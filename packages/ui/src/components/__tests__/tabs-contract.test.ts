@@ -97,10 +97,15 @@ const SCAN_ROOT_NAMES = ["packages", "apps", "templates"] as const;
  * the scan walks are reached by relative path here rather than by the
  * `$TURBO_ROOT$` the Turbo inputs use. Two spellings of one fact, which is why
  * the contract below checks them against each other rather than trusting both.
+ *
+ * Each prefix covers the WHOLE root. `sourceFiles` recurses from the root, so
+ * `packages/foo/examples/demo.jsx` is a file it reads — narrowing these to
+ * `src` would make the contract green while leaving that file unwatched, which
+ * is the contract certifying a gap rather than closing it.
  */
 const CALL_SITE_ROOT_GLOBS = [
-  { root: "packages", prefix: "../*/src/**/*." },
-  { root: "apps", prefix: "../../apps/*/src/**/*." },
+  { root: "packages", prefix: "../*/**/*." },
+  { root: "apps", prefix: "../../apps/*/**/*." },
   { root: "templates", prefix: "../../templates/**/*." },
 ] as const;
 
@@ -1360,50 +1365,73 @@ function styleResolver(attribute: ts.JsxAttribute): {
     expression: ts.Expression | undefined,
     seen?: Set<ts.Node>
   ): ts.ObjectLiteralExpression[];
-  valueOf(name: string): ts.Expression | undefined;
+  valueOf(
+    name: string,
+    from?: ts.Node
+  ): { value: ts.Expression; scope: ts.Node } | undefined;
 } {
-  const initializerOf = (name: string): ts.Expression | undefined => {
-    const declared = (scope: ts.Node): ts.Expression | undefined => {
-      let found: ts.Expression | undefined;
-      // Only the scope's OWN statements, so a declaration nested inside a
-      // sibling function is not mistaken for one in this scope.
-      ts.forEachChild(scope, statement => {
-        if (!ts.isVariableStatement(statement)) return;
-        // `const` only. A `let` or `var` binding's declaration initializer is
-        // not what the element renders — `let c = undefined; c = "red";` paints,
-        // and following the initializer alone concludes the opposite. Reading a
-        // reassignable binding as its first value turns a check into a false
-        // NEGATIVE, which is the direction that lets a real violation ship.
-        //
-        // Undecidable is the honest answer for those, and undecidable here
-        // means "keep reporting": the callers treat an unresolvable binding as
-        // emitting, which is the conservative side.
-        const isConst =
-          (statement.declarationList.flags & ts.NodeFlags.Const) !== 0;
-        if (!isConst) return;
-        for (const declaration of statement.declarationList.declarations) {
-          if (
-            ts.isIdentifier(declaration.name) &&
-            declaration.name.text === name &&
-            declaration.initializer
-          ) {
-            found = declaration.initializer;
-          }
+  /**
+   * The nearest declaration of a name, and whether it can be trusted.
+   *
+   * Two things this deliberately does NOT do, each of which was a false
+   * negative:
+   *
+   * - It stops at the FIRST scope declaring the name, even when that
+   *   declaration is mutable. Skipping a mutable shadow and continuing outward
+   *   resolves the use to a completely different binding: an inner
+   *   `let colour = "red"` under an outer `const colour = undefined` rendered
+   *   red while the scan read the outer `undefined` and stayed silent. A shadow
+   *   makes the name undecidable; it does not make it the outer one.
+   * - It reports mutability rather than filtering on it, because the right
+   *   answer depends on the CALLER. For a property value, unresolved means
+   *   "assume it emits" and reporting is the safe side. For the style object
+   *   itself, unresolved means an empty object list and therefore silence — so
+   *   the same filter that protects one caller blinds the other.
+   *
+   * The declaration's own scope comes back with it, so an alias is followed
+   * from where it was WRITTEN. `const key = sourceKey` must resolve `sourceKey`
+   * against the alias's scope; resolving it against the element's picks up an
+   * inner `sourceKey` that the alias never saw.
+   */
+  interface Binding {
+    initializer: ts.Expression;
+    /** The declaration is `let` or `var`, so its initializer is not final. */
+    mutable: boolean;
+    /** Where the declaration lives, for following aliases from there. */
+    scope: ts.Node;
+  }
+
+  const declaredIn = (scope: ts.Node, name: string): Binding | undefined => {
+    let found: Binding | undefined;
+    // Only the scope's OWN statements, so a declaration nested inside a
+    // sibling function is not mistaken for one in this scope.
+    ts.forEachChild(scope, statement => {
+      if (!ts.isVariableStatement(statement)) return;
+      const mutable =
+        (statement.declarationList.flags & ts.NodeFlags.Const) === 0;
+      for (const declaration of statement.declarationList.declarations) {
+        if (
+          ts.isIdentifier(declaration.name) &&
+          declaration.name.text === name &&
+          declaration.initializer
+        ) {
+          found = { initializer: declaration.initializer, mutable, scope };
         }
-      });
-      return found;
-    };
-    for (
-      let scope: ts.Node | undefined = attribute;
-      scope;
-      scope = scope.parent
-    ) {
+      }
+    });
+    return found;
+  };
+
+  const bindingOf = (name: string, from: ts.Node): Binding | undefined => {
+    for (let scope: ts.Node | undefined = from; scope; scope = scope.parent) {
       if (
         ts.isBlock(scope) ||
         ts.isSourceFile(scope) ||
         ts.isCaseClause(scope)
       ) {
-        const found = declared(scope);
+        // The FIRST scope that declares it wins, mutable or not. Continuing
+        // past a shadow is what reads the wrong binding.
+        const found = declaredIn(scope, name);
         if (found) return found;
       }
     }
@@ -1456,13 +1484,39 @@ function styleResolver(attribute: ts.JsxAttribute): {
         walk(node.right);
         return;
       }
-      if (ts.isIdentifier(node)) walk(initializerOf(node.text));
+      // Followed whether or not the binding is mutable. An unresolved object
+      // yields an EMPTY list here, and an empty list reports nothing — so
+      // dropping a `let style = { ... }` is a false negative, the opposite
+      // polarity to an unresolved property value.
+      if (ts.isIdentifier(node)) {
+        walk(bindingOf(node.text, node)?.initializer);
+      }
     };
     walk(root);
     return objects;
   };
 
-  return { objectsFrom, valueOf: initializerOf };
+  /**
+   * The value a name holds, when that is decidable.
+   *
+   * `undefined` for a mutable binding — including one that merely SHADOWS a
+   * constant — because the declaration initializer is not what runs. Callers
+   * treat an unresolved value as emitting, so undecidable errs towards
+   * reporting.
+   *
+   * `from` is where the name was written, so an alias resolves against its own
+   * scope rather than the element's.
+   */
+  const valueOf = (
+    name: string,
+    from: ts.Node = attribute
+  ): { value: ts.Expression; scope: ts.Node } | undefined => {
+    const binding = bindingOf(name, from);
+    if (!binding || binding.mutable) return undefined;
+    return { value: binding.initializer, scope: binding.scope };
+  };
+
+  return { objectsFrom, valueOf };
 }
 
 /** The objects an element's `style` prop can resolve to here. */
@@ -1534,7 +1588,8 @@ function propertyNameOf(
 function staticKeyOf(
   expression: ts.Expression,
   resolver: ReturnType<typeof styleResolver>,
-  seen = new Set<string>()
+  seen = new Set<string>(),
+  from?: ts.Node
 ): string | undefined {
   const value = withoutTypeWrappers(expression);
   if (ts.isStringLiteral(value) || ts.isNoSubstitutionTemplateLiteral(value)) {
@@ -1542,8 +1597,12 @@ function staticKeyOf(
   }
   if (ts.isIdentifier(value) && !seen.has(value.text)) {
     seen.add(value.text);
-    const bound = resolver.valueOf(value.text);
-    if (bound) return staticKeyOf(bound, resolver, seen);
+    const bound = resolver.valueOf(value.text, from);
+    // Followed from the DECLARATION's scope, not the element's. An alias like
+    // `const key = sourceKey` refers to whatever `sourceKey` meant where the
+    // alias was written, and resolving it beside the element instead picks up
+    // an inner `sourceKey` the alias never saw.
+    if (bound) return staticKeyOf(bound.value, resolver, seen, bound.scope);
   }
   return undefined;
 }
@@ -1686,7 +1745,8 @@ function declaredProperties(
 function emitsValue(
   value: ts.Expression,
   resolver: ReturnType<typeof styleResolver>,
-  seen = new Set<string>()
+  seen = new Set<string>(),
+  from?: ts.Node
 ): boolean {
   const inner = withoutTypeWrappers(value);
   if (isDefinitelyNothing(inner)) return false;
@@ -1694,8 +1754,10 @@ function emitsValue(
   // through the same identifier path a bare `colour` does.
   if (ts.isIdentifier(inner) && !seen.has(inner.text)) {
     seen.add(inner.text);
-    const bound = resolver.valueOf(inner.text);
-    if (bound) return emitsValue(bound, resolver, seen);
+    const bound = resolver.valueOf(inner.text, from);
+    // Same lexical rule as a computed key: an alias is resolved from where it
+    // was declared.
+    if (bound) return emitsValue(bound.value, resolver, seen, bound.scope);
   }
   return true;
 }
@@ -2182,6 +2244,28 @@ describe("the tab indicator contract", () => {
     [
       "the same reassigned binding behind an assertion",
       'let c: string | undefined = undefined;\nc = "red";\n<TabsTrigger style={{ borderBottomColor: c as string | undefined }} />',
+    ],
+    // A mutable binding SHADOWING a constant. Skipping the inner declaration
+    // and continuing outward does not fall back to "undecidable" — it resolves
+    // the use to a completely different binding, and reads `undefined` from an
+    // outer constant the element never mentions.
+    [
+      "a mutable binding shadowing an outer constant",
+      'const colour = undefined;\nfunction Row() {\n  let colour = "red";\n  return <TabsTrigger style={{ borderBottomColor: colour }} />;\n}',
+    ],
+    // The style OBJECT in a mutable binding. Dropping the declaration leaves an
+    // empty object list, and an empty list reports nothing — the opposite
+    // polarity to an unresolved property VALUE, where unresolved means report.
+    [
+      "an owned property inside a mutable style binding",
+      'let style = { borderBottomColor: "red" };\n<TabsTrigger style={style} />',
+    ],
+    // An alias resolved in the WRONG scope. `key` means what `sourceKey` meant
+    // where the alias was written; resolving it beside the element picks up an
+    // inner `sourceKey` the alias never saw.
+    [
+      "a computed key aliasing a constant shadowed near the element",
+      'const sourceKey = "borderBottomColor";\nconst key = sourceKey;\nfunction Row() {\n  const sourceKey = "width";\n  return <TabsTrigger style={{ [key]: "red" }} />;\n}',
     ],
   ])("catches %s", (_label, body) => {
     // The positive controls. Each is a shape an earlier version returned clean

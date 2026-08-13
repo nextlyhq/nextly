@@ -18,16 +18,18 @@ export default defineConfig({
       // `src/components/__tests__/tabs-contract.test.ts`, which asserts this
       // list covers it.
       "**/src/**/*.{ts,tsx,js,jsx}",
-      // And every ROOT that scan walks, not only this package. The glob above
-      // is relative to `packages/ui`, so a call site in `packages/admin`,
-      // `apps/playground` or a template changed nothing in watch mode — the
-      // suite that reports on those files never reran.
+      // And every ROOT that scan walks, not only this package, and the WHOLE
+      // of each root rather than its `src`. The traversal recurses from the
+      // root, so `packages/foo/examples/demo.jsx` is a call site it reads — and
+      // a `src`-only trigger left that file able to gain a violation with the
+      // suite never rerunning. The scan's reach is what these have to match,
+      // not the convention most files happen to follow.
       //
       // Kept in step with `CALL_SITE_ROOT_GLOBS` in
       // `src/components/__tests__/tabs-contract.test.ts`, which asserts this
       // list covers every root-and-extension pair the scan reads.
-      "../*/src/**/*.{ts,tsx,js,jsx}",
-      "../../apps/*/src/**/*.{ts,tsx,js,jsx}",
+      "../*/**/*.{ts,tsx,js,jsx}",
+      "../../apps/*/**/*.{ts,tsx,js,jsx}",
       "../../templates/**/*.{ts,tsx,js,jsx}",
       "**/src/**/*.css",
       // The declaration build runs through both tsup configs, and a child
