@@ -517,10 +517,16 @@ function exceedsLimits(
   // count never reaches the cap it was meant to enforce.
   if (roots.length > maxNodes) return "nodes";
 
-  const stack: Array<{ node: unknown; depth: number }> = roots.map(node => ({
-    node,
-    depth: 1,
-  }));
+  // `Array.from` rather than `roots.map`: `map` PRESERVES holes, so a sparse
+  // array yields entries the walk later pops as `undefined` — and the guard
+  // below treats a missing node as an ordinary non-object and walks past it,
+  // when a hole is a malformed document rather than an absent child. `Array.from`
+  // materializes every index, so a hole becomes an explicit `undefined` the
+  // schema then refuses.
+  const stack: Array<{ node: unknown; depth: number }> = Array.from(
+    roots,
+    node => ({ node, depth: 1 })
+  );
   let counted = roots.length;
 
   while (stack.length > 0) {

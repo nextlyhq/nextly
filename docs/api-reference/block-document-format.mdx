@@ -265,7 +265,11 @@ The frozen surface is:
    description, example, prop schemas, serialized `supports`, and slot rules.
 6. **The bindability rule** — whether a prop can be bound is derived from its
    field type, never opted into per block. The predicate is `isBindablePropType`.
-7. **The registry read API** and the `contributes.blocks` contribution shape.
+7. **The registry read API.** A plugin contributing blocks does so through the
+   page builder's block-registration service rather than a core `contributes`
+   key — blocks belong to the page builder, not to Nextly — so the shape frozen
+   here is the read side (`getBlock`, `allBlocks`, `getBlockSource`,
+   `getSupport`, `allSupports`), not a contribution field.
 
 ### Reserved operation names
 

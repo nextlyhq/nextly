@@ -88,7 +88,12 @@ export function measureBytes(
       // their place, so a document holding one comes back with a different
       // value than the one validated — the silent-rewrite case rather than the
       // throw, which is the worse of the two.
-      if (!Number.isFinite(value)) unserializable = true;
+      // `-0` is finite and serializes as `0`, so a caller that stored it reads
+      // back a different number with nothing reporting the change. Detected by
+      // division rather than by `===`, which cannot tell the two zeros apart.
+      if (!Number.isFinite(value) || (value === 0 && 1 / value < 0)) {
+        unserializable = true;
+      }
       bytes += String(value).length;
     } else if (typeof value === "boolean") {
       bytes += String(value).length;

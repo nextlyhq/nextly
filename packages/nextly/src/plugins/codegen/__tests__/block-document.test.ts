@@ -403,6 +403,9 @@ describe("block document schema", () => {
       ["undefined", undefined],
       ["NaN", Number.NaN],
       ["Infinity", Number.POSITIVE_INFINITY],
+      // Finite, and still rewritten: JSON writes `-0` as `0`, so the number
+      // read back is a different number and nothing reports the change.
+      ["negative zero", -0],
     ];
 
     for (const [label, offending] of cases) {
@@ -420,6 +423,18 @@ describe("block document schema", () => {
       const result = parseBlockDocument(doc);
       expect(result.success, `${label} should be refused`).toBe(false);
     }
+  });
+
+  it("refuses a sparse node array instead of walking past its holes", () => {
+    // A hole is not an absent child, it is a malformed document. `map`
+    // preserves holes, so the walk would pop `undefined`, treat it as an
+    // ordinary non-object and continue — reporting a document valid whose node
+    // list has gaps in it.
+    const sparse: unknown[] = [];
+    sparse[3] = { id: "a", type: "core/text", version: 1, props: {} };
+    const doc = { ...emptyPage(), nodes: sparse };
+
+    expect(parseBlockDocument(doc).success).toBe(false);
   });
 
   it("refuses a prototype-named key on the closed style-state axis", () => {

@@ -25,6 +25,7 @@
  * runtime, and `validate()` covers the rest against a live registry.
  */
 import type {
+  Binding,
   BindingFormat,
   BindingFormatType,
   BindingSource,
@@ -34,6 +35,11 @@ import type {
   DocumentKind,
   LocaleOverlay,
   LocaleOverlayValue,
+  BreakpointId,
+  NodeStyles,
+  NodeVisibility,
+  StyleValues,
+  TokenRef,
   IssueSeverity,
   StyleState,
   TreePosition,
@@ -41,6 +47,10 @@ import type {
   ValidationIssue,
   AnyBlockDefinition,
   SupportDefinition,
+  DEFAULT_MAX_DOCUMENT_BYTES,
+  MAX_DEPTH,
+  MAX_NODES,
+  RESERVED_OPERATION_NAMES,
   allBlocks,
   allSupports,
   duplicateNode,
@@ -170,6 +180,77 @@ expectTypeOf<keyof ComponentInstanceProps>().toEqualTypeOf<
 expectTypeOf<ComponentInstanceProps["componentId"]>().toEqualTypeOf<string>();
 expectTypeOf<ComponentInstanceProps["variant"]>().toEqualTypeOf<
   string | undefined
+>();
+
+// ---------------------------------------------------------------------------
+// The frozen value shapes inside a node
+// ---------------------------------------------------------------------------
+
+/**
+ * The three shapes a node's optional fields carry. None is reachable from the
+ * envelope assertions, and none is described by the golden schema: `styles`
+ * publishes unconstrained values by design, and `bindings` publishes a fragment
+ * derived from the schema rather than from these types.
+ *
+ * `Binding` is asserted as its full union rather than by key set. The
+ * discrimination IS the contract — `sourceKey` required on exactly one branch
+ * and forbidden on the others — and a key-set assertion over a union collapses
+ * to the keys they share, which is precisely the property that would be lost.
+ */
+expectTypeOf<Binding["$bind"]>().toEqualTypeOf<string>();
+
+// The `single` branch REQUIRES its key. That requirement is the contract — a
+// single addressed by nothing resolves to nothing at read time — and it is
+// asserted through the branch rather than by restating the union, because a
+// restated union has to spell `sourceKey?: never` in a position where the
+// compiler has already collapsed it to `undefined`, so the assertion would fail
+// for a reason that has nothing to do with the property.
+expectTypeOf<
+  Extract<Binding, { source: "single" }>["sourceKey"]
+>().toEqualTypeOf<string>();
+
+expectTypeOf<keyof NodeVisibility>().toEqualTypeOf<"conditions" | "devices">();
+
+// The token-reference convention. `$token` is the marker that keeps a reference
+// self-describing in raw JSON, parallel to `$bind`, and renaming it would make
+// every stored reference read as an ordinary object — accepted by the schema,
+// which publishes style values unconstrained, and silently unresolved.
+expectTypeOf<keyof TokenRef>().toEqualTypeOf<"$token">();
+expectTypeOf<TokenRef["$token"]>().toEqualTypeOf<string>();
+
+// States on one axis, breakpoints on the other, both sparse. Flattening either
+// level is a storage migration rather than a refactor.
+expectTypeOf<NodeStyles>().toEqualTypeOf<
+  Partial<Record<StyleState, Partial<Record<BreakpointId, StyleValues>>>>
+>();
+
+// ---------------------------------------------------------------------------
+// The advertised limits
+// ---------------------------------------------------------------------------
+
+/**
+ * The specification publishes these numbers, and an external producer sizes its
+ * output against them. Nothing else pins them: the runtime tests derive their
+ * fixtures from these same constants, so raising a cap moves the test with it,
+ * and the golden JSON Schema contains none of them.
+ *
+ * Asserted as literal types, which is what makes the VALUE the contract rather
+ * than the name. A change here is a published-limit change and needs saying so.
+ */
+expectTypeOf<typeof MAX_DEPTH>().toEqualTypeOf<12>();
+expectTypeOf<typeof MAX_NODES>().toEqualTypeOf<5000>();
+expectTypeOf<typeof DEFAULT_MAX_DOCUMENT_BYTES>().toEqualTypeOf<number>();
+
+// The reserved vocabulary, in order. A name is only reservable before something
+// else takes it, so the list is the contract and its ORDER is how the
+// specification page and this assertion stay comparable by eye.
+expectTypeOf<typeof RESERVED_OPERATION_NAMES>().toEqualTypeOf<
+  readonly [
+    "saveAsPattern",
+    "saveAsComponent",
+    "convertToComponent",
+    "detachComponent",
+  ]
 >();
 
 // ---------------------------------------------------------------------------
