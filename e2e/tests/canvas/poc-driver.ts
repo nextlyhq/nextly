@@ -351,6 +351,15 @@ export function createPocDriver(page: Page): CanvasDriver {
       await page.mouse.down();
     },
 
+    async crossActivationThreshold() {
+      // The same constant `startDragAt` uses, so this driver has ONE statement
+      // of its activation distance. A second number here would agree today and
+      // drift the moment dnd-kit's sensor is retuned, leaving a control that
+      // silently stops crossing the threshold it exists to cross.
+      pointer = { x: pointer.x + DRAG_THRESHOLD_PX, y: pointer.y };
+      await page.mouse.move(pointer.x, pointer.y);
+    },
+
     async moveBy(dx: number, dy: number) {
       pointer = { x: pointer.x + dx, y: pointer.y + dy };
       await page.mouse.move(pointer.x, pointer.y);

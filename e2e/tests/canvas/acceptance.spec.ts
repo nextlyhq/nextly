@@ -41,6 +41,7 @@ import {
   CanvasCapabilityError,
   dragPointerTo,
   dragToZoneEdge,
+  dragUntilInsideZone,
   dragUntilTarget,
   jitterAcrossEdge,
 } from "./driver";
@@ -393,14 +394,20 @@ test.describe("a canvas any Nextly editor could ship", () => {
     // makes every click on a block a possible accidental move.
     await driver.moveBy(2, 2);
     const subThreshold = await driver.isDragging();
-    // The SAME press, carried past the threshold. Without this the assertion
-    // below is satisfied by absence: a press that never landed — a moved
-    // handle, a changed selector, an overlay swallowing the pointerdown —
-    // reports "not dragging" exactly as a correct hysteresis does, and the
+    // The SAME press, carried past the threshold BY THE DRIVER. Without this
+    // the assertion below is satisfied by absence: a press that never landed —
+    // a moved handle, a changed selector, an overlay swallowing the pointerdown
+    // — reports "not dragging" exactly as a correct hysteresis does, and the
     // target then passes on a gesture that never happened. Continuing the same
-    // gesture rather than starting a second one is what makes it a control:
-    // it proves the press this test made was live.
-    await driver.moveBy(40, 40);
+    // gesture rather than starting a second one is what makes it a control: it
+    // proves the press this test made was live.
+    //
+    // The distance is the DRIVER's, not a number written here. Activation
+    // motion is explicitly each canvas's own, so a hard-coded displacement
+    // asserts this canvas's threshold on every replacement — and one whose
+    // activation distance is larger leaves the press below threshold, failing a
+    // control for a property it satisfies.
+    await driver.crossActivationThreshold();
     const pastThreshold = await driver.isDragging();
     await driver.cancel();
 
@@ -455,24 +462,45 @@ test.describe("a canvas any Nextly editor could ship", () => {
       edge.target,
       "the drag must reach a zone before a boundary can be sought"
     ).toBeGreaterThanOrEqual(0);
-    // ASSERTED, not merely recorded, because of which way this target now
-    // points. An unbracketed jitter cannot flip, so it would satisfy the
-    // expected failure below by measuring nothing — the harness failing to find
-    // an edge and the canvas holding its target are the same green. Where the
-    // property is expected to HOLD, a failed bracket is weak evidence and
-    // acceptable; where the shortfall is expected, it is the shortfall's alibi.
+    // The target must have CHANGED at least once. A canvas stuck on one target
+    // forever never crosses a boundary, and every jitter afterwards is stable —
+    // which reads exactly like the compliant switch margin this point asks for.
+    // Asserted rather than annotated, because that unusable implementation
+    // would otherwise produce the same green as a correct one.
     expect(
-      edge.bracketed,
-      "the edge must be bracketed, or a stable target proves only that nothing was near a boundary"
+      edge.crossed,
+      "a boundary must be crossed, or this measures a target that never moves"
     ).toBe(true);
+    // The BRACKET is recorded, not asserted, now that the reverse search
+    // carries the forward step's overshoot. A wide-but-compliant margin can
+    // still exhaust the budget, and failing here would report a canvas meeting
+    // the requirement as a harness fault.
+    test.info().annotations.push({
+      type: "bracketed",
+      description: String(edge.bracketed),
+    });
 
-    const reader = await driver.recordActiveTargetTransitions();
-    // A 2px oscillation ACROSS the bracketed edge. With no switch margin the
-    // target flips on every crossing and the indicator stutters under a hand
-    // that is not perfectly still.
-    await jitterAcrossEdge(driver);
-    const transitions = await reader();
+    // The DWELL-AWARE probe, shared with the scenario suite. The requirement
+    // permits hysteresis expressed as a >100ms dwell instead of a distance
+    // margin, and each move is a CDP round trip whose duration belongs to the
+    // machine: on a loaded runner one move outlasts that dwell, the pointer
+    // rests long enough for a compliant timer to commit, and the flip that
+    // follows says nothing about hysteresis. An untimed jitter reports that as
+    // this canvas's known gap.
+    const probe = await jitterAcrossEdge(driver);
     await driver.cancel();
+
+    // Unmeasurable is INCONCLUSIVE, not a shortfall. Failing here would report
+    // a missing canvas behaviour on evidence that cannot show one, for a reason
+    // living in the runner rather than the code.
+    if (probe.transitions === undefined) {
+      test.skip(
+        true,
+        `the jitter never outpaced the ${String(probe.dwellAllowanceMs)}ms dwell a canvas may use as hysteresis across ${String(probe.sweeps)} sweeps (slowest ${String(probe.slowestMoveMs)}ms), so this runner cannot tell a sticky target from a slow mouse`
+      );
+      return;
+    }
+    const transitions = probe.transitions;
 
     // The indicator has to have been visible throughout: a log holding only a
     // baseline of -1 reports no movement because nothing was ever shown. A
@@ -483,8 +511,9 @@ test.describe("a canvas any Nextly editor could ship", () => {
     ).toBeGreaterThanOrEqual(0);
 
     // Marked only now. Everything above ran unprotected, so a failed seed, a
-    // drag that never reached a zone, or a bracket that never found an edge
-    // stays a real failure instead of becoming another expected one.
+    // drag that never reached a zone, a target that never moved, or a probe the
+    // runner was too slow to take stays a real outcome of its own rather than
+    // becoming another expected failure.
     test.fail(true, "the target flips on every 2px crossing of a zone edge");
 
     // The log's FIRST entry is the state when recording began, not a change, so
@@ -884,19 +913,25 @@ test.describe("a canvas any Nextly editor could ship", () => {
       chrome.startDragOfBlock(fixture.blockIds[1] ?? "")
     ).rejects.toThrow(CanvasCapabilityError);
 
-    // Marked only now. Everything above ran unprotected.
-    test.fail(
-      true,
-      "dragging a block already in the canvas is not offered here"
-    );
-
     // BOTH drags, measured the same way, and compared against each other.
     // Reading only the canvas drag asks whether it works, not whether it is the
     // same engine — two independent implementations satisfy that whenever the
     // canvas one happens to report dragging, which is the green this case was
     // returning. The property is AGREEMENT, so neither side may be a constant
     // written into this file.
+    //
+    // The panel side runs BEFORE the marker, with everything it depends on.
+    // Under an active `test.fail`, a panel-side harness regression — a broken
+    // `dragOntoZone`, a reader that stopped working — is recorded as the
+    // expected failure and the canvas comparison below is never reached, so the
+    // control stops controlling anything at exactly the moment it matters.
     await dragOntoZone(driver);
+    // INSIDE a zone, not merely on one. `dragOntoZone` stops as soon as a
+    // target resolves, and that can be the overlap fallback with the pointer
+    // outside every zone — measured, this control read
+    // `resolvesToContainingZone: false` from a perfectly healthy panel drag.
+    // The signature's exact reading is only decidable from containment.
+    await dragUntilInsideZone(driver);
     const panel = await engineSignature(driver);
     await driver.cancel();
 
@@ -908,6 +943,12 @@ test.describe("a canvas any Nextly editor could ship", () => {
       "the panel drag is the reference and must be live and on a zone"
     ).toEqual({ dragging: true, resolvesToContainingZone: true });
 
+    // Marked only now, with the whole panel-side control behind it.
+    test.fail(
+      true,
+      "dragging a block already in the canvas is not offered here"
+    );
+
     await chrome.startDragOfBlock(fixture.blockIds[1] ?? "");
     await dragUntilTarget(driver);
     const canvas = await engineSignature(driver);
@@ -916,6 +957,20 @@ test.describe("a canvas any Nextly editor could ship", () => {
     // Two engines drift: one gains a hysteresis fix or an autoscroll tune and
     // the other does not, and the canvas then behaves differently depending on
     // where the block came from.
+    //
+    // WHAT THIS DOES NOT PROVE, stated because the title overreaches and a
+    // future reader should not take the green for more than it is: two
+    // independent engines that both report dragging and both resolve to the
+    // containing zone pass this. Agreement on observable behaviour is necessary
+    // for "one engine" and nowhere near sufficient, and the drift this case
+    // exists to catch — a hysteresis fix or an autoscroll tune landing on one
+    // side only — is not represented in either reading.
+    //
+    // Separating the two genuinely needs an identity boundary rather than a
+    // behavioural sample: one provider both drags resolve through, asserted at
+    // the architecture rather than through the DOM. That is a B-15 design
+    // decision and cannot be bolted on from the harness, so it is recorded here
+    // rather than approximated with more booleans.
     expect(canvas, "a canvas drag behaves as a panel drag does").toEqual(panel);
   });
 

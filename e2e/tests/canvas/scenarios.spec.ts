@@ -11,7 +11,13 @@
  */
 import { expect, test } from "@playwright/test";
 
-import { dragPointerTo, dragToZoneEdge, dragUntilTarget } from "./driver";
+import {
+  dragPointerTo,
+  dragToZoneEdge,
+  dragUntilInsideZone,
+  dragUntilTarget,
+  jitterAcrossEdge,
+} from "./driver";
 import type { ActiveTargetTransition, CanvasDriver } from "./driver";
 import { EXTREME_RATIO_FIXTURE, FLAT_LIST_FIXTURE, seedPage } from "./fixtures";
 import { createPocDriver } from "./poc-driver";
@@ -53,38 +59,38 @@ async function expectIndicatorAtPointer(driver: CanvasDriver, label: string) {
   const rect = await driver.readIndicatorRect();
   expect(rect, `${label}: an indicator must be visible`).not.toBeNull();
 
-  // Two readings, and which one is authoritative depends on where the pointer
-  // sits. `@dnd-kit/collision` resolves to a zone CONTAINING the pointer first
-  // and only ranks by the dragged shape's overlap when none does, so:
+  // Driven INTO a zone before the comparison, so the exact reading is always
+  // the one used. `@dnd-kit/collision` resolves to a zone containing the
+  // pointer first and only ranks by the dragged shape's overlap when none does,
+  // and these scenarios can stop on that fallback with the pointer outside
+  // every zone.
   //
-  // - inside a zone, containment is EXACT and needs no tolerance;
-  // - outside every zone, the nearest zone is an approximation the canvas never
-  //   promised. Measured, one sample of 28 resolved one ordinal away from it.
-  //
-  // Asserting strict equality against the nearest zone therefore holds most of
-  // the time and fails next to a boundary, which reads as a mapping defect
-  // rather than as the harness asking a question the canvas does not answer.
-  // Both the stale-rect (#1705) and unscaled-transform (#1706) failures move
-  // the resolved zone much further than one ordinal, so the weaker bound still
-  // catches what this guard exists for.
+  // Tolerating that case is what makes this guard weak. An adjacency bound
+  // accepts the NEIGHBOURING zone, which is precisely what a stale-scroll or
+  // unscaled-transform implementation selects — so the two failures this
+  // function exists to catch (#1705, #1706) can satisfy it. Inside a zone,
+  // containment is exact and needs no tolerance at all, and every geometry
+  // scenario can reach such a position.
+  const containing = await dragUntilInsideZone(driver);
+
   const active = await driver.readActiveTarget();
-  const containing = await driver.zoneContainingPointer();
   const nearest = await driver.nearestZoneToPointer();
   test.info().annotations.push({
     type: `${label}-zone`,
     description: `active=${active} containing=${containing} nearest=${nearest}`,
   });
-  if (containing >= 0) {
-    expect(
-      active,
-      `${label}: the zone containing the pointer must be the active one`
-    ).toBe(containing);
-    return;
-  }
+
+  // A precondition, not a fallback. If no position inside a zone can be reached
+  // the mapping question cannot be asked exactly, and answering it approximately
+  // would certify the implementations this is meant to reject.
   expect(
-    Math.abs(active - nearest),
-    `${label}: with the pointer inside no zone, the active zone must still be adjacent to the nearest`
-  ).toBeLessThanOrEqual(1);
+    containing,
+    `${label}: the pointer must reach a position inside a zone for containment to be decidable`
+  ).toBeGreaterThanOrEqual(0);
+  expect(
+    active,
+    `${label}: the zone containing the pointer must be the active one`
+  ).toBe(containing);
 }
 
 test("scenario 1: a library block drags across the iframe boundary", async ({
@@ -319,61 +325,40 @@ test("scenario 4b: a 2px jitter at a zone edge keeps the indicator stable", asyn
     edge.target,
     "the drag must reach a zone before seeking a boundary"
   ).toBeGreaterThanOrEqual(0);
-  // Not asserted. Failing to find an edge within the search distance means the
-  // target is STICKY, which is the behaviour being asked for; the jitter below
-  // then runs from wherever the pointer sits and observes no flip. Recording it
-  // keeps the weaker evidence visible instead of silently equivalent.
+  // The target must have CHANGED. A canvas whose collision resolution is stuck
+  // on one target forever walks the whole search without a crossing, and every
+  // jitter afterwards is stable — indistinguishable from a compliant 8-12px
+  // margin or dwell. Without this, that unusable implementation produces the
+  // same eventual green as a correct one.
+  expect(
+    edge.crossed,
+    "a boundary must actually be crossed, or this measures the middle of one zone"
+  ).toBe(true);
+  // The BRACKET, by contrast, is recorded rather than asserted: once a crossing
+  // has happened, failing to walk back inside the budget means the margin is
+  // wide, which is the behaviour being asked for. The jitter still runs and
+  // observes no flip; recording keeps the weaker evidence visible instead of
+  // silently equivalent to the stronger.
   test.info().annotations.push({
     type: "bracketed",
     description: String(edge.bracketed),
   });
-  // Step to P-2 first, then alternate by 4px so the samples are P+2 and P-2 —
-  // genuinely opposite sides of the edge. Alternating +/-2 from P samples P+2
-  // and P, both on the same side, which an implementation that switches the
-  // instant the pointer crosses would still pass.
-  await driver.moveBy(0, -2);
-
-  // Recorded from inside the page, not sampled from the test. The requirement
-  // permits hysteresis expressed as a dwell of more than 100ms as an
-  // alternative to a distance margin, and a `readActiveTarget()` between two
-  // moves is a cross-frame round trip that holds the pointer still for the
-  // length of that trip. On a loaded runner that alone can outlast the dwell,
-  // so a canvas that implements the timer correctly would still be seen to
-  // switch on every sample and would stay classified as the known gap below.
-  // Recording separates the observation from the gesture; the moves then run
-  // back to back and the dwell is only as long as a mouse event takes.
-  // Whether the probe was valid at all, established rather than assumed. If a
-  // move took longer than the dwell the requirement allows, the pointer rested
-  // at an endpoint long enough for a compliant timer to commit, and any flip
-  // observed afterwards says nothing about hysteresis.
+  // The DWELL-AWARE probe, shared with the acceptance suite so both ask the
+  // question the same way. It steps to P-2 first and alternates by 4 (samples
+  // on genuinely opposite sides of the edge), records transitions from inside
+  // the page rather than sampling between moves, and repeats until a sweep is
+  // fast enough to be conclusive.
   //
-  // Each move is one CDP round trip, so its duration is a property of the
-  // machine rather than of the canvas. A busy runner exceeds the allowance
-  // often enough that the probe has to expect it: the jitter is repeated, and
-  // the first sweep whose slowest move stays inside the allowance is the one
-  // read. Each sweep returns the pointer to where it started, 10 moves of +4
-  // against 10 of -4, so a repeat re-probes the same bracketed edge.
-  const DWELL_ALLOWANCE_MS = 100;
-  const PROBE_SWEEPS = 3;
-  let observed: ActiveTargetTransition[] | undefined;
-  let slowest = Number.POSITIVE_INFINITY;
-
-  for (let sweep = 0; sweep < PROBE_SWEEPS && observed === undefined; sweep++) {
-    const readTransitions = await driver.recordActiveTargetTransitions();
-    const moveDurations: number[] = [];
-    for (let step = 0; step < 20; step++) {
-      const startedAt = Date.now();
-      await driver.moveBy(0, step % 2 === 0 ? 4 : -4);
-      moveDurations.push(Date.now() - startedAt);
-    }
-    const log = await readTransitions();
-    slowest = Math.max(...moveDurations);
-    test.info().annotations.push({
-      type: `jitter-move-durations-ms-sweep-${sweep + 1}`,
-      description: JSON.stringify(moveDurations),
-    });
-    if (slowest < DWELL_ALLOWANCE_MS) observed = log;
-  }
+  // The timing is what makes it valid rather than merely repeated: the
+  // requirement permits hysteresis as a >100ms dwell instead of a distance
+  // margin, and each move is a CDP round trip whose duration belongs to the
+  // machine. If a move outlasts that allowance the pointer rested long enough
+  // for a compliant timer to commit, and any flip afterwards says nothing.
+  const probe = await jitterAcrossEdge(driver);
+  const observed = probe.transitions;
+  const slowest = probe.slowestMoveMs;
+  const DWELL_ALLOWANCE_MS = probe.dwellAllowanceMs;
+  const PROBE_SWEEPS = probe.sweeps;
   await driver.cancel();
 
   // An unmeasurable run is INCONCLUSIVE, not a defect. Failing here would

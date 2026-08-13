@@ -213,6 +213,21 @@ export interface CanvasDriver {
    */
   nearestZoneToPointer(): Promise<number>;
 
+  /**
+   * Carry an already-pressed pointer past THIS canvas's activation threshold.
+   *
+   * The distance is the driver's to know. `startDragAt` is contractually
+   * allowed to move by whatever its canvas requires, so a suite that hard-codes
+   * a displacement is asserting one canvas's threshold on every other: a
+   * replacement whose activation distance is larger leaves the press below
+   * threshold, and a positive control built on it fails while reporting a
+   * property that is perfectly satisfied.
+   *
+   * Used to prove a press is LIVE. A sub-threshold test reads "not dragging",
+   * which absence satisfies just as well as correct hysteresis does.
+   */
+  crossActivationThreshold(): Promise<void>;
+
   /** `data-nx-id` of the container owning the active zone, or null. */
   readActiveZoneOwner(): Promise<string | null>;
 
@@ -316,18 +331,58 @@ export async function dragUntilTarget(
   return -1;
 }
 
+/**
+ * Carry the drag until the pointer is INSIDE a zone, not merely until one is
+ * active.
+ *
+ * `dragUntilTarget` stops as soon as a target resolves, and
+ * `@dnd-kit/collision` resolves one by the dragged shape's OVERLAP when no zone
+ * contains the pointer. So "a target is active" and "the pointer is inside that
+ * target" are different states, and every exact claim about mapping — is the
+ * indicator where the pointer is, do two drags resolve the same way — is only
+ * decidable in the second.
+ *
+ * The distinction is not academic: it is where a stale-scroll or unscaled
+ * transform hides. Those implementations select a NEIGHBOURING zone, which any
+ * assertion tolerant of the overlap case accepts.
+ *
+ * Returns the containing zone's ordinal, or -1 if none was reached — a value the
+ * CALLER must assert on, for the same reason `dragUntilTarget` says so.
+ */
+export async function dragUntilInsideZone(
+  driver: CanvasDriver,
+  maxSteps = 40
+): Promise<number> {
+  let containing = await driver.zoneContainingPointer();
+  for (let step = 0; step < maxSteps && containing < 0; step += 1) {
+    await driver.moveBy(0, 4);
+    containing = await driver.zoneContainingPointer();
+  }
+  return containing;
+}
+
 /** Where a boundary search left the pointer. */
 export interface ZoneEdge {
-  /** Active target the pointer rests on, or -1 when no boundary was reached. */
+  /** Active target the pointer rests on, or -1 when no zone was reached. */
   readonly target: number;
   /**
-   * Whether an edge was found and the pointer stepped back just inside it.
+   * Whether the forward walk ever saw the target CHANGE.
    *
-   * `false` is not a failure. The search runs a bounded distance, and a target
-   * that does not change within it is a STICKY one — which is the behaviour the
-   * jitter requirement asks for. A caller may still jitter from there and
-   * observe no flip; it simply has weaker evidence, because the pointer is not
-   * known to straddle an edge.
+   * Separate from {@link bracketed} because the two failures mean opposite
+   * things. A canvas whose collision resolution is stuck on one target forever
+   * never crosses a boundary, and every jitter afterwards is stable — which
+   * reads exactly like a compliant switch margin. Callers must assert this, or
+   * an unusable implementation produces the same green as a correct one.
+   */
+  readonly crossed: boolean;
+  /**
+   * Whether the reverse search then located the edge to within a pixel.
+   *
+   * `false` here is NOT a failure once {@link crossed} is true: the target
+   * changed, and the reverse search simply did not find its way back within the
+   * budget, which a wide switch margin can legitimately cause. The jitter still
+   * runs; it carries weaker evidence because the pointer is not known to
+   * straddle the edge.
    */
   readonly bracketed: boolean;
 }
@@ -360,15 +415,16 @@ export interface ZoneEdge {
  */
 export async function dragToZoneEdge(
   driver: CanvasDriver,
-  searchPx = 24
+  marginPx = 24
 ): Promise<ZoneEdge> {
   const first = await dragUntilTarget(driver);
-  if (first < 0) return { target: -1, bracketed: false };
+  if (first < 0) return { target: -1, crossed: false, bracketed: false };
 
+  const FORWARD_STEP_PX = 4;
   let crossed = -1;
   let previous = first;
   for (let step = 0; step < 120; step += 1) {
-    await driver.moveBy(0, 4);
+    await driver.moveBy(0, FORWARD_STEP_PX);
     const current = await driver.readActiveTarget();
     if (current >= 0 && current !== previous) {
       crossed = current;
@@ -376,35 +432,93 @@ export async function dragToZoneEdge(
     }
     if (current >= 0) previous = current;
   }
-  if (crossed < 0) return { target: previous, bracketed: false };
+  if (crossed < 0) {
+    return { target: previous, crossed: false, bracketed: false };
+  }
 
-  for (let step = 0; step < searchPx; step += 1) {
+  // The reverse budget carries the FORWARD step's overshoot. A 4px scan first
+  // observes the new target up to 3px past the point where it switched, so
+  // walking back the margin alone falls short by that much and reports a
+  // compliant canvas as unbracketed. The distance to search is the margin the
+  // requirement allows plus however far the coarse step could have overshot it.
+  const reverseBudget = marginPx + FORWARD_STEP_PX - 1;
+  for (let step = 0; step < reverseBudget; step += 1) {
     await driver.moveBy(0, -1);
     if ((await driver.readActiveTarget()) !== crossed) {
       await driver.moveBy(0, 1);
-      return { target: crossed, bracketed: true };
+      return { target: crossed, crossed: true, bracketed: true };
     }
   }
-  return { target: crossed, bracketed: false };
+  return { target: crossed, crossed: true, bracketed: false };
+}
+
+/** What a dwell-aware jitter observed, and whether it could observe anything. */
+export interface JitterProbe {
+  /** Target transitions recorded inside the page, or undefined if inconclusive. */
+  readonly transitions: ActiveTargetTransition[] | undefined;
+  /** The slowest single move across the sweeps that ran, in milliseconds. */
+  readonly slowestMoveMs: number;
+  /** The allowance a move had to stay under for the sweep to count. */
+  readonly dwellAllowanceMs: number;
+  /** How many sweeps were attempted. */
+  readonly sweeps: number;
 }
 
 /**
- * Oscillate the pointer across the edge the caller has just bracketed.
+ * Oscillate across a bracketed edge, and report whether the probe was VALID.
  *
- * Steps to P-2 FIRST and then alternates by 4, so the samples are P-2 and P+2 —
- * genuinely opposite sides. Alternating +/-2 from P samples P+2 and P, both on
- * the same side, and a canvas that switches the instant the pointer crosses
- * passes that.
+ * The requirement permits hysteresis expressed as a dwell of more than 100ms
+ * instead of a distance margin, and every `moveBy` is a CDP round trip whose
+ * duration belongs to the machine rather than to the canvas. On a loaded runner
+ * a single move can outlast that dwell, which means the pointer rested at an
+ * endpoint long enough for a COMPLIANT timer to commit — and any flip observed
+ * afterwards says nothing about hysteresis.
+ *
+ * So the sweep is timed and repeated, and only a sweep whose slowest move stayed
+ * inside the allowance is returned. Each sweep is balanced (ten moves of +4
+ * against ten of -4) so it ends where it began and a repeat re-probes the same
+ * edge.
+ *
+ * Shared rather than reimplemented. An acceptance probe that jitters without
+ * timing reports a compliant dwell-based canvas as the known missing-hysteresis
+ * failure, on a machine property, and nothing in its output says so.
  */
 export async function jitterAcrossEdge(
   driver: CanvasDriver,
-  cycles = 6
-): Promise<void> {
+  { sweeps = 3, dwellAllowanceMs = 100 } = {}
+): Promise<JitterProbe> {
+  // To P-2 first, then alternating by 4, so the samples are P-2 and P+2 —
+  // genuinely opposite sides. Alternating +/-2 from P samples P+2 and P, both
+  // on the same side, which a canvas that switches the instant the pointer
+  // crosses would still pass.
   await driver.moveBy(0, -2);
-  for (let cycle = 0; cycle < cycles; cycle += 1) {
-    await driver.moveBy(0, 4);
-    await driver.moveBy(0, -4);
+
+  let slowestMoveMs = Number.POSITIVE_INFINITY;
+  for (let sweep = 0; sweep < sweeps; sweep += 1) {
+    const readTransitions = await driver.recordActiveTargetTransitions();
+    const durations: number[] = [];
+    for (let step = 0; step < 20; step += 1) {
+      const startedAt = Date.now();
+      await driver.moveBy(0, step % 2 === 0 ? 4 : -4);
+      durations.push(Date.now() - startedAt);
+    }
+    const log = await readTransitions();
+    slowestMoveMs = Math.max(...durations);
+    if (slowestMoveMs < dwellAllowanceMs) {
+      return {
+        transitions: log,
+        slowestMoveMs,
+        dwellAllowanceMs,
+        sweeps: sweep + 1,
+      };
+    }
   }
+  return {
+    transitions: undefined,
+    slowestMoveMs,
+    dwellAllowanceMs,
+    sweeps,
+  };
 }
 
 /**
