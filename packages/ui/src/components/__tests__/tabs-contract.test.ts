@@ -952,29 +952,47 @@ function spreadAttributes(
   attribute: ts.JsxSpreadAttribute,
   checker: ts.TypeChecker
 ): {
-  attributes: Array<{ name: string; value: ts.Expression }>;
+  /**
+   * One entry per object the spread can resolve to.
+   *
+   * Kept apart rather than flattened, because the objects are ALTERNATIVES:
+   * `{...(flag ? a : b)}` renders one of them, and merging the two let a safe
+   * value from one branch stand in for a forbidden value in the other.
+   */
+  alternatives: Array<Array<{ name: string; value: ts.Expression }>>;
   readable: boolean;
 } {
   const { objects, readable } = styleResolver(checker).objectsFrom(
     attribute.expression
   );
-  if (!readable) return { attributes: [], readable: false };
-  const attributes: Array<{ name: string; value: ts.Expression }> = [];
+  if (!readable) return { alternatives: [], readable: false };
+  const alternatives: Array<Array<{ name: string; value: ts.Expression }>> = [];
   for (const object of objects) {
+    const attributes: Array<{ name: string; value: ts.Expression }> = [];
     for (const property of object.properties) {
+      // A shorthand names its key, and that is all this needs when the key is
+      // not a prop the contract owns: `{...{ value }}` is the ordinary way to
+      // pass Radix's `value`, and reporting the whole spread as unreadable
+      // rejected it on the strength of syntax that proves it harmless.
+      if (ts.isShorthandPropertyAssignment(property)) {
+        if (!OWNED_PROPS.includes(property.name.text)) continue;
+        // An owned prop carried as a shorthand still hides its VALUE.
+        return { alternatives: [], readable: false };
+      }
       if (!ts.isPropertyAssignment(property)) {
-        // A shorthand or a spread inside the spread is a value this does not
-        // read, and the props it carries are unknown rather than absent.
-        return { attributes: [], readable: false };
+        // A spread inside the spread is a value this does not read, and the
+        // props it carries are unknown rather than absent.
+        return { alternatives: [], readable: false };
       }
       const name = property.name;
       if (!ts.isIdentifier(name) && !ts.isStringLiteral(name)) {
-        return { attributes: [], readable: false };
+        return { alternatives: [], readable: false };
       }
       attributes.push({ name: name.text, value: property.initializer });
     }
+    alternatives.push(attributes);
   }
-  return { attributes, readable: true };
+  return { alternatives, readable: true };
 }
 
 /** Which of a component's owned classes a caller's `className` takes over. */
@@ -1528,7 +1546,10 @@ interface Ownership {
  * name from another library, would otherwise be held to this contract and fail
  * for a corner it is entitled to.
  */
-function ownershipIn(sourceFile: ts.SourceFile): {
+function ownershipIn(
+  sourceFile: ts.SourceFile,
+  checker: ts.TypeChecker
+): {
   ownership: Ownership;
   exportedNameOf: Map<string, string>;
   owning: Map<ts.Node, string>;
@@ -1622,9 +1643,10 @@ function ownershipIn(sourceFile: ts.SourceFile): {
     if (ts.isVariableDeclaration(node) && node.initializer) {
       const exported = exportedFrom(
         node.initializer,
-        names,
         namespaces,
-        exportedNameOf
+        owning,
+        exportedNameOf,
+        checker
       );
       if (exported && ts.isIdentifier(node.name)) {
         names.add(node.name.text);
@@ -1708,12 +1730,26 @@ function requiredFrom(
  */
 function exportedFrom(
   initializer: ts.Expression,
-  names: Set<string>,
   namespaces: Set<string>,
-  exportedNameOf: Map<string, string>
+  owning: Map<ts.Node, string>,
+  exportedNameOf: Map<string, string>,
+  checker: ts.TypeChecker
 ): string | undefined {
-  if (ts.isIdentifier(initializer) && names.has(initializer.text)) {
-    return exportedNameOf.get(initializer.text);
+  // Which binding the name REFERS to, not how it is spelled. Matching the
+  // text against the file-wide set held a LOCAL component to the contract of
+  // an import it shadows — `const TabsTrigger = Other; const Local =
+  // TabsTrigger` recorded `Local` as owning the primitive. The JSX tag is
+  // already resolved this way, and an alias has to be resolved the same way
+  // or the two disagree about what a name means in one file.
+  if (ts.isIdentifier(initializer)) {
+    const declaration = declarationOf(initializer, checker);
+    // A resolved declaration answers on its own. Nothing resolving is the
+    // ordinary case for an import of a module this program never loads, and
+    // the text is all there is then — the same fallback, and the same order,
+    // that `exportedTagOf` applies to the JSX tag.
+    if (!declaration) return exportedNameOf.get(initializer.text);
+    const declared = (declaration as { name?: ts.Node }).name;
+    return declared ? owning.get(declared) : undefined;
   }
   if (
     ts.isPropertyAccessExpression(initializer) &&
@@ -1819,6 +1855,17 @@ function selectedByLiteralCondition(
 }
 
 function literalStrings(node: ts.Node, found: string[] = []): string[] {
+  // Asked before any operand is visited, so a concatenation contributes the
+  // string it evaluates to rather than its halves. Splitting on whitespace
+  // happens downstream, and by then two pieces are indistinguishable from two
+  // separate classes.
+  if (ts.isExpression(node)) {
+    const whole = staticStringOf(node);
+    if (whole !== undefined) {
+      found.push(whole);
+      return found;
+    }
+  }
   if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
     found.push(node.text);
   } else if (ts.isTemplateExpression(node)) {
@@ -1843,6 +1890,15 @@ function literalStrings(node: ts.Node, found: string[] = []): string[] {
   // key's value as though it were a class name too.
   if (ts.isObjectLiteralExpression(node)) {
     for (const property of node.properties) {
+      // `cn({ rounded })` is `{ rounded: rounded }` to clsx, so the KEY names
+      // the class exactly as the written-out form does. A filter on the node
+      // kind walked past it, and the shorthand is the shorter spelling most
+      // callers reach for.
+      if (ts.isShorthandPropertyAssignment(property)) {
+        if (staticTruthiness(property.name) !== false)
+          found.push(property.name.text);
+        continue;
+      }
       if (!ts.isPropertyAssignment(property)) continue;
       if (staticTruthiness(property.initializer) === false) continue;
       const name = property.name;
@@ -2116,6 +2172,18 @@ function staticStringOf(
   const inner = withoutTypeWrappers(expression);
   if (ts.isStringLiteral(inner) || ts.isNoSubstitutionTemplateLiteral(inner)) {
     return inner.text;
+  }
+  // `"border-b-" + "0"` is ONE class at runtime. Read as two operands it is
+  // two names that are each harmless, so a caller passing an owned class in
+  // pieces scanned clean — the concatenation has to be performed here, where
+  // both halves are known, rather than left to whoever splits on whitespace.
+  if (
+    ts.isBinaryExpression(inner) &&
+    inner.operatorToken.kind === ts.SyntaxKind.PlusToken
+  ) {
+    const left = staticStringOf(inner.left, resolver, seen);
+    const right = staticStringOf(inner.right, resolver, seen);
+    return left !== undefined && right !== undefined ? left + right : undefined;
   }
   // A name holding the value is the same value. `const noImage = "none"` draws
   // no border image exactly as the literal spelling does, and reading only the
@@ -2439,8 +2507,10 @@ type PropSource =
 
 function violationsIn(file: string, source: string): Violation[] {
   const { sourceFile, checker } = parse(file, source);
-  const { ownership, exportedNameOf, owning, owningNamespaces } =
-    ownershipIn(sourceFile);
+  const { ownership, exportedNameOf, owning, owningNamespaces } = ownershipIn(
+    sourceFile,
+    checker
+  );
   const found: Violation[] = [];
   const at = (node: ts.Node): number =>
     sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line +
@@ -2463,12 +2533,15 @@ function violationsIn(file: string, source: string): Violation[] {
         // where it appears asked about values the element never receives, so
         // the surviving source of each owned prop is resolved first and only
         // that one is read.
-        const effective = new Map<string, PropSource>();
+        // A LIST per prop, not one source: a spread between object literals
+        // supplies alternatives rather than a sequence, and every alternative
+        // is a value the element can render.
+        const effective = new Map<string, PropSource[]>();
         // A spread whose contents cannot be read may carry either owned prop,
         // so it stops mattering only once BOTH are written again after it.
         const unread: Array<{ at: ts.Node; awaiting: Set<string> }> = [];
-        const take = (name: string, source: PropSource): void => {
-          effective.set(name, source);
+        const take = (name: string, sources: PropSource[]): void => {
+          effective.set(name, sources);
           for (const spread of unread) spread.awaiting.delete(name);
         };
 
@@ -2482,20 +2555,34 @@ function violationsIn(file: string, source: string): Violation[] {
               unread.push({ at: attribute, awaiting: new Set(OWNED_PROPS) });
               continue;
             }
-            for (const carried of spread.attributes) {
-              if (!OWNED_PROPS.includes(carried.name)) continue;
-              take(carried.name, {
-                kind: "spread",
-                at: attribute,
-                value: carried.value,
-              });
+            for (const name of OWNED_PROPS) {
+              const carried = spread.alternatives
+                .map(alternative => alternative.find(a => a.name === name))
+                .filter(found => found !== undefined)
+                .map(
+                  (found): PropSource => ({
+                    kind: "spread",
+                    at: attribute,
+                    value: found.value,
+                  })
+                );
+              if (carried.length === 0) continue;
+              // Only a spread EVERY alternative supplies replaces what came
+              // before. When one branch omits the prop, that branch renders
+              // the earlier value, so the earlier value is still in play.
+              take(
+                name,
+                carried.length === spread.alternatives.length
+                  ? carried
+                  : [...(effective.get(name) ?? []), ...carried]
+              );
             }
             continue;
           }
           if (!ts.isJsxAttribute(attribute)) continue;
           const name = attribute.name.getText(sourceFile);
           if (OWNED_PROPS.includes(name)) {
-            take(name, { kind: "attribute", attribute });
+            take(name, [{ kind: "attribute", attribute }]);
           }
         }
 
@@ -2511,27 +2598,36 @@ function violationsIn(file: string, source: string): Violation[] {
           });
         }
 
-        const className = effective.get("className");
-        const classValue =
-          className?.kind === "attribute"
-            ? className.attribute.initializer
-            : className?.value;
-        if (className && classValue) {
+        // Reported once per distinct sentence. Two alternatives of one spread
+        // sit on the same line, and repeating an identical message for each
+        // says nothing the first did not.
+        const said = new Set<string>();
+        const report = (line: number, why: string): void => {
+          const key = `${line}:${why}`;
+          if (said.has(key)) return;
+          said.add(key);
+          found.push({ file, line, why });
+        };
+
+        for (const className of effective.get("className") ?? []) {
+          const classValue =
+            className.kind === "attribute"
+              ? className.attribute.initializer
+              : className.value;
+          if (!classValue) continue;
           const displaced = displacedBy(
             exported,
             literalStrings(classValue).join(" ")
           );
           if (displaced.length > 0) {
-            found.push({
-              file,
-              line: lineOf(className),
-              why: `${className.kind === "spread" ? "spreads" : "displaces"} ${displaced.join(", ")} — the primitive owns that appearance, and every surface should change with it`,
-            });
+            report(
+              lineOf(className),
+              `${className.kind === "spread" ? "spreads" : "displaces"} ${displaced.join(", ")} — the primitive owns that appearance, and every surface should change with it`
+            );
           }
         }
 
-        const style = effective.get("style");
-        if (style) {
+        for (const style of effective.get("style") ?? []) {
           const line = lineOf(style);
           const verb = style.kind === "spread" ? "spreads" : "sets";
           const { objects, readable, resolver } =
@@ -2544,11 +2640,10 @@ function violationsIn(file: string, source: string): Violation[] {
           // and staying silent about it would mean "no violation" and "could
           // not tell" looked the same from outside.
           if (!readable) {
-            found.push({
-              file,
+            report(
               line,
-              why: `${verb} an inline style this scan cannot read — write it as a literal object, or move it to \`className\` so the primitive keeps its appearance`,
-            });
+              `${verb} an inline style this scan cannot read — write it as a literal object, or move it to \`className\` so the primitive keeps its appearance`
+            );
           } else {
             const spreadUnreadable = { value: false };
             const property = objects
@@ -2557,17 +2652,15 @@ function violationsIn(file: string, source: string): Violation[] {
               )
               .find(Boolean);
             if (property) {
-              found.push({
-                file,
+              report(
                 line,
-                why: `${verb} \`${property}\` inline, which beats every class the primitive applies`,
-              });
+                `${verb} \`${property}\` inline, which beats every class the primitive applies`
+              );
             } else if (spreadUnreadable.value) {
-              found.push({
-                file,
+              report(
                 line,
-                why: "spreads an inline style this scan cannot read — write it as a literal object, or move it to `className` so the primitive keeps its appearance",
-              });
+                "spreads an inline style this scan cannot read — write it as a literal object, or move it to `className` so the primitive keeps its appearance"
+              );
             }
           }
         }
@@ -3109,6 +3202,30 @@ describe("the tab indicator contract", () => {
       "an unreadable spread with only one owned prop written after it",
       '<TabsTrigger {...rest} className="w-full" />',
     ],
+    // The objects a conditional spread chooses between are ALTERNATIVES: one
+    // of them renders, so a safe value in one branch does not excuse a
+    // forbidden value in the other.
+    [
+      "a class in one branch of a conditional spread",
+      '<TabsTrigger {...(flag ? { className: "border-b-0" } : { className: "w-full" })} />',
+    ],
+    // Only a spread every alternative supplies replaces what came before; a
+    // branch that omits the prop renders the earlier value.
+    [
+      "a class a spread replaces in only one of its branches",
+      '<TabsTrigger className="border-b-0" {...(flag ? { style: {} } : { className: "w-full" })} />',
+    ],
+    // `cn({ rounded })` is `{ rounded: rounded }` to clsx, so the key names
+    // the class exactly as the written-out form does.
+    [
+      "an owned class named by a class-map shorthand",
+      "const rounded = true;\n<TabsList className={cn({ rounded })} />",
+    ],
+    // One class at runtime, whichever way it is spelled in the source.
+    [
+      "an owned class written as a concatenation",
+      '<TabsTrigger className={"border-b-" + "0"} />',
+    ],
   ])("catches %s", (_label, body) => {
     // The positive controls. Each is a shape an earlier version returned clean
     // on, or a category it never read. Without these, a check that can never
@@ -3436,6 +3553,22 @@ describe("the tab indicator contract", () => {
     [
       "an unreadable spread with both owned props written after it",
       '<TabsTrigger {...rest} className="w-full" style={{ width: 2 }} />',
+    ],
+    // A shorthand names its key, and a key that is not an owned prop cannot
+    // carry one. `{...{ value }}` is the ordinary way to pass Radix's `value`.
+    [
+      "a spread carrying an unrelated prop as a shorthand",
+      'const value = "a";\n<TabsTrigger {...{ value }} />',
+    ],
+    [
+      "a spread carrying an unrelated prop written out",
+      '<TabsTrigger {...{ role: "tab" }} />',
+    ],
+    // Ownership follows the BINDING, not the spelling. A local component that
+    // shadows the import is a different component, and so is an alias of it.
+    [
+      "an alias of a name that shadows the import",
+      'function Row() {\n  const TabsTrigger = Other;\n  const Local = TabsTrigger;\n  return <Local className="border-b-0" />;\n}',
     ],
   ])("does not report %s", (_label, body) => {
     // The complement, and the reason this is a contract rather than a ban. A
