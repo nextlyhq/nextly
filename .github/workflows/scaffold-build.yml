@@ -22,7 +22,13 @@ name: Scaffold build
 on:
   pull_request:
     paths:
-      - "templates/**"
+      # `templates/plugin/**` is deliberately absent. A plugin scaffold is a publishable
+      # LIBRARY rather than a Next app, so the assertions below — a root layout, font packages,
+      # a `.next` directory — do not describe it, and a job that triggered on it while testing
+      # something else would claim a coverage it does not have. Tracked separately.
+      - "templates/base/**"
+      - "templates/blank/**"
+      - "templates/blog/**"
       - "packages/create-nextly-app/**"
       - ".github/workflows/scaffold-build.yml"
 
@@ -35,12 +41,28 @@ concurrency:
 
 jobs:
   scaffold-build:
-    name: Scaffold, install, and build
+    name: Scaffold ${{ matrix.template }} with ${{ matrix.pm }}
     runs-on: ubuntu-latest
     # One OS and one Node line. Cross-platform path handling is `scaffold-smoke`'s
     # question and native-module ABI coverage is the nightly matrix's; repeating either
     # here would buy minutes of duplicate signal.
     timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        # EVERY app template this job's paths can trigger on. Testing one while triggering on
+        # all of them is the failure this job exists to catch, applied to itself: a change to
+        # `blog` would run the job, scaffold `blank`, and pass.
+        template: [blank, blog]
+        pm: [npm]
+        include:
+          # One pnpm leg. npm installs a HOISTED tree, so an import of an undeclared transitive
+          # dependency resolves there and the build passes — while the same generated project
+          # fails for anyone invoking the CLI through pnpm, whose layout does not expose
+          # subdependencies at the root. Cheaper than doubling the matrix, and it covers the
+          # asymmetry rather than every combination of it.
+          - template: blank
+            pm: pnpm
 
     steps:
       - name: Checkout
@@ -78,10 +100,26 @@ jobs:
           mkdir -p /tmp/scaffold-build
           cd /tmp/scaffold-build
           tarball=$(ls /tmp/nextly-pack/*.tgz | head -1)
-          # `npm exec --package=<tarball> -- <bin>` is the explicit form; `npx --yes
-          # <tarball>` routes the path through sh on npm 11 and fails on the tgz.
-          # No `--skip-install`: the install is the point.
-          npm exec --yes --package="$tarball" -- create-nextly-app scaffolded-app --template blank --yes
+          # `--local-template` points the CLI at THIS checkout. Content templates such as
+          # `blog` are otherwise downloaded from GitHub at runtime, so without it the job would
+          # scaffold the templates already on `main` and report nothing about the change under
+          # review — the same shape as testing one template while triggering on all of them.
+          #
+          # `npm exec --package=<tarball> -- <bin>` is the explicit form; `npx --yes <tarball>`
+          # routes the path through sh on npm 11 and fails on the tgz. No `--skip-install`: the
+          # install is the point.
+          #
+          # The package manager the CLI installs with follows the one that INVOKED it, so the
+          # leg is chosen here rather than by a flag.
+          if [ "${{ matrix.pm }}" = "pnpm" ]; then
+            pnpm dlx "$tarball" scaffolded-app \
+              --template ${{ matrix.template }} \
+              --local-template "$GITHUB_WORKSPACE/templates" --yes
+          else
+            npm exec --yes --package="$tarball" -- create-nextly-app scaffolded-app \
+              --template ${{ matrix.template }} \
+              --local-template "$GITHUB_WORKSPACE/templates" --yes
+          fi
 
       # The controls, before the build's verdict is worth anything. A job that scaffolded
       # nothing, or scaffolded into the wrong directory, would otherwise reach a build
