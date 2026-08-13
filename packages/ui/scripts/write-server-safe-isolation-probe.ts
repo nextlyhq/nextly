@@ -63,11 +63,21 @@
  * - **A load deferred behind a function.** These probes import each entry point and count its
  *   exports; a forbidden load inside an exported helper is never reached, because nothing calls it.
  *
- * Both are properties of runtime observation rather than defects here, and neither is closed by the
- * source ban either: it catches the plain spellings and says in its own header that computed host
- * access such as `globalThis["pro" + "cess"]` is outside what reading syntax can recognise. So a
- * COMPUTED resolver form that only resolves, or that sits behind an uncalled function, is currently
- * covered by neither check. That is written here rather than left for a green run to imply.
+ * - **A package this one does not declare.** The wires are placed at names derivable from the
+ *   manifest and the install. `next` is neither, yet it resolves in the consumer this package
+ *   ships into — so a caught, computed `createRequire(...)("next")` succeeds there and trips
+ *   nothing here. Wiring it would mean naming packages a consumer MIGHT have, which is unbounded
+ *   and cannot be derived from anything this repository holds.
+ *
+ * All three are properties of runtime observation rather than defects here, and none is closed by
+ * the source ban either: it catches the plain spellings and says in its own header that computed
+ * host access such as `globalThis["pro" + "cess"]` is outside what reading syntax can recognise. So
+ * a COMPUTED resolver form that only resolves, that sits behind an uncalled function, or that names
+ * a package this one never declares, is currently covered by neither check.
+ *
+ * That is written here rather than left for a green run to imply. The one mechanism that would
+ * close all three is a loader hook seeing every resolution whatever its shape, and the APIs for
+ * that do not span the supported Node range — which is the constraint, not an omission.
  *
  * Usage, from this package's directory:
  *   tsx scripts/write-server-safe-isolation-probe.ts <directory>            write the project
@@ -331,6 +341,13 @@ function arm(target: string): void {
   ].sort();
   for (const name of wired) {
     const home = join(target, "node_modules", ...name.split("/"));
+
+    // REPLACED, not overlaid. A name being wired may already hold a real package — a hoisted
+    // transitive is the ordinary case — and writing a manifest and two entry files over it leaves
+    // every other file it shipped exactly where it was. Those remain resolvable by absolute or
+    // computed path, so the wire would guard the entry point while the package's real code stayed
+    // reachable beside it, which is the boundary reporting on less than it appears to.
+    rmSync(home, { recursive: true, force: true });
     mkdirSync(home, { recursive: true });
 
     // `appendFileSync` before the throw, so evidence exists whatever the caller does with the
