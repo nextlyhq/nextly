@@ -101,17 +101,22 @@ async function effectiveTemplateFiles(
 const SEARCH_INDEX_SCRIPT = path.join("scripts", "build-search-index.mjs");
 
 /**
- * Whether the scaffold receives the Pagefind index builder.
+ * Whether the scaffolded PROJECT has the Pagefind index builder.
  *
- * READ from the merged template tree rather than inferred from the project type, for the same
- * reason the font list is: a hand-kept mapping of "which templates have search" is a second answer
- * to a question the templates already answer, and the two agree only until someone adds one.
+ * Read from the finished project directory rather than from the templates it was assembled out
+ * of, and the distinction is the whole point. A template can ship a file that the copy never
+ * carries across — which is exactly what happened to the blog's `scripts/` — and a decision taken
+ * from the source tree then writes a build step naming a file the project does not have.
+ *
+ * Asking the target makes the two impossible to disagree: whatever answers here is what `node`
+ * will resolve at build time, because it is the same directory.
+ *
+ * Must therefore be called AFTER every copy, which is where `generatePackageJson` already sits.
  */
-export async function templateShipsSearchIndex(
-  templateDirs: readonly string[]
+export async function projectHasSearchIndexScript(
+  targetDir: string
 ): Promise<boolean> {
-  const effective = await effectiveTemplateFiles(templateDirs);
-  return effective.has(SEARCH_INDEX_SCRIPT);
+  return fs.pathExists(path.join(targetDir, SEARCH_INDEX_SCRIPT));
 }
 
 /**
@@ -458,7 +463,15 @@ export async function generatePackageJson(
   database: DatabaseConfig,
   useYalc: boolean = false,
   projectType: ProjectType = "blank",
-  templateDirs: readonly string[] = []
+  templateDirs: readonly string[] = [],
+  /**
+   * The project directory, once every copy has finished.
+   *
+   * Decides the Pagefind build step, which has to be settled against what the project HAS rather
+   * than what its templates ship — see {@link projectHasSearchIndexScript}. Omitting it means
+   * "there is no project on disk to ask", and no search step is emitted.
+   */
+  targetDir?: string
 ): Promise<string> {
   // Plugins are a publishable library, not an app — different package.json.
   if (projectType === "plugin") {
@@ -538,9 +551,11 @@ export async function generatePackageJson(
     "eslint-config-next": runtimeVersions["eslint-config-next"],
   };
 
-  // Derived from the merged template tree, so a template that gains or loses the
-  // Pagefind builder changes the generated manifest without anyone editing a list.
-  const shipsSearchIndex = await templateShipsSearchIndex(templateDirs);
+  // Read from the project that was just assembled, so the generated script can only name a
+  // file that is actually there.
+  const shipsSearchIndex = targetDir
+    ? await projectHasSearchIndexScript(targetDir)
+    : false;
 
   // Pagefind builds the static index behind /search. DECLARED only where the
   // builder ships, because the index script invokes it through `node`, which
@@ -958,6 +973,18 @@ export async function copyTemplate(
     });
   }
 
+  // The build steps a template brings with it — the blog's Pagefind index builder is the only
+  // one today. Without this the template's own `package.json` scripts name a file the project
+  // never receives, which is how the search index came to be silently absent from every blog
+  // scaffold: the build invoked it behind a `test -f` guard that swallowed the miss.
+  const templateScriptsDir = path.join(typeDir, "scripts");
+  if (await fs.pathExists(templateScriptsDir)) {
+    await fs.copy(templateScriptsDir, path.join(targetDir, "scripts"), {
+      overwrite: false,
+      filter: src => !SKIP_FILES.has(path.basename(src)),
+    });
+  }
+
   const frontendPagePath = path.join(
     targetDir,
     "src",
@@ -981,7 +1008,8 @@ export async function copyTemplate(
     database,
     useYalc,
     projectType,
-    [baseDir, typeDir]
+    [baseDir, typeDir],
+    targetDir
   );
   await fs.writeFile(
     path.join(targetDir, "package.json"),
