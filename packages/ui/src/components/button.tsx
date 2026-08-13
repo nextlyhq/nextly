@@ -44,8 +44,9 @@ const buttonVariants = cva(
           "bg-destructive-solid text-destructive-foreground border border-transparent hover:bg-destructive-600",
         // border-border is the decorative separator token, and it is the right
         // one here: a button is identified by its label and fill, so its edge
-        // carries no meaning on its own and is not held to the 3:1 minimum that
-        // border-input meets for controls identified by their boundary. It is
+        // carries no meaning on its own, unlike border-input, which is the
+        // token for controls identified by their boundary (that token is now
+        // below 1.4.11's 3:1 in light mode; see contrast/accepted.ts). It is
         // still used in preference to a faint primary alpha, which reads as a
         // tint of the brand colour rather than as an edge.
         outline:

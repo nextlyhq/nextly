@@ -19,10 +19,13 @@
  * list one level down: it would need an edit every six months, and nothing would fail until the
  * major it was missing broke a consumer.
  *
- * Usage:
- *   node scripts/node-matrix.mjs                 print the matrix as JSON
- *   node scripts/node-matrix.mjs --github        write the outputs to $GITHUB_OUTPUT
- *   node scripts/node-matrix.mjs --floor-only    the lowest floor alone, WITHOUT the network
+ * Usage, from this package's directory:
+ *   tsx scripts/node-matrix.ts                 print the matrix as JSON
+ *   tsx scripts/node-matrix.ts --github        write the outputs to $GITHUB_OUTPUT
+ *   tsx scripts/node-matrix.ts --floor-only    the lowest floor alone, WITHOUT the network
+ *
+ * Through `tsx` rather than `node`, because the lowest supported Node cannot execute TypeScript
+ * directly. That is also how the workflow invokes it.
  *
  * `--floor-only` exists because a pull request runs one leg, and that leg is derivable from the
  * manifest alone. Fetching anyway would let an outage at nodejs.org fail a UI pull request that
@@ -42,8 +45,11 @@ const RELEASE_INDEX = "https://nodejs.org/dist/index.json";
  * @param {readonly number[]} releasedMajors every major with at least one release
  * @returns {string[]}
  */
-export function matrixFor(range, releasedMajors) {
-  const versions = [];
+export function matrixFor(
+  range: string,
+  releasedMajors: readonly number[]
+): string[] {
+  const versions: string[] = [];
   for (const clause of range.split("||").map(part => part.trim())) {
     const caret = /^\^(\d+)\.(\d+)\.(\d+)$/.exec(clause);
     const open = /^>=(\d+)\.(\d+)\.(\d+)$/.exec(clause);
@@ -80,12 +86,14 @@ export function matrixFor(range, releasedMajors) {
  * the first clause would run Node 24 on every pull request while the real floor went unexercised,
  * with every synchronisation check still green.
  */
-export function lowestFloor(range) {
+export function lowestFloor(range: string): string {
   const floors = matrixFor(range, []);
   if (floors.length === 0) {
-    throw new Error("engines.node named no versions, so no leg could be selected.");
+    throw new Error(
+      "engines.node named no versions, so no leg could be selected."
+    );
   }
-  const parts = version => version.split(".").map(Number);
+  const parts = (version: string): number[] => version.split(".").map(Number);
   return floors.reduce((lowest, candidate) => {
     const [major, minor, patch] = parts(candidate);
     const [lowMajor, lowMinor, lowPatch] = parts(lowest);
@@ -104,13 +112,16 @@ async function releasedMajors() {
         `rather than running a narrower matrix, which would pass while covering less.`
     );
   }
-  const releases = await response.json();
-  return releases.map(release => Number(release.version.slice(1).split(".")[0]));
+  // The index is an array of `{ version: "vX.Y.Z" }`; narrowed here rather than trusted, since
+  // `response.json()` is `any` and a shape change would otherwise surface as a wrong matrix.
+  const releases = (await response.json()) as readonly { version: string }[];
+  return releases.map(release =>
+    Number(release.version.slice(1).split(".")[0])
+  );
 }
 
 const invokedDirectly =
-  process.argv[1] !== undefined &&
-  process.argv[1].endsWith("node-matrix.mjs");
+  process.argv[1] !== undefined && process.argv[1].endsWith("node-matrix.ts");
 
 if (invokedDirectly) {
   const flags = new Set(process.argv.slice(2));
@@ -131,7 +142,9 @@ if (invokedDirectly) {
   if (flags.has("--github")) {
     const out = process.env.GITHUB_OUTPUT;
     if (out === undefined) {
-      console.error("GITHUB_OUTPUT is not set, so the matrix could not be published.");
+      console.error(
+        "GITHUB_OUTPUT is not set, so the matrix could not be published."
+      );
       process.exit(1);
     }
     appendFileSync(out, `versions=${payload}\n`);

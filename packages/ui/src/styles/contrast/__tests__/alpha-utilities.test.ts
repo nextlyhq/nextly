@@ -289,6 +289,38 @@ describe("alpha-opacity color utilities", () => {
     ).toEqual([]);
   });
 
+  it("puts no alpha on the control boundary, in any utility", () => {
+    // `--nx-control-border` is the one token whose entire reason for existing is
+    // to clear 1.4.11's 3:1 where `--nx-input` deliberately does not. Any alpha
+    // composites it toward its surface and removes exactly that, so the
+    // modifier is refused outright rather than measured -- there is no value of
+    // N for which this is the right token to fade.
+    //
+    // Scanned across ALL utility prefixes on purpose. The pattern the rest of
+    // this file uses covers `text`, `border` and `ring`; a `bg-control-border/80`
+    // on the switch track was invisible to it for that reason, and rendered at
+    // 2.65:1 on muted while every contrast test stayed green -- because the
+    // pairings measure the TOKEN and the component was painting something else.
+    // Test files are excluded because the subject is what a COMPONENT renders,
+    // and because this assertion's own comment names the offending utility --
+    // a scan that reads its own prose reports a hit that no user can see, which
+    // is the same mistake in the opposite direction.
+    const hits = execSync(
+      `grep -rHoE '\\b[a-z-]+-control-border/[0-9[]' ${repo}/packages/*/src 2>/dev/null || true`,
+      { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }
+    )
+      .split("\n")
+      .map(line => line.trim())
+      .filter(Boolean)
+      .filter(line => !/\.test\.|\/__tests__\//.test(line));
+
+    expect(
+      hits,
+      `An opacity on --nx-control-border voids the 3:1 it exists to hold. Use ` +
+        `the token at full strength, or a different token:\n${hits.join("\n")}`
+    ).toEqual([]);
+  });
+
   it("every allowlisted utility is still used and still needs the exception", () => {
     // Keep the allowlist honest: an entry that no longer appears, or that now
     // passes, should be removed rather than left as dead documentation.

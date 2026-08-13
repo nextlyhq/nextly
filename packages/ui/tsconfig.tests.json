@@ -13,12 +13,20 @@
 // Every test file compiles today, so there is no opt-out list. If one is ever
 // needed, it belongs here as a list that shrinks: removing an entry is an
 // improvement, adding one is a regression worth arguing for in review.
+//
+// `rootDir` is widened to the package root and `scripts/**/*` added to `include`. The build
+// scripts are TypeScript and the suites import them, so they have to be in the program — and
+// `rootDir: "src"`, inherited from the shipping config, rejects any file outside `src` with
+// TS6059. That constraint exists to shape EMIT, and this pass is `noEmit`, so widening it costs
+// nothing and buys the scripts type-checking they never had as `.mjs` with hand-written
+// declarations beside them.
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
+    "rootDir": ".",
     "types": ["node"]
   },
-  "include": ["src/**/*"],
+  "include": ["src/**/*", "scripts/**/*"],
   "exclude": ["dist", "node_modules"]
 }

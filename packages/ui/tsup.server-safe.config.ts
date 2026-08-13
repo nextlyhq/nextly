@@ -1,6 +1,6 @@
 import { defineConfig } from "tsup";
 
-import { serverSafeBuildEntries } from "./scripts/published-entries.mjs";
+import { serverSafeBuildEntries } from "./scripts/published-entries.js";
 
 // Left to the consumer rather than bundled: React and Radix keep component
 // state and portals in module-level stores, so a second copy inside this

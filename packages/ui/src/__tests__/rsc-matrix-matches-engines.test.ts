@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { lowestFloor, matrixFor } from "../../scripts/node-matrix.mjs";
+import { lowestFloor, matrixFor } from "../../scripts/node-matrix.js";
 
 const repoRoot = path.join(
   path.dirname(fileURLToPath(import.meta.url)),

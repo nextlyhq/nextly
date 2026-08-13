@@ -23,6 +23,7 @@ import {
 import { resolveCollectionPlacement } from "@admin/lib/plugins/collection-placement";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 import { resolvePluginIcon } from "@admin/lib/plugins/resolve-plugin-icon";
+import { isUnder } from "@admin/lib/routing";
 import { cn } from "@admin/lib/utils";
 import type { ApiCollection } from "@admin/types/entities";
 
@@ -338,8 +339,13 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
       });
     };
 
+    // The route constants rather than their spellings. The plugin directory
+    // sits at its own top level so no plugin slug can shadow it, which means
+    // the Plugins category is not one URL prefix and a literal would silently
+    // stop covering it the next time either route moves.
     if (
-      pathname.includes("/admin/plugins") ||
+      isUnder(pathname, ROUTES.PLUGINS) ||
+      isUnder(pathname, ROUTES.PLUGIN_BROWSE) ||
       pathname.includes("/admin/forms") ||
       isPluginPath(collectionsData)
     ) {
