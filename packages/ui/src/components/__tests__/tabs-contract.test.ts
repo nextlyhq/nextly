@@ -1633,6 +1633,36 @@ function styleResolver(
   };
 
   /**
+   * Whether a node runs every time its execution unit does.
+   *
+   * Only a write that definitely happens can be said to have replaced what came
+   * before it. One inside an `if`, a loop, a `switch`, a `try` or the right of
+   * a short-circuit may be skipped, so it ADDS a value the binding might hold
+   * without removing any.
+   *
+   * Written as a list of constructs that introduce a choice rather than a list
+   * of ones that do not, so an unfamiliar node fails towards "may be skipped" —
+   * which keeps earlier values in play, and keeping them is the reporting side.
+   */
+  const alwaysRuns = (node: ts.Node, unit: ts.Node | undefined): boolean => {
+    for (let at = node.parent; at && at !== unit; at = at.parent) {
+      if (
+        ts.isIfStatement(at) ||
+        ts.isIterationStatement(at, /* lookInLabeledStatements */ true) ||
+        ts.isSwitchStatement(at) ||
+        ts.isCaseOrDefaultClause(at) ||
+        ts.isTryStatement(at) ||
+        ts.isCatchClause(at) ||
+        ts.isConditionalExpression(at) ||
+        ts.isBinaryExpression(at)
+      ) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  /**
    * Every value assigned to a binding that the element could actually see.
    *
    * A declaration initializer is only the FIRST value a mutable binding holds:
@@ -1648,36 +1678,58 @@ function styleResolver(
    * Across different units the order is not decidable and the write is kept,
    * which is the reporting side and therefore the safe one.
    */
-  const assignedValues = (declaration: ts.Declaration): ts.Expression[] => {
+  const writesTo = (
+    declaration: ts.Declaration
+  ): Array<{ value: ts.Expression; straightLine: boolean; at: number }> => {
     const elementUnit = executionUnitOf(element);
-    const values: ts.Expression[] = [];
+    const found: Array<{
+      value: ts.Expression;
+      straightLine: boolean;
+      at: number;
+    }> = [];
     const visit = (node: ts.Node): void => {
       if (
         ts.isBinaryExpression(node) &&
         node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
         ts.isIdentifier(node.left) &&
-        declarationOf(node.left, checker) === declaration &&
-        (executionUnitOf(node) !== elementUnit ||
-          node.getStart() < element.getStart())
+        declarationOf(node.left, checker) === declaration
       ) {
-        values.push(node.right);
+        const sameUnit = executionUnitOf(node) === elementUnit;
+        const before = node.getStart() < element.getStart();
+        if (!sameUnit || before) {
+          found.push({
+            value: node.right,
+            // Definite only when it shares the element's execution unit, runs
+            // before it, and no branch stands between: those three together are
+            // what let a write be said to have HAPPENED.
+            straightLine:
+              sameUnit && before && alwaysRuns(node, elementUnit ?? undefined),
+            at: node.getStart(),
+          });
+        }
       }
       ts.forEachChild(node, visit);
     };
     visit(declaration.getSourceFile());
-    return values;
+    return found.sort((a, b) => a.at - b.at);
   };
 
   /**
    * Every value a name can hold at the element.
    *
-   * The declaration's initializer and every write that can reach here, which is
-   * the whole answer to "what does this name hold" — so both the object
+   * The declaration's initializer and every write that can still reach here,
+   * which is the whole answer to "what does this name hold" — so the object
    * question and the property-value question are asked of this one list rather
    * than each assembling its own. A mutable binding whose initializer is the
    * only value it ever holds is fully decidable, and discarding it purely
    * because the declaration said `let` reported `let colour = undefined` as a
    * colour React never receives.
+   *
+   * A write KILLS what came before it. `let style = {}; style = { ...owned };
+   * style = {}` holds the empty object at the element, and carrying the middle
+   * value along rejected a call site for a style it had already discarded. Only
+   * a write that definitely runs can kill, so a reset inside an `if` narrows
+   * nothing and every earlier value stays in play.
    *
    * An empty list means the name resolved to a declaration that carries no
    * readable value — a parameter, an import — which the callers treat as
@@ -1686,11 +1738,18 @@ function styleResolver(
   const reachingValues = (identifier: ts.Identifier): ts.Expression[] => {
     const declaration = declarationOf(identifier, checker);
     if (!declaration) return [];
-    const values: ts.Expression[] = [];
-    const initializer = bindingOf(identifier)?.initializer;
-    if (initializer) values.push(initializer);
-    values.push(...assignedValues(declaration));
-    return values;
+    const writes = writesTo(declaration);
+    const lastDefinite = writes.map(w => w.straightLine).lastIndexOf(true);
+    if (lastDefinite === -1) {
+      const initializer = bindingOf(identifier)?.initializer;
+      return [
+        ...(initializer ? [initializer] : []),
+        ...writes.map(w => w.value),
+      ];
+    }
+    // The initializer and everything before that write are values the binding
+    // has already stopped holding.
+    return writes.slice(lastDefinite).map(w => w.value);
   };
 
   /**
@@ -2596,6 +2655,13 @@ describe("the tab indicator contract", () => {
       "an owned property assigned to a style binding after it is declared",
       'let style = {};\nstyle = { borderBottomColor: "red" };\n<TabsTrigger style={style} />',
     ],
+    // A reset that MIGHT not happen clears nothing. Only a write that
+    // definitely runs replaces what came before it, so the owned value is still
+    // one the element can render and the call site is still reported.
+    [
+      "an owned property a conditional reset does not certainly clear",
+      'let style = { borderBottomColor: "red" };\nif (window.innerWidth > 0) {\n  style = {};\n}\n<TabsTrigger style={style} />',
+    ],
     // `undefined` is a NAME. Shadowed by a local declaration it is an ordinary
     // colour, and reading the spelling alone cleared a call site that paints.
     [
@@ -2876,6 +2942,14 @@ describe("the tab indicator contract", () => {
       "an owned property in a statically unreachable branch",
       '<TabsTrigger style={true ? {} : { borderBottomColor: "red" }} />',
     ],
+    // A binding reset before it renders. The middle value is one it has
+    // already stopped holding, and carrying it along rejected an element that
+    // passes an empty object. Paired with the reassignment case above, this
+    // separates "a write happened" from "this write is the one that survives".
+    [
+      "an owned property overwritten before the element renders",
+      'let style = {};\nstyle = { borderBottomColor: "red" };\nstyle = {};\n<TabsTrigger style={style} />',
+    ],
     // A mutable binding nothing ever writes to. Its initializer IS what the
     // element receives, so discarding it for being `let` reported a property
     // React never emits. This is the counterpart to the reassignment cases
@@ -3095,10 +3169,17 @@ describe("which files the call-site scan reads", () => {
     //
     // Both depths, because they fail differently: a `**/src/**` trigger covers
     // the nested one and silently misses a file directly under the root.
+    // Three depths, because they fail differently and each one has a trigger
+    // shape that covers the others and misses it: a `**/src/**` glob covers the
+    // nested file and misses the package-level one, and a glob requiring at
+    // least one child directory covers both and misses a file sitting directly
+    // in the root — which `sourceFiles` reaches, since it recurses from the
+    // root itself rather than from the packages inside it.
     const probes = SCAN_ROOT_NAMES.flatMap(root =>
       CALL_SITE_EXTENSIONS.flatMap(extension => [
         resolve(REPO, root, `probe-package/src/nested/probe${extension}`),
         resolve(REPO, root, `probe-package/probe${extension}`),
+        resolve(REPO, root, `probe${extension}`),
       ])
     );
     const unwatchedProbes = probes
