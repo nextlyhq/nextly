@@ -129,7 +129,7 @@ import {
 } from "../plugins/services/plugin-services-registry";
 import { clearPluginSubscriptions } from "../plugins/subscription-tracker";
 import { validatePluginSlugs } from "../plugins/validate-slugs";
-import { setHandlerPlugins } from "../route-handler/auth-handler";
+import { setBootedConfig } from "../route-handler/auth-handler";
 import type {
   CollectionSource,
   FieldDefinition,
@@ -1116,7 +1116,12 @@ export async function registerServices(
   //
   // Unconditional: a config whose transformers removed every plugin must clear
   // the store rather than leave the author's raw list standing there.
-  setHandlerPlugins(transformedConfig.plugins);
+  // The WHOLE transformed config, not a hand-picked field list. A `setup`
+  // transformer may add a top-level collection or single as well as change the
+  // plugin list, and the permission fold decides whether a `publish`
+  // declaration names an entity — so anything left out here silently leaves the
+  // endpoint folding against the raw route config for that field.
+  setBootedConfig(transformedConfig);
 }
 
 // ============================================================
