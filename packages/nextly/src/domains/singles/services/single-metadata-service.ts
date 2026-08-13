@@ -200,6 +200,32 @@ interface UpdateDdlPlan {
   ownsMigrationStatus: boolean;
 }
 
+/**
+ * Whether an update request can reach schema DDL at all, from the input alone.
+ *
+ * Two callers need this answer and they need it at different moments, which is why it is a function
+ * rather than a condition written twice. `planUpdate` uses it to decide there is nothing to plan.
+ * `updateSingleSchema` needs it BEFORE the exclusion is taken, to decide whether this operation may
+ * create the lock table — and it cannot ask `planUpdate`, because planning reads the live table and
+ * so has to happen inside the exclusion it is being consulted about.
+ *
+ * A save with no field change still has companion work when the single crosses the
+ * Internationalization boundary, or when Draft/Published is saved on a single that is localized in
+ * either state, because that toggle ADDs or DROPs the companion's own `_status`.
+ *
+ * Conservative in the direction that matters: it answers yes whenever DDL is possible, not only
+ * when it is certain. A wrong yes costs one `CREATE TABLE IF NOT EXISTS` for the lock; a wrong no
+ * would let a schema change run with no lock table to claim.
+ */
+function requestsSchemaWork(input: UpdateSingleSchemaInput): boolean {
+  const { fields, isLocalized, wasLocalized, statusRequested } = input;
+  if (fields !== undefined) return true;
+  return (
+    isLocalized !== wasLocalized ||
+    (statusRequested && (isLocalized || wasLocalized))
+  );
+}
+
 export class SingleMetadataService {
   constructor(
     private readonly registry: SingleRegistryService,
@@ -369,7 +395,11 @@ export class SingleMetadataService {
         adapter: this.adapter,
         logger: this.logger,
         label: `update single schema "${input.slug}"`,
-        issuesDdl: true,
+        // A save that changes only labels, admin options, versioning, revalidation or webhooks
+        // writes a registry row and nothing else. Claiming DDL rights for it would make a
+        // deployment whose role has DML but not DDL start refusing metadata edits that worked
+        // before, because taking the exclusion would try to CREATE the lock table.
+        issuesDdl: requestsSchemaWork(input),
       },
       () => this.updateSingleSchemaExcluded(input)
     );
@@ -424,21 +454,16 @@ export class SingleMetadataService {
       wasLocalized,
       hasStatus,
       wasStatus,
-      statusRequested,
     } = input;
     const previousFields = (existing.fields ??
       []) as unknown as FieldDefinition[];
 
+    // Asked through the shared predicate rather than restated here. `updateSingleSchema` needs the
+    // same answer BEFORE it takes the exclusion, and two copies of this condition would agree today
+    // and drift silently — with the drift showing up as a schema change running unprotected.
+    if (!requestsSchemaWork(input)) return null;
+
     if (fields === undefined) {
-      // A save with no field change still has companion work when the single is crossing the
-      // Internationalization boundary, or when Draft/Published is saved on a single that is
-      // localized in either state — that toggle ADDs or DROPs the companion's own `_status`.
-      // Without this the flag persisted while the physical schema stayed as it was, stranding
-      // data in the table the new flag says it does not live in.
-      const needsCompanionWork =
-        isLocalized !== wasLocalized ||
-        (statusRequested && (isLocalized || wasLocalized));
-      if (!needsCompanionWork) return null;
       return {
         migrationSQL: "",
         fields: previousFields,

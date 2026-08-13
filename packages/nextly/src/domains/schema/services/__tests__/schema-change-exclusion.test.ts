@@ -213,6 +213,36 @@ describe("a Schema Builder change and the storage migration exclude each other",
     expect(excludeArgs[0]?.mayCreateLock).toBe(true);
   });
 
+  it("claims DDL rights only when the save can actually change schema", async () => {
+    // Taking the exclusion with `mayCreateLock` runs `CREATE TABLE IF NOT EXISTS` for the lock's own
+    // table. A deployment that deliberately gives the application role DML but not DDL would then
+    // start refusing metadata edits — a label change, a webhook toggle — that worked before. Both
+    // directions are asserted: a false that should be true would leave a real schema change with no
+    // lock table to claim, which is the worse error of the two.
+    const adapter = makeAdapter();
+    const { service } = makeService(adapter);
+    const base = {
+      slug: "page",
+      existing: { slug: "page", tableName: "single_page", fields: [] },
+      updateData: { label: "Page renamed" },
+      isLocalized: false,
+      wasLocalized: false,
+      hasStatus: false,
+      wasStatus: false,
+      statusRequested: false,
+    };
+
+    await service.updateSingleSchema(
+      base as unknown as Parameters<typeof service.updateSingleSchema>[0]
+    );
+    await service.updateSingleSchema({
+      ...base,
+      fields: [{ name: "heading", type: "text" }],
+    } as unknown as Parameters<typeof service.updateSingleSchema>[0]);
+
+    expect(excludeArgs.map(a => a.mayCreateLock)).toEqual([false, true]);
+  });
+
   it("keeps the claim through an interrupt, because the work is not idempotent", async () => {
     // The signal does not stop the work. A session that released here would hand the row to a
     // storage migration while this change was still between its DDL and its registry write, which
