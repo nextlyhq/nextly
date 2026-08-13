@@ -34,6 +34,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { NextlyError } from "../../../../errors";
 import type { Logger } from "../../../../shared/types";
+import {
+  isMigrationLockStatement,
+  withMigrationLockSurface,
+} from "../../migration/__tests__/helpers/migration-lock-double";
 import type { FieldGroupRegistryService } from "../field-group-registry-service";
 import {
   FieldGroupMetadataService,
@@ -68,13 +72,35 @@ function registryDouble() {
   };
 }
 
-/** An adapter that runs DDL happily and answers the verification however the test needs. */
+/**
+ * An adapter that runs DDL happily and answers the verification however the test needs.
+ *
+ * A create now runs inside the storage migration's lock, so the double carries the lock's surface
+ * too, and `nextly_meta` answers absent — a fixture that has never recorded a migration marker.
+ * That leaves the supplied `tableExists` governing the VERIFICATION probe alone, which is the
+ * failure these tests inject; routing it into the exclusion's probe as well would refuse the create
+ * before it started, and every assertion below would be describing a different path.
+ */
 function adapterDouble(tableExists: () => Promise<boolean>) {
-  return {
+  return withMigrationLockSurface({
     getCapabilities: () => ({ dialect: "postgresql" as const }),
     executeQuery: vi.fn(async () => []),
-    tableExists: vi.fn(tableExists),
-  };
+    tableExists: vi.fn(async (name: string) =>
+      name === "nextly_meta" ? false : tableExists()
+    ),
+  });
+}
+
+/**
+ * The statements the create issued for its OWN table.
+ *
+ * Taking the lock issues DDL for the lock's table, so "the adapter executed nothing" no longer
+ * separates a create that built a table from one that never got that far. This does.
+ */
+function entityStatements(adapter: ReturnType<typeof adapterDouble>): string[] {
+  return adapter.executeQuery.mock.calls
+    .map(([sql]) => sql as string)
+    .filter(sql => !isMigrationLockStatement(sql));
 }
 
 function serviceOver(
@@ -144,7 +170,7 @@ describe("a field-group create records its outcome rather than raising it", () =
 
     // Nothing ran and nothing was written. A refusal that has already touched the table would have
     // rebound the existing field group's storage to this request's fields.
-    expect(adapter.executeQuery).not.toHaveBeenCalled();
+    expect(entityStatements(adapter)).toEqual([]);
     expect(registry.registerComponent).not.toHaveBeenCalled();
   });
 });
@@ -224,7 +250,7 @@ describe("a create whose generated names would not fit is refused", () => {
 
     // Before any DDL, which is the whole point: a refusal that has already run statements leaves
     // exactly the half-made field group this exists to prevent.
-    expect(adapter.executeQuery).not.toHaveBeenCalled();
+    expect(entityStatements(adapter)).toEqual([]);
     expect(registry.registerComponent).not.toHaveBeenCalled();
   });
 
@@ -242,7 +268,7 @@ describe("a create whose generated names would not fit is refused", () => {
       })
     ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
 
-    expect(adapter.executeQuery).not.toHaveBeenCalled();
+    expect(entityStatements(adapter)).toEqual([]);
   });
 
   it("counts the column's own name, not only names derived from it", async () => {
@@ -258,7 +284,7 @@ describe("a create whose generated names would not fit is refused", () => {
       })
     ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
 
-    expect(adapter.executeQuery).not.toHaveBeenCalled();
+    expect(entityStatements(adapter)).toEqual([]);
   });
 
   it("does not count an index the renderer never emits", async () => {
