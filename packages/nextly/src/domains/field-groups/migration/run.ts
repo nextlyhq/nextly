@@ -158,12 +158,21 @@ export type MigrationOutcome =
        */
       basis: PlanBasis;
       /**
-       * The claim held on the migration lock when the preview was taken, or `null`.
+       * What could be learned about the migration lock while the preview was taken.
+       *
+       * Three states, never `null`: `{ kind: "held", owner }` when a run is in flight,
+       * `{ kind: "not-held" }` when nothing holds it, and `{ kind: "unknown", reason }` when the
+       * lock could not be read at all — a restricted role denied SELECT on the lock table lands
+       * there rather than being reported as an empty database.
        *
        * A dry run observes the lock rather than taking it, so a run in flight is reported here
        * instead of raising a refusal. Present because the preview is a snapshot: with another run
        * writing, the renames above describe a world that is moving, and an operator who cannot see
        * that would read a partially-applied plan as the plan.
+       *
+       * When `basis` reports the plan unreconciled, this is the observation that JUSTIFIED that
+       * answer rather than the one the session opened with — the two differ exactly when a writer
+       * claimed the lock after the preview began.
        *
        * 🔴 Informational only. It was true at the moment it was read and may not be by the time it
        * is acted on, so it can no more gate a write than any other stale read. The lock itself is
@@ -530,13 +539,24 @@ export async function runFieldGroupMigration(
           }
         }
 
-        const { tables, columns } = await readCatalog(adapter, dialect);
-
-        // Reconciled in the direction that will execute. A rollback scored
-        // against the canonical plan asks whether the legacy names are present,
-        // finds the migrated ones instead, and refuses the very run that would
-        // restore them.
+        // 🔴 The try opens HERE, before the catalog is read, so every retryable failure in the
+        // plan-scoring window leaves by one path. A torn catalog read surfaces as the driver's
+        // missing-table error rather than as a refusal, and handling that only in the outer loop
+        // meant it was retried but never reported: exhaustion rethrew the database error instead of
+        // the documented unreconciled outcome, so an operator met a raw driver failure in exactly
+        // the contended case this path exists to describe.
+        //
+        // It does NOT open earlier. Before this point the registry rows have not been read, and
+        // without them no manifest exists to name the renames — reporting a plan there would mean
+        // reporting an empty one, which reads as "nothing to do". A preview that cannot read the
+        // registry has nothing honest to say and refuses.
+        let tables: string[];
+        let columns: TableColumns[];
+        let reconciled: ReconciledEntry[];
         const directed = directedRenameEntries(direction, entries);
+        // Above the try because the steps below the try need them, and none of
+        // the three depends on the catalog read the try guards.
+        //
         // Enumerated from what Nextly knows it owns rather than recognised by
         // shape. Nextly runs inside the user's own database, and a table of
         // theirs that happens to carry the parent-pointer column would otherwise
@@ -545,8 +565,13 @@ export async function runFieldGroupMigration(
         const owned = ownedDataTableNames({ rows, entries: directed });
         const dataSteps = dataStepCount({ meta, migrationId });
         const offset = renamePositionOffset(direction, dataSteps);
-        let reconciled: ReconciledEntry[];
         try {
+          ({ tables, columns } = await readCatalog(adapter, dialect));
+
+          // Reconciled in the direction that will execute. A rollback scored
+          // against the canonical plan asks whether the legacy names are present,
+          // finds the migrated ones instead, and refuses the very run that would
+          // restore them. Declared above the try because the fallback names its renames from it.
           reconciled = reconcilePlan({
             entries: directed,
             rows,
@@ -567,11 +592,20 @@ export async function runFieldGroupMigration(
             identifierCase,
           });
         } catch (error) {
-          // Only a preview re-reads, only for a refusal a concurrent writer can manufacture, and
+          // Only a preview re-reads, only for a failure a concurrent writer can manufacture, and
           // only when a writer is demonstrably there. Everything else — a run that writes, a
           // refusal about the database's actual shape, a torn-SHAPED refusal on a database nobody
           // is writing to — leaves by the same door it always did.
-          if (!dryRun || !isTornReadRefusal(error) || !(await contended())) {
+          //
+          // Contention does not always arrive as a REFUSAL: the catalog is a table list followed by
+          // introspection of that list, and a rename landing in that gap surfaces as the driver's
+          // own missing-table error. Recognised by the same predicate the outer loop uses, so the
+          // two cannot disagree about what is worth re-reading.
+          if (
+            !dryRun ||
+            !isRetryablePreviewFailure(error, dialect) ||
+            !(await contended())
+          ) {
             throw error;
           }
           // Not the final attempt: let it out so the whole session runs again, marker included.
@@ -742,11 +776,36 @@ export async function runFieldGroupMigration(
       // list; a rename landing inside either gap surfaces as the driver's own missing-table error,
       // which no refusal ever classified. Recognised by the same code-based classifier the lock
       // observation uses, so the two cannot disagree about what "not there" looks like.
-      const retryable =
-        isTornReadRefusal(error) || (dryRun && isMissingTable(error, dialect));
-      if (finalAttempt || !retryable || !(await contended())) throw error;
+      if (
+        finalAttempt ||
+        !dryRun ||
+        !isRetryablePreviewFailure(error, dialect) ||
+        !(await contended())
+      ) {
+        throw error;
+      }
     }
   }
+}
+
+/**
+ * Whether a preview should re-read rather than surface this failure.
+ *
+ * 🔴 ONE predicate, asked by both the catch inside the session and the loop around it. They judge
+ * the same question at two depths, and a second list in either place is how the two come to
+ * disagree about which failures are worth another look — the inner one deciding a failure is
+ * reportable while the outer decides the same failure is fatal.
+ *
+ * Two shapes qualify. A refusal a writer can manufacture carries its own classification. A torn
+ * CATALOG read carries none: the list of tables and the introspection of that list are separate
+ * queries, so a rename landing between them comes back as the driver's missing-table error, which
+ * no refusal ever saw.
+ */
+function isRetryablePreviewFailure(
+  error: unknown,
+  dialect: MigrationDialect
+): boolean {
+  return isTornReadRefusal(error) || isMissingTable(error, dialect);
 }
 
 /**

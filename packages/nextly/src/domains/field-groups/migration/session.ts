@@ -342,7 +342,16 @@ export async function withMigrationSession<T>(
   if (args.requireExistingLock === true) {
     // No lock table means no run has ever been recorded here, so there is
     // nothing to exclude and nothing worth creating a table for.
-    if (!(await adapter.tableExists(MIGRATION_LOCK_TABLE))) return fn(session);
+    //
+    // 🔴 Reported as NOT HELD, not with the session's default. That default says
+    // held-by-this-claim, which is true for a session that went on to acquire
+    // and false on this path — the claim string was generated and never written
+    // anywhere. Handing it out here would advertise ownership on the one branch
+    // that deliberately takes no lock, so a caller inspecting it would see
+    // exclusion exactly where there is none.
+    if (!(await adapter.tableExists(MIGRATION_LOCK_TABLE))) {
+      return fn({ ...session, lock: { kind: "not-held" } });
+    }
     await seedLockRow(adapter);
   } else {
     await ensureLockRow(adapter, dialect);
