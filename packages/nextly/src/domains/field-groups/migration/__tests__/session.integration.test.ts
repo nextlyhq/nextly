@@ -6,11 +6,21 @@
  * demand and has no Drizzle definition, so the typed CRUD path rejected the
  * name while doubles answered the call happily. This suite exists so that class
  * of defect cannot survive again — it exercises seed, claim, exclusion and
- * release through the real adapter, with the table genuinely absent from the
- * schema registry.
+ * release through the real adapter.
+ *
+ * Run on EVERY dialect, not just PostgreSQL. The defect this suite was written
+ * for was a typed-CRUD path rejecting an undeclared table name, and nothing
+ * about that is specific to one driver: whether `lockRow` and the statement
+ * path work against a given server is a property of that server's adapter. One
+ * dialect passing says nothing about the other two, which is exactly the gap
+ * that let a double stand in for reality the first time.
  */
+import { createMySqlAdapter } from "@nextlyhq/adapter-mysql";
 import { createPostgresAdapter } from "@nextlyhq/adapter-postgres";
+import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import {
@@ -25,15 +35,49 @@ interface LockAdapter {
   executeQuery<T = unknown>(sql: string, params?: unknown[]): Promise<T[]>;
 }
 
-describe.skipIf(!process.env.TEST_POSTGRES_URL)(
-  "field-group migration lock on a live server",
-  () => {
+/**
+ * The servers this runs against.
+ *
+ * SQLite carries no URL because it needs no server; the other two self-skip when
+ * their URL is unset, which is how every integration suite here behaves.
+ */
+const DIALECTS: {
+  dialect: SupportedDialect;
+  url: string | null;
+  make: () => LockAdapter;
+}[] = [
+  {
+    dialect: "postgresql",
+    url: process.env.TEST_POSTGRES_URL ?? null,
+    make: () =>
+      createPostgresAdapter({
+        url: process.env.TEST_POSTGRES_URL as string,
+      }) as unknown as LockAdapter,
+  },
+  {
+    dialect: "mysql",
+    url: process.env.TEST_MYSQL_URL ?? null,
+    make: () =>
+      createMySqlAdapter({
+        url: process.env.TEST_MYSQL_URL as string,
+      }) as unknown as LockAdapter,
+  },
+  {
+    dialect: "sqlite",
+    url: "memory",
+    make: () => createSqliteAdapter({ memory: true }) as unknown as LockAdapter,
+  },
+];
+
+describe.each(DIALECTS)(
+  "field-group migration lock on a live $dialect server",
+  ({ dialect, url, make }) => {
     let adapter: LockAdapter;
+    const runs = url === null ? describe.skip : describe;
 
     beforeAll(async () => {
-      adapter = createPostgresAdapter({
-        url: process.env.TEST_POSTGRES_URL as string,
-      }) as unknown as LockAdapter;
+      if (url === null) return;
+      adapter = make();
       await adapter.connect();
       // No table, no row, and no schema registry has ever been told about it:
       // exactly the state a first run meets.
@@ -43,6 +87,7 @@ describe.skipIf(!process.env.TEST_POSTGRES_URL)(
     });
 
     afterAll(async () => {
+      if (url === null) return;
       await adapter.executeQuery(
         `DROP TABLE IF EXISTS ${MIGRATION_LOCK_TABLE}`
       );
@@ -58,7 +103,7 @@ describe.skipIf(!process.env.TEST_POSTGRES_URL)(
           // The adapter's own type; the cast is only to keep this suite's
           // surface narrow.
           adapter: adapter as never,
-          dialect: "postgresql",
+          dialect,
           label,
         },
         fn
@@ -72,40 +117,42 @@ describe.skipIf(!process.env.TEST_POSTGRES_URL)(
       return rows[0]?.owner ?? null;
     }
 
-    it("creates its table, seeds the row, claims and releases it", async () => {
-      let heldDuring: string | null = null;
+    runs("against this server", () => {
+      it("creates its table, seeds the row, claims and releases it", async () => {
+        let heldDuring: string | null = null;
 
-      await session("run-1", async () => {
-        heldDuring = await ownerNow();
+        await session("run-1", async () => {
+          heldDuring = await ownerNow();
+        });
+
+        // Held while the callback ran, and free afterwards. Both halves went
+        // through the real driver against a table the ORM does not declare.
+        expect(heldDuring).not.toBeNull();
+        expect(heldDuring).toContain("run-1");
+        expect(await ownerNow()).toBeNull();
       });
 
-      // Held while the callback ran, and free afterwards. Both halves went
-      // through the real driver against a table the ORM does not declare.
-      expect(heldDuring).not.toBeNull();
-      expect(heldDuring).toContain("run-1");
-      expect(await ownerNow()).toBeNull();
-    });
+      it("refuses a second run while the first holds the lock", async () => {
+        const error = await session("outer", async () =>
+          session("inner", () => Promise.resolve("should not run")).catch(
+            (caught: unknown) => caught
+          )
+        );
 
-    it("refuses a second run while the first holds the lock", async () => {
-      const error = await session("outer", async () =>
-        session("inner", () => Promise.resolve("should not run")).catch(
-          (caught: unknown) => caught
-        )
-      );
+        expect(NextlyError.is(error)).toBe(true);
+        if (NextlyError.is(error)) {
+          expect(error.logContext?.reason).toMatch(/held elsewhere/);
+        }
+        // The outer run's release still happened despite the inner refusal.
+        expect(await ownerNow()).toBeNull();
+      });
 
-      expect(NextlyError.is(error)).toBe(true);
-      if (NextlyError.is(error)) {
-        expect(error.logContext?.reason).toMatch(/held elsewhere/);
-      }
-      // The outer run's release still happened despite the inner refusal.
-      expect(await ownerNow()).toBeNull();
-    });
-
-    it("releases the claim when the run throws", async () => {
-      await expect(
-        session("failing", () => Promise.reject(new Error("boom")))
-      ).rejects.toThrow();
-      expect(await ownerNow()).toBeNull();
+      it("releases the claim when the run throws", async () => {
+        await expect(
+          session("failing", () => Promise.reject(new Error("boom")))
+        ).rejects.toThrow();
+        expect(await ownerNow()).toBeNull();
+      });
     });
   }
 );
