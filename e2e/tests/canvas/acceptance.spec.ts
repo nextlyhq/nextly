@@ -45,6 +45,7 @@ import {
   dragUntilTarget,
   jitterAcrossEdge,
   readShellState,
+  dwellAllowanceOf,
   settledTarget,
   settledValue,
 } from "./driver";
@@ -315,6 +316,7 @@ test.describe("a canvas any Nextly editor could ship", () => {
           sampled === null && containing >= 0
             ? await settledValue(
                 () => driver.readActiveZoneOwner(),
+                dwellAllowanceOf(driver),
                 "active zone owner"
               )
             : sampled;

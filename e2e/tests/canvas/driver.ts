@@ -142,6 +142,22 @@ export interface CanvasDriver {
   keyboardInsert(direction: "up" | "down"): Promise<void>;
 
   /**
+   * The longest this canvas may keep showing a previous reading after the
+   * pointer has moved, in milliseconds.
+   *
+   * Declared per driver because the requirement permits a dwell of MORE than
+   * 100ms and sets no upper bound, so no global constant is correct for every
+   * canvas. A canvas with a distance margin rather than a timer declares 0.
+   *
+   * Optional: a driver that omits it gets {@link DEFAULT_DWELL_ALLOWANCE_MS}.
+   * Understating it is self-punishing rather than self-serving — readings come
+   * back stale and this suite fails — which is why the settling helpers trust
+   * it while the jitter probe, which grades whether hysteresis exists at all,
+   * deliberately does not.
+   */
+  dwellAllowanceMs?: number;
+
+  /**
    * Ordinal of the active drop zone among ALL drop zones in document order, or
    * -1 when none is active. Ordinal rather than id because the droppable id is
    * not present in the DOM.
@@ -325,7 +341,16 @@ export async function dragUntilTarget(
 ): Promise<number> {
   for (let step = 0; step < maxSteps; step += 1) {
     await driver.moveBy(0, 8);
-    const active = await driver.readActiveTarget();
+    // Given the dwell, not sampled. A resolver whose hysteresis is a timer
+    // starting from no target at all can have that timer RESET by each move,
+    // so a fixture of narrow candidates is traversed for every step without a
+    // target ever becoming active — and both hysteresis suites then fail their
+    // precondition before reaching the dwell-aware search they exist to run.
+    const active = await departureFrom(
+      () => driver.readActiveTarget(),
+      -1,
+      dwellAllowanceOf(driver)
+    );
     if (active >= 0) return active;
   }
   return -1;
@@ -360,13 +385,20 @@ export const PERMITTED_DWELL_FLOOR_MS = 100;
  * lowering it did the reverse.
  *
  * The requirement states a dwell of MORE than 100ms and gives no upper bound,
- * so no finite wait is provably sufficient and this number is an assumption
- * rather than a derivation. Three times the floor covers any dwell a person
- * would perceive as immediate; a canvas that deliberately dwells longer should
- * declare it on the driver rather than have this raised for everyone, the way
- * the activation threshold is already declared.
+ * so no finite wait is provably sufficient and no global constant can be
+ * correct for every canvas. This is the DEFAULT for a driver that does not say
+ * otherwise; a canvas that dwells longer declares it on the driver, the way the
+ * activation threshold already is.
+ *
+ * Which number each question uses is the load-bearing part. Settling takes the
+ * DRIVER's figure, because that is harness-side knowledge about the
+ * implementation and getting it wrong is self-punishing — understate it and
+ * readings come back stale and the suite fails. The jitter probe takes the
+ * REQUIREMENT's floor instead, never the driver's, because it grades whether
+ * hysteresis exists at all: feeding it the canvas's own claim would let an
+ * implementation set the bar it is measured against.
  */
-export const DWELL_CEILING_MS = 3 * PERMITTED_DWELL_FLOOR_MS;
+export const DEFAULT_DWELL_ALLOWANCE_MS = 3 * PERMITTED_DWELL_FLOOR_MS;
 
 /**
  * How long a stationary pointer is given to stop producing new targets.
@@ -376,10 +408,11 @@ export const DWELL_CEILING_MS = 3 * PERMITTED_DWELL_FLOOR_MS;
  * changing its mind with no input to justify it, which is a defect rather than
  * permitted lag and must not be reported as a settled reading.
  */
-const SETTLE_BUDGET_MS = 4 * DWELL_CEILING_MS;
+const SETTLE_ROUNDS = 4;
 
 /** The capability these readers need, so a test can supply exactly it. */
-type TargetReader = Pick<CanvasDriver, "readActiveTarget">;
+type TargetReader = Pick<CanvasDriver, "readActiveTarget"> &
+  Partial<Pick<CanvasDriver, "dwellAllowanceMs">>;
 
 /**
  * Wait for `read` to return something other than `from`, or for the permitted
@@ -400,12 +433,16 @@ type TargetReader = Pick<CanvasDriver, "readActiveTarget">;
  * version that only knew about target ordinals would leave the other readers to
  * grow their own copy of this.
  */
-async function departureFrom<T>(read: () => Promise<T>, from: T): Promise<T> {
-  const deadline = Date.now() + DWELL_CEILING_MS;
-  let current = from;
-  do {
+async function departureFrom<T>(
+  read: () => Promise<T>,
+  from: T,
+  allowanceMs: number
+): Promise<T> {
+  const deadline = Date.now() + allowanceMs;
+  let current = await read();
+  while (current === from && Date.now() < deadline) {
     current = await read();
-  } while (current === from && Date.now() < deadline);
+  }
   return current;
 }
 
@@ -415,7 +452,7 @@ async function departureFrom<T>(read: () => Promise<T>, from: T): Promise<T> {
  *
  * A canvas whose hysteresis is a TIMER rather than a distance margin is allowed
  * to lag: the pointer is over a new zone and the old reading stays correct for
- * up to {@link DWELL_CEILING_MS}. So "settled" cannot mean "two reads agreed"
+ * up to the dwell its driver declares. So "settled" cannot mean "two reads agreed"
  * — during that lag EVERY read agrees, and they all return the pre-move value.
  * Stability is only evidence once it has been observed across the whole interval
  * the canvas was permitted to lag for, which is why this waits the allowance out
@@ -428,25 +465,44 @@ async function departureFrom<T>(read: () => Promise<T>, from: T): Promise<T> {
  */
 export async function settledValue<T>(
   read: () => Promise<T>,
+  allowanceMs: number,
   subject = "reading"
 ): Promise<T> {
-  const deadline = Date.now() + SETTLE_BUDGET_MS;
+  const budgetMs = SETTLE_ROUNDS * allowanceMs;
+  const deadline = Date.now() + budgetMs;
   let value = await read();
-  while (Date.now() < deadline) {
-    const next = await departureFrom(read, value);
+  // At least one full round, so a canvas declaring a zero dwell still gets its
+  // reading taken rather than falling straight through an expired deadline.
+  for (let round = 0; round < SETTLE_ROUNDS; round += 1) {
+    const next = await departureFrom(read, value, allowanceMs);
     if (next === value) return value;
     value = next;
+    if (Date.now() >= deadline) break;
   }
   throw new Error(
-    `the ${subject} was still changing after ${SETTLE_BUDGET_MS}ms with a ` +
+    `the ${subject} was still changing after ${String(budgetMs)}ms with a ` +
       `stationary pointer (last seen ${String(value)}), so nothing read here ` +
       `is settled`
   );
 }
 
-/** {@link settledValue} over the active drop target. */
+/** {@link settledValue} over the active drop target, at the driver's own dwell. */
 export async function settledTarget(driver: TargetReader): Promise<number> {
-  return settledValue(() => driver.readActiveTarget(), "active target");
+  return settledValue(
+    () => driver.readActiveTarget(),
+    dwellAllowanceOf(driver),
+    "active target"
+  );
+}
+
+/**
+ * The dwell a driver declares, or the default when it declares none.
+ *
+ * Read through one helper so a driver written before this existed keeps
+ * working, and so the fallback is stated once rather than at each call.
+ */
+export function dwellAllowanceOf(driver: Partial<CanvasDriver>): number {
+  return driver.dwellAllowanceMs ?? DEFAULT_DWELL_ALLOWANCE_MS;
 }
 
 /**
@@ -586,7 +642,8 @@ export async function dragToZoneEdge(
     // overshoot the reverse budget below has to carry down to one step.
     const current = await departureFrom(
       () => driver.readActiveTarget(),
-      previous
+      previous,
+      dwellAllowanceOf(driver)
     );
     if (current >= 0 && current !== previous) {
       crossed = current;
@@ -611,10 +668,12 @@ export async function dragToZoneEdge(
     // budget in less time than one dwell — every immediate read then still says
     // `crossed`, the edge is never bracketed, and both hysteresis tests skip
     // without having tested the implementation.
-    if (
-      (await departureFrom(() => driver.readActiveTarget(), crossed)) !==
-      crossed
-    ) {
+    const stepped = await departureFrom(
+      () => driver.readActiveTarget(),
+      crossed,
+      dwellAllowanceOf(driver)
+    );
+    if (stepped !== crossed) {
       await driver.moveBy(0, 1);
       return { target: crossed, crossed: true, bracketed: true };
     }

@@ -13,8 +13,9 @@
 import { expect, test } from "@playwright/test";
 
 import {
-  DWELL_CEILING_MS,
+  DEFAULT_DWELL_ALLOWANCE_MS,
   PERMITTED_DWELL_FLOOR_MS,
+  settledTarget,
   settledValue,
 } from "./driver";
 
@@ -24,7 +25,7 @@ import {
  * then commits to the new one.
  *
  * This is a COMPLIANT canvas, not a broken one. The requirement permits
- * hysteresis expressed as a dwell of up to {@link DWELL_CEILING_MS} instead of
+ * hysteresis expressed as a dwell of up to {@link DEFAULT_DWELL_ALLOWANCE_MS} instead of
  * a distance margin, so every assertion below is about the harness reading such
  * a canvas correctly rather than about the canvas being right.
  */
@@ -42,9 +43,12 @@ test("returns the value the reader commits to, not the one it is still lagging o
   // During a permitted dwell every read agrees, and they all return the
   // PRE-move value — so the old reader returned 1 here and each caller compared
   // a stale target against where the pointer actually was.
-  expect(await settledValue(dwellingReader(1, 2, DWELL_CEILING_MS / 2))).toBe(
-    2
-  );
+  expect(
+    await settledValue(
+      dwellingReader(1, 2, DEFAULT_DWELL_ALLOWANCE_MS / 2),
+      DEFAULT_DWELL_ALLOWANCE_MS
+    )
+  ).toBe(2);
 });
 
 test("spends the whole allowance before calling an unchanged value settled", async () => {
@@ -53,8 +57,10 @@ test("spends the whole allowance before calling an unchanged value settled", asy
   // indistinguishable until the interval it was permitted to lag for has
   // passed. Any implementation that returns sooner is guessing.
   const started = Date.now();
-  expect(await settledValue(async () => 3)).toBe(3);
-  expect(Date.now() - started).toBeGreaterThanOrEqual(DWELL_CEILING_MS);
+  expect(await settledValue(async () => 3, DEFAULT_DWELL_ALLOWANCE_MS)).toBe(3);
+  expect(Date.now() - started).toBeGreaterThanOrEqual(
+    DEFAULT_DWELL_ALLOWANCE_MS
+  );
 });
 
 test("throws rather than returning a value from a reader that never holds still", async () => {
@@ -64,10 +70,14 @@ test("throws rather than returning a value from a reader that never holds still"
   // this whole file exists to prevent.
   let next = 0;
   await expect(
-    settledValue(async () => {
-      next += 1;
-      return next;
-    }, "test reading")
+    settledValue(
+      async () => {
+        next += 1;
+        return next;
+      },
+      DEFAULT_DWELL_ALLOWANCE_MS,
+      "test reading"
+    )
   ).rejects.toThrow(/test reading was still changing/);
 });
 
@@ -77,13 +87,13 @@ test("tolerates a reader that settles only after changing more than once", async
   // transition would fail a compliant canvas, which is the error this suite has
   // made four times in other probes.
   const movedAt = Date.now();
-  const step = DWELL_CEILING_MS / 2;
+  const step = DEFAULT_DWELL_ALLOWANCE_MS / 2;
   const value = await settledValue(async () => {
     const elapsed = Date.now() - movedAt;
     if (elapsed < step) return 1;
     if (elapsed < step * 2) return 2;
     return 3;
-  });
+  }, DEFAULT_DWELL_ALLOWANCE_MS);
   expect(value).toBe(3);
 });
 
@@ -97,6 +107,35 @@ test("reads a canvas whose dwell sits ABOVE the permitted floor", async () => {
   // This is the case that separates the two constants: with one shared value
   // the settling wait equals the floor and this fails.
   expect(
-    await settledValue(dwellingReader(1, 2, PERMITTED_DWELL_FLOOR_MS + 50))
+    await settledValue(
+      dwellingReader(1, 2, PERMITTED_DWELL_FLOOR_MS + 50),
+      DEFAULT_DWELL_ALLOWANCE_MS
+    )
   ).toBe(2);
+});
+
+test("honours a dwell the driver declares to be longer than the default", async () => {
+  // The requirement sets no upper bound on a permitted dwell, so no global
+  // constant can be right for every canvas. A driver that dwells longer than
+  // the default says so, and the settling helper takes ITS figure — with a
+  // shared constant this returns the pre-move value.
+  //
+  // Trusting the driver here is safe because understating the dwell is
+  // self-punishing: readings come back stale and the suite fails. The jitter
+  // probe deliberately does NOT trust it, because that probe grades whether
+  // hysteresis exists at all.
+  const slow = DEFAULT_DWELL_ALLOWANCE_MS + 200;
+  const read = dwellingReader(1, 2, slow - 50);
+
+  expect(
+    await settledTarget({ dwellAllowanceMs: slow, readActiveTarget: read })
+  ).toBe(2);
+});
+
+test("takes the default for a driver that declares no dwell", async () => {
+  // The capability is optional, so a driver written before it existed keeps
+  // working rather than silently settling with a zero allowance.
+  const read = dwellingReader(1, 2, DEFAULT_DWELL_ALLOWANCE_MS / 2);
+
+  expect(await settledTarget({ readActiveTarget: read })).toBe(2);
 });

@@ -160,6 +160,13 @@ export function createPocDriver(page: Page): CanvasDriver {
   let pointer: Point = { x: 0, y: 0 };
 
   const driver: CanvasDriver = {
+    // Zero, because this canvas has no target-switch hysteresis at all:
+    // `plugin-page-builder` registers no collision priority and no dwell, and a
+    // 2px jitter at a boundary flips the indicator on every move. Declaring a
+    // dwell it does not have would spend a wait per reading for lag that never
+    // happens, and would let a real hysteresis defect hide inside the wait.
+    dwellAllowanceMs: 0,
+
     async mountTree(fixture: CanvasFixture) {
       await gotoAdmin(page, `/collections/pages/${fixture.entryId}`);
       await expect(page.locator("iframe")).toBeVisible({ timeout: 30_000 });
