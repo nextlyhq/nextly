@@ -18,6 +18,7 @@ import {
 } from "../di";
 import type { NextlyServiceConfig } from "../di/register";
 import { buildServiceConfig } from "../init/build-service-config";
+import { seedAllPermissions } from "../init/seed-permissions";
 import type { PluginDefinition } from "../plugins/plugin-context";
 import { ensureHmrListener } from "../runtime/hmr-listener";
 import { getImageProcessor } from "../storage/image-processor";
@@ -369,28 +370,14 @@ async function initializeServicesOnce(): Promise<void> {
       // Silently skip — email_templates table may not exist yet
     }
 
-    // Seed system + collection + single permissions (idempotent).
-    // This mirrors init.ts runPostInitTasks() so external apps using
-    // createDynamicHandlers() get permissions auto-seeded on first request.
-    // Without this, permissions like "update-api-keys" won't exist and
-    // the admin UI will block access to protected settings tabs.
+    // The same seeding the instrumentation boot performs, so an app that cold
+    // boots only through `createDynamicHandlers` ends up with the same rows.
+    // Shared rather than mirrored: this path used to seed system, collection
+    // and single permissions and stop there, which left a plugin's declared
+    // permission with no row and no super-admin grant on the one boot path
+    // that never runs post-init tasks.
     try {
-      const permissionSeedService = getService("permissionSeedService");
-      const systemResult = await permissionSeedService.seedSystemPermissions();
-      const collectionResult =
-        await permissionSeedService.seedAllCollectionPermissions();
-      const singleResult =
-        await permissionSeedService.seedAllSinglePermissions();
-
-      const allNewIds = [
-        ...systemResult.newPermissionIds,
-        ...collectionResult.newPermissionIds,
-        ...singleResult.newPermissionIds,
-      ];
-
-      if (allNewIds.length > 0) {
-        await permissionSeedService.assignNewPermissionsToSuperAdmin(allNewIds);
-      }
+      await seedAllPermissions();
     } catch {
       // Silently skip — permissions table may not exist yet (migrations not run),
       // or permissionSeedService may not be registered
