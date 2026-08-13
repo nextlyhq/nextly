@@ -2073,6 +2073,75 @@ describe("an inverse that names a parent held twice", () => {
     ).toThrow(/this subtree is nested 1001 levels deep and cannot be edited/);
   });
 
+  it("treats a reordered record as a change, not a no-op", () => {
+    // A document's identity is its SERIALIZED form, and `JSON.stringify` writes
+    // keys in insertion order — so these are different stored documents, and a
+    // block rendering `Object.entries(props)` produces different output from
+    // them. Comparing membership alone calls the reordering a no-op and refuses
+    // an edit that changes what the reader sees.
+    const before = doc([
+      { ...node("a"), props: { first: 1, second: 2 } } as BlockNode,
+    ]);
+
+    const { document: after } = applyOp(before, {
+      kind: "update",
+      id: "a",
+      patch: { props: { second: 2, first: 1 } },
+    });
+
+    // Asserted on the SERIALIZED form, because that is the thing that differs;
+    // a structural comparison here would be the very check under test.
+    expect(JSON.stringify(after.nodes)).not.toBe(JSON.stringify(before.nodes));
+  });
+
+  it("refuses an array whose iterator is inherited rather than running it", () => {
+    // `hasOnlyJsonOwnKeys` vouches for OWN keys, and `Symbol.iterator` is
+    // inherited — so a prototype supplying one passes the descriptor check and
+    // then has its code executed by a `for...of` inside the walk that was
+    // deciding whether to trust the document. The refusal this module promises
+    // becomes whatever the document chose to throw.
+    const hostile: BlockNode[] = [node("a")];
+    Object.setPrototypeOf(
+      hostile,
+      new Proxy(Array.prototype, {
+        get(target, key, receiver) {
+          if (key === Symbol.iterator) {
+            throw new TypeError("the document decided how to iterate");
+          }
+          return Reflect.get(target, key, receiver) as unknown;
+        },
+      })
+    );
+
+    expect(() =>
+      applyOp(doc(hostile), { kind: "remove", id: "a" })
+    ).not.toThrow(TypeError);
+  });
+
+  it("judges an inserted subtree's values on one shared budget", () => {
+    // Two values, each under the parts ceiling and together over it. Checked
+    // per value with a fresh budget each, the insert is accepted — and the next
+    // `applyOp`, which shares one budget across the document, refuses what the
+    // insert produced. The op succeeded and its own inverse cannot be applied.
+    //
+    // `maxBytes` is raised because otherwise the byte cap refuses this first
+    // and the parts budget is never the deciding check.
+    const half = 2_500_000;
+    const carrier = {
+      ...node("carrier"),
+      alpha: Array.from({ length: half }, () => 1),
+      beta: Array.from({ length: half }, () => 1),
+    } as unknown as BlockNode;
+
+    expect(() =>
+      applyOp(
+        doc(),
+        { kind: "insert", node: carrier, at: { index: 0 } },
+        { maxDepth: 10, maxNodes: 100, maxBytes: Number.MAX_SAFE_INTEGER }
+      )
+    ).toThrow(OpError);
+  }, 60_000);
+
   it("refuses a cap that cannot decide anything", () => {
     // Every cap here is a `>` comparison and every comparison against `NaN` is
     // false, so one non-finite limit does not loosen a cap — it removes it, and

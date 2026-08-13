@@ -492,8 +492,17 @@ function equalWithin(a: unknown, b: unknown, budget: number): boolean {
       if (leftKeys.length !== rightKeys.length) return false;
       if (queued + leftKeys.length > budget) return false;
       queued += leftKeys.length;
-      for (const key of leftKeys) {
-        if (!Object.hasOwn(right, key)) return false;
+      for (let index = 0; index < leftKeys.length; index += 1) {
+        const key = leftKeys[index];
+        if (key === undefined) return false;
+        // ORDER, not just membership. A document's identity is its serialized
+        // form, and `JSON.stringify` writes keys in insertion order — so
+        // `{ first: 1, second: 2 }` and `{ second: 2, first: 1 }` are different
+        // stored documents, and a block rendering `Object.entries(props)`
+        // produces different output from them. Comparing membership alone calls
+        // that reordering a no-op and refuses an edit that changes what the
+        // reader sees.
+        if (key !== rightKeys[index]) return false;
         pending.push([left[key], right[key]]);
       }
       continue;
@@ -660,6 +669,22 @@ function hasOnlyJsonOwnKeys(value: object): boolean {
   // them all, and the byte cap that would refuse such a value has not run yet.
   let parts = 0;
   if (Array.isArray(value)) {
+    // The PROTOTYPE, before any own key. Everything downstream — this module's
+    // own walks, and the engine's `findNode`, `moveNode` and `mapForest` —
+    // reaches a list with `for...of` or a spread, and both run
+    // `Symbol.iterator`, which is inherited. An array subclass or a prototype
+    // supplying its own iterator therefore passes an own-keys check and then
+    // executes the document's code inside the guard deciding whether to trust
+    // it; a null-prototype array fails the other way, with a native "not
+    // iterable" even though its indexed JSON form is valid.
+    //
+    // Refusing the exotic prototype outright rather than avoiding iteration
+    // here, because avoiding it HERE fixes one caller: the engine iterates too,
+    // and this is the boundary that decides what reaches it. Nothing is lost by
+    // the refusal — an array subclass does not survive `JSON.stringify` or
+    // `structuredClone` as a subclass anyway, so it is already outside what
+    // this module promises to store faithfully.
+    if (Object.getPrototypeOf(value) !== Array.prototype) return false;
     for (const key of Reflect.ownKeys(value)) {
       if (parts++ > MAX_VALUE_PARTS) return false;
       // `length` is an own property of every array and is never serialized as
@@ -1075,6 +1100,13 @@ function assertNodeShape(
     { candidate: node, path: "the node", depth: 1 },
   ];
 
+  // Every value the subtree HOLDS, collected here and judged once at the end
+  // against one shared parts budget — the same decision the document walk makes
+  // in `areJsonValues`. Two boundaries answering the same question with
+  // different budgets is how an accepted insert becomes a document the next op
+  // refuses.
+  const heldValues: unknown[] = [];
+
   // Counted as it is ENQUEUED, not as it is popped, and against one running
   // total. A subtree that already holds more nodes than a whole document may is
   // going to be refused by the cap check either way — but that check runs after
@@ -1176,15 +1208,16 @@ function assertNodeShape(
     // Preserved rather than rejected, deliberately. Refusing an unknown field
     // would make a document from a newer editor uneditable by this one, which
     // is the failure that costs an author their work rather than an edit.
+    // COLLECTED, then judged once for the whole subtree. Checking each value
+    // with its own `isJsonValue` call gives each a FRESH parts budget, so a
+    // node carrying several values that are individually under the ceiling and
+    // together over it is accepted here — and then refused by the next
+    // `applyOp`, whose `areJsonValues` shares one budget across the document.
+    // The insert succeeds and the document it produces cannot be edited again,
+    // its own inverse included.
     for (const [key, extra] of Object.entries(candidate)) {
       if (Object.hasOwn(NODE_FIELDS, key)) continue;
-      if (!isJsonValue(extra)) {
-        throw new OpError(
-          `${verb}: ${path} carries ${describe(key)}, which holds ${describe(extra)} — ` +
-            `a value JSON cannot write. The node would enter the document and ` +
-            `the next save would be refused.`
-        );
-      }
+      heldValues.push(extra);
     }
 
     for (const [field, contract] of Object.entries(NODE_FIELDS)) {
@@ -1219,11 +1252,11 @@ function assertNodeShape(
               `unchanged, so they would replay as something else.`
           );
         }
-      } else if (!isJsonValue(value)) {
-        throw new OpError(
-          `${verb}: ${path}.${field} holds a value JSON cannot carry ` +
-            `unchanged, so it would replay as something else.`
-        );
+      } else {
+        // Into the same shared budget as the extras, for the same reason:
+        // a fresh budget per field lets a node carry several values that pass
+        // individually and fail together.
+        heldValues.push(value);
       }
       if (!contract.holds(value)) {
         throw new OpError(
@@ -1270,6 +1303,31 @@ function assertNodeShape(
         });
       }
     }
+  }
+
+  // One decision for the whole subtree, matching what the document walk makes.
+  // A per-value budget accepts a node carrying several values that are each
+  // under the ceiling and together over it; this refuses it here, before the
+  // node is placed, rather than leaving the next `applyOp` to refuse the
+  // document this one produced.
+  if (!areJsonValues(heldValues)) {
+    // The offender, found only once the fast path has failed. The PATH is gone
+    // by this point — the walk has finished and its per-node breadcrumbs with
+    // it — so the value is named instead. Keeping paths for a branch that
+    // almost never runs would cost one string per node on every op, which is
+    // the trade the aggregate exists to avoid.
+    for (const value of heldValues) {
+      if (isJsonValue(value)) continue;
+      throw new OpError(
+        `${verb}: this subtree holds ${describe(value)} — a value JSON cannot ` +
+          `write. The node would enter the document and the next save would ` +
+          `be refused.`
+      );
+    }
+    throw new OpError(
+      `${verb}: this subtree holds more values than an edit may examine, so ` +
+        `no document could hold it.`
+    );
   }
 }
 
@@ -1368,7 +1426,16 @@ function assertForestEntries(nodes: BlockNode[]): void {
       );
     }
     enqueued += list.length;
-    for (const entry of list) pending.push(entry);
+    // An INDEX loop, never `for...of`. Iteration runs `Symbol.iterator`, and
+    // that method is INHERITED — `hasOnlyJsonOwnKeys` checks own keys, so an
+    // array subclass or a prototype supplying a custom iterator passes it and
+    // then has its code executed by this walk, leaking a native error where an
+    // `OpError` is promised. A null-prototype array is the same fault from the
+    // other side: its indexed JSON form is perfectly valid and `for...of`
+    // throws "not iterable" on it. The indices were already checked; read them.
+    for (let index = 0; index < list.length; index += 1) {
+      pending.push(list[index]);
+    }
   };
   enqueue(nodes, "a document's nodes");
   // Every node reached, so a document that holds itself is refused rather than
@@ -1772,17 +1839,29 @@ function assertSubtreeIdsAreUnique(
   // one, which is quadratic in the document size — and the subtree that most
   // needs this check is the large one.
   const counts = new Map<string, number>();
-  const pending: BlockNode[] = [];
-  for (const entry of nodes) pending.push(entry);
+  // `unknown` rather than `BlockNode`: the declared type says node, and this
+  // walk exists to work on documents that may not honour it.
+  const pending: unknown[] = [];
+  // Indices rather than iteration, for the reason the entry walk uses them:
+  // `Symbol.iterator` is inherited, so a document-supplied array can run its
+  // own code inside a walk that has only vouched for own keys.
+  for (let index = 0; index < nodes.length; index += 1) {
+    pending.push(nodes[index]);
+  }
   while (pending.length > 0) {
     const current = pending.pop();
-    if (current === undefined) break;
+    if (!isPlainRecord(current)) continue;
     if (typeof current.id === "string") {
       counts.set(current.id, (counts.get(current.id) ?? 0) + 1);
     }
-    for (const children of Object.values(current.slots ?? {})) {
+    const slots: unknown = current.slots;
+    if (!isPlainRecord(slots)) continue;
+    for (const children of Object.values(slots)) {
       if (!Array.isArray(children)) continue;
-      for (const child of children) {
+      // Indices rather than iteration: `Symbol.iterator` is inherited, so a
+      // document-supplied array can run its own code here.
+      for (let index = 0; index < children.length; index += 1) {
+        const child: unknown = children[index];
         if (isPlainRecord(child)) pending.push(child);
       }
     }
@@ -1801,14 +1880,22 @@ function assertSubtreeIdsAreUnique(
 
 function subtreeIds(root: BlockNode): string[] {
   const ids: string[] = [];
-  const pending: BlockNode[] = [root];
+  // `unknown` rather than `BlockNode`, because that is what a slot's children
+  // have been established to be at the moment they are read: the declared type
+  // says node, and this walk exists to work on documents that may not honour it.
+  const pending: unknown[] = [root];
   while (pending.length > 0) {
     const entry = pending.pop();
-    if (entry === undefined) break;
+    if (!isPlainRecord(entry)) continue;
     if (typeof entry.id === "string") ids.push(entry.id);
-    for (const children of Object.values(entry.slots ?? {})) {
+    const slots: unknown = entry.slots;
+    if (!isPlainRecord(slots)) continue;
+    for (const children of Object.values(slots)) {
       if (!Array.isArray(children)) continue;
-      for (const child of children) {
+      // Indices rather than iteration: `Symbol.iterator` is inherited, so a
+      // document-supplied array can run its own code here.
+      for (let index = 0; index < children.length; index += 1) {
+        const child: unknown = children[index];
         if (isPlainRecord(child)) pending.push(child);
       }
     }
@@ -1823,7 +1910,12 @@ function assertIdIsUnique(nodes: BlockNode[], id: string, verb: string): void {
   // guard broke on the input the repair was trying to fix.
   let seen = 0;
   const pending: BlockNode[] = [];
-  for (const entry of nodes) pending.push(entry);
+  // Indices rather than iteration, for the reason the entry walk uses them:
+  // `Symbol.iterator` is inherited, so a document-supplied array can run its
+  // own code inside a walk that has only vouched for own keys.
+  for (let index = 0; index < nodes.length; index += 1) {
+    pending.push(nodes[index]);
+  }
   while (pending.length > 0) {
     const current = pending.pop();
     if (current === undefined) break;
@@ -1831,7 +1923,9 @@ function assertIdIsUnique(nodes: BlockNode[], id: string, verb: string): void {
     const slots = current.slots;
     if (slots === undefined) continue;
     for (const children of Object.values(slots)) {
-      for (const child of children) pending.push(child);
+      for (let index = 0; index < children.length; index += 1) {
+        pending.push(children[index]);
+      }
     }
   }
   if (seen > 1) {
