@@ -309,13 +309,19 @@ export function DataTableView<Row extends object>({
   // only the row-less case replaces the table outright.
   if (error && rows.length === 0) {
     return (
-      <div className={cn("@container/table w-full", className)}>
+      <div className={cn("@container/table w-full space-y-4", className)}>
         <div
           role="alert"
           className="rounded-md bg-destructive/10 p-3 text-sm text-destructive"
         >
           <TableError message={error} />
         </div>
+        {/* The footer stays. It carries the pager, and a request that failed
+            for ONE page leaves the user on that page with no rows -- so
+            removing the controls here removes the only way back to a page that
+            works. The rows are gone; the navigation out of the failure is not
+            part of the failure. */}
+        {footer}
       </div>
     );
   }

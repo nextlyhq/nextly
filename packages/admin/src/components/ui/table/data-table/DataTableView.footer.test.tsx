@@ -111,6 +111,25 @@ describe("DataTableView footer", () => {
     );
   });
 
+  it("keeps the footer when a page fails with no rows", () => {
+    // The pager lives in the footer, and a request that fails for ONE page
+    // leaves the user on that page with nothing. Dropping the footer with the
+    // rows takes away the only way back to a page that works, which turns a
+    // recoverable error into a dead end. The rows are gone; the navigation out
+    // of the failure is not part of the failure.
+    render(
+      <DataTableView<Row>
+        columns={[{ name: "name", header: "Name" }]}
+        rows={[]}
+        error="Request failed"
+        footer={<div data-testid="footer">pager</div>}
+      />
+    );
+
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(screen.getByTestId("footer")).toBeInTheDocument();
+  });
+
   it("renders nothing extra when no footer is given", () => {
     render(
       <DataTableView<Row>

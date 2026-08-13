@@ -61,6 +61,43 @@ function tagNameOf(node: ts.Node, file: ts.SourceFile): string | undefined {
 }
 
 /**
+ * The local names a file binds `Pagination` to, including through an alias or a
+ * namespace.
+ *
+ * A JSX tag is a BINDING, not a spelling. `import { Pagination as Pager }` still
+ * puts the word `Pagination` in the file — so the file stays in `sources` and
+ * looks scanned — while every tag reads `Pager` and matches nothing. An import
+ * refactor would have disabled this guard silently, with the file counts
+ * unchanged because the other surfaces are still there.
+ */
+function localPagerNames(file: ts.SourceFile): Set<string> {
+  const names = new Set<string>();
+  let rebound = false;
+  for (const statement of file.statements) {
+    if (!ts.isImportDeclaration(statement)) continue;
+    const bindings = statement.importClause?.namedBindings;
+    if (!bindings) continue;
+    if (ts.isNamespaceImport(bindings)) {
+      names.add(`${bindings.name.text}.${PAGER}`);
+      continue;
+    }
+    for (const element of bindings.elements) {
+      // `propertyName` is set only when aliased, and then holds the EXPORTED
+      // name while `name` holds the local one.
+      if ((element.propertyName ?? element.name).text === PAGER) {
+        names.add(element.name.text);
+      }
+      if (element.name.text === PAGER) rebound = true;
+    }
+  }
+  // The component's own module declares rather than imports it, and a control
+  // fixture may have no imports, so the bare name counts unless something has
+  // bound that name to a different export.
+  if (!rebound) names.add(PAGER);
+  return names;
+}
+
+/**
  * Components that take a `footer` and hand it straight to a `DataTableView`.
  *
  * A short list rather than an open rule, because "some component has a prop
@@ -109,11 +146,13 @@ function ownerTagName(node: ts.Node, file: ts.SourceFile): string | undefined {
   return undefined;
 }
 
-/** Every `<Pagination>` in a file that is NOT inside a `footer` attribute. */
+/** Every pager in a file that is NOT inside a table's `footer`, found by binding. */
 function detachedPagers(file: ts.SourceFile): ts.Node[] {
+  const names = localPagerNames(file);
   const found: ts.Node[] = [];
   const visit = (node: ts.Node): void => {
-    if (tagNameOf(node, file) === PAGER && !insideTableFooter(node, file)) {
+    const tag = tagNameOf(node, file);
+    if (tag !== undefined && names.has(tag) && !insideTableFooter(node, file)) {
       found.push(node);
     }
     ts.forEachChild(node, visit);
@@ -236,6 +275,23 @@ describe("list pagination", () => {
       "const x = <MediaListView media={m} footer={<Pagination page={1} />} />;"
     );
     expect(detachedPagers(forwarded)).toHaveLength(0);
+
+    // A tag is a BINDING, not a spelling. An aliased import leaves the word
+    // `Pagination` in the file, so it stays in `sources` and looks scanned,
+    // while every tag reads `Pager` and matches nothing.
+    const aliased = parse(
+      "aliased.tsx",
+      'import { Pagination as Pager } from "@admin/components/shared/pagination";\n' +
+        "const x = (<><DataTableView columns={c} rows={r} /><Pager page={1} /></>);"
+    );
+    expect(detachedPagers(aliased), "aliased pager").toHaveLength(1);
+
+    const namespaced = parse(
+      "namespaced.tsx",
+      'import * as Shared from "@admin/components/shared";\n' +
+        "const x = (<><DataTableView columns={c} rows={r} /><Shared.Pagination page={1} /></>);"
+    );
+    expect(detachedPagers(namespaced), "namespaced pager").toHaveLength(1);
   });
 
   it("renders every list pager inside its table", () => {
