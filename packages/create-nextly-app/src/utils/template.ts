@@ -4,7 +4,12 @@ import { fileURLToPath } from "url";
 import fs from "fs-extra";
 
 import { buildNextConfigTemplate } from "../generators/next-config";
-import type { DatabaseConfig, ProjectApproach, ProjectType } from "../types";
+import type {
+  DatabaseConfig,
+  PackageManager,
+  ProjectApproach,
+  ProjectType,
+} from "../types";
 
 /**
  * Templates whose `nextly.config.ts` registers `formBuilderPlugin`. The
@@ -733,6 +738,52 @@ export function generatePnpmWorkspaceYaml(): string {
   );
 }
 
+/**
+ * Generate the `.npmrc` for a scaffolded project, or `null` when it needs none.
+ *
+ * Written only for pnpm scaffolds, and only to undo a side effect of shipping
+ * `pnpm-workspace.yaml`: through pnpm 9.3 the presence of that file makes the
+ * project a workspace ROOT, so an ordinary
+ *
+ *     pnpm add zod
+ *
+ * is refused with `ERR_PNPM_ADDING_TO_ROOT` and a suggestion to pass `-w`. The
+ * check exists to stop a dependency landing in a monorepo's root instead of the
+ * package that wanted it; a scaffolded app has no other package, so there is
+ * nothing for it to protect and it only obstructs.
+ *
+ * Measured: 9.0.0 refuses `pnpm add` without this and accepts it with; 10.18.3
+ * and 11.0.0 accept it either way. Two alternatives were measured and rejected —
+ * declaring the root as a member (`packages: ["."]`) is refused identically, and
+ * the same setting written into `pnpm-workspace.yaml` is not read by pnpm 9 at
+ * all, since that file only became the settings home in 10.6.
+ *
+ * NOT written for npm, yarn or bun, which is the whole reason this is a separate
+ * function rather than an unconditional file: npm reads `.npmrc` too and prints
+ *
+ *     npm warn Unknown project config "ignore-workspace-root-check".
+ *     This will stop working in the next major version of npm.
+ *
+ * on every command. A permanent warning for the majority is a poor trade for a
+ * setting they cannot use.
+ *
+ * The residual gap, stated rather than left to be discovered: a project
+ * scaffolded with npm and later opened with pnpm 9.3 or older still meets
+ * `ERR_PNPM_ADDING_TO_ROOT`. That error names its own remedy, and the affected
+ * pnpm range is closed and shrinking.
+ */
+export function generateNpmrc(packageManager: PackageManager): string | null {
+  if (packageManager !== "pnpm") return null;
+
+  return (
+    "# This project is a single package, not a monorepo. pnpm 9 treats the\n" +
+    "# pnpm-workspace.yaml shipped for its build allowlist as declaring a\n" +
+    "# workspace root, which makes `pnpm add <pkg>` demand a -w flag. There is no\n" +
+    "# other package here for that check to protect.\n" +
+    "ignore-workspace-root-check=true\n"
+  );
+}
+
 // ============================================================
 // Copy Template (Main Orchestrator)
 // ============================================================
@@ -748,6 +799,13 @@ export interface CopyTemplateOptions {
   approach?: ProjectApproach;
   /** Explicit paths to base and template directories (from download or --local-template) */
   templateSource?: { basePath: string; templatePath: string };
+  /**
+   * The package manager the project will be installed with, which decides
+   * whether a `.npmrc` is written — see {@link generateNpmrc}. Omitted is
+   * treated as npm, so a caller that does not know writes nothing rather than
+   * writing a file the wrong tool will warn about.
+   */
+  packageManager?: PackageManager;
   /**
    * Suppress the internal "directory already exists" guard. Set by the
    * installer when it has already negotiated a directory conflict with
@@ -782,6 +840,7 @@ export async function copyTemplate(
     useYalc = false,
     approach,
     templateSource,
+    packageManager = "npm",
     allowExistingTarget = false,
   } = options;
 
@@ -818,7 +877,13 @@ export async function copyTemplate(
   // app — no base app, no next.config/.env generation, no frontend page. Copy
   // the plugin tree as-is, generate its package.json, fill placeholders, done.
   if (projectType === "plugin") {
-    await copyPluginTemplate({ projectName, typeDir, targetDir, useYalc });
+    await copyPluginTemplate({
+      projectName,
+      typeDir,
+      targetDir,
+      useYalc,
+      packageManager,
+    });
     return;
   }
 
@@ -943,6 +1008,14 @@ export async function copyTemplate(
     "utf-8"
   );
 
+  // Step 6c: Undo the side effect of the file above for the pnpm versions that
+  // read it as a workspace declaration. Only for pnpm, because npm warns about
+  // the setting on every command — see generateNpmrc.
+  const npmrc = generateNpmrc(packageManager);
+  if (npmrc) {
+    await fs.writeFile(path.join(targetDir, ".npmrc"), npmrc, "utf-8");
+  }
+
   // Step 7: Create SQLite data directory if needed
   // SQLite stores its database file at ./data/nextly.db and the parent
   // directory must exist before the adapter can create the file.
@@ -977,8 +1050,9 @@ async function copyPluginTemplate(opts: {
   typeDir: string;
   targetDir: string;
   useYalc: boolean;
+  packageManager: PackageManager;
 }): Promise<void> {
-  const { projectName, typeDir, targetDir, useYalc } = opts;
+  const { projectName, typeDir, targetDir, useYalc, packageManager } = opts;
 
   if (!(await fs.pathExists(typeDir))) {
     throw new Error(
@@ -1012,12 +1086,18 @@ async function copyPluginTemplate(opts: {
   // pnpm 11 ignores the package.json `pnpm` field, and the embedded dev/
   // playground uses better-sqlite3 (native build) — so this file is what lets
   // `pnpm install` build it instead of aborting with ERR_PNPM_IGNORED_BUILDS.
-  // Harmless for npm/yarn/pnpm 9.
   await fs.writeFile(
     path.join(targetDir, "pnpm-workspace.yaml"),
     generatePnpmWorkspaceYaml(),
     "utf-8"
   );
+
+  // A plugin scaffold installs like any other project, so it meets the same
+  // workspace-root refusal the file above provokes on pnpm 9 — see generateNpmrc.
+  const npmrc = generateNpmrc(packageManager);
+  if (npmrc) {
+    await fs.writeFile(path.join(targetDir, ".npmrc"), npmrc, "utf-8");
+  }
 
   // Fill plugin placeholders across the copied tree (src/ + dev/).
   const nextlyRange = await resolvePluginNextlyRange(useYalc);
