@@ -8,6 +8,7 @@
  * DIRECTION, not merely for having clamped.
  */
 
+import { CALENDAR_COLUMN_MAX_OFFSET_MS } from "../../retention/window";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -68,16 +69,42 @@ describe("resolving the delivery-log retention policy", () => {
   );
 
   it.each([
-    ["zero", 0],
     ["negative", -1],
     ["NaN", Number.NaN],
   ])("falls back to the default for a %s window", (_label, value) => {
-    // The opposite direction, and it is safe here: a window of zero or less
-    // asks to delete EVERYTHING immediately, so the default is the conservative
-    // reading rather than the destructive one.
+    // The opposite direction, and it is safe here: neither says anything
+    // coherent about how long to keep rows, and neither asked for MORE
+    // retention than the default gives.
     expect(resolveEmailRetentionConfig({ maxAgeMs: value }).maxAgeMs).toBe(
       DEFAULT_MAX_AGE_MS
     );
+  });
+
+  it("reads zero as keeping nothing, because this is a delivery ledger", () => {
+    // Deliberate, and the opposite of what an audit trail does with the same
+    // input. A delivery row exists to make a retry possible and to answer "did
+    // this send"; an operator who does not want recipient addresses stored at
+    // all is expressing a position, and `false` already means keep forever, so
+    // zero has no other coherent reading left to it. The audit trails call the
+    // same value malformed, because erasing the record of who did what on a
+    // typo is not recoverable — one shared resolver, two stated policies.
+    expect(resolveEmailRetentionConfig({ maxAgeMs: 0 }).maxAgeMs).toBe(0);
+  });
+
+  it("keeps a window the ledger's column can actually store", () => {
+    // The bound belongs to `email_deliveries.created_at`, a MySQL `datetime(3)`
+    // reaching back to year 1000 — not to the `Date` range. An earlier copy of
+    // this resolver bounded by `8.64e15`, which accepted windows whose cutoff no
+    // column can hold: the pass then failed on every run while the setting read
+    // as accepted.
+    const past = CALENDAR_COLUMN_MAX_OFFSET_MS + 1;
+    expect(resolveEmailRetentionConfig({ maxAgeMs: past }).maxAgeMs).toBe(
+      false
+    );
+    expect(
+      resolveEmailRetentionConfig({ maxAgeMs: CALENDAR_COLUMN_MAX_OFFSET_MS })
+        .maxAgeMs
+    ).toBe(CALENDAR_COLUMN_MAX_OFFSET_MS);
   });
 
   it("keeps the interval inside the range the gate can compare", () => {

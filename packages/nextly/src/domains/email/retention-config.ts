@@ -20,6 +20,11 @@
  * @module domains/email/retention-config
  */
 
+import {
+  CALENDAR_COLUMN_MAX_OFFSET_MS,
+  resolveRetentionWindow,
+} from "../retention/window";
+
 /**
  * A retention window, or `false` to keep rows indefinitely.
  *
@@ -63,42 +68,47 @@ const DEFAULT_EMAIL_RETENTION_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_EMAIL_MAX_BATCHES_PER_RUN = 10;
 
 /**
- * The largest offset that still lands inside the Date range when subtracted
- * from now. A window beyond it makes the cutoff unrepresentable.
- */
-const MAX_STORABLE_OFFSET_MS = 8.64e15;
-
-/**
- * A window, or `false`.
+ * A window, resolved by the rule every trail shares.
  *
- * An out-of-range value degrades to `false` — keep everything — rather than to
- * the default, and the direction is the whole point: the default is SHORTER, so
- * substituting it would DELETE rows the configuration asked to retain.
- * Rejecting a value must never be more destructive than honouring it.
+ * Derived from `domains/retention/window` rather than decided here, because
+ * audit, webhooks and this ledger were all answering one question separately
+ * and had drifted into different answers for the same input. The copy that
+ * stood here bounded a window by `8.64e15` — the full `Date` range — which is
+ * not what any COLUMN can store: a cutoff formed from it lands far outside
+ * `datetime`, and the pass then fails on every run while the configuration
+ * reads as accepted.
+ *
+ * `zero` is `keep-nothing` rather than malformed, and this ledger is the reason
+ * that parameter exists. A delivery row's purpose is making a retry possible
+ * and answering "did this send"; an operator who does not want recipient
+ * addresses stored at all is expressing a position, not making a typo. An audit
+ * trail set to zero is the opposite, which is why the two cannot share one
+ * reading.
+ *
+ * The bound is the calendar one because `email_deliveries.created_at` is a
+ * MySQL `datetime(3)` — the same family as `audit_log` and the webhook tables,
+ * and not the epoch-based `TIMESTAMP` that governs `activity_log`.
  */
 function maxAge(value: EmailMaxAge | undefined, fallback: number): EmailMaxAge {
-  if (value === false) return false;
-  if (value === undefined) return fallback;
-  const window = value;
-  // NaN is not a window at all, and zero or negative asks to delete everything
-  // immediately — for those the default is the conservative reading.
-  if (Number.isNaN(window) || window <= 0) return fallback;
-  // Infinity and anything past the Date range are the SAME request: keep rows
-  // longer than a cutoff can express. Both become `false`, never the default,
-  // because the default is shorter and would delete what was asked to be kept.
-  return window <= MAX_STORABLE_OFFSET_MS ? window : false;
+  return resolveRetentionWindow(value, {
+    fallback,
+    zero: "keep-nothing",
+    maxOffsetMs: CALENDAR_COLUMN_MAX_OFFSET_MS,
+  });
 }
 
 /**
- * A positive, representable duration.
- *
- * Bounded for the same reason a window is: the gate subtracts the interval from
- * now to decide whether a pass is due, so a value that leaves the Date range
- * makes that comparison unanswerable and no pass ever runs again.
+ * An interval is subtracted from now to decide whether a pass is due, so it has
+ * to stay a real date; a value outside the `Date` range makes that comparison
+ * unanswerable and no pass ever runs again. Unlike a window it is never stored
+ * or compared against a column, so no column sets this ceiling — any finite
+ * bound past the point where an interval means anything will do.
  */
+const MAX_INTERVAL_MS = 50 * 365 * 24 * 60 * 60 * 1000;
+
 function positive(value: number | undefined, fallback: number): number {
   if (value === undefined) return fallback;
-  return Number.isFinite(value) && value > 0 && value <= MAX_STORABLE_OFFSET_MS
+  return Number.isFinite(value) && value > 0 && value <= MAX_INTERVAL_MS
     ? value
     : fallback;
 }
