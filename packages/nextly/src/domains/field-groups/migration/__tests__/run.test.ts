@@ -1234,6 +1234,41 @@ describe("a preview that meets a writer mid-run", () => {
     });
   });
 
+  // 🔴 MySQL commits each `RENAME TABLE` as it is issued and the registry row is updated after, so
+  // there is a VALID window in which one consistent catalog holds the migrated companion beside a
+  // still-legacy registry row. Asking only the legacy spelling answers "no companion" there, which
+  // changes the registry hash — and an in-flight run then fails the recorded-hash comparison and
+  // refuses permanently, before the retryable block, while the lock names the writer that caused it.
+  //
+  // Distinct from the snapshot test above: that one separates "asked once" from "asked twice", this
+  // one separates a mid-rename catalog from a settled one. A single fixture cannot do both.
+  it("finds a companion already renamed ahead of its registry row", async () => {
+    const { adapter } = createRunWorld({
+      // Base still legacy, companion already moved — the MySQL intermediate state.
+      tables: [LEGACY_REGISTRY, "comp_hero", "fg_hero_locales"],
+      registryRows: [
+        { id: "1", slug: "hero", table_name: "comp_hero", localized: true },
+      ],
+    });
+
+    // Asserted on the registry read itself rather than through a dry run. A preview over this
+    // catalog legitimately refuses — a migrated name present with nothing recorded is the adoption
+    // case — so routing the assertion through it would test that refusal instead of the companion
+    // resolution, and would report the same failure whether or not the fix were present.
+    const rows = await readRegistryRows(adapter, "postgresql", PRESERVING);
+
+    expect(rows).toEqual([
+      {
+        id: "1",
+        slug: "hero",
+        tableName: "comp_hero",
+        // Read only under the legacy spelling this is `false`, which drops the companion from the
+        // manifest and changes the registry hash an in-flight run is compared against.
+        hasCompanion: true,
+      },
+    ]);
+  });
+
   // 🔴 The retry decision and the reported lock must come from ONE observation. Reducing the
   // recheck to a boolean was enough to decide and not enough to report: the outcome carried the
   // session's opening `not-held` beside a `basis` saying contention, so the single field an
