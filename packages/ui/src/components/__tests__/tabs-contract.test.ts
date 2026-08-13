@@ -88,7 +88,9 @@ const REPO = resolve(HERE, "../../../../..");
  * first-party consumer. Omitting them would mean reporting repository-wide
  * conformance from a subset of the repository.
  */
-const SCAN_ROOTS = ["packages", "apps", "templates"].map(r => resolve(REPO, r));
+const SCAN_ROOT_NAMES = ["packages", "apps", "templates"] as const;
+
+const SCAN_ROOTS = SCAN_ROOT_NAMES.map(r => resolve(REPO, r));
 
 /** The primitive itself declares the contract; it is not a call site. */
 const PRIMITIVE = resolve(REPO, "packages/ui/src/components/tabs.tsx");
@@ -1033,31 +1035,18 @@ function ownsStyleProperty(slot: string, property: string): boolean {
 /**
  * Whether a file can hold a JSX call site.
  *
- * `.js` is on the list and that is not an oversight corrected — it is the case
- * an earlier version of this test actively certified as SAFE. A JavaScript
- * Next.js app puts JSX in `.js` routinely, so a first-party `page.js` importing
- * `TabsTrigger` was invisible to the scan while a control asserted that
- * invisibility was correct. A test that ratifies a gap is worse than no test,
- * because it answers the question and closes it.
+ * Every extension in which JSX is legal, which is the three below and not only
+ * the TypeScript ones: a JavaScript Next.js app writes JSX in `.js` and `.jsx`
+ * routinely, so `app/page.js` is an ordinary place for a call site to live.
+ * `.ts` is excluded because an element cannot appear there at all.
  *
- * `.ts` stays off: an element cannot appear there, so reading those files would
- * cost time and find nothing.
- *
- * Named once because the Turbo input globs must cover exactly these — an
+ * Named once because the Turbo input globs must cover exactly these. An
  * extension the scan reads but the hash does not cover is a file that can
- * change behind a cached green, which is the same silent gap wearing different
- * clothes. `turbo.json` is static JSON and cannot import this, so the two are
- * tied together by a contract test below rather than by a claim in a comment.
+ * change while a cached result is replayed, and a replayed pass is
+ * indistinguishable from one that ran. `turbo.json` is static JSON and cannot
+ * import this list, so a contract test below asserts the two agree.
  */
 const CALL_SITE_EXTENSIONS = [".tsx", ".jsx", ".js"] as const;
-
-/**
- * The roots the scan walks, and the roots the Turbo inputs must cover.
- *
- * Both halves of a pair matter. A glob covering `packages` says nothing about a
- * call site under `apps`, so the two are enumerated rather than summarised.
- */
-const CALL_SITE_ROOTS = ["packages", "apps"] as const;
 
 /**
  * Directories whose contents are generated rather than written.
@@ -2438,16 +2427,22 @@ describe("which files the call-site scan reads", () => {
       )
     ) as { tasks: Record<string, { inputs?: string[] }> };
 
-    const required = CALL_SITE_ROOTS.flatMap(root =>
-      CALL_SITE_EXTENSIONS.map(
+    // Derived from the roots the traversal actually walks, so a root added
+    // there cannot be forgotten here. `templates` is covered by a single broad
+    // glob rather than per-extension ones, which is why a root is satisfied by
+    // EITHER spelling: what matters is that every file the scan reads is
+    // hashed, not how the glob is written.
+    const satisfies = (inputs: Set<string>, root: string): string[] => {
+      if (inputs.has(`$TURBO_ROOT$/${root}/**`)) return [];
+      return CALL_SITE_EXTENSIONS.map(
         extension => `$TURBO_ROOT$/${root}/**/*${extension}`
-      )
-    );
+      ).filter(glob => !inputs.has(glob));
+    };
 
     // Both tasks: a gap in either replays a stale result for that task alone.
     for (const task of ["test", "test:coverage"]) {
       const inputs = new Set(config.tasks[task]?.inputs ?? []);
-      const missing = required.filter(glob => !inputs.has(glob));
+      const missing = SCAN_ROOT_NAMES.flatMap(root => satisfies(inputs, root));
 
       // The missing globs are named, because this rule is only ever broken by
       // someone adding an extension or a root who does not know the second
