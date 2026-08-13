@@ -858,6 +858,24 @@ export async function runFieldGroupMigration(
       // observation uses, so the two cannot disagree about what "not there" looks like.
       if (!dryRun || !isRetryablePreviewFailure(error, dialect)) throw error;
 
+      // 🔴 Scored BEFORE the final-attempt verdict, not after it. This ran below the block, so the
+      // last attempt was judged on the comparison between the two attempts BEFORE it: a final
+      // failure whose signature had changed — the very evidence that the writer moved — was
+      // rethrown, and a stale `true` from an earlier transition could soften a final failure after
+      // movement had stopped. Both errors come from deciding with state that does not yet describe
+      // the failure being decided about.
+      //
+      // Recorded here as well as in the inner catch so a failure leaving by either door counts
+      // towards the same judgement. Two paths deciding "did the world move" from different evidence
+      // is the drift this file has already been corrected for twice.
+      const signature = signatureOf(error, await observeContention());
+      if (lastSignature !== undefined && signature !== lastSignature) {
+        movedSinceLastAttempt = true;
+      } else if (lastSignature !== undefined) {
+        movedSinceLastAttempt = false;
+      }
+      lastSignature = signature;
+
       if (finalAttempt) {
         if (innerAdjudicated) throw error;
         // 🔴 Exhausted on the OUTER path, which the inner fallback cannot reach. A later attempt can
@@ -889,16 +907,6 @@ export async function runFieldGroupMigration(
           basis: { kind: "unreconciled", reason },
         });
       }
-      // Recorded here too, so a failure that leaves by the outer door counts towards the same
-      // judgement. Two paths deciding "did the world move" from different evidence is the drift
-      // this file has already been corrected for twice.
-      const signature = signatureOf(error, await observeContention());
-      if (lastSignature !== undefined && signature !== lastSignature) {
-        movedSinceLastAttempt = true;
-      } else if (lastSignature !== undefined) {
-        movedSinceLastAttempt = false;
-      }
-      lastSignature = signature;
     }
   }
 }
