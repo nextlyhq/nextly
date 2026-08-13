@@ -542,19 +542,12 @@ jobs:
           pnpm dev > /tmp/dev.log 2>&1 &
           dev_pid=$!
 
-          # Wait for both watchers to ANNOUNCE they are watching, not for their artifacts to
-          # appear. tsup writes `dist` before it arms its file watcher, so an edit made in that
-          # gap is never seen and the rebuild below cannot happen — the artifact is present and
-          # the watcher is not yet listening, which is precisely the state a one-shot build is
-          # also in. Each config prints this line once, so two occurrences means both are armed.
-          #
-          # `|| true` rather than `|| echo 0`: grep PRINTS 0 and exits 1 when it matches nothing,
-          # so a fallback that echoes as well makes the substitution "0\n0" and the numeric
-          # comparison never succeeds. The empty default then covers the file not existing yet,
-          # where grep prints nothing at all.
+          # Wait for the artifacts to exist, which is only enough to take a baseline from. It is
+          # NOT evidence that anything is watching: tsup writes `dist` before it arms its file
+          # watcher, so an edit made in this gap is absorbed by chokidar's initial scan and never
+          # reported. The probe below is what establishes readiness.
           for _ in $(seq 1 120); do
-            armed=$(grep -c 'Watching for changes' /tmp/dev.log 2>/dev/null || true)
-            if [ "${armed:-0}" -ge 2 ]; then break; fi
+            if [ -f dist/index.mjs ] && [ -f dist/color.mjs ]; then break; fi
             sleep 1
           done
 
@@ -579,12 +572,24 @@ jobs:
           # detect one in either direction.
           before_client=$(cksum dist/index.mjs | awk '{print $1"-"$2}')
           before_server=$(cksum dist/color.mjs | awk '{print $1"-"$2}')
-          printf '\nexport const __clientWatcherProbe = "probe";\n' >> src/index.ts
-          printf '\nexport const __serverWatcherProbe = "probe";\n' >> src/lib/color/index.ts
 
+          # The edit is REPEATED until a rebuild is seen, rather than made once against a signal
+          # that claims the watcher is ready. tsup logs "Watching for changes" before it expands
+          # the watch path and constructs chokidar, so that line is a proxy: on a slow runner both
+          # configs can log it while neither is listening, and a single edit made then is swallowed
+          # by the initial scan. Retrying removes the proxy — the first rebuild IS the readiness
+          # signal, and nothing has to be assumed about when it arrives.
+          #
+          # Each probe carries the attempt number so repeated appends stay distinct declarations
+          # rather than a redeclaration error that would fail the build for the wrong reason.
           client_rebuilt=no
           server_rebuilt=no
-          for _ in $(seq 1 90); do
+          for i in $(seq 1 45); do
+            [ "$client_rebuilt" = "no" ] &&
+              printf '\nexport const __clientWatcherProbe%s = "probe";\n' "$i" >> src/index.ts
+            [ "$server_rebuilt" = "no" ] &&
+              printf '\nexport const __serverWatcherProbe%s = "probe";\n' "$i" >> src/lib/color/index.ts
+            sleep 2
             if [ "$(cksum dist/index.mjs | awk '{print $1"-"$2}')" != "$before_client" ]; then
               client_rebuilt=yes
             fi
@@ -592,7 +597,6 @@ jobs:
               server_rebuilt=yes
             fi
             if [ "$client_rebuilt" = "yes" ] && [ "$server_rebuilt" = "yes" ]; then break; fi
-            sleep 1
           done
 
           # Liveness AFTER the rebuild, which is a different question from liveness before it: a
