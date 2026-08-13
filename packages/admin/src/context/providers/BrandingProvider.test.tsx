@@ -79,31 +79,18 @@ describe("useBrandingStatus", () => {
 
     await waitFor(() => expect(status()).toBe("unavailable"));
   });
-
-  /**
-   * The separating case, and the one a plain `isError` gets wrong.
-   *
-   * A background refetch can fail long after a response is cached, and that
-   * cached response is still a complete answer. Reporting it as unavailable
-   * would replace a correct page with an error for as long as the server stays
-   * unreachable — for a reader looking at a plugin the cached list already
-   * proved absent, that is an error screen instead of the install page.
-   */
-  it("stays answered when a refetch fails after a response is cached", async () => {
-    get.mockResolvedValueOnce({ plugins: [] } as AdminBranding);
-    get.mockRejectedValue(new Error("boom"));
-
-    const client = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    });
-    renderProbe(client);
-    await waitFor(() => expect(status()).toBe("answered"));
-
-    await client.refetchQueries({ queryKey: ["admin-meta"] });
-
-    // The refetch really did fail — without this the assertion below is
-    // satisfied by a refetch that never ran, which is the same green.
-    expect(get).toHaveBeenCalledTimes(2);
-    expect(status()).toBe("answered");
-  });
 });
+
+/**
+ * NOT COVERED, stated rather than left to look covered: a background refetch
+ * failing while a previous response is cached must leave the status
+ * `answered`, since the cached response is still a complete answer.
+ *
+ * `isUnavailable` is wired to the query's `isLoadingError`, which query-core
+ * defines as `isError && !hasData` (`isRefetchError` is the `&& hasData`
+ * half), so the distinction is the library's own and holds by construction.
+ * A test was written for it and removed: driving a failed refetch through
+ * `refetchQueries` errors the cache entry without the probe observing a
+ * re-render, so the assertion passed against BOTH `isLoadingError` and a
+ * deliberately broken `isError` — coverage in appearance only.
+ */
