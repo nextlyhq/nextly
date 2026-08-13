@@ -84,7 +84,9 @@ function registryDouble() {
 function adapterDouble(tableExists: () => Promise<boolean>) {
   return withMigrationLockSurface({
     getCapabilities: () => ({ dialect: "postgresql" as const }),
-    executeQuery: vi.fn(async () => []),
+    // The parameter is declared even though nothing here reads it: `entityStatements` reads the
+    // recorded calls, and a mock with no declared parameters records them as an empty tuple.
+    executeQuery: vi.fn(async (_sql: string) => []),
     tableExists: vi.fn(async (name: string) =>
       name === "nextly_meta" ? false : tableExists()
     ),
@@ -99,7 +101,7 @@ function adapterDouble(tableExists: () => Promise<boolean>) {
  */
 function entityStatements(adapter: ReturnType<typeof adapterDouble>): string[] {
   return adapter.executeQuery.mock.calls
-    .map(([sql]) => sql as string)
+    .map(([sql]) => sql)
     .filter(sql => !isMigrationLockStatement(sql));
 }
 
