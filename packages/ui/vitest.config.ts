@@ -28,8 +28,8 @@ export default defineConfig({
       // Kept in step with `CALL_SITE_ROOT_GLOBS` in
       // `src/components/__tests__/tabs-contract.test.ts`, which asserts this
       // list covers every root-and-extension pair the scan reads.
-      "../*/**/*.{ts,tsx,js,jsx}",
-      "../../apps/*/**/*.{ts,tsx,js,jsx}",
+      "../**/*.{ts,tsx,js,jsx}",
+      "../../apps/**/*.{ts,tsx,js,jsx}",
       "../../templates/**/*.{ts,tsx,js,jsx}",
       "**/src/**/*.css",
       // The declaration build runs through both tsup configs, and a child

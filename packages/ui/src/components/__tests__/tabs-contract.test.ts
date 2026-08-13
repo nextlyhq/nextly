@@ -91,23 +91,27 @@ const REPO = resolve(HERE, "../../../../..");
 const SCAN_ROOT_NAMES = ["packages", "apps", "templates"] as const;
 
 /**
- * The watch-trigger prefix that subscribes to each scanned root.
+ * The watch-trigger glob that subscribes to each scanned root.
  *
- * Vitest resolves `forceRerunTriggers` relative to the package, so the roots
- * the scan walks are reached by relative path here rather than by the
- * `$TURBO_ROOT$` the Turbo inputs use. Two spellings of one fact, which is why
- * the contract below checks them against each other rather than trusting both.
+ * DERIVED from `SCAN_ROOT_NAMES` rather than listed beside it, so a root added
+ * to the traversal appears here without anyone remembering to add it. An
+ * independently maintained copy would stay green while the newly scanned tree
+ * went unwatched, which is the failure this mapping exists to prevent wearing
+ * the mapping's own clothes.
  *
- * Each prefix covers the WHOLE root. `sourceFiles` recurses from the root, so
- * `packages/foo/examples/demo.jsx` is a file it reads — narrowing these to
- * `src` would make the contract green while leaving that file unwatched, which
- * is the contract certifying a gap rather than closing it.
+ * Vitest resolves `forceRerunTriggers` relative to the package, so each root is
+ * reached by relative path here rather than by the `$TURBO_ROOT$` the Turbo
+ * inputs use — `packages` is this package's parent, the rest are siblings of it.
+ *
+ * The recursive wildcard follows the root immediately, with no directory
+ * segment in between. A file placed DIRECTLY under a root is one the traversal
+ * reads, and a glob requiring a package or app directory first does not match
+ * it — measured against the installed matcher, not assumed from the shape.
  */
-const CALL_SITE_ROOT_GLOBS = [
-  { root: "packages", prefix: "../*/**/*." },
-  { root: "apps", prefix: "../../apps/*/**/*." },
-  { root: "templates", prefix: "../../templates/**/*." },
-] as const;
+const CALL_SITE_ROOT_GLOBS = SCAN_ROOT_NAMES.map(root => ({
+  root,
+  prefix: root === "packages" ? "../**/*." : `../../${root}/**/*.`,
+}));
 
 const SCAN_ROOTS = SCAN_ROOT_NAMES.map(r => resolve(REPO, r));
 
@@ -2209,10 +2213,10 @@ describe("the tab indicator contract", () => {
       "an owned property declared through a getter",
       '<TabsTrigger style={{ get borderBottomColor() { return "red"; } }} />',
     ],
-    // A computed key built from a local constant names the property exactly as
-    // the literal spelling does, and React emits the same declaration. Reading
-    // only the literal form walked past it and reported clean on a call site
-    // that repaints the indicator.
+    // A constant-computed key names the property exactly as the literal
+    // spelling does, and React emits the same declaration — so the two must be
+    // treated identically. The distinguishing property is that the key is
+    // decidable without running the code, not how it is spelled.
     [
       "an owned property behind a computed key bound to a constant",
       'const key = "borderBottomColor";\n<TabsTrigger style={{ [key]: "red" }} />',
@@ -2675,6 +2679,26 @@ describe("which files the call-site scan reads", () => {
     // it: a renamed option or a reformatted config would otherwise read as a
     // pass, which is the failure this whole case exists to prevent.
     expect(triggers.length).toBeGreaterThan(0);
+
+    // The watched roots ARE the scanned roots. Deriving the list is what keeps
+    // them in step today; asserting it is what notices if someone replaces the
+    // derivation with a literal — which leaves every case below green while a
+    // scanned tree goes unwatched, because they only check the entries present.
+    expect(CALL_SITE_ROOT_GLOBS.map(glob => glob.root)).toEqual([
+      ...SCAN_ROOT_NAMES,
+    ]);
+
+    // Each glob must recurse from the ROOT itself, with no directory segment
+    // in between. Measured against the installed matcher rather than inferred:
+    // `../*/**` does not match a file placed directly under `packages`, so a
+    // prefix of that shape leaves those files unwatched while this contract —
+    // comparing strings — reported them covered.
+    for (const { root, prefix } of CALL_SITE_ROOT_GLOBS) {
+      expect({ root, prefix }).toEqual({
+        root,
+        prefix: expect.stringMatching(/(^|\/)\*\*\/\*\.$/),
+      });
+    }
 
     const missing = CALL_SITE_ROOT_GLOBS.flatMap(({ root, prefix }) =>
       CALL_SITE_EXTENSIONS.map(extension => extension.slice(1))
