@@ -83,9 +83,22 @@ export function measureBytes(
     const value = stack.pop();
     if (typeof value === "string") {
       bytes += 2 + utf8ByteLength(value, limit - bytes);
-    } else if (typeof value === "number" || typeof value === "boolean") {
+    } else if (typeof value === "number") {
+      // `NaN` and the infinities are not JSON. The serializer writes `null` in
+      // their place, so a document holding one comes back with a different
+      // value than the one validated — the silent-rewrite case rather than the
+      // throw, which is the worse of the two.
+      if (!Number.isFinite(value)) unserializable = true;
       bytes += String(value).length;
-    } else if (value === null || value === undefined) {
+    } else if (typeof value === "boolean") {
+      bytes += String(value).length;
+    } else if (value === null) {
+      bytes += 4;
+    } else if (value === undefined) {
+      // JSON has no `undefined`: a property holding one is OMITTED entirely and
+      // an array element becomes `null`. Either way the stored document differs
+      // from the one that was checked.
+      unserializable = true;
       bytes += 4;
     } else if (Array.isArray(value)) {
       // Count the array's own structural bytes (brackets + commas) and bail

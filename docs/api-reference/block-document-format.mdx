@@ -300,6 +300,11 @@ gestures, so a script or an agent can perform them without driving a UI.
 
 ## What documents never contain
 
-**Custom JavaScript.** A block may carry custom CSS, at the document level and
-per node, and it is sanitized. There is no mechanism for custom JS anywhere in
-the format, and this is a deliberate limit rather than an unbuilt feature.
+**Custom JavaScript.** There is no mechanism for custom JS anywhere in the
+format, and this is a deliberate limit rather than an unbuilt feature — unlike
+the reserved fields above, it is not waiting on an implementation.
+
+A block may carry custom CSS at the document level and per node. That CSS is
+**not** sanitized today, because the sanitizer does not exist; the field is
+stored and nothing reads it (see the note on `customCss` above). Sanitization is
+a precondition of ever emitting it, not a property it already has.

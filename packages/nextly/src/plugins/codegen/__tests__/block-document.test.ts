@@ -397,6 +397,12 @@ describe("block document schema", () => {
       ["a symbol", Symbol("s")],
       ["a Date", new Date()],
       ["a Map", new Map()],
+      // These three are not throws but silent REWRITES, which is the worse
+      // half: JSON omits an undefined property and writes null for a non-finite
+      // number, so the stored document differs from the one that validated.
+      ["undefined", undefined],
+      ["NaN", Number.NaN],
+      ["Infinity", Number.POSITIVE_INFINITY],
     ];
 
     for (const [label, offending] of cases) {

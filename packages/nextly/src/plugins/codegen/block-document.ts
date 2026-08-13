@@ -531,7 +531,14 @@ function exceedsLimits(
     const slots = (node as { slots?: unknown }).slots;
     if (typeof slots !== "object" || slots === null) continue;
 
-    for (const children of Object.values(slots as Record<string, unknown>)) {
+    // `for...in` with an own check rather than `Object.values`: the latter
+    // allocates an array of every slot value before either cap can stop the
+    // walk, so a single node carrying hundreds of thousands of slots does work
+    // proportional to the whole hostile input inside the guard meant to bound
+    // it. The same reason the byte counter iterates this way.
+    for (const slot in slots) {
+      if (!Object.prototype.hasOwnProperty.call(slots, slot)) continue;
+      const children = (slots as Record<string, unknown>)[slot];
       if (!Array.isArray(children)) continue;
       // Counted on discovery rather than on pop, so the cap is reached while
       // pushing rather than after a whole generation is already resident.
