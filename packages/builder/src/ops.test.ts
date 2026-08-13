@@ -1994,8 +1994,11 @@ describe("an inverse that names a parent held twice", () => {
       configurable: true,
     });
 
+    // Both halves matter: it must be an `OpError` rather than the document's own
+    // `TypeError`, AND it must be the descriptor branch that produced it. The
+    // type alone passes if some later guard refuses the op for its own reasons.
     expect(() => applyOp(hostile, { kind: "remove", id: "a" })).toThrow(
-      OpError
+      /computed rather than held, cannot be edited/
     );
   });
 
@@ -2016,9 +2019,13 @@ describe("an inverse that names a parent held twice", () => {
       configurable: true,
     });
 
+    // The BRANCH's own message, not just `OpError`. Any guard that refuses this
+    // op — a patch-shape check, an unknown id — produces an `OpError` too, so
+    // the weaker assertion stays green after the enumerability check is removed
+    // if anything else happens to reject the same input.
     expect(() =>
       applyOp(doc(), { kind: "update", id: "a", patch: { classes } })
-    ).toThrow(OpError);
+    ).toThrow(/"classes" holds a value JSON cannot carry unchanged/);
   });
 
   it("accepts its own result at the value-depth boundary", () => {
