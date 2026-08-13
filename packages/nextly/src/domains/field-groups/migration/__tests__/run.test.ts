@@ -96,6 +96,16 @@ interface RunWorld {
    * consult the same `tables` array and agree no matter which the code used.
    */
   invisibleToTableExists?: string[];
+  /**
+   * Called after each read of the lock row, with how many have happened.
+   *
+   * A session observes the lock once, at the top, and the retry decision reads
+   * it again when judging a failure. Separating "reported the opening
+   * observation" from "reported the one that proved a holder" needs the lock to
+   * CHANGE between those two reads on the final attempt, and this is the only
+   * seam where a test can place that change.
+   */
+  onLockRead?: (count: number) => void;
 }
 
 /**
@@ -127,6 +137,7 @@ function createRunWorld(world: RunWorld) {
   // what makes "this run recorded nothing" an observation. Counting adapter calls would not: the
   // same method serves reads, so a count above zero says nothing about which kind happened.
   const writes = { marker: 0 };
+  let lockReads = 0;
   const lock: { seeded: boolean; owner: string | null } = {
     seeded: true,
     owner: world.lockOwner ?? null,
@@ -141,7 +152,10 @@ function createRunWorld(world: RunWorld) {
         flat
       )
     ) {
-      return lock.seeded ? [{ id: 1, owner: lock.owner }] : [];
+      const answer = lock.seeded ? [{ id: 1, owner: lock.owner }] : [];
+      lockReads += 1;
+      world.onLockRead?.(lockReads);
+      return answer;
     }
     if (
       /^UPDATE "nextly_field_group_lock" SET "owner" = \$1 WHERE "id" = \$2$/.test(
@@ -1226,12 +1240,16 @@ describe("a preview that meets a writer mid-run", () => {
   // operator checks to understand the answer contradicted the answer.
   it("reports the holder that justified an unreconciled plan", async () => {
     const world = quietWorld();
+    world.lockOwner = "field-group-migration:down#early";
     const built = createRunWorld(world);
-    let reads = 0;
-    world.onMarkerRead = () => {
-      reads += 1;
-      // Claims AFTER the session observed the lock as free, and never lets go.
-      if (reads === 1) built.claimLock("field-group-migration:down#latecomer");
+    // 🔴 The holder must VANISH before the final attempt observes the lock and reappear before that
+    // attempt judges its refusal. Otherwise the opening observation and the recheck agree, and the
+    // test cannot tell which one the outcome reported. One lock read happens per attempt while a
+    // holder is visible, so releasing after the second and reclaiming after the third places the
+    // change exactly inside the final attempt.
+    world.onLockRead = count => {
+      if (count === 2) built.claimLock(null);
+      if (count === 3) built.claimLock("field-group-migration:down#latecomer");
     };
 
     const outcome = await runFieldGroupMigration({
