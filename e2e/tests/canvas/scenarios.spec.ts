@@ -74,19 +74,25 @@ async function expectIndicatorAtPointer(
   // scenario can reach such a position.
   const containing = await dragUntilInsideZone(driver);
 
-  // The indicator is read AFTER the containment walk, not before it. Reading
-  // first certifies a rectangle from a position the pointer has since left: if
-  // the target change during the walk hides or collapses the indicator while
-  // leaving the active marker set, every scenario passes on a stale rect for a
-  // position where nothing is drawn.
+  // SETTLED FIRST, then the indicator. `dragUntilInsideZone` has just moved the
+  // pointer into a zone and a canvas whose hysteresis is a dwell may still be
+  // showing the previous one, so comparing that lagging reading with
+  // `containing` would make scenarios 1-3 reject correct scroll, scale and
+  // cross-frame behaviour.
+  //
+  // The ORDER is part of the assertion. Reading the rectangle before the wait
+  // certifies a rectangle belonging to whatever was active before the dwell
+  // expired, so a canvas that activates the right containing zone and then
+  // hides or collapses its new indicator passes on the old target's rect —
+  // the two readings would describe different states while being asserted as
+  // one.
+  const active = await settledTarget(driver);
+
+  // Read after the walk AND after the settle, so it belongs to the position and
+  // the target everything below is about. Reading before the walk certified a
+  // rectangle from a position the pointer had since left.
   const rect = await driver.readIndicatorRect();
   expect(rect, `${label}: an indicator must be visible`).not.toBeNull();
-
-  // Settled, because `dragUntilInsideZone` has just moved the pointer into a
-  // zone and a canvas whose hysteresis is a dwell may still be showing the
-  // previous one. Comparing that lagging reading with `containing` would make
-  // scenarios 1-3 reject correct scroll, scale and cross-frame behaviour.
-  const active = await settledTarget(driver);
   const nearest = await driver.nearestZoneToPointer();
   test.info().annotations.push({
     type: `${label}-zone`,

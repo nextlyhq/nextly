@@ -627,6 +627,7 @@ export async function dragToZoneEdge(
   const FORWARD_STEP_PX = 4;
   let crossed = -1;
   let previous = first;
+  let seen = first;
   for (let step = 0; step < 120; step += 1) {
     await driver.moveBy(0, FORWARD_STEP_PX);
     // Given the dwell to depart, not sampled. A canvas using the permitted dwell
@@ -640,11 +641,21 @@ export async function dragToZoneEdge(
     // Departure rather than full settling: this loop only asks whether the
     // target left `previous`, and returning the moment it does keeps the
     // overshoot the reverse budget below has to carry down to one step.
+    //
+    // Two baselines, because the walk asks two different questions. `seen` is
+    // the last value OBSERVED, `-1` included, and departure is measured from
+    // it: leaving the baseline at the last real zone while the pointer sits in
+    // dead space makes every later read differ from it immediately, so the
+    // wait expires at once and the walk races through the next narrow zone
+    // before a compliant timer can activate it. `previous` is the last ZONE,
+    // which is what a crossing is measured against — arriving in dead space is
+    // not a crossing.
     const current = await departureFrom(
       () => driver.readActiveTarget(),
-      previous,
+      seen,
       dwellAllowanceOf(driver)
     );
+    seen = current;
     if (current >= 0 && current !== previous) {
       crossed = current;
       break;
@@ -721,6 +732,14 @@ export async function jitterAcrossEdge(
   // on the same side, which a canvas that switches the instant the pointer
   // crosses would still pass.
   await driver.moveBy(0, -2);
+  // Settled BEFORE the recorder exists, so no dwell started by the positioning
+  // move is still pending when observation begins. The interval between that
+  // move and the first timing mark is not covered by the sweep's own
+  // measurement, so a slow round trip there could let a compliant timer commit
+  // while the observer was active — putting a transition in the log that the
+  // jitter never provoked, inside a sweep whose measured moves all look fast
+  // enough to trust. That is the one thing this probe exists to distinguish.
+  await settledTarget(driver);
 
   let slowestMoveMs = Number.POSITIVE_INFINITY;
   for (let sweep = 0; sweep < sweeps; sweep += 1) {
