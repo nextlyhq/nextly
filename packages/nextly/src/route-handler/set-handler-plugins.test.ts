@@ -62,8 +62,14 @@ describe("the handler config store", () => {
    */
   beforeEach(async () => {
     vi.resetModules();
-    delete (globalThis as { __nextly_bootPlugins?: unknown })
-      .__nextly_bootPlugins;
+    // BOTH, or a value left by an earlier test satisfies the next one's
+    // assertion and the suite reports coverage it does not have.
+    const g = globalThis as {
+      __nextly_bootPlugins?: unknown;
+      __nextly_bootEntities?: unknown;
+    };
+    delete g.__nextly_bootPlugins;
+    delete g.__nextly_bootEntities;
     servicesRegistered.mockReturnValue(true);
     store = await import("./auth-handler");
   });

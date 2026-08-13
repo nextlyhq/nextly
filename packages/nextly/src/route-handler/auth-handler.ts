@@ -171,6 +171,10 @@ export function setBootedConfig(config: {
   collections?: ReadonlyArray<{ slug: string }>;
   singles?: ReadonlyArray<{ slug: string }>;
 }): void {
+  // Takes the whole transformed config rather than a field list assembled by
+  // the caller. A call site that names the fields is a call site that can omit
+  // one, and the omission is invisible — the endpoint just keeps folding
+  // against the raw route config for whatever was left out.
   globalForBoot.__nextly_bootPlugins = config.plugins ?? [];
   globalForBoot.__nextly_bootEntities = {
     collections: (config.collections ?? []).map(c => c.slug),

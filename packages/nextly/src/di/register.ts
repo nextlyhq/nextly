@@ -1116,16 +1116,12 @@ export async function registerServices(
   //
   // Unconditional: a config whose transformers removed every plugin must clear
   // the store rather than leave the author's raw list standing there.
-  setBootedConfig({
-    plugins: transformedConfig.plugins,
-    // The entity slugs too, because a `setup` transformer may ADD a top-level
-    // collection or single — and the permission fold decides whether a
-    // `publish` declaration names an entity, so folding against the raw route
-    // config would report a declaration on a transformer-added entity as a
-    // plugin-owned custom permission that boot drops.
-    collections: transformedConfig.collections,
-    singles: transformedConfig.singles,
-  });
+  // The WHOLE transformed config, not a hand-picked field list. A `setup`
+  // transformer may add a top-level collection or single as well as change the
+  // plugin list, and the permission fold decides whether a `publish`
+  // declaration names an entity — so anything left out here silently leaves the
+  // endpoint folding against the raw route config for that field.
+  setBootedConfig(transformedConfig);
 }
 
 // ============================================================
