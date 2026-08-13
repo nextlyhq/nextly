@@ -33,12 +33,26 @@ describe("resolveAuditRetentionConfig", () => {
     expect(resolved.authMaxAgeMs).toBe(false);
   });
 
+  it("reads an infinite window as keeping everything", () => {
+    // `Infinity` and the 2000-year window in the test above are the SAME
+    // request — keep rows longer than a cutoff can express — and this file used
+    // to answer them differently: the finite one kept everything while the
+    // infinite one fell back to a default that DELETES after 90 days. The
+    // stronger spelling of "keep forever" was the destructive one.
+    const resolved = resolveAuditRetentionConfig({
+      activityMaxAgeMs: Infinity,
+      authMaxAgeMs: Infinity,
+    });
+    expect(resolved.activityMaxAgeMs).toBe(false);
+    expect(resolved.authMaxAgeMs).toBe(false);
+  });
+
   it("falls back when a window is not a finite positive number", () => {
-    // MAX_SAFE_INTEGER is the one that survives a finiteness check: subtracted
-    // from now it leaves the Date range, so the cutoff is an Invalid Date the
-    // driver rejects — a pass that fails every run and is swallowed, leaving
-    // the trail unpruned while the configuration reads as accepted.
-    for (const bad of [Infinity, -Infinity, NaN, 0, -1]) {
+    // Every value here asks for LESS retention than the default, or asks for
+    // nothing coherent — so falling back cannot delete more than honouring it
+    // would. `Infinity` is deliberately not in this list; it is the one input
+    // that asks for MORE, and it is covered above.
+    for (const bad of [-Infinity, NaN, 0, -1]) {
       const resolved = resolveAuditRetentionConfig({
         activityMaxAgeMs: bad,
         authMaxAgeMs: bad,

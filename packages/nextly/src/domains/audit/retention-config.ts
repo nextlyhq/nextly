@@ -11,6 +11,11 @@
  * @since 1.0.0
  */
 
+import {
+  MAX_STORABLE_OFFSET_MS,
+  resolveRetentionWindow,
+} from "../retention/window";
+
 /** `false` means keep forever and accept the growth. */
 type MaxAge = number | false;
 
@@ -69,38 +74,16 @@ export interface ResolvedAuditRetentionConfig {
 }
 
 /**
- * The largest offset whose resulting date every supported column can store.
+ * A window, resolved by the rule every trail shares.
  *
- * A window is subtracted from now to form a cutoff, and an interval likewise,
- * so both are bounded by the narrowest column that receives one. That is not
- * `Date` (±8.64e15 ms) and not MySQL `DATETIME` (from year 1000): it is MySQL
- * `TIMESTAMP`, which `activity_log.created_at` uses and which **starts at
- * 1970**. A cutoff before then is rejected under strict mode, so the pass fails
- * on every run and is swallowed — the trail unpruned while its configuration
- * reads as accepted.
- *
- * Fifty years is the conservative form: any clock later than 2020 minus this
- * offset lands after 1970, so it holds without consulting the current time. It
- * is also past the point of meaning — a window longer than the epoch itself can
- * select nothing, because no row can be older than the time it measures from.
+ * The bound and the direction of each rejection live in
+ * `domains/retention/window`, so this trail cannot drift from the others on a
+ * question none of them owns alone. Zero is `malformed` here rather than
+ * "keep nothing": an audit trail set to zero is far more likely to be a typo
+ * than a decision, and erasing the record of who did what is not recoverable.
  */
-const MAX_STORABLE_OFFSET_MS = 50 * 365 * DAY_MS;
-
 function maxAge(value: MaxAge | undefined, fallback: number): MaxAge {
-  if (value === false) return false;
-  // A non-positive window would delete rows the moment they are written, and a
-  // non-finite one is worse than either: `Infinity` is a positive number, so it
-  // passes a naive check and then produces an Invalid Date cutoff, which the
-  // pass swallows as a failure — retention that looks configured and silently
-  // never runs. `false` is how "keep forever" is expressed.
-  const window = value as number;
-  if (!Number.isFinite(window) || window <= 0) return fallback;
-  // Beyond what a cutoff can express, the request is to keep essentially
-  // everything — so it is honoured as `false` rather than replaced by the
-  // default. The default is SHORTER, and substituting it would delete what the
-  // configuration asked to retain: rejecting a value must never be more
-  // destructive than honouring it.
-  return window <= MAX_STORABLE_OFFSET_MS ? window : false;
+  return resolveRetentionWindow(value, { fallback, zero: "malformed" });
 }
 
 function positive(value: number | undefined, fallback: number): number {
