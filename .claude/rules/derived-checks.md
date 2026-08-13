@@ -198,17 +198,29 @@ structure rather than by someone else's spelling, at the granularity your claim
 actually needs — which is the separating-property test applied to the identifier
 itself.
 
-## The THIRD finding of one shape is about the check, not the instance
+## The THIRD finding of one shape is a prompt to TEST the check
 
-Two findings that rhyme are a coincidence. The third is a measurement: the check
-is built on something that cannot answer the question, and fixing instances will
-keep producing findings for as long as anyone keeps looking. Every fix is
-correct, every one is followed by another, and the reviewer and the author both
-read the sequence as progress.
+Two findings that rhyme are a coincidence. The third is worth a minute spent on
+the instrument rather than the instance — but it is a PROMPT, not a verdict, and
+the distinction is load-bearing. Three hardcoded-colour findings usually mean
+the change contains three hardcoded colours. A rule that let the count alone
+condemn the check would talk a reviewer out of reporting the fourth real
+violation, which is worse than the patching it was written to stop.
 
-So at the third, stop patching and ask which of two things is unreliable,
-because the remedies are different and applying the wrong one looks like
-diligence:
+So the third finding buys an experiment, not a diagnosis. Run the check against
+cases where you already know the answer:
+
+- a POSITIVE control — an input that must be reported, where the expected result
+  is not "nothing". A check that reports nothing under every circumstance passes
+  every negative control ever written.
+- a NEGATIVE control — a valid input it must stay silent on, ideally the exact
+  shape the recent findings were about.
+
+If it passes both, the check is fine and the findings are real: keep fixing them,
+and say so rather than leaving the instrument under suspicion. If it fails
+either, the check is the problem, and only then is it worth asking which of two
+things is unreliable — the remedies differ, and applying the wrong one looks
+like diligence:
 
 - **The READ** — the check cannot see what it is looking at. Replace the
   instrument, do not extend it. A regex over source becomes a walk over the
@@ -228,20 +240,44 @@ diligence:
   one left the count unmoved and every assertion green. Naming the exempt pager
   fixed it; a bigger allowance never would have.
 
-The tell that separates them: ask whether a human reading the same input would
-get the right answer. If yes, the read is at fault. If a human would also have
-to guess, the classification is.
+The controls separate them too, which is why they come first. Feed the check an
+input it currently misreports and watch WHERE it goes wrong: if it never sees
+the value — the token, the node, the row — the read is at fault. If it sees the
+value and reaches the wrong verdict, the classification is.
 
-## A guard that fires on correct code is worse than one that misses
+Do not substitute a thought experiment about what a human reader would conclude.
+It misfires in both directions: a value built through an imported helper or a
+runtime branch defeats a human restricted to the same input, while the defect is
+still the READ; and a human bringing outside knowledge can spot a bad
+classification the check reads perfectly. Run the input through the instrument
+instead of predicting what someone would infer from it.
 
-A miss costs whatever the defect costs. A false positive costs the guard — it
-gets suppressed, worked around, or deleted, and takes its true positives with
-it. The two are not symmetric and should not be traded off as if they were.
+## For an ADVISORY check, firing on correct code is worse than missing
 
-This decides what to do when a property is **not decidable from what the check
-can see**, which is common and is not a failure. Do not add another exception
-each time one is found; that is the third-finding shape above, wearing the
-costume of thoroughness. Instead:
+Read the scope first, because the asymmetry inverts and the inverted case is a
+security hole rather than a style preference.
+
+**An advisory check** — a lint, a convention guard, a dead-code or dead-class
+warning, anything whose rejection costs someone an edit — is the case this
+section is about. A miss costs whatever the defect costs. A false positive costs
+the GUARD: it gets suppressed, worked around, or deleted, and takes its true
+positives with it. So the two are not symmetric, and where they conflict, prefer
+the miss.
+
+**A precondition is the opposite and must not be widened.** Authorization,
+ownership, validity, quota, release gating, anything guarding a destructive or
+irreversible operation: there a miss PERMITS the prohibited action while a false
+positive merely rejects a valid one, so accepting misses converts a cost saving
+into a hole. `AGENTS.md` already says preconditions run first whatever they cost;
+this is the same instruction from the other side. When such a guard cannot
+decide, it must fail CLOSED and say why, never widen until it stops objecting.
+
+The rest of this section applies to the advisory case only.
+
+It decides what to do when a property is **not decidable from what the check can
+see**, which is common and is not a failure. Do not add another exception each
+time one is found; that is the third-finding shape above, wearing the costume of
+thoroughness. Instead:
 
 - Widen the condition so it cannot have gaps, accepting misses. Prefer a PREFIX
   or a structural property over a list of spellings — a list of Tailwind border
@@ -256,6 +292,11 @@ costume of thoroughness. Instead:
 State the remaining boundary rather than covering it badly. A named limitation
 is a check whose silence means something; an unnamed one is indistinguishable
 from coverage.
+
+And name which kind the check is where it is defined. "Advisory" and
+"precondition" are not always obvious from the code — a helper written as one
+acquires the other the moment a second caller gates a write on it, and nothing
+at the definition changes when it does.
 
 ## A bare `catch` is only a defect when its fallback makes a CLAIM
 
