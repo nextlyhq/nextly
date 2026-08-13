@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { PluginMetadata } from "@admin/types/branding";
@@ -47,6 +47,51 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
   // Settled with an answer, so a slug missing from `plugins` really is absent.
   useBrandingStatus: () => ({ isPending: false, isUnavailable: false }),
 }));
+
+/**
+ * The page is two columns with a sticky metadata rail. What these pin is where
+ * each half lives: the metadata sits in the rail, and what the plugin
+ * contributes — its permissions and API routes included — stays in the main
+ * column, visible without an interaction rather than behind one.
+ */
+describe("PluginDetailPage layout", () => {
+  function rail() {
+    return screen.getByRole("complementary", { name: "About @acme/forms" });
+  }
+
+  it("puts the metadata in a rail and the contributions outside it", () => {
+    render(<PluginDetailPage params={{ slug: "acme-forms" }} />);
+
+    const aside = rail();
+    // In the rail: the About metadata.
+    expect(within(aside).getByText("Installed version")).toBeInTheDocument();
+    expect(within(aside).getByText("Depends on")).toBeInTheDocument();
+
+    // NOT in the rail: what the plugin contributes. The separating assertion —
+    // without it, moving the whole page inside the aside would pass.
+    expect(within(aside).queryByText("Permissions")).toBeNull();
+    expect(within(aside).queryByText("API routes")).toBeNull();
+    expect(screen.getByText("Permissions")).toBeInTheDocument();
+    expect(screen.getByText("API routes")).toBeInTheDocument();
+  });
+
+  /**
+   * A grid item stretches to its row by default, which leaves `position:
+   * sticky` with nothing to stick to. `self-start` is the part that actually
+   * makes the rail stick, and it is invisible in a rendered-text assertion.
+   *
+   * Container-scoped, not viewport-scoped: the sidebars take a variable share
+   * of the window, so a `lg:` prefix here would engage the two-column layout
+   * at window widths where the page has no room for it.
+   */
+  it("gives the rail the classes that let it stick", () => {
+    render(<PluginDetailPage params={{ slug: "acme-forms" }} />);
+
+    const className = rail().className;
+    expect(className).toContain("@3xl/content:sticky");
+    expect(className).toContain("@3xl/content:self-start");
+  });
+});
 
 describe("PluginDetailPage", () => {
   it("renders the identity header with version, status, category, and author", () => {

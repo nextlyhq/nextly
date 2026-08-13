@@ -28,6 +28,7 @@ import {
 
 import type { ManifestEntry } from "./manifest";
 import type { TableColumns } from "./reconcile";
+import { REFUSAL_KIND_KEY, type RefusalKind } from "./refusal-kind";
 
 /**
  * The column an embedded instance records its parent's physical table in.
@@ -140,6 +141,19 @@ export async function assertNoStaleParentPointers(args: {
    * than assumed generous.
    */
   maxParams: number;
+  /**
+   * Whether re-reading could change this verdict, which depends on the caller.
+   *
+   * Verifying a SETTLED marker compares a marker captured at one instant against rows read later,
+   * with no lock held between them, so a rollback rewriting `_parent_table` back to its legacy
+   * spelling produces a mismatch the database was never actually in. Verifying after this run's OWN
+   * steps holds the lock and reads rows those steps just wrote; a stale pointer there is real and
+   * must stay loud.
+   *
+   * Defaults to `permanent`, so a caller that has not thought about it gets the refusal that
+   * cannot be mistaken for contention.
+   */
+  kind?: RefusalKind;
 }): Promise<void> {
   const { query, columns, identifierCase, owned, staleNames, maxParams } = args;
   if (staleNames.length === 0) return;
@@ -173,6 +187,7 @@ export async function assertNoStaleParentPointers(args: {
           "field-group migration will not settle: embedded instances still address a table it renamed",
         logContext: {
           reason: "a parent pointer still names storage this run renamed away",
+          [REFUSAL_KIND_KEY]: args.kind ?? "permanent",
           table,
           // The column is text on every dialect, so a non-string is an anomaly
           // worth naming rather than coercing: default stringification would
