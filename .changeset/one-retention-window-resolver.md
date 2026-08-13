@@ -33,20 +33,19 @@ after 90 days and webhook events after 30, on the schedule the default sets,
 while the setting itself read as accepted. Nothing surfaced it: the pass ran,
 reported success, and pruned rows the configuration had asked to retain.
 
-The cause was three separate answers to one question. Audit, webhook and email
-retention each resolved a configured window in their own file, and the three had
-drifted: a 2000-year window kept everything, an infinite one deleted, and the
-same input produced different outcomes depending on which trail it was written
-for. Webhook retention also had no upper bound at all, so a very large window
-produced a cutoff date no database column can store, which made the pass fail
-silently on every run and leave the ledger unpruned.
+The cause was two separate answers to one question. Audit and webhook retention
+each resolved a configured window in their own file, and the two had drifted: a
+2000-year window kept everything, an infinite one deleted, and the same input
+produced different outcomes depending on which trail it was written for. Webhook
+retention also had no upper bound at all, so a very large window produced a
+cutoff date no database column can store, which made the pass fail silently on
+every run and leave the ledger unpruned.
 
-There is now one resolver behind all of them, built on the rule the copies
-disagreed about: refusing a value must never delete more than accepting it
-would. An infinite window, and any window longer than a date can express, now
-mean keep forever. Values that ask for less than the default, or for nothing
-coherent, still fall back to the default, because that direction cannot lose
-data.
+There is now one resolver behind both, built on the rule they disagreed about:
+refusing a value must never delete more than accepting it would. An infinite
+window, and any window longer than a date can express, now mean keep forever.
+Values that ask for less than the default, or for nothing coherent, still fall
+back to the default, because that direction cannot lose data.
 
 Two positions each trail holds on its own are unchanged: `false` still means
 keep forever everywhere, and a delivery ledger set to zero still keeps nothing,

@@ -1,10 +1,10 @@
 /**
  * How a configured retention window is read, for every trail that has one.
  *
- * One question with one implementation. Three domains resolved this separately
- * — audit, webhooks and email deliveries — and the three had drifted into three
- * different answers for the same input, which is the failure mode a shared
- * question always has when it is answered in more than one place.
+ * One question with one implementation. The two trails that resolve a window —
+ * audit and webhooks — did it separately and had drifted into different answers
+ * for the same input, which is the failure mode a shared question always has
+ * when it is answered in more than one place.
  *
  * The invariant every caller depends on, and the one the copies disagreed on:
  *
@@ -14,8 +14,13 @@
  * here is a finite window that DELETES. So the direction of each rejection has
  * to be chosen, not defaulted: substituting the default for a value that asked
  * to keep MORE turns a malformed setting into data loss, silently, on a
- * schedule. `Infinity` is exactly that value, and both shipped copies rejected
- * it into a default that deleted after 90 and 30 days respectively.
+ * schedule. `Infinity` is exactly that value, and both copies rejected it into
+ * a default that deleted after 90 and 30 days respectively.
+ *
+ * A third trail is expected to ask this question — the delivery log records one
+ * row per recipient and has no window of its own yet — and the reason it is
+ * named here is the policy parameters below, which exist so a caller can differ
+ * where the difference is real without forking the invariant.
  *
  * @module domains/retention/window
  */
