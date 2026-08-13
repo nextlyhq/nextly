@@ -274,8 +274,8 @@ export async function withMigrationSession<T>(
      * concurrent run, so an `observe` session describes a snapshot that may
      * already be stale. That is acceptable only because such a session performs
      * no work — nothing acts on the answer, so a stale one costs an operator a
-     * re-read rather than a wrong write. `observedLockOwner` reports the
-     * contention that the claim would otherwise have raised as a refusal.
+     * re-read rather than a wrong write. `lock` reports the contention that the
+     * claim would otherwise have raised as a refusal.
      *
      * Never use `observe` for a session that writes. The lock is what makes two
      * writers impossible, and this mode is precisely its absence.
@@ -312,12 +312,6 @@ export async function withMigrationSession<T>(
   // must reach none of them. Placed above `requireExistingLock` because that
   // option still claims when the table happens to exist, which is a write.
   if (mode === "observe") {
-    // The table's absence is a complete answer rather than a missing one: the
-    // lock is created by the first run that ever claims it, so nothing can hold
-    // a lock whose table does not exist. Asked with `tableExists` because
-    // SELECTing a missing table raises a dialect-specific error that would have
-    // to be recognised to be told apart from a permission failure — the guess
-    // this mode exists to avoid.
     return fn({
       ...session,
       lock: await observeLock(adapter, dialect),

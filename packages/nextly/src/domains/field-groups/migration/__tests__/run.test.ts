@@ -73,6 +73,16 @@ interface RunWorld {
    * describes a state no database can be in.
    */
   lockOwner?: string;
+  /**
+   * Called after each marker read has been served, so a test can advance the
+   * world the way a concurrent writer does.
+   *
+   * The hook fires AFTER the value is captured, which is what makes a torn read
+   * expressible: the reader gets the marker as it stood, and the catalog it
+   * reads next belongs to a later instant. Mutating `world` from here is the
+   * whole mechanism — every other read consults `world` at call time.
+   */
+  onMarkerRead?: () => void;
 }
 
 /**
@@ -216,7 +226,10 @@ function createRunWorld(world: RunWorld) {
           where: () => ({
             limit: () => {
               trace.push("marker");
-              return Promise.resolve(
+              // Captured before the hook runs, so a hook that advances the world
+              // leaves this read holding the marker as it stood — which is
+              // exactly the stale half of a torn pair.
+              const rows =
                 world.marker === undefined
                   ? []
                   : [
@@ -224,8 +237,9 @@ function createRunWorld(world: RunWorld) {
                         key: FIELD_GROUP_MIGRATION_KEY,
                         value: JSON.stringify(world.marker),
                       },
-                    ]
-              );
+                    ];
+              world.onMarkerRead?.();
+              return Promise.resolve(rows);
             },
           }),
         }),
@@ -896,5 +910,165 @@ describe("a dry run", () => {
       kind: "held",
       owner: "field-group-migration:up#someone-else",
     });
+  });
+});
+
+/**
+ * A preview reads the marker, the registry and the catalog as separate queries and holds no lock,
+ * so a writer advancing between them hands it a pair of answers no single instant ever held. The
+ * plan is then scored against a world that never existed, and reconciliation refuses — in exactly
+ * the contended case an unlocked preview exists to serve.
+ *
+ * The reads are re-taken TOGETHER rather than the catalog alone, and these fix that: the marker
+ * decides the already-migrated exit and which entries are selected, so a retry that re-read only
+ * the catalog would converge on a stale marker while looking entirely correct.
+ */
+describe("a preview that meets a writer mid-run", () => {
+  /** How many times the run read the marker, which is once per session. */
+  function markerReads(trace: Trace): number {
+    return trace.filter(entry => entry === "marker").length;
+  }
+
+  /**
+   * A catalog that has moved past the marker: the data table already carries its
+   * migrated name while nothing recorded says a run reached that point.
+   *
+   * This is the pair a reader gets by reading the marker before the writer's
+   * rename commits and the catalog after — the reads happen in that order, so it
+   * is the interleaving this path actually meets.
+   */
+  function tornWorld(): RunWorld {
+    return {
+      tables: [LEGACY_REGISTRY, "fg_hero"],
+      registryRows: [{ id: "1", slug: "hero", table_name: "comp_hero" }],
+    };
+  }
+
+  // 🔴 THE separating test for re-reading the whole session. The world advances the MARKER between
+  // attempts, and nothing else: a retry that re-read only the catalog would still be holding the
+  // first marker and would refuse again. Reaching a settled outcome is only possible if the second
+  // attempt read the marker afresh.
+  it("re-reads the marker, not just the catalog", async () => {
+    const world = tornWorld();
+    let reads = 0;
+    world.onMarkerRead = () => {
+      reads += 1;
+      if (reads > 1) return;
+      // The writer finished and settled while the preview was in flight.
+      world.marker = settledRun();
+      world.tables = [TARGET_REGISTRY, "fg_hero"];
+    };
+    const { adapter, trace } = createRunWorld(world);
+
+    const outcome = await runFieldGroupMigration({
+      adapter,
+      logger,
+      direction: "up",
+      dryRun: true,
+    });
+
+    // Without the retry this throws; with a catalog-only retry it throws too, because the marker
+    // it re-scored against would still be the absent one.
+    expect(outcome).toMatchObject({ ran: false, reason: "already-migrated" });
+    expect(markerReads(trace)).toBe(2);
+  });
+
+  // The control the retry needs to be safe. Retrying a refusal that re-reading cannot clear would
+  // burn the attempts and then report it as contention -- turning a correct, loud refusal about the
+  // operator's storage into a soft wrong answer, which is worse than the defect being fixed.
+  it("does not retry a refusal that re-reading cannot clear", async () => {
+    // Both names present: the target this run wants is occupied by something that is not its own
+    // finished work. No amount of re-reading changes that.
+    const { adapter, trace } = createRunWorld({
+      tables: [LEGACY_REGISTRY, "comp_hero", "fg_hero"],
+      registryRows: [{ id: "1", slug: "hero", table_name: "comp_hero" }],
+    });
+
+    await expect(
+      runFieldGroupMigration({
+        adapter,
+        logger,
+        direction: "up",
+        dryRun: true,
+      })
+    ).rejects.toSatisfy(
+      error =>
+        NextlyError.is(error) &&
+        error.logContext?.reason === "migration target name is already in use"
+    );
+
+    // The assertion that separates "refused" from "refused after three tries". A permanent refusal
+    // reported only at the end would still look like this without it.
+    expect(markerReads(trace)).toBe(1);
+  });
+
+  // The plan is reported rather than withheld, and labelled rather than passed off as scored. An
+  // empty list would read as "nothing to do", which is the silent wrong answer this whole path
+  // exists to remove.
+  it("reports an unreconciled plan when the writer never lets go", async () => {
+    const { adapter, trace } = createRunWorld(tornWorld());
+
+    const outcome = await runFieldGroupMigration({
+      adapter,
+      logger,
+      direction: "up",
+      dryRun: true,
+    });
+
+    if (outcome.ran !== false || outcome.reason !== "dry-run") {
+      expect.fail("expected a dry-run outcome, not a refusal");
+    }
+    expect(outcome.basis).toEqual({
+      kind: "unreconciled",
+      reason:
+        "an object using the migrated storage name exists but no recorded progress accounts for it",
+    });
+    // 🔴 Never empty. The manifest's renames are an upper bound rather than the outstanding subset,
+    // which is what `basis` says -- but reporting none would tell an operator there is no work.
+    expect(outcome.renames.length).toBeGreaterThan(0);
+    expect(outcome.renames).toContainEqual({
+      from: "comp_hero",
+      to: "fg_hero",
+    });
+    expect(markerReads(trace)).toBe(3);
+  });
+
+  // A scored plan says so, so a caller can tell the two apart without inspecting the renames.
+  it("reports a reconciled basis when nothing is contending", async () => {
+    const { adapter } = createRunWorld({
+      tables: [LEGACY_REGISTRY, "comp_hero"],
+      registryRows: [{ id: "1", slug: "hero", table_name: "comp_hero" }],
+    });
+
+    const outcome = await runFieldGroupMigration({
+      adapter,
+      logger,
+      direction: "up",
+      dryRun: true,
+    });
+
+    if (outcome.ran !== false || outcome.reason !== "dry-run") {
+      expect.fail("expected a dry-run outcome");
+    }
+    expect(outcome.basis).toEqual({ kind: "reconciled" });
+  });
+
+  // 🔴 A run that WRITES holds the lock, which excludes the very writer a retry exists to survive.
+  // A refusal there is a fact about the database rather than a torn read of one, and re-reading it
+  // would spend three sets of reads to arrive at the same refusal -- while a second run that
+  // legitimately holds the lock is contended with three times instead of once.
+  it("never retries a run that writes", async () => {
+    const { adapter, trace } = createRunWorld(tornWorld());
+
+    await expect(
+      runFieldGroupMigration({
+        adapter,
+        logger,
+        direction: "up",
+        backupConfirmed: true,
+      })
+    ).rejects.toSatisfy(error => NextlyError.is(error));
+
+    expect(markerReads(trace)).toBe(1);
   });
 });
