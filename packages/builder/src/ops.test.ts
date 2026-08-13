@@ -1899,6 +1899,71 @@ describe("an inverse that names a parent held twice", () => {
     ).toBeLessThan(huge.length / 100);
   });
 
+  it("does not share the caller's objects with the document it returns", () => {
+    // An op is DATA describing an edit, and the result has to be that edit's
+    // outcome rather than a live view of the caller's objects. Sharing a
+    // reference means a producer that mutates what it passed rewrites the
+    // applied document with no op recorded and nothing to undo.
+    const props: Record<string, unknown> = { text: "as supplied" };
+    const incoming = {
+      id: "fresh",
+      type: "core/box",
+      version: 1,
+      props,
+    } as unknown as BlockNode;
+
+    const applied = applyOp(doc(), {
+      kind: "insert",
+      node: incoming,
+      at: { index: 0 },
+    });
+    props.text = "mutated afterwards";
+
+    expect(
+      applied.document.nodes.find(entry => entry.id === "fresh")?.props,
+      "the document must hold what was supplied, not what it became"
+    ).toEqual({ text: "as supplied" });
+  });
+
+  it("does not let a later mutation change what undo restores", () => {
+    // The inverse of a remove carries the node it will put back. Captured by
+    // reference, an undo restores whatever that object has become since rather
+    // than what was there when the edit ran.
+    const held: Record<string, unknown> = { text: "at removal time" };
+    const original = {
+      id: "goes",
+      type: "core/box",
+      version: 1,
+      props: held,
+    } as unknown as BlockNode;
+
+    const removed = applyOp(doc([original]), { kind: "remove", id: "goes" });
+    held.text = "mutated afterwards";
+
+    const undone = applyOp(removed.document, removed.inverse);
+    expect(
+      undone.document.nodes.find(entry => entry.id === "goes")?.props,
+      "undo must restore the state at the time of the edit"
+    ).toEqual({ text: "at removal time" });
+  });
+
+  it("refuses an untouched node holding a value JSON cannot write", () => {
+    // A remove only shrinks, so nothing measures the result — and an untouched
+    // sibling carrying a bad value made a SUCCESSFUL edit hand back a document
+    // that cannot be saved. The promise is about the document returned, not
+    // only about the node edited.
+    const sibling = {
+      id: "bystander",
+      type: "core/box",
+      version: 1,
+      props: { bad: 1n },
+    } as unknown as BlockNode;
+
+    expect(() =>
+      applyOp(doc([node("goes"), sibling]), { kind: "remove", id: "goes" })
+    ).toThrow(/JSON cannot write/);
+  });
+
   it("refuses an update that both writes and removes one field", () => {
     // The spread that applies an update puts removals last, so the removal wins
     // silently and the supplied value is discarded — an op recorded as accepted

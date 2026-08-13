@@ -449,6 +449,25 @@ function equalWithin(a: unknown, b: unknown, budget: number): boolean {
   return true;
 }
 
+/**
+ * A detached copy of a value the caller still holds a reference to.
+ *
+ * An op is DATA describing an edit, and the document it produces has to be that
+ * edit's result rather than a live view of the caller's objects. Without this,
+ * an in-process producer that passes a `props` object and later mutates it
+ * rewrites the applied document — and the inverse in the history alongside it —
+ * with no op recorded and nothing to undo. A history whose entries change after
+ * the fact is not a history.
+ *
+ * Safe here because it runs only AFTER the value has been established as JSON:
+ * no accessors, no cycles, no functions, nothing outside the domain, and
+ * bounded in depth and parts. `structuredClone` would throw on the values this
+ * module refuses, and by this point it cannot meet one.
+ */
+function snapshot<T>(value: T): T {
+  return structuredClone(value);
+}
+
 function isJsonValue(value: unknown): boolean {
   // ITERATIVE, with an explicit stack. The recursive form exhausted the JS
   // stack on a deeply nested but otherwise legal value and leaked a native
@@ -494,14 +513,23 @@ function isJsonValue(value: unknown): boolean {
     pending.push({ value: undefined, depth: entry.depth, exiting: held });
 
     if (Array.isArray(held)) {
+      // The budget is spent while ENQUEUEING, not only while popping. A sparse
+      // `Array(100_000_000)` costs nothing to construct and nothing to hold, and
+      // the loop below would put a hundred million entries on the stack before
+      // a single one came back off it to be counted. Refusing at the bound
+      // means the memory this walk uses is bounded by the bound rather than by
+      // what the caller declared.
+      //
       // By index: `every` skips holes, and a hole serializes as `null`.
       for (let index = 0; index < held.length; index += 1) {
+        if (parts++ > MAX_VALUE_PARTS) return false;
         pending.push({ value: held[index], depth: entry.depth + 1 });
       }
       continue;
     }
     if (!isPlainRecord(held)) return false;
     for (const child of Object.values(held)) {
+      if (parts++ > MAX_VALUE_PARTS) return false;
       pending.push({ value: child, depth: entry.depth + 1 });
     }
   }
@@ -1207,6 +1235,25 @@ function assertForestEntries(nodes: BlockNode[]): void {
           `would be saved.`
       );
     }
+    // What the node HOLDS, not only how it holds it. Descriptors establish that
+    // a field is stored rather than computed and say nothing about the value,
+    // so an untouched node carrying `props: { bad: 1n }` passed every check and
+    // a removal elsewhere in the document returned a result `JSON.stringify`
+    // cannot write. A remove measures nothing — it only shrinks — so no later
+    // pass caught it either.
+    //
+    // Every node in the document rather than only the edited one, because the
+    // op store's promise is about the DOCUMENT it hands back: a successful edit
+    // may not return something that cannot be saved.
+    for (const [field, value] of Object.entries(entry)) {
+      if (field === "slots") continue;
+      if (!isJsonValue(value)) {
+        throw new OpError(
+          `a node whose "${field}" holds ${describe(value)} cannot be edited: ` +
+            `JSON cannot write that value, so the document would not save.`
+        );
+      }
+    }
     // Read as `unknown` rather than cast: the entry has only been established
     // as a record, so claiming it is a BlockNode here would assert the very
     // thing this walk exists to check.
@@ -1767,7 +1814,11 @@ function priorValues(
     unset.push(key);
   }
 
-  return { patch, unset };
+  // Detached before it leaves. These values came out of the live document, so
+  // the inverse would otherwise hold references into the very tree a later edit
+  // rewrites — and undo would restore whatever those objects became rather than
+  // what was there when the edit ran.
+  return { patch: snapshot(patch), unset };
 }
 
 /** The result of applying one op: the new forest, and the op that undoes it. */
@@ -1950,9 +2001,13 @@ export function applyOp(
       // Asked BEFORE the placement, because afterwards the slot exists whether
       // this insert made it or not, and the question cannot be answered.
       const createdSlot = slotCreatedBy(nodes, op.at);
+      // A copy, placed rather than the caller's own object. Validation has just
+      // established it is JSON, so the copy is exact — and the document no
+      // longer shares a reference with whoever built the op.
+      const incoming = snapshot(op.node);
       const placed = accepted(
         nodes,
-        insertNode(nodes, op.node, op.at),
+        insertNode(nodes, incoming, op.at),
         `insert: the document did not accept "${op.node.id}" at the position ` +
           `given. The position may name a parent the document does not hold ` +
           `or omit the slot it needs, or the subtree may carry an id the ` +
@@ -2042,7 +2097,15 @@ export function applyOp(
           : dropEmptySlot(without, op.dropSlotIfEmpty);
       return {
         document: withNodes(document, pruned),
-        inverse: { kind: "insert", node, at: positionOf(location) },
+        // A copy in the inverse, for the same reason the insert placed one: the
+        // removed node is still reachable from whoever handed us the document,
+        // and an undo has to restore what was there when the edit ran rather
+        // than whatever that object has become since.
+        inverse: {
+          kind: "insert",
+          node: snapshot(node),
+          at: positionOf(location),
+        },
       };
     }
 
@@ -2184,7 +2247,10 @@ export function applyOp(
       // An update changes no node count and is the easiest way past the byte
       // cap: one large string in `props` is a document the engine will refuse
       // to store, written by an edit nothing objected to.
-      const updated = updateNode(nodes, op.id, { ...op.patch, ...removals });
+      const updated = updateNode(nodes, op.id, {
+        ...snapshot(op.patch),
+        ...removals,
+      });
       assertFitsCaps(document, withNodes(document, updated), "update", limits);
       return {
         document: withNodes(document, updated),
