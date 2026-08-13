@@ -133,9 +133,10 @@ test.describe("panel widths survive a reload", () => {
     // split across two tests, the second would start clean and pass or fail for
     // a reason that has nothing to do with persistence.
     await page.reload();
-    await page
-      .getByRole("navigation", { name: "Editor panels" })
-      .waitFor({ state: "visible" });
+    // The SAME readiness implementation the first navigation uses. A second,
+    // raw `waitFor` here would mean a page that fails to render only AFTER a
+    // reload still reports the generic timeout this change exists to replace.
+    await assertShellReady(page);
 
     expect(await shell.panelIsOpen()).toBe(true);
     expect(await shell.widthOf("panel")).toBeCloseTo(dragged, -1);
@@ -162,9 +163,10 @@ test.describe("panel widths survive a reload", () => {
     expect(Math.abs(dragged - before)).toBeGreaterThan(20);
 
     await page.reload();
-    await page
-      .getByRole("navigation", { name: "Editor panels" })
-      .waitFor({ state: "visible" });
+    // The SAME readiness implementation the first navigation uses. A second,
+    // raw `waitFor` here would mean a page that fails to render only AFTER a
+    // reload still reports the generic timeout this change exists to replace.
+    await assertShellReady(page);
 
     expect(await shell.panelIsOpen()).toBe(false);
     expect(await shell.widthOf("inspector")).toBeCloseTo(dragged, -1);
@@ -272,10 +274,19 @@ test.describe("the readiness diagnostic itself", () => {
        <div class="nx-builder-chrome"></div></body></html>`
     );
 
-    const error = await assertShellReady(page).catch(
+    // Asserted as a REJECTION first. Checking only that the message lacks a
+    // string passes when the promise RESOLVES — `error` is then `undefined`
+    // and `String(undefined)` contains nothing — so the weaker form would
+    // certify a readiness check that had silently stopped failing at all.
+    const error = await assertShellReady(page).then(
+      () => null,
       (thrown: unknown) => thrown
     );
 
+    expect(error).not.toBeNull();
+    // Playwright's OWN timeout, not ours: the rail is present, so the absence
+    // path must not have run and the original failure must survive intact.
+    expect(String(error)).toMatch(/Timeout|exceeded/i);
     expect(String(error)).not.toContain("not in the DOM");
   });
 });

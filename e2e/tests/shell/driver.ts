@@ -168,7 +168,19 @@ async function diagnoseUnrenderedPage(page: Page): Promise<never> {
 
 /** Turn one measurement into the readiness verdict. */
 function assertPainted(measurement: ShellRenderMeasurement): void {
-  const { box, background } = measurement;
+  const { present, box, background } = measurement;
+  // Absence FIRST. The rail can render while the chrome root is removed or
+  // renamed, and then `box` is null for a reason that has nothing to do with
+  // styles — reading it as "present but unstyled" sends a markup regression
+  // down the CSS investigation path, which is the failure this file exists to
+  // stop rather than commit.
+  if (!present) {
+    throw new Error(
+      `The rail rendered but no element matches "${CHROME_SELECTOR}", so the ` +
+        `shell's ROOT is missing or renamed — a markup change, not a styling ` +
+        `one. Every geometric check here is addressed from that element.`
+    );
+  }
   if (box === null || box.width === 0 || box.height === 0) {
     throw new Error(
       `The editor shell is in the DOM but has no layout box, so the page ` +
