@@ -64,6 +64,59 @@ function regionLocator(page: Page, region: keyof typeof REGION_NAMES): Locator {
   }
 }
 
+/**
+ * Fail with the CAUSE when the application did not come up, before any
+ * assertion gets the chance to report a symptom instead.
+ *
+ * Every geometric check in this file reads a measured box, which is what makes
+ * them honest — but it also means a page that never styled produces "the
+ * inspector region has no layout box", which reads exactly like a layout
+ * regression in the shell. That has now cost two other lanes an afternoon each:
+ * their diffs could not reach `packages/builder`, the web server had logged
+ * `TypeError: The database connection is not open`, and three assertions
+ * observing ONE broken page were read as three independent regressions.
+ *
+ * Three unrelated regressions in a single run is implausible; one page that
+ * failed to render, seen three times, is not. This check encodes that reading
+ * so the next person does not have to arrive at it.
+ *
+ * Deliberately placed in `goto`, not in `widthOf`: by the time a width is being
+ * measured the test is already asking a question that presupposes a working
+ * page, and the answer to a presupposition failure belongs before the question.
+ */
+async function assertAppRendered(page: Page): Promise<void> {
+  const chrome = page.locator(".nx-builder-chrome").first();
+  const box = await chrome.boundingBox();
+  if (box === null || box.width === 0 || box.height === 0) {
+    throw new Error(
+      `The editor shell mounted but has no layout box, so the APPLICATION did ` +
+        `not render — this is not a layout regression in the shell.\n` +
+        `Check the web-server log first. Known causes, all outside any PR's ` +
+        `diff: the playground's database failing to open ` +
+        `("TypeError: The database connection is not open"), and ` +
+        `\`next/font/google\` fetching at BUILD time from fonts.googleapis.com, ` +
+        `which fails a blocked or slow network while naming an internal ` +
+        `turbopack module.`
+    );
+  }
+
+  // Painted, not merely boxed. A `var()` chain that cannot resolve computes to
+  // transparent, which is what a missing design-system stylesheet produces —
+  // and that renders a full-size, correctly-structured, entirely unstyled page
+  // whose region widths are all wrong for a reason no shell change caused.
+  const background = await chrome.evaluate(
+    element => getComputedStyle(element).backgroundColor
+  );
+  if (background === "rgba(0, 0, 0, 0)" || background === "transparent") {
+    throw new Error(
+      `The editor shell rendered but its chrome resolved to no colour, so a ` +
+        `STYLESHEET is missing rather than a layout being wrong. The shell's ` +
+        `own sheet supplements the design system's: the harness must import ` +
+        `"@nextlyhq/ui/styles.css" alongside "@nextlyhq/builder/styles.css".`
+    );
+  }
+}
+
 export function createShellDriver(page: Page): ShellDriver {
   return {
     async goto() {
@@ -74,6 +127,7 @@ export function createShellDriver(page: Page): ShellDriver {
       await page
         .getByRole("navigation", { name: REGION_NAMES.rail })
         .waitFor({ state: "visible" });
+      await assertAppRendered(page);
     },
 
     railItem(label) {
