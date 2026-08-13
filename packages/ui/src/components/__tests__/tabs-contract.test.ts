@@ -90,29 +90,6 @@ const REPO = resolve(HERE, "../../../../..");
  */
 const SCAN_ROOT_NAMES = ["packages", "apps", "templates"] as const;
 
-/**
- * The watch-trigger glob that subscribes to each scanned root.
- *
- * DERIVED from `SCAN_ROOT_NAMES` rather than listed beside it, so a root added
- * to the traversal appears here without anyone remembering to add it. An
- * independently maintained copy would stay green while the newly scanned tree
- * went unwatched, which is the failure this mapping exists to prevent wearing
- * the mapping's own clothes.
- *
- * Vitest resolves `forceRerunTriggers` relative to the package, so each root is
- * reached by relative path here rather than by the `$TURBO_ROOT$` the Turbo
- * inputs use — `packages` is this package's parent, the rest are siblings of it.
- *
- * The recursive wildcard follows the root immediately, with no directory
- * segment in between. A file placed DIRECTLY under a root is one the traversal
- * reads, and a glob requiring a package or app directory first does not match
- * it — measured against the installed matcher, not assumed from the shape.
- */
-const CALL_SITE_ROOT_GLOBS = SCAN_ROOT_NAMES.map(root => ({
-  root,
-  prefix: root === "packages" ? "../**/*." : `../../${root}/**/*.`,
-}));
-
 const SCAN_ROOTS = SCAN_ROOT_NAMES.map(r => resolve(REPO, r));
 
 /** The primitive itself declares the contract; it is not a call site. */
@@ -998,15 +975,16 @@ const REACHES_BOTTOM = new Set([
 const BORDER_ASPECTS = ["width", "style", "color"];
 
 /**
- * The border-image shorthand and its longhands.
+ * The border-image properties that can put an image over the border.
  *
- * Every one of them changes what the border renders rather than an aspect of
- * it, so none names an edge or an aspect and none is reachable through the
- * shorthand split above. `border-image-source` alone replaces the drawn border
- * wherever the image covers it, which on a tab is the underline the primitive
- * owns.
+ * Only the shorthand and `-source`, because only they can supply one. While
+ * `border-image-source` is its initial `none` there is no image to draw, so
+ * `-slice`, `-width`, `-outset` and `-repeat` change nothing on screen and the
+ * primitive's own bottom border renders exactly as it did. Owning all five
+ * reported those four as repainting an underline they cannot reach; they fall
+ * through to standing for themselves, and intersect nothing the primitive owns.
  */
-const BORDER_IMAGE = /^border-image(?:-(source|slice|width|outset|repeat))?$/;
+const BORDER_IMAGE = /^border-image(?:-source)?$/;
 const ANY_CORNER = /^border(-[a-z]+)*-radius$/;
 const BOTTOM_OFFSET = /^margin(-(bottom|block-end|block|y))?$/;
 
@@ -1151,14 +1129,92 @@ function sourceFiles(dir: string, found: string[] = []): string[] {
  * from the delimiters of a JSX element being grammatical, so no character-class
  * approximation of them holds.
  */
-function parse(file: string, source: string): ts.SourceFile {
-  return ts.createSourceFile(
+/**
+ * The compiler options the binder runs under.
+ *
+ * `noLib` is load-bearing rather than a saving. It is what makes an unshadowed
+ * `undefined` resolve to NO symbol, which is how a local `const undefined` is
+ * told apart from the global one; with a lib loaded both would resolve to a
+ * declaration and the two cases would read alike. `noResolve` keeps the program
+ * to the single file: nothing here reads a type or follows an import, so
+ * resolving the module graph would buy nothing and cost the whole workspace.
+ */
+const BINDER_OPTIONS: ts.CompilerOptions = {
+  noResolve: true,
+  noLib: true,
+  allowJs: true,
+  jsx: ts.JsxEmit.Preserve,
+  types: [],
+};
+
+/**
+ * Parse as TSX, and BIND, so names resolve the way the language resolves them.
+ *
+ * The binder rather than a scope walk written here, because every lexical form
+ * that declares a name is a form the walk has to know about: a parameter, a
+ * catch binding, an import, a function declaration, a loop variable. A hand
+ * written resolver is a list of the ones remembered, and the ones forgotten
+ * fail SILENTLY — the search continues outward and finds a different binding of
+ * the same name, which reads as a confident answer about the wrong declaration.
+ * `getSymbolAtLocation` answers from the same tables the compiler itself uses,
+ * so shadowing, parameters and alias identity are correct by construction
+ * rather than by enumeration.
+ *
+ * One program per file keeps `violationsIn` a pure function of its source,
+ * which is what lets every case below state a whole file and read the result.
+ */
+function parse(
+  file: string,
+  source: string
+): { sourceFile: ts.SourceFile; checker: ts.TypeChecker } {
+  const sourceFile = ts.createSourceFile(
     file,
     source,
     ts.ScriptTarget.Latest,
     /* setParentNodes */ true,
     ts.ScriptKind.TSX
   );
+  const host: ts.CompilerHost = {
+    getSourceFile: name => (name === file ? sourceFile : undefined),
+    getDefaultLibFileName: () => "lib.d.ts",
+    writeFile: () => {},
+    getCurrentDirectory: () => REPO,
+    getCanonicalFileName: name => name,
+    useCaseSensitiveFileNames: () => true,
+    getNewLine: () => "\n",
+    fileExists: name => name === file,
+    readFile: name => (name === file ? source : undefined),
+  };
+  const checker = ts
+    .createProgram([file], BINDER_OPTIONS, host)
+    .getTypeChecker();
+  return { sourceFile, checker };
+}
+
+/**
+ * The declaration a name refers to HERE, or undefined when it refers to none.
+ *
+ * Undefined has two meanings that callers must keep apart: a global (there is
+ * no declaration in this file) and a name the binder could not resolve. Both
+ * say "not a local binding", which is all any caller here asks.
+ *
+ * A shorthand needs its own question. In `{ borderBottomColor }` the identifier
+ * is both the property name and the value, and `getSymbolAtLocation` answers
+ * with the PROPERTY — a member of the object literal, whose declaration is the
+ * shorthand itself. Following that resolves the value to the entry that holds
+ * it, so a shorthand bound to `undefined` looked like a colour and was
+ * reported. The value binding is a separate lookup.
+ */
+function declarationOf(
+  identifier: ts.Identifier,
+  checker: ts.TypeChecker
+): ts.Declaration | undefined {
+  const parent = identifier.parent;
+  const symbol =
+    ts.isShorthandPropertyAssignment(parent) && parent.name === identifier
+      ? checker.getShorthandAssignmentValueSymbol(parent)
+      : checker.getSymbolAtLocation(identifier);
+  return symbol?.valueDeclaration;
 }
 
 /**
@@ -1383,82 +1439,76 @@ function literalStrings(node: ts.Node, found: string[] = []): string[] {
  * in the other order, invents one. Which declaration a name refers to is a
  * lexical question, and the answer is the nearest enclosing one.
  */
-function styleResolver(attribute: ts.JsxAttribute): {
+function styleResolver(checker: ts.TypeChecker): {
   objectsFrom(
     expression: ts.Expression | undefined,
     seen?: Set<ts.Node>
   ): ts.ObjectLiteralExpression[];
-  valueOf(
-    name: string,
-    from?: ts.Node
-  ): { value: ts.Expression; scope: ts.Node } | undefined;
+  valueOf(identifier: ts.Identifier): ts.Expression | undefined;
+  declarationOf(identifier: ts.Identifier): ts.Declaration | undefined;
 } {
   /**
-   * The nearest declaration of a name, and whether it can be trusted.
+   * What a name holds, for a name the binder resolved to a declaration here.
    *
-   * Two things this deliberately does NOT do, each of which was a false
-   * negative:
+   * Mutability is REPORTED rather than filtered on, because the right answer
+   * depends on the CALLER. For a property value, unresolved means "assume it
+   * emits" and reporting is the safe side. For the style object itself,
+   * unresolved means an empty object list and therefore silence — so the same
+   * filter that protects one caller blinds the other.
    *
-   * - It stops at the FIRST scope declaring the name, even when that
-   *   declaration is mutable. Skipping a mutable shadow and continuing outward
-   *   resolves the use to a completely different binding: an inner
-   *   `let colour = "red"` under an outer `const colour = undefined` rendered
-   *   red while the scan read the outer `undefined` and stayed silent. A shadow
-   *   makes the name undecidable; it does not make it the outer one.
-   * - It reports mutability rather than filtering on it, because the right
-   *   answer depends on the CALLER. For a property value, unresolved means
-   *   "assume it emits" and reporting is the safe side. For the style object
-   *   itself, unresolved means an empty object list and therefore silence — so
-   *   the same filter that protects one caller blinds the other.
-   *
-   * The declaration's own scope comes back with it, so an alias is followed
-   * from where it was WRITTEN. `const key = sourceKey` must resolve `sourceKey`
-   * against the alias's scope; resolving it against the element's picks up an
-   * inner `sourceKey` that the alias never saw.
+   * A declaration with no initializer is still a binding. It stops the question
+   * at the right place: a parameter shadowing an outer constant means the name
+   * is the parameter, whose value the caller supplies, so the property is
+   * undecidable rather than the outer constant's.
    */
   interface Binding {
-    initializer: ts.Expression;
-    /** The declaration is `let` or `var`, so its initializer is not final. */
+    /** The declaration's own initializer, where it has one. */
+    initializer: ts.Expression | undefined;
+    /** The initializer is not necessarily what the name holds at the element. */
     mutable: boolean;
-    /** Where the declaration lives, for following aliases from there. */
-    scope: ts.Node;
   }
 
-  const declaredIn = (scope: ts.Node, name: string): Binding | undefined => {
-    let found: Binding | undefined;
-    // Only the scope's OWN statements, so a declaration nested inside a
-    // sibling function is not mistaken for one in this scope.
-    ts.forEachChild(scope, statement => {
-      if (!ts.isVariableStatement(statement)) return;
+  const bindingOf = (identifier: ts.Identifier): Binding | undefined => {
+    const declaration = declarationOf(identifier, checker);
+    if (!declaration) return undefined;
+    if (ts.isVariableDeclaration(declaration)) {
+      const list = declaration.parent;
+      // `const` is the only form whose initializer is still the value later on.
       const mutable =
-        (statement.declarationList.flags & ts.NodeFlags.Const) === 0;
-      for (const declaration of statement.declarationList.declarations) {
-        if (
-          ts.isIdentifier(declaration.name) &&
-          declaration.name.text === name &&
-          declaration.initializer
-        ) {
-          found = { initializer: declaration.initializer, mutable, scope };
-        }
-      }
-    });
-    return found;
+        !ts.isVariableDeclarationList(list) ||
+        (list.flags & ts.NodeFlags.Const) === 0;
+      return { initializer: declaration.initializer, mutable };
+    }
+    // A parameter's default is what it holds only when the caller passes
+    // nothing, and an import, a function or a catch binding has no initializer
+    // to read at all. Each is a binding whose value is undecidable here.
+    return { initializer: undefined, mutable: true };
   };
 
-  const bindingOf = (name: string, from: ts.Node): Binding | undefined => {
-    for (let scope: ts.Node | undefined = from; scope; scope = scope.parent) {
+  /**
+   * Every value assigned to a binding anywhere in the file.
+   *
+   * A declaration initializer is only the FIRST value a mutable binding holds:
+   * `let style = {}; style = { borderBottomColor: "red" }` renders the second
+   * one, and reading the declaration alone reported nothing at all. Matched by
+   * DECLARATION identity rather than by name, so a same-named binding in
+   * another scope contributes nothing and the whole file can be searched.
+   */
+  const assignedValues = (declaration: ts.Declaration): ts.Expression[] => {
+    const values: ts.Expression[] = [];
+    const visit = (node: ts.Node): void => {
       if (
-        ts.isBlock(scope) ||
-        ts.isSourceFile(scope) ||
-        ts.isCaseClause(scope)
+        ts.isBinaryExpression(node) &&
+        node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+        ts.isIdentifier(node.left) &&
+        declarationOf(node.left, checker) === declaration
       ) {
-        // The FIRST scope that declares it wins, mutable or not. Continuing
-        // past a shadow is what reads the wrong binding.
-        const found = declaredIn(scope, name);
-        if (found) return found;
+        values.push(node.right);
       }
-    }
-    return undefined;
+      ts.forEachChild(node, visit);
+    };
+    visit(declaration.getSourceFile());
+    return values;
   };
 
   /**
@@ -1507,12 +1557,16 @@ function styleResolver(attribute: ts.JsxAttribute): {
         walk(node.right);
         return;
       }
-      // Followed whether or not the binding is mutable. An unresolved object
-      // yields an EMPTY list here, and an empty list reports nothing — so
-      // dropping a `let style = { ... }` is a false negative, the opposite
-      // polarity to an unresolved property value.
+      // Followed whether or not the binding is mutable, and through every
+      // ASSIGNMENT as well as the declaration. An unresolved object yields an
+      // EMPTY list here, and an empty list reports nothing — so dropping a
+      // `let style = { ... }` is a false negative, the opposite polarity to an
+      // unresolved property value.
       if (ts.isIdentifier(node)) {
-        walk(bindingOf(node.text, node)?.initializer);
+        const declaration = declarationOf(node, checker);
+        if (!declaration) return;
+        walk(bindingOf(node)?.initializer);
+        for (const assigned of assignedValues(declaration)) walk(assigned);
       }
     };
     walk(root);
@@ -1527,27 +1581,32 @@ function styleResolver(attribute: ts.JsxAttribute): {
    * treat an unresolved value as emitting, so undecidable errs towards
    * reporting.
    *
-   * `from` is where the name was written, so an alias resolves against its own
-   * scope rather than the element's.
+   * The identifier itself is the input, never its text: the binder resolves it
+   * at its own position, so an alias is followed from where it was WRITTEN
+   * without the caller having to carry a scope along with it.
    */
-  const valueOf = (
-    name: string,
-    from: ts.Node = attribute
-  ): { value: ts.Expression; scope: ts.Node } | undefined => {
-    const binding = bindingOf(name, from);
+  const valueOf = (identifier: ts.Identifier): ts.Expression | undefined => {
+    const binding = bindingOf(identifier);
     if (!binding || binding.mutable) return undefined;
-    return { value: binding.initializer, scope: binding.scope };
+    return binding.initializer;
   };
 
-  return { objectsFrom, valueOf };
+  return {
+    objectsFrom,
+    valueOf,
+    declarationOf: identifier => declarationOf(identifier, checker),
+  };
 }
 
 /** The objects an element's `style` prop can resolve to here. */
-function styleObjectsFor(attribute: ts.JsxAttribute): {
+function styleObjectsFor(
+  attribute: ts.JsxAttribute,
+  checker: ts.TypeChecker
+): {
   objects: ts.ObjectLiteralExpression[];
   resolver: ReturnType<typeof styleResolver>;
 } {
-  const resolver = styleResolver(attribute);
+  const resolver = styleResolver(checker);
   const initializer = attribute.initializer;
   if (!initializer || !ts.isJsxExpression(initializer)) {
     return { objects: [], resolver };
@@ -1591,7 +1650,10 @@ function propertyNameOf(
  * declared side by side are read the same way, and wrappers are peeled first so
  * `[key as string]` resolves like a bare `key`.
  *
- * `seen` stops a self-referential binding from recursing. Anything else — a
+ * `seen` stops a self-referential binding from recursing. It holds DECLARATIONS
+ * rather than names: keyed on text, an alias chain crossing a shadowed name
+ * stopped at the second spelling of it and returned clean on a call site that
+ * paints. Two bindings sharing a name are two entries here. Anything else — a
  * template with substitutions, a call, a member access — stays undecidable and
  * returns undefined, which leaves the property unnamed rather than guessed.
  *
@@ -1605,27 +1667,26 @@ function propertyNameOf(
  * reported — the conservative side. For a KEY, undecidable means the property
  * is not known at all, and defaulting to "owned" would report every computed
  * key in the repository, including the overwhelming majority that name nothing
- * this primitive draws. Closing this needs the assignments in scope to be read,
- * not a change of default.
+ * this primitive draws.
  */
 function staticKeyOf(
   expression: ts.Expression,
   resolver: ReturnType<typeof styleResolver>,
-  seen = new Set<string>(),
-  from?: ts.Node
+  seen = new Set<ts.Declaration>()
 ): string | undefined {
   const value = withoutTypeWrappers(expression);
   if (ts.isStringLiteral(value) || ts.isNoSubstitutionTemplateLiteral(value)) {
     return value.text;
   }
-  if (ts.isIdentifier(value) && !seen.has(value.text)) {
-    seen.add(value.text);
-    const bound = resolver.valueOf(value.text, from);
-    // Followed from the DECLARATION's scope, not the element's. An alias like
-    // `const key = sourceKey` refers to whatever `sourceKey` meant where the
-    // alias was written, and resolving it beside the element instead picks up
-    // an inner `sourceKey` the alias never saw.
-    if (bound) return staticKeyOf(bound.value, resolver, seen, bound.scope);
+  if (ts.isIdentifier(value)) {
+    const declaration = resolver.declarationOf(value);
+    if (!declaration || seen.has(declaration)) return undefined;
+    seen.add(declaration);
+    // The binder resolved this identifier at its own position, so an alias
+    // like `const key = sourceKey` already refers to whatever `sourceKey`
+    // meant where the alias was written.
+    const bound = resolver.valueOf(value);
+    if (bound) return staticKeyOf(bound, resolver, seen);
   }
   return undefined;
 }
@@ -1638,10 +1699,19 @@ function staticKeyOf(
  * decidable here and must keep being reported, because the same variable holds a
  * colour on the next render — which is exactly how the violation that motivated
  * the inline half was written.
+ *
+ * `undefined` is a NAME, not a keyword, so a local declaration of it is a
+ * colour like any other. It counts as nothing only when it resolves to no
+ * declaration in this file, which is what the global one does.
  */
-function isDefinitelyNothing(initializer: ts.Expression): boolean {
+function isDefinitelyNothing(
+  initializer: ts.Expression,
+  resolver: ReturnType<typeof styleResolver>
+): boolean {
   const value = withoutTypeWrappers(initializer);
-  if (ts.isIdentifier(value)) return value.text === "undefined";
+  if (ts.isIdentifier(value)) {
+    return value.text === "undefined" && !resolver.declarationOf(value);
+  }
   if (value.kind === ts.SyntaxKind.NullKeyword) return true;
   // `void 0` is the other spelling of the same intent.
   return ts.isVoidExpression(value);
@@ -1768,19 +1838,20 @@ function declaredProperties(
 function emitsValue(
   value: ts.Expression,
   resolver: ReturnType<typeof styleResolver>,
-  seen = new Set<string>(),
-  from?: ts.Node
+  seen = new Set<ts.Declaration>()
 ): boolean {
   const inner = withoutTypeWrappers(value);
-  if (isDefinitelyNothing(inner)) return false;
+  if (isDefinitelyNothing(inner, resolver)) return false;
   // Unwrapped before the binding lookup too, so `(colour as string)` resolves
   // through the same identifier path a bare `colour` does.
-  if (ts.isIdentifier(inner) && !seen.has(inner.text)) {
-    seen.add(inner.text);
-    const bound = resolver.valueOf(inner.text, from);
-    // Same lexical rule as a computed key: an alias is resolved from where it
-    // was declared.
-    if (bound) return emitsValue(bound.value, resolver, seen, bound.scope);
+  if (ts.isIdentifier(inner)) {
+    const declaration = resolver.declarationOf(inner);
+    // Keyed on the declaration, so two bindings that share a name are two
+    // entries and a chain crossing a shadow is not mistaken for a cycle.
+    if (!declaration || seen.has(declaration)) return true;
+    seen.add(declaration);
+    const bound = resolver.valueOf(inner);
+    if (bound) return emitsValue(bound, resolver, seen);
   }
   return true;
 }
@@ -1806,7 +1877,7 @@ interface Violation {
 }
 
 function violationsIn(file: string, source: string): Violation[] {
-  const sourceFile = parse(file, source);
+  const { sourceFile, checker } = parse(file, source);
   const { ownership, exportedNameOf } = ownershipIn(sourceFile);
   const found: Violation[] = [];
   const at = (node: ts.Node): number =>
@@ -1821,7 +1892,7 @@ function violationsIn(file: string, source: string): Violation[] {
           if (!ts.isJsxAttribute(attribute)) continue;
           const name = attribute.name.getText(sourceFile);
           if (name === "style") {
-            const { objects, resolver } = styleObjectsFor(attribute);
+            const { objects, resolver } = styleObjectsFor(attribute, checker);
             const property = objects
               .map(object => ownedStyleProperty(exported, object, resolver))
               .find(Boolean);
@@ -2263,8 +2334,12 @@ describe("the tab indicator contract", () => {
       "the same border image set inline",
       '<TabsTrigger style={{ borderImage: "linear-gradient(red,red) 1" }} />',
     ],
+    // The one longhand that can put an image there. It is what keeps the
+    // narrowing below honest: the other four are reported by nothing, so
+    // without a case on `-source` a mapping that owned no border image at all
+    // would pass.
     [
-      "a border-image longhand on its own",
+      "a border image supplied by the source longhand",
       '<TabsTrigger style={{ borderImageSource: "linear-gradient(red,red)" }} />',
     ],
     [
@@ -2304,6 +2379,26 @@ describe("the tab indicator contract", () => {
     [
       "a computed key aliasing a constant shadowed near the element",
       'const sourceKey = "borderBottomColor";\nconst key = sourceKey;\nfunction Row() {\n  const sourceKey = "width";\n  return <TabsTrigger style={{ [key]: "red" }} />;\n}',
+    ],
+    // An alias chain CROSSING a shadowed name. Two distinct bindings spelled
+    // `key`, so a cycle guard keyed on the spelling stops at the second one and
+    // never reaches the owned property the chain names.
+    [
+      "a computed key aliased through a second binding of the same name",
+      'const key = "borderBottomColor";\nfunction Row() {\n  const alias = key;\n  {\n    const key = alias;\n    return <TabsTrigger style={{ [key]: "red" }} />;\n  }\n}',
+    ],
+    // The value a mutable binding holds at the element is the last one ASSIGNED
+    // to it, not the one it was declared with. Reading only the declaration saw
+    // an empty object and reported nothing.
+    [
+      "an owned property assigned to a style binding after it is declared",
+      'let style = {};\nstyle = { borderBottomColor: "red" };\n<TabsTrigger style={style} />',
+    ],
+    // `undefined` is a NAME. Shadowed by a local declaration it is an ordinary
+    // colour, and reading the spelling alone cleared a call site that paints.
+    [
+      "an owned property set to a locally shadowed undefined",
+      'function Row() {\n  const undefined = "red";\n  return <TabsTrigger style={{ borderBottomColor: undefined }} />;\n}',
     ],
   ])("catches %s", (_label, body) => {
     // The positive controls. Each is a shape an earlier version returned clean
@@ -2534,6 +2629,21 @@ describe("the tab indicator contract", () => {
       "a spread whose owned property the object then clears",
       'const inherited = { borderBottomColor: "red" };\n<TabsTrigger style={{ ...inherited, borderBottomColor: undefined }} />',
     ],
+    // A PARAMETER shadowing an outer constant. The name is the parameter, whose
+    // value the caller supplies, so the property is undecidable — not the outer
+    // constant's. Walking past the parameter named an owned property for an
+    // element that renders whatever it is passed.
+    [
+      "a computed key bound to a parameter shadowing an outer constant",
+      'const key = "borderBottomColor";\nfunction Row(key = "width") {\n  return <TabsTrigger style={{ [key]: "red" }} />;\n}',
+    ],
+    // The border-image longhands that cannot draw. With `border-image-source`
+    // at its initial `none` there is no image, so these change nothing on
+    // screen and the primitive's own bottom border renders as it did.
+    [
+      "border-image longhands with no source to draw",
+      '<TabsTrigger style={{ borderImageRepeat: "round", borderImageSlice: "30", borderImageWidth: "4px", borderImageOutset: "2px" }} />',
+    ],
   ])("does not report %s", (_label, body) => {
     // The complement, and the reason this is a contract rather than a ban. A
     // check that flags a documented example or a legitimate layout class gets
@@ -2687,7 +2797,7 @@ describe("which files the call-site scan reads", () => {
     }
   });
 
-  it("reruns in watch mode for every root and extension it reads", () => {
+  it("reruns in watch mode for every root and extension it reads", async () => {
     // The scan reaches call sites with `readFileSync`, so Vitest has no module
     // dependency on them: without an explicit trigger a watch session keeps
     // displaying the previous green after a real violation is added.
@@ -2697,57 +2807,42 @@ describe("which files the call-site scan reads", () => {
     // `**/src` subscribes to `packages/ui` alone — a call site in
     // `packages/admin`, an app or a template could gain a violation and the
     // suite reporting on it would never rerun.
-    const config = readFileSync(
-      resolve(HERE, "../../../vitest.config.ts"),
-      "utf8"
-    );
-
-    const triggers = [...config.matchAll(/"([^"]*)\{([^}]+)\}"/g)].map(
-      match => ({
-        prefix: match[1],
-        extensions: match[2].split(",").map(part => part.trim()),
+    // The REAL triggers and the REAL matcher, on the REAL paths.
+    //
+    // Every earlier version of this case compared the config's strings against
+    // strings assembled here, and a comparison between two things written in
+    // the same change proves nothing about either: the triggers were relative,
+    // matched none of the absolute paths Vitest hands the matcher, and this
+    // contract stayed green throughout because it never ran one.
+    //
+    // So the config is IMPORTED rather than parsed, picomatch is resolved
+    // through Vitest so it is the same version and cannot drift, and the paths
+    // are the ones the traversal actually returns.
+    const { default: config } = (await import("../../../vitest.config")) as {
+      default: { test?: { forceRerunTriggers?: string[] } };
+    };
+    const triggers = config.test?.forceRerunTriggers ?? [];
+    const fromHere = createRequire(import.meta.url);
+    const isMatch = fromHere(
+      fromHere.resolve("picomatch", {
+        paths: [dirname(fromHere.resolve("vitest/package.json"))],
       })
+    ).isMatch as (path: string, globs: string[]) => boolean;
+
+    // A negative control first, so a matcher that says yes to everything — the
+    // one way every assertion below could pass while covering nothing — is
+    // caught before its answers are trusted. A Markdown file is read by no
+    // scan and must not trigger a rerun.
+    expect(isMatch(resolve(REPO, "packages/ui/README.md"), triggers)).toBe(
+      false
     );
 
-    // Proves the pattern matched something before anything is concluded from
-    // it: a renamed option or a reformatted config would otherwise read as a
-    // pass, which is the failure this whole case exists to prevent.
-    expect(triggers.length).toBeGreaterThan(0);
-
-    // The watched roots ARE the scanned roots. Deriving the list is what keeps
-    // them in step today; asserting it is what notices if someone replaces the
-    // derivation with a literal — which leaves every case below green while a
-    // scanned tree goes unwatched, because they only check the entries present.
-    expect(CALL_SITE_ROOT_GLOBS.map(glob => glob.root)).toEqual([
-      ...SCAN_ROOT_NAMES,
-    ]);
-
-    // Each glob must recurse from the ROOT itself, with no directory segment
-    // in between. Measured against the installed matcher rather than inferred:
-    // `../*/**` does not match a file placed directly under `packages`, so a
-    // prefix of that shape leaves those files unwatched while this contract —
-    // comparing strings — reported them covered.
-    for (const { root, prefix } of CALL_SITE_ROOT_GLOBS) {
-      expect({ root, prefix }).toEqual({
-        root,
-        prefix: expect.stringMatching(/(^|\/)\*\*\/\*\.$/),
-      });
-    }
-
-    const missing = CALL_SITE_ROOT_GLOBS.flatMap(({ root, prefix }) =>
-      CALL_SITE_EXTENSIONS.map(extension => extension.slice(1))
-        .filter(
-          extension =>
-            !triggers.some(
-              trigger =>
-                trigger.prefix === prefix &&
-                trigger.extensions.includes(extension)
-            )
-        )
-        .map(extension => `${root}:${extension}`)
-    );
-
-    expect(missing).toEqual([]);
+    // Every file the scan reads has to trigger a rerun, because every one of
+    // them can gain a violation this suite would otherwise keep reporting
+    // clean. Named individually: the list is only ever wrong for a whole tree
+    // at a time, and a bare count says nothing about which.
+    const unwatched = scanned().filter(file => !isMatch(file, triggers));
+    expect(unwatched).toEqual([]);
   });
 
   it("finds a violation in a .jsx call site", () => {

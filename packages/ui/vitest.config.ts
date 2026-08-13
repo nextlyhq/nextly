@@ -1,4 +1,23 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
+
+/**
+ * The repository root, as an absolute path with forward slashes.
+ *
+ * Vitest matches a rerun trigger against the path its watcher emits, which is
+ * ABSOLUTE, so a relative glob cannot match one however it is spelled: measured
+ * against the picomatch Vitest resolves, `../**` + `/*.tsx` against
+ * `<root>/packages/admin/src/ApiKeyTable.tsx` is false. A glob beginning `**` +
+ * `/` matches an absolute path because the leading `**` absorbs the prefix,
+ * which is why the `src`-scoped triggers below work and hid this for the roots.
+ *
+ * Backslashes are replaced because picomatch treats one as an escape rather
+ * than a separator, so a Windows path would match nothing.
+ */
+const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(
+  /\\/g,
+  "/"
+);
 
 export default defineConfig({
   test: {
@@ -25,12 +44,13 @@ export default defineConfig({
       // suite never rerunning. The scan's reach is what these have to match,
       // not the convention most files happen to follow.
       //
-      // Kept in step with `CALL_SITE_ROOT_GLOBS` in
-      // `src/components/__tests__/tabs-contract.test.ts`, which asserts this
-      // list covers every root-and-extension pair the scan reads.
-      "../**/*.{ts,tsx,js,jsx}",
-      "../../apps/**/*.{ts,tsx,js,jsx}",
-      "../../templates/**/*.{ts,tsx,js,jsx}",
+      // Absolute for the reason given above. The contract in
+      // `src/components/__tests__/tabs-contract.test.ts` runs every file the
+      // scan actually reads through the matcher Vitest uses, so a glob that
+      // matches nothing fails there rather than passing as a string.
+      `${REPO_ROOT}packages/**/*.{ts,tsx,js,jsx}`,
+      `${REPO_ROOT}apps/**/*.{ts,tsx,js,jsx}`,
+      `${REPO_ROOT}templates/**/*.{ts,tsx,js,jsx}`,
       "**/src/**/*.css",
       // The declaration build runs through both tsup configs, and a child
       // process loads them — they are in no module graph Vitest can invalidate,
