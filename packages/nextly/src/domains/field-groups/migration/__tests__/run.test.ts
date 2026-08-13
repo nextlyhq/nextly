@@ -1092,6 +1092,65 @@ describe("a preview that meets a writer mid-run", () => {
     expect(markerReads(built.trace)).toBe(2);
   });
 
+  // 🔴 The parent-pointer sweep runs BEFORE the probe inside the settled-marker verification, so
+  // it is the refusal an unlocked preview actually meets when a rollback is rewriting `_parent_table`
+  // back to legacy names. Classifying only the probe left this one raising ahead of it, and the
+  // retry never saw a refusal it recognised.
+  it("re-reads when a rollback is rewriting parent pointers", async () => {
+    const settledWithPlan = {
+      version: MIGRATION_MARKER_VERSION,
+      status: "settled",
+      generation: "field-groups-v2",
+      appliedManifest: [
+        { kind: "table", from: "comp_hero", to: "fg_hero" },
+        {
+          kind: "registry",
+          from: "dynamic_components",
+          to: "dynamic_field_groups",
+        },
+      ],
+    };
+    const world: RunWorld = {
+      marker: settledWithPlan,
+      tables: [TARGET_REGISTRY, "fg_hero", MIGRATION_LOCK_TABLE],
+      registryRows: [
+        { id: "1", slug: "hero", table_name: "fg_hero", localized: 0 },
+      ],
+      // A rollback has already put a legacy name back into the pointer column.
+      stalePointers: { fg_hero: "comp_hero" },
+      lockOwner: "field-group-migration:down#someone-else",
+    };
+    let reads = 0;
+    world.onMarkerRead = () => {
+      reads += 1;
+      if (reads !== 1) return;
+      // The rollback settled; its marker now agrees with the rows it rewrote.
+      world.marker = {
+        version: MIGRATION_MARKER_VERSION,
+        status: "settled",
+        generation: "legacy",
+      };
+      world.tables = [LEGACY_REGISTRY, "comp_hero", MIGRATION_LOCK_TABLE];
+      world.registryRows = [
+        { id: "1", slug: "hero", table_name: "comp_hero", localized: 0 },
+      ];
+      world.stalePointers = {};
+    };
+    const { adapter, trace } = createRunWorld(world);
+
+    const outcome = await runFieldGroupMigration({
+      adapter,
+      logger,
+      direction: "up",
+      dryRun: true,
+    });
+
+    if (outcome.ran !== false || outcome.reason !== "dry-run") {
+      expect.fail("expected a dry-run outcome, not a refusal");
+    }
+    expect(markerReads(trace)).toBe(2);
+  });
+
   // The plan is reported rather than withheld, and labelled rather than passed off as scored. An
   // empty list would read as "nothing to do", which is the silent wrong answer this whole path
   // exists to remove.
