@@ -606,14 +606,25 @@ export type ByteMeasurement =
  * The boxed form is included because `Object(1n)` is a BigInt OBJECT, so
  * `typeof` reports `"object"` and the walk would treat it as an ordinary record
  * with no own keys — two bytes for a value that cannot be written at all.
+ *
+ * That boxed form is recognised by its internal slot rather than by its tag.
+ * `Object.prototype.toString` reads `Symbol.toStringTag`, which is an ordinary
+ * writable property of the document under inspection: `{ [Symbol.toStringTag]:
+ * "BigInt", x: 1 }` reports `[object BigInt]` and yet `JSON.stringify` writes it
+ * as `{"x":1}`. Classifying by the tag therefore lets block props declare
+ * themselves unstorable. `BigInt.prototype.valueOf` reaches the slot instead and
+ * throws for anything that does not have one, so no property the document can
+ * set changes the answer.
  */
 function refusedByWriter(value: unknown): boolean {
-  return (
-    typeof value === "bigint" ||
-    (typeof value === "object" &&
-      value !== null &&
-      Object.prototype.toString.call(value) === "[object BigInt]")
-  );
+  if (typeof value === "bigint") return true;
+  if (typeof value !== "object" || value === null) return false;
+  try {
+    BigInt.prototype.valueOf.call(value);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function measureBytes(root: unknown, limit: number): ByteMeasurement {

@@ -1934,6 +1934,28 @@ describe("measureBytes says WHY a value cannot be stored", () => {
     });
   });
 
+  it("writes an object that only CLAIMS to be a BigInt", () => {
+    // `Symbol.toStringTag` is an ordinary writable property of the document
+    // under inspection, so `Object.prototype.toString` reports whatever the
+    // document says. This value tags itself `[object BigInt]` and the writer
+    // stores it regardless, which is why the refusal is decided by the internal
+    // slot instead: classifying by the tag would let block props declare
+    // themselves unstorable and lock their own author out.
+    const spoof = { [Symbol.toStringTag]: "BigInt", x: 1 };
+    const written = JSON.stringify({ v: spoof });
+
+    // The positive control for the pair: the writer really does store one and
+    // really does refuse the other, so the two cases are genuinely different
+    // rather than both being accepted.
+    expect(written).toBe('{"v":{"x":1}}');
+    expect(() => JSON.stringify({ v: Object(1n) })).toThrow(TypeError);
+
+    expect(measureBytes({ v: spoof }, 1_000)).toEqual({
+      bytes: Buffer.byteLength(written, "utf8"),
+      exceeded: false,
+    });
+  });
+
   it("still says over-limit when the document is merely too big", () => {
     // The distinction is the whole point: these two need opposite advice, and
     // a single boolean cannot tell an author which one they have.
