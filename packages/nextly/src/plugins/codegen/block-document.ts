@@ -61,6 +61,8 @@ import type {
 } from "@nextlyhq/blocks-engine/format";
 import { z } from "zod";
 
+import { NextlyError } from "../../errors/nextly-error";
+
 /**
  * The closed vocabularies, read from the engine rather than written out again.
  *
@@ -654,7 +656,34 @@ export type BlockDocumentShape = z.infer<typeof blockDocumentSchema>;
  * artifact is writing a document rather than reading one back out of zod.
  */
 export function blockDocumentJsonSchema(): Record<string, unknown> {
-  return z.toJSONSchema(blockDocumentSchema, { io: "input" });
+  const schema = z.toJSONSchema(blockDocumentSchema, { io: "input" });
+
+  // The emission is checked HERE rather than only where this module consumes
+  // it, because publishing a corrupted schema is the worse of the two failures:
+  // a caller writes it to a file, a generator or an external agent validates
+  // against it, and it silently accepts malformed nodes long after this process
+  // has exited.
+  //
+  // What corrupts it is prototype pollution. Emitting while `Object.prototype`
+  // carries `id`, `type`, `version` and `props` returns EIGHT property names
+  // instead of 33, with every node field missing — a shorter document rather
+  // than an error, which is why nothing downstream notices.
+  const emitted = new Set<string>();
+  collectDeclaredFields(schema, emitted);
+  const missing = NODE_REQUIRED_FIELDS.filter(field => !emitted.has(field));
+  if (missing.length > 0) {
+    throw new NextlyError({
+      code: "SCHEMA_DERIVATION_FAILED",
+      publicMessage:
+        "The block document schema could not be derived, so it was not emitted.",
+      logContext: {
+        missing: [...missing],
+        cause:
+          "Object.prototype has been extended; zod's registry reads `id` off the object given to .meta(), so the emitted schema loses the node's fields and would describe a format that accepts malformed nodes.",
+      },
+    });
+  }
+  return schema;
 }
 
 /**
@@ -683,6 +712,22 @@ export type BlockDocumentParseResult =
  * that it was invalid.
  */
 export function parseBlockDocument(value: unknown): BlockDocumentParseResult {
+  // FIRST, ahead of the survey. This is the cheapest condition and it decides
+  // the verdict on its own, so anything done before it is work a refused
+  // document got for free — and the survey is not merely work: an inherited
+  // `toJSON` would be retrieved and INVOKED on the root and on every nested
+  // object, so a polluted prototype could run arbitrary code inside the
+  // precondition that exists to refuse it.
+  const added = pollutedPrototypeKey();
+  if (added !== undefined) {
+    return {
+      success: false,
+      issues: [
+        `Object.prototype has gained \`${added}\` since this module loaded, so every object in this document appears to hold fields it does not own.`,
+      ],
+    };
+  }
+
   const survey = surveyDocument(value, {
     maxBytes: DEFAULT_MAX_DOCUMENT_BYTES,
     maxDepth: MAX_DEPTH,
@@ -725,16 +770,6 @@ export function parseBlockDocument(value: unknown): BlockDocumentParseResult {
   // `Object.prototype`, every object in the document resolves that field
   // whether or not it holds one, so the schema would be validating values the
   // document does not contain and storage will not receive.
-  const added = pollutedPrototypeKey();
-  if (added !== undefined) {
-    return {
-      success: false,
-      issues: [
-        `Object.prototype has gained \`${added}\` since this module loaded, so every object in this document appears to hold fields it does not own.`,
-      ],
-    };
-  }
-
   const fields = declaredFields();
   // The positive control. A perturbed emission returns a SHORTER list rather
   // than an error, so "no declared field is shadowed" has to be distinguished

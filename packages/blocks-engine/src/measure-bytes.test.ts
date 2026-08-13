@@ -142,6 +142,76 @@ describe("measureBytes", () => {
     expect(survey.tooManyNodes || survey.tooLarge).toBe(true);
   });
 
+  it("counts the document's own structure, not a toJSON replacement's", () => {
+    // The caps exist to bound what a caller holds and the validator will walk.
+    // A hook returning something shallower let the replacement be accounted for
+    // while the real tree went unmeasured: 5,001 nodes presenting an empty
+    // forest counted zero, passed a 5,000 cap, and were then validated in full.
+    const nodes = Array.from({ length: 5001 }, (_, index) => ({
+      id: `n${index}`,
+      type: "core/text",
+      version: 1,
+      props: {},
+    }));
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes,
+      toJSON: () => ({ formatVersion: 1, kind: "page", nodes: [] }),
+    };
+    // The precondition: the writer really would emit the empty forest, so this
+    // is a document whose declared size and stored size disagree.
+    expect(JSON.parse(JSON.stringify(document)).nodes).toEqual([]);
+
+    const survey = surveyDocument(document, {
+      maxBytes: Number.MAX_SAFE_INTEGER,
+      maxDepth: 12,
+      maxNodes: 5000,
+    });
+
+    expect(survey.tooManyNodes).toBe(true);
+    expect(survey.unserializable).toBe(true);
+  });
+
+  it("counts a node's own subtree, not its toJSON replacement's", () => {
+    // The same rule one level down, where the substitution is on a member
+    // rather than the root.
+    const children = Array.from({ length: 5001 }, (_, index) => ({
+      id: `c${index}`,
+      type: "core/text",
+      version: 1,
+      props: {},
+    }));
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "root",
+          type: "core/section",
+          version: 1,
+          props: {},
+          slots: { children },
+          toJSON: () => ({
+            id: "root",
+            type: "core/section",
+            version: 1,
+            props: {},
+          }),
+        },
+      ],
+    };
+
+    const survey = surveyDocument(document, {
+      maxBytes: Number.MAX_SAFE_INTEGER,
+      maxDepth: 12,
+      maxNodes: 5000,
+    });
+
+    expect(survey.tooManyNodes).toBe(true);
+    expect(survey.unserializable).toBe(true);
+  });
+
   it("reads a toJSON hook once, as the writer does", () => {
     // `JSON.stringify` retrieves the property once and calls what it got.
     // Reading it twice — once to type-test, once to invoke — lets an accessor

@@ -8,7 +8,7 @@ import {
   STYLE_STATES,
   isReservedOperationName,
 } from "@nextlyhq/blocks-engine";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { blockDocumentJsonSchema, parseBlockDocument } from "../block-document";
 
@@ -515,67 +515,41 @@ describe("block document schema", () => {
     ).toBe(true);
   });
 
-  it("refuses when the prototype is polluted BEFORE the module derives its fields", async () => {
-    // The ordering that disarmed the guard, and it disarmed it through the
-    // guard's own input. The field list is derived by emitting the JSON Schema
-    // and reading its `properties`; emitting it while `Object.prototype`
-    // carries `id`, `type`, `version` and `props` yields 8 names instead of 33,
-    // with every node field missing. So the search ran over a list that no
-    // longer contained the names under attack, found nothing, and a node
-    // inheriting all four required fields parsed as valid.
+  it("refuses to EMIT a schema whose derivation was corrupted", () => {
+    // The corruption is real and specific: with `id` on `Object.prototype`,
+    // `z.toJSONSchema` returns EIGHT property names instead of 33 — every node
+    // field gone — because zod's registry reads `id` off the object handed to
+    // `.meta()` and every registration then looks like the same one.
     //
-    // Every other test here pollutes AFTER something has already derived the
-    // list, so they exercised a warm cache and passed either way. `resetModules`
-    // is what makes the module derive its list for the first time while the
-    // pollution is in place.
-    vi.resetModules();
-    const proto = Object.prototype as unknown as Record<string, unknown>;
-    const planted = { id: "a", type: "core/text", version: 1, props: {} };
-    for (const [key, value] of Object.entries(planted)) {
-      Object.defineProperty(Object.prototype, key, {
-        value,
-        enumerable: false,
-        writable: true,
-        configurable: true,
-      });
-    }
-    try {
-      const node = {};
-      // The precondition: all four required fields resolve without being owned.
-      expect((node as { id?: string }).id).toBe("a");
-      expect(Object.hasOwn(node, "id")).toBe(false);
+    // Measured across the format's own field names, `id` is the only one that
+    // does this; `type`, `version`, `props`, `kind` and `nodes` all emit 33
+    // intact. So this is the single input that turns the published contract
+    // into one accepting malformed nodes, and it is checked at the point of
+    // emission rather than only where this module consumes it — a caller who
+    // writes the result to a file ships that acceptance long after the process
+    // has gone.
+    withPrototypeFields({ id: "spoofed" }, () => {
+      expect(() => blockDocumentJsonSchema()).toThrow(/could not be derived/);
+    });
 
-      // The property is that a polluted process NEVER reports such a document
-      // valid — not which mechanism refuses it. Three can, and which one fires
-      // depends on when the pollution arrived:
-      //
-      //  - the load-time prototype snapshot, for pollution added afterwards;
-      //  - the derivation control, when the emitted schema comes back short;
-      //  - zod's own registry, which throws during module initialization,
-      //    because `.meta()` reads `id` off the object it is given and an
-      //    inherited `id` makes every call look like the same registration.
-      //
-      // The last one means the import itself can fail, so the assertion has to
-      // cover a throw as well as a refusal. Asserting one specific message
-      // would pin the accident of ordering rather than the guarantee.
-      let reportedValid = false;
-      try {
-        const cold = (await import("../block-document")) as {
-          parseBlockDocument: typeof parseBlockDocument;
-        };
-        reportedValid = cold.parseBlockDocument({
-          formatVersion: DOCUMENT_FORMAT_VERSION,
-          kind: "page",
-          nodes: [node],
-        }).success;
-      } catch {
-        reportedValid = false;
+    // The control, immediately after: the same call succeeds and the schema is
+    // whole, so the refusal is of the corruption and not of the emission.
+    const schema = blockDocumentJsonSchema();
+    const names = new Set<string>();
+    (function walk(node: unknown): void {
+      if (node === null || typeof node !== "object") return;
+      if (Array.isArray(node)) {
+        node.forEach(walk);
+        return;
       }
-      expect(reportedValid).toBe(false);
-    } finally {
-      for (const key of Object.keys(planted)) delete proto[key];
-      vi.resetModules();
-    }
+      const record = node as Record<string, unknown>;
+      if (record.properties !== null && typeof record.properties === "object") {
+        Object.keys(record.properties).forEach(name => names.add(name));
+      }
+      Object.values(record).forEach(walk);
+    })(schema);
+    expect(names.has("id")).toBe(true);
+    expect(names.size).toBeGreaterThan(30);
   });
 
   it("refuses a node whose OPTIONAL field is inherited", () => {

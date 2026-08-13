@@ -458,6 +458,7 @@ export function surveyDocument(
       // so both the size and the drop are decided here.
       let held: unknown = member.present ? member.value : undefined;
       let threw = false;
+      let substituted = false;
       if (member.present && !hidden) {
         try {
           held = asSerialized(member.value, key);
@@ -473,7 +474,8 @@ export function surveyDocument(
         // describe — while representability must report that the document read
         // back is not the document that was validated. So the bytes come from
         // the normalized value and the flag comes from the substitution.
-        if (held !== member.value) unserializable = true;
+        substituted = held !== member.value;
+        if (substituted) unserializable = true;
       }
 
       // A hidden record property is one the schema's direct read would see and
@@ -529,14 +531,39 @@ export function surveyDocument(
           ? { kind: "nodeList" as FrameKind, depth: frame.depth + 1 }
           : placement;
 
-      if (typeof held === "object" && held !== null) {
+      // STRUCTURE is counted from the document, never from a `toJSON`
+      // replacement. The caps describe the tree a caller holds and the
+      // validator will walk; a hook returning something shallower would
+      // otherwise account for the replacement and leave the real tree
+      // unmeasured. Measured: a document of 5,001 nodes whose root hook returns
+      // an empty forest counted zero nodes, passed a 5,000 cap, and was then
+      // validated in full.
+      //
+      // Bytes still come from the replacement, because that is what the writer
+      // emits. The two answers differ only for a document already refused as
+      // unserializable by the substitution itself, so no accepted document is
+      // measured from anything but itself.
+      const structural =
+        reached.kind === "node" ||
+        reached.kind === "nodeList" ||
+        reached.kind === "slotMap";
+      const descend = structural && substituted ? member.value : held;
+
+      if (typeof descend === "object" && descend !== null) {
+        stack.push({
+          value: descend,
+          kind: reached.kind,
+          depth: reached.depth,
+          // Already through `toJSON`, unless we deliberately kept the original
+          // for structural accounting — in which case the hook has not been
+          // applied to what is being pushed and must not be skipped.
+          normalized: !(structural && substituted),
+        });
+      } else if (typeof held === "object" && held !== null) {
         stack.push({
           value: held,
           kind: reached.kind,
           depth: reached.depth,
-          // Already through `toJSON`. The writer calls the hook once and writes
-          // what it returns as-is, so normalizing a replacement that itself
-          // defines `toJSON` would measure a value nothing ever produces.
           normalized: true,
         });
       } else {
@@ -565,8 +592,15 @@ export function surveyDocument(
         unserializable = true;
         continue;
       }
-      // Same substitution rule as a member's, for the same reason.
-      if (value !== frame.value) unserializable = true;
+      // Same substitution rule as a member's, and the same structural rule:
+      // the caps describe the document a caller holds, so a root hook returning
+      // something shallower is refused and then IGNORED for the walk. Following
+      // it let a 5,001-node document present an empty forest, count zero nodes,
+      // and pass a 5,000 cap.
+      if (value !== frame.value) {
+        unserializable = true;
+        value = frame.value;
+      }
       if (!serializesAs(value)) {
         // Nothing at all is written for a root the writer drops.
         unserializable = true;
