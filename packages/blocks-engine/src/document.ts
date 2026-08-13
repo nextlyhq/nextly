@@ -176,7 +176,29 @@ export type Binding =
       sourceKey: string;
     });
 
-export type BindingSource = "entry" | "item" | "single" | "site";
+/**
+ * Every legal binding source, as a runtime value.
+ *
+ * The list is the source of truth and `BindingSource` is derived from it, not
+ * the other way around. A consumer that must enumerate the sources — a schema,
+ * a picker, a generator — otherwise restates them as literals, and a restated
+ * list stays valid TypeScript after this one changes: adding a source here
+ * would leave the copy rejecting documents the engine accepts, with every test
+ * on both sides still passing. Deriving makes that divergence unrepresentable
+ * rather than merely discouraged.
+ */
+export const BINDING_SOURCES = ["entry", "item", "single", "site"] as const;
+
+export type BindingSource = (typeof BINDING_SOURCES)[number];
+
+/**
+ * The source that applies when a binding names none.
+ *
+ * Stated as a value for the same reason as the list: the schema and the
+ * resolver both need to know which source an omitted `source` means, and a
+ * default agreed in two places is a default in neither.
+ */
+export const DEFAULT_BINDING_SOURCE: BindingSource = "entry";
 
 /**
  * Structured, locale-aware formatting for bound values. Each variant maps to
@@ -189,6 +211,22 @@ export type BindingFormat =
   | { type: "currency"; currency: string; options?: Record<string, unknown> }
   | { type: "relativeTime"; options?: Record<string, unknown> }
   | { type: "list"; options?: Record<string, unknown> };
+
+/**
+ * Every legal `format.type`, as a runtime value, for the same reason as
+ * {@link BINDING_SOURCES}. `currency` is the one variant carrying a required
+ * field of its own, so a consumer building a validator iterates this list and
+ * special-cases that member rather than transcribing five shapes.
+ */
+export const BINDING_FORMAT_TYPES = [
+  "date",
+  "number",
+  "currency",
+  "relativeTime",
+  "list",
+] as const;
+
+export type BindingFormatType = (typeof BINDING_FORMAT_TYPES)[number];
 
 // ---------------------------------------------------------------------------
 // Visibility — entry-field conditions + per-breakpoint device visibility

@@ -11,6 +11,9 @@ export type { SeoDefinitionSource, SeoImageCandidate } from "./derive-seo";
 export {
   DOCUMENT_FORMAT_VERSION,
   DOCUMENT_KINDS,
+  BINDING_SOURCES,
+  BINDING_FORMAT_TYPES,
+  DEFAULT_BINDING_SOURCE,
   COMPONENT_INSTANCE_TYPE,
   STYLE_STATES,
   MAX_BREAKPOINTS_PER_AXIS,
@@ -23,6 +26,7 @@ export type {
   Binding,
   BindingSource,
   BindingFormat,
+  BindingFormatType,
   BreakpointDef,
   BreakpointId,
   BreakpointSet,

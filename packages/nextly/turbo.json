@@ -1,0 +1,29 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "test": {
+      // The spec page is an INPUT to this package's tests, not documentation
+      // beside them: `block-document.test.ts` reads
+      // `docs/api-reference/block-document-format.mdx` and asserts every
+      // reserved operation name appears on it. Without this entry the file is
+      // outside the task's hash, so a docs-only edit removing a reserved name
+      // leaves the cache key unmoved and turbo replays the previous pass — the
+      // assertion reports green over a page it never read.
+      //
+      // `$TURBO_EXTENDS$` first, because a package task list is an appendix to
+      // the root's rather than a replacement for it; composing the array from
+      // scratch would silently drop every inherited input.
+      //
+      // `$TURBO_ROOT$` because the path is repository-relative. A bare
+      // `../../docs/...` is resolved against the package directory and turbo
+      // does not accept inputs outside it, so the entry would either error or
+      // match nothing — and matching nothing is the failure this exists to
+      // prevent, reinstated in the fix for it.
+      "inputs": [
+        "$TURBO_EXTENDS$",
+        "$TURBO_ROOT$/docs/api-reference/block-document-format.mdx"
+      ]
+    }
+  }
+}

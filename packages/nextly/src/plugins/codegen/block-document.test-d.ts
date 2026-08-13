@@ -25,8 +25,12 @@
  * runtime, and `validate()` covers the rest against a live registry.
  */
 import type {
+  BindingFormat,
+  BindingFormatType,
+  BindingSource,
   BlockDocument,
   BlockNode,
+  ComponentInstanceProps,
   DocumentKind,
   LocaleOverlay,
   LocaleOverlayValue,
@@ -101,6 +105,48 @@ expectTypeOf<DocumentKind>().toEqualTypeOf<
 // mean anything, so the set is frozen with the format rather than beside it.
 expectTypeOf<StyleState>().toEqualTypeOf<
   "base" | "hover" | "focus" | "active"
+>();
+
+// The binding vocabulary. Both lists exist as runtime values on the engine and
+// the types are derived from them, so pinning the TYPE here pins the value: a
+// source added to `BINDING_SOURCES` widens `BindingSource` and stops this line.
+expectTypeOf<BindingSource>().toEqualTypeOf<
+  "entry" | "item" | "single" | "site"
+>();
+expectTypeOf<BindingFormatType>().toEqualTypeOf<
+  "date" | "number" | "currency" | "relativeTime" | "list"
+>();
+
+// `BindingFormat` is a union of per-variant SHAPES while `BindingFormatType` is
+// the list of discriminators, and nothing structural ties them together. This
+// asserts the tie: a variant added to the union without a matching entry in the
+// list — or the reverse — makes these two disagree, which is exactly the drift
+// that would leave the published schema rejecting a format the engine accepts.
+expectTypeOf<BindingFormat["type"]>().toEqualTypeOf<BindingFormatType>();
+
+// ---------------------------------------------------------------------------
+// The component-instance node shape
+// ---------------------------------------------------------------------------
+
+/**
+ * A component instance is a normal node whose `props` carry the reference, so
+ * nothing about the node type distinguishes it and the envelope assertions
+ * above cannot reach this shape — `props` is `Record<string, unknown>` there,
+ * which every possible props object satisfies.
+ *
+ * That makes this the one frozen shape with no structural enforcement anywhere
+ * else: the runtime schema treats `props` as an open record on purpose, so
+ * renaming `componentId` would pass every parse test while silently orphaning
+ * every stored instance. The key set is pinned here for the same reason the
+ * envelope's is, and the value types are pinned too because both fields are
+ * identifiers rather than open content.
+ */
+expectTypeOf<keyof ComponentInstanceProps>().toEqualTypeOf<
+  "componentId" | "variant"
+>();
+expectTypeOf<ComponentInstanceProps["componentId"]>().toEqualTypeOf<string>();
+expectTypeOf<ComponentInstanceProps["variant"]>().toEqualTypeOf<
+  string | undefined
 >();
 
 // ---------------------------------------------------------------------------

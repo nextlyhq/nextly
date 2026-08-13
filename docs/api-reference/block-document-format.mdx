@@ -39,13 +39,15 @@ if (!result.success) {
 ```
 
 `parseBlockDocument` is the entry point to use on a document you did not write.
-It bounds nesting depth **before** parsing, so a hostile or merely broken input
-comes back as invalid rather than exhausting the call stack — the schema is
-self-referential, and a long enough chain of nested slots would otherwise take
-down the process doing the checking.
+It bounds both nesting **depth** and node **count** before parsing, so a hostile
+or merely broken input comes back as invalid rather than consuming the process
+doing the checking. Depth matters because the schema is self-referential, and a
+long enough chain of nested slots exhausts the call stack; count matters because
+a document can be shallow and still enormous, and parsing walks and copies the
+whole forest before it can report anything.
 
-The underlying schema is deliberately not exported, because that depth bound is
-a precondition rather than an option.
+The underlying schema is deliberately not exported, because those bounds are a
+precondition rather than an option.
 
 For a consumer with neither TypeScript nor zod, the format is also published as
 plain JSON Schema:
@@ -64,9 +66,9 @@ input would hand you a document the engine still rejects, with the diagnostic
 already discarded — so unknown fields survive, and a malformed token reference
 stays malformed for the engine to report.
 
-**It answers a narrower question than the engine does.** The schema asks *is
-this the block document format at all*; `validate(doc, ctx)` asks *is this a
-legal document for this app*, against the blocks that are actually registered
+**It answers a narrower question than the engine does.** The schema asks _is
+this the block document format at all_; `validate(doc, ctx)` asks _is this a
+legal document for this app_, against the blocks that are actually registered
 and the breakpoints that are actually configured. A document can satisfy the
 schema and still be rejected — an unregistered block type, for example, is
 invisible to a static schema.
@@ -93,15 +95,15 @@ pseudo-node. Document-level concerns live on the envelope instead.
 
 `kind` is closed:
 
-| kind | what it is |
-| --- | --- |
-| `page` | an entry's blocks-field content |
-| `pattern` | a copy-on-insert saved subtree, including full-page patterns |
+| kind        | what it is                                                           |
+| ----------- | -------------------------------------------------------------------- |
+| `page`      | an entry's blocks-field content                                      |
+| `pattern`   | a copy-on-insert saved subtree, including full-page patterns         |
 | `component` | a linked, reusable definition with exposed props, slots and variants |
-| `region` | a layout region such as a header or footer |
-| `template` | a collection template |
+| `region`    | a layout region such as a header or footer                           |
+| `template`  | a collection template                                                |
 
-A layout is a named bundle *referencing* region documents, so it is not a kind of
+A layout is a named bundle _referencing_ region documents, so it is not a kind of
 its own.
 
 ## A node
@@ -145,28 +147,59 @@ can still be supplied.
 `fallback` is what renders when the path resolves to nothing, and it stays in
 `props` as the literal shown if the binding is removed.
 
+> **Bindings are reserved, not yet resolved.** The format accepts and validates
+> them, and the shape above is frozen. Nothing resolves them today: the renderer
+> passes `props` through unchanged, so a bound prop renders its literal `props`
+> value for every entry rather than the bound field.
+>
+> That is safe in itself — the literal is the documented fallback, so a page
+> shows stale content rather than nothing — but a generator that writes `$bind`
+> expecting it to take effect will produce pages that never update. Write the
+> value you want into `props` until resolution ships.
+
 ### Visibility
 
 ```json
-{ "conditions": [[{ "field": "status", "op": "eq", "value": "vip" }]], "devices": { "mobile": false } }
+{
+  "conditions": [[{ "field": "status", "op": "eq", "value": "vip" }]],
+  "devices": { "mobile": false }
+}
 ```
 
 The two mechanisms are deliberately separate and must not be conflated:
 
-- **`conditions`** decides whether a node is *served*. A hidden node is omitted
+- **`conditions`** decides whether a node is _served_. A hidden node is omitted
   from server output entirely, not CSS-hidden. Stored as OR-of-AND (outer array
   ORs, inner arrays AND) from the start, so a richer editing UI never needs a
   storage migration.
-- **`devices`** decides whether a *served* node is shown at a breakpoint. This
+- **`devices`** decides whether a _served_ node is shown at a breakpoint. This
   is presentation, and it is CSS-based.
 
 Conflating them would either leak a conditioned node into the payload or stop a
 hidden-on-mobile node being indexed.
 
+> **`conditions` is reserved, and it currently fails CLOSED.** No evaluator
+> exists — `op` is an open string and nothing decides whether a predicate holds
+> — so the renderer omits any node carrying `conditions` **for every visitor**,
+> rather than serving it to those who match.
+>
+> This is deliberate: conditions gate personalised and status-restricted
+> content, and showing everyone what was meant for some of them cannot be taken
+> back, while content missing from a page is visible and reportable. The
+> consequence is still worth stating plainly: **a node you condition today
+> disappears from the page entirely.** Leave `conditions` unset until the
+> evaluator ships.
+>
+> `devices` is unaffected and works as described.
+
 ### Styles
 
 ```json
-{ "base": { "desktop": { "padding": "16px", "color": { "$token": "brand.primary" } } } }
+{
+  "base": {
+    "desktop": { "padding": "16px", "color": { "$token": "brand.primary" } }
+  }
+}
 ```
 
 Two axes: state, then breakpoint. The **state** axis is closed — `base`,
@@ -180,13 +213,13 @@ literal.
 
 The format follows one rule: **additive-open, semantically-closed.**
 
-| change | cost |
-| --- | --- |
-| a new style property | free; no format change |
-| a new optional field | free |
-| removing a field | a format migration |
-| changing what an existing field means | a format migration |
-| widening a closed vocabulary (`kind`, style state) | a format migration |
+| change                                             | cost                   |
+| -------------------------------------------------- | ---------------------- |
+| a new style property                               | free; no format change |
+| a new optional field                               | free                   |
+| removing a field                                   | a format migration     |
+| changing what an existing field means              | a format migration     |
+| widening a closed vocabulary (`kind`, style state) | a format migration     |
 
 So the format can grow without breaking stored documents. What it cannot do is
 change its mind about something already written.
@@ -195,8 +228,16 @@ The frozen surface is:
 
 1. **The document and node shapes** above, including `Binding`, `NodeVisibility`,
    locale overlays, the component-instance node shape, and the document limits.
+
+   The freeze is over the **stored shape**, not over runtime behaviour. `Binding`
+   and `NodeVisibility.conditions` are frozen and reserved while the code that
+   acts on them is not written yet (see the notes in those sections). That is the
+   intended order: a document written against a frozen shape stays valid when
+   resolution arrives, whereas shipping a shape that later has to change would
+   invalidate everything already stored.
+
 2. **The typed-style envelope** — the states × breakpoints structure and the
-   token-reference convention. The style *property catalog* inside it is
+   token-reference convention. The style _property catalog_ inside it is
    additive-open and is not frozen.
 3. **The validation API** — `validate(doc, ctx) → ValidationIssue[]`, where an
    issue is `{ path, code, message, suggestion?, severity }` and `path` is an
@@ -211,6 +252,7 @@ The frozen surface is:
    edit cannot express safely, such as an id that appears twice, where an
    inverse could only ever restore one of them. That difference is deliberate,
    and closing it would reintroduce silent data loss.
+
 5. **The manifest artifact format**, whose block entries carry name, version,
    description, example, prop schemas, serialized `supports`, and slot rules.
 6. **The bindability rule** — whether a prop can be bound is derived from its
@@ -223,18 +265,21 @@ The frozen surface is:
 today. They are listed here so that nothing else claims one before the
 composition features ship, and so an implementer can see the intended shape.
 
-| name | what it will do |
-| --- | --- |
-| `saveAsPattern` | save a subtree as a copy-on-insert pattern |
-| `saveAsComponent` | save a subtree as a linked, reusable component |
-| `convertToComponent` | replace a subtree in place with a component instance |
-| `detachComponent` | replace a component instance with a copy of its content |
+| name                 | what it will do                                         |
+| -------------------- | ------------------------------------------------------- |
+| `saveAsPattern`      | save a subtree as a copy-on-insert pattern              |
+| `saveAsComponent`    | save a subtree as a linked, reusable component          |
+| `convertToComponent` | replace a subtree in place with a component instance    |
+| `detachComponent`    | replace a component instance with a copy of its content |
 
 The reservation is a value rather than a sentence, because a list that exists
 only in prose cannot be consulted by the code that would have to honour it:
 
 ```ts
-import { RESERVED_OPERATION_NAMES, isReservedOperationName } from "@nextlyhq/blocks-engine";
+import {
+  RESERVED_OPERATION_NAMES,
+  isReservedOperationName,
+} from "@nextlyhq/blocks-engine";
 ```
 
 An operation layer should refuse a reserved name it does not implement, rather

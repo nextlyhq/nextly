@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import {
   DOCUMENT_FORMAT_VERSION,
   DOCUMENT_KINDS,
+  MAX_NODES,
   RESERVED_OPERATION_NAMES,
   STYLE_STATES,
   isReservedOperationName,
@@ -216,6 +217,114 @@ describe("block document schema", () => {
       (result.data.nodes[0] as unknown as Record<string, unknown>)
         .fieldFromALaterRelease
     ).toBe("keep me");
+  });
+
+  it("preserves later-release fields inside a binding and its format", () => {
+    // The same additive-open guarantee, one and two levels deeper. These were
+    // the LAST closed objects in the module: the node and the envelope were
+    // opened first, then `settings` and `assets`, and each round of that fix
+    // was checked only where the previous one had looked. Nesting is what the
+    // earlier passes kept missing, so the assertion goes to the bottom.
+    const doc = {
+      ...emptyPage(),
+      nodes: [
+        {
+          id: "a",
+          type: "core/text",
+          version: 1,
+          props: {},
+          bindings: {
+            title: {
+              $bind: "title",
+              source: "entry",
+              future: "keep me",
+              format: { type: "currency", currency: "USD", futureOpt: "also" },
+            },
+          },
+        },
+      ],
+    };
+
+    const result = parseBlockDocument(doc);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    const binding = (
+      result.data.nodes[0] as unknown as {
+        bindings: Record<string, Record<string, unknown>>;
+      }
+    ).bindings.title!;
+    expect(binding.future).toBe("keep me");
+    expect((binding.format as Record<string, unknown>).futureOpt).toBe("also");
+  });
+
+  it("still refuses a sourceKey the format does not allow there", () => {
+    // The companion to the test above, and the reason opening these objects is
+    // not simply "accept everything". `sourceKey` is DECLARED as never on this
+    // branch, so it is refused rather than passed through: an open object
+    // carries what it does not know about, not what it knows is wrong.
+    const doc = {
+      ...emptyPage(),
+      nodes: [
+        {
+          id: "a",
+          type: "core/text",
+          version: 1,
+          props: {},
+          bindings: { title: { $bind: "t", source: "entry", sourceKey: "x" } },
+        },
+      ],
+    };
+    expect(parseBlockDocument(doc).success).toBe(false);
+  });
+
+  it("rejects a document wider than the node cap without parsing it", () => {
+    // A shallow document can still be enormous, and the depth bound does not
+    // see it: a flat array of nodes never nests, so it passed the guard and
+    // `safeParse` then walked and CLONED the whole forest before succeeding.
+    // The cap has to be applied to the count, before the parse.
+    const doc = {
+      ...emptyPage(),
+      nodes: Array.from({ length: MAX_NODES + 1 }, (_unused, index) => ({
+        id: `n${index}`,
+        type: "core/text",
+        version: 1,
+        props: {},
+      })),
+    };
+
+    const result = parseBlockDocument(doc);
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.issues.join(" ")).toContain("more nodes");
+  });
+
+  it("counts nodes nested in slots toward the same cap", () => {
+    // The positive control for the walk rather than for the cap. Counting only
+    // the top-level array would pass this test's fixture at every size, so a
+    // document whose bulk lives in slots would be bounded by nothing — and the
+    // check above could not tell the difference.
+    const branching = (depth: number): Record<string, unknown> => ({
+      id: `n${depth}`,
+      type: "core/text",
+      version: 1,
+      props: {},
+      slots:
+        depth === 0
+          ? undefined
+          : {
+              children: Array.from({ length: 80 }, () => branching(depth - 1)),
+            },
+    });
+
+    // 1 + 80 + 6400 per root, over 3 roots: past the cap, nested, and well
+    // inside the depth limit so this can only fail on the count.
+    const doc = { ...emptyPage(), nodes: [0, 1, 2].map(() => branching(2)) };
+
+    const result = parseBlockDocument(doc);
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.issues.join(" ")).toContain("more nodes");
   });
 
   it("accepts a node version above the definition registration cap", () => {

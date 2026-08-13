@@ -113,7 +113,8 @@
                             "additionalProperties": {}
                           }
                         },
-                        "required": ["type"]
+                        "required": ["type"],
+                        "additionalProperties": {}
                       },
                       {
                         "type": "object",
@@ -130,7 +131,8 @@
                             "additionalProperties": {}
                           }
                         },
-                        "required": ["type"]
+                        "required": ["type"],
+                        "additionalProperties": {}
                       },
                       {
                         "type": "object",
@@ -150,7 +152,8 @@
                             "additionalProperties": {}
                           }
                         },
-                        "required": ["type", "currency"]
+                        "required": ["type", "currency"],
+                        "additionalProperties": {}
                       },
                       {
                         "type": "object",
@@ -167,7 +170,8 @@
                             "additionalProperties": {}
                           }
                         },
-                        "required": ["type"]
+                        "required": ["type"],
+                        "additionalProperties": {}
                       },
                       {
                         "type": "object",
@@ -184,7 +188,8 @@
                             "additionalProperties": {}
                           }
                         },
-                        "required": ["type"]
+                        "required": ["type"],
+                        "additionalProperties": {}
                       }
                     ]
                   },
@@ -196,7 +201,8 @@
                     "not": {}
                   }
                 },
-                "required": ["$bind"]
+                "required": ["$bind"],
+                "additionalProperties": {}
               },
               {
                 "type": "object",
@@ -222,7 +228,8 @@
                             "additionalProperties": {}
                           }
                         },
-                        "required": ["type"]
+                        "required": ["type"],
+                        "additionalProperties": {}
                       },
                       {
                         "type": "object",
@@ -239,7 +246,8 @@
                             "additionalProperties": {}
                           }
                         },
-                        "required": ["type"]
+                        "required": ["type"],
+                        "additionalProperties": {}
                       },
                       {
                         "type": "object",
@@ -259,7 +267,8 @@
                             "additionalProperties": {}
                           }
                         },
-                        "required": ["type", "currency"]
+                        "required": ["type", "currency"],
+                        "additionalProperties": {}
                       },
                       {
                         "type": "object",
@@ -276,7 +285,8 @@
                             "additionalProperties": {}
                           }
                         },
-                        "required": ["type"]
+                        "required": ["type"],
+                        "additionalProperties": {}
                       },
                       {
                         "type": "object",
@@ -293,7 +303,8 @@
                             "additionalProperties": {}
                           }
                         },
-                        "required": ["type"]
+                        "required": ["type"],
+                        "additionalProperties": {}
                       }
                     ]
                   },
@@ -305,7 +316,8 @@
                     "type": "string"
                   }
                 },
-                "required": ["$bind", "source", "sourceKey"]
+                "required": ["$bind", "source", "sourceKey"],
+                "additionalProperties": {}
               }
             ]
           }

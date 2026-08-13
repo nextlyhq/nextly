@@ -29,14 +29,38 @@ import { describe, expect, it } from "vitest";
 const DIST = resolve(dirname(fileURLToPath(import.meta.url)), "..", "dist");
 
 /**
- * Every emitted file an entry point reaches, following relative specifiers.
+ * Every module specifier a source file imports, in any of the forms the bundler
+ * emits.
  *
- * The specifier regex accepts BOTH quote styles. An earlier version of this
- * walk matched only double quotes while the bundler emits single ones: it
- * followed nothing, summed one file, and reported a total that read as
- * confirmation. A traversal that cannot match reports absence, and absence here
- * looks exactly like the answer this test wants to give.
+ * Three forms, and each was found only after the version without it had been
+ * written and believed:
+ *
+ * - `import x from "y"` / `export … from "y"` — the `from` clause.
+ * - `import "y"` — a SIDE-EFFECT import, which has no `from` and is exactly how
+ *   a parser gets pulled in for its registration behaviour. A scanner requiring
+ *   `from` reports a file importing `css-tree/parser` as importing nothing.
+ * - both quote styles. An earlier version matched only double quotes while the
+ *   bundler emits single ones, so it followed nothing and summed one file.
+ *
+ * All three failures share a shape: the scanner could not match, so it reported
+ * absence, and absence is indistinguishable from the clean result this test
+ * exists to report. `specifiersIn` is exported to the suite below precisely so
+ * that property can be tested on input where the answer is known, rather than
+ * inferred from the boundary happening to look healthy.
  */
+export function specifiersIn(source: string): string[] {
+  const found: string[] = [];
+  // `from "x"` covers import and export alike; the second alternative is a bare
+  // `import "x"` with no binding, which the first cannot see.
+  for (const match of source.matchAll(/(?:from|import)\s*['"]([^'"]+)['"]/g)) {
+    found.push(match[1]!);
+  }
+  return found;
+}
+
+const isRelative = (specifier: string) => specifier.startsWith(".");
+
+/** Every emitted file an entry point reaches, following relative specifiers. */
 function bundleGraph(entry: string): string[] {
   const seen = new Set<string>();
   const queue = [entry];
@@ -46,9 +70,8 @@ function bundleGraph(entry: string): string[] {
     if (file === undefined || seen.has(file) || !existsSync(file)) continue;
     seen.add(file);
 
-    const source = readFileSync(file, "utf8");
-    for (const match of source.matchAll(/from\s*['"](\.[^'"]*)['"]/g)) {
-      queue.push(resolve(dirname(file), match[1]!));
+    for (const specifier of specifiersIn(readFileSync(file, "utf8"))) {
+      if (isRelative(specifier)) queue.push(resolve(dirname(file), specifier));
     }
   }
 
@@ -59,9 +82,8 @@ function bundleGraph(entry: string): string[] {
 function externalImports(files: string[]): Set<string> {
   const externals = new Set<string>();
   for (const file of files) {
-    const source = readFileSync(file, "utf8");
-    for (const match of source.matchAll(/from\s*['"]([^.'"][^'"]*)['"]/g)) {
-      externals.add(match[1]!);
+    for (const specifier of specifiersIn(readFileSync(file, "utf8"))) {
+      if (!isRelative(specifier)) externals.add(specifier);
     }
   }
   return externals;
@@ -119,5 +141,30 @@ describe("the format entry point's boundary", () => {
       specifier => specifier.split("/")[0]
     );
     expect(rootPackages).toContain("css-tree");
+  });
+
+  it("sees every import form the bundler emits", () => {
+    // The control for the SCANNER rather than for the boundary, on input whose
+    // answer is known. The assertions above read real bundles, where a missed
+    // form is invisible: the graph comes back smaller, the external set comes
+    // back empty, and both are exactly what a healthy boundary looks like.
+    //
+    // The bare `import "…"` case is here because the scanner did not see it.
+    // A side-effect import is how a parser gets pulled in for its registration,
+    // so `format.mjs` could have imported css-tree outright and all four checks
+    // above would have passed.
+    const emitted = [
+      `import { a } from './rel.mjs';`,
+      `import "css-tree/parser";`,
+      `export { b } from "./other.mjs";`,
+      `import c from 'some-pkg';`,
+    ].join("\n");
+
+    expect(specifiersIn(emitted).sort()).toEqual([
+      "./other.mjs",
+      "./rel.mjs",
+      "css-tree/parser",
+      "some-pkg",
+    ]);
   });
 });

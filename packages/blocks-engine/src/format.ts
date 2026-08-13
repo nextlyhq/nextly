@@ -20,6 +20,13 @@
  */
 
 export {
+  BINDING_FORMAT_TYPES,
+  BINDING_SOURCES,
+  type BindingFormatType,
+  type BindingSource,
+  COMPONENT_INSTANCE_TYPE,
+  type ComponentInstanceProps,
+  DEFAULT_BINDING_SOURCE,
   DOCUMENT_FORMAT_VERSION,
   DOCUMENT_KINDS,
   type DocumentFormatVersion,

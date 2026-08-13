@@ -42,12 +42,20 @@
 
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import {
+  BINDING_FORMAT_TYPES,
+  BINDING_SOURCES,
   DOCUMENT_FORMAT_VERSION,
   DOCUMENT_KINDS,
   MAX_DEPTH,
+  MAX_NODES,
   STYLE_STATES,
 } from "@nextlyhq/blocks-engine/format";
-import type { DocumentKind, StyleState } from "@nextlyhq/blocks-engine/format";
+import type {
+  BindingFormatType,
+  BindingSource,
+  DocumentKind,
+  StyleState,
+} from "@nextlyhq/blocks-engine/format";
 import { z } from "zod";
 
 /**
@@ -75,6 +83,25 @@ const styleStates = STYLE_STATES as unknown as readonly [
   StyleState,
   ...StyleState[],
 ];
+
+/**
+ * The binding vocabulary, read from the engine for the same reason as the two
+ * above.
+ *
+ * `bindingSourcesWithoutSingle` is DERIVED by removing the one member the
+ * union's other branch owns, rather than written out as its own list. A second
+ * literal list would be a copy of a copy: adding a source to the engine would
+ * leave this branch rejecting it while every test on both sides still passed,
+ * which is precisely the drift reading the engine's constants exists to
+ * prevent. The filter states the relationship instead of restating the members.
+ */
+const bindingFormatTypes = BINDING_FORMAT_TYPES as unknown as readonly [
+  BindingFormatType,
+  ...BindingFormatType[],
+];
+const bindingSourcesWithoutSingle = BINDING_SOURCES.filter(
+  source => source !== "single"
+) as unknown as readonly [BindingSource, ...BindingSource[]];
 
 /**
  * One state × breakpoint bucket of style values.
@@ -130,30 +157,46 @@ const nodeVisibilitySchema = z.looseObject({
   devices: z.record(z.string(), z.boolean()).optional(),
 });
 
-/** Locale-aware display formatting for a bound value. */
-const bindingFormatSchema = z.union([
-  z.object({
-    type: z.literal("date"),
-    options: z.record(z.string(), z.unknown()).optional(),
-  }),
-  z.object({
-    type: z.literal("number"),
-    options: z.record(z.string(), z.unknown()).optional(),
-  }),
-  z.object({
-    type: z.literal("currency"),
-    currency: z.string(),
-    options: z.record(z.string(), z.unknown()).optional(),
-  }),
-  z.object({
-    type: z.literal("relativeTime"),
-    options: z.record(z.string(), z.unknown()).optional(),
-  }),
-  z.object({
-    type: z.literal("list"),
-    options: z.record(z.string(), z.unknown()).optional(),
-  }),
-]);
+/**
+ * Locale-aware display formatting for a bound value.
+ *
+ * Built by mapping the engine's own list rather than by writing five shapes
+ * out, so a format added to the engine appears here without an edit and one
+ * removed cannot linger. `currency` is the only member carrying a required
+ * field of its own, which is why it is the only branch named.
+ *
+ * `looseObject` throughout, like every other object in this module: see
+ * {@link blockNodeSchema} for why passing an unknown key through is the whole
+ * point of an additive-open format.
+ */
+const formatOptionsSchema = z.record(z.string(), z.unknown()).optional();
+
+const bindingFormatVariants = bindingFormatTypes.map(type =>
+  type === "currency"
+    ? z.looseObject({
+        type: z.literal(type),
+        currency: z.string(),
+        options: formatOptionsSchema,
+      })
+    : z.looseObject({ type: z.literal(type), options: formatOptionsSchema })
+);
+
+/**
+ * The cast supplies the non-empty shape `z.union` requires, which `map` cannot
+ * express: an array literal's length is known to the compiler and a mapped
+ * array's is not. It widens nothing — the element type is the mapped variants'
+ * own — so a variant that stopped matching the format would still fail to
+ * compile.
+ */
+type BindingFormatVariant = (typeof bindingFormatVariants)[number];
+
+const bindingFormatSchema = z.union(
+  bindingFormatVariants as unknown as readonly [
+    BindingFormatVariant,
+    BindingFormatVariant,
+    ...BindingFormatVariant[],
+  ]
+);
 
 /**
  * A binding: a typed field path, never an expression.
@@ -164,11 +207,11 @@ const bindingFormatSchema = z.union([
  * saying which one fails here rather than resolving to nothing at read time.
  */
 const bindingSchema = z.union([
-  z.object({
+  z.looseObject({
     $bind: z.string(),
     fallback: z.unknown().optional(),
     format: bindingFormatSchema.optional(),
-    source: z.enum(["entry", "item", "site"]).optional(),
+    source: z.enum(bindingSourcesWithoutSingle).optional(),
     /**
      * Declared so a misplaced key is REFUSED rather than dropped.
      *
@@ -181,7 +224,7 @@ const bindingSchema = z.union([
      */
     sourceKey: z.never().optional(),
   }),
-  z.object({
+  z.looseObject({
     $bind: z.string(),
     fallback: z.unknown().optional(),
     format: bindingFormatSchema.optional(),
@@ -292,41 +335,62 @@ export type BlockDocumentParseResult =
   | { success: false; issues: string[] };
 
 /**
- * Whether a value nests deeper than the format allows, measured WITHOUT
- * recursion.
+ * Whether a value exceeds the format's structural limits, measured WITHOUT
+ * recursion and BEFORE the schema sees it.
  *
- * The schema is self-referential, so parsing a deeply nested value walks it
- * with the call stack: a long enough slot chain raises `RangeError: Maximum
- * call stack size exceeded` before any validation runs. This entry point is
- * published for checking documents produced elsewhere, so that input is
- * untrusted by definition and a crafted one would take down the process doing
- * the checking rather than being reported as invalid.
+ * Two limits, one traversal. Depth and node count are different questions, but
+ * they are answered by walking the same slot tree, and walking it twice would
+ * double the cost of the check that exists to bound cost.
  *
- * An explicit stack makes depth a value to compare instead of a limit the
- * runtime discovers. It walks slots only, which is where the format nests;
- * every other field bottoms out in data.
+ * **Depth.** The schema is self-referential, so parsing a deeply nested value
+ * walks it with the call stack: a long enough slot chain raises `RangeError:
+ * Maximum call stack size exceeded` before any validation runs. An explicit
+ * stack makes depth a value to compare instead of a limit the runtime
+ * discovers.
  *
- * The bound comes from the engine so there is one answer to "how deep may a
- * document be" rather than two that agree until one is edited.
+ * **Width.** A document can be shallow and still enormous. `safeParse` walks
+ * and CLONES the whole forest before returning success, so a flat array of a
+ * million nodes is bounded by nothing the depth check looks at: it passes, and
+ * the work happens anyway. Counting first turns that into a rejection.
+ *
+ * The walk stops at the first breach rather than measuring the true total,
+ * which is the point — a bound that reads the whole input to discover the input
+ * is too large has already done the work it was protecting against.
+ *
+ * Both bounds come from the engine so there is one answer to "how deep" and
+ * "how many" rather than two that agree until one is edited.
  */
-function nestsTooDeep(value: unknown, max: number): boolean {
-  if (typeof value !== "object" || value === null) return false;
+type LimitBreach = "depth" | "nodes";
+
+function exceedsLimits(
+  value: unknown,
+  maxDepth: number,
+  maxNodes: number
+): LimitBreach | null {
+  if (typeof value !== "object" || value === null) return null;
 
   // Seeded from the envelope's `nodes`, because that is where a document's
   // tree starts. Seeding from the document itself walks nothing: the envelope
   // has no `slots`, so the first iteration finds none and the pass reports a
   // depth of zero for a document of any shape.
   const roots = (value as { nodes?: unknown }).nodes;
-  if (!Array.isArray(roots)) return false;
+  if (!Array.isArray(roots)) return null;
+
+  // The roots are themselves nodes, so the count starts before the walk does.
+  // Checking only what the walk POPS would let a single flat array of a million
+  // roots through: nothing in it has slots, so the loop pushes nothing and the
+  // count never reaches the cap it was meant to enforce.
+  if (roots.length > maxNodes) return "nodes";
 
   const stack: Array<{ node: unknown; depth: number }> = roots.map(node => ({
     node,
     depth: 1,
   }));
+  let counted = roots.length;
 
   while (stack.length > 0) {
     const { node, depth } = stack.pop()!;
-    if (depth > max) return true;
+    if (depth > maxDepth) return "depth";
     if (typeof node !== "object" || node === null) continue;
 
     const slots = (node as { slots?: unknown }).slots;
@@ -334,21 +398,26 @@ function nestsTooDeep(value: unknown, max: number): boolean {
 
     for (const children of Object.values(slots as Record<string, unknown>)) {
       if (!Array.isArray(children)) continue;
+      // Counted on discovery rather than on pop, so the cap is reached while
+      // pushing rather than after a whole generation is already resident.
+      counted += children.length;
+      if (counted > maxNodes) return "nodes";
       for (const child of children) {
         stack.push({ node: child, depth: depth + 1 });
       }
     }
   }
 
-  return false;
+  return null;
 }
 
 /**
  * Check a value against the block document format.
  *
  * This is the entry point to use on a document you did not write. It applies
- * the depth bound first, so a hostile or merely broken input is REPORTED as
- * invalid rather than exhausting the stack, and only then runs the schema.
+ * the structural bounds first, so a hostile or merely broken input is REPORTED
+ * as invalid rather than exhausting the stack or being cloned in full, and only
+ * then runs the schema.
  *
  * The raw schema is deliberately not exported. Depth is a precondition of
  * parsing safely, and an exported schema alongside a guarded function is an
@@ -361,10 +430,19 @@ function nestsTooDeep(value: unknown, max: number): boolean {
  * answers, and this makes no claim about it.
  */
 export function parseBlockDocument(value: unknown): BlockDocumentParseResult {
-  if (nestsTooDeep(value, MAX_DEPTH)) {
+  const breach = exceedsLimits(value, MAX_DEPTH, MAX_NODES);
+  if (breach === "depth") {
     return {
       success: false,
       issues: [`Document nests deeper than the format allows (${MAX_DEPTH}).`],
+    };
+  }
+  if (breach === "nodes") {
+    return {
+      success: false,
+      issues: [
+        `Document holds more nodes than the format allows (${MAX_NODES}).`,
+      ],
     };
   }
 
