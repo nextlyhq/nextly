@@ -165,6 +165,12 @@ export const SearchBar = React.forwardRef<HTMLInputElement, SearchBarProps>(
             them was maintained. Only the search-specific parts stay here: room
             for the leading icon and the trailing clear button. */}
         <Input
+          // Before the spread, not after: a caller passing its own
+          // `data-testid` must win. This is a publicly exported component whose
+          // props extend the native input's, so silently replacing a consumer's
+          // test hook with an internal one breaks their tests and gives them no
+          // way to address the field.
+          data-testid="search-input"
           {...props}
           ref={ref}
           // `search`, not `text`: assistive technology announces it as a search
@@ -176,11 +182,6 @@ export const SearchBar = React.forwardRef<HTMLInputElement, SearchBarProps>(
           value={internalValue}
           onChange={handleChange}
           aria-busy={isLoading}
-          // The hook the suite has always queried. It was never rendered, so
-          // every test in the file errored on the query and the component has
-          // had no working coverage at all -- which is how twelve behavioural
-          // differences from Input accumulated without anything failing.
-          data-testid="search-input"
           className="h-10 pl-10 pr-10 [&::-webkit-search-cancel-button]:appearance-none"
         />
 

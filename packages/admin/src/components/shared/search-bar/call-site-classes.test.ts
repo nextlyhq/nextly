@@ -85,7 +85,34 @@ function openingTags(source: string): { text: string; index: number }[] {
   return tags;
 }
 
-const CLASS_ATTR = /className="([^"]*)"/;
+/**
+ * The class text a tag carries, in either JSX spelling.
+ *
+ * `className="a b"` is the literal form. `className={...}` is equally valid and
+ * equally common once a call site needs `cn()` or a conditional, and a pattern
+ * that reads only the literal form skips those attributes in SILENCE — the
+ * offending class is still there, the scan simply never sees it. Returning the
+ * whole expression text is deliberately blunt: this check asks whether a
+ * forbidden class NAME appears anywhere in what the tag passes, and a name
+ * inside `cn("border-input", x)` is just as inert as one in a plain string.
+ */
+function classText(tag: string): string | null {
+  const literal = /className="([^"]*)"/.exec(tag);
+  if (literal) return literal[1];
+
+  const brace = tag.indexOf("className={");
+  if (brace === -1) return null;
+  let depth = 0;
+  for (let i = brace + "className=".length; i < tag.length; i++) {
+    const ch = tag[i];
+    if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) return tag.slice(brace + "className={".length, i);
+    }
+  }
+  return null;
+}
 
 const sources = walk(adminSrc).filter(
   path =>
@@ -105,15 +132,56 @@ describe("SearchBar call sites", () => {
     expect(elements.length).toBeGreaterThan(10);
   });
 
+  it("reads a forbidden class in either JSX spelling", () => {
+    // The scanner itself is exercised on a known offender, because the other
+    // two assertions can only ever report ZERO -- and a scanner that reads
+    // nothing reports zero too. Counting tags does not separate those cases:
+    // the tag is found either way, and it is the ATTRIBUTE inside it that gets
+    // skipped.
+    //
+    // The expression form is the one that was missed. `className={"..."}` and
+    // `className={cn("...")}` are ordinary JSX and were invisible to a pattern
+    // that read only the literal spelling.
+    const cases = [
+      ["literal", '<SearchBar value={v} className="w-full border-input" />'],
+      ["braced", '<SearchBar value={v} className={"border-input"} />'],
+      [
+        "cn() call",
+        '<SearchBar value={v} className={cn("w-full", "border-input")} />',
+      ],
+    ] as const;
+
+    for (const [name, markup] of cases) {
+      const [tag] = openingTags(markup);
+      expect(tag, `${name}: no opening tag found`).toBeDefined();
+      const text = classText(tag.text);
+      if (text === null) throw new Error(`${name}: className not read`);
+      expect(
+        text.split(/[\s"'`,()]+/).some(token => FIELD_ONLY.test(token)),
+        `${name}: the scanner did not see border-input`
+      ).toBe(true);
+    }
+
+    // The negative half, so the check is not simply matching everything.
+    const [ok] = openingTags(
+      '<SearchBar value={v} className="w-full max-w-sm" />'
+    );
+    const okText = classText(ok.text);
+    if (okText === null) throw new Error("clean case: className not read");
+    expect(
+      okText.split(/[\s"'`,()]+/).some(token => FIELD_ONLY.test(token))
+    ).toBe(false);
+  });
+
   it("passes no class that only the field could use", () => {
     const inert: string[] = [];
     for (const path of sources) {
       const source = readFileSync(path, "utf8");
       for (const tag of openingTags(source)) {
-        const className = CLASS_ATTR.exec(tag.text)?.[1];
+        const className = classText(tag.text);
         if (!className) continue;
         const offenders = className
-          .split(/\s+/)
+          .split(/[\s"'`,()]+/)
           .filter(token => FIELD_ONLY.test(token));
         if (offenders.length === 0) continue;
         const line = source.slice(0, tag.index).split("\n").length;
