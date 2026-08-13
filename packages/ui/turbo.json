@@ -57,6 +57,8 @@
         // that can change behind a cached pass.
         "$TURBO_ROOT$/packages/**/*.jsx",
         "$TURBO_ROOT$/apps/**/*.jsx",
+        "$TURBO_ROOT$/packages/**/*.js",
+        "$TURBO_ROOT$/apps/**/*.js",
         // The RSC-matrix suite reads the root manifest and the package-smoke
         // workflow, comparing the job's Node legs against `engines.node`. Listed
         // here rather than on the root task: there they become inputs to every
@@ -91,6 +93,8 @@
         // that can change behind a cached pass.
         "$TURBO_ROOT$/packages/**/*.jsx",
         "$TURBO_ROOT$/apps/**/*.jsx",
+        "$TURBO_ROOT$/packages/**/*.js",
+        "$TURBO_ROOT$/apps/**/*.js",
         // The RSC-matrix suite reads the root manifest and the package-smoke
         // workflow, comparing the job's Node legs against `engines.node`. Listed
         // here rather than on the root task: there they become inputs to every

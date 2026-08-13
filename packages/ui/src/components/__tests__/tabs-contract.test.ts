@@ -1032,12 +1032,23 @@ function ownsStyleProperty(slot: string, property: string): boolean {
 /**
  * Whether a file can hold a JSX call site.
  *
- * Both extensions, and neither `.ts` nor `.js`: an element cannot appear in
- * those, so reading them would cost time and find nothing. Named rather than
- * inlined so the traversal and the Turbo input globs can be checked against one
- * list instead of two that agree until someone edits one.
+ * `.js` is on the list and that is not an oversight corrected — it is the case
+ * an earlier version of this test actively certified as SAFE. A JavaScript
+ * Next.js app puts JSX in `.js` routinely, so a first-party `page.js` importing
+ * `TabsTrigger` was invisible to the scan while a control asserted that
+ * invisibility was correct. A test that ratifies a gap is worse than no test,
+ * because it answers the question and closes it.
+ *
+ * `.ts` stays off: an element cannot appear there, so reading those files would
+ * cost time and find nothing.
+ *
+ * Named once because the Turbo input globs must cover exactly these — an
+ * extension the scan reads but the hash does not cover is a file that can
+ * change behind a cached green, which is the same silent gap wearing different
+ * clothes. `turbo.json` is static JSON and cannot import this, so the two are
+ * tied together by a contract test below rather than by a claim in a comment.
  */
-const CALL_SITE_EXTENSIONS = [".tsx", ".jsx"] as const;
+const CALL_SITE_EXTENSIONS = [".tsx", ".jsx", ".js"] as const;
 
 function isCallSite(name: string): boolean {
   return CALL_SITE_EXTENSIONS.some(extension => name.endsWith(extension));
@@ -2207,6 +2218,26 @@ describe("the tab indicator contract", () => {
       "the same assertion around a parenthesised nothing",
       "<TabsTrigger style={{ borderBottomColor: (undefined) as string | undefined }} />",
     ],
+    // The non-null branch. `!` asserts to the COMPILER that a value is present
+    // and erases entirely at runtime, so `undefined!` still reaches React as
+    // `undefined` and still emits nothing. Without this case, deleting
+    // `ts.isNonNullExpression` from the unwrapper leaves the suite green.
+    [
+      "an inline property with a non-null assertion on nothing",
+      "<TabsTrigger style={{ borderBottomColor: undefined! }} />",
+    ],
+    // The unwrapping in front of the BINDING lookup, which is a second path
+    // through the same helper. A wrapper around an identifier has to be peeled
+    // before the resolver is asked, or the lookup never happens and the value
+    // is reported on the strength of its wrapper alone.
+    [
+      "a bound nothing behind an assertion",
+      "const empty = undefined;\n<TabsTrigger style={{ borderBottomColor: empty as string | undefined }} />",
+    ],
+    [
+      "a bound nothing behind a non-null assertion",
+      "const empty = undefined;\n<TabsTrigger style={{ borderBottomColor: empty! }} />",
+    ],
     // Tailwind's own child variants. `*` compiles to `:is(& > *)` and `**` to
     // `:is(& *)`, so both land on children and neither can repaint the tab.
     [
@@ -2348,9 +2379,43 @@ describe("which files the call-site scan reads", () => {
 
       const found = sourceFiles(dir).map(path => path.slice(dir.length + 1));
 
-      expect(found.sort()).toEqual(["a.tsx", "b.jsx"].sort());
+      expect(found.sort()).toEqual(["a.tsx", "b.jsx", "d.js"].sort());
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("has a Turbo input glob for every extension it reads", () => {
+    // The claim this replaces was a comment saying the list was "named once and
+    // read by both". It was not: the extensions were repeated by hand in two
+    // task input lists, and `turbo.json` is static JSON that cannot import a
+    // constant. So the tie is asserted here instead of asserted in prose.
+    //
+    // What it protects is the same silent gap this PR closes from the other
+    // side: an extension the scan reads but the hash does not cover is a file
+    // that can change behind a cached green, and the cached pass looks exactly
+    // like a real one.
+    const config = JSON.parse(
+      readFileSync(resolve(HERE, "../../../turbo.json"), "utf8").replace(
+        // The file carries `//` comments, which `JSON.parse` rejects.
+        /^\s*\/\/.*$/gm,
+        ""
+      )
+    ) as { tasks: Record<string, { inputs?: string[] }> };
+
+    // BOTH tasks, because a coverage gap in either replays a stale green.
+    for (const task of ["test", "test:coverage"]) {
+      const inputs = config.tasks[task]?.inputs ?? [];
+      for (const extension of CALL_SITE_EXTENSIONS) {
+        const covered = inputs.filter(glob => glob.endsWith(`*${extension}`));
+        // Named in the failure, so a reader is told WHICH extension and WHICH
+        // task rather than being handed a false.
+        expect(
+          covered.length > 0
+            ? `${task} covers ${extension}`
+            : { task, extension }
+        ).toBe(`${task} covers ${extension}`);
+      }
     }
   });
 
