@@ -1,16 +1,32 @@
 import type { Metadata } from "next";
-import { Inter, Geist_Mono } from "next/font/google";
+import localFont from "next/font/local";
 
 import "./globals.css";
 
-const inter = Inter({
+/**
+ * The faces come from packages in `node_modules` rather than from
+ * `next/font/google`, which fetches them from fonts.googleapis.com at BUILD
+ * time — so a build behind a proxy, on a locked-down CI runner, or simply
+ * offline fails at a step that has nothing to do with the app's code.
+ *
+ * `next/font/local` rather than the packages' own stylesheets, so the faces
+ * keep the CSS variables the styles already reference, and keep the
+ * metric-adjusted fallback that stops text reflowing once the face arrives.
+ */
+const inter = localFont({
+  src: "../../node_modules/@fontsource-variable/inter/files/inter-latin-wght-normal.woff2",
   variable: "--font-inter",
-  subsets: ["latin"],
+  display: "swap",
+  // One file spanning the whole weight axis; the filename carries no weight
+  // for Next to infer, so the range is declared.
+  weight: "100 900",
 });
 
-const geistMono = Geist_Mono({
+const geistMono = localFont({
+  src: "../../node_modules/@fontsource-variable/geist-mono/files/geist-mono-latin-wght-normal.woff2",
   variable: "--font-geist-mono",
-  subsets: ["latin"],
+  display: "swap",
+  weight: "100 900",
 });
 
 /**

@@ -6,27 +6,33 @@ import {
   QueryProvider,
   ThemeProvider,
 } from "@nextlyhq/admin";
-import { Geist, Geist_Mono } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 
-// Self-hosted at build time by `next/font`, which exposes the face only as a
-// CSS variable -- the admin theme names that variable first for exactly this
-// reason. Weights are the four the design system declares; the rest would ship
-// bytes nothing renders.
-const geistSans = Geist({
+// The face ships in `node_modules` rather than being fetched from
+// fonts.googleapis.com at BUILD time, which made every build -- and the browser
+// suite's global setup, which builds first -- depend on reaching a third party.
+// It is still self-hosted from the app's own origin at runtime, and still
+// exposed only as a CSS variable; the admin theme names that variable first for
+// exactly this reason.
+//
+// One variable file covers the whole weight axis, which replaces the four
+// static cuts the design system declares. That is fewer requests rather than
+// more bytes: the discarded weights were separate files.
+const geistSans = localFont({
+  src: "../../node_modules/@fontsource-variable/geist/files/geist-latin-wght-normal.woff2",
   variable: "--font-geist",
-  subsets: ["latin"],
   display: "swap",
-  weight: ["400", "500", "600", "700"],
+  weight: "100 900",
 });
 
 // The mono face the admin reaches for on code surfaces: the API playground
 // editor, ids, and inline code.
-const geistMono = Geist_Mono({
+const geistMono = localFont({
+  src: "../../node_modules/@fontsource-variable/geist-mono/files/geist-mono-latin-wght-normal.woff2",
   variable: "--font-geist-mono",
-  subsets: ["latin"],
   display: "swap",
-  weight: ["400", "500"],
+  weight: "100 900",
 });
 
 export default function RootLayout({

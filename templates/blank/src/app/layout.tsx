@@ -1,18 +1,32 @@
 import type { Metadata } from "next";
-import { Inter, JetBrains_Mono } from "next/font/google";
+import localFont from "next/font/local";
 
 import "./globals.css";
 
-const display = Inter({
+/**
+ * The faces come from packages in `node_modules` rather than from
+ * `next/font/google`, which fetches them from fonts.googleapis.com at BUILD
+ * time — so a build behind a proxy, on a locked-down CI runner, or simply
+ * offline fails at a step that has nothing to do with the app's code.
+ *
+ * `next/font/local` rather than the packages' own stylesheets, so the fonts
+ * keep the same CSS variables the styles already reference, and keep the
+ * metric-adjusted fallback that stops text reflowing once the face arrives.
+ */
+const display = localFont({
+  src: "../../node_modules/@fontsource-variable/inter/files/inter-latin-wght-normal.woff2",
   variable: "--font-display",
-  subsets: ["latin"],
   display: "swap",
+  // A variable font covering the whole axis in one file. Declared because the
+  // filename is not something Next can infer a weight range from.
+  weight: "100 900",
 });
 
-const mono = JetBrains_Mono({
+const mono = localFont({
+  src: "../../node_modules/@fontsource-variable/jetbrains-mono/files/jetbrains-mono-latin-wght-normal.woff2",
   variable: "--font-mono",
-  subsets: ["latin"],
   display: "swap",
+  weight: "100 800",
 });
 
 /**
