@@ -76,8 +76,13 @@ export interface PluginAdminMeta {
    */
   clientConfig?: Record<string, unknown>;
   /**
-   * Declared custom permissions (identity + display fields only) — present
-   * only for enabled plugins, like the rest of the behavioral surface.
+   * Declared custom permissions (identity + display fields only).
+   *
+   * Present whatever the enabled state, unlike the rest of the behavioral
+   * surface, because these rows exist whatever the enabled state: the
+   * permission fold covers disabled plugins too, the seeder creates them, and
+   * new ones are granted to super_admin. A disabled plugin's permission is
+   * held and assignable; what it protects is simply not mounted.
    */
   permissions?: Array<{
     action: string;
@@ -343,29 +348,32 @@ export function buildPluginAdminMeta(
         meta.entryFormToolbarSlot = admin.entryFormToolbarSlot;
     }
 
-    // Behavioral contributions summarized for the detail page, enabled only:
-    // a disabled plugin's routes are not mounted and its permissions grant
-    // nothing, so listing them would overstate what the install does.
-    // One shaper, two destinations. Which name the routes travel under is the
-    // difference between "this plugin serves these" and "enabling it would
-    // serve these", and an `if/else` is what stops both being true at once.
+    // Permissions are serialized whatever the enabled state, because they
+    // EXIST whatever the enabled state: `collectCustomPermissions` folds over
+    // every plugin including disabled ones (D49), the post-init seeder creates
+    // the rows, and new ones are assigned to super_admin. Withholding them
+    // here made the page disagree with the database — an operator could hold a
+    // plugin's permission, see it in the roles UI, and find nothing on the
+    // owning plugin's page to explain where it came from.
     //
-    // Permissions are NOT part of this: they are folded over every plugin,
-    // disabled included, so they are already seeded and are not pending on
-    // anything. Only their listing here is withheld while disabled.
+    // Routes are the genuinely absent half: `collectPluginRoutes` skips
+    // disabled plugins, so a disabled plugin serves none. Those move to
+    // `whenEnabled`, and the `if/else` is what stops a route being reported as
+    // both served and pending.
+    const permissions = plugin.contributes?.permissions;
+    if (permissions && permissions.length > 0) {
+      meta.permissions = permissions.map(p => ({
+        action: p.action,
+        resource: p.resource,
+        ...(p.label ? { label: p.label } : {}),
+        ...(p.description ? { description: p.description } : {}),
+        ...(p.danger ? { danger: p.danger } : {}),
+      }));
+    }
+
     const declaredRoutes = mountableRoutes(plugin, plugins);
     if (isEnabled) {
       if (declaredRoutes) meta.routes = declaredRoutes;
-      const permissions = plugin.contributes?.permissions;
-      if (permissions && permissions.length > 0) {
-        meta.permissions = permissions.map(p => ({
-          action: p.action,
-          resource: p.resource,
-          ...(p.label ? { label: p.label } : {}),
-          ...(p.description ? { description: p.description } : {}),
-          ...(p.danger ? { danger: p.danger } : {}),
-        }));
-      }
     } else if (declaredRoutes) {
       meta.whenEnabled = { routes: declaredRoutes };
     }

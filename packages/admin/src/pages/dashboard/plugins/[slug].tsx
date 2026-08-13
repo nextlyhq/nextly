@@ -449,9 +449,15 @@ function Contributions({ plugin }: { plugin: PluginMetadata }) {
         What this plugin adds
       </h2>
       {!enabled && (
+        // Names which parts survive being disabled and which do not, because
+        // this section now lists both. Permissions are seeded and granted for
+        // every plugin, disabled included, so calling them inactive here would
+        // contradict the roles UI that still offers them.
         <p className="mb-3 text-xs text-muted-foreground">
-          This plugin is disabled: its collections and data are retained, but
-          its behavior does not load.
+          This plugin is disabled: its collections, data and permissions are
+          retained — its permissions stay granted, though what they protect is
+          not loaded — while its behavior, including its API routes, does not
+          run.
         </p>
       )}
       {/* Auto-fitting tracks rather than a breakpoint. These cards sit inside

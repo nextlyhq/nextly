@@ -444,7 +444,13 @@ describe("buildPluginAdminMeta", () => {
     expect(meta[0].dependsOn).toEqual({ "@acme/core": "^1.2.0" });
   });
 
-  it("summarizes declared permissions for enabled plugins only", () => {
+  /**
+   * Whatever the enabled state, because the ROWS exist whatever the enabled
+   * state: the permission fold covers disabled plugins (D49), the seeder
+   * creates them, and new ones are granted to super_admin. Reporting them only
+   * while enabled made this payload disagree with the database.
+   */
+  it("summarizes declared permissions whether or not the plugin is enabled", () => {
     const contributes = {
       permissions: [
         {
@@ -472,7 +478,11 @@ describe("buildPluginAdminMeta", () => {
       asPlugins([{ ...base, enabled: false, contributes }]),
       undefined
     );
-    expect(disabled[0].permissions).toBeUndefined();
+    // Identical to the enabled case. The separating assertion for the split is
+    // below: routes DO disappear when disabled, so this is not simply "the
+    // enabled flag changes nothing".
+    expect(disabled[0].permissions).toEqual(enabled[0].permissions);
+    expect(disabled[0].permissions).toHaveLength(1);
   });
 
   it("summarizes declared routes (method + path only) for enabled plugins only", () => {

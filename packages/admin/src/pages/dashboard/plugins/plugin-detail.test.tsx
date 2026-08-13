@@ -45,6 +45,14 @@ const plugins: PluginMetadata[] = [
     enabled: false,
     placement: "plugins",
     collections: ["retained"],
+    permissions: [
+      {
+        action: "purge",
+        resource: "archive",
+        label: "Purge Archive",
+        danger: true,
+      },
+    ],
     whenEnabled: {
       routes: [
         {
@@ -161,7 +169,11 @@ describe("PluginDetailPage", () => {
   it("marks a disabled plugin and explains that its behavior does not load", () => {
     render(<PluginDetailPage params={{ slug: "acme-disabled" }} />);
     expect(screen.getByText("Disabled")).toBeInTheDocument();
-    expect(screen.getByText(/its behavior does not load/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /its behavior, including its API routes, does not\s+run/i
+      )
+    ).toBeInTheDocument();
   });
 
   /**
@@ -240,5 +252,44 @@ describe("PluginDetailPage dormant disclosure", () => {
     expect(
       screen.getByText("GET /admin/api/plugins/@acme/forms/submissions/export")
     ).toBeInTheDocument();
+  });
+});
+
+/**
+ * A disabled plugin's permissions are seeded and granted like any other's, so
+ * the page must show them. Its routes are not mounted, so those must not be
+ * shown as current. These pin both halves of that split on one plugin.
+ */
+describe("PluginDetailPage disabled plugin permissions", () => {
+  it("lists a disabled plugin's permissions as things it has", () => {
+    render(<PluginDetailPage params={{ slug: "acme-disabled" }} />);
+
+    const contributions = screen
+      .getByText("What this plugin adds")
+      .closest("section");
+    expect(
+      within(contributions!).getByText("Purge Archive")
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * The separating assertion. If the enabled flag simply stopped mattering,
+   * routes would show here too — they must not, because they are not mounted.
+   */
+  it("still withholds a disabled plugin's routes from that section", () => {
+    render(<PluginDetailPage params={{ slug: "acme-disabled" }} />);
+
+    const contributions = screen
+      .getByText("What this plugin adds")
+      .closest("section");
+    expect(within(contributions!).queryByText("API routes")).toBeNull();
+    // They are disclosed as pending instead, not dropped.
+    expect(screen.getByText("Would serve when enabled")).toBeInTheDocument();
+  });
+
+  it("says the permissions stay granted while the plugin is off", () => {
+    render(<PluginDetailPage params={{ slug: "acme-disabled" }} />);
+
+    expect(screen.getByText(/permissions stay granted/i)).toBeInTheDocument();
   });
 });
