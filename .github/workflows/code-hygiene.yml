@@ -102,15 +102,30 @@ jobs:
           # binary would still read no config and baseline a different policy —
           # comparing two sides under different rules measures nothing.
           #
-          # `--save-baseline` exits non-zero when the tree it recorded has
-          # findings, which this one does by definition. That is not a failure
-          # of the step.
+          # `--save-baseline` exits 1 when the tree it recorded has findings,
+          # which the base has by definition — that is not a failure. Anything
+          # ABOVE 1 is fallow failing to run, and `|| true` would swallow it:
+          # the baseline file would be missing or truncated, every finding in
+          # the head would then read as introduced, and the gate would blame
+          # the change for the whole repository's debt.
+          set +e
           for analysis in dead-code dupes health; do
             pnpm exec fallow "$analysis" \
               --root /tmp/fallow-base \
               --config "$GITHUB_WORKSPACE/.fallowrc.jsonc" \
-              --save-baseline "/tmp/base-$analysis.json" || true
+              --save-baseline "/tmp/base-$analysis.json"
+            code=$?
+            if [ "$code" -gt 1 ]; then
+              echo "::error::fallow $analysis failed to baseline the base commit (exit $code)."
+              exit 1
+            fi
+            # A missing file means the same thing whatever the exit code said.
+            if [ ! -s "/tmp/base-$analysis.json" ]; then
+              echo "::error::fallow $analysis exited $code but wrote no baseline."
+              exit 1
+            fi
           done
+          set -e
 
       # One run per analysis. Its exit code IS the verdict, so a second
       # human-format run to read one would recompute the same answer.

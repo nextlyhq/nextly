@@ -50,10 +50,18 @@ export function sqliteTableDdl(table: SQLiteTable): string[] {
 
   for (const index of config.indexes) {
     const built = index.config;
-    // A partial or expression index has no plain column list to name here.
-    // Skipping it keeps the fixture honest: the table is created either way,
-    // and a suite that needs the index asserts on it rather than inheriting
-    // it silently.
+
+    // A PARTIAL index is skipped on its predicate, not on its columns. Its
+    // columns are plain, so a column-shape check passes it and emits the
+    // statement without the `WHERE` — an index over every row where the schema
+    // declares one over a subset. That is a different object under the same
+    // name, and a suite asserting on uniqueness would then be asserting the
+    // opposite of what production enforces.
+    if (built.where !== undefined) continue;
+
+    // An EXPRESSION index has no column name to quote, so there is nothing to
+    // emit. Both cases leave the table created and the index absent, which a
+    // suite that needs one states for itself rather than inheriting silently.
     const names = built.columns
       .map(column => ("name" in column ? column.name : undefined))
       .filter((name): name is string => typeof name === "string");
