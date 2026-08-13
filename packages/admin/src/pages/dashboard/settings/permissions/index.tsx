@@ -294,7 +294,7 @@ function PermissionsContent() {
             onChange={setSearch}
             placeholder="Search by name, slug, action, or resource..."
             isLoading={isLoading}
-            className="w-full max-w-sm bg-background text-foreground border-input"
+            className="w-full max-w-sm"
           />
         </div>
         <div className="flex items-center gap-1.5 shrink-0">

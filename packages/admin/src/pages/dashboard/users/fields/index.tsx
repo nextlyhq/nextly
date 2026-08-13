@@ -657,7 +657,6 @@ function UserFieldsTable() {
               onChange={setSearch}
               placeholder="Search fields by name or label..."
               isLoading={false}
-              className="bg-background text-foreground border-border"
             />
           </div>
         </div>
@@ -685,7 +684,6 @@ function UserFieldsTable() {
               onChange={setSearch}
               placeholder="Search fields by name or label..."
               isLoading={true}
-              className="bg-background text-foreground border-border"
             />
           </div>
         </div>
@@ -729,7 +727,6 @@ function UserFieldsTable() {
               onChange={setSearch}
               placeholder="Search fields by name or label..."
               isLoading={isLoading}
-              className="bg-background text-foreground border-border"
             />
           </div>
         </div>

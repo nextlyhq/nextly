@@ -673,7 +673,7 @@ function EmailProviderTable() {
           onChange={setSearch}
           placeholder="Search providers by name..."
           isLoading={false}
-          className="w-full max-w-md bg-background text-foreground border-input"
+          className="w-full max-w-md"
         />
         <Alert variant="destructive">
           <AlertTriangle className="h-4 w-4" />
@@ -752,7 +752,7 @@ function EmailProviderTable() {
             onChange={setSearch}
             placeholder="Search providers by name..."
             isLoading={isLoading}
-            className="w-full bg-background text-foreground border-input"
+            className="w-full"
           />
         }
         filters={
