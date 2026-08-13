@@ -538,7 +538,38 @@ function isJsonValue(value: unknown): boolean {
   const pending: { value: unknown; depth: number; exiting?: object }[] = [
     { value, depth: 1 },
   ];
+  return walkIsJson(pending, open);
+}
 
+/**
+ * The same question asked of many values at once, each as its own root.
+ *
+ * NOT `isJsonValue(values)`. Wrapping them in an array makes that array the
+ * root, so every value is examined one level deeper than it really sits — and a
+ * value nested at exactly {@link MAX_VALUE_DEPTH} is then refused at 513 by the
+ * aggregate that the per-field check had already accepted at 512.
+ *
+ * That gap is the shape this module treats as the serious one: the forward edit
+ * succeeds, and the document it produces is refused by the next call, so the
+ * inverse cannot be applied and a successful operation cannot be undone.
+ *
+ * Kept as ONE call rather than a loop over `isJsonValue`, which is why this
+ * exists at all. Each call allocates a stack and a cycle set, so asking per
+ * field turned a 150,000-node document into six hundred thousand of those.
+ * Seeding the walk with every value at depth 1 keeps the single allocation and
+ * the shared budget while leaving each value at its true depth.
+ */
+function areJsonValues(values: readonly unknown[]): boolean {
+  return walkIsJson(
+    values.map(value => ({ value, depth: 1 })),
+    new Set<object>()
+  );
+}
+
+function walkIsJson(
+  pending: { value: unknown; depth: number; exiting?: object }[],
+  open: Set<object>
+): boolean {
   // Bounded as well as iterative. Depth is not the only way a value gets too
   // big to examine: a SHALLOW object with millions of properties costs a full
   // traversal here, before any cap has had the chance to refuse it.
@@ -1088,6 +1119,23 @@ function assertNodeShape(
       );
     }
 
+    // The MACHINE bound as well, and inside the walk rather than after it. A
+    // site may raise `maxDepth` above what the engine's recursive helpers can
+    // walk, and the check that refuses such a subtree unconditionally runs only
+    // once this walk has finished — so a subtree nested far past the machine
+    // bound was traversed in full first, building a longer diagnostic path for
+    // every descendant on the way down, to reach a verdict that was settled at
+    // level 1,001. Stopping here makes the traversal end as soon as the outcome
+    // is known.
+    //
+    // WITHOUT the path, unlike every other refusal in this walk. At a thousand
+    // levels the path is a thousand `.slots.main[0]` segments, which is longer
+    // than a message may be — so interpolating it truncates the reason away and
+    // leaves the author reading fifteen kilobytes of breadcrumb with no verdict
+    // at the end. The depth is the actionable fact here, and the path is not:
+    // nothing can be done about level 1,001 except make the tree shallower.
+    assertWalkable(depth, `${verb}: this subtree`);
+
     if (!isPlainRecord(candidate)) {
       throw new OpError(
         `${verb}: ${path} is ${describe(candidate)}, which is not a node. ` +
@@ -1439,7 +1487,13 @@ function assertForestEntries(nodes: BlockNode[]): void {
   // computed and say nothing about the value, so an untouched node carrying a
   // value JSON cannot write made a successful edit hand back a document that
   // cannot be saved.
-  if (!isJsonValue(heldValues)) {
+  //
+  // Each value as its OWN root. `isJsonValue(heldValues)` would make the array
+  // the root and examine every value one level deeper than it sits, so a field
+  // accepted at exactly `MAX_VALUE_DEPTH` by the per-field check is refused at
+  // 513 here — the edit succeeds and the document it returns cannot be edited
+  // again, inverse included.
+  if (!areJsonValues(heldValues)) {
     // The precise offender, found only once the fast path has failed. Naming
     // the field costs a second walk, and paying for it on every op to describe
     // a failure that almost never happens is the wrong trade.

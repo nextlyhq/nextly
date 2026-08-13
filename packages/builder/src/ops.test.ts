@@ -2021,6 +2021,52 @@ describe("an inverse that names a parent held twice", () => {
     ).toThrow(OpError);
   });
 
+  it("accepts its own result at the value-depth boundary", () => {
+    // A value nested at exactly the per-field limit. The forward edit is
+    // accepted by the per-field check; the aggregate check then examines every
+    // held value wrapped in one array, which adds a level, so the SAME value is
+    // one deeper there. The edit succeeded and the document it produced could
+    // not be edited again — its own inverse included.
+    //
+    // Separating on the SECOND call, not the first: a test that only applies
+    // the op passes either way, because the forward edit was never the broken
+    // half.
+    let deep: Record<string, unknown> = { leaf: 1 };
+    for (let level = 0; level < 510; level += 1) deep = { deep };
+
+    const { document: after, inverse } = applyOp(doc(), {
+      kind: "update",
+      id: "a",
+      patch: { props: deep },
+    });
+
+    expect(() => applyOp(after, inverse)).not.toThrow();
+  });
+
+  it("stops a too-deep subtree at the machine bound, with a readable reason", () => {
+    // A site may raise `maxDepth` past what the engine's helpers can walk. The
+    // unconditional refusal then runs only after the whole subtree has been
+    // traversed, building a longer diagnostic path for every descendant on the
+    // way down to a verdict that was settled at level 1,001.
+    //
+    // The message is asserted as well as the refusal. Interpolating the path at
+    // that depth produces a thousand `.slots.main[0]` segments, which is longer
+    // than a message may be — so the reason is truncated away and the author
+    // reads breadcrumb with no verdict at the end.
+    let root: BlockNode = node("deep-leaf");
+    for (let level = 0; level < 1_200; level += 1) {
+      root = node(`deep-${String(level)}`, { main: [root] });
+    }
+
+    expect(() =>
+      applyOp(
+        doc(),
+        { kind: "insert", node: root, at: { index: 0 } },
+        { maxDepth: 100_000, maxNodes: 100_000, maxBytes: 100_000_000 }
+      )
+    ).toThrow(/cannot be edited/);
+  });
+
   it("refuses a cap that cannot decide anything", () => {
     // Every cap here is a `>` comparison and every comparison against `NaN` is
     // false, so one non-finite limit does not loosen a cap — it removes it, and
