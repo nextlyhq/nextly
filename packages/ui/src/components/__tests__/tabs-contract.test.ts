@@ -57,6 +57,7 @@
  */
 
 import {
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -1050,6 +1051,34 @@ function ownsStyleProperty(slot: string, property: string): boolean {
  */
 const CALL_SITE_EXTENSIONS = [".tsx", ".jsx", ".js"] as const;
 
+/**
+ * The roots the scan walks, and the roots the Turbo inputs must cover.
+ *
+ * Both halves of a pair matter. A glob covering `packages` says nothing about a
+ * call site under `apps`, so the two are enumerated rather than summarised.
+ */
+const CALL_SITE_ROOTS = ["packages", "apps"] as const;
+
+/**
+ * Directories whose contents are generated rather than written.
+ *
+ * `.next` is the one that makes this load-bearing rather than tidy: a
+ * contributor who has run the playground dev server has thousands of generated
+ * `.js` chunks under it, and a scan that reads JavaScript would parse every one
+ * of them. That is slow, and worse, it makes the result depend on whether
+ * somebody happened to build locally — a suite that reads generated output is
+ * reading a different repository on each machine.
+ */
+const GENERATED_DIRECTORIES = new Set([
+  "node_modules",
+  "dist",
+  ".turbo",
+  ".next",
+  "coverage",
+  "out",
+  "build",
+]);
+
 function isCallSite(name: string): boolean {
   return CALL_SITE_EXTENSIONS.some(extension => name.endsWith(extension));
 }
@@ -1057,9 +1086,7 @@ function isCallSite(name: string): boolean {
 function sourceFiles(dir: string, found: string[] = []): string[] {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const name = entry.name;
-    if (name === "node_modules" || name === "dist" || name === ".turbo") {
-      continue;
-    }
+    if (GENERATED_DIRECTORIES.has(name)) continue;
     const full = join(dir, name);
     if (entry.isDirectory()) {
       // `__tests__` is skipped deliberately: a test may construct violating
@@ -2377,6 +2404,11 @@ describe("which files the call-site scan reads", () => {
         writeFileSync(join(dir, name), "");
       }
 
+      // Generated output, which reading JavaScript would otherwise pull in by
+      // the thousand on any machine where the playground has been built.
+      mkdirSync(join(dir, ".next"));
+      writeFileSync(join(dir, ".next", "chunk.js"), "");
+
       const found = sourceFiles(dir).map(path => path.slice(dir.length + 1));
 
       expect(found.sort()).toEqual(["a.tsx", "b.jsx", "d.js"].sort());
@@ -2385,16 +2417,19 @@ describe("which files the call-site scan reads", () => {
     }
   });
 
-  it("has a Turbo input glob for every extension it reads", () => {
-    // The claim this replaces was a comment saying the list was "named once and
-    // read by both". It was not: the extensions were repeated by hand in two
-    // task input lists, and `turbo.json` is static JSON that cannot import a
-    // constant. So the tie is asserted here instead of asserted in prose.
+  it("covers every scan root and extension in both Turbo tasks", () => {
+    // The traversal and the cache have to agree about which files matter. An
+    // extension or a root the scan reads but the hash does not cover is a file
+    // that can change while Turbo replays a cached green, and a replayed pass
+    // is indistinguishable from one that ran.
     //
-    // What it protects is the same silent gap this PR closes from the other
-    // side: an extension the scan reads but the hash does not cover is a file
-    // that can change behind a cached green, and the cached pass looks exactly
-    // like a real one.
+    // `turbo.json` is static JSON and cannot import the lists above, so the
+    // agreement is asserted here rather than assumed.
+    //
+    // Every ROOT-and-extension pair, not merely every extension: a glob for
+    // `packages/**/*.js` says nothing about a call site under `apps`, and a
+    // check that only asks "is this extension mentioned anywhere" stays green
+    // while half the coverage is gone.
     const config = JSON.parse(
       readFileSync(resolve(HERE, "../../../turbo.json"), "utf8").replace(
         // The file carries `//` comments, which `JSON.parse` rejects.
@@ -2403,19 +2438,21 @@ describe("which files the call-site scan reads", () => {
       )
     ) as { tasks: Record<string, { inputs?: string[] }> };
 
-    // BOTH tasks, because a coverage gap in either replays a stale green.
+    const required = CALL_SITE_ROOTS.flatMap(root =>
+      CALL_SITE_EXTENSIONS.map(
+        extension => `$TURBO_ROOT$/${root}/**/*${extension}`
+      )
+    );
+
+    // Both tasks: a gap in either replays a stale result for that task alone.
     for (const task of ["test", "test:coverage"]) {
-      const inputs = config.tasks[task]?.inputs ?? [];
-      for (const extension of CALL_SITE_EXTENSIONS) {
-        const covered = inputs.filter(glob => glob.endsWith(`*${extension}`));
-        // Named in the failure, so a reader is told WHICH extension and WHICH
-        // task rather than being handed a false.
-        expect(
-          covered.length > 0
-            ? `${task} covers ${extension}`
-            : { task, extension }
-        ).toBe(`${task} covers ${extension}`);
-      }
+      const inputs = new Set(config.tasks[task]?.inputs ?? []);
+      const missing = required.filter(glob => !inputs.has(glob));
+
+      // The missing globs are named, because this rule is only ever broken by
+      // someone adding an extension or a root who does not know the second
+      // task list exists — and a bare `false` tells them nothing.
+      expect({ task, missing }).toEqual({ task, missing: [] });
     }
   });
 
