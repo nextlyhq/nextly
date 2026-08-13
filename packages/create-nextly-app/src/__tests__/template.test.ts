@@ -25,6 +25,7 @@ vi.mock("fs-extra", () => ({
     readFile: vi.fn(),
     readdir: vi.fn(),
     remove: vi.fn(),
+    move: vi.fn(),
     ensureDir: vi.fn(),
   },
 }));
