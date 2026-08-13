@@ -52,6 +52,9 @@ const APP_TEMPLATES = ["base", "blank", "blog"] as const;
  * plain substring search flags that explanation — which would push the next
  * person to delete the comment that stops the fetch being reintroduced.
  */
+/** A literal path into `node_modules`, which assumes a physical install layout. */
+const NODE_MODULES_PATH = /["\x27][^"\x27]*node_modules\//;
+
 const BUILD_TIME_FONT_IMPORT =
   /(?:from\s*|require\(\s*|import\(\s*)["']next\/font\/google["']/;
 
@@ -82,6 +85,28 @@ describe("no template fetches a font at build time", () => {
         " * `next/font/google`, which fetches them from fonts.googleapis.com"
       )
     ).toBe(false);
+  });
+
+  it("recognises a node_modules path when it sees one", () => {
+    // Positive control for the assertion below, which is satisfied by ABSENCE.
+    expect(
+      NODE_MODULES_PATH.test('src: "../../node_modules/@fontsource/x.woff2"')
+    ).toBe(true);
+    expect(NODE_MODULES_PATH.test('import "@fontsource-variable/inter";')).toBe(
+      false
+    );
+  });
+
+  it.each(APP_TEMPLATES)("%s names no node_modules path", template => {
+    // A literal path asserts where a package physically lives. That is false under Yarn PnP
+    // (no node_modules at all), under npm/Yarn workspace hoisting (the package moves to the
+    // workspace root), and under pnpm's symlinked store — and the failure is a build error in
+    // the user's project, not here.
+    const offenders = sourceFiles(path.join(TEMPLATES_ROOT, template)).filter(
+      file => NODE_MODULES_PATH.test(fs.readFileSync(file, "utf8"))
+    );
+
+    expect(offenders.map(f => path.relative(TEMPLATES_ROOT, f))).toEqual([]);
   });
 
   it.each(APP_TEMPLATES)("%s imports no build-time font fetch", template => {
