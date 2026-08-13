@@ -566,7 +566,23 @@ export function measureBytes(
   let bytes = 0;
   const stack: unknown[] = [root];
   while (stack.length > 0) {
-    const value = stack.pop();
+    const popped = stack.pop();
+    // `toJSON` FIRST, because that is what `JSON.stringify` writes. A value
+    // defining it is serialized as whatever it returns, not as the fields it
+    // happens to carry — and this counter exists to agree with the serializer.
+    // A `Date` is the everyday case: walking its enumerable fields finds none
+    // and counts the empty object at 2 bytes, while the writer emits a 26-byte
+    // quoted timestamp. A caller enforcing a storage cap through this function
+    // would admit data the store then refuses.
+    //
+    // Load-bearing now that this is exported: inside this package every value
+    // reaching it has already been established as plain JSON, so the gap could
+    // not open. A public caller has made no such promise.
+    const value =
+      typeof (popped as { toJSON?: unknown } | null | undefined)?.toJSON ===
+      "function"
+        ? (popped as { toJSON: () => unknown }).toJSON()
+        : popped;
     if (typeof value === "string") {
       bytes += 2 + utf8ByteLength(value, limit - bytes);
     } else if (typeof value === "number") {

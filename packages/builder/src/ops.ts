@@ -569,10 +569,21 @@ function isJsonValue(value: unknown): boolean {
  * the shared budget while leaving each value at its true depth.
  */
 function areJsonValues(values: readonly unknown[]): boolean {
-  return walkIsJson(
-    values.map(value => ({ value, depth: 1 })),
-    new Set<object>()
-  );
+  // The LENGTH before the seed, like every other list this module copies — and
+  // this one is worth stating plainly, because the helper was WRITTEN to fix an
+  // instance of exactly this shape and then contained another. `values.map`
+  // allocates one pending record per value before the walk can enforce
+  // anything, so a document whose nodes each hold four fields reaches four
+  // million records while the forest guard, which counts NODES, is still happy.
+  //
+  // A local fix to one instance of a class does not make the class go away, and
+  // writing the fix is not a reason to think it did.
+  if (values.length > MAX_VALUE_PARTS) return false;
+  const seed: { value: unknown; depth: number; exiting?: object }[] = [];
+  for (let index = 0; index < values.length; index += 1) {
+    seed.push({ value: values[index], depth: 1 });
+  }
+  return walkIsJson(seed, new Set<object>());
 }
 
 function walkIsJson(

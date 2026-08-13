@@ -1810,3 +1810,17 @@ describe("measureBytes", () => {
     ).toBeLessThan(5_000_000);
   });
 });
+
+describe("measureBytes and the serializer agree on toJSON", () => {
+  it("counts what JSON.stringify writes for a value defining toJSON", () => {
+    // A `Date` carries no enumerable fields, so a walk over its properties
+    // counts an empty object while the writer emits a quoted timestamp. Pinned
+    // against `Buffer.byteLength(JSON.stringify(v))` rather than a remembered
+    // number, so the next divergence fails instead of needing to be noticed.
+    const value = { when: new Date("2020-01-01T00:00:00.000Z") };
+    const written = Buffer.byteLength(JSON.stringify(value), "utf8");
+
+    expect(measureBytes(value, 1_000).bytes).toBe(written);
+    expect(measureBytes(value, 20).exceeded).toBe(true);
+  });
+});
