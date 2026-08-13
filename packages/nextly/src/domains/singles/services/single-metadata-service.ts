@@ -478,7 +478,6 @@ export class SingleMetadataService {
 
     if (!current) {
       throw NextlyError.notFound({
-        logMessage: `single "${input.slug}" was removed before its schema change could run`,
         logContext: {
           reason: "single disappeared while awaiting the exclusion",
           slug: input.slug,
@@ -487,7 +486,6 @@ export class SingleMetadataService {
     }
     if (current.locked) {
       throw NextlyError.forbidden({
-        logMessage: `single "${input.slug}" became locked before its schema change could run`,
         logContext: {
           reason: "single became locked while awaiting the exclusion",
           slug: input.slug,
