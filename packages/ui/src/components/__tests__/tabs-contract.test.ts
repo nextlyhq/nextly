@@ -675,15 +675,53 @@ function restates(owned: Utility, caller: Utility): boolean {
 function excludeEachOther(a: string, b: string): boolean {
   const negatedIn = (selector: string): string[] =>
     [...selector.matchAll(/:not\(([^)]*)\)/g)].map(match =>
-      (match[1] ?? "").trim()
+      // A leading `*` is the universal selector Tailwind writes inside the
+      // negation — `not-disabled:` compiles to `&:not(*:disabled)` while the
+      // required side is a bare `&:disabled`. Compared verbatim the two never
+      // met, so the clearest disjoint pair in the vocabulary read as coexisting.
+      (match[1] ?? "").trim().replace(/^\*/, "")
     );
   const requires = (selector: string, qualifier: string): boolean =>
     qualifier.length > 0 &&
     selector.replace(/:not\([^)]*\)/g, "").includes(qualifier);
-  return (
+  if (
     negatedIn(a).some(qualifier => requires(b, qualifier)) ||
     negatedIn(b).some(qualifier => requires(a, qualifier))
-  );
+  ) {
+    return true;
+  }
+  return attributesConflict(a, b);
+}
+
+/**
+ * Whether two selectors demand different values of the SAME attribute.
+ *
+ * An element has one value per attribute, so `[data-state="active"]` and
+ * `[data-state="inactive"]` never match together — the form the primitive's own
+ * active and inactive rules are written in, and one no negation appears in.
+ *
+ * Read outside any `:not()`, because a negated attribute states the opposite
+ * requirement and the negation is already compared above.
+ */
+function attributesConflict(a: string, b: string): boolean {
+  const required = (selector: string): Map<string, Set<string>> => {
+    const found = new Map<string, Set<string>>();
+    for (const match of selector
+      .replace(/:not\([^)]*\)/g, "")
+      .matchAll(/\[([a-zA-Z0-9_-]+)\s*=\s*"([^"]*)"\]/g)) {
+      const name = match[1] ?? "";
+      const values = found.get(name) ?? new Set<string>();
+      values.add(match[2] ?? "");
+      found.set(name, values);
+    }
+    return found;
+  };
+  const other = required(b);
+  for (const [name, values] of required(a)) {
+    const theirs = other.get(name);
+    if (theirs && ![...values].some(value => theirs.has(value))) return true;
+  }
+  return false;
 }
 
 /**
@@ -1539,6 +1577,7 @@ function styleResolver(
     seen?: Set<ts.Node>
   ): ts.ObjectLiteralExpression[];
   valueOf(identifier: ts.Identifier): ts.Expression | undefined;
+  reachingValues(identifier: ts.Identifier): ts.Expression[];
   declarationOf(identifier: ts.Identifier): ts.Declaration | undefined;
 } {
   /**
@@ -1630,6 +1669,31 @@ function styleResolver(
   };
 
   /**
+   * Every value a name can hold at the element.
+   *
+   * The declaration's initializer and every write that can reach here, which is
+   * the whole answer to "what does this name hold" — so both the object
+   * question and the property-value question are asked of this one list rather
+   * than each assembling its own. A mutable binding whose initializer is the
+   * only value it ever holds is fully decidable, and discarding it purely
+   * because the declaration said `let` reported `let colour = undefined` as a
+   * colour React never receives.
+   *
+   * An empty list means the name resolved to a declaration that carries no
+   * readable value — a parameter, an import — which the callers treat as
+   * undecidable in whichever direction is conservative for them.
+   */
+  const reachingValues = (identifier: ts.Identifier): ts.Expression[] => {
+    const declaration = declarationOf(identifier, checker);
+    if (!declaration) return [];
+    const values: ts.Expression[] = [];
+    const initializer = bindingOf(identifier)?.initializer;
+    if (initializer) values.push(initializer);
+    values.push(...assignedValues(declaration));
+    return values;
+  };
+
+  /**
    * Every object an expression can evaluate to HERE.
    *
    * A style prop routinely selects between shapes, and every branch a
@@ -1687,10 +1751,7 @@ function styleResolver(
       // `let style = { ... }` is a false negative, the opposite polarity to an
       // unresolved property value.
       if (ts.isIdentifier(node)) {
-        const declaration = declarationOf(node, checker);
-        if (!declaration) return;
-        walk(bindingOf(node)?.initializer);
-        for (const assigned of assignedValues(declaration)) walk(assigned);
+        for (const value of reachingValues(node)) walk(value);
       }
     };
     walk(root);
@@ -1718,6 +1779,7 @@ function styleResolver(
   return {
     objectsFrom,
     valueOf,
+    reachingValues,
     declarationOf: identifier => declarationOf(identifier, checker),
   };
 }
@@ -1984,8 +2046,14 @@ function emitsValue(
     // entries and a chain crossing a shadow is not mistaken for a cycle.
     if (!declaration || seen.has(declaration)) return true;
     seen.add(declaration);
-    const bound = resolver.valueOf(inner);
-    if (bound) return emitsValue(bound, resolver, seen);
+    // Any value the name can hold here is a value React can receive, so the
+    // property emits unless EVERY one of them is written as nothing. Each
+    // branch carries its own trail, or one branch's visits would cut another's
+    // short and report it as emitting.
+    const reaching = resolver.reachingValues(inner);
+    if (reaching.length > 0) {
+      return reaching.some(value => emitsValue(value, resolver, new Set(seen)));
+    }
   }
   return true;
 }
@@ -2808,6 +2876,22 @@ describe("the tab indicator contract", () => {
       "an owned property in a statically unreachable branch",
       '<TabsTrigger style={true ? {} : { borderBottomColor: "red" }} />',
     ],
+    // A mutable binding nothing ever writes to. Its initializer IS what the
+    // element receives, so discarding it for being `let` reported a property
+    // React never emits. This is the counterpart to the reassignment cases
+    // above: together they separate "the declaration decides" from "a write
+    // decides", which neither shows alone.
+    [
+      "an owned property held by an unchanged mutable binding",
+      "let colour: string | undefined = undefined;\n<TabsTrigger style={{ borderBottomColor: colour }} />",
+    ],
+    // A rule that can never apply beside the owned one it matches. `disabled:`
+    // and `not-disabled:` select complementary states, so neither can restate
+    // or override the other however the cascade ranks them.
+    [
+      "an equal declaration under a negated form of the owned qualifier",
+      '<TabsTrigger className="not-disabled:opacity-50" />',
+    ],
   ])("does not report %s", (_label, body) => {
     // The complement, and the reason this is a contract rather than a ban. A
     // check that flags a documented example or a legitimate layout class gets
@@ -2971,17 +3055,15 @@ describe("which files the call-site scan reads", () => {
     // `**/src` subscribes to `packages/ui` alone — a call site in
     // `packages/admin`, an app or a template could gain a violation and the
     // suite reporting on it would never rerun.
-    // The REAL triggers and the REAL matcher, on the REAL paths.
+    // The REAL triggers and the REAL matcher, on REAL paths.
     //
-    // Every earlier version of this case compared the config's strings against
-    // strings assembled here, and a comparison between two things written in
-    // the same change proves nothing about either: the triggers were relative,
-    // matched none of the absolute paths Vitest hands the matcher, and this
-    // contract stayed green throughout because it never ran one.
-    //
-    // So the config is IMPORTED rather than parsed, picomatch is resolved
-    // through Vitest so it is the same version and cannot drift, and the paths
-    // are the ones the traversal actually returns.
+    // Each of those three is what makes the answer mean anything. The config is
+    // IMPORTED rather than parsed, so the assertion reads the value Vitest
+    // loads instead of a rendering of it. picomatch is resolved THROUGH Vitest,
+    // so the matcher here is the one that decides at runtime and cannot drift
+    // to a different version. And the paths are ABSOLUTE, because absolute is
+    // what the watcher emits: a glob is only covering a file if it matches the
+    // string the matcher is actually handed.
     const { default: config } = (await import("../../../vitest.config")) as {
       default: { test?: { forceRerunTriggers?: string[] } };
     };
@@ -3029,6 +3111,33 @@ describe("which files the call-site scan reads", () => {
     // whole tree at a time, and a bare count says nothing about which.
     const unwatched = scanned().filter(file => !isMatch(file, triggers));
     expect(unwatched).toEqual([]);
+  });
+
+  it("treats complementary states as unable to apply together", () => {
+    // Asserted on the coexistence test directly, because through `violationsIn`
+    // it cannot be isolated: every disjoint pair in this primitive's vocabulary
+    // also meets a rule it genuinely DOES coexist with, so the call site is
+    // reported either way and the outcome cannot separate the two causes.
+    // `data-[state=active]:border-transparent` is the worked example — it is
+    // disjoint from the inactive border, and at the same time a real override
+    // of `hover:border-primary`, which an active hovered tab matches.
+    //
+    // Both spellings the vocabulary produces, taken from what Tailwind actually
+    // compiles rather than from how the variants are written:
+    //   `not-disabled:` -> `&:not(*:disabled)`   against `&:disabled`
+    //   `data-[state=active]:` -> `&[data-state="active"]`
+    expect(excludeEachOther("&:not(*:disabled)", "&:disabled")).toBe(true);
+    expect(
+      excludeEachOther('&[data-state="active"]', '&[data-state="inactive"]')
+    ).toBe(true);
+
+    // The positive control. Without it a test that answered `true` to
+    // everything would pass both cases above, and every comparison in the
+    // contract would be silently skipped as "cannot apply together".
+    expect(excludeEachOther("&:hover", '&[data-state="active"]')).toBe(false);
+    expect(
+      excludeEachOther('&[data-state="active"]', '&[data-state="active"]')
+    ).toBe(false);
   });
 
   it("finds a violation in a .jsx call site", () => {
