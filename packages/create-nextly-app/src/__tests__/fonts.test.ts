@@ -118,6 +118,59 @@ describe("no template fetches a font at build time", () => {
   });
 });
 
+describe("every template feeds the admin theme", () => {
+  /** The `:root` block a template's `globals.css` declares, where the theme resolves. */
+  function rootBlock(template: string): string {
+    const css = fs.readFileSync(
+      path.join(TEMPLATES_ROOT, template, "src/app/globals.css"),
+      "utf8"
+    );
+    const start = css.indexOf(":root {");
+    expect(start).toBeGreaterThanOrEqual(0);
+    // Comments stripped first. The comments here QUOTE the theme's declarations by name, so a
+    // scan over raw text matches the prose explaining a rule and reports the rule itself —
+    // which is what pushes the next reader to delete the explanation to get a green.
+    return css
+      .slice(start, css.indexOf("}", start))
+      .replace(/\/\*[\s\S]*?\*\//g, "");
+  }
+
+  it("reads declarations rather than the comments about them", () => {
+    // Positive control for the stripping above: the shadow assertions are satisfied by ABSENCE,
+    // and prose naming a token looks identical to a declaration of it.
+    const blank = rootBlock("blank");
+    expect(blank).toMatch(/--font-geist\s*:/);
+    expect(blank).not.toContain("theme's OWN token");
+  });
+
+  it.each(APP_TEMPLATES)(
+    "%s exposes the variables the admin reads",
+    template => {
+      // `packages/ui/src/styles/theme.css` declares
+      // `--font-sans: var(--font-geist, Geist), ...` and
+      // `--font-mono: var(--font-geist-mono, "Geist Mono"), ...` in a NON-INLINE `@theme`, so they
+      // are emitted into `:root` and substitute there. A template that loads a different face still
+      // has to publish it under these names, or its admin panel renders in a system fallback while
+      // its own pages render correctly — which is easy to miss, because only /admin looks wrong.
+      const root = rootBlock(template);
+      expect(root).toMatch(/--font-geist\s*:/);
+      expect(root).toMatch(/--font-geist-mono\s*:/);
+    }
+  );
+
+  it.each(APP_TEMPLATES)(
+    "%s does not shadow the theme's own tokens",
+    template => {
+      // `--font-sans` and `--font-mono` are the THEME's tokens, declared at `:root`. A template
+      // redefining one at the same scope replaces the theme's whole fallback chain with a single
+      // family rather than feeding it — a broken stack rather than a missing font.
+      const root = rootBlock(template);
+      expect(root).not.toMatch(/--font-sans\s*:/);
+      expect(root).not.toMatch(/--font-mono\s*:/);
+    }
+  );
+});
+
 describe("the scaffold installs the fonts its templates import", () => {
   /** The faces each scaffold's FINAL layout references, after the type overlays base. */
   const EXPECTED: Record<(typeof APP_TEMPLATES)[number], string[]> = {

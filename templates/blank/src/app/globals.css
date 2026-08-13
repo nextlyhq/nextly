@@ -6,8 +6,18 @@
    the name is load-bearing — the admin theme reads `--font-geist`. Quoted family names, so
    the two-word values stay one identifier. */
 :root {
+  /* `--font-geist` and `--font-geist-mono` are the names the ADMIN theme reads
+     (`--font-sans: var(--font-geist, Geist), ...` in a non-inline `@theme`, so
+     it resolves at `:root`). A template that loads a different face still has to
+     expose it under these names or the admin renders in a system fallback while
+     the app's own pages render correctly. */
+  --font-geist: "Inter Variable";
+  --font-geist-mono: "JetBrains Mono Variable";
+  /* This template's own display face, read by `.font-display` below. NOT named
+     `--font-mono` for its mono face: that is the theme's OWN token, declared at
+     `:root`, and redefining it here replaces the theme's whole fallback chain
+     rather than feeding it. */
   --font-display: "Inter Variable";
-  --font-mono: "JetBrains Mono Variable";
 }
 
 /**
