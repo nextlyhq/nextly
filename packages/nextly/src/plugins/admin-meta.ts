@@ -26,6 +26,8 @@ import type {
   PluginDefinition,
 } from "./plugin-context";
 import { pluginAdminSlug } from "./plugin-slug";
+import { collectPluginRoutes } from "./routes/collect-routes";
+import { isRouteError } from "./routes/route-error";
 import { validatedClientConfig } from "./validate-client-config";
 import { validatePluginSlugs } from "./validate-slugs";
 
@@ -90,7 +92,7 @@ export interface PluginAdminMeta {
    * plugin mounts. Present only for enabled plugins (routes of a disabled
    * plugin are not mounted).
    */
-  routes?: Array<{ method: string; path: string }>;
+  routes?: Array<{ method: string; path: string; fullPath: string }>;
   /**
    * The routes a DISABLED plugin declares but does not currently serve.
    *
@@ -179,18 +181,23 @@ export { pluginAdminSlug } from "./plugin-slug";
  * applies) but contribute NO behavioral admin UI — no menu/pages/settings.
  */
 /**
- * The routes a plugin declares that could actually mount, shaped for
- * serialization.
+ * The routes a plugin declares that would actually mount, with the namespace
+ * they would answer at.
  *
- * The leading-slash rule is `collectPluginRoutes`'s, restated here rather than
- * shared because that function THROWS on a violation while this one is
- * describing a plugin whose routes have not been collected yet — the disabled
- * plugin is precisely the one whose declarations were never validated. Keeping
- * the rule in step matters: a route this admits and that one rejects is a
- * route the admin promised and boot refuses.
+ * Asks `collectPluginRoutes` rather than restating its rules. That function is
+ * the canonical answer to "would these mount": it rejects a path without a
+ * leading slash and rejects two declarations sharing a `(method, full path)`.
+ * Re-implementing either predicate here would mean the admin can advertise a
+ * route boot refuses, which is the whole failure this guards.
  *
- * `undefined` when nothing survives, so a caller renders nothing rather than
- * an empty section.
+ * It is asked about ONE plugin, forced enabled, because that is the question:
+ * what would happen to this plugin's own declarations. Collisions ACROSS
+ * plugins are a property of the whole enabled set and cannot be evaluated for
+ * a plugin that is not in it — enabling two plugins that collide with each
+ * other still fails at boot, and no per-plugin view can foresee it.
+ *
+ * `undefined` when nothing would mount, so a caller renders nothing rather
+ * than an empty section.
  */
 function mountableRoutes(
   plugin: PluginDefinition
@@ -198,12 +205,28 @@ function mountableRoutes(
   const routes = plugin.contributes?.routes;
   if (!routes || routes.length === 0) return undefined;
 
-  // Method + path only: handlers/middleware are code and never serialize.
-  const shaped = routes
-    .filter(r => r.path.startsWith("/"))
-    .map(r => ({ method: r.method, path: r.path }));
+  let collected;
+  try {
+    collected = collectPluginRoutes([{ ...plugin, enabled: true }]);
+  } catch (error) {
+    // Only route errors reach here — `collectPluginRoutes` throws
+    // `routeInvalidPathError` and `routeCollisionError` and nothing else — and
+    // both mean the same thing to this caller: these declarations do not
+    // mount, so there is nothing honest to advertise. Rethrown if it is
+    // anything else, since that would be a defect rather than a verdict.
+    if (!isRouteError(error)) throw error;
+    return undefined;
+  }
 
-  return shaped.length > 0 ? shaped : undefined;
+  // Method + path only, plus the namespace: handlers and middleware are code
+  // and never serialize.
+  return collected.length > 0
+    ? collected.map(c => ({
+        method: c.method,
+        path: c.path,
+        fullPath: c.fullPath,
+      }))
+    : undefined;
 }
 
 export function buildPluginAdminMeta(

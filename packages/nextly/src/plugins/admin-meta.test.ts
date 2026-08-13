@@ -490,8 +490,15 @@ describe("buildPluginAdminMeta", () => {
       asPlugins([{ ...base, contributes }]),
       undefined
     );
+    // `fullPath` travels too: it is the namespace the dispatcher mounts the
+    // route at, derived from the raw package name, and the admin renders it
+    // rather than rebuilding it from the slug.
     expect(enabled[0].routes).toEqual([
-      { method: "GET", path: "/submissions/export" },
+      {
+        method: "GET",
+        path: "/submissions/export",
+        fullPath: "/plugins/@acme/p/submissions/export",
+      },
     ]);
 
     const disabled = buildPluginAdminMeta(
@@ -715,7 +722,7 @@ describe("dormant routes", () => {
     );
 
     expect(meta.whenEnabled?.routes).toEqual([
-      { method: "GET", path: "/export" },
+      { method: "GET", path: "/export", fullPath: "/plugins/@acme/p/export" },
     ]);
     expect(meta.routes).toBeUndefined();
   });
@@ -741,7 +748,9 @@ describe("dormant routes", () => {
       undefined
     );
 
-    expect(meta.routes).toEqual([{ method: "GET", path: "/export" }]);
+    expect(meta.routes).toEqual([
+      { method: "GET", path: "/export", fullPath: "/plugins/@acme/p/export" },
+    ]);
     expect(meta.whenEnabled).toBeUndefined();
   });
 

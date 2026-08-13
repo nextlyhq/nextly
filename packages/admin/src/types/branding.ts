@@ -92,7 +92,14 @@ export interface PluginMetadata {
     danger?: boolean;
   }>;
   /** Declared HTTP routes as method + path (enabled plugins only). */
-  routes?: Array<{ method: string; path: string }>;
+  /**
+   * Declared HTTP routes. `fullPath` is the namespace the dispatcher mounts
+   * them at, serialized by the server rather than rebuilt here: it is derived
+   * from the RAW package name, which is not the admin slug this UI addresses
+   * plugins by. Prefix it with the host's mount point (`/api` by convention)
+   * to get the URL.
+   */
+  routes?: Array<{ method: string; path: string; fullPath: string }>;
   /**
    * The routes a DISABLED plugin declares but does not currently serve.
    * Mirrors the server's `PluginAdminMeta.whenEnabled`.

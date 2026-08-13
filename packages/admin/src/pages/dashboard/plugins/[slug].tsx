@@ -33,7 +33,6 @@ import {
   useBrandingStatus,
 } from "@admin/context/providers/BrandingProvider";
 import { categoryLabel } from "@admin/lib/plugins/plugin-categories";
-import { pluginRoutePath } from "@admin/lib/plugins/plugin-route-path";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 import { staticRegistrySource } from "@admin/lib/plugins/registry/static-source";
 import type { PluginMetadata } from "@admin/types/branding";
@@ -436,7 +435,7 @@ function Contributions({ plugin }: { plugin: PluginMetadata }) {
       label: "API routes",
       icon: Route,
       items: (plugin.routes ?? []).map(r => ({
-        primary: `${r.method} ${pluginRoutePath(plugin.name, r.path)}`,
+        primary: `${r.method} /api${r.fullPath}`,
       })),
     },
   ].filter(group => group.items.length > 0);
@@ -546,7 +545,7 @@ function WhenEnabled({ plugin }: { plugin: PluginMetadata }) {
               key={`${r.method}-${r.path}`}
               className="break-words font-mono text-sm text-foreground"
             >
-              {`${r.method} ${pluginRoutePath(plugin.name, r.path)}`}
+              {`${r.method} /api${r.fullPath}`}
             </li>
           ))}
         </ul>

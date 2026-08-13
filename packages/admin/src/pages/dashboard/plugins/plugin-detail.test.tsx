@@ -31,7 +31,13 @@ const plugins: PluginMetadata[] = [
         danger: true,
       },
     ],
-    routes: [{ method: "GET", path: "/submissions/export" }],
+    routes: [
+      {
+        method: "GET",
+        path: "/submissions/export",
+        fullPath: "/plugins/@acme/forms/submissions/export",
+      },
+    ],
   },
   {
     name: "@acme/disabled",
@@ -39,7 +45,15 @@ const plugins: PluginMetadata[] = [
     enabled: false,
     placement: "plugins",
     collections: ["retained"],
-    whenEnabled: { routes: [{ method: "DELETE", path: "/archive" }] },
+    whenEnabled: {
+      routes: [
+        {
+          method: "DELETE",
+          path: "/archive",
+          fullPath: "/plugins/@acme/disabled/archive",
+        },
+      ],
+    },
   },
 ];
 
