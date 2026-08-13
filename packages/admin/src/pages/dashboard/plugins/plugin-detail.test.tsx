@@ -79,13 +79,17 @@ describe("PluginDetailPage layout", () => {
    * A grid item stretches to its row by default, which leaves `position:
    * sticky` with nothing to stick to. `self-start` is the part that actually
    * makes the rail stick, and it is invisible in a rendered-text assertion.
+   *
+   * Container-scoped, not viewport-scoped: the sidebars take a variable share
+   * of the window, so a `lg:` prefix here would engage the two-column layout
+   * at window widths where the page has no room for it.
    */
   it("gives the rail the classes that let it stick", () => {
     render(<PluginDetailPage params={{ slug: "acme-forms" }} />);
 
     const className = rail().className;
-    expect(className).toContain("lg:sticky");
-    expect(className).toContain("lg:self-start");
+    expect(className).toContain("@3xl/content:sticky");
+    expect(className).toContain("@3xl/content:self-start");
   });
 });
 

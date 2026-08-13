@@ -203,12 +203,20 @@ function PluginDetailContent({ activeSlug }: { activeSlug?: string }) {
         className="mb-6"
       />
 
-      {/* Two columns from `lg` up, one below it. The rail is a fixed 20rem so
-          the main column absorbs the remaining width; `minmax(0,1fr)` rather
-          than `1fr` because a grid item's default `min-width: auto` lets a
-          long unbroken string — a package name, an API route — push the
-          column wider than its track instead of scrolling inside it. */}
-      <div className="grid grid-cols-1 gap-8 lg:grid-cols-[minmax(0,1fr)_20rem]">
+      {/* A CONTAINER query, not a viewport one. The two sidebars take a
+          variable share of the window — around 630px with both open — so a
+          `lg:` breakpoint would split a 1024px viewport into a 320px rail and
+          a main column narrower than the rail. `@container/content` is
+          declared on the dashboard's `<main>`, so this measures the space the
+          page actually has and gains the second column when a sidebar
+          collapses rather than when the window happens to grow.
+
+          The rail is a fixed 20rem so the main column absorbs the rest;
+          `minmax(0,1fr)` rather than `1fr` because a grid item's default
+          `min-width: auto` lets a long unbroken string — a package name, an
+          API route — push the column wider than its track instead of
+          scrolling inside it. */}
+      <div className="grid grid-cols-1 gap-8 @3xl/content:grid-cols-[minmax(0,1fr)_20rem]">
         <div className="min-w-0">
           {/* Identity header */}
           <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -279,12 +287,12 @@ function PluginDetailContent({ activeSlug }: { activeSlug?: string }) {
         {/* `self-start` is what makes `sticky` work here: a grid item stretches
             to the row height by default, so the rail would be exactly as tall
             as the content it is meant to stay beside and never have anywhere
-            to stick to. Sticky only from `lg`, since in the stacked layout the
-            rail is the last thing on the page and pinning it would cover the
-            content the reader scrolled to. */}
+            to stick to. Sticky only once the columns exist — in the stacked
+            layout the rail is the last thing on the page, and pinning it there
+            would cover the content the reader scrolled to. */}
         <aside
           aria-label={`About ${title}`}
-          className="lg:sticky lg:top-6 lg:self-start"
+          className="@3xl/content:sticky @3xl/content:top-6 @3xl/content:self-start"
         >
           <About plugin={plugin} />
         </aside>
