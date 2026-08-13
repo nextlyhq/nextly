@@ -86,32 +86,83 @@ function openingTags(source: string): { text: string; index: number }[] {
 }
 
 /**
- * The class text a tag carries, in either JSX spelling.
+ * The text between the brace at `open` and its match, skipping string literals
+ * so that a brace inside a string does not unbalance the count.
+ */
+function braceBody(source: string, open: number): string | null {
+  let depth = 0;
+  let quote: string | null = null;
+  for (let i = open; i < source.length; i++) {
+    const ch = source[i];
+    if (quote) {
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === "`") quote = ch;
+    else if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) return source.slice(open + 1, i);
+    }
+  }
+  return null;
+}
+
+/** Every `{...expr}` on the tag, as the expression text without its dots. */
+function spreadExpressions(tag: string): string[] {
+  const found: string[] = [];
+  for (const spread of tag.matchAll(/\{\s*\.\.\./g)) {
+    const body = braceBody(tag, spread.index);
+    if (body !== null) found.push(body.replace(/^\s*\.\.\./, ""));
+  }
+  return found;
+}
+
+/**
+ * The class text a tag carries, in any JSX spelling that can be read statically.
  *
  * `className="a b"` is the literal form. `className={...}` is equally valid and
  * equally common once a call site needs `cn()` or a conditional, and a pattern
  * that reads only the literal form skips those attributes in SILENCE — the
- * offending class is still there, the scan simply never sees it. Returning the
- * whole expression text is deliberately blunt: this check asks whether a
- * forbidden class NAME appears anywhere in what the tag passes, and a name
- * inside `cn("border-input", x)` is just as inert as one in a plain string.
+ * offending class is still there, the scan simply never sees it. A spread of an
+ * object literal, `{...{ className: "..." }}`, is a third spelling with the same
+ * property.
+ *
+ * Returning the whole expression text is deliberately blunt: this check asks
+ * whether a forbidden class NAME appears anywhere in what the tag passes, and a
+ * name inside `cn("border-input", x)` is just as inert as one in a plain string.
  */
 function classText(tag: string): string | null {
   const literal = /className="([^"]*)"/.exec(tag);
   if (literal) return literal[1];
 
   const brace = tag.indexOf("className={");
-  if (brace === -1) return null;
-  let depth = 0;
-  for (let i = brace + "className=".length; i < tag.length; i++) {
-    const ch = tag[i];
-    if (ch === "{") depth++;
-    else if (ch === "}") {
-      depth--;
-      if (depth === 0) return tag.slice(brace + "className={".length, i);
-    }
+  if (brace !== -1) {
+    const body = braceBody(tag, brace + "className=".length);
+    if (body !== null) return body;
+  }
+
+  for (const expression of spreadExpressions(tag)) {
+    const inner = expression.trim();
+    if (inner.startsWith("{") && /\bclassName\b/.test(inner)) return inner;
   }
   return null;
+}
+
+/**
+ * Spreads whose contents no static scan can know — `{...props}` and anything
+ * else that is not an object literal.
+ *
+ * These are reported rather than skipped. A scan that passes over the input it
+ * cannot read answers a narrower question than the one it claims to, and
+ * answers it in green: the forbidden class would reach the wrapper with every
+ * assertion still reporting zero. Naming the tag turns that silence into a
+ * failure with an instruction, and costs nothing while no call site spreads.
+ */
+function opaqueSpreads(tag: string): string[] {
+  return spreadExpressions(tag).filter(
+    expression => !expression.trim().startsWith("{")
+  );
 }
 
 const sources = walk(adminSrc).filter(
@@ -149,6 +200,10 @@ describe("SearchBar call sites", () => {
         "cn() call",
         '<SearchBar value={v} className={cn("w-full", "border-input")} />',
       ],
+      [
+        "object-literal spread",
+        '<SearchBar value={v} {...{ className: "border-input" }} />',
+      ],
     ] as const;
 
     for (const [name, markup] of cases) {
@@ -171,6 +226,46 @@ describe("SearchBar call sites", () => {
     expect(
       okText.split(/[\s"'`,()]+/).some(token => FIELD_ONLY.test(token))
     ).toBe(false);
+  });
+
+  it("reports a spread it cannot read rather than skipping it", () => {
+    // The scanner has to distinguish the two spreads, because they differ in
+    // what is knowable: an object literal is right there in the source, and
+    // `{...props}` could hold anything. Reading the first and reporting the
+    // second are both correct; treating either as "no className" is what makes
+    // the whole check answer zero for a reason unrelated to the call sites.
+    const [opaque] = openingTags("<SearchBar value={v} {...props} />");
+    expect(opaqueSpreads(opaque.text)).toEqual(["props"]);
+
+    const [literal] = openingTags(
+      '<SearchBar value={v} {...{ className: "w-full" }} />'
+    );
+    expect(opaqueSpreads(literal.text)).toEqual([]);
+
+    const [plain] = openingTags('<SearchBar value={v} className="w-full" />');
+    expect(opaqueSpreads(plain.text)).toEqual([]);
+  });
+
+  it("spreads nothing into SearchBar that the scan cannot read", () => {
+    const unreadable: string[] = [];
+    for (const path of sources) {
+      const source = readFileSync(path, "utf8");
+      for (const tag of openingTags(source)) {
+        const spreads = opaqueSpreads(tag.text);
+        if (spreads.length === 0) continue;
+        const line = source.slice(0, tag.index).split("\n").length;
+        unreadable.push(
+          `${relative(repo, path)}:${line} — ${spreads.join(" ")}`
+        );
+      }
+    }
+
+    expect(
+      unreadable.sort(),
+      `A spread hides which classes reach SearchBar, so the check below cannot ` +
+        `see a field-only class passed this way. Pass className explicitly:` +
+        `\n${unreadable.join("\n")}`
+    ).toEqual([]);
   });
 
   it("passes no class that only the field could use", () => {
