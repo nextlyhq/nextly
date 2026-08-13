@@ -33,6 +33,7 @@ import {
   panelAfterRailClick,
   RAIL_WIDTH,
   readPreferences,
+  topologyKey,
   writePreferences,
   type LeftPanel,
   type PreferenceStore,
@@ -255,120 +256,22 @@ function shallowEqualPreferences(
   a: ShellPreferences,
   b: ShellPreferences
 ): boolean {
-  if (a.leftPanel !== b.leftPanel || a.leftPinned !== b.leftPinned)
+  if (a.leftPanel !== b.leftPanel || a.leftPinned !== b.leftPinned) {
     return false;
-  if (a.layout === b.layout) return true;
-  if (a.layout === null || b.layout === null) return false;
-  const aKeys = Object.keys(a.layout);
-  const bKeys = Object.keys(b.layout);
-  return (
-    aKeys.length === bKeys.length &&
-    aKeys.every(key => a.layout?.[key] === b.layout?.[key])
-  );
-}
-
-/**
- * The panel group's imperative handle, DERIVED from the component's own props.
- *
- * Restated as a local interface it would be a second copy of the library's
- * type, agreeing on the day it was written and silently afterwards. Taken from
- * `groupRef` it cannot drift: if the handle changes shape, this stops compiling.
- */
-type PanelGroupHandle =
-  NonNullable<
-    React.ComponentProps<typeof ResizablePanelGroup>["groupRef"]
-  > extends React.Ref<infer Handle>
-    ? NonNullable<Handle>
-    : never;
-
-/**
- * Apply a restored layout to a group that has already mounted.
- *
- * `defaultLayout` cannot do this, and that is a property of the library rather
- * than of how it is being called. Version 4.12.2 reads that prop when the panels
- * REGISTER; changing it afterwards only assigns `mutableState.defaultLayout` and
- * never applies it. Preferences here are restored in an effect, deliberately —
- * reading storage during render diverges from the server's markup and costs a
- * hydration failure — so the value always arrives after registration, and the
- * prop was never going to take.
- *
- * The case that hid it: opening a panel CHANGES the panel set, which re-registers
- * everything and makes the deferred value take effect after all. So a layout
- * dragged with a panel open appeared to restore, while one dragged with the rail
- * closed — the default state, and the common one — silently reset on reload.
- *
- * Applied once per matching topology. The stored keys are compared with the
- * mounted ones because they can legitimately disagree: a layout saved with the
- * left panel open names a panel that is not mounted when it is closed, and
- * handing the group a layout for panels it does not have is not a restoration.
- */
-function useRestoredLayout(
-  groupRef: React.RefObject<PanelGroupHandle | null>,
-  layout: ShellPreferences["layout"],
-  leftPanel: ShellPreferences["leftPanel"],
-  loadCount: number
-): void {
-  const applied = React.useRef(-1);
-  /**
-   * The widths the panels declare, captured before anything is restored over
-   * them.
-   *
-   * Needed because there is no "reset" on the group. A load whose store has NO
-   * saved layout has to put the declared widths back, and by the time that
-   * happens the live layout is the PREVIOUS store's — so the defaults have to
-   * have been remembered from before the first restoration.
-   */
-  const declared = React.useRef<Record<string, number> | null>(null);
-
-  React.useEffect(() => {
-    const group = groupRef.current;
-    if (group === null || applied.current === loadCount) return;
-
-    const live = group.getLayout();
-    const mountedIds = Object.keys(live);
-    // Captured on the first run of this effect, which is before any restoration
-    // has been applied, so these really are the declared widths.
-    declared.current ??= live;
-
-    // On the FIRST load there is nothing to reset from — the panels already
-    // carry their declared widths — so a store with no saved layout is simply
-    // a no-op. The defaults are replayed only for a LATER load, which is a
-    // store swap, where what is on screen belongs to the previous store.
-    const isFirstLoad = applied.current === -1;
-    const target = layout ?? (isFirstLoad ? null : declared.current);
-    if (target === null || Object.keys(target).length === 0) {
-      applied.current = loadCount;
-      return;
-    }
-    // Not an error, and not permanent: the panel may simply not have mounted
-    // yet. `leftPanel` is a dependency so this runs again once the topology
-    // settles. Also guards the defaults snapshot, which belongs to whichever
-    // topology was mounted when it was taken.
-    if (
-      mountedIds.length !== Object.keys(target).length ||
-      !mountedIds.every(id => target[id] !== undefined)
-    ) {
-      return;
-    }
-
-    applied.current = loadCount;
-    // Rebuilt in the MOUNTED order rather than passed through as-is. The
-    // library validates `Object.values(layout)` positionally against its panel
-    // constraints, while a `Record` arriving through the public store port
-    // carries whatever key order the host's JSON happened to have — so an
-    // alphabetised `{canvas, inspector, panel}` would be constrained as though
-    // it were `{panel, canvas, inspector}` and the saved widths clamped to the
-    // wrong bounds. Object key order is insertion order, so rebuilding fixes it.
-    const ordered: Record<string, number> = {};
-    for (const id of mountedIds) {
-      const value = target[id];
-      if (value !== undefined) ordered[id] = value;
-    }
-    group.setLayout(ordered);
-    // `leftPanel` is not read in the body. It is a dependency because it is what
-    // changes the panel set, and the comparison above depends on that having
-    // settled.
-  }, [groupRef, layout, leftPanel, loadCount]);
+  }
+  if (a.layouts === b.layouts) return true;
+  const topologies = Object.keys(a.layouts);
+  if (topologies.length !== Object.keys(b.layouts).length) return false;
+  return topologies.every(topology => {
+    const left = a.layouts[topology];
+    const right = b.layouts[topology];
+    if (left === undefined || right === undefined) return false;
+    const ids = Object.keys(left);
+    return (
+      ids.length === Object.keys(right).length &&
+      ids.every(id => left[id] === right[id])
+    );
+  });
 }
 
 /**
@@ -577,7 +480,8 @@ function ShellRegions({
    * How many times preferences have been loaded from a store.
    *
    * Restoring a layout happens once per load, and this is what "once" is
-   * counted against — see `useRestoredLayout`.
+   * counted against: the group is remounted per load so the library
+   * re-reads the restored layout at panel registration.
    */
   loadCount: number;
 }) {
@@ -589,17 +493,19 @@ function ShellRegions({
   });
   useRegionCycling(regionRefs, active);
   const onKeyDownCapture = useSeparatorRegionEscape(regionRefs, active);
-  const groupRef = React.useRef<PanelGroupHandle | null>(null);
-  useRestoredLayout(
-    groupRef,
-    preferences.layout,
-    preferences.leftPanel,
-    loadCount
-  );
   const chromeRef = React.useRef<HTMLDivElement | null>(null);
   useDesignSystemStylesheet(chromeRef);
 
   const openPanel = preferences.leftPanel;
+  // The panel set about to be rendered, named the same way a persisted layout
+  // is keyed. Derived from `openPanel` because that is what decides the set;
+  // the persisted key is derived from the layout's own ids, and the two meet at
+  // `topologyKey` rather than being two spellings of one arrangement.
+  const mountedTopology = topologyKey(
+    openPanel === null
+      ? ["canvas", "inspector"]
+      : ["panel", "canvas", "inspector"]
+  );
 
   const selectPanel = (panel: LeftPanel) =>
     update(current => ({
@@ -671,9 +577,20 @@ function ShellRegions({
         </nav>
 
         <ResizablePanelGroup
+          // Remounted when a store is LOADED, which is the only way the library
+          // applies a layout: it reads `defaultLayout` when the panels REGISTER
+          // and a later prop change merely assigns it. Restoration therefore
+          // happens where the library already does it, rather than being
+          // reapplied afterwards through the imperative API — which is what made
+          // the units, the key order and the mount timing this component's
+          // problems to solve.
+          key={loadCount}
           orientation="horizontal"
-          groupRef={groupRef}
-          onLayoutChanged={(_layout, meta) => {
+          // Selected by the panel set actually mounted, so an arrangement with
+          // no stored layout falls through to the panels' declared widths
+          // instead of inheriting another arrangement's.
+          defaultLayout={preferences.layouts[mountedTopology]}
+          onLayoutChanged={(layout, meta) => {
             // The group reports every layout it settles on, not only the ones a
             // person asked for. Mounting, recomputing constraints and reacting
             // to a changed default all arrive here too, and the mount pass
@@ -687,16 +604,17 @@ function ShellRegions({
             // separator. Dragging a separator is the one event that states an
             // intent about widths, and it is the only one worth remembering.
             if (!meta.isUserInteraction) return;
-            const group = groupRef.current;
-            if (group === null) return;
-            // Read back through `getLayout` rather than persisting the argument.
-            // The callback reports FLEX-GROW weights while `setLayout` takes
-            // PERCENTAGES, and restoring now goes through `setLayout`; storing
-            // one unit and replaying it as the other is a bug that only shows up
-            // on a layout whose weights happen not to sum to 100.
+            // Stored under the topology it was measured for, and keyed from the
+            // layout's OWN ids rather than from a separate description of the
+            // panel set. `defaultLayout` consumes the same flex-grow weights
+            // this reports, so the value makes a round trip in one unit and
+            // never meets the percentage side of the API.
             update(current => ({
               ...current,
-              layout: { ...group.getLayout() },
+              layouts: {
+                ...current.layouts,
+                [topologyKey(Object.keys(layout))]: { ...layout },
+              },
             }));
           }}
           className="min-w-0 flex-1"

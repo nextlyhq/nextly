@@ -117,14 +117,43 @@ export function fitsFullShell(viewportWidth: number): boolean {
 export interface ShellPreferences {
   leftPanel: LeftPanel | null;
   leftPinned: boolean;
-  /** Panel id to percentage, or null when the author has never resized. */
-  layout: Record<string, number> | null;
+  /**
+   * Layouts, one per PANEL TOPOLOGY.
+   *
+   * Keyed rather than singular because a layout only means anything alongside
+   * the panel set it was measured for. The left panel is conditionally
+   * rendered, so the group has two shapes — with it and without — and their
+   * layouts have different keys and different arithmetic. Stored as one record
+   * they overwrote each other: resizing with a panel open and then closing it
+   * left a three-key layout that no two-panel group could accept, so the widths
+   * were dropped on the next load.
+   *
+   * This is the shape the panel library's own persistence helper uses, for the
+   * same reason — its `panelIds` prop exists so a group with conditionally
+   * rendered panels can "save and restore multiple layouts".
+   *
+   * Outer key: {@link topologyKey} over the mounted panel ids.
+   * Inner: panel id to percentage.
+   */
+  layouts: Record<string, Record<string, number>>;
+}
+
+/**
+ * The identity of a panel arrangement, from the panels themselves.
+ *
+ * Sorted and joined rather than taken from `leftPanel`, so it is derived from
+ * what is actually MOUNTED rather than from a second description of it that can
+ * disagree. Sorting makes it independent of the order the ids arrive in, which
+ * varies with how a host's JSON was serialised.
+ */
+export function topologyKey(panelIds: readonly string[]): string {
+  return [...panelIds].sort().join(",");
 }
 
 export const DEFAULT_PREFERENCES: ShellPreferences = {
   leftPanel: null,
   leftPinned: true,
-  layout: null,
+  layouts: {},
 };
 
 /**
@@ -151,6 +180,24 @@ export interface PreferenceStore {
  * distributes a layout across ALL panels, so a map missing one or carrying a
  * `NaN` resolves to a layout nobody chose. The whole map is the unit.
  */
+/**
+ * The stored layouts, dropping any entry that is not usable.
+ *
+ * Per-topology rather than all-or-nothing: a layout written under a panel set
+ * that no longer exists should cost the author only that arrangement's widths,
+ * not the ones they set for every other arrangement.
+ */
+function readLayouts(value: unknown): Record<string, Record<string, number>> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return {};
+  }
+  const layouts: Record<string, Record<string, number>> = {};
+  for (const [key, layout] of Object.entries(value)) {
+    if (isLayout(layout)) layouts[key] = layout;
+  }
+  return layouts;
+}
+
 function isLayout(value: unknown): value is Record<string, number> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return false;
@@ -193,7 +240,7 @@ export function readPreferences(store: PreferenceStore): ShellPreferences {
       typeof record.leftPinned === "boolean"
         ? record.leftPinned
         : DEFAULT_PREFERENCES.leftPinned,
-    layout: isLayout(record.layout) ? record.layout : null,
+    layouts: readLayouts(record.layouts),
   };
 }
 

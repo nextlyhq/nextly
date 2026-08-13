@@ -41,13 +41,18 @@ const children = PRODUCERS.map(({ label, args }) => {
     shell: true,
   });
   child.on("exit", code => {
-    // A watcher exiting means this dev session is already broken; the other two
-    // would otherwise keep running and look healthy.
-    if (code !== 0 && code !== null) {
-      console.error(`[builder] ${label} watcher exited with ${code}`);
-    }
+    // ANY exit is a failure here, including a clean one. These producers are
+    // meant to run until the developer stops them, so a watcher that returns 0
+    // — losing its input stream, say — has still stopped updating artifacts.
+    // Forwarding that 0 told the surrounding pnpm/turbo pipeline the builder
+    // task had SUCCEEDED while every artifact silently went stale, which is the
+    // half-working state this runner exists to make visible.
+    console.error(
+      `[builder] the ${label} watcher exited (code ${code ?? "null"}); ` +
+        `stopping the others, because artifacts are no longer being rebuilt.`
+    );
     stopAll();
-    process.exit(code ?? 1);
+    process.exit(code === 0 || code === null ? 1 : code);
   });
   return child;
 });

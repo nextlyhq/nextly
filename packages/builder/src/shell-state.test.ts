@@ -141,7 +141,9 @@ describe("preferences round-trip", () => {
   const stored: ShellPreferences = {
     leftPanel: "tokens",
     leftPinned: false,
-    layout: { left: 22, canvas: 54, inspector: 24 },
+    layouts: {
+      "canvas,inspector,left": { left: 22, canvas: 54, inspector: 24 },
+    },
   };
 
   it("restores what was written", () => {
@@ -179,13 +181,18 @@ describe("preferences round-trip", () => {
       JSON.stringify({
         leftPanel: "layers",
         leftPinned: "yes",
-        layout: { left: Number.NaN, canvas: 60 },
+        layouts: {
+          "canvas,inspector": { canvas: 70, inspector: 30 },
+          "canvas,inspector,panel": { panel: Number.NaN, canvas: 60 },
+        },
       })
     );
+    // The good arrangement survives, the malformed one does not, and neither
+    // takes the author's panel choice with it.
     expect(readPreferences(store)).toEqual({
       leftPanel: "layers",
       leftPinned: DEFAULT_PREFERENCES.leftPinned,
-      layout: null,
+      layouts: { "canvas,inspector": { canvas: 70, inspector: 30 } },
     });
   });
 
@@ -201,8 +208,12 @@ describe("preferences round-trip", () => {
       [],
     ];
     for (const layout of cases) {
-      const store = memoryStore(JSON.stringify({ layout }));
-      expect(readPreferences(store).layout).toBeNull();
+      // Nested under a topology now: a malformed layout costs that arrangement
+      // its widths and leaves every other arrangement's intact.
+      const store = memoryStore(
+        JSON.stringify({ layouts: { "canvas,inspector": layout } })
+      );
+      expect(readPreferences(store).layouts).toEqual({});
     }
   });
 });
