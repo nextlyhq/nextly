@@ -101,6 +101,11 @@ function makeService(adapter: ReturnType<typeof makeAdapter>) {
     // Read INSIDE the exclusion, so an update plans from the record as it is once the lock is held
     // rather than as the caller found it. Answers the same shape the caller passed in, which is the
     // uncontended case; the contended one is covered where the lock itself is modelled.
+    // Read INSIDE the exclusion by the create path, which re-asserts that no other Single has
+    // claimed this table while the request waited. Empty is the uncontended answer.
+    getAllSingles: vi.fn(
+      async (): Promise<{ slug: string; tableName: string }[]> => []
+    ),
     getSingleBySlug: vi.fn(async (slug: string) => ({
       slug,
       tableName: "single_page",
@@ -292,6 +297,82 @@ describe("a Schema Builder change and the storage migration exclude each other",
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
 
     expect(registry.updateSingle).not.toHaveBeenCalled();
+  });
+
+  it("takes the PRIOR flags from the refreshed record, keeping only what the request set", async () => {
+    // 🔴 Two overlapping Builder saves. The first enables Draft/Published; the second was composed
+    // before that and carries `wasStatus: false` plus a `hasStatus: false` the CALLER filled in
+    // because the request said nothing about status. Planning from those would create the companion
+    // without `_status` while the row ends up saying it has one.
+    //
+    // The request DID set localization, so that value survives the refresh; it said nothing about
+    // status, so the refreshed record decides. Asserting through the plan's own inputs would be
+    // circular, so this observes what the service passes on: `updateData` must not carry a status
+    // change nobody asked for, and the localization the request did ask for must still be applied.
+    const adapter = makeAdapter({ mainTableExists: true });
+    const { service, registry } = makeService(adapter);
+    registry.getSingleBySlug.mockResolvedValue({
+      slug: "page",
+      tableName: "single_page",
+      fields: [],
+      locked: false,
+      schemaHash: "unchanged",
+      status: true,
+      localized: false,
+    });
+
+    await service.updateSingleSchema({
+      slug: "page",
+      existing: {
+        slug: "page",
+        tableName: "single_page",
+        fields: [],
+        schemaHash: "unchanged",
+        status: false,
+        localized: false,
+      },
+      updateData: { localized: true },
+      isLocalized: true,
+      wasLocalized: false,
+      localizedRequested: true,
+      hasStatus: false,
+      wasStatus: false,
+      statusRequested: false,
+    } as unknown as Parameters<typeof service.updateSingleSchema>[0]);
+
+    const [, written] = registry.updateSingle.mock.calls[0] as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(written.localized).toBe(true);
+    // The stale `hasStatus: false` must not have become a DROP of a column the live record has.
+    const statements = adapter.executeQuery.mock.calls.map(([sql]) => sql);
+    expect(statements.join("\n")).not.toMatch(/DROP COLUMN[^\n]*_status/i);
+  });
+
+  it("refuses to CREATE onto a table claimed while it waited", async () => {
+    // 🔴 The registry insert at the end already rejects the duplicate row, which is why this looks
+    // unnecessary and is not. Before that insert the create has already run `CREATE TABLE IF NOT
+    // EXISTS` against the table the config now owns and REBOUND THE RUNTIME SCHEMA to this
+    // request's fields — and the runtime stays rebound until the process restarts. The insert makes
+    // the row safe; it does not make the process safe.
+    const adapter = makeAdapter();
+    const { service, registry } = makeService(adapter);
+    registry.getAllSingles.mockResolvedValue([
+      { slug: "page_from_code", tableName: "single_page" },
+    ]);
+
+    await expect(
+      service.createSingle({
+        slug: "page",
+        label: "Page",
+        tableName: "single_page",
+        fields: [{ name: "heading", type: "text" }],
+      } as unknown as Parameters<typeof service.createSingle>[0])
+    ).rejects.toMatchObject({ code: "DUPLICATE" });
+
+    expect(trace).toEqual(["exclusion:held"]);
+    expect(registry.registerSingle).not.toHaveBeenCalled();
   });
 
   it("refuses to DELETE a Single that became code-first while it waited", async () => {

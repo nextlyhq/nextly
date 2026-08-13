@@ -104,6 +104,18 @@ function makeService(
   onRegister?: () => void
 ) {
   const registry = {
+    // Both are read inside the exclusion now: the create re-asserts table ownership, and the update
+    // and delete re-read the record they were handed.
+    getAllSingles: vi.fn(
+      async (): Promise<{ slug: string; tableName: string }[]> => []
+    ),
+    getSingleBySlug: vi.fn(async (slug: string) => ({
+      slug,
+      tableName: "single_page",
+      fields: [] as unknown[],
+      locked: false,
+      schemaHash: "unchanged",
+    })),
     registerSingle: vi.fn(async (row: unknown) => {
       onRegister?.();
       return row;

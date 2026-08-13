@@ -51,6 +51,7 @@ import type {
   DynamicSingleRecord,
   SingleMigrationStatus,
 } from "../../../schemas/dynamic-singles/types";
+import { assertGlobalResourceSlugAvailable } from "../../../services/lib/resource-slug-guard";
 import type { Logger } from "../../../shared/types";
 import { applyMigrationStatements } from "../../schema/services/apply-migration-statements";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
@@ -145,6 +146,15 @@ export interface UpdateSingleSchemaInput {
   fields?: FieldDefinition[];
   isLocalized: boolean;
   wasLocalized: boolean;
+  /**
+   * Whether the request SET the Internationalization toggle, as opposed to leaving it alone.
+   *
+   * The mirror of {@link UpdateSingleSchemaInput.statusRequested}, and required for the same
+   * reason: `isLocalized` falls back to the value the CALLER read, so once this service re-reads
+   * the record it cannot tell "the user asked for localized: false" from "the user said nothing and
+   * the caller filled in what it saw". Only the first should survive a refresh.
+   */
+  localizedRequested: boolean;
   hasStatus: boolean;
   wasStatus: boolean;
   /**
@@ -287,6 +297,16 @@ export class SingleMetadataService {
   private async createSingleExcluded(
     input: CreateSingleInput
   ): Promise<CreateSingleResult> {
+    // 0. RE-ASSERT ownership, now that the exclusion is held.
+    //
+    // 🔴 The caller checked this outside the lock, and an HMR reload can register a code-first
+    // Single onto the same table or slug in between. Without repeating it, the apply below runs
+    // `CREATE TABLE IF NOT EXISTS` against a table the config now owns, reconciles its companion,
+    // and rebinds the RUNTIME schema to this request's fields — and the runtime stays rebound until
+    // the process restarts, even though the registry insert afterwards correctly rejects the
+    // duplicate. The insert is what makes the row safe; it is not what makes the process safe.
+    await this.assertCreateStillPossible(input);
+
     // 1. PLAN, before anything is persisted or executed. The generator is a validator as well as a
     // renderer, so a request it refuses leaves nothing behind at all — no row, no table — and the
     // corrected retry is a fresh create rather than a collision with its own wreckage.
@@ -455,9 +475,25 @@ export class SingleMetadataService {
     // what it is transitioning from, which a migration does not touch — it renames vocabulary, not
     // toggles — so re-deriving them here would substitute this service's reading of the request for
     // the caller's.
+    const current = await this.refreshForUpdate(args);
+
+    // The `was*` flags describe the state being transitioned FROM, so they follow the refreshed
+    // record. The `is*`/`has*` flags describe what the request asked for — but only where it
+    // actually asked: the caller resolves an absent toggle to the value it read, and that value can
+    // be stale. Where the request said nothing, the refreshed record decides.
+    //
+    // Without this, two overlapping Builder saves plan from mutually inconsistent state: one enables
+    // Draft/Published, the next enables localization carrying `hasStatus: false` from before, and
+    // the companion is created without `_status` while the row ends up saying it has one.
+    const wasLocalized = current.localized === true;
+    const wasStatus = current.status === true;
     const input: UpdateSingleSchemaInput = {
       ...args,
-      existing: await this.refreshForUpdate(args),
+      existing: current,
+      wasLocalized,
+      wasStatus,
+      isLocalized: args.localizedRequested ? args.isLocalized : wasLocalized,
+      hasStatus: args.statusRequested ? args.hasStatus : wasStatus,
     };
 
     // 1. PLAN. May reject; nothing is persisted and no statement has run.
@@ -981,6 +1017,38 @@ export class SingleMetadataService {
    * REJECT the request and must do so before anything is persisted, while the apply must never
    * throw so a failure is still recorded against a row.
    */
+  /**
+   * Re-run the create's ownership preconditions, inside the exclusion.
+   *
+   * Asks the same two questions the caller asked and re-uses the same shared guard for the second,
+   * rather than restating either: a table another Single already owns, and a slug some other
+   * resource kind has taken.
+   */
+  private async assertCreateStillPossible(
+    input: CreateSingleInput
+  ): Promise<void> {
+    const owner = (await this.registry.getAllSingles()).find(
+      single =>
+        single.tableName === input.tableName && single.slug !== input.slug
+    );
+    if (owner) {
+      throw NextlyError.duplicate({
+        logContext: {
+          reason:
+            "another single claimed this table while awaiting the exclusion",
+          slug: input.slug,
+          tableName: input.tableName,
+          ownedBy: owner.slug,
+        },
+      });
+    }
+
+    const adapter = this.adapter;
+    if (adapter) {
+      await assertGlobalResourceSlugAvailable(adapter, input.slug);
+    }
+  }
+
   private async planCreate(input: CreateSingleInput): Promise<CreateDdlPlan> {
     const isLocalized = input.localized === true;
     const hasStatus = input.status === true;
