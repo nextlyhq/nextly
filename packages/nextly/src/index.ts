@@ -391,7 +391,8 @@ export {
 // ones with no way to reach an internal module.
 export {
   blockDocumentJsonSchema,
-  blockDocumentSchema,
+  parseBlockDocument,
+  type BlockDocumentParseResult,
 } from "./plugins/codegen/block-document";
 
 // Plugin System - Types and helpers for creating plugins

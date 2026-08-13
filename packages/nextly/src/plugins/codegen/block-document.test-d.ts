@@ -32,7 +32,7 @@ import type {
 } from "@nextlyhq/blocks-engine";
 import { expectTypeOf } from "vitest";
 
-import type { blockDocumentSchema } from "./block-document";
+import type { BlockDocumentShape } from "./block-document";
 
 // ---------------------------------------------------------------------------
 // The frozen envelope
@@ -100,7 +100,7 @@ expectTypeOf<StyleState>().toEqualTypeOf<
  * saying any kind is acceptable. That is the failure these two lines exist to
  * catch, and it is one this file caught once already.
  */
-type SchemaDocument = ReturnType<(typeof blockDocumentSchema)["parse"]>;
+type SchemaDocument = BlockDocumentShape;
 
 expectTypeOf<SchemaDocument["kind"]>().toEqualTypeOf<DocumentKind>();
 expectTypeOf<SchemaDocument["formatVersion"]>().toEqualTypeOf<1>();

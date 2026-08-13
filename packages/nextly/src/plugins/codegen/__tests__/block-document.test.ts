@@ -9,10 +9,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
-import {
-  blockDocumentJsonSchema,
-  blockDocumentSchema,
-} from "../block-document";
+import { blockDocumentJsonSchema, parseBlockDocument } from "../block-document";
 
 /** The smallest document the format allows: a page with nothing on it. */
 function emptyPage() {
@@ -49,7 +46,7 @@ describe("block document schema", () => {
   it("accepts a document nested through a slot", () => {
     // The recursion is the part a hand-written schema gets wrong, so the
     // fixture nests rather than testing a flat page and inferring the rest.
-    expect(blockDocumentSchema.safeParse(nestedPage()).success).toBe(true);
+    expect(parseBlockDocument(nestedPage()).success).toBe(true);
   });
 
   it("accepts every kind the engine declares", () => {
@@ -57,7 +54,7 @@ describe("block document schema", () => {
     // unchanged after one was added, which is the case it exists to catch.
     for (const kind of DOCUMENT_KINDS) {
       expect(
-        blockDocumentSchema.safeParse({ ...emptyPage(), kind }).success,
+        parseBlockDocument({ ...emptyPage(), kind }).success,
         `kind "${kind}" should be accepted`
       ).toBe(true);
     }
@@ -78,24 +75,23 @@ describe("block document schema", () => {
         ],
       };
       expect(
-        blockDocumentSchema.safeParse(doc).success,
+        parseBlockDocument(doc).success,
         `state "${state}" should be accepted`
       ).toBe(true);
     }
   });
 
   it("rejects a kind outside the closed vocabulary", () => {
-    expect(
-      blockDocumentSchema.safeParse({ ...emptyPage(), kind: "layout" }).success
-    ).toBe(false);
+    expect(parseBlockDocument({ ...emptyPage(), kind: "layout" }).success).toBe(
+      false
+    );
   });
 
   it("rejects a format version it was not written for", () => {
     // The field exists so a reader can tell whether it understands the file.
     // Accepting an unknown version would answer that question wrongly.
     expect(
-      blockDocumentSchema.safeParse({ ...emptyPage(), formatVersion: 2 })
-        .success
+      parseBlockDocument({ ...emptyPage(), formatVersion: 2 }).success
     ).toBe(false);
   });
 
@@ -104,7 +100,7 @@ describe("block document schema", () => {
       ...emptyPage(),
       nodes: [{ id: "a", type: "core/text", props: {} }],
     };
-    expect(blockDocumentSchema.safeParse(doc).success).toBe(false);
+    expect(parseBlockDocument(doc).success).toBe(false);
   });
 
   it("requires sourceKey when a binding reads a single", () => {
@@ -134,10 +130,10 @@ describe("block document schema", () => {
         },
       ],
     };
-    expect(blockDocumentSchema.safeParse(withKey).success).toBe(true);
+    expect(parseBlockDocument(withKey).success).toBe(true);
     // A single addressed by nothing resolves to nothing at read time; failing
     // here names the document, which is the only place the slug can be fixed.
-    expect(blockDocumentSchema.safeParse(withoutKey).success).toBe(false);
+    expect(parseBlockDocument(withoutKey).success).toBe(false);
   });
 
   it("refuses sourceKey on a source that has no single to name", () => {
@@ -160,8 +156,105 @@ describe("block document schema", () => {
         },
       ],
     };
-    const result = blockDocumentSchema.safeParse(doc);
+    const result = parseBlockDocument(doc);
     expect(result.success).toBe(false);
+  });
+
+  it("keeps a token reference intact instead of tidying it", () => {
+    // A token-shaped value carrying an extra key is invalid, and the engine
+    // says so. Modelling the token shape here made this branch match first and
+    // return a clean reference, repairing the document on its way past and
+    // taking the engine's diagnostic with it.
+    const doc = {
+      ...emptyPage(),
+      nodes: [
+        {
+          id: "a",
+          type: "core/text",
+          version: 1,
+          props: {},
+          styles: {
+            base: { base: { color: { $token: "brand.primary", extra: true } } },
+          },
+        },
+      ],
+    };
+    const result = parseBlockDocument(doc);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    const styles = result.data.nodes[0]!.styles as Record<
+      string,
+      Record<string, Record<string, unknown>>
+    >;
+    expect(styles.base!.base!.color).toEqual({
+      $token: "brand.primary",
+      extra: true,
+    });
+  });
+
+  it("preserves a field it does not know about", () => {
+    // The format is additive-open: a new optional field needs no migration, so
+    // an older release meeting one must hand it back rather than drop it. The
+    // default object behaviour strips silently, which would lose
+    // forward-compatible data in any validate-then-save flow.
+    const doc = {
+      ...emptyPage(),
+      nodes: [
+        {
+          id: "a",
+          type: "core/text",
+          version: 1,
+          props: {},
+          fieldFromALaterRelease: "keep me",
+        },
+      ],
+    };
+    const result = parseBlockDocument(doc);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(
+      (result.data.nodes[0] as unknown as Record<string, unknown>)
+        .fieldFromALaterRelease
+    ).toBe("keep me");
+  });
+
+  it("accepts a node version above the definition registration cap", () => {
+    // That cap bounds what a block DEFINITION may declare at registration. A
+    // stored node written by a newer definition is a case the engine handles
+    // deliberately, so refusing it here would be a false rejection of a
+    // document the engine accepts.
+    const doc = {
+      ...emptyPage(),
+      nodes: [{ id: "a", type: "core/text", version: 9999, props: {} }],
+    };
+    expect(parseBlockDocument(doc).success).toBe(true);
+  });
+
+  it("reports a document nested past the limit instead of crashing", () => {
+    // The schema is self-referential, so a long enough slot chain walks the
+    // call stack and raises RangeError before any validation runs. This entry
+    // point exists for documents produced elsewhere, so that input is hostile
+    // by assumption and must come back as invalid, not as a dead process.
+    let node: Record<string, unknown> = {
+      id: "leaf",
+      type: "core/text",
+      version: 1,
+      props: {},
+    };
+    for (let i = 0; i < 5000; i += 1) {
+      node = {
+        id: `n${i}`,
+        type: "core/section",
+        version: 1,
+        props: {},
+        slots: { default: [node] },
+      };
+    }
+
+    const result = parseBlockDocument({ ...emptyPage(), nodes: [node] });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.issues.join(" ")).toContain("nests deeper");
   });
 
   it("leaves unknown style properties alone", () => {
@@ -179,7 +272,7 @@ describe("block document schema", () => {
         },
       ],
     };
-    expect(blockDocumentSchema.safeParse(doc).success).toBe(true);
+    expect(parseBlockDocument(doc).success).toBe(true);
   });
 });
 

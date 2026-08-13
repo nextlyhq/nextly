@@ -35,20 +35,7 @@
               "propertyNames": {
                 "type": "string"
               },
-              "additionalProperties": {
-                "anyOf": [
-                  {
-                    "type": "object",
-                    "properties": {
-                      "$token": {
-                        "type": "string"
-                      }
-                    },
-                    "required": ["$token"]
-                  },
-                  {}
-                ]
-              }
+              "additionalProperties": {}
             }
           }
         },
@@ -70,6 +57,7 @@
     }
   },
   "required": ["formatVersion", "kind", "nodes"],
+  "additionalProperties": {},
   "$defs": {
     "__schema0": {
       "type": "object",
@@ -83,7 +71,7 @@
         "version": {
           "type": "integer",
           "exclusiveMinimum": 0,
-          "maximum": 1001
+          "maximum": 9007199254740991
         },
         "props": {
           "type": "object",
@@ -348,20 +336,7 @@
               "propertyNames": {
                 "type": "string"
               },
-              "additionalProperties": {
-                "anyOf": [
-                  {
-                    "type": "object",
-                    "properties": {
-                      "$token": {
-                        "type": "string"
-                      }
-                    },
-                    "required": ["$token"]
-                  },
-                  {}
-                ]
-              }
+              "additionalProperties": {}
             }
           }
         },
@@ -389,7 +364,8 @@
                     },
                     "value": {}
                   },
-                  "required": ["field", "op"]
+                  "required": ["field", "op"],
+                  "additionalProperties": {}
                 }
               }
             },
@@ -402,7 +378,8 @@
                 "type": "boolean"
               }
             }
-          }
+          },
+          "additionalProperties": {}
         },
         "locked": {
           "type": "boolean"
@@ -429,7 +406,8 @@
           "type": "boolean"
         }
       },
-      "required": ["id", "type", "version", "props"]
+      "required": ["id", "type", "version", "props"],
+      "additionalProperties": {}
     }
   }
 }

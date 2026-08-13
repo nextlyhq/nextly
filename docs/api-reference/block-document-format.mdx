@@ -29,17 +29,40 @@ legacy page-builder canvas has already saved.
 
 ## Checking a document
 
-The format is published as JSON Schema, so a producer can check its own output
-without TypeScript:
+```ts
+import { parseBlockDocument } from "nextly";
+
+const result = parseBlockDocument(value);
+if (!result.success) {
+  console.error(result.issues);
+}
+```
+
+`parseBlockDocument` is the entry point to use on a document you did not write.
+It bounds nesting depth **before** parsing, so a hostile or merely broken input
+comes back as invalid rather than exhausting the call stack — the schema is
+self-referential, and a long enough chain of nested slots would otherwise take
+down the process doing the checking.
+
+The underlying schema is deliberately not exported, because that depth bound is
+a precondition rather than an option.
+
+For a consumer with neither TypeScript nor zod, the format is also published as
+plain JSON Schema:
 
 ```ts
 import { blockDocumentJsonSchema } from "nextly";
-
-const schema = blockDocumentJsonSchema();
 ```
 
-The schema is derived from the same definition this package validates with, so
-what it publishes cannot describe a different format from what Nextly accepts.
+It is derived from the same definition this package checks against, so what is
+published cannot describe a different format from what Nextly accepts.
+
+### What it does not repair
+
+Anything it accepts, it returns **unchanged**. A checker that quietly tidied its
+input would hand you a document the engine still rejects, with the diagnostic
+already discarded — so unknown fields survive, and a malformed token reference
+stays malformed for the engine to report.
 
 **It answers a narrower question than the engine does.** The schema asks *is
 this the block document format at all*; `validate(doc, ctx)` asks *is this a
