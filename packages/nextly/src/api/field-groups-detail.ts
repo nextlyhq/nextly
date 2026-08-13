@@ -17,12 +17,11 @@
  * @module api/field-groups-detail
  */
 
-import type { FieldConfig } from "@nextly/collections";
-
 import { getService } from "../di";
-import { calculateSchemaHash } from "../domains/schema/services/schema-hash";
+import type { FieldGroupMetadataService } from "../domains/field-groups/services/field-group-metadata-service";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
+import type { FieldDefinition } from "../schemas/dynamic-collections";
 import type { FieldGroupRegistryService } from "../services/field-groups/field-group-registry-service";
 import { requireBuilderEnabled } from "../shared/builder-access";
 
@@ -37,6 +36,59 @@ import { withErrorHandler } from "./with-error-handler";
  */
 interface RouteContext {
   params: Promise<{ slug: string }>;
+}
+
+/**
+ * The service that owns a field group's physical schema and its registry row together.
+ *
+ * Mirrors `api/field-groups.ts`, deliberately: a mounted route reaching the registry directly is
+ * how this transport came to write metadata without the DDL it describes.
+ */
+async function getFieldGroupMetadataService(): Promise<FieldGroupMetadataService> {
+  await getCachedNextly();
+  return getService("fieldGroupMetadataService");
+}
+
+/**
+ * Read one property of a parsed body at the type the service expects, or refuse.
+ *
+ * The body arrives as `Record<string, unknown>` because it is whatever the client sent. Passing a
+ * value of the wrong type straight through — which this route did — stores it: a numeric `label`
+ * reached the registry and became the field group's display name. Refusing names the offending
+ * property, which is also what makes the failure fixable from the client side.
+ *
+ * `undefined` stays `undefined` rather than becoming an error, because absent means UNTOUCHED for
+ * every property of a PATCH.
+ */
+function expect<T extends "string" | "boolean" | "object">(
+  body: Record<string, unknown>,
+  key: string,
+  kind: T
+):
+  | (T extends "string"
+      ? string
+      : T extends "boolean"
+        ? boolean
+        : Record<string, unknown>)
+  | undefined {
+  const value = body[key];
+  if (value === undefined) return undefined;
+  const matches =
+    kind === "object"
+      ? typeof value === "object" && value !== null && !Array.isArray(value)
+      : typeof value === kind;
+  if (!matches) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: key,
+          code: "invalid_type",
+          message: `Expected ${key} to be ${kind === "object" ? "an object" : `a ${kind}`}.`,
+        },
+      ],
+    });
+  }
+  return value as never;
 }
 
 async function getComponentRegistry(): Promise<FieldGroupRegistryService> {
@@ -84,7 +136,6 @@ export const PATCH = withErrorHandler(
     ]);
 
     const { slug } = await context.params;
-    const registry = await getComponentRegistry();
 
     // Body parse failure is a client error; surface as a single-issue
     // validation rather than letting the SyntaxError become a 500.
@@ -103,37 +154,30 @@ export const PATCH = withErrorHandler(
       });
     }
 
-    const updateData: Record<string, unknown> = {};
-
-    if (body.label !== undefined) {
-      updateData.label = body.label;
-    }
-
-    if (body.description !== undefined) {
-      updateData.description = body.description;
-    }
-
     if (body.fields !== undefined) {
       // Same rules as the ui-schema.json mirror (see api/fields-payload).
       assertValidFieldsPayload(body.fields);
-      updateData.fields = body.fields;
-      // The registry re-validates the field config; cast through `unknown`
-      // to avoid `any` while keeping the existing trust boundary.
-      updateData.schemaHash = calculateSchemaHash(
-        body.fields as unknown as FieldConfig[]
-      );
     }
 
-    if (body.admin !== undefined) {
-      updateData.admin = body.admin;
-    }
-
-    // Update component (source: "ui" to enforce locking rules)
-    const updated = await registry.updateComponent(slug, updateData, {
+    // 🔴 Through the metadata service, not the registry. Writing the registry directly is what made
+    // this route store a new field set and a matching `schema_hash` while running no DDL — the
+    // table kept its old columns, and only the dispatcher's copy of this operation ever moved them.
+    // The service owns the physical change and the row write together, so every transport that
+    // edits a field group now performs the whole operation.
+    const metadata = await getFieldGroupMetadataService();
+    const { record } = await metadata.updateFieldGroup({
+      slug,
+      label: expect(body, "label", "string"),
+      description: expect(body, "description", "string"),
+      admin: expect(body, "admin", "object"),
+      // Already validated in shape by `assertValidFieldsPayload` above, which is the same check the
+      // ui-schema mirror applies; the cast carries that result across the untyped body boundary.
+      fields: body.fields as FieldDefinition[] | undefined,
+      localized: expect(body, "localized", "boolean"),
       source: "ui",
     });
 
-    return respondMutation("Field group updated.", updated);
+    return respondMutation("Field group updated.", record);
   }
 );
 
