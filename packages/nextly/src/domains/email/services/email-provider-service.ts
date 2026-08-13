@@ -14,6 +14,7 @@
  */
 
 import { randomUUID } from "crypto";
+import { isDeepStrictEqual } from "util";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { and, eq, desc, ne } from "drizzle-orm";
@@ -230,19 +231,26 @@ export class EmailProviderService extends BaseService {
    * setting away from working, and a variable name is not itself a secret.
    */
   /**
-   * The parsed configuration a provider returns, as something storable.
+   * A provider's configuration, parsed and checked to be storable as it is.
+   *
+   * Parsing happens HERE rather than at each caller, because every property
+   * below is about what may be persisted, and a caller that parsed on its own
+   * would be a write that skipped the checks.
    *
    * The parsed value is `unknown` by design — the erased form does not expose
-   * the type — so the one property this needs is checked rather than assumed.
-   * A provider whose parser returns something other than an object cannot have
-   * its configuration persisted at all, and failing here names which provider
-   * did it; storing the value regardless would put a string or an array in a
-   * column every reader expects to hold fields.
+   * the type — so each property is checked rather than assumed.
    */
   private storableConfiguration(
     type: string,
-    parsed: unknown
+    input: unknown
   ): Record<string, unknown> {
+    const provider = getEmailProviderRegistry().get(type);
+    const parsed = provider.parseConfiguration(input);
+
+    // A provider whose parser returns something other than an object cannot
+    // have its configuration persisted at all, and failing here names which
+    // provider did it; storing the value regardless would put a string or an
+    // array in a column every reader expects to hold fields.
     if (
       typeof parsed !== "object" ||
       parsed === null ||
@@ -254,7 +262,54 @@ export class EmailProviderService extends BaseService {
         logContext: { reason: "email-provider-parsed-not-object", type },
       });
     }
-    return parsed as Record<string, unknown>;
+
+    // What an adapter runs on is not this value. It is this value written as
+    // JSON into the column, read back, and parsed AGAIN — `createAdapterFrom`
+    // re-parses whatever it is handed, which is what keeps an adapter from
+    // being built out of a row nothing validated. So the property that has to
+    // hold is that parsing the stored form returns the stored form, and it is
+    // checked here rather than left as an assumption about how parsers behave.
+    //
+    // Two ways a parser breaks it, neither visible at the call site:
+    //
+    // It may DERIVE a value rather than reshape one. `Buffer.from(key)
+    // .toString("base64")` encodes on the way in and encodes the encoding on
+    // the way out, so the adapter authenticates with a doubly-encoded
+    // credential and the provider answers "bad key" about a key the operator
+    // entered correctly.
+    //
+    // Or it may return something JSON cannot carry — a `Date`, a `Map`, a
+    // `Set` — which reads back as a string or as an empty object, so the
+    // adapter receives a shape its own parser just rejected.
+    //
+    // Compared against the ROUND-TRIPPED form rather than the parsed one,
+    // because the round-tripped form is what a reader gets and therefore what
+    // the parser has to be a fixed point OF. That makes `undefined` a third
+    // way to fail rather than an exception to the rule: a parser returning
+    // `{ label: undefined }` has JSON drop the key and then puts it back, so
+    // the value in hand and the value in the column are different objects.
+    // Rejecting it is the same answer as for a `Date`, and for the same
+    // reason — return only what the column can hold.
+    const stored = parsed as Record<string, unknown>;
+    const roundTripped: unknown = JSON.parse(JSON.stringify(stored));
+    let reparsed: unknown;
+    try {
+      reparsed = provider.parseConfiguration(roundTripped);
+    } catch {
+      // A parser that REJECTS its own stored output fails the same property,
+      // and reaches it by throwing rather than by returning something else.
+      // Left as one outcome: both mean the row could not be read back.
+      reparsed = undefined;
+    }
+    if (!isDeepStrictEqual(reparsed, roundTripped)) {
+      throw new NextlyError({
+        code: "BUSINESS_RULE_VIOLATION",
+        publicMessage: `Email provider "${type}" cannot store this configuration, because parsing what would be saved does not return what was saved. Its \`parseConfig\` must accept its own output unchanged — derive values in \`createAdapter\` instead, and return only what JSON can carry.`,
+        logContext: { reason: "email-provider-parse-not-a-fixed-point", type },
+      });
+    }
+
+    return stored;
   }
 
   private encryptConfiguration(config: Record<string, unknown>): string {
@@ -678,9 +733,7 @@ export class EmailProviderService extends BaseService {
     // that read the row.
     const parsedConfiguration = this.storableConfiguration(
       data.type,
-      getEmailProviderRegistry()
-        .get(data.type)
-        .parseConfiguration(data.configuration)
+      data.configuration
     );
 
     const id = randomUUID();
@@ -952,9 +1005,7 @@ export class EmailProviderService extends BaseService {
           : {};
       const parsedSubmitted = this.storableConfiguration(
         data.type as string,
-        getEmailProviderRegistry()
-          .get(data.type as string)
-          .parseConfiguration(submitted)
+        submitted
       );
 
       // Persist the replacement even when the update carried no configuration.
@@ -1024,9 +1075,7 @@ export class EmailProviderService extends BaseService {
       // parser and stored under resend -- accepted here and unusable at send.
       const parsedMerged = this.storableConfiguration(
         effectiveType,
-        getEmailProviderRegistry()
-          .get(effectiveType)
-          .parseConfiguration(mergedConfig)
+        mergedConfig
       );
 
       // Compared BEFORE encryption. Encryption is randomised -- a fresh salt
