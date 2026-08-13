@@ -128,7 +128,11 @@ describe("a configuration whose parse is not a fixed point", () => {
 
     const provider = await write("reshaping", { apiKey: "  k  " });
 
-    expect(provider.id).toBeTruthy();
+    // Read BACK, not just "the insert succeeded". A truthy id is true whether
+    // the column holds the trimmed parsed value or the padded input, which is
+    // the one difference this PR exists to make.
+    const stored = await service.getProviderDecrypted(provider.id);
+    expect(stored.configuration).toEqual({ apiKey: "k" });
   });
 
   // Encoding on the way in and encoding the encoding on the way out. The
@@ -289,5 +293,47 @@ describe("a configuration whose parse is not a fixed point", () => {
       const stored = await service.getProviderDecrypted(provider.id);
       expect((stored.configuration as { call?: number }).call).toBe(1);
     }
+  });
+
+  // A non-enumerable own property is dropped by JSON and ignored by
+  // isDeepStrictEqual, so both comparisons agree over a property the column
+  // never holds and the adapter gets back on every reparse.
+  it("refuses a parser returning a non-enumerable property", async () => {
+    register("hidden", input => {
+      const out = { apiKey: String((input as { apiKey: unknown }).apiKey) };
+      Object.defineProperty(out, "token", {
+        value: "derived",
+        enumerable: false,
+      });
+      return out;
+    });
+
+    await expect(write("hidden", { apiKey: "k" })).rejects.toThrow(
+      /properties JSON cannot write/
+    );
+  });
+
+  // An INHERITED field is materialised by zod into its parsed output as an own
+  // property, so a caller that never sent the credential has one persisted.
+  it("does not persist a configuration field the caller never sent", async () => {
+    register("inheriting", input => ({
+      apiKey: String((input as { apiKey?: unknown }).apiKey ?? ""),
+      ...(typeof (input as { token?: unknown }).token === "string"
+        ? { token: (input as { token: string }).token }
+        : {}),
+    }));
+
+    const provider = await write(
+      "inheriting",
+      Object.create(
+        { token: "injected-by-prototype" },
+        {
+          apiKey: { value: "k", enumerable: true, writable: true },
+        }
+      ) as Record<string, unknown>
+    );
+
+    const stored = await service.getProviderDecrypted(provider.id);
+    expect(stored.configuration).toEqual({ apiKey: "k" });
   });
 });

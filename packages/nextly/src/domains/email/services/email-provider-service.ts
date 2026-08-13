@@ -245,7 +245,41 @@ export class EmailProviderService extends BaseService {
     input: unknown
   ): Record<string, unknown> {
     const provider = getEmailProviderRegistry().get(type);
-    const parsed = provider.parseConfiguration(input);
+
+    // Parsed from an OWN-PROPERTY tree, never from the object as it arrived.
+    // Measured on zod 4.1.12: a schema reads a value off the prototype chain
+    // and materialises it into its output as an OWN property, and it does so
+    // for a REQUIRED field as well as an optional one -- so "it parsed" stops
+    // meaning "the caller supplied it". A Direct API caller passing
+    // `Object.create({ apiKey })`, or a polluted `Object.prototype`, would
+    // otherwise have a credential nobody sent encrypted and persisted, and it
+    // stays active after the prototype is restored.
+    //
+    // `Object.hasOwn` is NOT a usable guard here, because the value is already
+    // an own property of the parser's output by the time anything could ask.
+    // The serialisation is what removes it: `JSON.stringify` reads own
+    // enumerable properties only, so the parser never sees the inherited one.
+    const parsed = provider.parseConfiguration(this.ownFieldsOf(type, input));
+
+    // Every own key must be one the column can hold. A non-enumerable or
+    // symbol-keyed own property is dropped by `JSON.stringify` AND ignored by
+    // `isDeepStrictEqual`, so both comparisons below would agree over a
+    // property the column never receives -- while every reparse recreates it
+    // and the adapter runs on a credential that was never saved.
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      Reflect.ownKeys(parsed).length !== Object.keys(parsed).length
+    ) {
+      throw new NextlyError({
+        code: "BUSINESS_RULE_VIOLATION",
+        publicMessage: `Email provider "${type}" parsed its configuration into an object carrying properties JSON cannot write, so what would be stored is not what the adapter would receive. Return plain enumerable fields from \`parseConfig\`.`,
+        logContext: {
+          reason: "email-provider-configuration-not-enumerable",
+          type,
+        },
+      });
+    }
 
     // A provider whose parser returns something other than an object cannot
     // have its configuration persisted at all, and failing here names which
@@ -399,6 +433,37 @@ export class EmailProviderService extends BaseService {
     // is stored is what was checked" true by construction rather than by
     // argument, and the two are now the same object.
     return roundTripped as Record<string, unknown>;
+  }
+
+  /**
+   * A configuration reduced to its OWN enumerable fields.
+   *
+   * `JSON.stringify` reads own enumerable properties only, so the round trip
+   * is what strips an inherited one -- and doing it BEFORE the parser runs is
+   * what stops a schema from reading the prototype and reporting success.
+   *
+   * A value that cannot be written is reported as the provider-configuration
+   * fault it is, rather than reaching the parser and failing later as
+   * something less specific.
+   */
+  private ownFieldsOf(type: string, input: unknown): unknown {
+    let serialized: string | undefined;
+    try {
+      serialized = JSON.stringify(input);
+    } catch (error) {
+      throw new NextlyError({
+        code: "BUSINESS_RULE_VIOLATION",
+        publicMessage: `Email provider "${type}" was sent a configuration that cannot be written as JSON, so it cannot be stored.`,
+        logContext: {
+          reason: "email-provider-input-not-serialisable",
+          type,
+          detail: error instanceof Error ? error.message : String(error),
+        },
+      });
+    }
+    // `undefined` for an absent configuration, which a parser may legitimately
+    // accept -- handed through unchanged rather than turned into `null`.
+    return serialized === undefined ? undefined : JSON.parse(serialized);
   }
 
   private encryptConfiguration(config: Record<string, unknown>): string {
