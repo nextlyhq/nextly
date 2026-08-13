@@ -22,8 +22,8 @@ import {
   packageOfInput,
   reachedFrom,
   specifiersIn,
-} from "../../scripts/check-server-safe-artifacts.mjs";
-import { SERVER_SAFE_ALLOWED_PACKAGES } from "../../scripts/published-entries.mjs";
+} from "../../scripts/check-server-safe-artifacts.js";
+import { SERVER_SAFE_ALLOWED_PACKAGES } from "../../scripts/published-entries.js";
 
 const read = (source: string): string[] => specifiersIn(source, "artifact.mjs");
 

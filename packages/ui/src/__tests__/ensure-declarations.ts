@@ -43,7 +43,7 @@
  * shared directory this exists to stay out of.
  */
 import { execFileSync } from "node:child_process";
-import { declarationFiles } from "../../scripts/published-entries.mjs";
+import { declarationFiles } from "../../scripts/published-entries.js";
 import { existsSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";

@@ -16,7 +16,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import {
   publishedEntries,
   sourcesBySubpath,
-} from "../scripts/published-entries.mjs";
+} from "../scripts/published-entries.js";
 
 import {
   DECLARATION_ENTRIES,
