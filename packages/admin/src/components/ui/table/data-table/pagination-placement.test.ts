@@ -155,19 +155,30 @@ const sources = walk(adminSrc).filter(
  * So every pager outside this list is checked, whether or not a table is
  * visible beside it. Each entry states what it paginates instead.
  */
-const NOT_A_TABLE_PAGER = new Map<string, string>([
+const NOT_A_TABLE_PAGER = new Map<string, { allowed: number; reason: string }>([
   [
     "packages/admin/src/components/shared/pagination/index.tsx",
-    "the Pagination component itself",
+    {
+      allowed: 0,
+      // Listed at zero rather than omitted: this file is in the scan because it
+      // mentions Pagination, and saying it renders none is what stops a future
+      // reader adding a permission it never needed.
+      reason: "the Pagination component's own definition, which renders none",
+    },
   ],
   [
     "packages/admin/src/components/features/media-library/index.tsx",
-    "the GRID view's pager; a grid has no row-versus-card view to place one " +
-      "for. The list view's pager goes into MediaListView as the table footer",
+    {
+      allowed: 1,
+      reason:
+        "the GRID view's pager; a grid has no row-versus-card view to place " +
+        "one for. The list view's pager goes into MediaListView as the table " +
+        "footer, and is NOT covered by this entry",
+    },
   ],
   [
     "packages/admin/src/pages/dashboard/users/fields/index.tsx",
-    "a card list of user fields, with no table on the page",
+    { allowed: 1, reason: "a card list of user fields, with no table" },
   ],
 ]);
 
@@ -235,9 +246,15 @@ describe("list pagination", () => {
     const detached: string[] = [];
     for (const path of sources) {
       const relativePath = relative(repo, path);
-      if (NOT_A_TABLE_PAGER.has(relativePath)) continue;
       const file = parse(path, readFileSync(path, "utf8"));
-      for (const pager of detachedPagers(file)) {
+      const pagers = detachedPagers(file);
+      // An exemption covers a COUNT, not a file. The media library holds two
+      // pagers -- a grid's, which is exempt, and a list's, which belongs in the
+      // table's footer -- so skipping the whole file would excuse the second
+      // along with the first, and moving the list pager back out would leave
+      // every assertion green. That is the regression this test exists for.
+      const exempt = NOT_A_TABLE_PAGER.get(relativePath)?.allowed ?? 0;
+      for (const pager of pagers.slice(exempt)) {
         detached.push(`${relativePath}:${lineOf(pager, file)}`);
       }
     }
@@ -260,7 +277,7 @@ describe("list pagination", () => {
     // pager to `footer` when it rendered it as a sibling -- and a per-entry
     // escape hatch in this loop is what stopped that being caught here. There
     // is no escape hatch now: every exempt path is checked the same way.
-    for (const [path, reason] of NOT_A_TABLE_PAGER) {
+    for (const [path, { allowed, reason }] of NOT_A_TABLE_PAGER) {
       const full = resolve(repo, path);
       expect(
         sources.includes(full),
@@ -271,6 +288,14 @@ describe("list pagination", () => {
         rendersTable(file),
         `${path} now renders a DataTableView, so "${reason}" no longer holds`
       ).toBe(false);
+      // The count is asserted EXACTLY, not as a ceiling. A file that drops one
+      // of its exempt pagers has an entry claiming more than exists, which is
+      // spare permission for the next one somebody adds.
+      expect(
+        detachedPagers(file).length,
+        `${path} has ${detachedPagers(file).length} detached pagers but is ` +
+          `exempted for ${allowed} (${reason})`
+      ).toBe(allowed);
     }
   });
 
@@ -297,11 +322,22 @@ describe("list pagination", () => {
         ) {
           for (const property of node.attributes.properties) {
             if (
-              ts.isJsxAttribute(property) &&
-              property.name.getText(file) === "footer"
+              !ts.isJsxAttribute(property) ||
+              property.name.getText(file) !== "footer"
             ) {
-              forwards = true;
+              continue;
             }
+            // The attribute must pass the component's OWN `footer` prop, not
+            // merely exist. `footer={undefined}` still has the attribute while
+            // dropping the caller's pager on the floor, and every caller would
+            // stay excused through FORWARDS_FOOTER.
+            const initializer = property.initializer;
+            forwards =
+              initializer !== undefined &&
+              ts.isJsxExpression(initializer) &&
+              initializer.expression !== undefined &&
+              ts.isIdentifier(initializer.expression) &&
+              initializer.expression.text === "footer";
           }
         }
         ts.forEachChild(node, visit);
