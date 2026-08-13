@@ -8,6 +8,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SanitizedNextlyConfig } from "../collections/config/define-config";
+import type { NextlyServiceConfig } from "../di/register";
 import type { PluginDefinition } from "../plugins/plugin-context";
 
 // The store is module state and nothing here reaches the service layer, so the
@@ -41,6 +42,15 @@ const stored = {
   plugins: [{ name: "@acme/raw", version: "1.0.0" }],
 } as unknown as SanitizedNextlyConfig;
 
+/**
+ * A boot result in the shape `registerServices` publishes. Only the blocks the
+ * store republishes matter here; the rest of `NextlyServiceConfig` is adapter
+ * and processor wiring this seam never reads.
+ */
+function booted(config: Partial<NextlyServiceConfig>): NextlyServiceConfig {
+  return config as NextlyServiceConfig;
+}
+
 function plugins(...names: string[]): PluginDefinition[] {
   return names.map(
     name => ({ name, version: "1.0.0" }) as unknown as PluginDefinition
@@ -64,12 +74,8 @@ describe("the handler config store", () => {
     vi.resetModules();
     // BOTH, or a value left by an earlier test satisfies the next one's
     // assertion and the suite reports coverage it does not have.
-    const g = globalThis as {
-      __nextly_bootPlugins?: unknown;
-      __nextly_bootEntities?: unknown;
-    };
-    delete g.__nextly_bootPlugins;
-    delete g.__nextly_bootEntities;
+    delete (globalThis as { __nextly_bootConfig?: unknown })
+      .__nextly_bootConfig;
     servicesRegistered.mockReturnValue(true);
     store = await import("./auth-handler");
   });
@@ -77,7 +83,7 @@ describe("the handler config store", () => {
   it("replaces the plugin list when boot runs after the route module", () => {
     store.setHandlerConfig(stored);
 
-    store.setBootedConfig({ plugins: plugins("@acme/transformed") });
+    store.setBootedConfig(booted({ plugins: plugins("@acme/transformed") }));
 
     expect(names(store)).toEqual(["@acme/transformed"]);
   });
@@ -91,7 +97,7 @@ describe("the handler config store", () => {
   it("leaves every other field of the stored config intact", () => {
     store.setHandlerConfig(stored);
 
-    store.setBootedConfig({ plugins: plugins("@acme/transformed") });
+    store.setBootedConfig(booted({ plugins: plugins("@acme/transformed") }));
 
     const after = store.getHandlerConfig();
     expect(after?.typescript).toEqual({ enabled: true });
@@ -106,7 +112,7 @@ describe("the handler config store", () => {
    * there is no stored config to correct at the moment boot reports its list.
    */
   it("applies a plugin list recorded before any config was stored", () => {
-    store.setBootedConfig({ plugins: plugins("@acme/transformed") });
+    store.setBootedConfig(booted({ plugins: plugins("@acme/transformed") }));
 
     store.setHandlerConfig(stored);
 
@@ -119,7 +125,7 @@ describe("the handler config store", () => {
    */
   it("keeps the booted list when the raw config is stored again", () => {
     store.setHandlerConfig(stored);
-    store.setBootedConfig({ plugins: plugins("@acme/transformed") });
+    store.setBootedConfig(booted({ plugins: plugins("@acme/transformed") }));
 
     store.setHandlerConfig(stored);
 
@@ -135,7 +141,7 @@ describe("the handler config store", () => {
   it("clears the declared plugins when boot produced none", () => {
     store.setHandlerConfig(stored);
 
-    store.setBootedConfig({ plugins: [] });
+    store.setBootedConfig(booted({ plugins: [] }));
 
     expect(names(store)).toEqual([]);
   });
@@ -149,7 +155,7 @@ describe("the handler config store", () => {
   it("clears the declared plugins when boot reported no list at all", () => {
     store.setHandlerConfig(stored);
 
-    store.setBootedConfig({});
+    store.setBootedConfig(booted({}));
 
     expect(names(store)).toEqual([]);
   });
@@ -167,22 +173,34 @@ describe("the handler config store", () => {
    * route config, so a declaration on a transformer-added entity reads as a
    * plugin-owned custom permission that boot actually drops.
    */
-  it("reports the entity slugs boot registered, not the declared ones", () => {
+  it("reports the entities boot registered, whole", () => {
     store.setHandlerConfig(stored);
 
-    store.setBootedConfig({
-      plugins: plugins("@acme/transformed"),
-      collections: [{ slug: "reports" }],
-      singles: [{ slug: "site" }],
-    });
+    store.setBootedConfig(
+      booted({
+        plugins: plugins("@acme/transformed"),
+        collections: [
+          { slug: "reports", dbName: "acme_reports", fields: [] },
+        ] as unknown as NextlyServiceConfig["collections"],
+        singles: [
+          { slug: "site", fields: [] },
+        ] as unknown as NextlyServiceConfig["singles"],
+      })
+    );
 
     const view = store.getHandlerConfig();
     expect(view?.collections?.map(c => c.slug)).toEqual(["reports"]);
     expect(view?.singles?.map(s => s.slug)).toEqual(["site"]);
+    // The DEFINITION, not a slug projection of it. `runProdMigrationsIfEnabled`
+    // reads this store and passes it to `resolveDeclaredSchema`, which resolves
+    // a table name from `dbName`; an earlier version rebuilt these entries as
+    // `{ slug }` and made drift verification look for a table that never
+    // existed. This assertion is what stops that returning.
+    expect(view?.collections?.[0]).toMatchObject({ dbName: "acme_reports" });
   });
 
   it("reports no config when only a plugin list has been recorded", () => {
-    store.setBootedConfig({ plugins: plugins("@acme/transformed") });
+    store.setBootedConfig(booted({ plugins: plugins("@acme/transformed") }));
 
     expect(store.getHandlerConfig()).toBeNull();
   });
@@ -196,7 +214,7 @@ describe("the handler config store", () => {
    */
   it("stops reporting the booted list once services are no longer registered", () => {
     store.setHandlerConfig(stored);
-    store.setHandlerPlugins(plugins("@acme/transformed"));
+    store.setBootedConfig(booted({ plugins: plugins("@acme/transformed") }));
     expect(store.getHandlerConfig()?.plugins?.map(p => p.name)).toEqual([
       "@acme/transformed",
     ]);
@@ -221,7 +239,7 @@ describe("the handler config store", () => {
    */
   it("shares the booted list across duplicate copies of the module", async () => {
     const booting = store;
-    booting.setBootedConfig({ plugins: plugins("@acme/transformed") });
+    booting.setBootedConfig(booted({ plugins: plugins("@acme/transformed") }));
 
     vi.resetModules();
     const serving: HandlerStore = await import("./auth-handler");
@@ -240,12 +258,12 @@ describe("the handler config store", () => {
    */
   it("re-derives the view when a later boot replaces the list", () => {
     store.setHandlerConfig(stored);
-    store.setBootedConfig({ plugins: plugins("@acme/first") });
+    store.setBootedConfig(booted({ plugins: plugins("@acme/first") }));
     expect(store.getHandlerConfig()?.plugins?.map(p => p.name)).toEqual([
       "@acme/first",
     ]);
 
-    store.setBootedConfig({ plugins: plugins("@acme/second") });
+    store.setBootedConfig(booted({ plugins: plugins("@acme/second") }));
 
     expect(store.getHandlerConfig()?.plugins?.map(p => p.name)).toEqual([
       "@acme/second",

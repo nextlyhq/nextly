@@ -19,7 +19,6 @@ import {
 import type { NextlyServiceConfig } from "../di/register";
 import { buildServiceConfig } from "../init/build-service-config";
 import { seedAllPermissions } from "../init/seed-permissions";
-import type { PluginDefinition } from "../plugins/plugin-context";
 import { ensureHmrListener } from "../runtime/hmr-listener";
 import { getImageProcessor } from "../storage/image-processor";
 
@@ -57,17 +56,58 @@ let _storedConfig: SanitizedNextlyConfig | null = null;
  * same copy serves the request, so it has no cross-graph reader.
  */
 const globalForBoot = globalThis as unknown as {
-  __nextly_bootPlugins?: PluginDefinition[];
-  /**
-   * The ENTITY slugs boot registered, plugin contributions and `setup`
-   * transformer additions included.
-   *
-   * Slugs only: the sole reader is the permission fold, which asks whether a
-   * resource names an entity. Keeping whole definitions here would put hooks
-   * and access rules in a process-global for no caller.
-   */
-  __nextly_bootEntities?: { collections: string[]; singles: string[] };
+  __nextly_bootConfig?: BootedConfigView;
 };
+
+/**
+ * The blocks of the booted config this store republishes, WHOLE.
+ *
+ * An earlier version kept entity SLUGS only, reasoning that the permission fold
+ * was the sole reader. It is not: `getHandlerConfig()` has six readers, and one
+ * hands its result to `runProdMigrationsIfEnabled`, whose `resolveDeclaredSchema`
+ * reads `dbName` and a relationship's `junctionTable`. Projecting those away
+ * made drift verification look for a table that never existed.
+ *
+ * So what is bounded here is WHICH blocks travel, never how much of each. The
+ * bound is type compatibility and the compiler checks it: the transformed
+ * config is a `NextlyServiceConfig`, whose `auth` is the UNSANITIZED
+ * `AuthConfig`, so overlaying that onto a `SanitizedNextlyConfig` would hand
+ * readers a shape they are typed against and do not have. Widening this list
+ * means checking a field's type across the two, not adding a name to it.
+ *
+ * These are also the blocks a `setup` transformer meaningfully rewrites: the
+ * plugin list, the entities plugins contribute, and the app-level permission
+ * declarations that can collide with them.
+ */
+type BootedConfigView = Partial<
+  Pick<
+    SanitizedNextlyConfig,
+    "plugins" | "collections" | "singles" | "permissions"
+  >
+>;
+
+/**
+ * `booted`'s explicitly-set keys laid over `base`.
+ *
+ * Key by key rather than a spread: a present-but-`undefined` key would
+ * otherwise delete a field the stored config legitimately holds.
+ */
+function overlayDefined(
+  base: SanitizedNextlyConfig,
+  booted: BootedConfigView
+): SanitizedNextlyConfig {
+  return {
+    ...base,
+    ...(booted.plugins !== undefined ? { plugins: booted.plugins } : {}),
+    ...(booted.collections !== undefined
+      ? { collections: booted.collections }
+      : {}),
+    ...(booted.singles !== undefined ? { singles: booted.singles } : {}),
+    ...(booted.permissions !== undefined
+      ? { permissions: booted.permissions }
+      : {}),
+  };
+}
 
 /**
  * The merged view, and the exact inputs it was built from.
@@ -81,8 +121,7 @@ const globalForBoot = globalThis as unknown as {
 let _bootView: SanitizedNextlyConfig | null = null;
 let _bootViewInputs: {
   config: SanitizedNextlyConfig;
-  plugins: PluginDefinition[];
-  entities?: { collections: string[]; singles: string[] };
+  booted: BootedConfigView;
 } | null = null;
 
 /**
@@ -111,33 +150,18 @@ function bootView(): SanitizedNextlyConfig | null {
   // remembered-to-clear approach would be one edit away from the stale-read it
   // is meant to prevent. Derived here, a teardown, a failed re-boot, and a
   // process that never booted all fall back to the declared list on their own.
-  const plugins = isServicesRegistered()
-    ? globalForBoot.__nextly_bootPlugins
+  const booted = isServicesRegistered()
+    ? globalForBoot.__nextly_bootConfig
     : undefined;
-  if (!config || !plugins) return config;
+  if (!config || !booted) return config;
 
-  const entities = globalForBoot.__nextly_bootEntities;
   if (
     !_bootView ||
     _bootViewInputs?.config !== config ||
-    _bootViewInputs?.plugins !== plugins ||
-    _bootViewInputs?.entities !== entities
+    _bootViewInputs?.booted !== booted
   ) {
-    _bootView = {
-      ...config,
-      plugins,
-      // Entity slugs travel as the minimal shape the permission fold reads.
-      // The definitions themselves stay whatever the route config carries: a
-      // reader wanting hooks or access rules must go through the container,
-      // and this store has never claimed to hold them.
-      ...(entities
-        ? {
-            collections: entities.collections.map(slug => ({ slug })),
-            singles: entities.singles.map(slug => ({ slug })),
-          }
-        : {}),
-    } as SanitizedNextlyConfig;
-    _bootViewInputs = { config, plugins, entities };
+    _bootView = overlayDefined(config, booted);
+    _bootViewInputs = { config, booted };
   }
   return _bootView;
 }
@@ -166,19 +190,19 @@ export function setHandlerConfig(config: SanitizedNextlyConfig): void {
  * advertising the plugins the author declared — and normalizing here rather
  * than at the call site leaves the caller no branch in which to disagree.
  */
-export function setBootedConfig(config: {
-  plugins?: PluginDefinition[];
-  collections?: ReadonlyArray<{ slug: string }>;
-  singles?: ReadonlyArray<{ slug: string }>;
-}): void {
-  // Takes the whole transformed config rather than a field list assembled by
-  // the caller. A call site that names the fields is a call site that can omit
-  // one, and the omission is invisible — the endpoint just keeps folding
-  // against the raw route config for whatever was left out.
-  globalForBoot.__nextly_bootPlugins = config.plugins ?? [];
-  globalForBoot.__nextly_bootEntities = {
-    collections: (config.collections ?? []).map(c => c.slug),
-    singles: (config.singles ?? []).map(s => s.slug),
+export function setBootedConfig(config: NextlyServiceConfig): void {
+  // Takes the WHOLE transformed config, and narrows here rather than at the
+  // call site. A caller that named the blocks to publish would be one omission
+  // from the endpoint folding against raw values for whatever it forgot.
+  //
+  // `plugins` is normalized because an absent list and an emptied one are the
+  // same fact: a boot whose transformers removed every plugin must stop this
+  // store advertising the ones the author declared.
+  globalForBoot.__nextly_bootConfig = {
+    plugins: config.plugins ?? [],
+    collections: config.collections,
+    singles: config.singles,
+    permissions: config.permissions,
   };
 }
 
