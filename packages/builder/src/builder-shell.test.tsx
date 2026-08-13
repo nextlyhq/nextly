@@ -18,6 +18,7 @@ import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { BuilderShell } from "./builder-shell";
+import { CommandPalette } from "./command-palette";
 import { DEFAULT_PREFERENCES, type PreferenceStore } from "./shell-state";
 
 afterEach(cleanup);
@@ -378,6 +379,27 @@ describe("a viewport too narrow for the shell", () => {
     expect(hiddenWrapper?.hasAttribute("inert")).toBe(true);
     // And the canvas is genuinely out of the accessibility tree.
     expect(screen.queryByRole("main", { name: "Canvas" })).toBeNull();
+  });
+
+  it("keeps a portalling slot child from opening over the notice", () => {
+    // `hidden` and `inert` only reach what renders INSIDE the wrapper. A dialog in a slot portals
+    // to the document body and escapes both, so it would float over the narrow-screen notice,
+    // fully interactive. The shell publishes its own answer instead, and the palette takes it as
+    // its default — note NO `enabled` prop here, because a caller forced to pass one would be
+    // re-deriving MIN_SHELL_WIDTH for itself.
+    stubViewport(false);
+    render(
+      <BuilderShell onExit={vi.fn()} store={memoryStore()}>
+        <CommandPalette
+          commands={[{ id: "a", label: "Should stay hidden", run: () => {} }]}
+        />
+      </BuilderShell>
+    );
+
+    fireEvent.keyDown(document, { key: "k", metaKey: true });
+    fireEvent.keyDown(document, { key: "k", ctrlKey: true });
+
+    expect(screen.queryByText("Should stay hidden")).toBeNull();
   });
 
   it("does not cycle regions while the editor is hidden", () => {

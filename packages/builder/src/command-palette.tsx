@@ -38,6 +38,8 @@ import {
 import * as React from "react";
 import { flushSync } from "react-dom";
 
+import { useShellIsActive } from "./builder-shell";
+
 /**
  * The keystroke that OPENS the palette, and the one nearly every editor uses for it.
  *
@@ -99,12 +101,16 @@ export interface CommandPaletteProps {
   /** Shown when nothing matches what was typed. */
   emptyMessage?: string;
   /**
-   * Whether the palette may be opened at all. Defaults to true.
+   * Whether the palette may be opened at all.
    *
-   * The dialog PORTALS to the document body, so it escapes any `hidden` or `inert` wrapper the
-   * host has put its own subtree behind — a shell that has disabled itself below a minimum width
-   * would still get an interactive palette floating over its narrow-screen notice. A host in that
-   * state passes false, which both stops the hotkey and closes an already-open palette.
+   * Defaults to whether the surrounding shell is interactive, and to `true` outside one. The
+   * dialog PORTALS to the document body, so it escapes the `hidden`/`inert` wrapper the shell
+   * puts its slots behind below its minimum width — without this it would float, fully
+   * interactive, over the narrow-screen notice.
+   *
+   * Left to the default in a shell. Pass it only to disable the palette for a reason of the
+   * host's own; re-deriving the shell's width here would be a second implementation of a question
+   * the shell already answers.
    */
   enabled?: boolean;
 }
@@ -176,8 +182,12 @@ function PaletteSurface({
   onOpenChange,
   placeholder = "Search commands…",
   emptyMessage = "No matching commands.",
-  enabled = true,
+  enabled: enabledProp,
 }: CommandPaletteProps): React.JSX.Element {
+  // The shell's own answer, so the width that hides its slots is the width that disables the
+  // palette. `true` outside a shell, which is what a standalone caller wants.
+  const shellIsActive = useShellIsActive();
+  const enabled = enabledProp ?? shellIsActive;
   const [uncontrolledOpen, setUncontrolledOpen] = React.useState(false);
   const isControlled = controlledOpen !== undefined;
   // One expression decides whether the palette is showing, so `enabled` cannot be honoured by the
