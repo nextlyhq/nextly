@@ -299,10 +299,11 @@ function PaletteSurface({
       // focus trap still holding — and a command that opens a dialog of its own or moves focus
       // then competes with a palette that is only just unmounting, leaving focus somewhere
       // neither component chose.
-      flushSync(() => setOpen(false));
-      // Claimed before running: a command that focuses something of its own must not have that
-      // undone by the restore above.
+      // Claimed BEFORE the close, not merely before `run()`. `flushSync` commits the close
+      // synchronously, which runs the effect that decides whether to hand focus back — so a claim
+      // made after it is read too late and the restore fires anyway.
       commandMovedFocus.current = true;
+      flushSync(() => setOpen(false));
       command.run();
     },
     [setOpen]

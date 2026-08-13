@@ -275,34 +275,33 @@ describe("the host can drive it", () => {
     await waitFor(() => expect(document.activeElement).toBe(origin));
   });
 
-  it("leaves focus alone when a command moved it deliberately", async () => {
+  it("leaves focus alone when a command deliberately drops it", async () => {
     render(
       <ShortcutProvider>
         <button type="button">Origin control</button>
-        <button type="button">Command target</button>
         <CommandPalette
           commands={[
             {
               id: "a",
-              label: "Focus elsewhere",
-              run: () =>
-                screen.getByRole("button", { name: "Command target" }).focus(),
+              label: "Dismiss focus",
+              // Focus goes NOWHERE, which is the separating case: a command that focuses some
+              // other element is already covered by the restore's own "did focus stray" guard,
+              // so only this one distinguishes the command's claim from that guard.
+              run: () => (document.activeElement as HTMLElement | null)?.blur(),
             },
           ]}
         />
       </ShortcutProvider>
     );
 
-    const origin = screen.getByRole("button", { name: "Origin control" });
-    origin.focus();
+    screen.getByRole("button", { name: "Origin control" }).focus();
     pressPaletteKey();
-    fireEvent.click(screen.getByText("Focus elsewhere"));
+    fireEvent.click(screen.getByText("Dismiss focus"));
 
-    // The restore must not undo what the command asked for, including after the deferred pass.
-    await waitFor(() =>
-      expect(document.activeElement).toBe(
-        screen.getByRole("button", { name: "Command target" })
-      )
+    // The restore must not undo what the command asked for, including after its deferred pass.
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(document.activeElement).not.toBe(
+      screen.getByRole("button", { name: "Origin control" })
     );
   });
 
@@ -332,9 +331,17 @@ describe("the host can drive it", () => {
   });
 
   it("gives an ungrouped bucket a key a group name cannot collide with", () => {
-    // Group names are unrestricted, so a host may legitimately name one `__ungrouped`. Sharing a
-    // React key with the ungrouped bucket is duplicate-key reconciliation: a later update can
-    // reuse the wrong fragment and duplicate or drop rows.
+    // Group names are unrestricted, so a host may legitimately name one `__ungrouped`. Asserted
+    // on React's duplicate-key WARNING rather than on the rendered rows: duplicate keys render
+    // correctly on the first pass and only misbehave on a later update, so a render assertion
+    // passes either way.
+    const errors: unknown[][] = [];
+    const spy = vi
+      .spyOn(console, "error")
+      .mockImplementation((...args: unknown[]) => {
+        errors.push(args);
+      });
+
     mount(
       <CommandPalette
         commands={[
@@ -344,10 +351,13 @@ describe("the host can drive it", () => {
       />
     );
     pressPaletteKey();
+    spy.mockRestore();
 
     expect(screen.getByText("Loose row")).toBeTruthy();
     expect(screen.getByText("Named row")).toBeTruthy();
-    expect(screen.getAllByText(/^(Loose row|Named row)$/)).toHaveLength(2);
+    expect(errors.filter(args => String(args[0]).includes("same key"))).toEqual(
+      []
+    );
   });
 
   it("cannot be opened while the host has it disabled", () => {
