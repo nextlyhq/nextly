@@ -52,9 +52,17 @@ BASE_REMOTE=origin                        # must point at the BASE repository
 HEAD_REMOTE=origin
 [ "$CROSS" = true ] && HEAD_REMOTE="https://github.com/$OWNER/$REPO.git"
 
-# History rewritten? Then the range below cannot certify anything — see next note.
-FORCED=$(gh api "repos/nextlyhq/nextly/issues/$PR/timeline?per_page=100" \
-  --jq '[.[]|select(.event=="head_ref_force_pushed")]|length')
+# History rewritten? Then the range below cannot certify anything, so this
+# EXITS rather than annotating. `--paginate` because the timeline is paged at
+# 100 and long PRs here run to three pages: an unpaginated query reads page one
+# and answers zero, which is the reassuring direction. It emits one count per
+# page, hence the sum.
+FORCED=$(gh api --paginate "repos/nextlyhq/nextly/issues/$PR/timeline?per_page=100" \
+  --jq '[.[]|select(.event=="head_ref_force_pushed")]|length' | awk '{s+=$1} END{print s+0}')
+if [ "${FORCED:-1}" -gt 0 ]; then
+  echo "PR#$PR: $FORCED force-push(es) — NOT CHECKABLE, which is not clean" >&2
+  exit 2
+fi
 
 TIP=$(git ls-remote "$HEAD_REMOTE" "refs/heads/$BR" | cut -f1)
 if [ -z "$TIP" ]; then
