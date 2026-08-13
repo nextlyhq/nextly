@@ -93,7 +93,16 @@ let _bootViewInputs: {
  */
 function bootView(): SanitizedNextlyConfig | null {
   const config = _storedConfig;
-  const plugins = globalForBoot.__nextly_bootPlugins;
+  // Gated on the canonical registration state rather than on the list having
+  // been cleared by whoever tore services down. The list describes a RUNNING
+  // runtime, so it is meaningful exactly while one is registered — and two
+  // functions clear that state (`shutdownServices`, `clearServices`), so a
+  // remembered-to-clear approach would be one edit away from the stale-read it
+  // is meant to prevent. Derived here, a teardown, a failed re-boot, and a
+  // process that never booted all fall back to the declared list on their own.
+  const plugins = isServicesRegistered()
+    ? globalForBoot.__nextly_bootPlugins
+    : undefined;
   if (!config || !plugins) return config;
 
   if (
