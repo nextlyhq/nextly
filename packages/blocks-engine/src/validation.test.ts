@@ -565,7 +565,12 @@ describe("validation never throws on adversarial input", () => {
       issues = validate(doc, {
         breakpoints: FIXTURE_BREAKPOINTS,
         mode: "strict",
-        limits: { maxDepth: 12, maxNodes: 100, maxBytes: 1_000_000 },
+        // The byte cap is deliberately far out of reach. This test is about the
+        // NODE cap bounding the walk, and a forest of 500,000 children also
+        // outruns a 1 MB budget — so a byte limit near the document's real size
+        // decides the outcome before the node cap is consulted, and the
+        // assertion below would be reporting on a bound the test does not name.
+        limits: { maxDepth: 12, maxNodes: 100, maxBytes: 100_000_000 },
       });
     }).not.toThrow();
     expect(issues.some(i => i.code === "node-count-exceeded")).toBe(true);

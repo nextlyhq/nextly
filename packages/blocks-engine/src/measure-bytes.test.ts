@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { measureBytes } from "./measure-bytes";
+import { measureBytes, surveyDocument } from "./measure-bytes";
 
 /**
  * The counter's whole purpose is to answer the question `JSON.stringify` would
@@ -98,6 +98,52 @@ describe("measureBytes", () => {
     expect(real).toBeGreaterThan(2 * 1024 * 1024);
     expect(measureBytes(document, Number.MAX_SAFE_INTEGER).bytes).toBe(real);
     expect(measureBytes(document, 2 * 1024 * 1024).exceeded).toBe(true);
+  });
+
+  it("refuses an over-long array without enumerating its keys", () => {
+    // Brackets and commas alone are not the floor. Every position costs at
+    // least one more byte, so an array can pass a bracket-and-comma check and
+    // still be impossible to store — and the walk used to enumerate one string
+    // per position before finding that out, which turned a document too large
+    // to accept into hundreds of megabytes of keys.
+    //
+    // The counters are what separate the implementations, because every version
+    // returns `tooLarge`: only the cost differs.
+    //
+    // `descriptors` is the sharper of the two. A walk that accepts the array
+    // and discovers the overflow one position at a time reads a descriptor per
+    // element; one that rejects it from `length` reads exactly the one that
+    // told it the length.
+    //
+    // `ownKeys` covers the other half, which is memory rather than work: one
+    // call is the symbol check every object pays, and a second would be a key
+    // list built for an array that cannot be stored. Measured at two million
+    // positions, that list moved resident memory from 94 MB to 366 MB.
+    let descriptors = 0;
+    let ownKeys = 0;
+    const watched = new Proxy(new Array(1000).fill(0), {
+      getOwnPropertyDescriptor(target, key) {
+        descriptors += 1;
+        return Reflect.getOwnPropertyDescriptor(target, key);
+      },
+      ownKeys(target) {
+        ownKeys += 1;
+        return Reflect.ownKeys(target);
+      },
+    });
+
+    // Chosen so the brackets and commas (1001) fit the budget and the positions
+    // (1000 more) cannot. A bound that only counted the separators would walk
+    // on.
+    const survey = surveyDocument(watched, {
+      maxBytes: 1500,
+      maxDepth: 12,
+      maxNodes: 5000,
+    });
+
+    expect(survey.tooLarge).toBe(true);
+    expect(descriptors).toBe(1);
+    expect(ownKeys).toBe(1);
   });
 
   it("refuses an array carrying a property JSON would drop", () => {

@@ -265,19 +265,18 @@ interface Frame {
   /**
    * Iteration state for a `members` frame.
    *
-   * `names` is the member list for a record AND for an array. Both containers
-   * have to answer the same question — which own properties does JSON actually
-   * emit — and an array that walked `0..length-1` instead could not see a
-   * non-index own property, which JSON silently drops.
+   * `names` is present for a record and absent for an array, where the index IS
+   * the key and holding one string per position is an allocation proportional
+   * to a length the document never has to pay for in content.
    *
-   * `keyed` says whether JSON writes `"key":` before each member, which is the
-   * only respect in which the two containers differ here. `emitted` records
-   * whether an earlier member of THIS container produced output, so the
-   * separating comma is counted from what was written rather than from the
-   * iteration index — a skipped member would otherwise leave a comma with
-   * nothing on one side of it.
+   * `keyed` says whether JSON writes `"key":` before each member, and picks
+   * between those two iterations. `emitted` records whether an earlier member
+   * of THIS container produced output, so the separating comma is counted from
+   * what was written rather than from the iteration index — a skipped member
+   * would otherwise leave a comma with nothing on one side of it.
    */
   names?: string[];
+  length?: number;
   index?: number;
   containerKind?: FrameKind;
   keyed?: boolean;
@@ -339,6 +338,34 @@ export function surveyDocument(
     // ancestors only. Pushed BEFORE the children, so it pops after them.
     if (frame.kind === "leave") {
       onPath.delete(frame.value as object);
+
+      // An array's own properties that are NOT positions, which JSON drops on
+      // the way to storage while the schema reads them straight back off the
+      // caller's value.
+      //
+      // `for...in` rather than `Object.getOwnPropertyNames`, and the difference
+      // is memory: the name list holds one string per position, so a
+      // two-million-element array allocated hundreds of megabytes of keys to
+      // answer a yes-or-no question. This holds one key at a time and stops at
+      // the first name that is not an index — which name it is does not matter.
+      //
+      // What it does not see is a NON-ENUMERABLE own property, which JSON also
+      // drops. Detecting that needs the full name list, so it is not detected;
+      // it cannot arise from `JSON.parse`, which produces enumerable properties
+      // only. Written down rather than implied, because a gap that is stated
+      // can be closed later and a silent one reads as coverage.
+      if (frame.length !== undefined) {
+        try {
+          for (const name in frame.value as object) {
+            if (arrayIndexOf(name, frame.length) < 0) {
+              unserializable = true;
+              break;
+            }
+          }
+        } catch {
+          unserializable = true;
+        }
+      }
       continue;
     }
 
@@ -353,11 +380,14 @@ export function surveyDocument(
     if (frame.kind === "members") {
       const container = frame.value as object;
       const index = frame.index ?? 0;
-      const names = frame.names ?? [];
-      if (index >= names.length) continue;
-
       const keyed = frame.keyed === true;
-      const key = names[index];
+      // A record iterates its own names; an array iterates its POSITIONS, so no
+      // string is held per element. The two differ in what JSON writes for a
+      // member it cannot find, which is the branch below.
+      const total = keyed ? (frame.names?.length ?? 0) : (frame.length ?? 0);
+      if (index >= total) continue;
+
+      const key = keyed ? frame.names![index] : String(index);
       const member = readMember(container, key);
 
       // Enumerability means different things to the serializer on the two
@@ -379,6 +409,13 @@ export function surveyDocument(
 
       if (skipped) {
         unserializable = true;
+        // A position JSON cannot read still occupies one: it writes `null`
+        // there, four bytes. A record's missing key costs nothing, because JSON
+        // writes nothing for it — which is why this is the array branch only.
+        if (!keyed) {
+          bytes += 4;
+          if (bytes > limits.maxBytes) return { ...done(), tooLarge: true };
+        }
         continue;
       }
 
@@ -452,13 +489,24 @@ export function surveyDocument(
       continue;
     }
 
-    onPath.add(value);
-    stack.push({ value, kind: "leave", depth: 0 });
+    // `Array.isArray` reads the brand through a proxy and throws when that
+    // proxy has been revoked, so the one reflection left unguarded here was the
+    // one that decides which branch runs. Every other reflection in this walk
+    // is wrapped; this was not, and an exception from it escaped a function
+    // whose whole contract is to return a verdict rather than raise.
+    let isArray: boolean;
+    try {
+      isArray = Array.isArray(value);
+    } catch {
+      unserializable = true;
+      continue;
+    }
 
-    if (Array.isArray(value)) {
-      // `length` is an own property, so a proxy can throw from reading it.
+    // `length` is an own property, so a proxy can throw from reading it.
+    let length = -1;
+    if (isArray) {
       const lengthMember = readMember(value, "length");
-      const length =
+      length =
         lengthMember.present && typeof lengthMember.value === "number"
           ? lengthMember.value
           : -1;
@@ -466,55 +514,43 @@ export function surveyDocument(
         unserializable = true;
         continue;
       }
+    }
+
+    onPath.add(value);
+    stack.push({
+      value,
+      kind: "leave",
+      depth: 0,
+      // Set for an array, and read on the way out to look for own properties
+      // JSON drops. Deferred rather than done here for two reasons that point
+      // the same way: a cap breach inside the array returns before this runs at
+      // all, and enumerating a hostile container's keys up front is the eager
+      // reflection the member loop exists to avoid.
+      length: isArray ? length : undefined,
+    });
+
+    if (isArray) {
       // Brackets and the separating commas, which `length` alone fixes: JSON
       // writes one element per position whether or not that position is
-      // present. Counted BEFORE the names are enumerated, so an array too large
-      // to store is refused without materializing a key list for it.
+      // present.
       bytes += 2 + Math.max(0, length - 1);
       if (bytes > limits.maxBytes) return { ...done(), tooLarge: true };
 
-      // Own NAMES rather than the positions `0..length-1`, because the two
-      // differ in both directions and JSON treats each difference differently.
-      // A position with no property is a HOLE, which JSON writes as `null`; a
-      // name that is not a position is a property JSON DROPS. Walking positions
-      // saw neither: the holes cost nothing and the extra properties were
-      // invisible, so an array measured smaller than it serializes and one
-      // carrying a field storage discards was reported as storage-preserving.
-      let names: string[];
-      try {
-        names = Object.getOwnPropertyNames(value);
-      } catch {
-        unserializable = true;
-        continue;
-      }
-
-      const elements: string[] = [];
-      for (const name of names) {
-        if (arrayIndexOf(name, length) >= 0) {
-          elements.push(name);
-        } else if (name !== "length") {
-          // `length` is the one own property JSON omits by design. Anything
-          // else here is data the caller can read back from the value it passed
-          // in and will not find in storage.
-          unserializable = true;
-        }
-      }
-
-      // Every position without a property serializes as `null`, four bytes
-      // each. A sparse array is legal input to `JSON.stringify` and it is the
-      // one shape where the emitted size is driven by what is ABSENT.
-      const holes = length - elements.length;
-      if (holes > 0) {
-        unserializable = true;
-        bytes += holes * 4;
-        if (bytes > limits.maxBytes) return { ...done(), tooLarge: true };
+      // Every position costs at least one more byte — the shortest thing JSON
+      // can write at one is a single digit, and a hole costs four — so an array
+      // whose length alone outruns the remaining budget is refused here, before
+      // anything is spent per position. Without this bound the walk did work
+      // proportional to `length` for an array it was always going to reject.
+      if (bytes + length > limits.maxBytes) {
+        bytes += length;
+        return { ...done(), tooLarge: true };
       }
 
       stack.push({
         value,
         kind: "members",
         depth,
-        names: elements,
+        length,
         index: 0,
         containerKind: kind,
       });

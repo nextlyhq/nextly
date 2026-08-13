@@ -468,8 +468,6 @@ const blockNodeObject = z.looseObject({
   migrationFailed: z.boolean().optional(),
 });
 
-const blockNodeFields = fieldNamesOf(() => blockNodeObject.shape);
-
 const blockNodeSchema = blockNodeObject;
 
 /**
@@ -522,20 +520,47 @@ function shadowedDeclaredField(fields: readonly string[]): string | undefined {
 }
 
 /**
- * The declared field names of an object schema, read from the schema itself.
+ * Every field name any object in the document declares.
  *
- * Writing the list out beside the schema is the same second declaration this
- * module removed from the format variants: the two agree when written and
- * nothing makes them stay that way, so a field added above would keep its
- * inherited value silently.
+ * Read from the JSON Schema this module publishes, which is the one artefact
+ * that already describes EVERY object reachable in a document — the envelope,
+ * the node, and equally the nested shapes it is easy to forget: a binding's
+ * `$bind` and `source`, a condition's `field` and `op`, a format's `currency`,
+ * `settings`, `assets`. Naming the shapes by hand covered two of them and left
+ * the rest, which is the same partial enumeration in a different costume.
  *
- * Read on first use rather than at module scope. `blockNodeSchema`'s `slots` is
- * a getter that names the node schema, so touching the shape while this module
+ * Derived rather than restated, so a field added to any schema above is
+ * included without an edit here. `properties` is JSON Schema's own word for
+ * "declared field", so the walk needs no knowledge of zod's internals and
+ * cannot fall out of step with what is published.
+ *
+ * Built on first use, not at module scope. `blockNodeSchema`'s `slots` is a
+ * getter naming the node schema, so emitting the JSON Schema while this module
  * is still initializing would reach it before it is bound.
  */
-function fieldNamesOf(shape: () => Record<string, unknown>): () => string[] {
-  let names: string[] | undefined;
-  return () => (names ??= Object.keys(shape()));
+function collectDeclaredFields(node: unknown, into: Set<string>): void {
+  if (node === null || typeof node !== "object") return;
+  if (Array.isArray(node)) {
+    for (const entry of node) collectDeclaredFields(entry, into);
+    return;
+  }
+  const record = node as Record<string, unknown>;
+  const properties = record.properties;
+  if (properties !== null && typeof properties === "object") {
+    for (const name of Object.keys(properties)) into.add(name);
+  }
+  for (const value of Object.values(record)) collectDeclaredFields(value, into);
+}
+
+let declaredFieldsCache: string[] | undefined;
+
+function declaredFields(): string[] {
+  if (declaredFieldsCache === undefined) {
+    const names = new Set<string>();
+    collectDeclaredFields(blockDocumentJsonSchema(), names);
+    declaredFieldsCache = [...names];
+  }
+  return declaredFieldsCache;
 }
 
 const blockDocumentObject = z.looseObject({
@@ -557,8 +582,6 @@ const blockDocumentObject = z.looseObject({
     .looseObject({ mediaIds: z.array(z.string()).optional() })
     .optional(),
 });
-
-const blockDocumentFields = fieldNamesOf(() => blockDocumentObject.shape);
 
 const blockDocumentSchema = blockDocumentObject;
 
@@ -654,9 +677,7 @@ export function parseBlockDocument(value: unknown): BlockDocumentParseResult {
   // `Object.prototype`, every object in the document resolves that field
   // whether or not it holds one, so the schema would be validating values the
   // document does not contain and storage will not receive.
-  const shadowed =
-    shadowedDeclaredField(blockDocumentFields()) ??
-    shadowedDeclaredField(blockNodeFields());
+  const shadowed = shadowedDeclaredField(declaredFields());
   if (shadowed !== undefined) {
     return {
       success: false,

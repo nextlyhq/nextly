@@ -22,7 +22,7 @@ import {
 import { describeValue, pointer } from "./issue-text";
 import { DEFAULT_LIMITS, LIMIT_WARNING_RATIO } from "./limits";
 import type { DocumentLimits } from "./limits";
-import { measureBytes } from "./measure-bytes";
+import { surveyDocument } from "./measure-bytes";
 import { isPlainRecord } from "./plain-record";
 import type { TokenKind } from "./style/catalog-types";
 import { MAX_NAMED_CLASS_NAME_LENGTH } from "./style/named-class";
@@ -435,45 +435,28 @@ function collectBreakpointIds(
  * traversal stops (the document is already rejected) and the frontier is never
  * allowed to grow past the cap, so a rejected forest cannot exhaust memory.
  */
-function measureForest(
-  nodes: BlockNode[],
-  maxNodes: number,
-  maxDepth: number
-): { count: number; exceededDepth: boolean } {
-  let count = 0;
-  let exceededDepth = false;
-  const queue: Array<{ node: BlockNode; depth: number }> = [];
-  for (let i = 0; i < nodes.length && queue.length <= maxNodes; i++) {
-    queue.push({ node: nodes[i], depth: 1 });
-  }
-  for (let i = 0; i < queue.length; i++) {
-    count++;
-    const { node, depth } = queue[i];
-    if (depth > maxDepth) exceededDepth = true;
-    if (count > maxNodes) break; // already over the cap; no need to count more
-    if (typeof node === "object" && node !== null && node.slots) {
-      for (const children of Object.values(node.slots)) {
-        if (!Array.isArray(children)) continue;
-        for (let c = 0; c < children.length && queue.length <= maxNodes; c++) {
-          queue.push({ node: children[c], depth: depth + 1 });
-        }
-      }
-    }
-  }
-  return { count, exceededDepth };
-}
 
 function checkLimits(
   doc: BlockDocument,
   limits: DocumentLimits,
   issues: ValidationIssue[]
 ): void {
-  const { count, exceededDepth } = measureForest(
-    doc.nodes,
-    limits.maxNodes,
-    limits.maxDepth
-  );
-  if (exceededDepth) {
+  // ONE traversal answers all three bounds.
+  //
+  // Depth, node count and serialized size were measured by two separate walks,
+  // and the second of them had to decide what counts as a node and how deep it
+  // sits in order to measure anything at all. So "what is a node" had two
+  // implementations that agreed on the day they were written and nothing to
+  // keep them agreeing — and a document sits between them only when they
+  // disagree, which is exactly when nobody is looking. Every accepted document
+  // also paid for the tree twice.
+  const survey = surveyDocument(doc, {
+    maxBytes: limits.maxBytes,
+    maxDepth: limits.maxDepth,
+    maxNodes: limits.maxNodes,
+  });
+
+  if (survey.tooDeep) {
     issues.push({
       path: "/nodes",
       code: "depth-exceeded",
@@ -481,7 +464,7 @@ function checkLimits(
       message: `Node tree is nested deeper than the maximum of ${limits.maxDepth}.`,
     });
   }
-  if (count > limits.maxNodes) {
+  if (survey.tooManyNodes) {
     issues.push({
       path: "/nodes",
       code: "node-count-exceeded",
@@ -489,14 +472,13 @@ function checkLimits(
       message: `Document exceeds the maximum of ${limits.maxNodes} nodes.`,
     });
   }
-  // A structurally over-cap document is already rejected; skip the byte pass so
-  // an oversized forest is never measured in full.
-  if (exceededDepth || count > limits.maxNodes) return;
+  // A structurally over-cap document is already rejected, and the walk stopped
+  // at that breach — so its byte count is a lower bound rather than a
+  // measurement, and reporting a size from it would report a number that was
+  // never finished.
+  if (survey.tooDeep || survey.tooManyNodes) return;
 
-  // Measure serialized size with a bounded, non-materializing counter: a
-  // document that stays under the node/depth caps but hides a huge string must
-  // still be rejected without allocating a full JSON copy of it.
-  const { bytes, exceeded } = measureBytes(doc, limits.maxBytes);
+  const { bytes, tooLarge: exceeded } = survey;
   if (exceeded) {
     issues.push({
       path: "",

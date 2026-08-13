@@ -268,13 +268,24 @@ export type BindingFormat = {
   [K in BindingFormatType]: {
     type: K;
     options?: Record<string, unknown>;
-  } & (typeof BINDING_FORMAT_SHAPES)[K] extends null
-    ? { type: K; options?: Record<string, unknown> }
-    : { type: K; options?: Record<string, unknown> } & Omit<
-        NonNullable<(typeof BINDING_FORMAT_SHAPES)[K]>,
-        never
-      >;
+  } & MutableFields<(typeof BINDING_FORMAT_SHAPES)[K]>;
 }[BindingFormatType];
+
+/**
+ * A shape entry's fields as a writable object type.
+ *
+ * `BINDING_FORMAT_SHAPES` is `as const` so the KEYS can drive
+ * {@link BindingFormatType}, and that same annotation makes every value
+ * `readonly`. Carried through untouched it would have narrowed the public
+ * union: `format.currency = "EUR"` on a variant narrowed to `currency` stopped
+ * compiling, which is a source-breaking change to a published type and has
+ * nothing to do with how the format is stored. The mapped type strips the
+ * modifier the const assertion added, leaving the fields as writable as they
+ * were before they were derived.
+ */
+type MutableFields<S> = S extends null
+  ? unknown
+  : { -readonly [K in keyof S]: S[K] };
 
 // ---------------------------------------------------------------------------
 // Visibility — entry-field conditions + per-breakpoint device visibility

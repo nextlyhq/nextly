@@ -498,6 +498,30 @@ describe("block document schema", () => {
     });
   });
 
+  it("refuses an inherited field belonging to a NESTED shape", () => {
+    // `$bind` is declared by the binding schema, not by the node or the
+    // envelope. A check that named those two shapes covered the fields it could
+    // see and left every nested one open: a binding of `{}` parsed, read back
+    // `$bind` through the prototype, and persisted as `{}`.
+    //
+    // This is the reason the field set is derived from the published JSON
+    // Schema rather than listed — the list was complete for the shapes whoever
+    // wrote it happened to think of.
+    withPrototypeFields({ $bind: "title" }, () => {
+      const node = {
+        id: "a",
+        type: "core/text",
+        version: 1,
+        props: {},
+        bindings: { text: {} },
+      };
+      expect((node.bindings.text as { $bind?: string }).$bind).toBe("title");
+
+      const doc = { ...emptyPage(), nodes: [node] };
+      expect(parseBlockDocument(doc).success).toBe(false);
+    });
+  });
+
   it("says nothing about an optional field that is simply absent", () => {
     // The separating control. A rule phrased over DECLARED fields rather than
     // resolved ones would refuse every node that omits an optional field, which

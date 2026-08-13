@@ -387,6 +387,13 @@ expectTypeOf<typeof moveNode>().returns.toEqualTypeOf<BlockNode[]>();
 expectTypeOf<typeof reidSubtree>().parameters.toEqualTypeOf<[BlockNode]>();
 expectTypeOf<typeof reidSubtree>().returns.toEqualTypeOf<BlockNode>();
 
+// Both halves, like every other primitive here. A return-only assertion stays
+// green while the parameters are changed underneath it — the behaviour tests
+// move with the call, so nothing else would report it, and the frozen call
+// shape is the half an external tool is written against.
+expectTypeOf<typeof duplicateNode>().parameters.toEqualTypeOf<
+  [BlockNode[], string]
+>();
 expectTypeOf<typeof duplicateNode>().returns.toEqualTypeOf<BlockNode[]>();
 
 // The patch type is part of the contract, not an implementation detail: it is
