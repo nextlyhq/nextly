@@ -239,6 +239,40 @@ export function createPocDriver(page: Page): CanvasDriver {
       );
     },
 
+    async zoneContainingPointer() {
+      const rects = await canvasFrame().evaluate(
+        selector =>
+          Array.from(document.querySelectorAll(selector)).map(el => {
+            const r = el.getBoundingClientRect();
+            return { y: r.y, height: r.height };
+          }),
+        DROP_ZONES
+      );
+      if (rects.length === 0) return -1;
+
+      const origin = await driver.frameOrigin();
+      const scale = await frameScale();
+      const pointerY = pointer.y;
+
+      // The FIRST containing zone, not the nearest of several. Gap zones do not
+      // overlap, so at most one can contain a point; taking the first keeps the
+      // answer defined if a canvas ever registers overlapping ones rather than
+      // silently picking whichever compared smaller.
+      return rects.findIndex(rect => {
+        // Mapped by the shared helper rather than multiplied out here. Written
+        // inline this is two numbers scaled and added, which is exactly the
+        // shape no import scan can tell from ordinary arithmetic — so it is the
+        // one that drifts silently when the mapping is corrected.
+        const top = mapFramePointToHost({ x: 0, y: rect.y }, origin, scale).y;
+        const bottom = mapFramePointToHost(
+          { x: 0, y: rect.y + rect.height },
+          origin,
+          scale
+        ).y;
+        return pointerY >= top && pointerY <= bottom;
+      });
+    },
+
     async nearestZoneToPointer() {
       const rects = await canvasFrame().evaluate(
         selector =>

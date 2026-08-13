@@ -132,39 +132,96 @@ test.describe("a canvas any Nextly editor could ship", () => {
 
     const origin = await driver.frameOrigin();
     const scale = await driver.frameScale();
+
+    // A margin at each edge, in frame units. The insertion gap immediately
+    // before and after the nested container belongs to the OUTER one, so a
+    // pointer sitting on the boundary is a position both containers can
+    // legitimately claim. Depth priority is a statement about being INSIDE,
+    // and the same margin is what makes the canonical probe stable.
+    const EDGE_MARGIN_PX = 8;
+    const centreX = inner!.left + inner!.width / 2;
     const top = mapFramePointToHost(
-      { x: inner!.left + inner!.width / 2, y: inner!.top },
+      { x: centreX, y: inner!.top + EDGE_MARGIN_PX },
       origin,
       scale
     );
-    await dragPointerTo(driver, top, 1);
+    const bottom = mapFramePointToHost(
+      { x: centreX, y: inner!.top + inner!.height - EDGE_MARGIN_PX },
+      origin,
+      scale
+    );
+    // The unambiguous span must exist before anything is asserted about it: a
+    // container shorter than two margins leaves nothing to traverse, and the
+    // descent below would then report a pass having sampled nothing inside.
+    expect(
+      bottom.y - top.y,
+      "the nested region must be tall enough to sample inside its edges"
+    ).toBeGreaterThan(0);
+    await dragPointerTo(driver, top);
 
     // EVERY sample taken while the pointer is inside the nested region, not the
     // first one that agrees. Exiting on the first `nx-inner` would pass an
     // implementation that resolves correctly at one depth and lets the outer
     // container win everywhere else in the same region.
-    const bottom = mapFramePointToHost(
-      { x: 0, y: inner!.top + inner!.height },
-      origin,
-      scale
+    //
+    // The step is derived from the zone height, and it has to be: a step larger
+    // than a zone steps OVER it, so the pointer lands inside a drop zone only by
+    // coincidence and the exact assertion below is left with nothing to check.
+    // Measured at a fixed 6px step against 6px zones, 2 samples of 28 were
+    // inside any zone. Half the shortest zone cannot skip one.
+    //
+    // Read while the drag is live, because activation is what gives the zones a
+    // height at all — measured before it, every zone is 0 and the step derived
+    // from them would not advance.
+    const zoneHeights = (await driver.readZoneHeights()).filter(
+      height => height > 0
     );
+    expect(
+      zoneHeights.length,
+      "the drag must have expanded the drop zones before they can be sampled"
+    ).toBeGreaterThan(0);
+    const STEP_PX = Math.max(
+      1,
+      Math.floor((Math.min(...zoneHeights) * scale) / 2)
+    );
+    // A runaway guard, derived from the span so it cannot become the reason the
+    // loop stops. A fixed count silently bounds how far down a tall container
+    // the descent reaches, and every assertion below then describes a partial
+    // descent while reading as though it covered the region. What the descent
+    // completed is asserted separately, from the exit position.
+    const maxSteps = Math.ceil((bottom.y - top.y) / STEP_PX) + 2;
     const owners: (string | null)[] = [];
-    let active = -1;
-    let nearest = -1;
-    for (let step = 0; step < 60; step += 1) {
-      if (driver.pointer().y > bottom.y) break;
+    const zoneChoices: Array<{
+      active: number;
+      nearest: number;
+      containing: number;
+    }> = [];
+    let step = 0;
+    for (; step < maxSteps && driver.pointer().y <= bottom.y; step += 1) {
       const owner = await driver.readActiveZoneOwner();
       if (owner !== null) {
         owners.push(owner);
-        if (active < 0) {
-          active = await driver.readActiveTarget();
-          nearest = await driver.nearestZoneToPointer();
-        }
+        // At every sample, not just the first. A nearest-zone check taken once
+        // proves the mapping at one depth, which is the same weakness the owner
+        // check above exists to close.
+        zoneChoices.push({
+          active: await driver.readActiveTarget(),
+          nearest: await driver.nearestZoneToPointer(),
+          containing: await driver.zoneContainingPointer(),
+        });
       }
-      await driver.moveBy(0, 6);
+      await driver.moveBy(0, STEP_PX);
     }
+    const exitedBelow = driver.pointer().y > bottom.y;
     await driver.cancel();
 
+    // The descent left the region because it crossed the far edge, not because
+    // it ran out of iterations. Without this the assertions below are true of
+    // however much of the region the loop happened to cover.
+    expect(
+      exitedBelow,
+      "the descent must cross the far edge of the nested region"
+    ).toBe(true);
     expect(
       owners.length,
       "the descent must find at least one active zone inside the region"
@@ -179,9 +236,40 @@ test.describe("a canvas any Nextly editor could ship", () => {
       [...new Set(owners)],
       "every zone inside the nested region must be owned by it"
     ).toEqual(["nx-inner"]);
-    // And it must be the nearest, which catches a different fault: a stale rect
-    // or an unscaled transform selects a zone that is not the nearest at all.
-    expect(active, "and it must be the zone nearest the pointer").toBe(nearest);
+    // Which zone won, which catches a different fault: a stale rect or an
+    // unscaled transform resolves the pointer to a zone far from where it is.
+    //
+    // Two assertions rather than one, because the canvas answers by two rules.
+    // `@dnd-kit/collision` tries pointer intersection FIRST and falls back to
+    // the dragged shape's overlap only when the pointer is inside no zone, so
+    // "the nearest zone wins" is not a rule this canvas follows and asserting it
+    // outright fails on a legitimate boundary tie. Measured: one sample of 28
+    // resolved to the zone one ordinal away from the nearest, with the pointer
+    // inside neither.
+    //
+    // Inside a zone, the answer is exact and has no tie to lose.
+    const contained = zoneChoices.filter(choice => choice.containing >= 0);
+    expect(
+      contained.length,
+      "the descent must sample the pointer inside a drop zone at least once"
+    ).toBeGreaterThan(0);
+    expect(
+      contained.filter(choice => choice.active !== choice.containing),
+      "a zone containing the pointer must be the zone that resolves"
+    ).toEqual([]);
+
+    // Outside every zone, the fallback may legitimately choose either side of a
+    // boundary, so the bound is one ordinal — the resolution limit of the rule
+    // itself, not a pixel tolerance. It still separates what this guards: at the
+    // measured ~34px zone spacing a #1705 stale rect after a 200px scroll lands
+    // about six zones away, and a #1706 unscaled 0.75 transform drifts further
+    // with every step of the descent.
+    expect(
+      zoneChoices.filter(
+        choice => Math.abs(choice.active - choice.nearest) > 1
+      ),
+      "the resolved zone must be the nearest to the pointer or its neighbour"
+    ).toEqual([]);
   });
 
   test("never turns a click into a drag", async ({ request }) => {
@@ -481,19 +569,31 @@ test.describe("a canvas any Nextly editor could ship", () => {
     // whatever else a loaded runner is doing, and none of that is canvas work
     // — so measuring the drag alone makes a single GC pause look exactly like
     // a re-measured tree.
+    //
+    // The two samples must differ in ONE thing: whether a drag is live. Move
+    // distance is not transport cost — hit-testing and zone selection scale
+    // with how far the pointer travels — so a control that steps a different
+    // distance, or over a different element, leaves part of the difference
+    // explained by something other than drag work.
+    const MOVE_COUNT = 20;
+    const MOVE_PX = 12;
+    const centre = await driver.canvasCentre();
+    const resting = driver.pointer();
+    await driver.moveBy(centre.x - resting.x, centre.y - resting.y);
+
     const idle: number[] = [];
-    for (let move = 0; move < 20; move += 1) {
+    for (let move = 0; move < MOVE_COUNT; move += 1) {
       const started = Date.now();
-      await driver.moveBy(0, 4);
+      await driver.moveBy(0, MOVE_PX);
       idle.push(Date.now() - started);
     }
 
     await dragFromPanel(driver);
 
     const dragging: number[] = [];
-    for (let move = 0; move < 20; move += 1) {
+    for (let move = 0; move < MOVE_COUNT; move += 1) {
       const started = Date.now();
-      await driver.moveBy(0, 12);
+      await driver.moveBy(0, MOVE_PX);
       dragging.push(Date.now() - started);
     }
     await driver.cancel();

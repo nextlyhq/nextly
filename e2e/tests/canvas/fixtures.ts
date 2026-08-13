@@ -134,21 +134,22 @@ export const NESTED_FIXTURE: SeedOptions = {
  */
 const TALL_BLOCK_HEIGHT = 200;
 const TALL_COUNT = 30;
+// One sequence, read by both the rendered nodes and the declared ids. Two
+// generators of the same names agree the day they are written; a later change
+// to the count or the naming applied to one leaves the fixture declaring a
+// document it does not render, and `mountTree` then waits for ids that never
+// appear.
+const TALL_BLOCK_IDS = Array.from(
+  { length: TALL_COUNT },
+  (_unused, index) => `nx-tall-${String(index)}`
+);
 export const TALL_FIXTURE: SeedOptions = {
   title: "spike tall",
   slug: "spike-tall",
   content: document(
-    Array.from({ length: TALL_COUNT }, (_unused, index) =>
-      spacer(`nx-tall-${String(index)}`, `${String(TALL_BLOCK_HEIGHT)}px`)
-    )
+    TALL_BLOCK_IDS.map(id => spacer(id, `${String(TALL_BLOCK_HEIGHT)}px`))
   ),
-  blockIds: [
-    "nx-spike-root",
-    ...Array.from(
-      { length: TALL_COUNT },
-      (_unused, index) => `nx-tall-${String(index)}`
-    ),
-  ],
+  blockIds: ["nx-spike-root", ...TALL_BLOCK_IDS],
 };
 
 /** 500 siblings: the tree size the perf budget is stated against. */

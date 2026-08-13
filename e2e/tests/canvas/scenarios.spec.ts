@@ -34,25 +34,11 @@ test.describe.configure({ timeout: 180_000 });
  */
 test.use({ viewport: { width: 2560, height: 1400 } });
 
-/**
- * How far the reported indicator may sit from the pointer before the mapping is
- * considered wrong.
- *
- * Generous on purpose: collision detection may legitimately choose a zone a
- * little away from the pointer. It is still far tighter than every failure it
- * guards. A stale-rect bug after a 200px scroll misreports by ~200px, and an
- * unscaled 0.75 transform misreports by ~25% of the travel, which exceeds this
- * within the first 240px of a sweep.
- */
-
-/** Step the pointer down until a drop zone becomes active, and report where. */
 /** Begin a drag from the insert panel and carry the pointer over the canvas. */
 async function startPanelDrag(driver: CanvasDriver) {
   const target = await driver.canvasCentre();
   await driver.startDragAt(await driver.dragSourceCentre());
-  // Shared, because the delta must be measured from the post-activation
-  // pointer rather than from the source point.
-  await dragPointerTo(driver, target, 1);
+  await dragPointerTo(driver, target);
 }
 
 /**
