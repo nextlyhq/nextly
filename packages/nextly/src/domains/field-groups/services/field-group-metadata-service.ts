@@ -32,6 +32,7 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { readRequestLocalized } from "../../../dispatcher/helpers/request-localized";
 import { NextlyError } from "../../../errors";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type {
@@ -243,6 +244,14 @@ export class FieldGroupMetadataService {
   async updateFieldGroup(
     input: UpdateFieldGroupInput
   ): Promise<UpdateFieldGroupResult> {
+    // 🔴 Validated BEFORE the exclusion, because it is a PRECONDITION and preconditions run first.
+    // Inside, the flag below has already given this request permission to create the lock table, so
+    // a deployment whose role holds DML but not DDL answers an invalid `localized` with a database
+    // permission error instead of the validation error that actually describes it — a caller told
+    // the wrong thing about their own mistake. Nothing here reads the database, so there is no
+    // reason for it to wait behind a lock.
+    const requestedLocalized = readRequestLocalized(input);
+
     return withSchemaChangeExcluded(
       {
         adapter: this.adapter,
@@ -259,12 +268,14 @@ export class FieldGroupMetadataService {
         // which cannot be read before deciding whether to take the lock that protects reading it.
         issuesDdl: input.fields !== undefined || input.localized !== undefined,
       },
-      () => this.updateFieldGroupExcluded(input)
+      () => this.updateFieldGroupExcluded(input, requestedLocalized)
     );
   }
 
   private async updateFieldGroupExcluded(
-    input: UpdateFieldGroupInput
+    input: UpdateFieldGroupInput,
+    /** Already validated by the caller, which runs outside the lock. */
+    requestedLocalized: boolean | undefined
   ): Promise<UpdateFieldGroupResult> {
     // 0. RE-ESTABLISH every precondition, against the state as it is NOW.
     //
@@ -290,17 +301,6 @@ export class FieldGroupMetadataService {
       );
       assertValidPluginFieldOptions(input.fields);
     }
-
-    // 🔴 Validated HERE, at the boundary every transport crosses, not in each transport. Fixing
-    // the dispatcher alone left the Direct API able to pass `localized: "false"` from JavaScript:
-    // the string is truthy, so the transition would enable and drop the main table's translatable
-    // columns while the registry, storing `data.localized === true`, recorded the group disabled.
-    // The declared type stops a TypeScript caller and stops nothing at runtime, which is exactly
-    // the difference this service exists to stop mattering.
-    const { readRequestLocalized } = await import(
-      "../../../dispatcher/helpers/request-localized"
-    );
-    const requestedLocalized = readRequestLocalized(input);
 
     const wasLocalized = existing.localized === true;
     const localized = requestedLocalized ?? wasLocalized;
