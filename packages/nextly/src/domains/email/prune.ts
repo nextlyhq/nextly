@@ -30,6 +30,7 @@
 import type { WhereCondition } from "@nextlyhq/adapter-drizzle/types";
 
 import type { Logger } from "../../shared/types";
+import { warnQuietly } from "../retention/safe-log";
 
 import {
   EMAIL_RETENTION_CLASSES,
@@ -170,7 +171,11 @@ export async function pruneEmailDataSafely(
   try {
     return await pruneEmailData(deps, policy, maxBatches);
   } catch (error) {
-    deps.logger?.warn?.("Email retention pass failed", { error });
+    // `warnQuietly` rather than the logger directly: this is inside the catch
+    // that exists to keep a prune failure away from the send, so an
+    // app-supplied logger throwing here would reintroduce exactly the escape
+    // this function was written to prevent.
+    warnQuietly(deps.logger, "Email retention pass failed", { error });
     return { deliveries: 0 };
   }
 }

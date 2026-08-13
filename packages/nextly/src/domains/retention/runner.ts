@@ -18,6 +18,7 @@
 import type { Logger } from "../../shared/types";
 
 import { claimRetentionPass, type RetentionGateStore } from "./gate";
+import { warnQuietly } from "./safe-log";
 
 /** One domain's retention work, plus how often it may run. */
 export interface RetentionPass {
@@ -84,7 +85,12 @@ export class RetentionRunner {
     } catch (error) {
       // The pass implementations absorb their own failures, so reaching here
       // means something unforeseen. Swallow it for the same reason they do.
-      this.deps.logger?.warn?.("retention pass could not start", {
+      //
+      // Reported through `warnQuietly` because this call sits INSIDE the catch
+      // that is supposed to contain everything: an app-supplied logger that
+      // throws here throws from the one position nothing is guarding, and the
+      // escape reaches the write path that only offered a pass out of courtesy.
+      warnQuietly(this.deps.logger, "retention pass could not start", {
         pass: pass.key,
         error: error instanceof Error ? error.message : String(error),
       });

@@ -31,6 +31,7 @@ import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
+import { warnQuietly } from "../../retention/safe-log";
 import {
   deliveriesTableFor,
   type EmailDeliveriesTable,
@@ -232,10 +233,22 @@ export class EmailDeliveryService extends BaseService {
     }
 
     // Offered after the rows exist, never before: a pass that ran first would
-    // do its work and then be handed the very rows it was meant to bound. It
-    // cannot throw — `maybeRun` absorbs its own failures, and this method's
-    // contract is that a recorded send is never reported as a failed one.
-    await this.retention?.maybeRun();
+    // do its work and then be handed the very rows it was meant to bound.
+    //
+    // Contained here as well as inside the runner, and the duplication is
+    // deliberate. `retention` is INJECTED, so what arrives is whatever the
+    // composition root or a test handed over, and this method cannot verify
+    // that it absorbs its own failures — while the contract it would break is
+    // this method's own: the rows are already written, so a rejection here
+    // reports an accepted send as a failed one and invites the caller to send
+    // it twice.
+    try {
+      await this.retention?.maybeRun();
+    } catch (error) {
+      warnQuietly(this.logger, "Email retention pass could not be offered", {
+        error,
+      });
+    }
   }
 
   /**
