@@ -29,7 +29,7 @@ import {
   releaseRetentionPass,
   type RetentionGateStore,
   AUDIT_RETENTION_DRAIN_GATE_KEY,
-  EMAIL_RETENTION_GATE_KEY,
+  EMAIL_RETENTION_DRAIN_GATE_KEY,
   WEBHOOK_RETENTION_GATE_KEY,
 } from "../../domains/retention/gate";
 
@@ -234,6 +234,11 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
     // Claimed here too, and for the same reason: the webhook sweep below has to
     // know how many passes will actually follow before it decides how much of
     // the remaining time it may spend.
+    //
+    // On its OWN marker, not the one write paths use. Every write offers this
+    // pass capped at a couple of batches, so sharing a marker would let a send
+    // take the turn moments before this call and leave the full budget
+    // unreachable — the log then grows while both triggers report success.
     const emailPolicy = activeEmailRetention(retention.emailPolicy);
     const emailPrunes =
       emailPolicy !== undefined && emailPolicy.maxAgeMs !== false;
@@ -241,7 +246,7 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
       emailPrunes && !deadlineSpent()
         ? await claimRetentionPass(
             retention.gate,
-            EMAIL_RETENTION_GATE_KEY,
+            EMAIL_RETENTION_DRAIN_GATE_KEY,
             emailPolicy!.intervalMs
           )
         : false;
@@ -337,10 +342,23 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
     // marker holding it off for a full interval.
     if (emailTurn) {
       if (deadlineSpent()) {
-        await releaseRetentionPass(retention.gate, EMAIL_RETENTION_GATE_KEY);
+        await releaseRetentionPass(
+          retention.gate,
+          EMAIL_RETENTION_DRAIN_GATE_KEY
+        );
       } else {
         const swept = await pruneEmailDataSafely(
-          { adapter: retention.prune.adapter, logger: retention.prune.logger },
+          {
+            adapter: retention.prune.adapter,
+            logger: retention.prune.logger,
+            // The drain's clock and deadline, so this pass stops between
+            // batches when the wall-clock budget runs out. Without them a
+            // backlog spends its whole batch allowance past the deadline and
+            // carries the invocation over the platform's limit -- losing the
+            // drain's delivery work, which is the one thing that was waited on.
+            now,
+            deadline,
+          },
           emailPolicy!
         );
         result.pruned.emailDeliveries = swept.deliveries;

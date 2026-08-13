@@ -150,6 +150,61 @@ describe("sweeping the email delivery log", () => {
     expect(deletes).toHaveLength(1);
   });
 
+  it("stops between batches once a supplied deadline passes", async () => {
+    // The scheduled drain's promise to a serverless cron route: the invocation
+    // must return before the platform kills it, or the drain's own delivery
+    // work is lost with it. Only that caller supplies a deadline; a write path
+    // bounds itself with batches, because what it protects is one request.
+    const full = Array.from(
+      { length: EMAIL_PRUNE_BATCH_SIZE },
+      (_, i) => `id-${i}`
+    );
+    // TEN full batches available, so the adapter can never be what stops this.
+    // An earlier version supplied four and asserted "fewer than ten", which
+    // passed with the deadline check removed — the fixture ran out first and
+    // the test proved nothing.
+    const { adapter, deletes } = adapterWith(
+      Array.from({ length: 10 }, () => full)
+    );
+    let clock = NOW.getTime();
+
+    await pruneEmailData(
+      {
+        adapter,
+        // Time passes only as batches are taken, so the deadline is crossed by
+        // work rather than by a contrived jump.
+        now: () => new Date((clock += 400)),
+        deadline: new Date(NOW.getTime() + 1000),
+      },
+      resolveEmailRetentionConfig(),
+      10
+    );
+
+    // The budget allowed ten batches and the adapter could serve all ten, so
+    // only the clock can have stopped this. A pass that never checked would
+    // have spent every one of them past the deadline.
+    expect(deletes.length).toBeGreaterThan(0);
+    expect(deletes.length).toBeLessThan(10);
+  });
+
+  it("runs its whole budget when no deadline is supplied", async () => {
+    // The control. A prune that stopped early regardless would pass the case
+    // above and quietly halve every write path's allowance.
+    const full = Array.from(
+      { length: EMAIL_PRUNE_BATCH_SIZE },
+      (_, i) => `id-${i}`
+    );
+    const { adapter, deletes } = adapterWith([full, full, full]);
+
+    await pruneEmailData(
+      { adapter, now: () => NOW },
+      resolveEmailRetentionConfig(),
+      3
+    );
+
+    expect(deletes).toHaveLength(3);
+  });
+
   it("never lets housekeeping fail a send", async () => {
     const warn = vi.fn();
     const adapter: EmailPruneAdapter = {

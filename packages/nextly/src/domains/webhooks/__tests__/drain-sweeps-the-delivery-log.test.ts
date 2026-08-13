@@ -19,6 +19,7 @@ import { describe, expect, it, vi } from "vitest";
 import { resolveAuditRetentionConfig } from "../../audit/retention-config";
 import { resolveEmailRetentionConfig } from "../../email/retention-config";
 import {
+  EMAIL_RETENTION_DRAIN_GATE_KEY,
   EMAIL_RETENTION_GATE_KEY,
   type RetentionGateStore,
 } from "../../retention/gate";
@@ -71,7 +72,7 @@ describe("the scheduled drain and the delivery log", () => {
       gate: gateThatGrants(claimed),
     });
 
-    expect(claimed).toContain(EMAIL_RETENTION_GATE_KEY);
+    expect(claimed).toContain(EMAIL_RETENTION_DRAIN_GATE_KEY);
     // Reached the table, rather than merely taking the turn. A pass that
     // claimed its gate and queried nothing would still leave the log growing
     // while the marker held the next attempt off for a full interval.
@@ -94,7 +95,7 @@ describe("the scheduled drain and the delivery log", () => {
       gate: gateThatGrants(claimed),
     });
 
-    expect(claimed).toContain(EMAIL_RETENTION_GATE_KEY);
+    expect(claimed).toContain(EMAIL_RETENTION_DRAIN_GATE_KEY);
   });
 
   it("does not claim a turn for a log configured to keep everything", async () => {
@@ -110,7 +111,17 @@ describe("the scheduled drain and the delivery log", () => {
       gate: gateThatGrants(claimed),
     });
 
-    expect(claimed).not.toContain(EMAIL_RETENTION_GATE_KEY);
+    expect(claimed).not.toContain(EMAIL_RETENTION_DRAIN_GATE_KEY);
+  });
+
+  it("claims a marker the capped write path cannot take from it", () => {
+    // Two triggers with different jobs. Every write offers this pass capped at
+    // a couple of batches so a send is not held up; the drain offers it at full
+    // budget because nothing waits on the drain. Sharing one marker let a send
+    // landing moments earlier take the turn and spend two batches, leaving the
+    // configured budget unreachable — the log then grows while both triggers
+    // report success. The audit trails were gated twice for exactly this.
+    expect(EMAIL_RETENTION_DRAIN_GATE_KEY).not.toBe(EMAIL_RETENTION_GATE_KEY);
   });
 
   it("does not consume the interval when the wall-clock budget is spent", async () => {
@@ -152,8 +163,8 @@ describe("the scheduled drain and the delivery log", () => {
     // given back.
     expect(select).not.toHaveBeenCalled();
     const held =
-      claimed.filter(k => k === EMAIL_RETENTION_GATE_KEY).length -
-      released.filter(k => k === EMAIL_RETENTION_GATE_KEY).length;
+      claimed.filter(k => k === EMAIL_RETENTION_DRAIN_GATE_KEY).length -
+      released.filter(k => k === EMAIL_RETENTION_DRAIN_GATE_KEY).length;
     expect(held).toBe(0);
   });
 });

@@ -470,14 +470,21 @@ export async function registerServices(
   // returning `email: { ...config.email, retention: false }` left the two
   // representations disagreeing — and every reader takes the flattened one, so
   // the plugin's keep-forever decision was silently overruled by the original
-  // 90-day default. Two representations of one setting only stay honest if the
-  // derived one is recomputed wherever its source can change.
+  // 90-day default.
   //
-  // An explicitly supplied `emailRetention` is left alone. That is a caller
-  // passing the resolved policy directly to `registerServices`, which no
-  // transformer is speaking for.
+  // UNCONDITIONAL when a nested block exists, and that is the whole point. An
+  // earlier version only recomputed when the flattened field was ABSENT, which
+  // is exactly backwards: on the ordinary `defineConfig()` path sanitization
+  // always populates it, so the guard was false precisely in the case the
+  // recomputation exists for. A derived value has to be recomputed wherever its
+  // SOURCE can change, not wherever it happens to be missing.
+  //
+  // The cost is that an `emailRetention` passed directly to `registerServices`
+  // alongside an `email` block is superseded by that block. The nested form is
+  // the one a transformer can speak for, and a caller supplying both has stated
+  // the same setting twice.
   const transformedConfig: typeof contributedConfig =
-    config.emailRetention === undefined && contributedConfig.email !== undefined
+    contributedConfig.email !== undefined
       ? {
           ...contributedConfig,
           emailRetention: resolveEmailRetentionConfig(

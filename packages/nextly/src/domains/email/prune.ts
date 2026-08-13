@@ -68,6 +68,20 @@ export interface EmailPruneDeps {
   adapter: EmailPruneAdapter;
   now?: () => Date;
   logger?: Logger;
+  /**
+   * Absolute moment to stop starting new batches.
+   *
+   * Only the scheduled drain supplies one, and it is a promise that call makes
+   * to a serverless cron route: the invocation must return before the platform
+   * kills it, or the drain's own delivery work is lost with it. Write paths
+   * bound themselves with `maxBatches` instead, because what they are
+   * protecting is one user's request rather than a wall clock.
+   *
+   * Checked BETWEEN batches rather than mid-statement, so a pass stops cleanly
+   * having committed whole batches. Absent means unbounded, which is what every
+   * caller that is not racing a platform timeout wants.
+   */
+  deadline?: Date;
 }
 
 /**
@@ -88,7 +102,13 @@ async function pruneClass(
 ): Promise<number> {
   let deleted = 0;
 
+  const clock = deps.now ?? ((): Date => new Date());
+
   while (budget.batchesLeft > 0) {
+    // Between batches, never inside one. A pass that stopped mid-batch would
+    // leave the select's work paid for and nothing deleted.
+    if (deps.deadline !== undefined && clock() >= deps.deadline) return deleted;
+
     const candidates = await deps.adapter.select<{ id: string }>(
       DELIVERIES_TABLE,
       {
