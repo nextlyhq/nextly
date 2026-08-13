@@ -17,6 +17,7 @@ import {
   shutdownServices,
 } from "../di";
 import type { NextlyServiceConfig } from "../di/register";
+import { buildServiceConfig } from "../init/build-service-config";
 import { ensureHmrListener } from "../runtime/hmr-listener";
 import { getImageProcessor } from "../storage/image-processor";
 
@@ -98,6 +99,47 @@ export function _recordRegisteredLocalizationForTest(
 }
 
 /**
+ * The service configuration a cold boot triggered by a request registers with.
+ *
+ * Derived from `buildServiceConfig`, the same builder the instrumentation boot
+ * uses, rather than from a second list of config blocks maintained beside it.
+ * The two paths must register the same shape, and a hand-copied list cannot be
+ * relied on to: a block added to one and forgotten in the other resolves,
+ * defaults, and then does nothing, with no error anywhere to say so. That has
+ * happened repeatedly — `admin.devAutoLogin` vanished, app-defined Singles were
+ * never registered, `localization` left every localized read silently writing
+ * to the main table. Asking the builder makes the question have one answer.
+ *
+ * `db` is the one block still read here, because the two paths genuinely
+ * DISAGREE about it rather than one having forgotten it: absent `schemasDir`,
+ * `register-collections.ts` falls back to `<basePath>/src/db/schemas/dynamic`,
+ * while `config.db.schemasDir` defaults to `./src/db/schemas/collections`. So
+ * forwarding it is a behaviour difference between boot paths, not an omission,
+ * and it is not this function's to settle.
+ */
+export function requestPathServiceConfig(
+  nextlyConfig: SanitizedNextlyConfig | null
+): NextlyServiceConfig {
+  // Never `getMediaStorage()` here: storage plugins are registered by
+  // `registerServices()` -> `initializeMediaStorage()`, so touching the
+  // singleton first builds one with no plugins and a local-only fallback.
+  const imageProcessor = getImageProcessor();
+  if (!nextlyConfig) return { imageProcessor };
+
+  const serviceConfig = buildServiceConfig({
+    config: nextlyConfig,
+    imageProcessor,
+  });
+
+  const dbConfig = nextlyConfig.db;
+  if (dbConfig?.schemasDir) serviceConfig.schemasDir = dbConfig.schemasDir;
+  if (dbConfig?.migrationsDir)
+    serviceConfig.migrationsDir = dbConfig.migrationsDir;
+
+  return serviceConfig;
+}
+
+/**
  * Ensure services are initialized, auto-initializing if needed.
  * This is critical for Singles and other services that depend on the DI container.
  *
@@ -172,65 +214,7 @@ async function initializeServicesOnce(): Promise<void> {
     // config need to be registered first via registerServices(), which calls
     // initializeMediaStorage() with the correct plugins. Calling getMediaStorage()
     // before that creates a singleton with zero plugins (local fallback only).
-    const serviceConfig: Record<string, unknown> = {
-      imageProcessor: getImageProcessor(),
-    };
-
-    if (nextlyConfig) {
-      // Pass through config properties that registerServices() understands.
-      // Mirrors the equivalent block in init/build-service-config.ts so the
-      // two init paths register the same shape - drift here is what caused
-      // admin.devAutoLogin to silently disappear before this fix.
-      if (nextlyConfig.plugins) serviceConfig.plugins = nextlyConfig.plugins;
-      if (nextlyConfig.collections)
-        serviceConfig.collections = nextlyConfig.collections;
-      // Forward singles and components too: the request-path boot otherwise
-      // registers neither, so app-defined Singles never reach registerServices
-      // — their runtime schema, and their webhook recording opt-out, silently
-      // fall back to defaults (a `webhooks: false` Single would record PII).
-      if (nextlyConfig.singles) serviceConfig.singles = nextlyConfig.singles;
-      if (nextlyConfig.fieldGroups)
-        serviceConfig.fieldGroups = nextlyConfig.fieldGroups;
-      if (nextlyConfig.storage)
-        serviceConfig.storagePlugins = nextlyConfig.storage;
-      if (nextlyConfig.email) serviceConfig.email = nextlyConfig.email;
-      if (nextlyConfig.users) serviceConfig.users = nextlyConfig.users;
-      if (nextlyConfig.admin) serviceConfig.admin = nextlyConfig.admin;
-      if (nextlyConfig.auth) serviceConfig.auth = nextlyConfig.auth;
-      if (nextlyConfig.security) serviceConfig.security = nextlyConfig.security;
-      // i18n: carry the normalized localization block so the request-path boot
-      // registers localization-aware data services, matching build-service-config.ts.
-      // Omitting it makes ctx.config.localization undefined → localized reads/writes
-      // silently no-op to the main table.
-      if (nextlyConfig.localization)
-        serviceConfig.localization = nextlyConfig.localization;
-      if (nextlyConfig.apiKeys) serviceConfig.apiKeys = nextlyConfig.apiKeys;
-      // Webhook retention: carry the resolved policy so a request-path boot
-      // wires the cleanup runner too. Compared against undefined rather than
-      // truthiness because null is the meaningful "retention off" value and
-      // must not be mistaken for absent.
-      if (nextlyConfig.webhookRetention !== undefined)
-        serviceConfig.webhookRetention = nextlyConfig.webhookRetention;
-      // Webhook audit seam: carry it so a request-path boot publishes the same
-      // recording-gate override an instrumentation boot would. Without it, an
-      // install configured `webhooks: { audit: true }` that cold-boots through
-      // this path would default audit off and drop events while it has no
-      // endpoint.
-      if (nextlyConfig.webhookAuditEnabled !== undefined)
-        serviceConfig.webhookAuditEnabled = nextlyConfig.webhookAuditEnabled;
-      // Audit retention: carry the resolved windows for the same reason. This
-      // path copies each field by hand, so one left out is a policy that
-      // resolves, defaults, and prunes nothing — the pass is never registered,
-      // and an unregistered pass does not run, log, or appear anywhere.
-      if (nextlyConfig.auditRetention !== undefined)
-        serviceConfig.auditRetention = nextlyConfig.auditRetention;
-      if (nextlyConfig.db) {
-        const dbConfig = nextlyConfig.db as Record<string, unknown>;
-        if (dbConfig.schemasDir) serviceConfig.schemasDir = dbConfig.schemasDir;
-        if (dbConfig.migrationsDir)
-          serviceConfig.migrationsDir = dbConfig.migrationsDir;
-      }
-    }
+    const serviceConfig = requestPathServiceConfig(nextlyConfig);
 
     // Warn (dev only) when an app boots through the request path instead
     // of via Next.js's instrumentation.ts. The request-path boot still
@@ -260,7 +244,7 @@ async function initializeServicesOnce(): Promise<void> {
       );
     }
 
-    await registerServices(serviceConfig as unknown as NextlyServiceConfig);
+    await registerServices(serviceConfig);
     // Services now match the block this config was registered from, so that
     // is the value a later request compares against.
     _registeredLocalization = localizationKey(nextlyConfig);
