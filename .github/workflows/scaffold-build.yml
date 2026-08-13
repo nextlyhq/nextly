@@ -82,6 +82,16 @@ jobs:
             pm: pnpm
             source: local
 
+          # NO `--local-template`, so the CLI falls back to the templates BUNDLED in the packed
+          # tarball. Every other blank leg passes the flag and every blog leg gets its template
+          # remotely, so a break in `copyBundledTemplates` — or `templates` dropped from the
+          # published `files` — would leave all of them green while an ordinary
+          # `create-nextly-app --template blank` fails with "Template not found".
+          - name: blank-bundled
+            template: blank
+            pm: npm
+            source: bundled
+
           # `blog` is the other app template these paths trigger on.
           - name: blog-code-first
             template: blog
@@ -159,6 +169,8 @@ jobs:
           # leg is chosen here rather than by a flag.
           args="--template ${{ matrix.template }} --yes"
           # Omitted on the download leg so `resolveTemplateSource` takes the production path.
+          # `bundled` and `download` both omit it, for different reasons: one exercises the
+          # tarball's own templates, the other the runtime download.
           if [ "${{ matrix.source }}" = "local" ]; then
             args="$args --local-template $GITHUB_WORKSPACE/templates"
           fi
@@ -224,4 +236,16 @@ jobs:
           if grep -rq "internal/font/google" .next; then
             echo "the build ran the Google font loader, which needs the network"
             exit 1
+          fi
+
+          # The blog scaffold's generated build script runs its search-index step as
+          # `(test -f scripts/build-search-index.mjs && node scripts/... || true)`, which turns a
+          # nonzero exit into success. So `npm run build` passing says nothing about whether the
+          # index was produced, and a project shipped without it serves a search page that cannot
+          # load — asserted here rather than inferred from the build's exit code.
+          if [ "${{ matrix.template }}" = "blog" ]; then
+            test -f public/pagefind/pagefind.js || {
+              echo "the blog build produced no search index at public/pagefind/pagefind.js"
+              exit 1
+            }
           fi
