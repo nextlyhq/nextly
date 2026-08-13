@@ -2082,6 +2082,37 @@ function samePlace(a: NodeLocation, b: NodeLocation): boolean {
 }
 
 /** Where a located node sits, in the shape an op addresses. */
+/**
+ * Refuses a slot cleanup that names somewhere the node did not just leave.
+ *
+ * `dropSlotIfEmpty` exists to undo the CONTAINER an insert or a move created,
+ * so the only slot it may remove is the one the node has just vacated. Accepting
+ * any empty slot in the document makes it a second, unlogged deletion riding on
+ * an unrelated edit: a remove naming some other parent's empty `extra` slot
+ * deletes both the node and that slot, while the inverse reinserts only the
+ * node. The slot is gone with nothing recording that it went.
+ *
+ * An op is data from storage or from an agent, so the address it carries is a
+ * claim rather than a fact. This is where the claim is checked against where the
+ * node actually sat.
+ */
+function assertDropSlotWasVacated(
+  address: SlotAddress | undefined,
+  location: NodeLocation,
+  verb: string
+): void {
+  if (address === undefined) return;
+  const parentId = location.parent?.id;
+  if (address.parentId !== parentId || address.slot !== location.slot) {
+    throw new OpError(
+      `${verb}: the slot to drop names ${describe(address.slot)} in ` +
+        `${describe(address.parentId)}, which is not where this node sat. Only ` +
+        `the slot a node has just left may be cleaned up, or the edit deletes ` +
+        `a region its inverse cannot restore.`
+    );
+  }
+}
+
 function positionOf(location: NodeLocation): OpPosition {
   if (location.parent === undefined) return { index: location.index };
   // A parent with no slot is not a position an op can express, and building one
@@ -2483,6 +2514,7 @@ export function applyOp(
       // The slot the original placement created, if this remove is the undo of
       // one. Applied AFTER the removal, because the slot only becomes empty
       // once the node is out of it.
+      assertDropSlotWasVacated(op.dropSlotIfEmpty, location, "remove");
       const pruned =
         op.dropSlotIfEmpty === undefined
           ? without
@@ -2565,6 +2597,7 @@ export function applyOp(
       // The slot the original placement created, if this move is the undo of
       // one. After the relocation, because the slot the node has just left is
       // only empty once it is out.
+      assertDropSlotWasVacated(op.dropSlotIfEmpty, location, "move");
       const settledForest =
         op.dropSlotIfEmpty === undefined
           ? moved

@@ -564,9 +564,16 @@ export function measureBytes(
   limit: number
 ): { bytes: number; exceeded: boolean } {
   let bytes = 0;
-  const stack: unknown[] = [root];
+  // Each entry carries the KEY it sits under, because `toJSON` receives it.
+  // `JSON.stringify` passes the containing property name — the index as a
+  // string inside an array, and `""` for the root — and a hook that reads it
+  // either throws on `undefined` or quietly returns something else. Both make
+  // this counter disagree with the writer it exists to agree with.
+  const stack: { value: unknown; key: string }[] = [{ value: root, key: "" }];
   while (stack.length > 0) {
-    const popped = stack.pop();
+    const entry = stack.pop();
+    if (entry === undefined) break;
+    const popped = entry.value;
     // `toJSON` FIRST, because that is what `JSON.stringify` writes. A value
     // defining it is serialized as whatever it returns, not as the fields it
     // happens to carry — and this counter exists to agree with the serializer.
@@ -581,7 +588,7 @@ export function measureBytes(
     const value =
       typeof (popped as { toJSON?: unknown } | null | undefined)?.toJSON ===
       "function"
-        ? (popped as { toJSON: () => unknown }).toJSON()
+        ? (popped as { toJSON: (key: string) => unknown }).toJSON(entry.key)
         : popped;
     if (typeof value === "string") {
       bytes += 2 + utf8ByteLength(value, limit - bytes);
@@ -605,7 +612,13 @@ export function measureBytes(
       // array's length is part of its meaning. The same value inside an object
       // is dropped instead — see below. Normalised here so the walk never has
       // to remember which container a value came from.
-      for (const item of value) stack.push(serializesAs(item) ? item : null);
+      for (let index = 0; index < value.length; index += 1) {
+        const item: unknown = value[index];
+        stack.push({
+          value: serializesAs(item) ? item : null,
+          key: String(index),
+        });
+      }
     } else if (typeof value === "object") {
       // Only the members that will actually be written. `JSON.stringify` DROPS
       // an object member whose value is `undefined`, a function or a symbol —
@@ -632,7 +645,7 @@ export function measureBytes(
       for (const [key, val] of entries) {
         bytes += utf8ByteLength(key, limit) + 3; // quotes + colon
         if (bytes > limit) return { bytes, exceeded: true };
-        stack.push(val);
+        stack.push({ value: val, key });
       }
     }
     if (bytes > limit) return { bytes, exceeded: true };

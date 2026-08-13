@@ -1824,3 +1824,28 @@ describe("measureBytes and the serializer agree on toJSON", () => {
     expect(measureBytes(value, 20).exceeded).toBe(true);
   });
 });
+
+describe("measureBytes passes toJSON the key the serializer does", () => {
+  it("matches the writer for a key-sensitive hook", () => {
+    // `JSON.stringify` calls `toJSON(key)` with the containing property name.
+    // Called with no argument, a hook that reads the key either throws or
+    // returns something else, and the counter stops agreeing with the writer.
+    const value = {
+      child: {
+        toJSON(key: string) {
+          return key.repeat(3);
+        },
+      },
+      list: [
+        {
+          toJSON(key: string) {
+            return `at-${key}`;
+          },
+        },
+      ],
+    };
+    const written = Buffer.byteLength(JSON.stringify(value), "utf8");
+
+    expect(measureBytes(value, 1_000).bytes).toBe(written);
+  });
+});
