@@ -28,6 +28,11 @@ import { FIELD_GROUP_MIGRATION_KEY, MIGRATION_MARKER_VERSION } from "../state";
 
 import { identifierCaseRules } from "../../../schema/utils/resolve-catalog-name";
 
+import {
+  buildMigrationManifest,
+  hashManifest,
+  hashRegistryIdentity,
+} from "../manifest";
 import { readRegistryRows, runFieldGroupMigration } from "../run";
 import { MIGRATION_LOCK_TABLE } from "../session";
 
@@ -83,6 +88,14 @@ interface RunWorld {
    * whole mechanism — every other read consults `world` at call time.
    */
   onMarkerRead?: () => void;
+  /**
+   * Names `tableExists` reports absent even though the catalog listing holds them.
+   *
+   * Models the two reads landing at different instants, which is the only way a
+   * test can tell "asked the snapshot" apart from "asked again": both otherwise
+   * consult the same `tables` array and agree no matter which the code used.
+   */
+  invisibleToTableExists?: string[];
 }
 
 /**
@@ -247,7 +260,11 @@ function createRunWorld(world: RunWorld) {
     }),
     executeQuery: () => Promise.resolve([]),
     queryStatement: (statement: SQL) => Promise.resolve(interpret(statement)),
-    tableExists: (name: string) => Promise.resolve(world.tables.includes(name)),
+    tableExists: (name: string) =>
+      Promise.resolve(
+        world.tables.includes(name) &&
+          !(world.invisibleToTableExists ?? []).includes(name)
+      ),
     listTables: () => {
       trace.push("catalog");
       return Promise.resolve([...world.tables]);
@@ -1144,6 +1161,151 @@ describe("a preview that meets a writer mid-run", () => {
     // done rather than previewing a plan.
     expect(outcome).toMatchObject({ ran: false, reason: "already-migrated" });
     expect(markerReads(trace)).toBe(2);
+  });
+
+  /**
+   * A marker for a run of `direction` already in flight.
+   *
+   * The hashes sit at the marker's TOP level and the manifest hash is verified against the plan it
+   * carries, so both are built from the same rows the world reports rather than written by hand —
+   * a fixture that disagrees with either is rejected as corrupt before the case under test is ever
+   * reached, and would fail for a reason that has nothing to do with direction.
+   */
+  function inFlightMarker(direction: "up" | "down") {
+    const rows = [
+      { id: "1", slug: "hero", tableName: "comp_hero", hasCompanion: false },
+    ];
+    const entries = buildMigrationManifest(rows).entries;
+    return {
+      version: MIGRATION_MARKER_VERSION,
+      status: "migrating",
+      direction,
+      migrationId: "fg-test",
+      step: 0,
+      registryHash: hashRegistryIdentity(rows),
+      manifestHash: hashManifest(entries),
+      appliedManifest: entries,
+    };
+  }
+
+  // 🔴 A localized group's companion is renamed by this migration too, so asking the catalog a
+  // SECOND time for it lets the row and its companion describe different instants: the row still
+  // under its old name, the companion already moved. That reads as `hasCompanion: false`, which
+  // feeds the registry hash — so an in-flight run fails the recorded-hash comparison and refuses
+  // PERMANENTLY, a refusal manufactured by the reading at the exact moment a writer is active.
+  it("reads a companion from the same snapshot as its registry row", async () => {
+    const { adapter } = createRunWorld({
+      tables: [LEGACY_REGISTRY, "comp_hero", "comp_hero_locales"],
+      registryRows: [
+        { id: "1", slug: "hero", table_name: "comp_hero", localized: true },
+      ],
+      // The listing holds it; a second look does not. Only code that trusts the
+      // snapshot it already took still finds the companion.
+      invisibleToTableExists: ["comp_hero_locales"],
+    });
+
+    const outcome = await runFieldGroupMigration({
+      adapter,
+      logger,
+      direction: "up",
+      dryRun: true,
+    });
+
+    if (outcome.ran !== false || outcome.reason !== "dry-run") {
+      expect.fail("expected a dry-run outcome");
+    }
+    expect(outcome.renames).toContainEqual({
+      from: "comp_hero_locales",
+      to: "fg_hero_locales",
+    });
+  });
+
+  // 🔴 The retry decision and the reported lock must come from ONE observation. Reducing the
+  // recheck to a boolean was enough to decide and not enough to report: the outcome carried the
+  // session's opening `not-held` beside a `basis` saying contention, so the single field an
+  // operator checks to understand the answer contradicted the answer.
+  it("reports the holder that justified an unreconciled plan", async () => {
+    const world = quietWorld();
+    const built = createRunWorld(world);
+    let reads = 0;
+    world.onMarkerRead = () => {
+      reads += 1;
+      // Claims AFTER the session observed the lock as free, and never lets go.
+      if (reads === 1) built.claimLock("field-group-migration:down#latecomer");
+    };
+
+    const outcome = await runFieldGroupMigration({
+      adapter: built.adapter,
+      logger,
+      direction: "up",
+      dryRun: true,
+    });
+
+    if (outcome.ran !== false || outcome.reason !== "dry-run") {
+      expect.fail("expected a dry-run outcome, not a refusal");
+    }
+    expect(outcome.basis).toMatchObject({ kind: "unreconciled" });
+    // The separating assertion: judged from the session's opening snapshot this reads `not-held`,
+    // which would describe a contended answer as having no writer behind it.
+    expect(outcome.lock).toEqual({
+      kind: "held",
+      owner: "field-group-migration:down#latecomer",
+    });
+  });
+
+  // A preview meeting a run going the other way is the case an operator most needs answered, and it
+  // was the one that still refused. REPORTED rather than retried: unlike a torn read this is an
+  // accurate observation that stays true for as long as the other run takes.
+  it("reports rather than refuses when a run goes the other way", async () => {
+    const { adapter, trace } = createRunWorld({
+      marker: inFlightMarker("down"),
+      tables: [LEGACY_REGISTRY, "comp_hero", MIGRATION_LOCK_TABLE],
+      registryRows: [{ id: "1", slug: "hero", table_name: "comp_hero" }],
+      lockOwner: "field-group-migration:down#someone-else",
+    });
+
+    const outcome = await runFieldGroupMigration({
+      adapter,
+      logger,
+      direction: "up",
+      dryRun: true,
+    });
+
+    if (outcome.ran !== false || outcome.reason !== "dry-run") {
+      expect.fail("expected a dry-run outcome, not a refusal");
+    }
+    expect(outcome.basis).toEqual({
+      kind: "unreconciled",
+      reason: "a run in the other direction is in flight",
+    });
+    expect(outcome.renames.length).toBeGreaterThan(0);
+    expect(outcome.lock).toMatchObject({ kind: "held" });
+    // Answered on the first look. Re-reading an accurate observation three times would spend the
+    // attempts to reach the same true answer more slowly.
+    expect(markerReads(trace)).toBe(1);
+  });
+
+  // The writing counterpart, which must NOT be softened: two runs travelling opposite ways over the
+  // same storage is the collision the lock exists to prevent.
+  it("still refuses a writing run that meets the other direction", async () => {
+    const { adapter } = createRunWorld({
+      marker: inFlightMarker("down"),
+      tables: [LEGACY_REGISTRY, "comp_hero", MIGRATION_LOCK_TABLE],
+      registryRows: [{ id: "1", slug: "hero", table_name: "comp_hero" }],
+    });
+
+    await expect(
+      runFieldGroupMigration({
+        adapter,
+        logger,
+        direction: "up",
+        backupConfirmed: true,
+      })
+    ).rejects.toSatisfy(
+      error =>
+        NextlyError.is(error) &&
+        error.logContext?.reason === "a run in the other direction is in flight"
+    );
   });
 
   // The plan is reported rather than withheld, and labelled rather than passed off as scored. An

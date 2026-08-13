@@ -329,12 +329,24 @@ export async function runFieldGroupMigration(
   //
   // `dryRun` is part of the expression, not a second guard. A CLAIMING session reports the lock as
   // held by its own claim — true and useless, and it would read as contention on every writing run.
-  const contended = async (): Promise<boolean> => {
-    if (!dryRun) return false;
-    if (observedLock.kind === "held") return true;
+  // 🔴 Returns the OBSERVATION, not a verdict about it. Reducing this to a boolean was enough to
+  // decide the retry and not enough to report it: the outcome then carried the session's original
+  // `lock` — `not-held`, or `unknown` — beside a `basis` that says contention, so the one field an
+  // operator would check to understand the answer contradicted the answer. Whichever observation
+  // proves a holder is the one the outcome reports, so the two cannot disagree.
+  const observeContention = async (): Promise<LockObservation> => {
+    if (!dryRun) return observedLock;
+    if (observedLock.kind === "held") return observedLock;
     const now = await observeMigrationLock(adapter, dialect);
-    return now.kind === "held";
+    // Held at EITHER end counts, and the later reading replaces the earlier only when it is the one
+    // carrying evidence: a writer that claimed after the session began is the explanation for what
+    // this attempt saw, while a quiet re-read does not undo a holder seen at the start.
+    if (now.kind === "held") observedLock = now;
+    return observedLock.kind === "held" ? observedLock : now;
   };
+
+  const contended = async (): Promise<boolean> =>
+    (await observeContention()).kind === "held";
 
   const runOnce = (finalAttempt: boolean): Promise<MigrationOutcome> =>
     withMigrationSession(
@@ -465,6 +477,47 @@ export async function runFieldGroupMigration(
             });
           }
           if (state.direction !== direction) {
+            // 🔴 A preview REPORTS this; only a run that writes refuses it. The marker says a run
+            // in the other direction is under way, and for something about to execute that is a
+            // hard stop — two runs travelling opposite ways over the same storage is the collision
+            // the lock exists to prevent. A preview executes nothing, and answering "no" to an
+            // operator asking what a migration would do, at the exact moment another one is
+            // running, withholds the answer they most need.
+            //
+            // Reported rather than retried, because unlike a torn read this is not a disagreement
+            // between two reads: it is an accurate observation that stays true for as long as the
+            // other run takes. Re-reading it three times would spend the attempts to arrive at the
+            // same true answer more slowly.
+            //
+            // Gated on an observed holder for the same reason everything else here is: a marker
+            // claiming an in-flight run with nothing holding the lock is a run that died, which an
+            // operator has to see rather than have described to them as traffic.
+            const lock = await observeContention();
+            if (dryRun && lock.kind === "held") {
+              const renames = directedRenameEntries(direction, entries).flatMap(
+                tableRenamesOf
+              );
+              logger.warn?.(
+                "field-group migration dry run met a run going the other way",
+                {
+                  phase: FIELD_GROUP_MIGRATION_PHASE,
+                  direction,
+                  recorded: state.direction,
+                  renames: renames.length,
+                }
+              );
+              return {
+                ran: false,
+                reason: "dry-run",
+                direction,
+                lock,
+                renames,
+                basis: {
+                  kind: "unreconciled",
+                  reason: "a run in the other direction is in flight",
+                },
+              };
+            }
             throw NextlyError.serviceUnavailable({
               logMessage: `field-group migration cannot run ${direction}: a ${state.direction} run is in flight`,
               logContext: {
@@ -541,8 +594,11 @@ export async function runFieldGroupMigration(
             ran: false,
             reason: "dry-run",
             direction,
+            // The observation that justified reaching this branch, not the one the session opened
+            // with. They differ exactly when a writer claimed after the preview began, which is the
+            // case this outcome exists to describe.
+            lock: await observeContention(),
             renames,
-            lock: session.lock,
             basis: { kind: "unreconciled", reason },
           };
         }
@@ -952,9 +1008,16 @@ export async function readRegistryRows(
     // A leftover companion from a group since un-localized is left behind by
     // this rule rather than renamed. That is the safe direction: nothing reads
     // it, whereas renaming a table Nextly does not own is not recoverable.
+    // 🔴 Answered from the SAME snapshot that resolved the registry, not a fresh `tableExists`. A
+    // localized group's companion is renamed by this migration too, so a separate lookup lets the
+    // row and its companion describe different instants: a rename committing between them reports
+    // a row still under its old `table_name` whose companion has already moved, which reads as
+    // `hasCompanion: false`. That feeds the registry hash, so an in-flight run then fails the
+    // recorded-hash comparison and raises a PERMANENT refusal — a refusal manufactured by the
+    // reading, at the one moment a writer is demonstrably active.
     const hasCompanion =
       isLocalized(row.localized) &&
-      (await adapter.tableExists(`${row.table_name}${suffix}`));
+      resolveCatalogName(catalog, `${row.table_name}${suffix}`) !== undefined;
     out.push({
       id: String(row.id),
       slug: String(row.slug),
