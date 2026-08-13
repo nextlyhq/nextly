@@ -1993,48 +1993,6 @@ describe("measureBytes says WHY a value cannot be stored", () => {
   });
 });
 
-describe("measureBytes stays cheap on ordinary objects", () => {
-  it("never reaches the slot check for a value that is not tagged a BigInt", () => {
-    // The mechanism, counted, rather than the wall clock. The slot check costs
-    // a thrown exception per call, so the defect is "it runs on every record" —
-    // and that is a count, not a duration. Measured as a timing ratio the same
-    // code produced 3.3x and 58x on one machine minutes apart, so a threshold
-    // between them is noise either way; a count separates exactly.
-    //
-    // `props` is not covered by the node cap, so an ordinary request can carry
-    // hundreds of thousands of small records through here.
-    const records = Array.from({ length: 20_000 }, () => ({}));
-    const original = BigInt.prototype.valueOf;
-    let calls = 0;
-    BigInt.prototype.valueOf = function countingValueOf(this: unknown): bigint {
-      calls += 1;
-      return original.call(this);
-    };
-
-    try {
-      measureBytes({ v: records }, Number.POSITIVE_INFINITY);
-    } finally {
-      BigInt.prototype.valueOf = original;
-    }
-
-    expect(
-      calls,
-      `the slot check ran ${String(calls)} times for ${String(records.length)} ` +
-        `ordinary records, each one a thrown exception`
-    ).toBe(0);
-  });
-
-  it("still refuses a boxed BigInt and still writes a tag that only claims to be one", () => {
-    // The positive control for the pre-filter: it must not have bought its
-    // cheapness by giving up either answer.
-    expect(measureBytes({ x: Object(1n) }, 100).exceeded).toBe(true);
-    expect(
-      measureBytes({ v: { [Symbol.toStringTag]: "BigInt", x: 1 } }, 1_000)
-        .exceeded
-    ).toBe(false);
-  });
-});
-
 describe("measureBytes reads nothing the writer would not", () => {
   it("does not invoke a Symbol.toStringTag getter the document defined", () => {
     // `JSON.stringify` ignores symbol keys, so it never runs this getter and
@@ -2084,5 +2042,45 @@ describe("measureBytes reads nothing the writer would not", () => {
       configurable: true,
     });
     expect(measureBytes({ v: tagged }, 1_000).exceeded).toBe(true);
+  });
+});
+
+describe("measureBytes probes a value only where the writer does", () => {
+  it("does not execute a proxy's descriptor trap", () => {
+    // The writer reads `toJSON` and own keys, and never asks for
+    // `Symbol.toStringTag`. A probe that does is observable through a Proxy
+    // trap even when no ordinary getter is involved, and a trap that throws
+    // turns a document the writer stores into a raised error.
+    const trapped: string[] = [];
+    const hostile = new Proxy(
+      { x: 1 },
+      {
+        getOwnPropertyDescriptor(target, key) {
+          trapped.push(String(key));
+          if (key === Symbol.toStringTag) throw new Error("descriptor trap");
+          return Reflect.getOwnPropertyDescriptor(target, key);
+        },
+      }
+    );
+
+    // The control: the writer really does accept it, so raising here would be
+    // a disagreement with the thing being counted.
+    expect(JSON.stringify({ v: hostile })).toBe('{"v":{"x":1}}');
+    expect(() => measureBytes({ v: hostile }, 1_000)).not.toThrow();
+    expect(
+      trapped.filter(key => key.includes("toStringTag")),
+      "the counter asked for a symbol the writer never asks for"
+    ).toEqual([]);
+  });
+
+  it("refuses a boxed BigInt whose prototype was replaced", () => {
+    // A prototype-based filter would call this an ordinary object. The writer
+    // still refuses it, so the counter has to as well or the two disagree
+    // about a document that cannot be stored.
+    const disguised = Object(1n) as object;
+    Object.setPrototypeOf(disguised, Object.prototype);
+
+    expect(() => JSON.stringify({ v: disguised })).toThrow(TypeError);
+    expect(measureBytes({ v: disguised }, 1_000).exceeded).toBe(true);
   });
 });

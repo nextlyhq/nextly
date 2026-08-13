@@ -607,58 +607,37 @@ export type ByteMeasurement =
  * `typeof` reports `"object"` and the walk would treat it as an ordinary record
  * with no own keys — two bytes for a value that cannot be written at all.
  *
- * That boxed form is decided by TWO checks, and the order is what keeps this
- * cheap. `Object.prototype.toString` reads `Symbol.toStringTag`, an ordinary
- * writable property of the document under inspection — `{ [Symbol.toStringTag]:
- * "BigInt", x: 1 }` reports `[object BigInt]` while `JSON.stringify` writes it
- * as `{"x":1}` — so the tag alone would let block props declare themselves
- * unstorable. `BigInt.prototype.valueOf` reaches the internal slot instead and
- * cannot be spoofed by any property the document sets.
- *
- * The slot check costs a thrown exception for every value that is not a BigInt,
- * so running it first would pay that on every ordinary object in the document.
- * Measured over 100,000 empty objects: 439ms as the only check, 3ms behind the
- * tag. The tag is therefore the cheap PRE-FILTER and the slot is the
- * CONFIRMATION — an ordinary object fails the tag and never reaches the throw,
- * while a spoofed one passes the tag and is then correctly refused. Neither
- * check is sufficient alone: the tag over-reports and the slot is expensive.
+ * How that boxed form is detected is stated at the check itself, because the
+ * cheap-looking alternatives are all wrong in ways that are not visible from
+ * here.
  */
-function definesToStringTag(value: object): boolean {
-  for (
-    let link: object | null = value;
-    link !== null;
-    link = Object.getPrototypeOf(link) as object | null
-  ) {
-    if (
-      Object.getOwnPropertyDescriptor(link, Symbol.toStringTag) !== undefined
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function refusedByWriter(value: unknown): boolean {
   if (typeof value === "bigint") return true;
   if (typeof value !== "object" || value === null) return false;
-  // The tag is consulted only where the DOCUMENT has not defined one, which is
-  // the ordinary case and the cheap one. There the tag is the engine's own
-  // answer, no accessor exists to run, and no builtin other than a BigInt
-  // object reports `[object BigInt]`.
+  // The internal slot, and NOTHING else. Every cheaper test asks the value a
+  // question, and a value in a block document is untrusted input:
   //
-  // Presence is decided by descriptor lookup rather than by reading the value,
-  // because reading it would invoke a document-supplied getter — code
-  // `JSON.stringify` never runs, since it ignores symbol keys entirely. A
-  // throwing getter would escape a function whose whole contract is to report
-  // rather than raise, and a getter with side effects would let a document
-  // mutate itself while being measured.
-  if (!definesToStringTag(value)) {
-    return Object.prototype.toString.call(value) === "[object BigInt]";
-  }
-  // A document-defined tag decides nothing, so the internal slot does. This
-  // costs a thrown exception, and it is reached only by values that declare a
-  // tag — rare in a block document, and the only place the cost can be
-  // provoked deliberately.
+  // - `Symbol.toStringTag` is an ordinary writable property, so the tag both
+  //   over-reports — `{ [Symbol.toStringTag]: "BigInt", x: 1 }` is written as
+  //   `{"x":1}` — and runs a document-supplied getter that `JSON.stringify`
+  //   never runs, since it ignores symbol keys entirely.
+  // - Reading that tag's DESCRIPTOR instead avoids the getter and still
+  //   executes a Proxy's `getOwnPropertyDescriptor` trap. Measured: an empty
+  //   proxy whose trap throws only for `Symbol.toStringTag` is written as `{}`
+  //   by the writer while the probe raises out of a function contracted to
+  //   report rather than throw.
+  // - The prototype chain cannot decide it either. Measured:
+  //   `setPrototypeOf(Object(1n), Object.prototype)` is still refused by the
+  //   writer, so a prototype filter reports a storable document that the
+  //   writer then rejects — the counter and the writer disagreeing, which is
+  //   the one thing this function exists to prevent.
+  //
+  // `BigInt.prototype.valueOf` reads an internal slot: measured against a Proxy
+  // logging every trap, it triggers none, and it cannot be spoofed by any
+  // property the document sets. It costs a thrown exception per non-BigInt
+  // object, which is the price of asking a question the value cannot answer
+  // dishonestly; the count is bounded by the byte cap that admits those objects
+  // in the first place.
   try {
     BigInt.prototype.valueOf.call(value);
     return true;
