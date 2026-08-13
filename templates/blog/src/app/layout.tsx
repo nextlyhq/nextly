@@ -19,7 +19,13 @@ import "./globals.css";
  *
  * The trade is `next/font`'s metric-adjusted fallback, so text can shift
  * slightly as the face arrives. The families are bound to this app's `--font-*`
- * variables in `globals.css`, which is what every rule downstream reads.
+ * variables in `globals.css`, which is what every rule downstream reads. *
+ * Importing the package root ships every subset the face offers — Latin, Latin
+ * Extended, Cyrillic, Vietnamese — but each `@font-face` carries a
+ * `unicode-range`, so a browser downloads only the subsets the page actually
+ * uses. The deployed bundle is larger than a single hand-picked file; what a
+ * reader fetches is not, and a page in Cyrillic now gets its face instead of a
+ * fallback.
  */
 
 /**
