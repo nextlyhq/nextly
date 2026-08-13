@@ -46,6 +46,21 @@ function sourceFiles(root: string): string[] {
 const APP_TEMPLATES = ["base", "blank", "blog"] as const;
 
 /**
+ * Every source root the build-time-fetch bans apply to.
+ *
+ * The playground is not a template and is never scaffolded, but it IS built by CI, and its
+ * `next/font/google` call is what reddened unrelated pull requests. A scan rooted only under
+ * `templates/` stays green while half of this change is reverted.
+ */
+const SCANNED_ROOTS: readonly (readonly [string, string])[] = [
+  ...APP_TEMPLATES.map(t => [t, path.join(TEMPLATES_ROOT, t)] as const),
+  [
+    "playground",
+    path.resolve(TEMPLATES_ROOT, "..", "apps", "playground", "src"),
+  ] as const,
+];
+
+/**
  * An IMPORT of the build-time font loader, not a mention of it.
  *
  * The layouts explain in prose why they no longer use `next/font/google`, and a
@@ -59,14 +74,18 @@ const BUILD_TIME_FONT_IMPORT =
   /(?:from\s*|require\(\s*|import\(\s*)["']next\/font\/google["']/;
 
 describe("no template fetches a font at build time", () => {
-  it("finds the template sources it is about to assert over", () => {
+  it("finds the sources it is about to assert over", () => {
     // The positive control. `next/font/google` is asserted by ABSENCE below, and
     // absence is also what a wrong path, a renamed directory or a glob that
     // matches nothing produces — each of which would certify every template as
     // clean without reading a line.
-    const files = APP_TEMPLATES.flatMap(t =>
-      sourceFiles(path.join(TEMPLATES_ROOT, t))
-    );
+    const files = SCANNED_ROOTS.flatMap(([, root]) => sourceFiles(root));
+    // Asserted per ROOT as well as in aggregate: one root silently resolving to nothing would
+    // otherwise hide behind the others' files, and its absence check would pass having read
+    // nothing.
+    for (const [, root] of SCANNED_ROOTS) {
+      expect(sourceFiles(root).length).toBeGreaterThan(0);
+    }
     expect(files.length).toBeGreaterThan(0);
     expect(
       files.some(f => f.endsWith(path.join("src", "app", "layout.tsx")))
@@ -97,25 +116,28 @@ describe("no template fetches a font at build time", () => {
     );
   });
 
-  it.each(APP_TEMPLATES)("%s names no node_modules path", template => {
+  it.each(SCANNED_ROOTS)("%s names no node_modules path", (_name, root) => {
     // A literal path asserts where a package physically lives. That is false under Yarn PnP
     // (no node_modules at all), under npm/Yarn workspace hoisting (the package moves to the
     // workspace root), and under pnpm's symlinked store — and the failure is a build error in
     // the user's project, not here.
-    const offenders = sourceFiles(path.join(TEMPLATES_ROOT, template)).filter(
-      file => NODE_MODULES_PATH.test(fs.readFileSync(file, "utf8"))
+    const offenders = sourceFiles(root).filter(file =>
+      NODE_MODULES_PATH.test(fs.readFileSync(file, "utf8"))
     );
 
-    expect(offenders.map(f => path.relative(TEMPLATES_ROOT, f))).toEqual([]);
+    expect(offenders.map(f => path.relative(root, f))).toEqual([]);
   });
 
-  it.each(APP_TEMPLATES)("%s imports no build-time font fetch", template => {
-    const offenders = sourceFiles(path.join(TEMPLATES_ROOT, template)).filter(
-      file => BUILD_TIME_FONT_IMPORT.test(fs.readFileSync(file, "utf8"))
-    );
+  it.each(SCANNED_ROOTS)(
+    "%s imports no build-time font fetch",
+    (_name, root) => {
+      const offenders = sourceFiles(root).filter(file =>
+        BUILD_TIME_FONT_IMPORT.test(fs.readFileSync(file, "utf8"))
+      );
 
-    expect(offenders.map(f => path.relative(TEMPLATES_ROOT, f))).toEqual([]);
-  });
+      expect(offenders.map(f => path.relative(root, f))).toEqual([]);
+    }
+  );
 });
 
 describe("every template feeds the admin theme", () => {
