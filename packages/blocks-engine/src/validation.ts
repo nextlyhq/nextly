@@ -559,6 +559,22 @@ function serializesAs(value: unknown): boolean {
   );
 }
 
+/**
+ * A value as `JSON.stringify` will SEE it: through `toJSON` when one exists.
+ *
+ * The hook runs before the writer decides anything else about the value —
+ * including whether the value is writable at all. So a member whose `toJSON`
+ * returns `undefined`, a function or a symbol is DROPPED, exactly as if it had
+ * held that directly, and a decision made on the original object gets both the
+ * size and the drop wrong.
+ */
+function asSerialized(value: unknown, key: string): unknown {
+  return typeof (value as { toJSON?: unknown } | null | undefined)?.toJSON ===
+    "function"
+    ? (value as { toJSON: (key: string) => unknown }).toJSON(key)
+    : value;
+}
+
 export function measureBytes(
   root: unknown,
   limit: number
@@ -585,11 +601,7 @@ export function measureBytes(
     // Load-bearing now that this is exported: inside this package every value
     // reaching it has already been established as plain JSON, so the gap could
     // not open. A public caller has made no such promise.
-    const value =
-      typeof (popped as { toJSON?: unknown } | null | undefined)?.toJSON ===
-      "function"
-        ? (popped as { toJSON: (key: string) => unknown }).toJSON(entry.key)
-        : popped;
+    const value = asSerialized(popped, entry.key);
     if (typeof value === "string") {
       bytes += 2 + utf8ByteLength(value, limit - bytes);
     } else if (typeof value === "number") {
@@ -613,9 +625,13 @@ export function measureBytes(
       // is dropped instead — see below. Normalised here so the walk never has
       // to remember which container a value came from.
       for (let index = 0; index < value.length; index += 1) {
-        const item: unknown = value[index];
+        // Decided on what the WRITER will see. An element whose `toJSON`
+        // returns a function or `undefined` becomes `null` in an array just as
+        // a bare one does, and judging the original object keeps a member the
+        // serializer drops.
+        const written = asSerialized(value[index], String(index));
         stack.push({
-          value: serializesAs(item) ? item : null,
+          value: serializesAs(written) ? written : null,
           key: String(index),
         });
       }
@@ -629,9 +645,14 @@ export function measureBytes(
       // leaves an own property holding `undefined`, so an edit that SHRINKS a
       // document was measured as growing it, and the cap refused the very edit
       // that would have brought an over-cap document back under.
-      const entries = Object.entries(value as Record<string, unknown>).filter(
-        ([, member]) => serializesAs(member)
-      );
+      // Filtered on what `toJSON` RETURNS, not on the member as it stands. The
+      // hook runs before the writer decides whether the member is writable at
+      // all, so `{ x: { toJSON: () => undefined } }` is dropped entirely and
+      // serializes to `{}` — charging its key, quotes and colon reports ten
+      // bytes for two, and a caller enforcing a cap rejects data that fits.
+      const entries = Object.entries(value as Record<string, unknown>)
+        .map(([key, member]) => [key, asSerialized(member, key)] as const)
+        .filter(([, member]) => serializesAs(member));
       // Braces AND the separators between entries, for the same reason the
       // array branch counts its commas: `{"a":1,"b":2}` carries one comma that
       // belongs to the object rather than to either entry, so charging it per

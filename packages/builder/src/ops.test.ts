@@ -2226,6 +2226,44 @@ describe("an inverse that names a parent held twice", () => {
     ).toThrow(/not where this node sat/);
   });
 
+  it("refuses a document that inherits its format instead of holding it", () => {
+    // `withNodes` spreads, which copies OWN enumerable properties only. A
+    // document resolving `formatVersion` and `kind` through the prototype
+    // satisfies both comparisons and then comes back without either, so the
+    // document entering history is missing what every later reader requires.
+    // Through `Object.prototype`, not a custom prototype: a document whose
+    // prototype is anything else is refused earlier as not a plain record, so
+    // that fixture never reaches the fields under test. Polluting the shared
+    // prototype is the case that does, and it is not exotic — one dependency
+    // doing it makes every plain object in the process carry these.
+    const polluted = Object.prototype as unknown as Record<string, unknown>;
+    polluted.formatVersion = DOCUMENT_FORMAT_VERSION;
+    polluted.kind = "page";
+    try {
+      const inherited = { nodes: [node("a")] } as unknown as BlockDocument;
+
+      expect(() => applyOp(inherited, { kind: "remove", id: "a" })).toThrow(
+        /does not carry its own/
+      );
+    } finally {
+      delete polluted.formatVersion;
+      delete polluted.kind;
+    }
+  });
+
+  it("refuses an op whose extra field cannot be written down", () => {
+    // An op is PERSISTED — a crash buffer, a queued agent edit, a replayed
+    // history. This one applies perfectly and then throws when anything writes
+    // the op itself, so the edit happened and the record of it cannot exist.
+    const op = {
+      kind: "remove",
+      id: "a",
+      metadata: 1n,
+    } as unknown as BuilderOp;
+
+    expect(() => applyOp(doc(), op)).toThrow(/the record of it would fail/);
+  });
+
   it("refuses a cap that cannot decide anything", () => {
     // Every cap here is a `>` comparison and every comparison against `NaN` is
     // false, so one non-finite limit does not loosen a cap — it removes it, and

@@ -1849,3 +1849,24 @@ describe("measureBytes passes toJSON the key the serializer does", () => {
     expect(measureBytes(value, 1_000).bytes).toBe(written);
   });
 });
+
+describe("measureBytes drops what the serializer drops", () => {
+  it("charges nothing for a member whose toJSON returns undefined", () => {
+    // The hook runs BEFORE the writer decides whether the member is writable,
+    // so this object serializes to `{}`. Filtering on the member as it stands
+    // keeps it and charges key, quotes, colon and value.
+    const value = { x: { toJSON: () => undefined } };
+    const written = Buffer.byteLength(JSON.stringify(value), "utf8");
+
+    expect(measureBytes(value, 1_000).bytes).toBe(written);
+  });
+
+  it("writes null for an array element whose toJSON returns a function", () => {
+    // An array's length is part of its meaning, so a value the writer cannot
+    // represent becomes `null` rather than disappearing.
+    const value = { list: [1, { toJSON: () => () => 1 }, 3] };
+    const written = Buffer.byteLength(JSON.stringify(value), "utf8");
+
+    expect(measureBytes(value, 1_000).bytes).toBe(written);
+  });
+});

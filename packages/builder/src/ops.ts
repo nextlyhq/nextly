@@ -888,6 +888,26 @@ export type BuilderOp =
     };
 
 /**
+ * Every field the op vocabulary itself defines.
+ *
+ * Used to tell an op's OWN fields from the extras a newer editor may have
+ * written. The two get different treatment on purpose: a known field is judged
+ * by the branch that reads it, under that field's own domain rules, while an
+ * extra is only ever carried — so the single thing that must be true of it is
+ * that it survives being written down.
+ */
+const OP_VOCABULARY = new Set([
+  "kind",
+  "id",
+  "node",
+  "at",
+  "to",
+  "patch",
+  "unset",
+  "dropSlotIfEmpty",
+]);
+
+/**
  * An op that could not be applied to the document it was given.
  *
  * Thrown rather than returned as a no-op, because the caller is a history: an op
@@ -981,6 +1001,29 @@ function assertPatchNames(op: Extract<BuilderOp, { kind: "update" }>): void {
     throw new OpError(
       `update: the patch carries a field JSON cannot write. A patch is stored ` +
         `as JSON, so a key it drops would apply here and be absent on replay.`
+    );
+  }
+
+  // Every patch value on ONE budget, before any of them is walked individually.
+  // A per-value `isJsonValue` gives each a fresh ceiling, so a patch carrying
+  // `props` and `bindings` that are each just under it is accepted — and the
+  // next `applyOp` refuses the document it produced, whose held values share a
+  // budget. The forward update succeeds and its own inverse cannot run.
+  //
+  // The per-value checks below stay: they name WHICH field is wrong, which this
+  // aggregate cannot, and they run only once the whole patch is known to fit.
+  if (!areJsonValues(Object.values(op.patch))) {
+    for (const [key, value] of Object.entries(op.patch)) {
+      if (isJsonValue(value)) continue;
+      throw new OpError(
+        `update: ${describe(key)} holds a value JSON cannot carry unchanged. ` +
+          `A patch is stored as JSON, so a value it drops or rewrites would ` +
+          `replay as something else — or not at all.`
+      );
+    }
+    throw new OpError(
+      `update: this patch holds more values than an edit may examine, so the ` +
+        `document it produced could not be edited again.`
     );
   }
 
@@ -2356,6 +2399,21 @@ export function applyOp(
   // it with current semantics silently rewrites them. Refused rather than
   // guessed: an editor that cannot read a document should say so, not save over
   // it.
+  // OWN properties, not merely resolvable ones. `Object.prototype` can be given
+  // a `formatVersion` or a `kind`, and a document owning only `nodes` then
+  // satisfies both comparisons below by INHERITING them — while `withNodes`
+  // spreads, which copies own enumerable properties only. The edit succeeds and
+  // hands back `{ nodes: [] }` with neither mandatory field, so the document
+  // that enters history is missing what every reader after it requires.
+  for (const field of ["formatVersion", "kind"] as const) {
+    if (!Object.hasOwn(document, field)) {
+      throw new OpError(
+        `a document that does not carry its own ${field} cannot be edited. ` +
+          `The field resolves through the prototype, so the edit would return ` +
+          `a document without it.`
+      );
+    }
+  }
   if (document.formatVersion !== DOCUMENT_FORMAT_VERSION) {
     throw new OpError(
       `a document in format ${describe(document.formatVersion)} cannot be ` +
@@ -2398,6 +2456,38 @@ export function applyOp(
     throw new OpError(
       `an op of ${describe(op)} is not an edit. Every op is a record ` +
         `naming its kind.`
+    );
+  }
+  // The op's EXTRA fields — the ones no branch below reads. An op is
+  // PERSISTED: a crash buffer, a queued agent edit, a replayed history. A
+  // `remove` carrying `metadata: 1n` applies perfectly and then throws when
+  // anything writes the op down, so the edit happened and the record of it
+  // cannot exist. Crash recovery and redo both lose it.
+  //
+  // Scoped to the extras deliberately. The vocabulary's own fields are checked
+  // by the branch that reads them, with the domain rules that field actually
+  // has — a patch's values are judged as patch values, at their own depth — and
+  // re-checking them here from one level further out would refuse documents
+  // those rules allow while naming the wrong reason.
+  const extras: unknown[] = [];
+  const extraKeys: string[] = [];
+  for (const [key, value] of Object.entries(op)) {
+    if (OP_VOCABULARY.has(key)) continue;
+    extraKeys.push(key);
+    extras.push(value);
+  }
+  if (!areJsonValues(extras)) {
+    for (let index = 0; index < extras.length; index += 1) {
+      if (isJsonValue(extras[index])) continue;
+      throw new OpError(
+        `an op carrying ${describe(extraKeys[index])}, which holds ` +
+          `${describe(extras[index])}, cannot be applied: JSON cannot write ` +
+          `that value, so the edit would run and the record of it would fail ` +
+          `to save.`
+      );
+    }
+    throw new OpError(
+      `an op holding more values than an edit may examine cannot be applied.`
     );
   }
 
