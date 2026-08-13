@@ -88,16 +88,16 @@ P1 and one leaving `main` red, and none was found by the procedure below.
 
 They are easy to run together and none substitutes for another:
 
-1. **Did my code land?** — content, from the final commit. What the numbered
-   steps below answer.
-2. **Did EVERY commit land?** — the `ls-remote` comparison above. Content from a
-   commit that merged cannot reach a commit that did not.
-3. **Was the job green?** — the merge commit's own check-runs, asserted as
-   `success`. A PR merged here with two `Integration` jobs failing and left
-   `main` red for hours; its author had verified the content correctly and that
-   check had nothing to say about the failure.
+- **Did my code land?** — content, from the final commit. What the numbered
+  steps below answer.
+- **Did EVERY commit land?** — the `ls-remote` comparison above. Content from a
+  commit that merged cannot reach a commit that did not.
+- **Was the job green?** — the merge commit's own check-runs, asserted as
+  `success`. A PR merged here with two `Integration` jobs failing and left
+  `main` red for hours; its author had verified the content correctly and that
+  check had nothing to say about the failure.
 
-4. Confirm what was actually merged, then FETCH the object before probing it:
+1. Confirm what was actually merged, then FETCH the object before probing it:
 
    ```
    gh pr view N --json headRefOid,mergeCommit
@@ -119,7 +119,7 @@ They are easy to run together and none substitutes for another:
    falsely; run after `main` advances and a later commit can make omitted
    content look present.
 
-5. Take the check from the **final** commit, in whichever direction it changed
+2. Take the check from the **final** commit, in whichever direction it changed
    things. A marker only proves anything if it is UNIQUE to that commit and the
    search is SCOPED to the path it changed — a string that also occurs elsewhere
    answers the same way whether or not the commit landed. Match it as a FIXED
@@ -156,7 +156,7 @@ They are easy to run together and none substitutes for another:
 
    - it changed a file mode, a binary, or a rename → text search cannot see it.
 
-6. When nothing is unique to the commit, or the change is a mode/binary/rename,
+3. When nothing is unique to the commit, or the change is a mode/binary/rename,
    compare the PR's **delta** — not the whole object. Diffing the merged path
    entry against the branch-head entry (`git ls-tree`, blob ids) is wrong as soon
    as `main` changed ANOTHER hunk of the same file after the branch point: a
@@ -177,7 +177,7 @@ They are easy to run together and none substitutes for another:
    the merge was computed is outside the comparison and it returns IDENTICAL.
    Run the `ls-remote` check above first; this one is not a substitute for it.
 
-7. If the final commit is a pure revert of an earlier one in the same PR, check the
+4. If the final commit is a pure revert of an earlier one in the same PR, check the
    NET effect, not the last hunk.
 
 The danger window is push-a-fix-then-merge-immediately, which is what everyone
