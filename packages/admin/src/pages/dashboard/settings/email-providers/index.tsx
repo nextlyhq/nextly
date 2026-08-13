@@ -817,9 +817,10 @@ function EmailProviderTable() {
             ariaLabel="Email providers table"
             emptyMessage="No email providers configured. Add a provider to start sending emails."
             // The table owns the pager, so it is placed for whichever view is
-            // showing. A provider list is short enough to fit
-            // one page in most installs; the gate keeps the controls out of the
-            // card entirely rather than showing a dead "1 of 1".
+            // showing. The gate hides it only when a response reports no pages
+            // at all -- an empty list. A single-page list still shows it,
+            // deliberately: the page-size selector lives there, and it is the
+            // control that gets a longer list onto one screen.
             footer={
               data && data.meta.totalPages > 0 ? (
                 <Pagination

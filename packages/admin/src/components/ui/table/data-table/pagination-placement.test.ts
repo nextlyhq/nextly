@@ -205,13 +205,58 @@ function ariaLabelOf(node: ts.Node, file: ts.SourceFile): string | undefined {
   return undefined;
 }
 
+/**
+ * Whether this element was EXTRACTED to a name rather than written in place.
+ *
+ * `const pager = <Pagination ... />` then `footer={pager}` is a behaviour-
+ * preserving refactor for readability, and a walk up from the declaration finds
+ * no `footer` ancestor — so the pager reads as detached and the suite rejects
+ * correct code. That is the failure that gets a guard deleted rather than
+ * fixed, and it is worse than the miss it prevents.
+ *
+ * Following the identifier to its uses would mean resolving every way a value
+ * can travel, which is the surface this repo's earlier source checks lost to.
+ * So an extracted element is not judged here, and this is the ONE documented
+ * blind spot: a pager assigned to a name and then rendered beside the table is
+ * not reported. Written down rather than left implicit, because a check whose
+ * silence means something has to say where it is silent.
+ */
+function isExtractedToName(node: ts.Node): boolean {
+  for (let current = node.parent; current; current = current.parent) {
+    // Reached JSX first: it is written in place, wherever that place is. The
+    // FRAGMENT matters as much as the element — `const x = (<>...</>)` is
+    // markup assigned to a name, not an extracted pager, and treating it as
+    // one silences every call site that returns a fragment.
+    if (
+      ts.isJsxElement(current) ||
+      ts.isJsxFragment(current) ||
+      ts.isJsxAttribute(current)
+    ) {
+      return false;
+    }
+    if (
+      ts.isVariableDeclaration(current) ||
+      ts.isPropertyAssignment(current) ||
+      ts.isPropertyDeclaration(current)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Every pager in a file that is NOT inside a table's `footer`, found by binding. */
 function detachedPagers(file: ts.SourceFile): ts.Node[] {
   const names = localPagerNames(file);
   const found: ts.Node[] = [];
   const visit = (node: ts.Node): void => {
     const tag = isElementOccurrence(node) ? tagNameOf(node, file) : undefined;
-    if (tag !== undefined && names.has(tag) && !insideTableFooter(node, file)) {
+    if (
+      tag !== undefined &&
+      names.has(tag) &&
+      !insideTableFooter(node, file) &&
+      !isExtractedToName(node)
+    ) {
       found.push(node);
     }
     ts.forEachChild(node, visit);
@@ -418,6 +463,30 @@ describe("list pagination", () => {
       "const x = (<><DataTableView columns={c} rows={r} /><Pagination page={1}>{null}</Pagination></>);"
     );
     expect(detachedPagers(withChildren), "paired tags").toHaveLength(1);
+
+    // Extracted for readability and passed as the footer. A walk from the
+    // declaration finds no `footer` ancestor, so judging it there would reject
+    // a behaviour-preserving refactor.
+    const extracted = parse(
+      "control.tsx",
+      "const pager = <Pagination page={1} />;\n" +
+        "const x = <DataTableView columns={c} rows={r} footer={pager} />;"
+    );
+    expect(detachedPagers(extracted), "extracted footer").toHaveLength(0);
+
+    // The same shape used as a real sibling is the documented blind spot: also
+    // silent. Asserted so the cost of the exemption is visible rather than
+    // discovered, and so it stays a deliberate miss rather than drifting into
+    // one nobody remembers choosing.
+    const extractedSibling = parse(
+      "control.tsx",
+      "const pager = <Pagination page={1} />;\n" +
+        "const x = (<><DataTableView columns={c} rows={r} />{pager}</>);"
+    );
+    expect(
+      detachedPagers(extractedSibling),
+      "extracted sibling is a known miss"
+    ).toHaveLength(0);
   });
 
   it("reads a pager's label, and reports when there is none", () => {
