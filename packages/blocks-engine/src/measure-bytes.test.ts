@@ -67,13 +67,46 @@ describe("measureBytes", () => {
     expect(result.bytes).toBeLessThan(5_000_000);
   });
 
-  it("terminates on a cycle rather than throwing", () => {
-    // `JSON.stringify` throws here. The counter is a precondition for parsing
+  it("terminates on a cycle independently of the byte limit", () => {
+    // `JSON.stringify` throws here. The walk is a precondition for parsing
     // untrusted input, so it has to report rather than crash the caller.
+    //
+    // The earlier version terminated because the cycle drove the byte count
+    // past the cap, which is termination by accident: a cyclic document of
+    // small values under a large cap would have run forever. Termination now
+    // comes from the repeated reference itself, so this asserts `unserializable`
+    // rather than `exceeded` — and deliberately uses a limit the document never
+    // approaches, which the previous implementation could not have survived.
     const cyclic: Record<string, unknown> = { a: 1 };
     cyclic.self = cyclic;
-    expect(() => measureBytes(pageWith(cyclic), 1024)).not.toThrow();
-    expect(measureBytes(pageWith(cyclic), 1024).exceeded).toBe(true);
+    const document = pageWith(cyclic);
+
+    expect(() => measureBytes(document, 10_000_000)).not.toThrow();
+    const result = measureBytes(document, 10_000_000);
+    expect(result.unserializable).toBe(true);
+    expect(result.exceeded).toBe(false);
+  });
+
+  it("reports a repeated reference, which storage would duplicate", () => {
+    // Not a cycle, and still a document that changes under storage: JSON
+    // duplicates a shared subtree, so what is read back is not what was
+    // validated. Unreachable from `JSON.parse`, which always yields a tree, so
+    // a shared reference means a JavaScript caller built it.
+    const shared = { text: "once" };
+    expect(
+      measureBytes(pageWith({ a: shared, b: shared }), 10_000_000)
+        .unserializable
+    ).toBe(true);
+
+    // The control: two structurally equal but distinct objects are a tree, and
+    // must NOT be flagged, or the assertion above passes for a walk that
+    // refuses every document with two similar values in it.
+    expect(
+      measureBytes(
+        pageWith({ a: { text: "once" }, b: { text: "once" } }),
+        10_000_000
+      ).unserializable
+    ).toBe(false);
   });
 
   it("reads property values one at a time, not all at once", () => {

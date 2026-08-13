@@ -43,7 +43,7 @@ export {
   documentBytes,
 } from "./limits";
 
-export { measureBytes } from "./measure-bytes";
+export { measureBytes, surveyDocument } from "./measure-bytes";
 export { isPlainRecord } from "./plain-record";
 
 export {

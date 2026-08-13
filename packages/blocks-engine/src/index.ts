@@ -58,6 +58,7 @@ export {
   documentBytes,
 } from "./limits";
 export type { DocumentLimits } from "./limits";
+export type { DocumentSurvey, SurveyLimits } from "./measure-bytes";
 
 export {
   newId,
@@ -74,7 +75,7 @@ export {
 } from "./tree";
 export type { NodeLocation, TreePosition } from "./tree";
 
-export { measureBytes } from "./measure-bytes";
+export { measureBytes, surveyDocument } from "./measure-bytes";
 export { isPlainRecord } from "./plain-record";
 export { validate, ISSUE_CODES } from "./validation";
 export { declaresNoMarkup, isConditionGated } from "./visibility";

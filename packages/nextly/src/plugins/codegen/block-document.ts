@@ -51,7 +51,7 @@ import {
   MAX_NODES,
   STYLE_STATES,
   isPlainRecord,
-  measureBytes,
+  surveyDocument,
 } from "@nextlyhq/blocks-engine/format";
 import type {
   BindingFormatType,
@@ -483,127 +483,33 @@ export type BlockDocumentParseResult =
   | { success: false; issues: string[] };
 
 /**
- * Whether a value exceeds the format's structural limits, measured WITHOUT
- * recursion and BEFORE the schema sees it.
+ * One traversal answers every precondition, and that is the point.
  *
- * Two limits, one traversal. Depth and node count are different questions, but
- * they are answered by walking the same slot tree, and walking it twice would
- * double the cost of the check that exists to bound cost.
+ * Depth, node count, serialized size, JSON-representability and safe reading
+ * are five questions about the same tree, and asking them separately is how
+ * they diverge: each walk grows its own defensive logic, a property added to
+ * one is missing from the other, and the gap is invisible because both look
+ * correct. `surveyDocument` visits each value once and answers all five.
  *
- * **Depth.** The schema is self-referential, so parsing a deeply nested value
- * walks it with the call stack: a long enough slot chain raises `RangeError:
- * Maximum call stack size exceeded` before any validation runs. An explicit
- * stack makes depth a value to compare instead of a limit the runtime
- * discovers.
- *
- * **Width.** A document can be shallow and still enormous. `safeParse` walks
- * and CLONES the whole forest before returning success, so a flat array of a
- * million nodes is bounded by nothing the depth check looks at: it passes, and
- * the work happens anyway. Counting first turns that into a rejection.
- *
- * The walk stops at the first breach rather than measuring the true total,
- * which is the point — a bound that reads the whole input to discover the input
- * is too large has already done the work it was protecting against.
- *
- * Both bounds come from the engine so there is one answer to "how deep" and
- * "how many" rather than two that agree until one is edited.
- */
-type LimitBreach = "depth" | "nodes";
-
-function exceedsLimits(
-  value: unknown,
-  maxDepth: number,
-  maxNodes: number
-): LimitBreach | null {
-  if (typeof value !== "object" || value === null) return null;
-
-  // Seeded from the envelope's `nodes`, because that is where a document's
-  // tree starts. Seeding from the document itself walks nothing: the envelope
-  // has no `slots`, so the first iteration finds none and the pass reports a
-  // depth of zero for a document of any shape.
-  const roots = (value as { nodes?: unknown }).nodes;
-  if (!Array.isArray(roots)) return null;
-
-  // The roots are themselves nodes, so the count starts before the walk does.
-  // Checking only what the walk POPS would let a single flat array of a million
-  // roots through: nothing in it has slots, so the loop pushes nothing and the
-  // count never reaches the cap it was meant to enforce.
-  if (roots.length > maxNodes) return "nodes";
-
-  // `Array.from` rather than `roots.map`: `map` PRESERVES holes, so a sparse
-  // array yields entries the walk later pops as `undefined` — and the guard
-  // below treats a missing node as an ordinary non-object and walks past it,
-  // when a hole is a malformed document rather than an absent child. `Array.from`
-  // materializes every index, so a hole becomes an explicit `undefined` the
-  // schema then refuses.
-  const stack: Array<{ node: unknown; depth: number }> = Array.from(
-    roots,
-    node => ({ node, depth: 1 })
-  );
-  let counted = roots.length;
-
-  while (stack.length > 0) {
-    const { node, depth } = stack.pop()!;
-    if (depth > maxDepth) return "depth";
-    if (typeof node !== "object" || node === null) continue;
-
-    const slots = (node as { slots?: unknown }).slots;
-    if (typeof slots !== "object" || slots === null) continue;
-
-    // `for...in` with an own check rather than `Object.values`: the latter
-    // allocates an array of every slot value before either cap can stop the
-    // walk, so a single node carrying hundreds of thousands of slots does work
-    // proportional to the whole hostile input inside the guard meant to bound
-    // it. The same reason the byte counter iterates this way.
-    for (const slot in slots) {
-      if (!Object.prototype.hasOwnProperty.call(slots, slot)) continue;
-      const children = (slots as Record<string, unknown>)[slot];
-      if (!Array.isArray(children)) continue;
-      // Counted on discovery rather than on pop, so the cap is reached while
-      // pushing rather than after a whole generation is already resident.
-      counted += children.length;
-      if (counted > maxNodes) return "nodes";
-      for (const child of children) {
-        stack.push({ node: child, depth: depth + 1 });
-      }
-    }
-  }
-
-  return null;
-}
-
-/**
- * The two verdicts the size walk produces, and why parsing waits for both.
- *
- * **Size.** The third bound, and the one the tree walks cannot express. Depth
- * and node count both measure the TREE, so a document that is shallow and holds
- * a single node can still be enormous — one `props` object with a few hundred
- * thousand keys passes both and is then cloned in full by the parser. The cap
- * is the engine's, so this and `validate()` agree on what is too large.
- *
- * **Serializability.** The record predicates decide what a props object IS;
- * they say nothing about what it CONTAINS. `props: { n: 1n }` is a plain record
- * holding a `BigInt`, so it satisfies every structural check and then throws on
- * the way to storage. A nested `Date` or `Map` is worse than a throw: it
- * becomes a string or `{}` silently, so the document read back is not the one
- * that was validated.
- *
- * Both come from ONE traversal. They are different questions, but each is about
- * every value in the document, and a walk that has already visited a value can
- * answer both without visiting it again.
- *
- * Run LAST of the three bounds, because this is the only one that must read
- * everything: a document that is too deep or too wide never reaches it.
+ * Run BEFORE the schema, because each bound is a precondition rather than a
+ * verdict: parsing a document that is too deep exhausts the stack, and parsing
+ * one that is too large copies it in full — both before anything could report
+ * that it was invalid.
  */
 export function parseBlockDocument(value: unknown): BlockDocumentParseResult {
-  const breach = exceedsLimits(value, MAX_DEPTH, MAX_NODES);
-  if (breach === "depth") {
+  const survey = surveyDocument(value, {
+    maxBytes: DEFAULT_MAX_DOCUMENT_BYTES,
+    maxDepth: MAX_DEPTH,
+    maxNodes: MAX_NODES,
+  });
+
+  if (survey.tooDeep) {
     return {
       success: false,
       issues: [`Document nests deeper than the format allows (${MAX_DEPTH}).`],
     };
   }
-  if (breach === "nodes") {
+  if (survey.tooManyNodes) {
     return {
       success: false,
       issues: [
@@ -611,8 +517,7 @@ export function parseBlockDocument(value: unknown): BlockDocumentParseResult {
       ],
     };
   }
-  const size = measureBytes(value, DEFAULT_MAX_DOCUMENT_BYTES);
-  if (size.exceeded) {
+  if (survey.tooLarge) {
     return {
       success: false,
       issues: [
@@ -620,11 +525,11 @@ export function parseBlockDocument(value: unknown): BlockDocumentParseResult {
       ],
     };
   }
-  if (size.unserializable) {
+  if (survey.unserializable) {
     return {
       success: false,
       issues: [
-        "Document holds a value JSON cannot represent (a BigInt, a function, a symbol, or an object that is not a plain record).",
+        "Document holds a value JSON cannot represent unchanged (a BigInt, a function, a symbol, `undefined`, a non-finite number, `-0`, an object that is not a plain record, an unreadable accessor, or a repeated reference).",
       ],
     };
   }

@@ -86,6 +86,29 @@ expectTypeOf<keyof BlockDocument>().toEqualTypeOf<
 // The frozen node
 // ---------------------------------------------------------------------------
 
+// The field TYPES, not only the names. A key set catches a field added or
+// removed; it says nothing about `id` becoming a number, `props` becoming an
+// array, or `slots` losing its per-name grouping — each of which reinterprets
+// every stored document while every name stays exactly where it was.
+//
+// The three addressed here are the ones the rest of the system keys on: `id` is
+// the only way anything addresses a node, `type` selects the definition, and
+// `version` decides which migration runs. `props` is deliberately open.
+expectTypeOf<BlockNode["id"]>().toEqualTypeOf<string>();
+expectTypeOf<BlockNode["type"]>().toEqualTypeOf<string>();
+expectTypeOf<BlockNode["version"]>().toEqualTypeOf<number>();
+expectTypeOf<BlockNode["props"]>().toEqualTypeOf<Record<string, unknown>>();
+expectTypeOf<BlockNode["slots"]>().toEqualTypeOf<
+  Record<string, BlockNode[]> | undefined
+>();
+expectTypeOf<BlockNode["bindings"]>().toEqualTypeOf<
+  Record<string, Binding> | undefined
+>();
+expectTypeOf<BlockNode["classes"]>().toEqualTypeOf<string[] | undefined>();
+expectTypeOf<BlockNode["attributes"]>().toEqualTypeOf<
+  Record<string, string> | undefined
+>();
+
 expectTypeOf<keyof BlockNode>().toEqualTypeOf<
   | "id"
   | "type"
