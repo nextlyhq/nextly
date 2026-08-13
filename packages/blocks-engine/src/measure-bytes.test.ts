@@ -164,6 +164,30 @@ describe("measureBytes", () => {
     ).toBe(false);
   });
 
+  it("does not read an INHERITED name as a property the array carries", () => {
+    // The scan for dropped properties uses `for...in`, which walks the
+    // prototype chain. An inherited name is not something the array holds:
+    // JSON ignores it either way, so reporting it refused every document in a
+    // process where anything had put an enumerable property on
+    // `Object.prototype` — which a library doing so makes true for the whole
+    // process, not for the document.
+    const polluted = Object.prototype as unknown as Record<string, unknown>;
+    polluted.customCss = ".from-prototype{}";
+    try {
+      const document = pageWith({ a: [1, 2] });
+      // The precondition: the name really is visible through the chain, so a
+      // pass here is the own-ness filter working rather than the pollution
+      // failing to take effect.
+      expect("customCss" in ([1, 2] as unknown as object)).toBe(true);
+
+      expect(
+        measureBytes(document, Number.MAX_SAFE_INTEGER).unserializable
+      ).toBe(false);
+    } finally {
+      delete polluted.customCss;
+    }
+  });
+
   it("treats a name that merely looks like an index as a dropped property", () => {
     // `JSON.stringify` emits positions 0..length-1 and nothing else, so these
     // are properties it discards — and each converts to a number, which is why

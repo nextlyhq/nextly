@@ -88,6 +88,11 @@ export interface ShellRenderMeasurement {
   background: string | null;
   /** The resolved `display`, which only this package's stylesheet sets. */
   display: string | null;
+  /**
+   * The background's alpha as the BROWSER computes it, or null when it could
+   * not be determined. Never derived by matching colour syntax in Node.
+   */
+  backgroundAlpha: number | null;
 }
 
 /** Read the chrome once, for every reader that needs to know how it looks. */
@@ -96,28 +101,71 @@ export async function measureShellRender(
 ): Promise<ShellRenderMeasurement> {
   const chrome = page.locator(CHROME_SELECTOR).first();
   if ((await chrome.count()) === 0) {
-    return { present: false, box: null, background: null, display: null };
+    return {
+      present: false,
+      box: null,
+      background: null,
+      display: null,
+      backgroundAlpha: null,
+    };
   }
   const box = await chrome.boundingBox();
   const styles = await chrome.evaluate(element => {
     const computed = getComputedStyle(element);
-    return { background: computed.backgroundColor, display: computed.display };
+    const background = computed.backgroundColor;
+    // The alpha is decided by the BROWSER, not by matching colour syntax here.
+    // `getComputedStyle` does not universally serialize to legacy `rgba(...)`:
+    // this repository's tokens are authored in `oklch`, and a computed value can
+    // preserve a modern colour function — which a syntax matcher reads as
+    // "unrecognised" and therefore, fatally, as "painted".
+    //
+    // Canvas `fillStyle` is the browser's own normaliser: assigning any colour
+    // it can parse and reading it back yields `#rrggbb` when opaque and
+    // `rgba(r, g, b, a)` when not. A sentinel detects the case where the
+    // assignment was REJECTED, so an unparseable value reports `null` — unknown
+    // — rather than silently borrowing the sentinel's own opacity.
+    const SENTINEL = "#010203";
+    const context = document.createElement("canvas").getContext("2d");
+    let alpha: number | null = null;
+    if (context !== null) {
+      context.fillStyle = SENTINEL;
+      context.fillStyle = background;
+      const normalised = context.fillStyle;
+      if (normalised !== SENTINEL || background === SENTINEL) {
+        const parsed = /^rgba?\([^)]*,\s*([\d.]+)\s*\)$/.exec(normalised);
+        alpha = parsed === null ? 1 : Number(parsed[1]);
+      }
+    }
+    return { background, display: computed.display, alpha };
   });
   return {
     present: true,
     box: box === null ? null : { width: box.width, height: box.height },
     background: styles.background,
     display: styles.display,
+    backgroundAlpha: styles.alpha,
   };
 }
 
-/** A background that resolved to nothing, however the browser spells it. */
-export function isUnpainted(background: string | null): boolean {
-  return (
-    background === null ||
-    background === "transparent" ||
-    background === "rgba(0, 0, 0, 0)"
-  );
+/**
+ * A chrome that draws nothing, whatever colour it nominally is.
+ *
+ * Takes the MEASUREMENT rather than a colour string, because the only reliable
+ * reader of a computed colour is the browser that computed it. An earlier
+ * version compared two literal spellings and then parsed legacy `rgba(...)` in
+ * Node; both were claims about how a value happens to be written, and this
+ * repository's `oklch` tokens are exactly the case that breaks them.
+ *
+ * An UNKNOWN alpha is treated as painted on purpose: the readiness check exists
+ * to explain a broken page, and reporting "the chrome drew nothing" because a
+ * colour could not be parsed would invent the very false diagnosis this file was
+ * written to remove. A missing background is still absence.
+ */
+export function isUnpainted(measurement: ShellRenderMeasurement): boolean {
+  const { background, backgroundAlpha } = measurement;
+  if (background === null || background.trim() === "") return true;
+  if (background.trim() === "transparent") return true;
+  return backgroundAlpha === 0;
 }
 
 /**
@@ -168,7 +216,7 @@ async function diagnoseUnrenderedPage(page: Page): Promise<never> {
 
 /** Turn one measurement into the readiness verdict. */
 function assertPainted(measurement: ShellRenderMeasurement): void {
-  const { present, box, background } = measurement;
+  const { present, box } = measurement;
   // Absence FIRST. The rail can render while the chrome root is removed or
   // renamed, and then `box` is null for a reason that has nothing to do with
   // styles — reading it as "present but unstyled" sends a markup regression
@@ -189,7 +237,7 @@ function assertPainted(measurement: ShellRenderMeasurement): void {
         `reading this as a shell defect.`
     );
   }
-  if (isUnpainted(background)) {
+  if (isUnpainted(measurement)) {
     // Deliberately NEUTRAL about which sheet is at fault: an unresolvable
     // `var()` chain and a chrome rule that lost its `background-color` compute
     // to the same value, so naming one states a cause this cannot separate.

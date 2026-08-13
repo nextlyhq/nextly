@@ -76,8 +76,23 @@ export {
 export type { NodeLocation, TreePosition } from "./tree";
 
 export { measureBytes, surveyDocument } from "./measure-bytes";
-export { isPlainRecord } from "./plain-record";
 export { validate, ISSUE_CODES } from "./validation";
+/**
+ * The registry-independent facts about a node, exported so a caller holding no
+ * block registry can still refuse a malformed one. The editor's op layer is the
+ * caller that needs them: it must reject a bad node before the tree primitives
+ * place it, and `validate()` requires a context a tree operation has no business
+ * demanding.
+ */
+export { isNodeType, isNodeVersion } from "./validation";
+/**
+ * Exported because anything holding a document read from storage has to ask the
+ * same question, and the answer is subtler than it looks: the check is on the
+ * PROTOTYPE, so a `Date`, a `Map` or a class instance is refused rather than
+ * walked and reported clean. A caller writing its own `typeof x === "object"`
+ * gets a different answer for exactly the values that survive JSON badly.
+ */
+export { isPlainRecord } from "./plain-record";
 export { declaresNoMarkup, isConditionGated } from "./visibility";
 export type { NoMarkupDefinitionSource } from "./visibility";
 export type {

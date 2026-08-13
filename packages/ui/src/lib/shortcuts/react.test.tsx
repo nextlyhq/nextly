@@ -129,6 +129,62 @@ describe("precedence from the tree", () => {
   });
 });
 
+describe("priority outranks depth", () => {
+  // Depth alone cannot express a modal: the HOST decides how deeply its own shortcuts are
+  // scoped, so any depth a modal picks can be tied by a host scope at the same level or beaten
+  // by one nested further — and a matching binding runs before a lower blocker is consulted.
+  it("a prioritised blocker stops a binding nested deeper than itself", () => {
+    const hostRan = vi.fn();
+    render(
+      <ShortcutProvider isApple={false}>
+        <ShortcutScope>
+          <Bind
+            keys="f6"
+            run={() => {}}
+            options={{ name: "modal", blocking: true, priority: 1 }}
+          />
+        </ShortcutScope>
+        {/* Deeper than the modal, and registered after it. Without priority this wins. */}
+        <ShortcutScope>
+          <ShortcutScope>
+            <Bind keys="mod+b" run={hostRan} options={{ name: "host" }} />
+          </ShortcutScope>
+        </ShortcutScope>
+      </ShortcutProvider>
+    );
+
+    press("b", { ctrlKey: true });
+
+    expect(hostRan).not.toHaveBeenCalled();
+  });
+
+  it("leaves ordinary layers ordered by depth when nobody sets it", () => {
+    // The positive control for the test above: without a priority the deeper host binding DOES
+    // run, so the assertion there is about priority rather than about the fixture.
+    const hostRan = vi.fn();
+    render(
+      <ShortcutProvider isApple={false}>
+        <ShortcutScope>
+          <Bind
+            keys="f6"
+            run={() => {}}
+            options={{ name: "modal", blocking: true }}
+          />
+        </ShortcutScope>
+        <ShortcutScope>
+          <ShortcutScope>
+            <Bind keys="mod+b" run={hostRan} options={{ name: "host" }} />
+          </ShortcutScope>
+        </ShortcutScope>
+      </ShortcutProvider>
+    );
+
+    press("b", { ctrlKey: true });
+
+    expect(hostRan).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("a blocking scope", () => {
   // The measured defect: pressing Escape during a drag cancelled the drag AND navigated out of
   // the editor, because the shell's binding and the canvas's binding were separate listeners

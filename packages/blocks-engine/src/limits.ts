@@ -52,7 +52,13 @@ export function countNodes(nodes: BlockNode[]): number {
       // Guard against malformed slots (a non-array value): these helpers run
       // over untrusted documents during validation and must not throw.
       for (const children of Object.values(node.slots)) {
-        if (Array.isArray(children)) queue.push(...children);
+        if (!Array.isArray(children)) continue;
+        // Enqueued one at a time. `push(...children)` passes each child as a
+        // call ARGUMENT, and V8 caps those near 100k — so a slot wider than
+        // that throws a native RangeError from inside the counter, before any
+        // caller can refuse the document for being too large. The count exists
+        // to reject exactly that document.
+        for (const child of children) queue.push(child);
       }
     }
   }

@@ -72,14 +72,51 @@ function isSerializableScalar(value: unknown): boolean {
   );
 }
 
+/**
+ * Whether `JSON.stringify` WRITES this value or omits it entirely.
+ *
+ * Distinct from {@link isSerializableScalar}, which asks whether the value
+ * survives unchanged. These three are not written at all: a record property
+ * holding one loses its key as well as its value, and an array position holding
+ * one becomes `null`. Counting them as four bytes in a record over-counted a
+ * key that storage never receives.
+ */
+function serializesAs(value: unknown): boolean {
+  return (
+    value !== undefined &&
+    typeof value !== "function" &&
+    typeof value !== "symbol"
+  );
+}
+
+/**
+ * A value as `JSON.stringify` will SEE it: through `toJSON` when one exists.
+ *
+ * The hook runs before the writer decides anything else, including whether the
+ * value can be written at all — so a `Date` is a 26-byte quoted timestamp
+ * rather than the empty object its own enumerable fields describe, and a hook
+ * returning `undefined` drops the member entirely. A counter that walks the
+ * original object disagrees with the writer on both the size and the drop.
+ */
+function asSerialized(value: unknown, key: string): unknown {
+  return typeof (value as { toJSON?: unknown } | null | undefined)?.toJSON ===
+    "function"
+    ? (value as { toJSON: (key: string) => unknown }).toJSON(key)
+    : value;
+}
+
 /** Serialized size of a non-object value, bounded like everything else here. */
 function scalarBytes(value: unknown, budget: number): number {
   if (typeof value === "string") return 2 + utf8ByteLength(value, budget);
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value).length;
+  if (typeof value === "number") {
+    // `NaN` and the infinities are WRITTEN, as `null`. `String` renders them as
+    // three and eight characters, so reading the length would disagree with the
+    // writer for exactly the numbers the format refuses.
+    return Number.isFinite(value) ? String(value).length : 4;
   }
-  // `null`, `undefined`, and the values JSON cannot hold; four bytes is what
-  // `null` costs, and the others are refused by the flag rather than counted.
+  if (typeof value === "boolean") return String(value).length;
+  // `null`, and the values JSON cannot hold at all; four bytes is what `null`
+  // costs, and the rest are refused by the flag rather than counted.
   return 4;
 }
 
@@ -281,6 +318,8 @@ interface Frame {
   containerKind?: FrameKind;
   keyed?: boolean;
   emitted?: boolean;
+  /** The value has already been through `toJSON`; do not run the hook twice. */
+  normalized?: boolean;
 }
 
 /**
@@ -355,8 +394,15 @@ export function surveyDocument(
       // only. Written down rather than implied, because a gap that is stated
       // can be closed later and a silent one reads as coverage.
       if (frame.length !== undefined) {
+        const array = frame.value as object;
         try {
-          for (const name in frame.value as object) {
+          for (const name in array) {
+            // OWN properties only. `for...in` walks the prototype chain, and an
+            // inherited name is not something this array carries — JSON ignores
+            // it whether or not the chain has it, so treating one as a dropped
+            // property refused every document in a process where anything had
+            // put an enumerable property on `Object.prototype`.
+            if (!Object.prototype.hasOwnProperty.call(array, name)) continue;
             if (arrayIndexOf(name, frame.length) < 0) {
               unserializable = true;
               break;
@@ -390,12 +436,40 @@ export function surveyDocument(
       const key = keyed ? frame.names![index] : String(index);
       const member = readMember(container, key);
 
+      // `toJSON` FIRST, because that is what the writer writes. A value
+      // defining it is serialized as whatever it returns rather than as the
+      // fields it happens to carry, and the hook can also return something JSON
+      // omits — so both the size and the drop are decided here.
+      let held: unknown = member.present ? member.value : undefined;
+      let threw = false;
+      if (member.present) {
+        try {
+          held = asSerialized(member.value, key);
+        } catch {
+          // The hook is caller-supplied code. It throwing is a fact about the
+          // value, not an error in the checker.
+          threw = true;
+        }
+        // A hook that CHANGED the value is the silent-rewrite case this walk
+        // exists to catch, and the two questions it raises have different
+        // answers. Size must be measured from what the writer emits — a `Date`
+        // is a 26-byte quoted timestamp, not the empty object its own fields
+        // describe — while representability must report that the document read
+        // back is not the document that was validated. So the bytes come from
+        // the normalized value and the flag comes from the substitution.
+        if (held !== member.value) unserializable = true;
+      }
+
       // Enumerability means different things to the serializer on the two
       // containers. `JSON.stringify` omits a non-enumerable RECORD property —
       // so the schema, which reads directly, would see a field storage drops —
       // but it serializes an array element by index regardless. Applying the
       // record rule to both refused documents JSON handles correctly.
-      const skipped = !member.present || (keyed && !member.enumerable);
+      const skipped =
+        !member.present ||
+        threw ||
+        (keyed && !member.enumerable) ||
+        !serializesAs(held);
 
       // Read BEFORE the continuation is pushed, so `emitted` carries this
       // member's outcome; the continuation still goes on the stack ahead of the
@@ -427,7 +501,6 @@ export function surveyDocument(
         if (bytes > limits.maxBytes) return { ...done(), tooLarge: true };
       }
 
-      const held = member.value;
       const placement = memberPlacement(
         frame.containerKind ?? "value",
         frame.depth,
@@ -444,6 +517,10 @@ export function surveyDocument(
           value: held,
           kind: placement.kind,
           depth: placement.depth,
+          // Already through `toJSON`. The writer calls the hook once and writes
+          // what it returns as-is, so normalizing a replacement that itself
+          // defines `toJSON` would measure a value nothing ever produces.
+          normalized: true,
         });
       } else {
         // A malformed entry in a node list is still an entry. Accounting for it
@@ -459,7 +536,27 @@ export function surveyDocument(
       continue;
     }
 
-    const { value, kind, depth } = frame;
+    // The ROOT arrives here unnormalized; every other value went through the
+    // hook as its container's member. `JSON.stringify` passes `""` as the key
+    // at the top level, and a hook that reads it behaves differently for
+    // `undefined` — so the key it is given has to be the one the writer gives.
+    let value: unknown = frame.value;
+    if (frame.normalized !== true) {
+      try {
+        value = asSerialized(value, "");
+      } catch {
+        unserializable = true;
+        continue;
+      }
+      // Same substitution rule as a member's, for the same reason.
+      if (value !== frame.value) unserializable = true;
+      if (!serializesAs(value)) {
+        // Nothing at all is written for a root the writer drops.
+        unserializable = true;
+        continue;
+      }
+    }
+    const { kind, depth } = frame;
 
     if (kind === "node") {
       nodes += 1;
