@@ -476,3 +476,104 @@ jobs:
           # avoids the multi-minute pnpm install during the smoke check.
           npm exec --yes --package="$tarball" -- create-nextly-app smoke-app --template blank --skip-install --yes
           test -f smoke-app/package.json && echo "scaffold ok"
+  # The `dev` script of `packages/ui` starts TWO watchers, and the shape it used
+  # before — `a --watch & b --watch & wait` — is POSIX. `cmd.exe` treats `&` as a
+  # SEQUENTIAL separator and has no `wait`, so on Windows the first watcher held
+  # the line and the second never ran. Nothing errored: a contributor saw a
+  # running dev server, a healthy client bundle, and stale server-safe artifacts
+  # beside it.
+  #
+  # A unit test now refuses that construct in any workspace script, which stops
+  # it being reintroduced. It cannot show that the REPLACEMENT works, and the
+  # replacement is where the risk moved: a runner that spawns one watcher
+  # correctly and drops the other fails exactly as silently as the shell did.
+  #
+  # So this runs the real script on the platform that had the bug and requires
+  # BOTH watchers to produce output. Windows is the subject; ubuntu is the
+  # control, because a check that fails on every platform says nothing about
+  # Windows in particular.
+  dev-script-smoke:
+    name: Dev script starts every watcher (${{ matrix.os }})
+    needs: [ci]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The watchers compile this package's own sources, but its workspace
+      # dependencies still have to exist for the client entry to resolve them.
+      - name: Build the dependencies of the UI package
+        run: pnpm --filter @nextlyhq/ui^... build
+
+      # `shell: bash` on every leg, so one script covers all of them — Git Bash
+      # ships on the Windows runners. The dev script is still launched through
+      # pnpm, which is what puts `node_modules/.bin` on PATH; running the runner
+      # directly would fail to find `tsup` for reasons that have nothing to do
+      # with the property under test.
+      #
+      # `dist` is removed first so a file found afterwards was produced by THIS
+      # run. Without that, a previous build satisfies the assertion and the job
+      # passes with no watcher having started at all.
+      - name: Start the dev script and require every watcher to build
+        shell: bash
+        run: |
+          cd packages/ui
+          rm -rf dist
+          pnpm dev > /tmp/dev.log 2>&1 &
+          dev_pid=$!
+
+          # One artifact per watcher: `index.mjs` is the client config's, and
+          # `color.mjs` belongs to the server-safe config — the one the broken
+          # script never reached.
+          for _ in $(seq 1 120); do
+            if [ -f dist/index.mjs ] && [ -f dist/color.mjs ]; then break; fi
+            sleep 1
+          done
+
+          missing=""
+          [ -f dist/index.mjs ] || missing="$missing client(dist/index.mjs)"
+          [ -f dist/color.mjs ] || missing="$missing server-safe(dist/color.mjs)"
+          # Still running when the artifacts appear, checked BEFORE the kill.
+          #
+          # Stated plainly, because it is weaker than it looks: this does NOT separate a watcher
+          # from a one-shot build. tsup writes these files before its declaration phase, so a pair
+          # of one-shot builds is still alive at this moment too.
+          #
+          # The check that WOULD separate them is editing a source and requiring a rebuild. It is
+          # not here because `tsup --watch` in this package does not currently rebuild at all — it
+          # logs `Change detected` and emits nothing, measured on one watcher and on two, and on
+          # the shell script this replaced. That is a real defect and it is filed separately; a
+          # control that fails for a reason this pull request does not cause would only teach
+          # people to ignore it.
+          alive=yes
+          kill -0 "$dev_pid" 2>/dev/null || alive=no
+          kill "$dev_pid" 2>/dev/null || true
+
+          if [ -n "$missing" ] || [ "$alive" = "no" ]; then
+            [ -n "$missing" ] && echo "The dev script did not produce output for:$missing"
+            [ "$alive" = "no" ] && echo "The dev script exited before its outputs were complete."
+            echo "--- dev script output ---"
+            cat /tmp/dev.log
+            exit 1
+          fi
+          echo "Both commands produced their output and the script was still running."
