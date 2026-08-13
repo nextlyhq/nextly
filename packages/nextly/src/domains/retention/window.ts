@@ -115,12 +115,14 @@ export interface RetentionWindowPolicy {
  *
  * Floored because a window is a whole number of milliseconds; a fractional
  * value is not wrong, only unrepresentable in what it is compared against.
- * Flooring happens BEFORE the zero reading rather than after, because rounding
- * is what can PRODUCE a zero: every window under a millisecond floors to one,
- * and read afterwards it arrives as a window rather than as the zero the policy
- * exists to judge. On a trail whose policy calls zero malformed, that is the
- * difference between the default and a cutoff of now — the whole record
- * removed, from a value that never asked for it.
+ *
+ * The zero reading happens AFTER the flooring, because rounding is what can
+ * PRODUCE a zero: every window under one millisecond floors to zero, and a
+ * value read BEFORE that — `0.5` is not `=== 0` — passes the zero branch as
+ * though it were an ordinary window, then becomes one anyway. On a trail whose
+ * policy calls zero malformed, that is the difference between the default and a
+ * cutoff of now, which is the whole record removed from a value that never
+ * asked for it.
  */
 export function resolveRetentionWindow(
   value: unknown,
