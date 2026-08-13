@@ -74,6 +74,8 @@ export {
 } from "./tree";
 export type { NodeLocation, TreePosition } from "./tree";
 
+export { measureBytes } from "./measure-bytes";
+export { isPlainRecord } from "./plain-record";
 export { validate, ISSUE_CODES } from "./validation";
 export { declaresNoMarkup, isConditionGated } from "./visibility";
 export type { NoMarkupDefinitionSource } from "./visibility";

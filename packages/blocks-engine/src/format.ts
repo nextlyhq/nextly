@@ -43,6 +43,9 @@ export {
   documentBytes,
 } from "./limits";
 
+export { measureBytes } from "./measure-bytes";
+export { isPlainRecord } from "./plain-record";
+
 export {
   RESERVED_OPERATION_NAMES,
   isReservedOperationName,

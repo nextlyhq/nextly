@@ -50,7 +50,8 @@ import {
   MAX_DEPTH,
   MAX_NODES,
   STYLE_STATES,
-  documentBytes,
+  isPlainRecord,
+  measureBytes,
 } from "@nextlyhq/blocks-engine/format";
 import type {
   BindingFormatType,
@@ -126,17 +127,20 @@ const bindingSourcesWithoutSingle = BINDING_SOURCES.filter(
  * of this module's returns-unchanged guarantee rather than an approximation of
  * it.
  *
+ * The predicate is the ENGINE's. A local "object, not null, not an array"
+ * check admits a `Date`, a `Map` and a class instance, each of which has no own
+ * enumerable keys — so a walk over one finds nothing and reports it clean,
+ * while JSON turns it into a string or `{}` on the way to storage. Deciding by
+ * prototype is what separates a record from an object that merely is one, and
+ * the engine already answers that question for its own validator.
+ *
  * `meta` carries the JSON Schema fragment, because `z.unknown()` alone would
  * publish `{}` and describe a field that accepts anything.
  */
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function openRecord(valuesFragment: Record<string, unknown> = {}) {
   return z
     .unknown()
-    .refine(isPlainObject, { message: "Expected an object" })
+    .refine(isPlainRecord, { message: "Expected an object" })
     .meta({ type: "object", additionalProperties: valuesFragment });
 }
 
@@ -149,7 +153,7 @@ function typedRecord(
     .unknown()
     .refine(
       (value): value is Record<string, unknown> =>
-        isPlainObject(value) && Object.values(value).every(check),
+        isPlainRecord(value) && Object.values(value).every(check),
       { message }
     )
     .meta({ type: "object", additionalProperties: valuesFragment });
@@ -333,6 +337,19 @@ const blockNodeSchema = z.looseObject({
     "Expected an object of bindings"
   ).optional(),
   get slots() {
+    // The one document-keyed record NOT checked in place, and the exception is
+    // the published schema rather than an oversight. Checking slots with a
+    // predicate takes the node schema out of the emitted tree, and with it the
+    // `$ref` that describes nesting at all: the contract stops saying a slot
+    // holds nodes and says only that it holds an array, so an external consumer
+    // can no longer validate anything below the first level. Describing the
+    // recursion is most of what publishing this format is for.
+    //
+    // What that costs is bounded, and smaller than the alternative. Slot names
+    // are declared by block definitions rather than typed by authors, so a slot
+    // literally named `constructor` is refused; and the parsed copy of a slot
+    // named `__proto__` is dropped, so its children go structurally unchecked.
+    // Neither loses data, because the value returned is the caller's own.
     return z.record(z.string(), z.array(blockNodeSchema)).optional();
   },
   styles: nodeStylesSchema.optional(),
@@ -496,7 +513,8 @@ function exceedsLimits(
 }
 
 /**
- * Whether a value serializes to more bytes than the format allows.
+ * Whether a value serializes to more bytes than the format allows, measured
+ * without building the string.
  *
  * The third bound, and the one the other two cannot express. Depth and node
  * count both measure the TREE, and a document can be shallow, hold a single
@@ -509,19 +527,18 @@ function exceedsLimits(
  * everything. The tree walks stop at their first breach, so a hostile document
  * that is deep or wide never reaches this line.
  *
- * A value that cannot be serialized is reported as oversized rather than
- * allowed through. `JSON.stringify` throws on a cycle and on a `BigInt`, and
- * neither can occur in a stored document — both are cases of a caller passing
- * something that was never JSON, which is precisely what this entry point is
- * for. Letting the throw escape would turn "invalid input" into a crash in the
- * process doing the checking.
+ * The measurement is the engine's, and it counts rather than serializes: a
+ * document hiding one enormous string would otherwise force an allocation
+ * proportional to the whole hostile input before anything could reject it,
+ * which is the cost this bound exists to avoid paying. It also terminates on a
+ * cycle, where building the string would throw.
+ *
+ * Sharing it with the canonical validator is not tidiness. Two measurements of
+ * "how large is this document" disagree about which documents are refused, and
+ * they disagree only on the inputs near the cap — the ones that matter.
  */
 function exceedsBytes(value: unknown, maxBytes: number): boolean {
-  try {
-    return documentBytes(value as BlockDocument) > maxBytes;
-  } catch {
-    return true;
-  }
+  return measureBytes(value, maxBytes).exceeded;
 }
 
 /**

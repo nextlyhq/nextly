@@ -36,11 +36,20 @@ import type {
   LocaleOverlayValue,
   IssueSeverity,
   StyleState,
+  TreePosition,
   ValidationContext,
   ValidationIssue,
+  duplicateNode,
+  insertNode,
+  moveNode,
+  reidSubtree,
+  removeNode,
+  updateNode,
   validate,
 } from "@nextlyhq/blocks-engine";
 import { expectTypeOf } from "vitest";
+
+import type { isBindablePropType } from "../../collections/fields/catalog";
 
 import type { BlockDocumentShape } from "./block-document";
 
@@ -188,6 +197,59 @@ expectTypeOf<typeof validate>().parameters.toEqualTypeOf<
   [BlockDocument, ValidationContext]
 >();
 expectTypeOf<typeof validate>().returns.toEqualTypeOf<ValidationIssue[]>();
+
+// ---------------------------------------------------------------------------
+// The frozen tree primitives and bindability rule
+// ---------------------------------------------------------------------------
+
+/**
+ * The primitives are the format's write API: an external tool composes an edit
+ * out of them, and a change to one of their signatures breaks that tool with no
+ * stored document changing at all.
+ *
+ * Behaviour tests exercise them at their current call shapes, which is not the
+ * same thing as pinning those shapes — a parameter added or a return type
+ * changed moves the implementation and its tests together and stays green. The
+ * assertions below are what make that a compile error instead.
+ *
+ * Return types are pinned alongside the parameters because these are pure
+ * functions over a forest: a primitive that started mutating in place and
+ * returned `void` would satisfy any parameter-only assertion while breaking
+ * every caller that reads the result.
+ */
+expectTypeOf<typeof insertNode>().parameters.toEqualTypeOf<
+  [BlockNode[], BlockNode, TreePosition]
+>();
+expectTypeOf<typeof insertNode>().returns.toEqualTypeOf<BlockNode[]>();
+
+expectTypeOf<typeof removeNode>().parameters.toEqualTypeOf<
+  [BlockNode[], string]
+>();
+expectTypeOf<typeof removeNode>().returns.toEqualTypeOf<BlockNode[]>();
+
+expectTypeOf<typeof moveNode>().parameters.toEqualTypeOf<
+  [BlockNode[], string, TreePosition]
+>();
+expectTypeOf<typeof moveNode>().returns.toEqualTypeOf<BlockNode[]>();
+
+expectTypeOf<typeof reidSubtree>().parameters.toEqualTypeOf<[BlockNode]>();
+expectTypeOf<typeof reidSubtree>().returns.toEqualTypeOf<BlockNode>();
+
+expectTypeOf<typeof duplicateNode>().returns.toEqualTypeOf<BlockNode[]>();
+
+expectTypeOf<typeof updateNode>().returns.toEqualTypeOf<BlockNode[]>();
+
+// A slot position addresses a parent and a named region, never an index into a
+// rendered tree. Positional addressing is excluded from every stored contract,
+// so widening this is a format change rather than an ergonomic one.
+expectTypeOf<keyof TreePosition>().toEqualTypeOf<
+  "parentId" | "slot" | "index"
+>();
+
+// Bindability is DERIVED from a prop's field type and is never opted into per
+// block. A signature taking anything other than the type name would let a block
+// declare its own answer, which is the design this rule exists to forbid.
+expectTypeOf<typeof isBindablePropType>().returns.toEqualTypeOf<boolean>();
 
 // ---------------------------------------------------------------------------
 // The published schema describes the frozen envelope
