@@ -208,19 +208,25 @@ condemn the check would talk a reviewer out of reporting the fourth real
 violation, which is worse than the patching it was written to stop.
 
 So the third finding buys an experiment, not a diagnosis. Run the check against
-cases where you already know the answer:
+cases where you already know the answer — and the controls must exercise the
+SHAPE the findings kept arriving in, not merely some case with a known answer.
+An easy positive and an unrelated valid negative both pass while the check still
+misreads the alias, the runtime value or the population behind every one of
+those findings, which certifies the instrument on the strength of never having
+asked it the question:
 
-- a POSITIVE control — an input that must be reported, where the expected result
-  is not "nothing". A check that reports nothing under every circumstance passes
-  every negative control ever written.
-- a NEGATIVE control — a valid input it must stay silent on, ideally the exact
-  shape the recent findings were about.
+- a POSITIVE control — an input carrying the repeated shape that must be
+  reported, where the expected result is not "nothing". A check that reports
+  nothing under every circumstance passes every negative control ever written.
+- a NEGATIVE control — a valid input it must stay silent on, in that same shape:
+  the aliased spelling, the computed value, the member of the population the
+  findings clustered around.
 
 If it passes both, the check is fine and the findings are real: keep fixing them,
 and say so rather than leaving the instrument under suspicion. If it fails
-either, the check is the problem, and only then is it worth asking which of two
-things is unreliable — the remedies differ, and applying the wrong one looks
-like diligence:
+either, the check is the problem, and only then is it worth asking which of
+three things is unreliable — the remedies differ, and applying the wrong one
+looks like diligence:
 
 - **The READ** — the check cannot see what it is looking at. Replace the
   instrument, do not extend it. A regex over source becomes a walk over the
@@ -240,10 +246,21 @@ like diligence:
   one left the count unmoved and every assertion green. Naming the exempt pager
   fixed it; a bigger allowance never would have.
 
-The controls separate them too, which is why they come first. Feed the check an
-input it currently misreports and watch WHERE it goes wrong: if it never sees
-the value — the token, the node, the row — the read is at fault. If it sees the
-value and reaches the wrong verdict, the classification is.
+- **The EMISSION or the HARNESS** — the check reads correctly, decides
+  correctly, and the verdict never reaches anyone. A changed-lines filter drops
+  it, a baseline absorbs it, a formatter swallows it, a reporting step is not
+  wired up — or the control fixture never invoked the check at all, so the run
+  proved nothing about either of the two above. This one is the easiest to
+  misdiagnose as the other two, because replacing a correct reader makes the
+  symptom move without fixing anything.
+
+The controls separate them, which is why they come first. Feed the check an
+input it currently misreports and follow it all the way through: if it never
+sees the value — the token, the node, the row — the read is at fault. If it sees
+the value and reaches the wrong verdict, the classification is. If it reaches
+the right verdict and nothing comes out, the emission is — and trace the harness
+before concluding anything, since a fixture that never reaches the mechanism
+produces exactly the silence all three failures produce.
 
 Do not substitute a thought experiment about what a human reader would conclude.
 It misfires in both directions: a value built through an imported helper or a
@@ -293,10 +310,16 @@ State the remaining boundary rather than covering it badly. A named limitation
 is a check whose silence means something; an unnamed one is indistinguishable
 from coverage.
 
-And name which kind the check is where it is defined. "Advisory" and
-"precondition" are not always obvious from the code — a helper written as one
-acquires the other the moment a second caller gates a write on it, and nothing
-at the definition changes when it does.
+And classify at the CALL SITE, not at the definition. A shared helper does not
+acquire one kind: a caller that logs a warning and a caller that gates a write
+are an advisory use and a precondition use of the same function, both live at
+once. A definition-level label is therefore worse than none, because "this
+helper is advisory" invites the widening above — safe for the first caller,
+a hole in the second, and the note at the definition still reads correctly.
+
+This is the same unit the `catch` section below audits, and for the same reason:
+the direction of a fallback is a joint property of the check and what the caller
+does with its answer. When a check gains a caller, classify that caller.
 
 ## A bare `catch` is only a defect when its fallback makes a CLAIM
 
