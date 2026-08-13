@@ -23,3 +23,13 @@
 
 export { BuilderShell } from "./builder-shell";
 export type { BuilderShellProps } from "./builder-shell";
+
+/**
+ * The command palette, published here beside the shell because it is a client
+ * component for the same reason: it holds React state and registers a keyboard
+ * binding through the shell's provider, so it belongs behind the same banner.
+ *
+ * Its types are described from the root entry, which stays server-callable.
+ */
+export { COMMAND_PALETTE_KEYS, CommandPalette } from "./command-palette";
+export type { BuilderCommand, CommandPaletteProps } from "./command-palette";
