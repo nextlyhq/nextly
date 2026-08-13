@@ -129,7 +129,7 @@ import {
 } from "../plugins/services/plugin-services-registry";
 import { clearPluginSubscriptions } from "../plugins/subscription-tracker";
 import { validatePluginSlugs } from "../plugins/validate-slugs";
-import { setHandlerPlugins } from "../route-handler/auth-handler";
+import { setBootedConfig } from "../route-handler/auth-handler";
 import type {
   CollectionSource,
   FieldDefinition,
@@ -1116,7 +1116,16 @@ export async function registerServices(
   //
   // Unconditional: a config whose transformers removed every plugin must clear
   // the store rather than leave the author's raw list standing there.
-  setHandlerPlugins(transformedConfig.plugins);
+  setBootedConfig({
+    plugins: transformedConfig.plugins,
+    // The entity slugs too, because a `setup` transformer may ADD a top-level
+    // collection or single — and the permission fold decides whether a
+    // `publish` declaration names an entity, so folding against the raw route
+    // config would report a declaration on a transformer-added entity as a
+    // plugin-owned custom permission that boot drops.
+    collections: transformedConfig.collections,
+    singles: transformedConfig.singles,
+  });
 }
 
 // ============================================================

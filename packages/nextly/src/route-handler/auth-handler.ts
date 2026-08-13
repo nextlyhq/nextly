@@ -47,7 +47,7 @@ let _storedConfig: SanitizedNextlyConfig | null = null;
  * On `globalThis`, and NOT module-local, for the same reason `register.ts`
  * keeps its registration state there: Next.js and Turbopack can evaluate this
  * module in more than one server module graph, so instrumentation's boot may
- * call `setHandlerPlugins` on one copy while `/admin-meta` reads another. A
+ * call `setBootedConfig` on one copy while `/admin-meta` reads another. A
  * module-local value is `null` in the reading copy, and the endpoint falls back
  * to disclosing the raw, pre-`setup` list — which is the defect this whole seam
  * exists to remove, reappearing only under a bundler that duplicates modules.
@@ -58,6 +58,15 @@ let _storedConfig: SanitizedNextlyConfig | null = null;
  */
 const globalForBoot = globalThis as unknown as {
   __nextly_bootPlugins?: PluginDefinition[];
+  /**
+   * The ENTITY slugs boot registered, plugin contributions and `setup`
+   * transformer additions included.
+   *
+   * Slugs only: the sole reader is the permission fold, which asks whether a
+   * resource names an entity. Keeping whole definitions here would put hooks
+   * and access rules in a process-global for no caller.
+   */
+  __nextly_bootEntities?: { collections: string[]; singles: string[] };
 };
 
 /**
@@ -73,6 +82,7 @@ let _bootView: SanitizedNextlyConfig | null = null;
 let _bootViewInputs: {
   config: SanitizedNextlyConfig;
   plugins: PluginDefinition[];
+  entities?: { collections: string[]; singles: string[] };
 } | null = null;
 
 /**
@@ -106,13 +116,28 @@ function bootView(): SanitizedNextlyConfig | null {
     : undefined;
   if (!config || !plugins) return config;
 
+  const entities = globalForBoot.__nextly_bootEntities;
   if (
     !_bootView ||
     _bootViewInputs?.config !== config ||
-    _bootViewInputs?.plugins !== plugins
+    _bootViewInputs?.plugins !== plugins ||
+    _bootViewInputs?.entities !== entities
   ) {
-    _bootView = { ...config, plugins };
-    _bootViewInputs = { config, plugins };
+    _bootView = {
+      ...config,
+      plugins,
+      // Entity slugs travel as the minimal shape the permission fold reads.
+      // The definitions themselves stay whatever the route config carries: a
+      // reader wanting hooks or access rules must go through the container,
+      // and this store has never claimed to hold them.
+      ...(entities
+        ? {
+            collections: entities.collections.map(slug => ({ slug })),
+            singles: entities.singles.map(slug => ({ slug })),
+          }
+        : {}),
+    } as SanitizedNextlyConfig;
+    _bootViewInputs = { config, plugins, entities };
   }
   return _bootView;
 }
@@ -141,10 +166,16 @@ export function setHandlerConfig(config: SanitizedNextlyConfig): void {
  * advertising the plugins the author declared — and normalizing here rather
  * than at the call site leaves the caller no branch in which to disagree.
  */
-export function setHandlerPlugins(
-  plugins: PluginDefinition[] | undefined
-): void {
-  globalForBoot.__nextly_bootPlugins = plugins ?? [];
+export function setBootedConfig(config: {
+  plugins?: PluginDefinition[];
+  collections?: ReadonlyArray<{ slug: string }>;
+  singles?: ReadonlyArray<{ slug: string }>;
+}): void {
+  globalForBoot.__nextly_bootPlugins = config.plugins ?? [];
+  globalForBoot.__nextly_bootEntities = {
+    collections: (config.collections ?? []).map(c => c.slug),
+    singles: (config.singles ?? []).map(s => s.slug),
+  };
 }
 
 /**

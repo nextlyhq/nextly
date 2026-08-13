@@ -71,7 +71,7 @@ describe("the handler config store", () => {
   it("replaces the plugin list when boot runs after the route module", () => {
     store.setHandlerConfig(stored);
 
-    store.setHandlerPlugins(plugins("@acme/transformed"));
+    store.setBootedConfig({ plugins: plugins("@acme/transformed") });
 
     expect(names(store)).toEqual(["@acme/transformed"]);
   });
@@ -85,7 +85,7 @@ describe("the handler config store", () => {
   it("leaves every other field of the stored config intact", () => {
     store.setHandlerConfig(stored);
 
-    store.setHandlerPlugins(plugins("@acme/transformed"));
+    store.setBootedConfig({ plugins: plugins("@acme/transformed") });
 
     const after = store.getHandlerConfig();
     expect(after?.typescript).toEqual({ enabled: true });
@@ -100,7 +100,7 @@ describe("the handler config store", () => {
    * there is no stored config to correct at the moment boot reports its list.
    */
   it("applies a plugin list recorded before any config was stored", () => {
-    store.setHandlerPlugins(plugins("@acme/transformed"));
+    store.setBootedConfig({ plugins: plugins("@acme/transformed") });
 
     store.setHandlerConfig(stored);
 
@@ -113,7 +113,7 @@ describe("the handler config store", () => {
    */
   it("keeps the booted list when the raw config is stored again", () => {
     store.setHandlerConfig(stored);
-    store.setHandlerPlugins(plugins("@acme/transformed"));
+    store.setBootedConfig({ plugins: plugins("@acme/transformed") });
 
     store.setHandlerConfig(stored);
 
@@ -129,7 +129,7 @@ describe("the handler config store", () => {
   it("clears the declared plugins when boot produced none", () => {
     store.setHandlerConfig(stored);
 
-    store.setHandlerPlugins([]);
+    store.setBootedConfig({ plugins: [] });
 
     expect(names(store)).toEqual([]);
   });
@@ -143,7 +143,7 @@ describe("the handler config store", () => {
   it("clears the declared plugins when boot reported no list at all", () => {
     store.setHandlerConfig(stored);
 
-    store.setHandlerPlugins(undefined);
+    store.setBootedConfig({});
 
     expect(names(store)).toEqual([]);
   });
@@ -155,7 +155,7 @@ describe("the handler config store", () => {
    * not be dressed up as a config.
    */
   it("reports no config when only a plugin list has been recorded", () => {
-    store.setHandlerPlugins(plugins("@acme/transformed"));
+    store.setBootedConfig({ plugins: plugins("@acme/transformed") });
 
     expect(store.getHandlerConfig()).toBeNull();
   });
@@ -194,7 +194,7 @@ describe("the handler config store", () => {
    */
   it("shares the booted list across duplicate copies of the module", async () => {
     const booting = store;
-    booting.setHandlerPlugins(plugins("@acme/transformed"));
+    booting.setBootedConfig({ plugins: plugins("@acme/transformed") });
 
     vi.resetModules();
     const serving: HandlerStore = await import("./auth-handler");
@@ -213,12 +213,12 @@ describe("the handler config store", () => {
    */
   it("re-derives the view when a later boot replaces the list", () => {
     store.setHandlerConfig(stored);
-    store.setHandlerPlugins(plugins("@acme/first"));
+    store.setBootedConfig({ plugins: plugins("@acme/first") });
     expect(store.getHandlerConfig()?.plugins?.map(p => p.name)).toEqual([
       "@acme/first",
     ]);
 
-    store.setHandlerPlugins(plugins("@acme/second"));
+    store.setBootedConfig({ plugins: plugins("@acme/second") });
 
     expect(store.getHandlerConfig()?.plugins?.map(p => p.name)).toEqual([
       "@acme/second",
