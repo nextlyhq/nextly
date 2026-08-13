@@ -943,6 +943,26 @@ export function splitSqlStatements(sql: string): string[] {
     const char = cleanedSql[i];
     const prevChar = cleanedSql[i - 1];
 
+    // Comments are copied through verbatim without being scanned, because the
+    // characters inside one are prose rather than SQL. An apostrophe in a
+    // retained comment ("SQLite doesn't support ...") would otherwise open a
+    // string that never closes, and every semicolon after it stops separating
+    // statements — the whole file then reaches the driver as one statement.
+    if (!inString && char === "-" && cleanedSql[i + 1] === "-") {
+      const lineEnd = cleanedSql.indexOf("\n", i);
+      const end = lineEnd === -1 ? cleanedSql.length : lineEnd;
+      current += cleanedSql.slice(i, end);
+      i = end - 1;
+      continue;
+    }
+    if (!inString && char === "/" && cleanedSql[i + 1] === "*") {
+      const close = cleanedSql.indexOf("*/", i + 2);
+      const end = close === -1 ? cleanedSql.length : close + 2;
+      current += cleanedSql.slice(i, end);
+      i = end - 1;
+      continue;
+    }
+
     if ((char === "'" || char === '"') && prevChar !== "\\") {
       if (!inString) {
         inString = true;
