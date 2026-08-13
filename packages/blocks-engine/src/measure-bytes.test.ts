@@ -158,6 +158,44 @@ describe("measureBytes", () => {
     expect(measureBytes([1, 2], 1024).unserializable).toBe(false);
   });
 
+  it("refuses an indexed accessor without invoking it", () => {
+    // The array counterpart of the object case. Both go through one reader, so
+    // this and its sibling cannot diverge — which is what they did for five
+    // review rounds while the two paths were written separately.
+    let invoked = 0;
+    const array: unknown[] = [1];
+    Object.defineProperty(array, "0", {
+      enumerable: true,
+      configurable: true,
+      get() {
+        invoked += 1;
+        return "x".repeat(100_000);
+      },
+    });
+
+    expect(measureBytes({ items: array }, 2 * 1024 * 1024).unserializable).toBe(
+      true
+    );
+    expect(invoked).toBe(0);
+  });
+
+  it("survives a hostile prototype lookup", () => {
+    // `Object.getPrototypeOf` runs a proxy's trap, which is caller-supplied
+    // code. A walk that is a precondition for parsing untrusted input must
+    // report rather than let the exception escape.
+    const hostile = new Proxy(
+      { a: 1 },
+      {
+        getPrototypeOf() {
+          throw new Error("trap");
+        },
+      }
+    );
+
+    expect(() => measureBytes({ nested: hostile }, 1024)).not.toThrow();
+    expect(measureBytes({ nested: hostile }, 1024).unserializable).toBe(true);
+  });
+
   it("counts own properties only", () => {
     // The walk uses `for...in`, which reaches the prototype chain. An inherited
     // property is not serialized, so counting one would overstate the size and

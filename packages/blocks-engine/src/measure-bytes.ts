@@ -94,6 +94,61 @@ function scalarBytes(value: unknown, budget: number): number {
  * early and `bytes` is a lower bound.
  */
 /**
+ * The outcome of reaching for one member of a container.
+ *
+ * `absent` covers both refusals: a member that could not be read, and one whose
+ * descriptor says reading it would run caller-supplied code. Neither yields a
+ * value, and both mean the document cannot be stored as it stands.
+ */
+type Member = { present: true; value: unknown } | { present: false };
+
+/**
+ * Read one member of an object or array, without running anything.
+ *
+ * Object properties and array elements are the same question — reach for a key,
+ * safely, and find out whether what comes back is data — and answering it in two
+ * places is how a guard comes to exist on one path and not the other. Both
+ * loops call this.
+ *
+ * The descriptor is what makes it safe: it reports an accessor WITHOUT
+ * invoking it, so a getter is refused rather than executed. Invoking one to
+ * discover it exists is the risk itself, and its return value is not what
+ * storage would hold. Reflection can also throw — a proxy trap runs
+ * caller-supplied code — so the lookup is guarded too.
+ */
+function readMember(container: object, key: string | number): Member {
+  let descriptor: PropertyDescriptor | undefined;
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(container, String(key));
+  } catch {
+    return { present: false };
+  }
+  if (descriptor === undefined) return { present: false };
+  if (descriptor.get !== undefined || descriptor.set !== undefined) {
+    return { present: false };
+  }
+  return { present: true, value: descriptor.value as unknown };
+}
+
+/**
+ * Whether a value is a plain record, tolerating a hostile prototype lookup.
+ *
+ * `Object.getPrototypeOf` runs a proxy's `getPrototypeOf` trap, which is
+ * caller-supplied code and can throw. A walk that is a precondition for parsing
+ * untrusted input must not let that escape.
+ */
+function isPlainRecordSafely(value: object): {
+  plain: boolean;
+  threw: boolean;
+} {
+  try {
+    return { plain: isPlainRecord(value), threw: false };
+  } catch {
+    return { plain: false, threw: true };
+  }
+}
+
+/**
  * Everything one pass over an untrusted document can establish.
  *
  * Depth, node count, serialized size, JSON-representability and read safety are
@@ -242,16 +297,18 @@ export function surveyDocument(
       // Filling the stack first reads every element before any is measured, so
       // an array of accessors returning large strings holds all of them at once
       // — the allocation the cap exists to refuse, performed while enforcing it.
+      // That applies to OBJECT-valued elements too: pushing them without
+      // accounting first defers nothing, because reading them is the cost.
       for (let index = 0; index < value.length; index += 1) {
-        let element: unknown;
-        try {
-          element = value[index];
-        } catch {
+        const member = readMember(value, index);
+        if (!member.present) {
           unserializable = true;
           continue;
         }
+        const element = member.value;
         if (typeof element === "object" && element !== null) {
           stack.push({ value: element, kind: elementKind, depth });
+          if (bytes > limits.maxBytes) return { ...done(), tooLarge: true };
         } else if (takeScalar(element)) {
           return { ...done(), tooLarge: true };
         }
@@ -259,7 +316,9 @@ export function surveyDocument(
       continue;
     }
 
-    if (!isPlainRecord(value)) unserializable = true;
+    const shape = isPlainRecordSafely(value);
+    if (!shape.plain) unserializable = true;
+    if (shape.threw) continue;
     bytes += 2; // braces
     if (bytes > limits.maxBytes) return { ...done(), tooLarge: true };
 
@@ -272,23 +331,12 @@ export function surveyDocument(
       properties += 1;
       if (bytes > limits.maxBytes) return { ...done(), tooLarge: true };
 
-      // An accessor is caller-supplied code. Its DESCRIPTOR says so without
-      // running it, so a document carrying one is refused rather than executed:
-      // a getter's return value is not what storage would hold, and invoking it
-      // to find that out is the risk itself.
-      let descriptor: PropertyDescriptor | undefined;
-      try {
-        descriptor = Object.getOwnPropertyDescriptor(value, key);
-      } catch {
+      const member = readMember(value, key);
+      if (!member.present) {
         unserializable = true;
         continue;
       }
-      if (descriptor !== undefined && descriptor.get !== undefined) {
-        unserializable = true;
-        continue;
-      }
-
-      const held = descriptor?.value as unknown;
+      const held = member.value;
 
       // The two places the document's own tree continues. `nodes` is the
       // ENVELOPE's key, so it is recognised only on the root frame — a props
