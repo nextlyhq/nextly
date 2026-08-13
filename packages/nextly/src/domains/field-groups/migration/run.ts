@@ -407,7 +407,14 @@ export async function runFieldGroupMigration(
    * unchanged world across every attempt is the signature that separates the two.
    */
   let lastSignature: string | undefined;
-  let worldMoved = false;
+  // 🔴 Whether the world moved at the LAST transition, not whether it ever moved.
+  //
+  // A sticky flag answers "was this ever contended", and the question at exhaustion is "is it
+  // contended NOW". A run that advances between the first two attempts and then crashes leaves the
+  // final two signatures identical and its claim stranded — a sticky flag still calls that live, so
+  // the preview reports contention while the operator's real task is recovery. Reset on every
+  // comparison, so movement has to persist THROUGH exhaustion to earn the softer answer.
+  let movedSinceLastAttempt = false;
 
   const signatureOf = (error: unknown, lock: LockObservation): string => {
     const reason = NextlyError.is(error)
@@ -652,7 +659,9 @@ export async function runFieldGroupMigration(
           }
           const signature = signatureOf(error, await observeContention());
           if (lastSignature !== undefined && signature !== lastSignature) {
-            worldMoved = true;
+            movedSinceLastAttempt = true;
+          } else if (lastSignature !== undefined) {
+            movedSinceLastAttempt = false;
           }
           lastSignature = signature;
           // Not the final attempt: let it out so the whole session runs again, marker included.
@@ -663,7 +672,7 @@ export async function runFieldGroupMigration(
           // the held row behind it is a claim someone left when their process died rather than a
           // writer at work. Reporting that as contention buries a real storage conflict under the
           // word traffic — so it is raised, exactly as it would be with no lock row at all.
-          if (!worldMoved) throw error;
+          if (!movedSinceLastAttempt) throw error;
 
           // Out of attempts. Report the manifest's plan and say plainly that it was never scored
           // against this database, rather than returning an empty list — which reads as "nothing to
@@ -828,7 +837,9 @@ export async function runFieldGroupMigration(
       // this file has already been corrected for twice.
       const signature = signatureOf(error, await observeContention());
       if (lastSignature !== undefined && signature !== lastSignature) {
-        worldMoved = true;
+        movedSinceLastAttempt = true;
+      } else if (lastSignature !== undefined) {
+        movedSinceLastAttempt = false;
       }
       lastSignature = signature;
     }
