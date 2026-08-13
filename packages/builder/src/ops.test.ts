@@ -363,17 +363,19 @@ describe("an op that cannot apply", () => {
     // hold, and enqueueing it first is a hundred million allocations before the
     // first hole can be popped and refused.
     //
-    // The SIZE is what separates. At five million the unbounded walk still
-    // finishes, because it enqueues everything and then refuses on the first
-    // entry it pops; a hundred million is where that difference stops being
-    // one of speed.
-    const wide = new Array(100_000_000) as BlockNode[];
+    // Asserted on the REASON, not on exhaustion. The same shape at the root is
+    // separating by size — a hundred million entries there exhausts the heap —
+    // and measured here it is not: an unbounded slot walk enqueues a hundred
+    // million holes in a few seconds, pops the first, and refuses the document
+    // for holding a hole among its nodes. It throws either way, so the size
+    // proves nothing and only the message distinguishes them.
+    const wide = new Array(5_000_000) as BlockNode[];
     const document = doc([node("outer", { main: wide })]);
 
     expect(() => applyOp(document, { kind: "remove", id: "outer" })).toThrow(
-      OpError
+      /entries an edit may walk/
     );
-  }, 30_000);
+  });
 
   it("bounds the walk across slots, not within one", () => {
     // Five lists, each comfortably under the per-list bound, summing past it.
