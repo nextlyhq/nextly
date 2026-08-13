@@ -16,11 +16,35 @@
  * A type cannot express this: `className` is a legitimate string prop and the
  * dead values are ordinary utilities. The property is about which utilities
  * make sense on which element, so it is asserted over the source.
+ *
+ * ## Why this parses rather than scans
+ *
+ * Earlier versions of this file matched JSX with regular expressions, and each
+ * was found to miss a spelling that renders perfectly well: `[^>]*?` truncating
+ * at the `>` inside an arrow-function prop; the `className={...}` expression
+ * form; a spread of an object literal; a spread of a variable; a template
+ * literal's interpolation; a shorthand property; and whitespace around the `=`.
+ * Every one was fixed by widening the pattern, and every fix was followed by
+ * another spelling.
+ *
+ * That is the signature of the wrong kind of check rather than of a careless
+ * pattern. A scan over syntax has an unbounded surface — the grammar keeps
+ * offering forms the author did not anticipate — so it can only ever be
+ * patched. This walks the real AST from the TypeScript compiler instead.
+ * Whitespace, formatting and exotic-but-valid spellings stop being cases to
+ * enumerate, because the parser has already handled them; what remains is a
+ * question about NODE KINDS, which is finite.
+ *
+ * The classification is therefore total and defaults to OPAQUE. An expression
+ * form nobody considered is reported rather than assumed harmless, which is the
+ * safe direction: a false report costs an author one message telling them to
+ * pass a literal, and a false pass ships a dead class with the suite green.
  */
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, extname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -35,7 +59,7 @@ const repo = resolve(adminSrc, "../../..");
  * reaching past the wrapper for the input.
  */
 const FIELD_ONLY =
-  /\b(?:border-(?:input|border|control-border)|bg-background|text-foreground)\b/;
+  /^(?:border-(?:input|border|control-border)|bg-background|text-foreground)$/;
 
 function walk(dir: string, found: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
@@ -47,257 +71,197 @@ function walk(dir: string, found: string[] = []): string[] {
   return found;
 }
 
+function parse(path: string, source: string): ts.SourceFile {
+  return ts.createSourceFile(
+    path,
+    source,
+    ts.ScriptTarget.Latest,
+    /* setParentNodes */ true,
+    ts.ScriptKind.TSX
+  );
+}
+
+/** Every `<SearchBar ...>` element in a file, opening tag or self-closing. */
+function searchBarTags(
+  file: ts.SourceFile
+): (ts.JsxOpeningElement | ts.JsxSelfClosingElement)[] {
+  const found: (ts.JsxOpeningElement | ts.JsxSelfClosingElement)[] = [];
+  const visit = (node: ts.Node): void => {
+    if (
+      (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) &&
+      node.tagName.getText(file) === "SearchBar"
+    ) {
+      found.push(node);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  return found;
+}
+
+/** What a class-valued expression contributes: text we can read, or names we cannot. */
+interface ClassValue {
+  /** Class text the source determines. */
+  literals: string[];
+  /** Expressions whose runtime value this file cannot know. */
+  opaque: string[];
+}
+
+const EMPTY: ClassValue = { literals: [], opaque: [] };
+
+function merge(parts: ClassValue[]): ClassValue {
+  return {
+    literals: parts.flatMap(part => part.literals),
+    opaque: parts.flatMap(part => part.opaque),
+  };
+}
+
 /**
- * Every `<SearchBar ... />` opening tag, read by tracking brace depth rather
- * than by scanning to the first `>`.
+ * Classify one expression appearing in class-value position.
  *
- * The obvious pattern — `<SearchBar\b[^>]*?>` — is wrong on real JSX, and
- * silently: an arrow function in a prop (`onChange={v => setSearch(v)}`)
- * contains a `>`, so the match ends inside the props and never reaches
- * `className`. A guard written that way passes over exactly the call sites most
- * likely to be complex, and it passed over a deliberately reintroduced dead
- * class when this file was first written.
+ * Deliberately a switch over node kinds with an opaque default. The positions
+ * that hold a non-class expression are recognised structurally rather than by
+ * punctuation: a call's EXPRESSION (`cn` in `cn(...)`) is a callee, and a
+ * conditional's CONDITION or a `&&`'s LEFT operand is a test. `??` is not in
+ * that group — in `classes ?? "w-full"` the left operand IS a value.
  */
-function openingTags(source: string): { text: string; index: number }[] {
-  const tags: { text: string; index: number }[] = [];
-  const NAME = /<SearchBar\b/g;
-  for (const start of source.matchAll(NAME)) {
-    let depth = 0;
-    let quote: string | null = null;
-    for (let i = start.index; i < source.length; i++) {
-      const ch = source[i];
-      if (quote) {
-        if (ch === quote) quote = null;
+function classValue(node: ts.Expression, file: ts.SourceFile): ClassValue {
+  if (ts.isParenthesizedExpression(node)) {
+    return classValue(node.expression, file);
+  }
+
+  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+    return { literals: [node.text], opaque: [] };
+  }
+
+  if (ts.isTemplateExpression(node)) {
+    // The literal chunks are class text; each interpolation is its own question.
+    return merge([
+      { literals: [node.head.text], opaque: [] },
+      ...node.templateSpans.map(span =>
+        merge([
+          classValue(span.expression, file),
+          { literals: [span.literal.text], opaque: [] },
+        ])
+      ),
+    ]);
+  }
+
+  if (ts.isCallExpression(node)) {
+    // `cn("a", x)` — the callee contributes nothing, every argument is a value.
+    return merge(node.arguments.map(argument => classValue(argument, file)));
+  }
+
+  if (ts.isConditionalExpression(node)) {
+    // The condition decides WHICH branch applies; only the branches are classes.
+    return merge([
+      classValue(node.whenTrue, file),
+      classValue(node.whenFalse, file),
+    ]);
+  }
+
+  if (ts.isBinaryExpression(node)) {
+    const operator = node.operatorToken.kind;
+    if (
+      operator === ts.SyntaxKind.AmpersandAmpersandToken ||
+      operator === ts.SyntaxKind.BarBarToken
+    ) {
+      // `isOpen && "max-w-sm"` — the left operand is a test.
+      return classValue(node.right, file);
+    }
+    if (
+      operator === ts.SyntaxKind.QuestionQuestionToken ||
+      operator === ts.SyntaxKind.PlusToken
+    ) {
+      // `classes ?? "w-full"`, `a + b` — both sides can be what renders.
+      return merge([classValue(node.left, file), classValue(node.right, file)]);
+    }
+  }
+
+  if (
+    node.kind === ts.SyntaxKind.NullKeyword ||
+    node.kind === ts.SyntaxKind.TrueKeyword ||
+    node.kind === ts.SyntaxKind.FalseKeyword ||
+    (ts.isIdentifier(node) && node.text === "undefined")
+  ) {
+    return EMPTY;
+  }
+
+  // Everything else — an identifier, a property access, anything unforeseen —
+  // is a value this file cannot read.
+  return { literals: [], opaque: [node.getText(file)] };
+}
+
+/** What one `<SearchBar>` tag passes as class text, and what it hides. */
+function classesOf(
+  tag: ts.JsxOpeningElement | ts.JsxSelfClosingElement,
+  file: ts.SourceFile
+): ClassValue {
+  const parts: ClassValue[] = [];
+
+  for (const property of tag.attributes.properties) {
+    if (ts.isJsxAttribute(property)) {
+      if (property.name.getText(file) !== "className") continue;
+      const initializer = property.initializer;
+      if (initializer === undefined) continue;
+      if (ts.isStringLiteral(initializer)) {
+        parts.push({ literals: [initializer.text], opaque: [] });
         continue;
       }
-      if (ch === '"' || ch === "'" || ch === "`") quote = ch;
-      else if (ch === "{") depth++;
-      else if (ch === "}") depth--;
-      else if (ch === ">" && depth === 0) {
-        tags.push({
-          text: source.slice(start.index, i + 1),
-          index: start.index,
-        });
-        break;
+      if (ts.isJsxExpression(initializer) && initializer.expression) {
+        parts.push(classValue(initializer.expression, file));
+      }
+      continue;
+    }
+
+    // A spread. An object literal can be read; anything else cannot.
+    const spread = property.expression;
+    if (!ts.isObjectLiteralExpression(spread)) {
+      parts.push({ literals: [], opaque: [spread.getText(file)] });
+      continue;
+    }
+    for (const member of spread.properties) {
+      if (member.name?.getText(file) !== "className") continue;
+      if (ts.isPropertyAssignment(member)) {
+        parts.push(classValue(member.initializer, file));
+      } else {
+        // Shorthand: `{ className }`. The value is a variable of that name, so
+        // there is nothing in the source to read.
+        parts.push({ literals: [], opaque: [member.getText(file)] });
       }
     }
   }
-  return tags;
+
+  return merge(parts);
 }
 
-/**
- * The text between the brace at `open` and its match, skipping string literals
- * so that a brace inside a string does not unbalance the count.
- */
-function braceBody(source: string, open: number): string | null {
-  let depth = 0;
-  let quote: string | null = null;
-  for (let i = open; i < source.length; i++) {
-    const ch = source[i];
-    if (quote) {
-      if (ch === quote) quote = null;
-      continue;
-    }
-    if (ch === '"' || ch === "'" || ch === "`") quote = ch;
-    else if (ch === "{") depth++;
-    else if (ch === "}") {
-      depth--;
-      if (depth === 0) return source.slice(open + 1, i);
-    }
-  }
-  return null;
+/** The forbidden utilities in some class text. */
+function offenders(literals: string[]): string[] {
+  return literals
+    .flatMap(text => text.split(/\s+/))
+    .filter(token => FIELD_ONLY.test(token));
 }
 
-/** Every `{...expr}` on the tag, as the expression text without its dots. */
-function spreadExpressions(tag: string): string[] {
-  const found: string[] = [];
-  for (const spread of tag.matchAll(/\{\s*\.\.\./g)) {
-    const body = braceBody(tag, spread.index);
-    if (body !== null) found.push(body.replace(/^\s*\.\.\./, ""));
-  }
-  return found;
-}
-
-/**
- * The class text a tag carries, in any JSX spelling that can be read statically.
- *
- * `className="a b"` is the literal form. `className={...}` is equally valid and
- * equally common once a call site needs `cn()` or a conditional, and a pattern
- * that reads only the literal form skips those attributes in SILENCE — the
- * offending class is still there, the scan simply never sees it. A spread of an
- * object literal, `{...{ className: "..." }}`, is a third spelling with the same
- * property.
- *
- * Returning the whole expression text is deliberately blunt: this check asks
- * whether a forbidden class NAME appears anywhere in what the tag passes, and a
- * name inside `cn("border-input", x)` is just as inert as one in a plain string.
- */
-function classText(tag: string): string | null {
-  const literal = /className="([^"]*)"/.exec(tag);
-  if (literal) return literal[1];
-
-  const brace = tag.indexOf("className={");
-  if (brace !== -1) {
-    const body = braceBody(tag, brace + "className=".length);
-    if (body !== null) return body;
-  }
-
-  for (const expression of spreadExpressions(tag)) {
-    const inner = expression.trim();
-    if (inner.startsWith("{") && /\bclassName\b/.test(inner)) return inner;
-  }
-  return null;
-}
-
-/**
- * The expression with the LITERAL text of its strings blanked out, but the
- * interpolations of a template literal kept.
- *
- * Blanking a template whole is the tempting version and it is wrong: in
- * `` `w-full ${classes}` `` the interpolation is the only part that can carry an
- * unknown class, so erasing it leaves an expression that looks entirely static
- * and reports clean. The literal segments around it are erased for the same
- * reason ordinary strings are — a word inside one is class text, already read by
- * the caller, not an identifier.
- *
- * Interpolation bodies are processed recursively so a nested literal inside one
- * (`` `${cn("w-full")}` ``) is erased too rather than being read as a variable.
- * Length is preserved throughout, so an identifier's offset still describes what
- * follows it.
- */
-function withoutLiteralText(source: string): string {
-  let out = "";
-  let i = 0;
-  while (i < source.length) {
-    const ch = source[i];
-    if (ch === '"' || ch === "'") {
-      const start = i++;
-      while (i < source.length && source[i] !== ch) {
-        i += source[i] === "\\" ? 2 : 1;
-      }
-      i++;
-      out += " ".repeat(i - start);
-      continue;
-    }
-    if (ch === "`") {
-      const start = i++;
-      let body = "";
-      while (i < source.length && source[i] !== "`") {
-        if (source[i] === "$" && source[i + 1] === "{") {
-          let depth = 1;
-          let end = i + 2;
-          while (end < source.length && depth > 0) {
-            if (source[end] === "{") depth++;
-            else if (source[end] === "}" && --depth === 0) break;
-            end++;
-          }
-          body += `  ${withoutLiteralText(source.slice(i + 2, end))} `;
-          i = end + 1;
-          continue;
-        }
-        body += " ";
-        i++;
-      }
-      i++;
-      out += ` ${body}`.padEnd(i - start, " ");
-      continue;
-    }
-    out += ch;
-    i++;
-  }
-  return out;
-}
-
-/** Words that can appear where a class value would, but carry no classes. */
-const NOT_A_CLASS_VALUE = new Set([
-  "true",
-  "false",
-  "null",
-  "undefined",
-  "typeof",
-]);
-
-/**
- * The identifiers in an expression that could carry class text at runtime.
- *
- * `className={cn("w-full", "border-input")}` is fully determined by its source
- * and can be read. `className={classes}` is not: the utility could be anywhere
- * in a variable this file never sees. Reading only the expression TEXT would
- * find no forbidden name in `classes` and report the call site clean, which is
- * the same silent narrowing as skipping a spread.
- *
- * Two positions hold an identifier without it being a class value, and both are
- * recognisable without parsing:
- *
- * - a callee, `cn(` — the function's NAME contributes nothing;
- * - a condition's test, `isActive && "..."` or `isActive ? "a" : "b"` — the test
- *   decides WHICH literal applies and is not itself a class. `??` is excluded
- *   from that, because `classes ?? "w-full"` uses the identifier as a value.
- *
- * Everything else is treated as unreadable and reported.
- */
-function opaqueClassValues(expression: string): string[] {
-  const bare = withoutLiteralText(expression);
-  const found: string[] = [];
-  for (const identifier of bare.matchAll(/[A-Za-z_$][A-Za-z0-9_$]*/g)) {
-    if (NOT_A_CLASS_VALUE.has(identifier[0])) continue;
-    const after = bare
-      .slice(identifier.index + identifier[0].length)
-      .trimStart();
-    if (after.startsWith("(")) continue;
-    if (after.startsWith("&&")) continue;
-    if (after.startsWith("?") && !after.startsWith("??")) continue;
-    found.push(identifier[0]);
-  }
-  return found;
-}
-
-/**
- * Everything a tag passes that no static scan can read: a spread that is not an
- * object literal, and a className expression whose value comes from a variable.
- *
- * These are reported rather than skipped. A scan that passes over the input it
- * cannot read answers a narrower question than the one it claims to, and
- * answers it in green: the forbidden class would reach the wrapper with every
- * assertion still reporting zero. Naming the tag turns that silence into a
- * failure with an instruction, and costs nothing while every call site passes a
- * literal.
- */
-function unreadable(tag: string): string[] {
-  const opaque = spreadExpressions(tag).filter(
-    expression => !expression.trim().startsWith("{")
-  );
-
-  const brace = tag.indexOf("className={");
-  if (brace !== -1) {
-    const body = braceBody(tag, brace + "className=".length);
-    if (body !== null) opaque.push(...opaqueClassValues(body));
-  }
-  for (const expression of spreadExpressions(tag)) {
-    const inner = expression.trim();
-    if (!inner.startsWith("{")) continue;
-    const property = /\bclassName\s*(:)?/.exec(withoutLiteralText(inner));
-    if (!property) continue;
-    if (property[1] === undefined) {
-      // Shorthand, `{...{ className }}`. The property's value IS a variable of
-      // that name, so there is nothing in the source to read -- and the colon
-      // this used to require is exactly what shorthand omits, so the whole
-      // object read as carrying no className at all.
-      opaque.push("className");
-      continue;
-    }
-    opaque.push(
-      ...opaqueClassValues(inner.slice(property.index + property[0].length))
-    );
-  }
-  return opaque;
+function lineOf(node: ts.Node, file: ts.SourceFile): number {
+  return file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1;
 }
 
 const sources = walk(adminSrc).filter(
   path =>
     !/\.test\.tsx$/.test(path) &&
-    readFileSync(path, "utf8").includes("<SearchBar")
+    readFileSync(path, "utf8").includes("SearchBar")
 );
+
+/** Parse one snippet as if it were a call site, for the controls below. */
+function only(markup: string): {
+  tag: ts.JsxOpeningElement | ts.JsxSelfClosingElement;
+  file: ts.SourceFile;
+} {
+  const file = parse("control.tsx", `const x = ${markup};`);
+  const [tag] = searchBarTags(file);
+  if (!tag) throw new Error(`no SearchBar element parsed from: ${markup}`);
+  return { tag, file };
+}
 
 describe("SearchBar call sites", () => {
   it("finds the call sites at all", () => {
@@ -305,154 +269,133 @@ describe("SearchBar call sites", () => {
     // directory or a changed element spelling has to fail here first rather
     // than reporting a clean run.
     const elements = sources.flatMap(path =>
-      openingTags(readFileSync(path, "utf8"))
+      searchBarTags(parse(path, readFileSync(path, "utf8")))
     );
     expect(sources.length).toBeGreaterThan(10);
     expect(elements.length).toBeGreaterThan(10);
   });
 
-  it("reads a forbidden class in either JSX spelling", () => {
-    // The scanner itself is exercised on a known offender, because the other
-    // two assertions can only ever report ZERO -- and a scanner that reads
-    // nothing reports zero too. Counting tags does not separate those cases:
-    // the tag is found either way, and it is the ATTRIBUTE inside it that gets
-    // skipped.
-    //
-    // The expression form is the one that was missed. `className={"..."}` and
-    // `className={cn("...")}` are ordinary JSX and were invisible to a pattern
-    // that read only the literal spelling.
+  it("reads a forbidden class in every spelling that renders", () => {
+    // The enforcement assertions can only ever report ZERO, and a reader that
+    // reads nothing reports zero too. So the reader is exercised on a known
+    // offender in each form. Most of these were live defects found one at a
+    // time against the earlier regex versions; the last, whitespace around `=`,
+    // is what made it clear the design rather than the pattern was wrong.
     const cases = [
-      ["literal", '<SearchBar value={v} className="w-full border-input" />'],
-      ["braced", '<SearchBar value={v} className={"border-input"} />'],
+      ["literal", '<SearchBar className="w-full border-input" />'],
+      ["braced", '<SearchBar className={"border-input"} />'],
+      ["cn() call", '<SearchBar className={cn("w-full", "border-input")} />'],
+      ["object spread", '<SearchBar {...{ className: "border-input" }} />'],
+      ["template", "<SearchBar className={`w-full border-input`} />"],
       [
-        "cn() call",
-        '<SearchBar value={v} className={cn("w-full", "border-input")} />',
+        "template with a hole",
+        "<SearchBar className={`w-full ${x} border-input`} />",
       ],
+      ["spaced equals", '<SearchBar className = {"border-input"} />'],
       [
-        "object-literal spread",
-        '<SearchBar value={v} {...{ className: "border-input" }} />',
+        "newline before value",
+        '<SearchBar\n  className=\n  "border-input"\n/>',
+      ],
+      ["guarded", '<SearchBar className={cond && "border-input"} />'],
+      [
+        "ternary branch",
+        '<SearchBar className={cond ? "a" : "border-input"} />',
+      ],
+      // An arrow function in an earlier prop contains a `>`, which truncated
+      // the very first version of this check.
+      [
+        "after an arrow prop",
+        '<SearchBar onChange={v => set(v)} className="border-input" />',
       ],
     ] as const;
 
     for (const [name, markup] of cases) {
-      const [tag] = openingTags(markup);
-      expect(tag, `${name}: no opening tag found`).toBeDefined();
-      const text = classText(tag.text);
-      if (text === null) throw new Error(`${name}: className not read`);
+      const { tag, file } = only(markup);
       expect(
-        text.split(/[\s"'`,()]+/).some(token => FIELD_ONLY.test(token)),
-        `${name}: the scanner did not see border-input`
-      ).toBe(true);
+        offenders(classesOf(tag, file).literals),
+        `${name}: the reader did not see border-input`
+      ).toContain("border-input");
     }
 
-    // The negative half, so the check is not simply matching everything.
-    const [ok] = openingTags(
-      '<SearchBar value={v} className="w-full max-w-sm" />'
-    );
-    const okText = classText(ok.text);
-    if (okText === null) throw new Error("clean case: className not read");
-    expect(
-      okText.split(/[\s"'`,()]+/).some(token => FIELD_ONLY.test(token))
-    ).toBe(false);
+    // The negative half, so the reader is not simply matching everything.
+    const clean = only('<SearchBar className="w-full max-w-sm" />');
+    expect(offenders(classesOf(clean.tag, clean.file).literals)).toEqual([]);
   });
 
   it("separates what it can read from what it cannot", () => {
-    // This check answers ZERO when it works and ZERO when it reads nothing, so
-    // the classifier is exercised on inputs whose right answer is known. Every
-    // case below is a spelling a call site may legitimately use; what differs is
-    // whether the class VALUE is determined by the source.
     const readable = [
-      ["literal", '<SearchBar className="w-full" />'],
-      ["braced literal", '<SearchBar className={"w-full"} />'],
-      [
-        "cn() of literals",
-        '<SearchBar className={cn("w-full", "max-w-sm")} />',
-      ],
-      // The test is a boolean, not a class. Refusing this would reject the
-      // commonest conditional in React to catch nothing.
-      ["guarded literal", '<SearchBar className={cn(isOpen && "max-w-sm")} />'],
-      ["ternary of literals", '<SearchBar className={x ? "a" : "b"} />'],
-      ["object spread", '<SearchBar {...{ className: "w-full" }} />'],
-      // A template with no interpolation is as static as a plain string, and a
-      // nested literal inside one is still literal text.
-      ["template, no holes", "<SearchBar className={`w-full max-w-sm`} />"],
-      ["template of a cn()", '<SearchBar className={`${cn("w-full")}`} />'],
-    ] as const;
-
-    for (const [name, markup] of readable) {
-      const [tag] = openingTags(markup);
-      expect(unreadable(tag.text), `${name}: reported unreadable`).toEqual([]);
+      '<SearchBar className="w-full" />',
+      '<SearchBar className={"w-full"} />',
+      '<SearchBar className={cn("w-full", "max-w-sm")} />',
+      '<SearchBar className={cn(isOpen && "max-w-sm")} />',
+      '<SearchBar className={x ? "a" : "b"} />',
+      '<SearchBar {...{ className: "w-full" }} />',
+      "<SearchBar className={`w-full max-w-sm`} />",
+      '<SearchBar className={`${cn("w-full")}`} />',
+      // Not a class value at all, so nothing to report.
+      "<SearchBar className={undefined} />",
+    ];
+    for (const markup of readable) {
+      const { tag, file } = only(markup);
+      expect(
+        classesOf(tag, file).opaque,
+        `reported unreadable: ${markup}`
+      ).toEqual([]);
     }
 
     const opaque = [
-      ["identifier", "<SearchBar className={classes} />", "classes"],
-      ["cn() of a variable", "<SearchBar className={cn(layout)} />", "layout"],
-      ["member expression", "<SearchBar className={styles.bar} />", "styles"],
+      ["<SearchBar className={classes} />", "classes"],
+      ["<SearchBar className={cn(layout)} />", "layout"],
+      ["<SearchBar className={styles.bar} />", "styles.bar"],
       // `a ?? b` uses the identifier as a VALUE, unlike `a ? x : y` where it is
       // the test. One character apart, opposite answers.
-      [
-        "nullish default",
-        '<SearchBar className={classes ?? "w"} />',
-        "classes",
-      ],
-      ["props spread", "<SearchBar {...props} />", "props"],
-      [
-        "spread with a variable class",
-        "<SearchBar {...{ className: layout }} />",
-        "layout",
-      ],
-      // The interpolation is the only part of a template that can carry an
-      // unknown class, so blanking the template whole hides exactly the thing
-      // worth reading.
-      [
-        "template interpolation",
-        "<SearchBar className={`w-full ${classes}`} />",
-        "classes",
-      ],
-      // Shorthand has no colon, which is what a property lookup keys on, so the
-      // object read as carrying no className at all.
-      ["shorthand spread", "<SearchBar {...{ className }} />", "className"],
+      ['<SearchBar className={classes ?? "w"} />', "classes"],
+      ["<SearchBar {...props} />", "props"],
+      ["<SearchBar {...{ className: layout }} />", "layout"],
+      ["<SearchBar {...{ className }} />", "className"],
+      ["<SearchBar className={`w-full ${classes}`} />", "classes"],
+      ["<SearchBar className = {classes} />", "classes"],
     ] as const;
 
-    for (const [name, markup, expected] of opaque) {
-      const [tag] = openingTags(markup);
-      expect(unreadable(tag.text), `${name}: not reported`).toContain(expected);
+    for (const [markup, expected] of opaque) {
+      const { tag, file } = only(markup);
+      expect(classesOf(tag, file).opaque, `not reported: ${markup}`).toContain(
+        expected
+      );
     }
   });
 
   it("passes SearchBar nothing the scan cannot read", () => {
-    const opaque: string[] = [];
+    const hidden: string[] = [];
     for (const path of sources) {
-      const source = readFileSync(path, "utf8");
-      for (const tag of openingTags(source)) {
-        const hidden = unreadable(tag.text);
-        if (hidden.length === 0) continue;
-        const line = source.slice(0, tag.index).split("\n").length;
-        opaque.push(`${relative(repo, path)}:${line} — ${hidden.join(" ")}`);
+      const file = parse(path, readFileSync(path, "utf8"));
+      for (const tag of searchBarTags(file)) {
+        const { opaque } = classesOf(tag, file);
+        if (opaque.length === 0) continue;
+        hidden.push(
+          `${relative(repo, path)}:${lineOf(tag, file)} — ${opaque.join(" ")}`
+        );
       }
     }
 
     expect(
-      opaque.sort(),
+      hidden.sort(),
       `These pass classes to SearchBar through a variable or a spread, so the ` +
         `check below cannot see whether a field-only class is among them. Pass ` +
-        `the classes as literals:\n${opaque.join("\n")}`
+        `the classes as literals:\n${hidden.join("\n")}`
     ).toEqual([]);
   });
 
   it("passes no class that only the field could use", () => {
     const inert: string[] = [];
     for (const path of sources) {
-      const source = readFileSync(path, "utf8");
-      for (const tag of openingTags(source)) {
-        const className = classText(tag.text);
-        if (!className) continue;
-        const offenders = className
-          .split(/[\s"'`,()]+/)
-          .filter(token => FIELD_ONLY.test(token));
-        if (offenders.length === 0) continue;
-        const line = source.slice(0, tag.index).split("\n").length;
-        inert.push(`${relative(repo, path)}:${line} — ${offenders.join(" ")}`);
+      const file = parse(path, readFileSync(path, "utf8"));
+      for (const tag of searchBarTags(file)) {
+        const dead = offenders(classesOf(tag, file).literals);
+        if (dead.length === 0) continue;
+        inert.push(
+          `${relative(repo, path)}:${lineOf(tag, file)} — ${dead.join(" ")}`
+        );
       }
     }
 
