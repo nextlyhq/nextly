@@ -275,19 +275,38 @@ describe("the host can drive it", () => {
     await waitFor(() => expect(document.activeElement).toBe(origin));
   });
 
-  it("leaves focus alone when a command deliberately drops it", async () => {
+  it("hands focus back after an ordinary command that never touches it", async () => {
     render(
       <ShortcutProvider>
         <button type="button">Origin control</button>
         <CommandPalette
+          commands={[{ id: "a", label: "Just a toggle", run: () => {} }]}
+        />
+      </ShortcutProvider>
+    );
+
+    const origin = screen.getByRole("button", { name: "Origin control" });
+    origin.focus();
+    pressPaletteKey();
+    fireEvent.click(screen.getByText("Just a toggle"));
+
+    // The common case, and the one a blanket "a command ran" claim broke: most commands never
+    // touch focus, and suppressing the restore for them drops the user on `<body>`.
+    await waitFor(() => expect(document.activeElement).toBe(origin));
+  });
+
+  it("leaves focus where a command put it", async () => {
+    render(
+      <ShortcutProvider>
+        <button type="button">Origin control</button>
+        <button type="button">Command target</button>
+        <CommandPalette
           commands={[
             {
               id: "a",
-              label: "Dismiss focus",
-              // Focus goes NOWHERE, which is the separating case: a command that focuses some
-              // other element is already covered by the restore's own "did focus stray" guard,
-              // so only this one distinguishes the command's claim from that guard.
-              run: () => (document.activeElement as HTMLElement | null)?.blur(),
+              label: "Focus elsewhere",
+              run: () =>
+                screen.getByRole("button", { name: "Command target" }).focus(),
             },
           ]}
         />
@@ -296,12 +315,12 @@ describe("the host can drive it", () => {
 
     screen.getByRole("button", { name: "Origin control" }).focus();
     pressPaletteKey();
-    fireEvent.click(screen.getByText("Dismiss focus"));
+    fireEvent.click(screen.getByText("Focus elsewhere"));
 
-    // The restore must not undo what the command asked for, including after its deferred pass.
+    // Suppressed only where the command ESTABLISHED focus, which is observed rather than assumed.
     await new Promise(resolve => setTimeout(resolve, 10));
-    expect(document.activeElement).not.toBe(
-      screen.getByRole("button", { name: "Origin control" })
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Command target" })
     );
   });
 
@@ -375,28 +394,58 @@ describe("the host can drive it", () => {
     expect(screen.queryByText("Should not appear")).toBeNull();
   });
 
-  it("ranks matches by relevance once the user types", () => {
+  it("flattens groups while searching so ranking is global", () => {
     mount(
       <CommandPalette
         commands={[
-          { id: "1", label: "Outline zebra", run: noop },
-          { id: "2", label: "Zebra", run: noop },
+          { id: "1", label: "Zulu zebra", group: "Zulu", run: noop },
+          { id: "2", label: "Alpha zebra", group: "Alpha", run: noop },
+          { id: "3", label: "Unrelated", group: "Alpha", run: noop },
         ]}
       />
     );
     pressPaletteKey();
 
+    // Headings are gone: cmdk orders items WITHIN a group and leaves the groups in their own
+    // order, so keeping them would pin a better match below a weaker one from an earlier group.
     fireEvent.change(screen.getByRole("combobox"), {
       target: { value: "zebra" },
     });
 
-    // The closer match first, ahead of registration order. Pinned because the ordering PROMISE is
-    // scoped to the unfiltered list, and a reader who saw only the unfiltered test would take
-    // registration order to hold here too.
-    const rows = screen
-      .getAllByText(/^(Outline zebra|Zebra)$/)
-      .map(n => n.textContent);
-    expect(rows).toEqual(["Zebra", "Outline zebra"]);
+    expect(screen.queryByText("Zulu")).toBeNull();
+    expect(screen.queryByText("Alpha")).toBeNull();
+    expect(screen.queryByText("Unrelated")).toBeNull();
+    expect(screen.getByText("Zulu zebra")).toBeTruthy();
+    expect(screen.getByText("Alpha zebra")).toBeTruthy();
+  });
+
+  it("keeps two commands separable when their fields concatenate alike", () => {
+    // `id`, `label` and `keywords` are free-form, so joining them is not injective. cmdk keys
+    // SELECTION on the value: a collision marks both rows selected and activates the first
+    // whichever the user chose.
+    const chosen: string[] = [];
+    mount(
+      <CommandPalette
+        commands={[
+          {
+            id: "settings advanced",
+            label: "First",
+            keywords: ["page"],
+            run: () => chosen.push("first"),
+          },
+          {
+            id: "advanced",
+            label: "Second",
+            keywords: ["page", "settings"],
+            run: () => chosen.push("second"),
+          },
+        ]}
+      />
+    );
+    pressPaletteKey();
+
+    fireEvent.click(screen.getByText("Second"));
+    expect(chosen).toEqual(["second"]);
   });
 
   it("names the search field, not just the dialog", () => {

@@ -84,10 +84,14 @@ export interface CommandPaletteProps {
   /**
    * Everything the palette can run.
    *
-   * Order within a group is preserved WHILE THE SEARCH IS EMPTY. Once the user types, matches are
-   * ranked by how well they match, which is what every palette this one will be compared against
-   * does — a list that stayed in registration order would put a worse match above the one the
-   * user is clearly typing towards.
+   * Order within a group is preserved WHILE THE SEARCH IS EMPTY.
+   *
+   * Once the user types, the groups are dropped and every match is offered as one list, ordered
+   * by cmdk across all of them. Deliberately not promised: that an exact match outranks a partial
+   * one. cmdk keys SELECTION on an item's value, so the value here has to be the `id` alone —
+   * anything richer is a concatenation of free-form fields and two commands can collide, which
+   * makes the wrong one run. The label and synonyms are still what the search matches on, through
+   * cmdk's separate keywords input, but scoring over them is cmdk's and is not specified here.
    */
   commands: readonly BuilderCommand[];
   /**
@@ -194,6 +198,7 @@ function PaletteSurface({
   // condition held, including on a viewport where the shell has hidden everything else, which is
   // the case this prop exists to cover.
   const enabled = (enabledProp ?? true) && shellIsActive;
+  const [search, setSearch] = React.useState("");
   const [uncontrolledOpen, setUncontrolledOpen] = React.useState(false);
   const isControlled = controlledOpen !== undefined;
   // One expression decides whether the palette is showing, so `enabled` cannot be honoured by the
@@ -222,11 +227,6 @@ function PaletteSurface({
 
   const setOpen = React.useCallback(
     (next: boolean) => {
-      if (next) {
-        const active = document.activeElement;
-        openedFrom.current = active instanceof HTMLElement ? active : null;
-        commandMovedFocus.current = false;
-      }
       if (!isControlled) setUncontrolledOpen(next);
       onOpenChange?.(next);
     },
@@ -234,9 +234,25 @@ function PaletteSurface({
   );
 
   const wasOpen = React.useRef(false);
-  React.useEffect(() => {
+  // Keyed on the actual open/close TRANSITION, and a layout effect so the capture happens before
+  // Radix moves focus into the dialog.
+  //
+  // The transition rather than `setOpen`, because a controlling host opens the palette by
+  // flipping `open` and never calls it — capturing there left the origin empty for exactly the
+  // case the controlled props exist to serve. And the transition rather than every closed render,
+  // because focusing a control does not re-render anything: measured, that version captured
+  // `<body>` from the first render and never saw the button the user was actually on.
+  React.useLayoutEffect(() => {
+    const opening = !wasOpen.current && open;
     const closing = wasOpen.current && !open;
     wasOpen.current = open;
+
+    if (opening) {
+      const active = document.activeElement;
+      openedFrom.current = active instanceof HTMLElement ? active : null;
+      commandMovedFocus.current = false;
+      return;
+    }
     if (!closing) return;
 
     const target = openedFrom.current;
@@ -253,6 +269,11 @@ function PaletteSurface({
       if (target.isConnected && strayed) target.focus();
     }, 0);
     return () => clearTimeout(restore);
+  }, [open]);
+
+  // Cleared when the palette shuts, so a stale search never greets the next opening.
+  React.useEffect(() => {
+    if (!open) setSearch("");
   }, [open]);
 
   // Read through a ref so the binding's `run` never goes stale, without re-registering the layer
@@ -290,7 +311,19 @@ function PaletteSurface({
     }
   );
 
-  const groups = groupAvailable(commands);
+  // While a search is active every match goes into ONE headingless list. cmdk ranks items inside
+  // a group and leaves the groups in their own order, so a better match in a later group would
+  // otherwise sit below a weaker one. Headings are what the groups are for, and they say nothing
+  // useful about a set of search results.
+  const searching = search.trim().length > 0;
+  const groups = searching
+    ? [
+        {
+          group: undefined,
+          commands: commands.filter(c => !c.when || c.when()),
+        },
+      ]
+    : groupAvailable(commands);
 
   const choose = React.useCallback(
     (command: BuilderCommand) => {
@@ -299,12 +332,15 @@ function PaletteSurface({
       // focus trap still holding — and a command that opens a dialog of its own or moves focus
       // then competes with a palette that is only just unmounting, leaving focus somewhere
       // neither component chose.
-      // Claimed BEFORE the close, not merely before `run()`. `flushSync` commits the close
-      // synchronously, which runs the effect that decides whether to hand focus back — so a claim
-      // made after it is read too late and the restore fires anyway.
-      commandMovedFocus.current = true;
       flushSync(() => setOpen(false));
+      const before = document.activeElement;
       command.run();
+      // OBSERVED rather than assumed. Claiming for every command suppressed the restore for
+      // ordinary ones — a toggle that never touches focus left it on `<body>`. The restore is
+      // deferred, so this is read after `run()` has settled.
+      const after = document.activeElement;
+      commandMovedFocus.current =
+        after !== before && after instanceof HTMLElement && after.isConnected;
     },
     [setOpen]
   );
@@ -329,7 +365,11 @@ function PaletteSurface({
       <DialogDescription className="sr-only">
         Search for a command and press Enter to run it.
       </DialogDescription>
-      <CommandInput placeholder={placeholder} />
+      <CommandInput
+        placeholder={placeholder}
+        value={search}
+        onValueChange={setSearch}
+      />
       <CommandList>
         <CommandEmpty>{emptyMessage}</CommandEmpty>
         {groups.map(({ group, commands: groupCommands }, index) => (
@@ -341,9 +381,13 @@ function PaletteSurface({
               {groupCommands.map(command => (
                 <CommandItem
                   key={command.id}
-                  // The id is appended so two commands sharing a label stay separately
-                  // selectable; cmdk keys its filtering on this value.
-                  value={`${command.label} ${(command.keywords ?? []).join(" ")} ${command.id}`}
+                  // The id ALONE, because cmdk keys selection on this value and a concatenation
+                  // of free-form fields is not injective: `keywords: ["page"], id: "settings x"`
+                  // and `keywords: ["page", "settings"], id: "x"` produce the same string, and
+                  // cmdk then highlights both rows and activates the first whichever is chosen.
+                  // What the search should MATCH goes to `keywords`, which cmdk reads separately.
+                  value={command.id}
+                  keywords={[command.label, ...(command.keywords ?? [])]}
                   onSelect={() => choose(command)}
                 >
                   {command.label}
