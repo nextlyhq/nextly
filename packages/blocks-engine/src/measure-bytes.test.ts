@@ -108,6 +108,35 @@ describe("measureBytes", () => {
     expect(reads).toBeLessThan(500);
   });
 
+  it("stops reading values once the limit is crossed by value bytes", () => {
+    // The companion to the test above, and the one that separates lazy KEYS
+    // from lazy VALUES. That test crosses the limit on key bytes alone, so it
+    // passes for an implementation that stacks every value before measuring
+    // any — which is eager in exactly the half that allocates.
+    //
+    // Here the keys are negligible and the values are large, so the limit can
+    // only be reached by reading them. An implementation that collects values
+    // first runs all 1,000 accessors and holds ~100 MB before consulting the
+    // cap; one that measures as it goes stops after about twenty.
+    let reads = 0;
+    const wide: Record<string, unknown> = {};
+    for (let index = 0; index < 1_000; index += 1) {
+      Object.defineProperty(wide, `k${index}`, {
+        enumerable: true,
+        get() {
+          reads += 1;
+          return "x".repeat(100_000);
+        },
+      });
+    }
+
+    const result = measureBytes(wide, 2 * 1024 * 1024);
+    expect(result.exceeded).toBe(true);
+    // 2 MiB / 100 KB is about 21 values. Bounded by the LIMIT rather than by
+    // the object, which is the property; the margin allows for counting order.
+    expect(reads).toBeLessThan(60);
+  });
+
   it("counts own properties only", () => {
     // The walk uses `for...in`, which reaches the prototype chain. An inherited
     // property is not serialized, so counting one would overstate the size and

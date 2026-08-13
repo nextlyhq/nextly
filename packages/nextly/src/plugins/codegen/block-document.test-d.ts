@@ -209,6 +209,22 @@ expectTypeOf<
   Extract<Binding, { source: "single" }>["sourceKey"]
 >().toEqualTypeOf<string>();
 
+// And the forbidden half, which is the half that actually constrains. The
+// assertion above stays green if the other branch is widened from
+// `sourceKey?: never` to `sourceKey?: string`, and that widening is exactly
+// what would make an ambiguous single binding representable — the thing the
+// union exists to prevent. `never` in an optional position reads as
+// `undefined`, so `undefined` is the only inhabitant this may have.
+expectTypeOf<
+  Exclude<Binding, { source: "single" }>["sourceKey"]
+>().toEqualTypeOf<undefined>();
+
+// The source vocabulary is DERIVED rather than restated, so a source added to
+// the engine's list reaches the stored type without an edit here.
+expectTypeOf<Exclude<Binding, { source: "single" }>["source"]>().toEqualTypeOf<
+  Exclude<BindingSource, "single"> | undefined
+>();
+
 expectTypeOf<keyof NodeVisibility>().toEqualTypeOf<"conditions" | "devices">();
 
 // The token-reference convention. `$token` is the marker that keeps a reference

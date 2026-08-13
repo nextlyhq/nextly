@@ -62,6 +62,27 @@ export function utf8ByteLength(s: string, budget: number): number {
   return bytes;
 }
 
+/** Whether a non-object value survives a round trip through JSON unchanged. */
+function isSerializableScalar(value: unknown): boolean {
+  if (typeof value === "number") {
+    return Number.isFinite(value) && !(value === 0 && 1 / value < 0);
+  }
+  return (
+    typeof value === "string" || typeof value === "boolean" || value === null
+  );
+}
+
+/** Serialized size of a non-object value, bounded like everything else here. */
+function scalarBytes(value: unknown, budget: number): number {
+  if (typeof value === "string") return 2 + utf8ByteLength(value, budget);
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value).length;
+  }
+  // `null`, `undefined`, and the values JSON cannot hold; four bytes is what
+  // `null` costs, and the others are refused by the flag rather than counted.
+  return 4;
+}
+
 /**
  * Estimate a document's serialized byte size, aborting as soon as `limit` is
  * passed and WITHOUT materializing the full JSON string — so a document that
@@ -130,6 +151,15 @@ export function measureBytes(
       // that the value is not a plain record, which is a question about whether
       // it belongs in a document at all.
       if (!isPlainRecord(value)) unserializable = true;
+      // A symbol-keyed own property is dropped by JSON without a word, the same
+      // silent-rewrite class as `undefined`. Checked with `getOwnPropertySymbols`
+      // rather than `Reflect.ownKeys`, because the latter allocates an array of
+      // every string key too — the allocation this walk exists to avoid.
+      //
+      // A non-enumerable STRING key is the same class and is NOT detected here,
+      // for that reason: finding one costs an array proportional to the object's
+      // width. Stated rather than silently omitted.
+      if (Object.getOwnPropertySymbols(value).length > 0) unserializable = true;
       bytes += 2; // braces
       if (bytes > limit) return { bytes, exceeded: true, unserializable };
       // `for...in` rather than `Object.entries`: the latter builds the complete
@@ -149,7 +179,22 @@ export function measureBytes(
         bytes += utf8ByteLength(key, limit) + 3 + (properties > 0 ? 1 : 0);
         properties += 1;
         if (bytes > limit) return { bytes, exceeded: true, unserializable };
-        stack.push((value as Record<string, unknown>)[key]);
+
+        // Read the value, MEASURE it, and only then advance. Stacking every
+        // value first is lazy in the keys and eager in the values, which is the
+        // half that costs: an object of accessors each returning a large string
+        // runs all of them before the cap is consulted, so the limit bounds what
+        // is counted and not what is allocated. Measuring inline keeps one value
+        // live at a time. Objects and arrays are references, so stacking those
+        // allocates nothing and preserves the iterative walk.
+        const held = (value as Record<string, unknown>)[key];
+        if (typeof held === "object" && held !== null) {
+          stack.push(held);
+        } else {
+          bytes += scalarBytes(held, limit - bytes);
+          if (!isSerializableScalar(held)) unserializable = true;
+          if (bytes > limit) return { bytes, exceeded: true, unserializable };
+        }
       }
     }
     if (bytes > limit) return { bytes, exceeded: true, unserializable };

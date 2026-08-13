@@ -363,6 +363,13 @@ const bindingSchema = z.union([
 const blockNodeSchema = z.looseObject({
   id: z.string(),
   type: z.string(),
+  // A positive SAFE integer, and the ceiling is deliberate rather than an
+  // artefact of the validator. A version above 2^53-1 does not survive JSON:
+  // the text `{"version":9007199254740993}` parses to `...992` and serializes
+  // back as `...992`, so the number read is not the number written. Accepting
+  // it would admit exactly the silent-rewrite class this entry point refuses
+  // for `-0`, `NaN` and the infinities. The published `maximum` states the
+  // bound rather than leaving a consumer to discover it.
   version: z.number().int().positive(),
   props: openRecord(),
   bindings: typedRecord(

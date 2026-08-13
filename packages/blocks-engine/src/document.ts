@@ -167,7 +167,7 @@ interface BindingBase {
  */
 export type Binding =
   | (BindingBase & {
-      source?: "entry" | "item" | "site";
+      source?: Exclude<BindingSource, "single">;
       sourceKey?: never;
     })
   | (BindingBase & {

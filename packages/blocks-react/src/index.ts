@@ -129,6 +129,11 @@ export type {
   AnyBlockDefinition,
   Binding,
   BindingFormat,
+  // Reachable from `Binding`, whose non-single branch is typed as
+  // `Exclude<BindingSource, "single">` so the vocabulary has one owner. A type
+  // a consumer can reach through a re-exported one but cannot name is a hole in
+  // the surface, which `type-surface.test.ts` refuses.
+  BindingSource,
   BlockDefinition,
   BlockDocument,
   BlockEditorMeta,
