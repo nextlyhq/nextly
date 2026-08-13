@@ -359,6 +359,30 @@ export async function runFieldGroupMigration(
     (await observeContention()).kind === "held";
 
   /**
+   * Build a dry-run outcome, sourcing the lock rather than accepting one.
+   *
+   * 🔴 The lock is deliberately NOT a parameter. Three separate exits reported it, three times the
+   * field drifted, and each fix corrected one site while an identical line stood a few feet away —
+   * the unreconciled exit, then the already-migrated exit, then the reconciled one. A rule that
+   * every exit must remember to re-read is a rule that will be broken by whoever adds the fourth.
+   *
+   * Making it unsupplyable is the difference between a check that looks for the mistake and a
+   * boundary the mistake cannot cross: a caller here CANNOT report a stale observation, because it
+   * never holds one to pass.
+   */
+  const previewOutcome = async (args: {
+    renames: readonly { readonly from: string; readonly to: string }[];
+    basis: PlanBasis;
+  }): Promise<MigrationOutcome> => ({
+    ran: false,
+    reason: "dry-run",
+    direction,
+    renames: args.renames,
+    basis: args.basis,
+    lock: await observeContention(),
+  });
+
+  /**
    * What the last attempt saw, so the next one can tell whether anything moved.
    *
    * 🔴 A held lock is NOT evidence of a live writer. This lock has no TTL and no auto-steal by
@@ -649,17 +673,10 @@ export async function runFieldGroupMigration(
             attempts,
             reason,
           });
-          return {
-            ran: false,
-            reason: "dry-run",
-            direction,
-            // The observation that justified reaching this branch, not the one the session opened
-            // with. They differ exactly when a writer claimed after the preview began, which is the
-            // case this outcome exists to describe.
-            lock: await observeContention(),
+          return previewOutcome({
             renames,
             basis: { kind: "unreconciled", reason },
-          };
+          });
         }
 
         // The last point at which nothing has been written. Everything above reads: the marker, the
@@ -685,14 +702,7 @@ export async function runFieldGroupMigration(
             direction,
             renames: renames.length,
           });
-          return {
-            ran: false,
-            reason: "dry-run",
-            direction,
-            renames,
-            lock: session.lock,
-            basis: { kind: "reconciled" },
-          };
+          return previewOutcome({ renames, basis: { kind: "reconciled" } });
         }
 
         // Written before the first statement, never after. A crash between a

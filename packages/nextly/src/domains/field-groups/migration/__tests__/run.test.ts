@@ -1338,6 +1338,41 @@ describe("a preview that meets a writer mid-run", () => {
     ]);
   });
 
+  // 🔴 The THIRD exit to carry this defect, which is why the fix was structural rather than another
+  // patch. A writer can claim the lock after the session's opening read and before its first
+  // mutation, leaving the catalog coherent — so a preview reports a perfectly scored plan beside
+  // `not-held` while a run is active, concealing exactly what the field exists to expose.
+  it("reports a holder that arrived during a reconciled preview", async () => {
+    const world: RunWorld = {
+      tables: [LEGACY_REGISTRY, "comp_hero", MIGRATION_LOCK_TABLE],
+      registryRows: [{ id: "1", slug: "hero", table_name: "comp_hero" }],
+    };
+    const built = createRunWorld(world);
+    // Claims after the session's own observation, which is lock read 1.
+    world.onLockRead = count => {
+      if (count === 1) built.claimLock("field-group-migration:down#arrived");
+    };
+
+    const outcome = await runFieldGroupMigration({
+      adapter: built.adapter,
+      logger,
+      direction: "up",
+      dryRun: true,
+    });
+
+    if (outcome.ran !== false || outcome.reason !== "dry-run") {
+      expect.fail("expected a dry-run outcome");
+    }
+    // The plan IS scored — this is the ordinary success path, not a contended one.
+    expect(outcome.basis).toEqual({ kind: "reconciled" });
+    expect(outcome.renames.length).toBeGreaterThan(0);
+    // ...and it still names the writer that arrived while it was being scored.
+    expect(outcome.lock).toEqual({
+      kind: "held",
+      owner: "field-group-migration:down#arrived",
+    });
+  });
+
   // 🔴 The retry decision and the reported lock must come from ONE observation. Reducing the
   // recheck to a boolean was enough to decide and not enough to report: the outcome carried the
   // session's opening `not-held` beside a `basis` saying contention, so the single field an
