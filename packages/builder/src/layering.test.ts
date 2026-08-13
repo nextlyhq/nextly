@@ -99,6 +99,10 @@ const ALLOWED_IN_TESTS = [
   "node:fs",
   "node:path",
   "node:url",
+  // Server rendering, for the hydration assertions. A shell whose server and
+  // first client render disagree is repaired by React discarding the subtree,
+  // and `renderToString` is the only way to observe that from a test.
+  "react-dom/server",
   "typescript",
   "vitest",
 ];
