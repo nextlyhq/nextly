@@ -97,6 +97,15 @@ interface RunWorld {
    */
   invisibleToTableExists?: string[];
   /**
+   * Called after each catalog listing is served, with how many have happened.
+   *
+   * 🔴 The seam that lets the table LIST and the table READ land at different instants. Everything
+   * else in this double consults one `tables` array, so the two agree by construction whichever the
+   * code asks — which meant no fixture could express a registry that vanishes between being listed
+   * and being selected from, and the whole outer-exhaustion path was unreachable from a test.
+   */
+  onCatalogRead?: (count: number) => void;
+  /**
    * Called after each read of the lock row, with how many have happened.
    *
    * A session observes the lock once, at the top, and the retry decision reads
@@ -131,6 +140,20 @@ interface RunWorld {
  *   five tests still pass when the double stops modelling the registry read;
  *   with a bare `Error`, all five fail.
  */
+/**
+ * A missing relation as the POSTGRES driver raises it.
+ *
+ * 🔴 Carries `code: "42P01"`. `isMissingTable` classifies by the driver's own code on postgres and
+ * falls back to message text only on sqlite, which has no distinct code — so a bare `Error` with the
+ * right words is a shape no adapter produces and one the classifier correctly refuses. A fixture
+ * throwing that would exercise the read and never reach the decision made from its failure.
+ */
+function missingRelation(table: string): Error {
+  return Object.assign(new Error(`relation "${table}" does not exist`), {
+    code: "42P01",
+  });
+}
+
 function createRunWorld(world: RunWorld) {
   const trace: Trace = [];
   // The marker is the first thing a run writes that outlives it, so recording the write itself is
@@ -138,6 +161,7 @@ function createRunWorld(world: RunWorld) {
   // same method serves reads, so a count above zero says nothing about which kind happened.
   const writes = { marker: 0 };
   let lockReads = 0;
+  let catalogReads = 0;
   const lock: { seeded: boolean; owner: string | null } = {
     seeded: true,
     owner: world.lockOwner ?? null,
@@ -186,7 +210,7 @@ function createRunWorld(world: RunWorld) {
       );
     if (registry?.[1] !== undefined) {
       if (!world.tables.includes(registry[1])) {
-        throw new Error(`relation "${registry[1]}" does not exist`);
+        throw missingRelation(registry[1]);
       }
       if (world.noLocalizedColumn === true) {
         throw new Error('column "localized" does not exist');
@@ -211,7 +235,7 @@ function createRunWorld(world: RunWorld) {
       /^SELECT "id", "slug", "table_name" FROM "(\w+)"$/.exec(flat);
     if (registryLegacy?.[1] !== undefined) {
       if (!world.tables.includes(registryLegacy[1])) {
-        throw new Error(`relation "${registryLegacy[1]}" does not exist`);
+        throw missingRelation(registryLegacy[1]);
       }
       // The column is absent, so no row can report itself localized.
       return (world.registryRows ?? []).map(
@@ -281,7 +305,12 @@ function createRunWorld(world: RunWorld) {
       ),
     listTables: () => {
       trace.push("catalog");
-      return Promise.resolve([...world.tables]);
+      // Captured before the hook runs, so a hook that removes a table leaves this listing holding
+      // it — a name that exists when listed and is gone when read.
+      const listed = [...world.tables];
+      catalogReads += 1;
+      world.onCatalogRead?.(catalogReads);
+      return Promise.resolve(listed);
     },
     transaction: (work: (ctx: unknown) => Promise<unknown>) =>
       work({
@@ -1572,6 +1601,54 @@ describe("a preview that meets a writer mid-run", () => {
     );
 
     expect(markerReads(trace)).toBe(3);
+  });
+
+  // 🔴 The OUTER exhaustion path, which no fixture could reach until the catalog seam existed.
+  //
+  // A later attempt can fail EARLIER than the one before it: `readRegistryRows` lists the catalog
+  // and then selects from the registry it found, and a writer renaming between those two queries
+  // makes the select raise a missing-table error — before the inner `try` opens, so the inner
+  // fallback never sees it. Exhausting there returned a raw driver error instead of the documented
+  // preview, in exactly the contended case the outcome exists to describe.
+  it("reports a preview when the final attempt loses the registry", async () => {
+    const world: RunWorld = {
+      // Torn: the migrated name is present with nothing recorded accounting for it, so attempts 1
+      // and 2 raise a retryable refusal and populate the remembered plan.
+      tables: [LEGACY_REGISTRY, "fg_hero", MIGRATION_LOCK_TABLE],
+      registryRows: [{ id: "1", slug: "hero", table_name: "comp_hero" }],
+      lockOwner: "field-group-migration:down#writer",
+    };
+    let markerReadCount = 0;
+    world.onMarkerRead = () => {
+      markerReadCount += 1;
+      // The writer keeps moving, so the world differs between attempts.
+      world.lockOwner = `field-group-migration:down#writer-${markerReadCount}`;
+    };
+    const built = createRunWorld(world);
+    world.onLockRead = count => {
+      built.claimLock(`field-group-migration:down#writer-${count}`);
+    };
+    world.onCatalogRead = count => {
+      // Two catalog listings happen per attempt — one for the registry read, one for the plan's
+      // catalog — so the FINAL attempt's first listing is the fifth. The registry vanishes right
+      // after it is listed and before it is selected from.
+      if (count === 5) world.tables = ["fg_hero", MIGRATION_LOCK_TABLE];
+    };
+
+    const outcome = await runFieldGroupMigration({
+      adapter: built.adapter,
+      logger,
+      direction: "up",
+      dryRun: true,
+    });
+
+    if (outcome.ran !== false || outcome.reason !== "dry-run") {
+      expect.fail("expected a dry-run outcome, not a raw driver error");
+    }
+    expect(outcome.basis).toMatchObject({ kind: "unreconciled" });
+    // 🔴 Non-empty, and that is the point: the plan comes from the last attempt that got far enough
+    // to build one. Reporting none would say "nothing to do" about a database being written to.
+    expect(outcome.renames.length).toBeGreaterThan(0);
   });
 
   // 🔴 THE control for the durable-claim hole. This lock has no TTL and no auto-steal by design, so
