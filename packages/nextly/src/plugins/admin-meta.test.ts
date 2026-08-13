@@ -791,6 +791,33 @@ describe("dormant routes", () => {
     expect(meta.whenEnabled).toBeUndefined();
   });
 
+  /**
+   * The second of `collectPluginRoutes`'s two rules, and the one a
+   * leading-slash filter alone would miss. Two declarations sharing a
+   * `(method, full path)` make boot throw NEXTLY_ROUTE_COLLISION, so
+   * advertising both as things enabling would serve is a promise boot refuses.
+   */
+  it("omits declarations that collide with each other", () => {
+    const [meta] = buildPluginAdminMeta(
+      [
+        {
+          name: "@acme/dup",
+          version: "1.0.0",
+          enabled: false,
+          contributes: {
+            routes: [
+              { method: "GET", path: "/export" },
+              { method: "GET", path: "/export" },
+            ],
+          },
+        } as unknown as PluginDefinition,
+      ],
+      undefined
+    );
+
+    expect(meta.whenEnabled).toBeUndefined();
+  });
+
   it("omits the dormant branch for a plugin that declares no routes", () => {
     const [meta] = buildPluginAdminMeta(
       [
