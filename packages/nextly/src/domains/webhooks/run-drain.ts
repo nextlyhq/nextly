@@ -251,10 +251,23 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
           )
         : false;
 
-    // This pass plus the ones already claimed. Counting CLAIMED turns rather
-    // than configured policies is what stops a reserve being set aside for a
-    // pass that will not run.
-    const ways = 1 + (auditTurn ? 1 : 0) + (emailTurn ? 1 : 0);
+    // How many passes still have to fit in the time that remains, counted from
+    // the turns already CLAIMED rather than from the policies configured — a
+    // reserve set aside for a pass that will not run leaves that share unusable
+    // until the next interval.
+    //
+    // Recomputed before EACH pass rather than once, and that is the whole fix:
+    // a single `ways` applied only to the first sweep left the second taking
+    // the entire remainder, so the third released its turn without pruning on
+    // every invocation. Generalising the helper was not enough while two of its
+    // three call sites still passed the raw deadline.
+    const passesLeftAfter = (done: {
+      webhook?: boolean;
+      audit?: boolean;
+    }): number =>
+      (done.webhook ? 0 : 1) +
+      (auditTurn && !done.audit ? 1 : 0) +
+      (emailTurn ? 1 : 0);
 
     const webhookPolicy = retention.policy;
     if (webhookPolicy && !deadlineSpent()) {
@@ -284,7 +297,7 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
             // for a sweep that will not run leaves the unclaimable half unused
             // until the next interval, so a ledger needing more than half a
             // budget per interval would grow while time sat idle.
-            deadline: shareOfRemaining(deadline, now, ways),
+            deadline: shareOfRemaining(deadline, now, passesLeftAfter({})),
           },
           webhookPolicy
         );
@@ -320,7 +333,18 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
         );
       } else if (auditDue) {
         const trails = await pruneAuditDataSafely(
-          { ...retention.prune, deadline },
+          {
+            ...retention.prune,
+            // A share, not the remainder. Taking everything left here starved
+            // the pass after it — a sustained audit backlog meant the delivery
+            // log was never swept on a drain, which is the same starvation the
+            // webhook sweep above is bounded to avoid.
+            deadline: shareOfRemaining(
+              deadline,
+              now,
+              passesLeftAfter({ webhook: true })
+            ),
+          },
           auditPolicy!
         );
         result.pruned.activity = trails.activity;

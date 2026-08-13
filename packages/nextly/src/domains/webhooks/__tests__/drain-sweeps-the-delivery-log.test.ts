@@ -124,6 +124,51 @@ describe("the scheduled drain and the delivery log", () => {
     expect(EMAIL_RETENTION_DRAIN_GATE_KEY).not.toBe(EMAIL_RETENTION_GATE_KEY);
   });
 
+  it("reaches the delivery log on a drain that also prunes audit", async () => {
+    // Covers that the email pass runs ALONGSIDE another domain's, which is the
+    // ordinary configuration and worth pinning on its own.
+    //
+    // It does NOT cover the budget share. I wrote it intending to, and measured
+    // that it does not: removing the audit pass's `shareOfRemaining` leaves
+    // this green, because the audit prune stops on its own batch budget long
+    // before the deadline it was handed matters. Saying so here rather than
+    // letting the name imply coverage the case does not have — the starvation
+    // fix in `run-drain.ts` is currently reasoned, not pinned, and a test that
+    // passed either way would be worse than admitting that.
+    const tables: string[] = [];
+    let clock = 0;
+
+    // A backlog that never runs out, and a clock that advances with the work,
+    // so the only thing that can stop the audit sweep is its own deadline.
+    const adapter = {
+      select: async (table: string) => {
+        tables.push(table);
+        clock += 50;
+        return table === "email_deliveries" ? [] : [{ id: "x" }];
+      },
+      delete: async () => {
+        clock += 50;
+        return 1;
+      },
+    };
+
+    await runDrain({
+      fanOut: { db: idleDb(), loadEndpoints: async () => [] } as never,
+      deliver: { db: idleDb(), now: () => new Date(clock) } as never,
+      maxDurationMs: 2000,
+      retention: {
+        auditPolicy: resolveAuditRetentionConfig({}),
+        emailPolicy: resolveEmailRetentionConfig({ maxAgeMs: 1000 }),
+        prune: { adapter, now: () => new Date(clock) } as never,
+        gate: { claim: async () => true, release: async () => undefined },
+      },
+    });
+
+    // The delivery log was actually reached. Asserting on the TABLE rather than
+    // on a call count is what separates "email ran" from "audit ran a lot".
+    expect(tables).toContain("email_deliveries");
+  });
+
   it("does not consume the interval when the wall-clock budget is spent", async () => {
     // The drain's promise to a serverless cron route. What matters is that the
     // interval is not spent on a pass that did no work — reached either by not

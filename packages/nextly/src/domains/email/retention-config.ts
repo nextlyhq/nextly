@@ -174,6 +174,32 @@ export function setEmailRetention(
   publishedEmailRetention = policy;
 }
 
+/**
+ * The flattened policy a config's NESTED block implies.
+ *
+ * `sanitizeConfig` computes `emailRetention` before any plugin `setup()`
+ * transformer runs, so the two representations disagree the moment a plugin
+ * rewrites `email.retention`. Every place that merges a transformed config back
+ * has to recompute the derived value, and there are three of them: the DI
+ * composition root, the CLI's fold, and anything that publishes a reload.
+ *
+ * Written once here rather than three times, because three copies of one
+ * derivation agree until someone edits one — and the disagreement is silent,
+ * since both sides look correct in isolation.
+ *
+ * Returns the base policy when the transformed config declares no `email` block
+ * at all: absence means the transformer said nothing about email, not that it
+ * asked for defaults.
+ */
+export function emailRetentionAfterTransform(
+  transformedEmail: { retention?: EmailRetentionConfig | false } | undefined,
+  fallback: ResolvedEmailRetentionConfig | undefined
+): ResolvedEmailRetentionConfig | undefined {
+  return transformedEmail === undefined
+    ? fallback
+    : resolveEmailRetentionConfig(transformedEmail.retention);
+}
+
 /** The policy a pass should run with: the reloaded one, else the built-in. */
 export function activeEmailRetention(
   built: ResolvedEmailRetentionConfig | undefined

@@ -42,7 +42,7 @@ import type { AuthService } from "../domains/auth/services/auth-service";
 import type { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
 import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
 import type { ResolvedEmailRetentionConfig } from "../domains/email/retention-config";
-import { resolveEmailRetentionConfig } from "../domains/email/retention-config";
+import { emailRetentionAfterTransform } from "../domains/email/retention-config";
 import type { EmailDeliveryService } from "../domains/email/services/email-delivery-service";
 import {
   getEmailProviderRegistry,
@@ -487,8 +487,9 @@ export async function registerServices(
     contributedConfig.email !== undefined
       ? {
           ...contributedConfig,
-          emailRetention: resolveEmailRetentionConfig(
-            contributedConfig.email.retention
+          emailRetention: emailRetentionAfterTransform(
+            contributedConfig.email,
+            contributedConfig.emailRetention
           ),
         }
       : contributedConfig;

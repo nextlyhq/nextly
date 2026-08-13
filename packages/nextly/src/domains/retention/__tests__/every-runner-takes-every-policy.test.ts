@@ -29,6 +29,7 @@ import { describe, expect, it } from "vitest";
 import { resolveAuditRetentionConfig } from "../../audit/retention-config";
 import {
   activeEmailRetention,
+  emailRetentionAfterTransform,
   resolveEmailRetentionConfig,
 } from "../../email/retention-config";
 import { resolveWebhookRetentionConfig } from "../../webhooks/retention-config";
@@ -220,6 +221,28 @@ describe("the derived policy list", () => {
     expect(
       activeEmailRetention(retentionPoliciesFrom(nested).emailPolicy)?.maxAgeMs
     ).toBe(0);
+  });
+
+  it("keeps a transformer's decision, and reverts nothing on a reload", () => {
+    // A plugin `setup()` that sets `email.retention: false` must survive every
+    // later merge. `sanitizeConfig` computed the flattened policy BEFORE the
+    // transformer ran, so any code that carries the flattened value forward
+    // instead of re-deriving it silently restores the pre-transform default —
+    // and starts deleting rows the live configuration was retaining.
+    const preTransform = resolveEmailRetentionConfig({ maxAgeMs: 1000 });
+
+    expect(
+      emailRetentionAfterTransform({ retention: false }, preTransform)?.maxAgeMs
+    ).toBe(false);
+  });
+
+  it("says nothing about email when the transformer did not", () => {
+    // The control. Absence of an `email` block means the transformer had no
+    // opinion, NOT that it asked for defaults — reading it as defaults would
+    // overwrite a policy the base config had already resolved.
+    const base = resolveEmailRetentionConfig({ maxAgeMs: 1000 });
+
+    expect(emailRetentionAfterTransform(undefined, base)).toBe(base);
   });
 
   it("builds no pass for a config that configured none", () => {

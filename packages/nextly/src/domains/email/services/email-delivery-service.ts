@@ -204,7 +204,23 @@ export class EmailDeliveryService extends BaseService {
    * another one. Not writing it is the only reading that means what it says.
    */
   private keepsNothing(): boolean {
-    return this.retentionPolicy?.()?.maxAgeMs === 0;
+    // Guarded for the same reason the retention offer below is, and I added
+    // this call without it right beside the one I had just guarded. The
+    // callback is INJECTED and does real work — it resolves the policy from the
+    // config on every send — so a throw here escapes `recordAll`, whose whole
+    // contract is that a provider-accepted send is never reported as failed.
+    //
+    // A failing read means "no zero window", which continues recording. The
+    // other direction would silently stop writing the log the moment a policy
+    // read broke, which is the failure this table exists to make impossible.
+    try {
+      return this.retentionPolicy?.()?.maxAgeMs === 0;
+    } catch (error) {
+      warnQuietly(this.logger, "Email retention policy could not be read", {
+        error,
+      });
+      return false;
+    }
   }
 
   /**

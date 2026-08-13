@@ -130,11 +130,19 @@ export class CollectionsHandler {
       // Derived from the same list every other call site spreads, so a domain
       // that gains retention later reaches this seam without anyone
       // remembering to add it here.
-      ...retentionPoliciesFrom({
-        webhookRetention,
-        auditRetention,
-        emailRetention,
-      }),
+      // `undefined` when NOTHING was supplied, which is not the same as an
+      // empty object: `retentionPoliciesFrom({})` resolves the DEFAULT email
+      // window, and `ServiceContainer.collections` constructs this handler with
+      // no policy arguments at all. That path would then prune the delivery log
+      // on a default nobody configured. `null` is preserved as it is — that is
+      // an explicitly disabled webhook policy, not an absent one.
+      ...retentionPoliciesFrom(
+        webhookRetention === undefined &&
+          auditRetention === undefined &&
+          emailRetention === undefined
+          ? undefined
+          : { webhookRetention, auditRetention, emailRetention }
+      ),
       gate: new MetaRetentionGate(adapter),
       logger,
     });
