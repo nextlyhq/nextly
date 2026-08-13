@@ -329,6 +329,12 @@ export function ConditionRow({
           <Input
             type={numeric ? "number" : dated ? "date" : "text"}
             aria-label="Condition value from"
+            // A visible placeholder, not only an aria-label. These fields start
+            // empty and carry no visible label, so without it the border is
+            // the only thing marking where the control is -- and the field
+            // border is deliberately below 1.4.11's 3:1 for controls that have
+            // other cues. This is the other cue.
+            placeholder="From"
             disabled={readOnly}
             value={rangeEnd(condition?.value, "min")}
             onChange={event =>
@@ -343,6 +349,7 @@ export function ConditionRow({
           <Input
             type={numeric ? "number" : dated ? "date" : "text"}
             aria-label="Condition value to"
+            placeholder="To"
             disabled={readOnly}
             value={rangeEnd(condition?.value, "max")}
             onChange={event =>
@@ -376,6 +383,7 @@ export function ConditionRow({
         <Input
           type={numeric ? "number" : dated ? "date" : "text"}
           aria-label="Condition value"
+          placeholder="Value"
           disabled={readOnly || condition === undefined}
           value={scalar(condition?.value)}
           onChange={event => emit({ value: event.target.value })}
