@@ -49,10 +49,10 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
 }));
 
 /**
- * The page is two columns with a sticky metadata rail (D7). Tabs were rejected
- * because permissions and API routes are a security disclosure, and a tab
- * converts a disclosure into a technicality — so what these pin is that the
- * disclosure stays on the page, beside the metadata rather than behind it.
+ * The page is two columns with a sticky metadata rail. What these pin is where
+ * each half lives: the metadata sits in the rail, and what the plugin
+ * contributes — its permissions and API routes included — stays in the main
+ * column, visible without an interaction rather than behind one.
  */
 describe("PluginDetailPage layout", () => {
   function rail() {

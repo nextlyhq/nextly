@@ -451,10 +451,14 @@ function Contributions({ plugin }: { plugin: PluginMetadata }) {
           its behavior does not load.
         </p>
       )}
-      {/* Two across at most: these cards now sit in the narrower main column,
-          so the old three-across track produced ~180px cards that wrapped
-          every route and permission label. */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      {/* Auto-fitting tracks rather than a breakpoint. These cards sit inside
+          the main column, whose width depends on whether the metadata rail is
+          beside them — so no viewport breakpoint describes the space they
+          have. At the width where the rail first appears the column is around
+          22rem, and a viewport-based two-column rule would split that into
+          ~10.5rem cards that wrap every route and permission label. A 16rem
+          minimum track fits one card until there is genuinely room for two. */}
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(16rem,1fr))] gap-4">
         {groups.map(group => (
           <div
             key={group.key}

@@ -50,14 +50,17 @@ describe("PluginDetailPage", () => {
     expect(screen.queryByText("acme settings panel")).not.toBeInTheDocument();
 
     // And the link stays in the header rather than the metadata rail. The rail
-    // stacks to the BOTTOM of the page below `lg`, so a primary action placed
-    // in it would be the last thing on a narrow viewport.
-    const aside = screen.queryByRole("complementary");
-    if (aside) {
-      expect(
-        within(aside).queryByRole("link", { name: /open settings/i })
-      ).toBeNull();
-    }
+    // stacks to the BOTTOM of the page in the narrow layout, so a primary
+    // action placed in it would be the last thing on the page there.
+    //
+    // `getByRole`, not `queryByRole` behind a conditional: a rail that stopped
+    // rendering would skip the assertion entirely and leave the positive one
+    // below still passing, so its absence would satisfy the test that exists
+    // to pin the separation.
+    const aside = screen.getByRole("complementary");
+    expect(
+      within(aside).queryByRole("link", { name: /open settings/i })
+    ).toBeNull();
     expect(
       screen.getByRole("link", { name: /open settings/i })
     ).toBeInTheDocument();
