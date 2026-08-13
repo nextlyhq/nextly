@@ -1329,6 +1329,12 @@ describe("a node container JSON cannot write whole", () => {
 
   it("refuses an unset entry that computes itself", () => {
     // `isStringArray` enumerates, so an accessor here ran during validation.
+    //
+    // Typed as untrusted rather than as the vocabulary: `unset` names only the
+    // fields an update may remove, and no caller with a compiler could write an
+    // array of accessors into it. This op is the shape that arrives from
+    // `JSON.parse` — a crash buffer, a queued agent edit, a replayed history —
+    // which is the only way such a value reaches `applyOp` at all.
     let reads = 0;
     const unset: string[] = [];
     Object.defineProperty(unset, "0", {
@@ -1339,9 +1345,14 @@ describe("a node container JSON cannot write whole", () => {
       enumerable: true,
     });
 
-    expect(() =>
-      applyOp(doc(), { kind: "update", id: "a", patch: { name: "x" }, unset })
-    ).toThrow(OpError);
+    const persisted = {
+      kind: "update",
+      id: "a",
+      patch: { name: "x" },
+      unset,
+    } as unknown as BuilderOp;
+
+    expect(() => applyOp(doc(), persisted)).toThrow(OpError);
     expect(reads, "the getter must never be invoked").toBe(0);
   });
 });

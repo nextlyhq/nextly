@@ -157,6 +157,26 @@ const PATCH_FIELDS: { readonly [K in keyof Required<NodePatch>]: true } = {
 type PatchField = keyof typeof PATCH_FIELDS;
 
 /**
+ * A field name an update may REMOVE.
+ *
+ * Computed from the engine's own node shape rather than listed, so it is the
+ * same statement of optionality that {@link mayRemove} enforces at runtime and
+ * cannot drift from it. A field the engine makes required leaves this union the
+ * day it changes.
+ *
+ * It exists so the vocabulary cannot SPELL the ops that are always refused.
+ * With `unset` typed as arbitrary strings a caller in TypeScript can write
+ * `unset: ["id"]` or `unset: ["version"]`, get no complaint from the compiler,
+ * and discover at apply time — inside a history replay, where the op is already
+ * recorded — that the edit was never applicable. The runtime guard stays for
+ * persisted input, which reaches `applyOp` from `JSON.parse` with no compiler
+ * anywhere in the room.
+ */
+type RemovableField = {
+  [K in PatchField]: IsOptional<BlockNode, K> extends true ? K : never;
+}[PatchField];
+
+/**
  * Whether a slot name can be stored and read back as its own key.
  *
  * ONE policy, asked wherever a slot name appears — a destination position and a
@@ -188,6 +208,11 @@ function isPatchField(key: string): key is PatchField {
  */
 function mayRemove(key: PatchField): boolean {
   return NODE_FIELDS[key].optional;
+}
+
+/** Whether a name is a field an update may remove, narrowing it to the union. */
+function isRemovableField(key: string): key is RemovableField {
+  return isPatchField(key) && mayRemove(key);
 }
 
 function isString(value: unknown): boolean {
@@ -477,7 +502,7 @@ export type BuilderOp =
        * storage as `{}`, and undoing an edit that ADDED a field left the field
        * in place. A list of names survives the round trip because it is data.
        */
-      readonly unset?: readonly string[];
+      readonly unset?: readonly RemovableField[];
     };
 
 /**
@@ -618,7 +643,14 @@ function assertPatchNames(op: Extract<BuilderOp, { kind: "update" }>): void {
     );
   }
 
-  for (const key of op.unset ?? []) {
+  // Read back as plain strings. `unset` is TYPED to the removable fields, which
+  // is what stops a caller with a compiler naming `id` or `version` — but this
+  // function exists for the ops that never met a compiler, and against those
+  // the declared type is a claim rather than a fact. Iterating the narrowed
+  // type would make both checks below look statically unreachable and leave
+  // persisted input unguarded.
+  const names: readonly string[] = op.unset ?? [];
+  for (const key of names) {
     if (!isPatchField(key)) {
       throw new OpError(`update: "${key}" is not a field this op may remove.`);
     }
@@ -1124,7 +1156,7 @@ function positionOf(location: NodeLocation): TreePosition {
 function priorValues(
   node: BlockNode,
   keys: readonly string[]
-): { patch: NodePatch; unset: string[] } {
+): { patch: NodePatch; unset: RemovableField[] } {
   const held = node as unknown as Record<string, unknown>;
   // Null prototype: a persisted op can carry `__proto__` as an own key, and
   // assigning it on an ordinary object rewrites the prototype instead of
@@ -1133,11 +1165,24 @@ function priorValues(
     string,
     unknown
   >;
-  const unset: string[] = [];
+  const unset: RemovableField[] = [];
 
   for (const key of keys) {
-    if (key in held && held[key] !== undefined) patch[key] = held[key];
-    else unset.push(key);
+    if (key in held && held[key] !== undefined) {
+      patch[key] = held[key];
+      continue;
+    }
+    // Absent, so the inverse must REMOVE it to restore what was there. A field
+    // the engine requires cannot legitimately be absent from a node that
+    // validated, and recording it here would build an inverse whose own
+    // application is refused — an undo that cannot run.
+    if (!isRemovableField(key)) {
+      throw new OpError(
+        `update: this node is missing "${key}", which every node carries, so ` +
+          `the edit could not be undone.`
+      );
+    }
+    unset.push(key);
   }
 
   return { patch, unset };
@@ -1433,8 +1478,13 @@ export function applyOp(
       // outside the JSON domain, so neither side can make `stringify` throw.
       const same = (a: unknown, b: unknown): boolean =>
         a === b || JSON.stringify(a) === JSON.stringify(b);
+      // A name set rather than `includes` on the typed list: the names being
+      // compared are the patch's own keys, which are strings, and widening the
+      // list to match them would give up the very narrowing that stops a caller
+      // naming a field no update can remove.
+      const removed = new Set<string>(op.unset ?? []);
       const changesSomething = touched.some(key =>
-        (op.unset ?? []).includes(key)
+        removed.has(key)
           ? held[key] !== undefined
           : !same(held[key], (op.patch as Record<string, unknown>)[key])
       );
