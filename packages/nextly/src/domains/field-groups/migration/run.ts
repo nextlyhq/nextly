@@ -441,12 +441,19 @@ export async function runFieldGroupMigration(
    */
   let innerAdjudicated = false;
 
-  const signatureOf = (error: unknown, lock: LockObservation): string => {
-    const reason = NextlyError.is(error)
+  // 🔴 Derived from the DATABASE's state, never from who holds the lock.
+  //
+  // A claim carries a fresh UUID per invocation, so several runs failing in turn on the SAME
+  // permanent conflict each present a different owner — and folding that into the signature made an
+  // unmoving database look like a moving one, turning a persistent storage conflict into a report of
+  // contention. Owner churn is activity around the database, not movement of it.
+  //
+  // The refusal's `logContext` is the right source because it already carries exactly what the
+  // decision is about: the position, the recorded step, and the names that disagree.
+  const signatureOf = (error: unknown): string =>
+    NextlyError.is(error)
       ? JSON.stringify(error.logContext ?? {})
       : String(error);
-    return `${lock.kind === "held" ? lock.owner : lock.kind}::${reason}`;
-  };
 
   const runOnce = (finalAttempt: boolean): Promise<MigrationOutcome> =>
     withMigrationSession(
@@ -684,7 +691,7 @@ export async function runFieldGroupMigration(
             innerAdjudicated = true;
             throw error;
           }
-          const signature = signatureOf(error, await observeContention());
+          const signature = signatureOf(error);
           if (lastSignature !== undefined && signature !== lastSignature) {
             movedSinceLastAttempt = true;
           } else if (lastSignature !== undefined) {
@@ -868,7 +875,7 @@ export async function runFieldGroupMigration(
       // Recorded here as well as in the inner catch so a failure leaving by either door counts
       // towards the same judgement. Two paths deciding "did the world move" from different evidence
       // is the drift this file has already been corrected for twice.
-      const signature = signatureOf(error, await observeContention());
+      const signature = signatureOf(error);
       if (lastSignature !== undefined && signature !== lastSignature) {
         movedSinceLastAttempt = true;
       } else if (lastSignature !== undefined) {

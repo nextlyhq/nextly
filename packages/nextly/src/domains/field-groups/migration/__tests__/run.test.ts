@@ -1411,6 +1411,22 @@ describe("a preview that meets a writer mid-run", () => {
   it("reports the holder that justified an unreconciled plan", async () => {
     const world = quietWorld();
     world.lockOwner = "field-group-migration:down#early";
+    // 🔴 The DATABASE has to move for this to reach the unreconciled outcome at all, and it must do
+    // so independently of the lock. Owner churn is not movement — several runs failing in turn on
+    // one permanent conflict each present a fresh claim — so this alternates which of two groups is
+    // caught mid-rename, exactly as a writer working through its plan does.
+    world.registryRows = [
+      { id: "1", slug: "hero", table_name: "comp_hero" },
+      { id: "2", slug: "other", table_name: "comp_other" },
+    ];
+    let markerReads2 = 0;
+    world.onMarkerRead = () => {
+      markerReads2 += 1;
+      world.tables =
+        markerReads2 % 2 === 0
+          ? [LEGACY_REGISTRY, "comp_hero", "fg_other", MIGRATION_LOCK_TABLE]
+          : [LEGACY_REGISTRY, "comp_other", "fg_hero", MIGRATION_LOCK_TABLE];
+    };
     const built = createRunWorld(world);
     // 🔴 The holder must VANISH before the final attempt observes the lock and reappear before that
     // attempt judges its refusal. Otherwise the opening observation and the recheck agree, and the
@@ -1649,6 +1665,33 @@ describe("a preview that meets a writer mid-run", () => {
     // 🔴 Non-empty, and that is the point: the plan comes from the last attempt that got far enough
     // to build one. Reporting none would say "nothing to do" about a database being written to.
     expect(outcome.renames.length).toBeGreaterThan(0);
+  });
+
+  // 🔴 The control Codex asked for: owners rotate, storage does not. Several invocations acquiring
+  // the lock in turn and failing on ONE permanent conflict each present a fresh claim UUID, so an
+  // owner folded into the movement signature makes an unmoving database look like a moving one —
+  // and a persistent storage conflict is then reported as contention.
+  it("refuses when the lock owner rotates but storage does not", async () => {
+    const world = tornWorld();
+    const built = createRunWorld(world);
+    // A different holder on every observation, and nothing else changes.
+    world.onLockRead = count => {
+      built.claimLock(`field-group-migration:up#claim-${count}`);
+    };
+
+    await expect(
+      runFieldGroupMigration({
+        adapter: built.adapter,
+        logger,
+        direction: "up",
+        dryRun: true,
+      })
+    ).rejects.toSatisfy(
+      error =>
+        NextlyError.is(error) &&
+        error.logContext?.reason ===
+          "an object using the migrated storage name exists but no recorded progress accounts for it"
+    );
   });
 
   // 🔴 THE control for the durable-claim hole. This lock has no TTL and no auto-steal by design, so
