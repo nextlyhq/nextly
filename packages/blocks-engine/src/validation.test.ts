@@ -1934,6 +1934,30 @@ describe("measureBytes says WHY a value cannot be stored", () => {
     });
   });
 
+  it("reports whichever refusal the bounded walk reaches first", () => {
+    // A document can be BOTH unwritable and over the limit, and one `reason`
+    // can only carry one of them. Which one surfaces is decided by traversal:
+    // the walk returns at the FIRST refusal it reaches and never looks further,
+    // because establishing that no unwritable value exists anywhere would mean
+    // reading the whole document — exactly the unbounded pass this counter
+    // exists to avoid.
+    //
+    // The traversal is a LIFO stack, so an object's LAST entry is visited
+    // first. That makes the answer depend on declaration order, which is
+    // pinned here as the measured behaviour rather than defended as a policy:
+    // nothing outside this walk can predict it, so no caller may rely on which
+    // reason arrives for a document that is both.
+    const reached = measureBytes({ pad: "x".repeat(500), bad: 1n }, 100);
+    const notReached = measureBytes({ bad: 1n, pad: "x".repeat(500) }, 100);
+
+    expect(reached.exceeded && reached.reason).toBe("unwritable");
+    expect(notReached.exceeded && notReached.reason).toBe("over-limit");
+
+    // What a caller MAY rely on, and the reason both spellings are safe to
+    // reject on: either way the document is refused.
+    expect([reached.exceeded, notReached.exceeded]).toEqual([true, true]);
+  });
+
   it("writes an object that only CLAIMS to be a BigInt", () => {
     // `Symbol.toStringTag` is an ordinary writable property of the document
     // under inspection, so `Object.prototype.toString` reports whatever the
