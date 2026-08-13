@@ -560,6 +560,30 @@ function serializesAs(value: unknown): boolean {
 }
 
 /**
+ * A value `JSON.stringify` REFUSES outright, rather than writes or drops.
+ *
+ * The third of the three things the writer can do with a value, and the one
+ * this counter had no way to express: `undefined`, functions and symbols are
+ * DROPPED ({@link serializesAs}); everything else is written; and a BigInt makes
+ * `JSON.stringify` throw. Counting it as an ordinary value reports
+ * `measureBytes({ x: 1n }, 100)` as `{ bytes: 6, exceeded: false }` while the
+ * writer refuses the whole document — so a caller using this as the documented
+ * storage-cap check admits data that cannot be persisted.
+ *
+ * The boxed form is included because `Object(1n)` is a `BigInt` object rather
+ * than a primitive, so `typeof` reports `"object"` and the walk would treat it
+ * as an ordinary record with no own keys.
+ */
+function refusedByWriter(value: unknown): boolean {
+  return (
+    typeof value === "bigint" ||
+    (typeof value === "object" &&
+      value !== null &&
+      Object.prototype.toString.call(value) === "[object BigInt]")
+  );
+}
+
+/**
  * A value as `JSON.stringify` will SEE it: through `toJSON` when one exists.
  *
  * The hook runs before the writer decides anything else about the value —
@@ -626,6 +650,10 @@ export function measureBytes(
     // not open. A public caller has made no such promise.
     const value =
       entry.normalized === true ? popped : asSerialized(popped, entry.key);
+    // REFUSED, not counted. Reported through the same `exceeded` verdict a
+    // cycle uses, rather than thrown, because the callers here are validators
+    // that must turn an unstorable document into an issue.
+    if (refusedByWriter(value)) return { bytes, exceeded: true };
     if (typeof value === "object" && value !== null) {
       // REPORTED, not thrown. A cyclic value has no serialized form, so it
       // cannot be stored — which is a verdict this function already has a way
