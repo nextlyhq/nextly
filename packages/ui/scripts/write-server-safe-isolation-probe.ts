@@ -4,9 +4,9 @@
  *
  * The other server-safe guards read things. The directive guard looks for a `"use client"` banner,
  * the artifact gate compares what each built file reaches against an allow-list, and the source ban
- * refuses runtime module resolution by naming the forms it permits. All three are models, and a
- * model answers for the cases it was taught: the source ban gained fourteen forms over five rounds
- * of one review, every one found by a person rather than by the check.
+ * refuses runtime module resolution by naming the forms it permits. All three are models of what a
+ * consumer does, and a model answers only for the cases it encodes: its surface is every way the
+ * language can spell a module load, which is unbounded, so it can be extended but never completed.
  *
  * This asks a different question. Install ONLY the packages a server-safe entry point may use, place
  * ONLY the server-safe artifacts, and import them. A load of anything else throws
@@ -66,6 +66,43 @@ const INSTALLED = join("node_modules", "@nextlyhq", "ui");
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
+/** The `dependencies` this package declares, which decide both what is allowed and what is not. */
+function declaredDependencies(): Record<string, string> {
+  const manifest = JSON.parse(
+    readFileSync(join(packageRoot, "package.json"), "utf8")
+  ) as { dependencies?: Record<string, string> };
+  return manifest.dependencies ?? {};
+}
+
+/**
+ * The allowed packages at the versions this package actually supports.
+ *
+ * The RANGE is carried across rather than replaced with `*`. A wildcard installs whatever is
+ * newest, so the day either package publishes a major this build never asked for, an unrelated
+ * export change fails every pull request for a version the package does not claim to support —
+ * and the failure names this probe rather than the upgrade that caused it.
+ *
+ * An allowed package missing from `dependencies` is refused rather than defaulted, because the two
+ * lists then disagree about what a server-safe entry point may reach, and inventing a range hides
+ * that disagreement behind an install that happens to work.
+ */
+function allowedDependencies(): Record<string, string> {
+  const declared = declaredDependencies();
+  return Object.fromEntries(
+    [...SERVER_SAFE_ALLOWED_PACKAGES].sort().map(name => {
+      const range = declared[name];
+      if (range === undefined) {
+        throw new Error(
+          `${name} is on the server-safe allow-list but is not a declared dependency of this ` +
+            "package, so there is no supported range to install it at. Either the allow-list " +
+            "names a package that was removed, or the dependency was dropped without updating it."
+        );
+      }
+      return [name, range] as const;
+    })
+  );
+}
+
 /**
  * A dependency of this package that a server-safe entry point may NOT use.
  *
@@ -77,10 +114,7 @@ const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
  * package rather than whichever one the manifest happened to list first.
  */
 function forbiddenSentinel(): string {
-  const manifest = JSON.parse(
-    readFileSync(join(packageRoot, "package.json"), "utf8")
-  ) as { dependencies?: Record<string, string> };
-  const forbidden = Object.keys(manifest.dependencies ?? {})
+  const forbidden = Object.keys(declaredDependencies())
     .filter(name => !SERVER_SAFE_ALLOWED_PACKAGES.has(name))
     .sort();
   if (forbidden.length === 0) {
@@ -93,7 +127,7 @@ function forbiddenSentinel(): string {
   return forbidden[0];
 }
 
-/** The server-safe subpaths, as a consumer spells them. */
+/** The server-safe subpaths, as the export map spells them. */
 function serverSafeSubpaths(): string[] {
   const subpaths = publishedEntries()
     .filter(entry => entry.serverSafe)
@@ -108,6 +142,19 @@ function serverSafeSubpaths(): string[] {
 }
 
 /**
+ * The server-safe subpaths as a CONSUMER spells them, which is what both probes import.
+ *
+ * The writer and the verifier must agree on this exactly: the probes record what they loaded under
+ * these names and the verifier looks each one up. Computed in two places, a change to how an
+ * export key becomes a specifier lands in one of them, and the verifier then either misses a
+ * subpath the probe covered or demands one it never imported — reading, in both directions, as a
+ * fault in the package rather than in this file.
+ */
+function consumerSpecifiers(): string[] {
+  return serverSafeSubpaths().map(subpath => `@nextlyhq/ui${subpath.slice(1)}`);
+}
+
+/**
  * Write the project, its manifest, and both probes.
  *
  * The manifest declares the allow-list and nothing else, which is what makes the boundary real:
@@ -118,8 +165,7 @@ function serverSafeSubpaths(): string[] {
 function write(target: string): void {
   mkdirSync(target, { recursive: true });
 
-  const allowed = [...SERVER_SAFE_ALLOWED_PACKAGES].sort();
-  const dependencies = Object.fromEntries(allowed.map(name => [name, "*"]));
+  const dependencies = allowedDependencies();
   writeFileSync(
     join(target, "package.json"),
     `${JSON.stringify({ name: "server-safe-isolation-probe", private: true, version: "1.0.0", dependencies }, null, 2)}\n`
@@ -127,7 +173,21 @@ function write(target: string): void {
 
   const subpaths = serverSafeSubpaths();
   const sentinel = forbiddenSentinel();
-  const specifiers = subpaths.map(subpath => `@nextlyhq/ui${subpath.slice(1)}`);
+  const specifiers = consumerSpecifiers();
+
+  // Only a missing module says the sentinel was unreachable. Any other failure — an incompatible
+  // release, a package that throws while initialising, one that cannot be loaded through this
+  // module system — means it WAS present, and swallowing it records the project as isolated while
+  // every forbidden package sits installed beside it. That is the one error this file must not
+  // treat as good news, so everything else is rethrown and fails the probe.
+  const sentinelProbe = (load: string) => `let sentinelReached = false;
+try {
+  ${load};
+  sentinelReached = true;
+} catch (error) {
+  const code = error && typeof error === "object" ? error.code : undefined;
+  if (code !== "ERR_MODULE_NOT_FOUND" && code !== "MODULE_NOT_FOUND") throw error;
+}`;
 
   // Both module systems, because the export map publishes both and a consumer arriving through
   // `require` resolves different files. Checking one leaves the other's artifacts evaluated by
@@ -140,11 +200,7 @@ for (const specifier of ${JSON.stringify(specifiers)}) {
   const module = await import(specifier);
   loaded[specifier] = Object.keys(module).length;
 }
-let sentinelReached = false;
-try {
-  await import(${JSON.stringify(sentinel)});
-  sentinelReached = true;
-} catch {}
+${sentinelProbe(`await import(${JSON.stringify(sentinel)})`)}
 writeFileSync(${JSON.stringify(MARKERS.esm)}, JSON.stringify({ loaded, sentinelReached }));
 `
   );
@@ -157,19 +213,17 @@ for (const specifier of ${JSON.stringify(specifiers)}) {
   const module = require(specifier);
   loaded[specifier] = Object.keys(module).length;
 }
-let sentinelReached = false;
-try {
-  require(${JSON.stringify(sentinel)});
-  sentinelReached = true;
-} catch {}
+${sentinelProbe(`require(${JSON.stringify(sentinel)})`)}
 writeFileSync(${JSON.stringify(MARKERS.cjs)}, JSON.stringify({ loaded, sentinelReached }));
 `
   );
 
   console.log(
     `Wrote an isolation probe for ${subpaths.length} server-safe subpaths (${subpaths.join(", ")}) ` +
-      `to ${target}. Allowed dependencies: ${allowed.join(", ")}. Isolation is demonstrated by ` +
-      `${sentinel} failing to load.`
+      `to ${target}. Allowed dependencies: ` +
+      `${Object.entries(dependencies)
+        .map(([name, range]) => `${name}@${range}`)
+        .join(", ")}. Isolation is demonstrated by ${sentinel} failing to load.`
   );
 }
 
@@ -214,9 +268,7 @@ function prune(target: string): void {
  * the first one". The marker is written last and is the only evidence that the run completed.
  */
 function verify(target: string): void {
-  const expected = serverSafeSubpaths().map(
-    subpath => `@nextlyhq/ui${subpath.slice(1)}`
-  );
+  const expected = consumerSpecifiers();
   const problems: string[] = [];
 
   for (const [system, marker] of Object.entries(MARKERS)) {
