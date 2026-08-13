@@ -517,6 +517,40 @@ describe("the host can drive it", () => {
     expect(screen.getByText("Lone surrogate")).toBeTruthy();
   });
 
+  it("asks each command whether it is available once, not once per path", () => {
+    // The searched list is DERIVED from the grouped one rather than filtered again. Two paths
+    // computing availability agree until someone edits one, and the divergence would show only
+    // while the user is searching — the half nobody looks at. Asserted by call COUNT because the
+    // two implementations return the same set today; what separates them is how many times the
+    // predicate runs.
+    const when = vi.fn(() => true);
+    mount(
+      <CommandPalette
+        commands={[{ id: "a", label: "Conditional", when, run: noop }]}
+      />
+    );
+    pressPaletteKey();
+
+    when.mockClear();
+    fireEvent.change(screen.getByRole("combobox"), {
+      target: { value: "cond" },
+    });
+
+    // One evaluation per render, however many views of the list that render produces.
+    const searching = when.mock.calls.length;
+
+    // Calibrated against the SAME component in the SAME test rather than against a number chosen
+    // here: React's render count is not something this test should be asserting, and a tolerance
+    // wide enough to survive it is wide enough to hide the second path. Typing must not cost more
+    // availability checks per render than not typing does.
+    when.mockClear();
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "" } });
+    const notSearching = when.mock.calls.length;
+
+    expect(notSearching).toBeGreaterThan(0);
+    expect(searching).toBeLessThanOrEqual(notSearching);
+  });
+
   it("names the search field, not just the dialog", () => {
     mount(<CommandPalette commands={[]} />);
     pressPaletteKey();
