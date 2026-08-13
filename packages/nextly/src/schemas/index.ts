@@ -49,6 +49,7 @@ import { emailProvidersSqlite } from "./email-providers/sqlite";
 import { emailTemplatesMysql } from "./email-templates/mysql";
 import { emailTemplatesPg } from "./email-templates/postgres";
 import { emailTemplatesSqlite } from "./email-templates/sqlite";
+import { fieldGroupLockTables } from "./field-group-lock";
 import { mediaTables } from "./media";
 import { nextlyI18nArchiveTables } from "./nextly-i18n-archive";
 import { nextlyMetaTables } from "./nextly-meta";
@@ -159,6 +160,12 @@ export function getCoreSchema(
     ...Object.values(mediaTables(dialect)),
     ...Object.values(auditTables(dialect)),
     ...Object.values(nextlyMetaTables(dialect)),
+    // `nextly_field_group_lock` — the storage migration's mutual-exclusion row. Bootstrapped
+    // out-of-band by the migration session (it must exist before anything can contend for it),
+    // and declared here so it is RECONCILABLE: the bootstrap is `CREATE TABLE IF NOT EXISTS`, so
+    // without this a column could never be added to an existing installation's copy. Same reasoning
+    // as `nextly_schema_events` and `nextly_i18n_archive` below.
+    ...Object.values(fieldGroupLockTables(dialect)),
     ...Object.values(apiKeyTables(dialect)),
     // `nextly_schema_events` (the migration ledger) is a first-class managed
     // table. It is still bootstrapped out-of-band via `getSchemaEventsDdl` so
@@ -257,6 +264,9 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "media_folders",
   "image_sizes",
   "nextly_meta",
+  // Read by live introspection. Absent here, the table is created and then invisible to every
+  // snapshot, so the drift check proposes adding it again on every run.
+  "nextly_field_group_lock",
   "dynamic_collections",
   "dynamic_singles",
   STORAGE_FORMAT.registryTable,
