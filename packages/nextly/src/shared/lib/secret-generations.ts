@@ -35,13 +35,59 @@ export function secretGenerations(
   current: string | undefined,
   retiredList: string | undefined
 ): string[] {
-  const retired = (retiredList ?? "")
-    .split(",")
-    .map(entry => entry.trim())
-    // A trailing comma is the likeliest way to write this list, and an empty
-    // entry would otherwise become a zero-length key that hashes every address
-    // to the same value — a collision across every recipient, silently.
-    .filter(entry => entry.length > 0);
-
+  const retired = retiredSecrets(retiredList);
   return current === undefined ? retired : [current, ...retired];
+}
+
+/**
+ * A JSON array of strings, or null for anything else.
+ *
+ * Anything else includes values that parse as JSON but are not a list of
+ * secrets — a bare number, a quoted string, an object. Those fall through to
+ * the comma form rather than being coerced, because a secret that happens to
+ * look like JSON is still a secret.
+ */
+function jsonStringArray(raw: string): string[] | null {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return null;
+    return parsed.every(entry => typeof entry === "string") ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The retired secrets, in either of the two accepted spellings.
+ *
+ * `NEXTLY_SECRET` is an arbitrary string, so a comma-separated list cannot
+ * express every value it accepts: a secret containing a comma is torn into two
+ * keys that were never used, and one with significant leading or trailing
+ * whitespace is trimmed into a different key. Both then match nothing, and the
+ * cost is an erasure request that reports success having reached no rows —
+ * silent, and exactly what listing the secret was meant to prevent.
+ *
+ * So a JSON array is accepted as well, and it round-trips anything:
+ * `NEXTLY_SECRET_PREVIOUS='["old,with,commas","  spaced  "]'`. Entries there
+ * are taken verbatim, since JSON already delimits them and trimming would
+ * reintroduce the defect this form exists to avoid.
+ *
+ * The comma form stays the ordinary one because it is what almost every secret
+ * can use and it reads plainly in a `.env`. The two are told apart by whether
+ * the value parses as a JSON array, which leaves one ambiguity worth naming: a
+ * retired secret that is itself literally an array literal is read as the JSON
+ * form. Such a value must use the JSON form, quoted inside it.
+ */
+function retiredSecrets(raw: string | undefined): string[] {
+  const value = raw ?? "";
+  if (value.trim().length === 0) return [];
+
+  const entries =
+    jsonStringArray(value.trim()) ?? value.split(",").map(part => part.trim());
+
+  // An empty entry is dropped in BOTH forms. A trailing comma is the likeliest
+  // way to write the list, and `""` is a valid HMAC key that hashes every
+  // address to one value — every recipient colliding with every other, with
+  // nothing to show for it until an erasure deletes the wrong rows.
+  return entries.filter(entry => entry.length > 0);
 }

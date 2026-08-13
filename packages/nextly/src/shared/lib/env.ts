@@ -39,7 +39,7 @@ export const _envSchema = z
 
     // Nextly auth secret (required in production, min 32 chars)
     NEXTLY_SECRET: z.string().optional(),
-    // Secrets this install has RETIRED, newest first, comma-separated.
+    // Secrets this install has RETIRED, newest first.
     //
     // Rotating `NEXTLY_SECRET` re-keys every value derived from it, which
     // silently orphans data written under the old one: an email delivery row's
@@ -48,9 +48,21 @@ export const _envSchema = z
     // Listing a retired secret here keeps those rows REACHABLE for erasure
     // without making them writable — nothing new is ever keyed with one.
     //
-    // Empty entries are dropped rather than rejected: a trailing comma is the
-    // likeliest way to write this, and treating it as a zero-length key would
-    // hash every address under the empty string.
+    // Two spellings, because one of them cannot express every legal secret.
+    // The ordinary form is comma-separated and reads plainly in a `.env`:
+    //
+    //   NEXTLY_SECRET_PREVIOUS=older,oldest
+    //
+    // A secret containing a comma, or one whose leading or trailing whitespace
+    // is part of the key, needs the JSON form — splitting or trimming those
+    // produces a key that was never used, which matches nothing and fails in
+    // the silent direction:
+    //
+    //   NEXTLY_SECRET_PREVIOUS=["old,with,commas","  spaced  "]
+    //
+    // Empty entries are dropped in both, rather than rejected: a trailing
+    // comma is the likeliest way to write the list, and `""` is a VALID HMAC
+    // key under which every address hashes to the same value.
     NEXTLY_SECRET_PREVIOUS: z.string().optional(),
     // Shared secret a scheduler (e.g. Vercel Cron) presents to the webhook
     // drain route. Optional: when unset, the drain route can still be triggered

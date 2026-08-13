@@ -61,4 +61,53 @@ describe("the secrets an install can read with", () => {
   it("keeps retired secrets when no current one is set", () => {
     expect(secretGenerations(undefined, "older")).toEqual(["older"]);
   });
+
+  describe("secrets the comma form cannot express", () => {
+    // `NEXTLY_SECRET` is an arbitrary string. Everything the comma form does
+    // to make a plain list readable — splitting, trimming — is destructive for
+    // some legal secret, and destroying one is silent: the derived key matches
+    // no stored row, so an erasure reports success having reached nothing.
+
+    it("round-trips a secret containing a comma", () => {
+      // Torn into "old" and "with" and "commas" by the comma form, none of
+      // which was ever a key. The JSON form delimits without guessing.
+      expect(secretGenerations("current", '["old,with,commas"]')).toEqual([
+        "current",
+        "old,with,commas",
+      ]);
+    });
+
+    it("preserves whitespace that is part of the key", () => {
+      // Trimming here produces a DIFFERENT key, not a tidier one. HMAC does
+      // not care that the spaces look accidental.
+      expect(secretGenerations("current", '["  spaced  "]')).toEqual([
+        "current",
+        "  spaced  ",
+      ]);
+    });
+
+    it("still drops empty entries in the JSON form", () => {
+      // The zero-length-key hazard is not about spelling: `""` is a valid HMAC
+      // key under which every address hashes alike, whichever form declared it.
+      expect(secretGenerations("current", '["older","",""]')).toEqual([
+        "current",
+        "older",
+      ]);
+    });
+
+    it("treats a secret that merely looks like JSON as one secret", () => {
+      // The control that stops the JSON branch from swallowing ordinary
+      // values. A bare number, a quoted string and an object all parse as JSON
+      // and none of them is a list of secrets, so each must survive whole.
+      expect(secretGenerations(undefined, "12345")).toEqual(["12345"]);
+      expect(secretGenerations(undefined, '"quoted"')).toEqual(['"quoted"']);
+      expect(secretGenerations(undefined, '{"a":1}')).toEqual(['{"a":1}']);
+    });
+
+    it("falls back to the comma form when the JSON is not string entries", () => {
+      // An array of non-strings is not a secret list either. Coercing it would
+      // invent keys; falling through keeps the value intact for a human to see.
+      expect(secretGenerations(undefined, "[1,2]")).toEqual(["[1", "2]"]);
+    });
+  });
 });
