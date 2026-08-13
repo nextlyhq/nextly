@@ -30,6 +30,14 @@ const FIELD_ONLY =
 const BORDER_WIDTH = /^border(?:-[0-9]+)?$|^border-[xytrbl](?:-[0-9]+)?$/;
 
 /**
+ * A width utility that paints nothing. `border-0` and `border-x-0` are widths,
+ * so they satisfy the pattern above, and they draw no edge — which puts a
+ * colour beside them right back in the inert case the exemption exists to
+ * carve out.
+ */
+const ZERO_WIDTH = /^border(?:-[xytrbl])?-0$/;
+
+/**
  * A utility's base, with Tailwind's variant prefixes and `!` removed.
  *
  * `hover:border-input` and `md:dark:border-input` set the same property on the
@@ -39,7 +47,16 @@ const BORDER_WIDTH = /^border(?:-[0-9]+)?$|^border-[xytrbl](?:-[0-9]+)?$/;
  */
 export function baseUtility(token: string): string {
   const withoutVariants = token.slice(token.lastIndexOf(":") + 1);
-  return withoutVariants.replace(/^!/, "").replace(/!$/, "");
+  const withoutImportant = withoutVariants.replace(/^!/, "").replace(/!$/, "");
+  // A trailing `/NN` is Tailwind's colour-opacity syntax and still emits the
+  // same colour property, so the modifier says how MUCH rather than what — the
+  // same relationship a variant has to the utility, and the same reason to
+  // remove it before comparing. Arbitrary values take the same form.
+  //
+  // Written without a concrete example on purpose: the alpha-utility guard in
+  // packages/ui greps admin SOURCE for these tokens and does not skip comments,
+  // so naming one here fails that suite from a file that renders nothing.
+  return withoutImportant.replace(/\/(?:\[[^\]]*\]|[0-9]+%?)$/, "");
 }
 
 /**
@@ -83,9 +100,10 @@ export function decodeEntities(text: string): string {
 export function inertClassesIn(className: string): string[] {
   const tokens = decodeEntities(className).split(/\s+/).filter(Boolean);
   // A border colour is only inert while nothing gives the wrapper a border.
-  const hasBorderWidth = tokens.some(token =>
-    BORDER_WIDTH.test(baseUtility(token))
-  );
+  const hasBorderWidth = tokens.some(token => {
+    const base = baseUtility(token);
+    return BORDER_WIDTH.test(base) && !ZERO_WIDTH.test(base);
+  });
   return tokens.filter(token => {
     const base = baseUtility(token);
     if (!FIELD_ONLY.test(base)) return false;

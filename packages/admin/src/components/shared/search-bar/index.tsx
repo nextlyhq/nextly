@@ -126,7 +126,12 @@ export const SearchBar = React.forwardRef<HTMLInputElement, SearchBarProps>(
     //
     // Development only, and effectful rather than computed during render.
     React.useEffect(() => {
-      if (process.env.NODE_ENV === "production" || !className) return;
+      // Opted INTO development rather than out of production. That is the
+      // polarity the rest of the admin uses, and it is the one that fails
+      // safe: if the value is ever absent, or folded to something unexpected
+      // by a bundler, an opt-in stays silent while an opt-out ships a console
+      // warning to every consumer of the published package.
+      if (process.env.NODE_ENV !== "development" || !className) return;
       const inert = inertClassesIn(className);
       if (inert.length > 0) console.warn(inertClassMessage(inert));
     }, [className]);

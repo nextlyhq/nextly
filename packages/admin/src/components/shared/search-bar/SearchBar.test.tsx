@@ -38,6 +38,12 @@ describe("SearchBar", () => {
     // final class string, so no spelling can hide from it. The source scan
     // beside it only reads literals and defers everything else here, so if this
     // stops firing the computed forms lose their only coverage.
+    // The environment is stated rather than inherited. The guard opts INTO
+    // development so that an absent or unexpected NODE_ENV stays silent rather
+    // than shipping a warning to consumers, which means the suite's own
+    // `test` value does not trigger it -- and a test that quietly relied on
+    // the ambient value would break the moment that polarity was corrected.
+    vi.stubEnv("NODE_ENV", "development");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       render(
@@ -51,18 +57,50 @@ describe("SearchBar", () => {
       expect(String(warn.mock.calls[0][0])).toContain("border-input");
     } finally {
       warn.mockRestore();
+      vi.unstubAllEnvs();
     }
   });
+
+  it.each(["production", "staging", ""])(
+    "stays silent when NODE_ENV is %o",
+    environment => {
+      // "production" alone does NOT separate the two polarities: an opt-out
+      // that returns early on an exact "production" passes it just as an
+      // opt-in does. What separates them is a THIRD value — an unset or
+      // unexpected NODE_ENV, which is precisely the case a bundler can leave
+      // behind, and where an opt-out ships a console warning to every consumer.
+      //
+      // Verified: with the guard written as `=== "production"`, the empty and
+      // "staging" cases fail and the "production" case still passes.
+      vi.stubEnv("NODE_ENV", environment);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        render(
+          <SearchBar
+            value=""
+            onChange={vi.fn()}
+            className="w-full border-input"
+          />
+        );
+        expect(warn).not.toHaveBeenCalled();
+      } finally {
+        warn.mockRestore();
+        vi.unstubAllEnvs();
+      }
+    }
+  );
 
   it("says nothing about a layout class", () => {
     // The negative half. A warning that fired on every className would satisfy
     // the assertion above and make the component unusable.
+    vi.stubEnv("NODE_ENV", "development");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       render(<SearchBar value="" onChange={vi.fn()} className="w-full" />);
       expect(warn).not.toHaveBeenCalled();
     } finally {
       warn.mockRestore();
+      vi.unstubAllEnvs();
     }
   });
 

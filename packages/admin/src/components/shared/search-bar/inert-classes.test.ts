@@ -59,4 +59,30 @@ describe("inert classes", () => {
     // And a width utility does not excuse a non-border class.
     expect(inertClassesIn("border bg-background")).toEqual(["bg-background"]);
   });
+
+  it("does not treat a zero width as a painted border", () => {
+    // `border-0` IS a width utility and paints nothing, so a colour beside it
+    // is back in the inert case the exemption exists to carve out. The
+    // exemption has to ask whether an edge is DRAWN, not whether a
+    // width-shaped class is present.
+    expect(inertClassesIn("border-0 border-input")).toEqual(["border-input"]);
+    expect(inertClassesIn("border-x-0 border-border")).toEqual([
+      "border-border",
+    ]);
+    // A real width alongside a zero one still paints on the other sides.
+    expect(inertClassesIn("border-x-0 border-y border-input")).toEqual([]);
+  });
+
+  it("sees through an opacity modifier", () => {
+    // `border-input/50` still emits a border colour; the modifier says how
+    // much, the way a variant says when.
+    expect(inertClassesIn("border-input/50")).toEqual(["border-input/50"]);
+    expect(inertClassesIn("hover:border-input/50")).toEqual([
+      "hover:border-input/50",
+    ]);
+    expect(inertClassesIn("bg-background/[0.4]")).toEqual([
+      "bg-background/[0.4]",
+    ]);
+    expect(baseUtility("hover:border-input/50")).toBe("border-input");
+  });
 });

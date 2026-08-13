@@ -163,8 +163,15 @@ function scanCombos(): Map<string, number> {
       throw new Error(`scanned dir does not exist: ${dir}`);
     }
   }
+  // `-H` so the path survives: test files are excluded below, and without the
+  // filename there is nothing to exclude them by. The subject here is what a
+  // component RENDERS, and a test naming a class as a fixture renders nothing
+  // -- a suite asserting that `border-input/50` is reported would otherwise be
+  // failed by this scan for containing the string it was written to describe.
+  // The sibling assertion in this file already excluded tests for the same
+  // reason; this one had not, which is the inconsistency rather than the rule.
   const out = execSync(
-    `grep -rohE '${UTILITY_PATTERN}' ${dirs.join(" ")} || true`,
+    `grep -rHoE '${UTILITY_PATTERN}' ${dirs.join(" ")} || true`,
     {
       encoding: "utf8",
       maxBuffer: 64 * 1024 * 1024,
@@ -172,7 +179,11 @@ function scanCombos(): Map<string, number> {
   );
   const combos = new Map<string, number>();
   for (const line of out.split("\n")) {
-    const t = line.trim();
+    const separator = line.indexOf(":");
+    if (separator === -1) continue;
+    const path = line.slice(0, separator);
+    if (/\.test\.|\/__tests__\//.test(path)) continue;
+    const t = line.slice(separator + 1).trim();
     if (!t) continue;
     const name = nameOf(t);
     if (name && isScannableColor(name)) {
