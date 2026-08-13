@@ -78,6 +78,7 @@ function createDeliveriesTable(sqlite: Database.Database): void {
 describe("a zero retention window", () => {
   let sqlite: Database.Database;
   let sweeps: number;
+  let sweptWith: Array<number | undefined>;
   let policy: ResolvedEmailRetentionConfig | undefined;
 
   function service(): EmailDeliveryService {
@@ -85,8 +86,9 @@ describe("a zero retention window", () => {
       makeAdapter(drizzle({ client: sqlite })),
       logger,
       {
-        maybeRun: async () => {
+        maybeRun: async (maxBatches?: number) => {
           sweeps += 1;
+          sweptWith.push(maxBatches);
         },
       },
       () => policy
@@ -97,6 +99,7 @@ describe("a zero retention window", () => {
     sqlite = new Database(":memory:");
     createDeliveriesTable(sqlite);
     sweeps = 0;
+    sweptWith = [];
     policy = undefined;
   });
 
@@ -133,6 +136,27 @@ describe("a zero retention window", () => {
     });
 
     expect(sweeps).toBe(1);
+  });
+
+  it("caps the sweep it offers, because the caller is waiting", async () => {
+    // The runner now carries EVERY domain's policy, so an uncapped offer spends
+    // each one's full configured budget -- dozens of delete batches by default
+    // -- synchronously, after the provider has already accepted the message. A
+    // serverless request times out long before that finishes, and a timed-out
+    // caller sends the mail again.
+    policy = resolveEmailRetentionConfig({ maxAgeMs: 30 * DAY_MS });
+
+    await service().record({
+      to: "person@example.com",
+      providerType: "smtp",
+      status: "sent",
+    });
+
+    // A number, and a small one. `undefined` here means "spend the whole
+    // budget", which is the defect rather than a neutral default.
+    expect(sweptWith).toHaveLength(1);
+    expect(sweptWith[0]).toBeGreaterThan(0);
+    expect(sweptWith[0]).toBeLessThanOrEqual(4);
   });
 
   it("records normally under any other window", async () => {

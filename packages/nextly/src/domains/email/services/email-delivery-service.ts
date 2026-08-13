@@ -278,13 +278,30 @@ export class EmailDeliveryService extends BaseService {
     // reports an accepted send as a failed one and invites the caller to send
     // it twice.
     try {
-      await this.retention?.maybeRun();
+      await this.retention?.maybeRun(
+        EmailDeliveryService.WRITE_PATH_PRUNE_BATCHES
+      );
     } catch (error) {
       warnQuietly(this.logger, "Email retention pass could not be offered", {
         error,
       });
     }
   }
+
+  /**
+   * Batches this runner may spend when a SEND offered the pass.
+   *
+   * A write path wants a bounded amount of work, not a backlog sweep. This
+   * runner carries every domain's policy, so an uncapped offer spends each
+   * one's full configured budget — dozens of delete batches by default — while
+   * the caller waits, AFTER the provider has already accepted the message.
+   * Long enough to hit a serverless request timeout, and the caller's natural
+   * response to a timeout is to send the mail again.
+   *
+   * Two, matching the other mutation services. Full-budget sweeps belong to
+   * triggers nothing is waiting on.
+   */
+  private static readonly WRITE_PATH_PRUNE_BATCHES = 2;
 
   /**
    * One bounded slice of a batch: insert it, and recover the one way that can
