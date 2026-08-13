@@ -30,6 +30,7 @@ import {
   type SanitizedNextlyConfig,
 } from "../../collections/config/define-config";
 import type { NextlyServiceConfig } from "../../di/register";
+import { emailRetentionAfterTransform } from "../../domains/email/retention-config";
 import {
   clearFieldTypes,
   registerFieldType,
@@ -99,6 +100,19 @@ function applyFoldedToBase(
     // or disables `webhooks.retention` in setup() must not be reverted to the
     // base value (which `webhooks:prune` and the runtime would otherwise use).
     webhookRetention: transformed.webhookRetention,
+    // And the email block, which is the one this list was missing. A plugin
+    // that sets `email.retention: false` in setup() had that decision reverted
+    // on the first reload, because only the base value was carried here — so an
+    // unrelated save could start deleting rows the live boot configuration had
+    // been retaining.
+    //
+    // The flattened policy is DERIVED from the block rather than carried
+    // beside it, through the same function the DI root uses. Carrying both
+    // independently is what let them disagree in the first place.
+    email: transformed.email ?? base.email,
+    emailRetention:
+      emailRetentionAfterTransform(transformed.email, base.emailRetention) ??
+      base.emailRetention,
   };
 }
 

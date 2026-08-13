@@ -22,9 +22,9 @@
  * @module domains/email/erase-recipient
  */
 
-import { eq, type Column, type Table } from "drizzle-orm";
+import { inArray, type Column, type Table } from "drizzle-orm";
 
-import { ERASED_RECIPIENT_HASH, recipientDigest } from "./delivery-record";
+import { ERASED_RECIPIENT_HASH, recipientDigests } from "./delivery-record";
 
 /**
  * The Drizzle surface this needs: one scoped UPDATE.
@@ -55,20 +55,21 @@ export type ErasableDeliveriesTable = Table & { recipientHash: Column };
  * stored value is the sentinel, which no address hashes to. Running this twice
  * therefore touches nothing the second time, without needing a guard to say so.
  *
- * ROWS WRITTEN UNDER A PREVIOUS `NEXTLY_SECRET` ARE NOT REACHED. The digest is
- * an HMAC keyed with the current secret, so after a rotation the predicate
- * computes a value none of the older rows carry, and this returns having
- * matched nothing — with no error, because "no rows matched" is also what a
- * recipient with no deliveries looks like. Rotation is a real operational
- * state here rather than a hypothetical: `email-provider-service.ts` already
- * handles a stored configuration that no longer decrypts for exactly that
- * reason.
+ * Rows written under a RETIRED `NEXTLY_SECRET` are reached, provided the
+ * install lists it in `NEXTLY_SECRET_PREVIOUS`. The digest is an HMAC keyed
+ * with the secret, so a rotation leaves older rows carrying a value the current
+ * key no longer produces; the predicate therefore matches every digest the
+ * known generations could have written rather than only the newest.
  *
- * Recording a key version alongside the digest would close it, and that is a
- * column on a table whose schema deliberately does not change in this change.
- * Until then the bound is the retention pass: rows age out regardless of which
- * key wrote them, so a rotation delays the removal of older rows rather than
- * making it never happen.
+ * Recording a key VERSION per row would also close it and was the obvious
+ * design, but it is strictly more machinery for the same outcome: a version
+ * column needs a schema change, a backfill for rows written before it existed,
+ * and it still cannot help those older rows. Computing all known digests reaches
+ * them with neither.
+ *
+ * What is NOT reached is a generation the operator has discarded. That is the
+ * honest boundary of this mechanism, and the retention pass is what bounds it:
+ * rows age out regardless of which key wrote them.
  *
  * The dialects do not agree on how this column compares: MySQL's default
  * `varchar` collation is case- and pad-insensitive, while Postgres and SQLite
@@ -84,6 +85,15 @@ export type ErasableDeliveriesTable = Table & { recipientHash: Column };
  * keeping a list of the addresses that asked to be forgotten, which is the
  * opposite of the request.
  *
+ * That includes a send already IN FLIGHT when the deletion commits: it finishes
+ * afterwards and records a row carrying a live digest for someone who has just
+ * been deleted. Accepted deliberately rather than closed. Re-reading the
+ * deletion before each write would pay a query on every send and still leave
+ * the window open between the check and the write, and the only construction
+ * that truly closes it is the tombstone list this paragraph already rejects.
+ * The retention sweep is what bounds it: the row ages out on the ordinary
+ * window rather than persisting indefinitely.
+ *
  * @param db - The caller's open transaction.
  * @param deliveries - The dialect's delivery table.
  * @param address - The recipient, in any form a sender may have written it.
@@ -96,5 +106,5 @@ export async function eraseRecipientDeliveries(
   await db
     .update(deliveries)
     .set({ recipientHash: ERASED_RECIPIENT_HASH })
-    .where(eq(deliveries.recipientHash, recipientDigest(address)));
+    .where(inArray(deliveries.recipientHash, recipientDigests(address)));
 }

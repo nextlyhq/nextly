@@ -159,18 +159,21 @@ export const emailDeliveriesPg = pgTable(
     messageId: text("message_id"),
 
     /**
-     * Which retention window WOULD govern this row.
+     * Which retention window governs this row.
      *
-     * Reserved and inert, like `next_attempt_at` above it: **no pass prunes
-     * this table today.** `domains/retention/passes.ts` builds one pass per
-     * domain that has retention configured, and email is not among them, so
-     * this value is written and never read.
+     * READ, unlike `next_attempt_at` above it. `domains/email/prune.ts` sweeps
+     * by this column and by age, offered from the send path — rows are created
+     * by sends, so that is when the table grows.
      *
-     * Present from the first migration anyway, for the reason the retry
-     * columns are: adding it later would be a migration on a table already
-     * holding production history. Saying so here rather than letting the
-     * column imply otherwise — an operator reading a labelled retention class
-     * would reasonably conclude something enforces it, and nothing does.
+     * The sweep scopes its DELETE by class, which is what makes an unswept
+     * class invisible: one the writer can stamp but the pass does not scope for
+     * matches no branch, is never selected, and grows while the pass reports
+     * success. `EMAIL_RETENTION_CLASSES` is asserted against what the writer
+     * can stamp so that failure is a red test rather than a silent table.
+     *
+     * Present from the first migration, for the reason the retry columns are:
+     * adding it later would have been a migration on a table already holding
+     * production history.
      */
     retentionClass: varchar("retention_class", { length: 50 }).notNull(),
 

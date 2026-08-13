@@ -39,6 +39,42 @@ export const _envSchema = z
 
     // Nextly auth secret (required in production, min 32 chars)
     NEXTLY_SECRET: z.string().optional(),
+    // Secrets this install has RETIRED, newest first.
+    //
+    // Rotating `NEXTLY_SECRET` re-keys every value derived from it, which
+    // silently orphans data written under the old one: an email delivery row's
+    // recipient digest stops matching, so an erasure request computes a value
+    // none of the older rows carry and reports success having matched nothing.
+    // Listing a retired secret here keeps those rows REACHABLE for erasure
+    // without making them writable — nothing new is ever keyed with one.
+    //
+    // Two spellings, because one of them cannot express every legal secret.
+    // The ordinary form is comma-separated and reads plainly in a `.env`:
+    //
+    //   NEXTLY_SECRET_PREVIOUS=older,oldest
+    //
+    // A secret containing a comma, or one whose leading or trailing whitespace
+    // is part of the key, needs the JSON form — splitting or trimming those
+    // produces a key that was never used, which matches nothing and fails in
+    // the silent direction:
+    //
+    //   NEXTLY_SECRET_PREVIOUS=["old,with,commas","  spaced  "]
+    //
+    // The JSON form also expresses two generations the comma form cannot name
+    // at all, and both are reachable:
+    //
+    //   NEXTLY_SECRET_PREVIOUS=[null,""]
+    //
+    // `null` is the UNKEYED generation — what a development install writes
+    // before it has a secret. Those rows carry a plain SHA-256 digest that no
+    // HMAC reproduces, so enabling a secret later strands them unless that
+    // generation can still be named. `""` is a secret that really was the
+    // empty string, which the writer uses as an HMAC key like any other.
+    //
+    // An empty entry in the COMMA form is dropped, because there it is a
+    // trailing comma rather than a declaration. In the JSON form it is kept:
+    // writing it is deliberate.
+    NEXTLY_SECRET_PREVIOUS: z.string().optional(),
     // Shared secret a scheduler (e.g. Vercel Cron) presents to the webhook
     // drain route. Optional: when unset, the drain route can still be triggered
     // by an authenticated admin/API-key call, but unattended cron triggering is

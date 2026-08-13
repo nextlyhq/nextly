@@ -13,7 +13,10 @@
 import type { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import { MetaRetentionGate } from "../../domains/retention/gate";
-import { buildRetentionRunner } from "../../domains/retention/passes";
+import {
+  buildRetentionRunner,
+  retentionPoliciesFrom,
+} from "../../domains/retention/passes";
 import { SingleEntryService } from "../../domains/singles/services/single-entry-service";
 import { SingleMetadataService } from "../../domains/singles/services/single-metadata-service";
 import { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
@@ -89,8 +92,7 @@ export function registerSingleServices(ctx: RegistrationContext): void {
       // matching the collection write path.
       buildRetentionRunner({
         adapter,
-        webhookPolicy: ctx.config.webhookRetention,
-        auditPolicy: ctx.config.auditRetention,
+        ...retentionPoliciesFrom(ctx.config),
         gate: new MetaRetentionGate(adapter),
         logger,
       }),
