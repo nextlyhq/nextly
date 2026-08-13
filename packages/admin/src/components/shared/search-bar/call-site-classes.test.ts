@@ -149,20 +149,86 @@ function classText(tag: string): string | null {
   return null;
 }
 
+/** Words that can appear where a class value would, but carry no classes. */
+const NOT_A_CLASS_VALUE = new Set([
+  "true",
+  "false",
+  "null",
+  "undefined",
+  "typeof",
+]);
+
 /**
- * Spreads whose contents no static scan can know — `{...props}` and anything
- * else that is not an object literal.
+ * The identifiers in an expression that could carry class text at runtime.
+ *
+ * `className={cn("w-full", "border-input")}` is fully determined by its source
+ * and can be read. `className={classes}` is not: the utility could be anywhere
+ * in a variable this file never sees. Reading only the expression TEXT would
+ * find no forbidden name in `classes` and report the call site clean, which is
+ * the same silent narrowing as skipping a spread.
+ *
+ * Two positions hold an identifier without it being a class value, and both are
+ * recognisable without parsing:
+ *
+ * - a callee, `cn(` — the function's NAME contributes nothing;
+ * - a condition's test, `isActive && "..."` or `isActive ? "a" : "b"` — the test
+ *   decides WHICH literal applies and is not itself a class. `??` is excluded
+ *   from that, because `classes ?? "w-full"` uses the identifier as a value.
+ *
+ * Everything else is treated as unreadable and reported.
+ */
+function opaqueClassValues(expression: string): string[] {
+  // Blank string literals first, so a word inside one is not read as an
+  // identifier. Length is preserved to keep the following offsets meaningful.
+  const bare = expression.replace(/(["'`])(?:\\.|(?!\1)[^\\])*\1/g, match =>
+    " ".repeat(match.length)
+  );
+  const found: string[] = [];
+  for (const identifier of bare.matchAll(/[A-Za-z_$][A-Za-z0-9_$]*/g)) {
+    if (NOT_A_CLASS_VALUE.has(identifier[0])) continue;
+    const after = bare
+      .slice(identifier.index + identifier[0].length)
+      .trimStart();
+    if (after.startsWith("(")) continue;
+    if (after.startsWith("&&")) continue;
+    if (after.startsWith("?") && !after.startsWith("??")) continue;
+    found.push(identifier[0]);
+  }
+  return found;
+}
+
+/**
+ * Everything a tag passes that no static scan can read: a spread that is not an
+ * object literal, and a className expression whose value comes from a variable.
  *
  * These are reported rather than skipped. A scan that passes over the input it
  * cannot read answers a narrower question than the one it claims to, and
  * answers it in green: the forbidden class would reach the wrapper with every
  * assertion still reporting zero. Naming the tag turns that silence into a
- * failure with an instruction, and costs nothing while no call site spreads.
+ * failure with an instruction, and costs nothing while every call site passes a
+ * literal.
  */
-function opaqueSpreads(tag: string): string[] {
-  return spreadExpressions(tag).filter(
+function unreadable(tag: string): string[] {
+  const opaque = spreadExpressions(tag).filter(
     expression => !expression.trim().startsWith("{")
   );
+
+  const brace = tag.indexOf("className={");
+  if (brace !== -1) {
+    const body = braceBody(tag, brace + "className=".length);
+    if (body !== null) opaque.push(...opaqueClassValues(body));
+  }
+  for (const expression of spreadExpressions(tag)) {
+    const inner = expression.trim();
+    if (!inner.startsWith("{")) continue;
+    const property = /\bclassName\s*:/.exec(inner);
+    if (property) {
+      opaque.push(
+        ...opaqueClassValues(inner.slice(property.index + property[0].length))
+      );
+    }
+  }
+  return opaque;
 }
 
 const sources = walk(adminSrc).filter(
@@ -228,43 +294,72 @@ describe("SearchBar call sites", () => {
     ).toBe(false);
   });
 
-  it("reports a spread it cannot read rather than skipping it", () => {
-    // The scanner has to distinguish the two spreads, because they differ in
-    // what is knowable: an object literal is right there in the source, and
-    // `{...props}` could hold anything. Reading the first and reporting the
-    // second are both correct; treating either as "no className" is what makes
-    // the whole check answer zero for a reason unrelated to the call sites.
-    const [opaque] = openingTags("<SearchBar value={v} {...props} />");
-    expect(opaqueSpreads(opaque.text)).toEqual(["props"]);
+  it("separates what it can read from what it cannot", () => {
+    // This check answers ZERO when it works and ZERO when it reads nothing, so
+    // the classifier is exercised on inputs whose right answer is known. Every
+    // case below is a spelling a call site may legitimately use; what differs is
+    // whether the class VALUE is determined by the source.
+    const readable = [
+      ["literal", '<SearchBar className="w-full" />'],
+      ["braced literal", '<SearchBar className={"w-full"} />'],
+      [
+        "cn() of literals",
+        '<SearchBar className={cn("w-full", "max-w-sm")} />',
+      ],
+      // The test is a boolean, not a class. Refusing this would reject the
+      // commonest conditional in React to catch nothing.
+      ["guarded literal", '<SearchBar className={cn(isOpen && "max-w-sm")} />'],
+      ["ternary of literals", '<SearchBar className={x ? "a" : "b"} />'],
+      ["object spread", '<SearchBar {...{ className: "w-full" }} />'],
+    ] as const;
 
-    const [literal] = openingTags(
-      '<SearchBar value={v} {...{ className: "w-full" }} />'
-    );
-    expect(opaqueSpreads(literal.text)).toEqual([]);
+    for (const [name, markup] of readable) {
+      const [tag] = openingTags(markup);
+      expect(unreadable(tag.text), `${name}: reported unreadable`).toEqual([]);
+    }
 
-    const [plain] = openingTags('<SearchBar value={v} className="w-full" />');
-    expect(opaqueSpreads(plain.text)).toEqual([]);
+    const opaque = [
+      ["identifier", "<SearchBar className={classes} />", "classes"],
+      ["cn() of a variable", "<SearchBar className={cn(layout)} />", "layout"],
+      ["member expression", "<SearchBar className={styles.bar} />", "styles"],
+      // `a ?? b` uses the identifier as a VALUE, unlike `a ? x : y` where it is
+      // the test. One character apart, opposite answers.
+      [
+        "nullish default",
+        '<SearchBar className={classes ?? "w"} />',
+        "classes",
+      ],
+      ["props spread", "<SearchBar {...props} />", "props"],
+      [
+        "spread with a variable class",
+        "<SearchBar {...{ className: layout }} />",
+        "layout",
+      ],
+    ] as const;
+
+    for (const [name, markup, expected] of opaque) {
+      const [tag] = openingTags(markup);
+      expect(unreadable(tag.text), `${name}: not reported`).toContain(expected);
+    }
   });
 
-  it("spreads nothing into SearchBar that the scan cannot read", () => {
-    const unreadable: string[] = [];
+  it("passes SearchBar nothing the scan cannot read", () => {
+    const opaque: string[] = [];
     for (const path of sources) {
       const source = readFileSync(path, "utf8");
       for (const tag of openingTags(source)) {
-        const spreads = opaqueSpreads(tag.text);
-        if (spreads.length === 0) continue;
+        const hidden = unreadable(tag.text);
+        if (hidden.length === 0) continue;
         const line = source.slice(0, tag.index).split("\n").length;
-        unreadable.push(
-          `${relative(repo, path)}:${line} — ${spreads.join(" ")}`
-        );
+        opaque.push(`${relative(repo, path)}:${line} — ${hidden.join(" ")}`);
       }
     }
 
     expect(
-      unreadable.sort(),
-      `A spread hides which classes reach SearchBar, so the check below cannot ` +
-        `see a field-only class passed this way. Pass className explicitly:` +
-        `\n${unreadable.join("\n")}`
+      opaque.sort(),
+      `These pass classes to SearchBar through a variable or a spread, so the ` +
+        `check below cannot see whether a field-only class is among them. Pass ` +
+        `the classes as literals:\n${opaque.join("\n")}`
     ).toEqual([]);
   });
 
