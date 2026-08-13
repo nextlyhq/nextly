@@ -1,0 +1,138 @@
+name: Scaffold build
+
+# Does a scaffolded project actually INSTALL and BUILD?
+#
+# The per-PR `scaffold-smoke` job in `ci.yml` answers a narrower question. It runs
+# `--skip-install` to stay fast, so it proves the CLI writes files and never that what it
+# wrote resolves. The nightly `scaffold-and-build` in `package-smoke.yml` does the real
+# install and build, and is gated `if: github.event_name != 'pull_request'`.
+#
+# Between them sits a class of change nothing on a pull request can see: one that alters
+# what a scaffolded project DEPENDS ON or IMPORTS. Its failure mode is not a red test —
+# it is every newly scaffolded project failing on the user's machine, hours before the
+# nightly reports it. A template that references a font package, a dependency the
+# generator stops emitting, an import that resolves here and not from a published
+# tarball: all merge green today.
+#
+# Deliberately NOT solved by relaxing the nightly job's gate. That workflow's
+# `pull_request.paths` filter already includes `pnpm-lock.yaml`, so dropping the `if:`
+# would put a ~30-minute install-and-build on every dependency bump — the most frequent
+# pull request in the repo, and the one least likely to change what a scaffold imports.
+# The cost belongs on changes to the scaffolder and its templates, which are rare.
+on:
+  pull_request:
+    paths:
+      - "templates/**"
+      - "packages/create-nextly-app/**"
+      - ".github/workflows/scaffold-build.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scaffold-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scaffold-build:
+    name: Scaffold, install, and build
+    runs-on: ubuntu-latest
+    # One OS and one Node line. Cross-platform path handling is `scaffold-smoke`'s
+    # question and native-module ABI coverage is the nightly matrix's; repeating either
+    # here would buy minutes of duplicate signal.
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the CLI and core
+        run: pnpm turbo build --filter=create-nextly-app --filter=nextly
+
+      # Packed and installed from the tarball rather than run from source, so the run
+      # exercises the `files` list a published package actually ships. A generator that
+      # works from the repo and omits a template from `files` is exactly the failure this
+      # is looking for.
+      - name: Pack the CLI
+        run: |
+          mkdir -p /tmp/nextly-pack
+          (cd packages/create-nextly-app && pnpm pack --pack-destination /tmp/nextly-pack)
+
+      - name: Scaffold with a real install
+        shell: bash
+        run: |
+          mkdir -p /tmp/scaffold-build
+          cd /tmp/scaffold-build
+          tarball=$(ls /tmp/nextly-pack/*.tgz | head -1)
+          # `npm exec --package=<tarball> -- <bin>` is the explicit form; `npx --yes
+          # <tarball>` routes the path through sh on npm 11 and fails on the tgz.
+          # No `--skip-install`: the install is the point.
+          npm exec --yes --package="$tarball" -- create-nextly-app scaffolded-app --template blank --yes
+
+      # The controls, before the build's verdict is worth anything. A job that scaffolded
+      # nothing, or scaffolded into the wrong directory, would otherwise reach a build
+      # step with nothing to build and report whatever that produces.
+      - name: Check the scaffold produced what the build needs
+        shell: bash
+        run: |
+          cd /tmp/scaffold-build/scaffolded-app
+          test -f package.json || { echo "no package.json: the scaffold did not run"; exit 1; }
+          test -d node_modules || { echo "no node_modules: the install did not run"; exit 1; }
+          test -f src/app/layout.tsx || { echo "no root layout: the template did not copy"; exit 1; }
+
+          # Every package the layouts import must be installed. Derived from the sources
+          # rather than named here: a list in this file is a second answer to a question
+          # the templates already answer, and the two agree only until someone changes a
+          # face.
+          missing=""
+          for pkg in $(grep -rhoE '@fontsource(-variable)?/[a-z0-9-]+' src/ | sort -u); do
+            [ -d "node_modules/$pkg" ] || missing="$missing $pkg"
+          done
+          if [ -n "$missing" ]; then
+            echo "imported but not installed:$missing"
+            exit 1
+          fi
+
+          # A positive control on that loop. It reports success by finding nothing
+          # missing, which is also what a `grep` that matched nothing produces — so the
+          # count it scanned has to be non-zero.
+          found=$(grep -rhoE '@fontsource(-variable)?/[a-z0-9-]+' src/ | sort -u | wc -l)
+          echo "font packages imported by the scaffold: $found"
+          [ "$found" -gt 0 ] || { echo "scanned no font imports at all"; exit 1; }
+
+      - name: Build the scaffolded project
+        shell: bash
+        run: |
+          cd /tmp/scaffold-build/scaffolded-app
+          npm run build
+
+      # `next build` exiting 0 is the assertion, and this is the check that it did the
+      # work rather than short-circuiting: a build that produced no output would
+      # otherwise pass on its exit code alone.
+      - name: Check the build produced output
+        shell: bash
+        run: |
+          cd /tmp/scaffold-build/scaffolded-app
+          test -d .next || { echo "no .next: the build produced nothing"; exit 1; }
+
+          # Nothing may have been fetched from Google at build time. Asserted on the
+          # OUTPUT rather than on the log: Next emits these modules only when the
+          # `next/font/google` loader actually runs, so their absence is structural.
+          if grep -rq "internal/font/google" .next; then
+            echo "the build ran the Google font loader, which needs the network"
+            exit 1
+          fi
