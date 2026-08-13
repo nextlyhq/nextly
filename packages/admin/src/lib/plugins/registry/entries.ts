@@ -31,7 +31,7 @@ export const REGISTRY_ENTRIES: RegistryPlugin[] = [
     category: "content",
     tags: ["blocks", "editor", "pages"],
     icon: { lucide: "Layout" },
-    configSnippet: "plugins: [pageBuilder()]",
+    config: { exportName: "pageBuilder", callArgs: "" },
     links: {
       homepage: "https://nextlyhq.com",
       repository: "https://github.com/nextlyhq/nextly",
@@ -45,10 +45,10 @@ export const REGISTRY_ENTRIES: RegistryPlugin[] = [
     category: "forms",
     tags: ["forms", "submissions"],
     icon: { lucide: "FileText" },
-    // `formBuilderPlugin`, not `formBuilder()`: the factory returns a
+    // `callArgs: null` — the export goes in uncalled. The factory returns a
     // FormBuilderPluginResult whose definition is at `.plugin`, and the package
     // exports the unwrapped value for exactly this use.
-    configSnippet: "plugins: [formBuilderPlugin]",
+    config: { exportName: "formBuilderPlugin", callArgs: null },
     links: {
       homepage: "https://nextlyhq.com",
       repository: "https://github.com/nextlyhq/nextly",
@@ -63,9 +63,13 @@ export const REGISTRY_ENTRIES: RegistryPlugin[] = [
     category: "seo",
     tags: ["seo", "meta"],
     icon: { lucide: "Search" },
-    // `seoPlugin`, and `collections` is required: the plugin adds the SEO group
-    // only to the collections it is given, so a bare call does not type-check.
-    configSnippet: 'plugins: [seoPlugin({ collections: ["posts"] })]',
+    // `collections` is required rather than illustrative: the plugin adds the
+    // SEO group only to the collections it is given, so a bare call does not
+    // type-check.
+    config: {
+      exportName: "seoPlugin",
+      callArgs: '{ collections: ["posts"] }',
+    },
     links: {
       homepage: "https://nextlyhq.com",
       repository: "https://github.com/nextlyhq/nextly",

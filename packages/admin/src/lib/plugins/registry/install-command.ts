@@ -1,12 +1,15 @@
 /**
- * The shell command that installs a catalogue plugin.
+ * The three lines that add a catalogue plugin to a project: the shell command
+ * that installs it, and the two edits to nextly.config.ts.
  *
- * Derived from the entry's `id` rather than stored beside it, so a package
- * rename cannot leave the install command fetching the old name while the
- * detail page joins installed state on the new one.
+ * All derived from the entry rather than stored beside it, so a package rename
+ * cannot leave the install command fetching the old name while the detail page
+ * joins installed state on the new one, and an entry cannot name a binding its
+ * import does not bring in.
  *
  * @module lib/plugins/registry/install-command
  */
+import type { RegistryPlugin } from "./types";
 
 /**
  * Package managers a Nextly project can be installed with.
@@ -38,4 +41,30 @@ export function installCommand(
   manager: PackageManager = "pnpm"
 ): string {
   return `${manager} ${ADD_SUBCOMMAND[manager]} ${packageName}`;
+}
+
+/**
+ * The import that brings the plugin's binding into nextly.config.ts.
+ *
+ * Installing the package does not introduce the identifier, so the entry below
+ * references nothing without this line. It is the reader's first edit, and
+ * omitting it hands them a recipe that does not compile.
+ */
+export function importStatement(plugin: RegistryPlugin): string {
+  return `import { ${plugin.config.exportName} } from "${plugin.id}";`;
+}
+
+/**
+ * The entry to add inside `plugins: [...]`.
+ *
+ * `callArgs` decides whether the binding is called at all: `null` means the
+ * package exports a ready-made plugin value, which is how
+ * `@nextlyhq/plugin-form-builder` ships one — its factory returns a result
+ * object whose definition sits at `.plugin`, so calling it here would be
+ * wrong rather than merely verbose.
+ */
+export function pluginsArrayEntry(plugin: RegistryPlugin): string {
+  const { exportName, callArgs } = plugin.config;
+  const value = callArgs === null ? exportName : `${exportName}(${callArgs})`;
+  return `plugins: [${value}]`;
 }

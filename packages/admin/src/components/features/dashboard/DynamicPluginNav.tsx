@@ -54,12 +54,15 @@ interface DynamicPluginNavProps {
 function PluginOverviewLink({
   isActive,
 }: {
-  isActive: (href?: string, exactMatch?: boolean) => boolean;
+  isActive: (href?: string) => boolean;
 }) {
-  // Exact: `/admin/plugins` is a prefix of `/admin/plugins/browse`, and the
-  // default match treats every descendant as active, so both sibling entries
-  // would highlight at once for anyone on the directory.
-  const active = isActive("/admin/plugins", true);
+  // `/admin/plugins` is a prefix of `/admin/plugins/browse`, so claiming the
+  // whole subtree would highlight both sibling entries at once on the
+  // directory. Subtracting the sibling rather than demanding an exact match:
+  // a plugin's own pages — `/admin/plugins/<slug>` and its settings — are
+  // descendants too, and under an exact match they left the secondary
+  // navigation with nothing selected at all.
+  const active = isActive(ROUTES.PLUGINS) && !isActive(ROUTES.PLUGIN_BROWSE);
   return (
     <SidebarMenuItem>
       <SidebarMenuButton asChild isActive={active}>

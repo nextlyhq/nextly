@@ -2,7 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import type React from "react";
-import { createContext, useContext, useEffect } from "react";
+import { createContext, useContext, useEffect, useMemo } from "react";
 
 import { publicApi } from "../../lib/api/publicApi";
 import {
@@ -18,10 +18,47 @@ import type {
 // Context
 // ============================================================================
 
-const BrandingContext = createContext<AdminBranding | undefined>(undefined);
+/**
+ * Whether the admin-meta request has answered yet, alongside its answer.
+ *
+ * The two are held together because most readers want only the answer, and
+ * one reader — a page that treats a plugin's ABSENCE from the list as a fact
+ * about the project — needs to know the list has actually arrived. Before it
+ * does, `branding` is undefined, which is indistinguishable from a project
+ * that has no plugins.
+ */
+interface BrandingState {
+  branding: AdminBranding | undefined;
+  /** True until the admin-meta query settles, either way. */
+  isPending: boolean;
+  /** True when it settled without an answer, so absence proves nothing. */
+  isError: boolean;
+}
+
+const BrandingContext = createContext<BrandingState | undefined>(undefined);
 
 export function useBranding(): AdminBranding {
-  return useContext(BrandingContext) ?? {};
+  return useContext(BrandingContext)?.branding ?? {};
+}
+
+/**
+ * The admin-meta request's state, for readers that draw a conclusion from
+ * something being MISSING from branding.
+ *
+ * Derived from the same context entry `useBranding` reads, rather than from a
+ * second query: two `useQuery` calls on one key would report their states
+ * independently and could disagree about whether the data has arrived.
+ */
+export function useBrandingStatus(): Omit<BrandingState, "branding"> {
+  const state = useContext(BrandingContext);
+  // No provider above: nothing is loading and nothing failed, which is the
+  // same shape a settled empty response has. A reader outside the provider is
+  // already reading `{}` from `useBranding`, and reporting "still pending"
+  // here would hang it forever.
+  return {
+    isPending: state?.isPending ?? false,
+    isError: state?.isError ?? false,
+  };
 }
 
 // ============================================================================
@@ -136,7 +173,11 @@ interface BrandingProviderProps {
 }
 
 export function BrandingProvider({ children }: BrandingProviderProps) {
-  const { data: fetchedData } = useQuery<AdminBranding>({
+  const {
+    data: fetchedData,
+    isPending,
+    isError,
+  } = useQuery<AdminBranding>({
     queryKey: ["admin-meta"],
     queryFn: () => publicApi.get<AdminBranding>("/admin-meta"),
     // Refetch periodically to pick up changes to custom sidebar groups,
@@ -148,8 +189,16 @@ export function BrandingProvider({ children }: BrandingProviderProps) {
   useColorInjection(fetchedData?.colors);
   useFaviconInjection(fetchedData?.favicon);
 
+  // Memoized because the value is now an object built here rather than the
+  // query's own stable `data` reference: without this every consumer of the
+  // context re-renders on each render of this provider.
+  const value = useMemo(
+    () => ({ branding: fetchedData, isPending, isError }),
+    [fetchedData, isPending, isError]
+  );
+
   return (
-    <BrandingContext.Provider value={fetchedData}>
+    <BrandingContext.Provider value={value}>
       {children}
     </BrandingContext.Provider>
   );

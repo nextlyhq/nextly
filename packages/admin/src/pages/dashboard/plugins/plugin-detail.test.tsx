@@ -44,6 +44,8 @@ const plugins: PluginMetadata[] = [
 
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => ({ plugins }),
+  // Settled with an answer, so a slug missing from `plugins` really is absent.
+  useBrandingStatus: () => ({ isPending: false, isError: false }),
 }));
 
 describe("PluginDetailPage", () => {

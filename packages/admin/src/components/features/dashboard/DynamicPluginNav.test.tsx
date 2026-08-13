@@ -44,8 +44,33 @@ vi.mock("@admin/hooks/queries", () => ({
 }));
 import { DynamicPluginNav } from "@admin/components/features/dashboard/DynamicPluginNav";
 import { SidebarProvider } from "@admin/components/layout/sidebar";
+import { useSidebarNavigation } from "@admin/hooks/useSidebarNavigation";
 
 const noop = () => false;
+
+/**
+ * Renders the panel with the REAL `isActive`, for the one pathname given.
+ *
+ * The sidebar's matcher rather than one written here: a copy would agree on
+ * the day it was written and then answer for itself, and what is under test is
+ * how the overview composes with that matcher, not whether the composition can
+ * be restated.
+ *
+ * Empty navigation items because `isActive` reads only the pathname; the items
+ * feed accordion state, which nothing here asserts on.
+ */
+function ActiveStateHarness({ pathname }: { pathname: string }) {
+  const { isActive } = useSidebarNavigation([], pathname);
+  return <DynamicPluginNav isActive={isActive} />;
+}
+
+function renderAt(pathname: string) {
+  return render(
+    <SidebarProvider defaultOpen>
+      <ActiveStateHarness pathname={pathname} />
+    </SidebarProvider>
+  );
+}
 
 // The real provider rather than a mocked `useSidebar`: the component reads
 // collapsed state from it, so a stub would let a change to that contract pass
@@ -189,6 +214,36 @@ describe("DynamicPluginNav", () => {
     expect(
       screen.getAllByRole("link", { name: /installed plugins/i })
     ).toHaveLength(1);
+  });
+});
+
+/**
+ * Which sidebar entry the overview claims.
+ *
+ * `/admin/plugins` is a prefix of both the directory and every plugin's own
+ * page, and the three cases pull in opposite directions: claiming the whole
+ * subtree highlights the overview and Browse together on the directory, while
+ * demanding an exact match leaves a plugin's own page with nothing selected.
+ */
+describe("DynamicPluginNav overview active state", () => {
+  function overviewActive() {
+    return screen
+      .getByRole("link", { name: /installed plugins/i })
+      .getAttribute("data-active");
+  }
+
+  it.each([
+    ["/admin/plugins", "true"],
+    ["/admin/plugins/acme-forms", "true"],
+    ["/admin/plugins/acme-forms/settings", "true"],
+    // The sibling page owns itself; Browse is the entry that highlights here.
+    ["/admin/plugins/browse", "false"],
+  ])("at %s the overview is active=%s", (pathname, expected) => {
+    mockBranding = { plugins: [] } as unknown as AdminBranding;
+
+    renderAt(pathname);
+
+    expect(overviewActive()).toBe(expected);
   });
 });
 

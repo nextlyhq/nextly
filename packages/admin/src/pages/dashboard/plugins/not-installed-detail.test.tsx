@@ -11,9 +11,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AdminBranding } from "@admin/types/branding";
 
 let mockBranding: AdminBranding = { plugins: [] } as unknown as AdminBranding;
+let mockBrandingStatus = { isPending: false, isError: false };
 
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => mockBranding,
+  useBrandingStatus: () => mockBrandingStatus,
 }));
 
 import PluginDetailPage from "./[slug]";
@@ -31,6 +33,7 @@ function renderDetail(slug: string) {
 
 afterEach(() => {
   mockBranding = { plugins: [] } as unknown as AdminBranding;
+  mockBrandingStatus = { isPending: false, isError: false };
   vi.restoreAllMocks();
 });
 
@@ -49,13 +52,49 @@ describe("plugin detail, not installed", () => {
     expect(screen.queryByText("Plugin not found")).toBeNull();
   });
 
-  it("offers the install command and the config line", async () => {
+  /**
+   * All three lines, because the recipe only works as a set: installing the
+   * package does not introduce the binding, so an array entry shown without
+   * its import names an identifier that does not exist in the file.
+   */
+  it("offers the install command, the import, and the array entry", async () => {
     renderDetail("nextlyhq-plugin-seo");
 
     expect(
       await screen.findByText("pnpm add @nextlyhq/plugin-seo")
     ).toBeInTheDocument();
+    expect(
+      screen.getByText('import { seoPlugin } from "@nextlyhq/plugin-seo";')
+    ).toBeInTheDocument();
     expect(screen.getByText(/plugins: \[seoPlugin\(/)).toBeInTheDocument();
+  });
+
+  /**
+   * A plugin the project HAS, on a page opened cold. Until admin-meta answers
+   * the installed list is empty for a reason that says nothing about the
+   * project, and reading that as "not installed" tells the reader to install
+   * something they already have.
+   */
+  it("does not offer to install while the installed list is still loading", async () => {
+    mockBrandingStatus = { isPending: true, isError: false };
+
+    renderDetail("nextlyhq-plugin-seo");
+
+    expect(await screen.findByRole("status")).toBeInTheDocument();
+    expect(screen.queryByText("pnpm add @nextlyhq/plugin-seo")).toBeNull();
+    expect(screen.queryByText("Plugin not found")).toBeNull();
+  });
+
+  /** Same reasoning, permanent: a failed request is not evidence of absence. */
+  it("does not offer to install when the installed list could not be loaded", async () => {
+    mockBrandingStatus = { isPending: false, isError: true };
+
+    renderDetail("nextlyhq-plugin-seo");
+
+    expect(
+      await screen.findByText("Could not load your installed plugins")
+    ).toBeInTheDocument();
+    expect(screen.queryByText("pnpm add @nextlyhq/plugin-seo")).toBeNull();
   });
 
   /**

@@ -1,3 +1,5 @@
+import type { AdminIconName } from "@admin/components/icons";
+
 import type { PluginCategory } from "../plugin-categories";
 
 /**
@@ -22,16 +24,36 @@ export interface RegistryPlugin {
   author: string;
   category: PluginCategory;
   tags?: string[];
-  icon: { lucide: string; asset?: string };
   /**
-   * The line to add inside `plugins: [...]` in nextly.config.ts.
-   *
-   * No package name beside it: that is `id`, and storing it twice means a
-   * rename can update one and leave the other, so the detail page would join
-   * on the new name while the install command still fetched the old one.
-   * Derive the command with `installCommand()`.
+   * `lucide` is checked against the icon barrel, unlike a plugin's own
+   * `appearance.icon`: this catalogue is ours, so a name nothing exports is a
+   * mistake we can refuse at compile time rather than a third party's string
+   * we have to tolerate at runtime.
    */
-  configSnippet: string;
+  icon: { lucide: AdminIconName; asset?: string };
+  /**
+   * What the reader has to write in nextly.config.ts, in the two parts they
+   * write it in: an import at the top of the file and an entry in the plugins
+   * array.
+   *
+   * Held as the binding and its arguments rather than as finished lines,
+   * because the two mention the same identifier and a stored pair can
+   * disagree — an entry naming a symbol the import does not bring in is a
+   * recipe that does not compile. Neither part repeats the package name
+   * either; that is `id`, and `importStatement()` reads it from there so a
+   * rename cannot leave the import fetching the old package while the detail
+   * page joins installed state on the new one.
+   */
+  config: {
+    /** The binding the package exports and the plugins array references. */
+    exportName: string;
+    /**
+     * The arguments as written inside the call: `""` for a call that takes
+     * none, or `null` when the export goes into the array uncalled. The two
+     * are different facts about the package's API, not two spellings of one.
+     */
+    callArgs: string | null;
+  };
   links?: { homepage?: string; repository?: string; docs?: string };
 }
 

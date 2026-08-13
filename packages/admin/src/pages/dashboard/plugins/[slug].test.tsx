@@ -12,6 +12,9 @@ import { renderWithProviders } from "../../../__tests__/utils";
 let mockBranding: AdminBranding | undefined;
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => mockBranding,
+  // Settled with an answer: every case here is about a plugin the branding
+  // payload already carries.
+  useBrandingStatus: () => ({ isPending: false, isError: false }),
 }));
 
 import PluginDetailPage from "./[slug]";

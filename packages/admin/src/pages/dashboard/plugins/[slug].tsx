@@ -1,7 +1,7 @@
 "use client";
 
 import { Badge } from "@nextlyhq/ui";
-import { useSuspenseQuery } from "@tanstack/react-query";
+import { useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 
 import {
   BookOpen,
@@ -11,6 +11,7 @@ import {
   Globe,
   LayoutDashboard,
   Layers,
+  Loader2,
   Menu as MenuIcon,
   Package,
   Route,
@@ -19,12 +20,18 @@ import {
 } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { Breadcrumbs } from "@admin/components/shared";
-import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
+import {
+  PageErrorFallback,
+  SectionErrorFallback,
+} from "@admin/components/shared/error-fallbacks";
 import { PluginIcon } from "@admin/components/shared/plugin-icon";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
-import { useBranding } from "@admin/context/providers/BrandingProvider";
+import {
+  useBranding,
+  useBrandingStatus,
+} from "@admin/context/providers/BrandingProvider";
 import { categoryLabel } from "@admin/lib/plugins/plugin-categories";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 import { staticRegistrySource } from "@admin/lib/plugins/registry/static-source";
@@ -132,8 +139,49 @@ function UninstalledOrMissing({ activeSlug }: { activeSlug?: string }) {
   );
 }
 
+/**
+ * Shown while the installed-plugin list is still in flight.
+ *
+ * The alternative — rendering the catalogue view immediately and correcting it
+ * when the list lands — flashes install instructions at someone who already
+ * has the plugin, and reads as an answer rather than as a wait.
+ */
+function LoadingInstalledPlugins() {
+  return (
+    <div
+      className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground"
+      role="status"
+    >
+      <Loader2 className="h-4 w-4 animate-spin" />
+      Loading plugin…
+    </div>
+  );
+}
+
+/**
+ * Shown when admin-meta failed, so whether this plugin is installed is
+ * unknown.
+ *
+ * Not the catalogue view: that one states the plugin is absent, which is a
+ * claim this page cannot make when the request that would have told it failed.
+ */
+function InstalledPluginsUnavailable() {
+  const queryClient = useQueryClient();
+
+  return (
+    <SectionErrorFallback
+      title="Could not load your installed plugins"
+      description="This page cannot tell whether the plugin is installed until the admin metadata loads."
+      reset={() => {
+        void queryClient.invalidateQueries({ queryKey: ["admin-meta"] });
+      }}
+    />
+  );
+}
+
 function PluginDetailContent({ activeSlug }: { activeSlug?: string }) {
   const branding = useBranding();
+  const { isPending, isError } = useBrandingStatus();
   const plugins = branding?.plugins ?? [];
   const plugin = activeSlug
     ? plugins.find(p => pluginSlug(p.name) === activeSlug)
@@ -143,7 +191,15 @@ function PluginDetailContent({ activeSlug }: { activeSlug?: string }) {
   // one decides. Only when the project has no such plugin is the catalogue
   // consulted, and that lookup lives inside `UninstalledOrMissing` so its query
   // is not a dependency of rendering an installed plugin.
-  if (!plugin) return <UninstalledOrMissing activeSlug={activeSlug} />;
+  //
+  // Absence is only a fact once admin-meta has answered. Until then the list is
+  // empty for a reason that says nothing about the project, and reading it as
+  // "not installed" tells someone who HAS this plugin to go and install it.
+  if (!plugin) {
+    if (isPending) return <LoadingInstalledPlugins />;
+    if (isError) return <InstalledPluginsUnavailable />;
+    return <UninstalledOrMissing activeSlug={activeSlug} />;
+  }
 
   const title = plugin.appearance?.label ?? plugin.name;
 

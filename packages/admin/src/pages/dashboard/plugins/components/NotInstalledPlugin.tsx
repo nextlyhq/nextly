@@ -9,7 +9,9 @@ import { PluginIcon } from "@admin/components/shared/plugin-icon";
 import { categoryLabel } from "@admin/lib/plugins/plugin-categories";
 import {
   PACKAGE_MANAGERS,
+  importStatement,
   installCommand,
+  pluginsArrayEntry,
   type PackageManager,
 } from "@admin/lib/plugins/registry/install-command";
 import type { RegistryPlugin } from "@admin/lib/plugins/registry/types";
@@ -64,8 +66,8 @@ function CopyLine({ value, label }: { value: string; label: string }) {
  * Deliberately thin, and the reason is the invariant the whole surface is
  * built on: verified content only ever appears in the verified section. Nothing
  * here has been observed running, so there is no contributions section, no
- * permissions and no routes — only what the catalogue claims, plus the two
- * commands that would make the claims checkable.
+ * permissions and no routes — only what the catalogue claims, plus the three
+ * lines that would make the claims checkable.
  *
  * @module pages/dashboard/plugins/components/NotInstalledPlugin
  */
@@ -111,8 +113,11 @@ export function NotInstalledPlugin({
         <div>
           <h2 className="text-sm font-semibold">Add it to your project</h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            Two steps: install the package, then register it in your Nextly
-            config. Nextly picks it up on the next start.
+            Install the package, then make two edits in{" "}
+            <code className="font-mono">nextly.config.ts</code>: import the
+            plugin at the top of the file, and add it to the{" "}
+            <code className="font-mono">plugins</code> array. Nextly picks it up
+            on the next start.
           </p>
         </div>
 
@@ -135,8 +140,19 @@ export function NotInstalledPlugin({
           ))}
         </div>
 
-        <CopyLine label="Install" value={installCommand(plugin.id, manager)} />
-        <CopyLine label="nextly.config.ts" value={plugin.configSnippet} />
+        {/* Three lines because the reader makes three edits, each copyable on
+            its own: the import and the array entry land in different places in
+            the same file, so joining them into one block would be a snippet
+            nobody can paste anywhere. */}
+        <CopyLine
+          label="Install command"
+          value={installCommand(plugin.id, manager)}
+        />
+        <CopyLine label="Import statement" value={importStatement(plugin)} />
+        <CopyLine
+          label="Plugins array entry"
+          value={pluginsArrayEntry(plugin)}
+        />
       </section>
 
       {/* States the boundary rather than leaving it implied: a reader looking

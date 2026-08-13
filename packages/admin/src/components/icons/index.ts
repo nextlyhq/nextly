@@ -108,6 +108,7 @@ export {
   Italic, // Rich text editor
   Key,
   Laptop,
+  Layout, // Plugin appearance: the icon @nextlyhq/plugin-page-builder declares
   LayoutGrid, // Collection Builder: blocks field
   Layers,
   LayoutDashboard,
@@ -219,3 +220,5 @@ export const Discord = ({ size = 24, ...props }: LucideProps) => {
     })
   );
 };
+
+export type { AdminIconName } from "./names";
