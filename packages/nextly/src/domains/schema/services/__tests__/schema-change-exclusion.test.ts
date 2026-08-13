@@ -407,7 +407,14 @@ describe("a Schema Builder change and the storage migration exclude each other",
     const adapter = makeAdapter();
     const { service, registry } = makeService(adapter);
     pluginOptionRefusal.error = NextlyError.validation({
-      logContext: { reason: "plugin rejected its own options" },
+      // The real shape: `validateOptions` reports per-field problems, and the factory requires them.
+      errors: [
+        {
+          path: "fields.0.options",
+          code: "invalid_options",
+          message: "plugin rejected its own options",
+        },
+      ],
     });
 
     await expect(
