@@ -180,3 +180,36 @@ export function activeEmailRetention(
 ): ResolvedEmailRetentionConfig | undefined {
   return publishedEmailRetention ?? built;
 }
+
+/**
+ * The retention classes a delivery row can carry.
+ *
+ * Derived from what the writer can stamp rather than restated: the suite
+ * asserts every value `EMAIL_RETENTION_CLASS` can take appears here, so adding
+ * a class without giving it a window fails a test instead of leaving those rows
+ * unswept. The prune scopes its DELETE by class, which is what makes an omitted
+ * class invisible — it matches no branch and grows while the pass reports
+ * success.
+ *
+ * One entry today. That is not a reason to drop the list: the column exists
+ * precisely so classes can diverge, and the guard has to predate the divergence
+ * to be worth anything.
+ */
+export type EmailRetentionClass = "email";
+
+export const EMAIL_RETENTION_CLASSES: readonly EmailRetentionClass[] = [
+  "email",
+];
+
+/**
+ * The window governing one class, or `false` when it is kept indefinitely.
+ *
+ * A single window today, asked per class so the prune never needs to change
+ * shape when a second one is added — only this function does.
+ */
+export function windowForEmailClass(
+  policy: ResolvedEmailRetentionConfig,
+  _retentionClass: EmailRetentionClass
+): EmailMaxAge {
+  return policy.maxAgeMs;
+}
