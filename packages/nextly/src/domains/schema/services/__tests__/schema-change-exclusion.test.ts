@@ -104,8 +104,11 @@ function makeService(adapter: ReturnType<typeof makeAdapter>) {
     getSingleBySlug: vi.fn(async (slug: string) => ({
       slug,
       tableName: "single_page",
-      fields: [],
+      fields: [] as unknown[],
       locked: false,
+      // Present in the default shape because the lost-update check reads it. Omitting it here and
+      // supplying it per test would type the double without the field and reject those overrides.
+      schemaHash: "unchanged",
     })),
     registerSingle: vi.fn(async (row: unknown) => {
       trace.push("registry:write");
@@ -271,6 +274,9 @@ describe("a Schema Builder change and the storage migration exclude each other",
       tableName: "single_page",
       fields: [],
       locked: false,
+      // Matches what the caller saw, so the lost-update check passes and this test is left asserting
+      // the property it is named for rather than a conflict.
+      schemaHash: "unchanged",
     });
 
     await service.updateSingleSchema({
