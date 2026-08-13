@@ -573,6 +573,29 @@ describe("the host can drive it", () => {
     expect(screen.getByText("Nothing to run.")).toBeTruthy();
   });
 
+  it("lets a space be typed in the middle of a query", () => {
+    mount(
+      <CommandPalette
+        commands={[
+          { id: "1", label: "Open settings", run: noop },
+          { id: "2", label: "Opensettings decoy", run: noop },
+        ]}
+      />
+    );
+    pressPaletteKey();
+
+    // Typed one character at a time, which is the whole point: injecting the finished string in a
+    // single change event never exercises the moment the value is `"open "` and a trimming
+    // controlled value hands back `"open"`, so the next key produces `"opensettings"`.
+    const input = screen.getByRole("combobox") as HTMLInputElement;
+    for (const ch of "open settings") {
+      fireEvent.change(input, { target: { value: input.value + ch } });
+    }
+
+    expect(input.value).toBe("open settings");
+    expect(screen.getByText("Open settings")).toBeTruthy();
+  });
+
   it("treats a whitespace-only query as no search at all", () => {
     mount(
       <CommandPalette

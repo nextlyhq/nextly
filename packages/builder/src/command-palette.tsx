@@ -310,10 +310,10 @@ function PaletteSurface({
   // a group and leaves the groups in their own order, so a better match in a later group would
   // otherwise sit below a weaker one. Headings are what the groups are for, and they say nothing
   // useful about a set of search results.
-  // ONE normalised query for both the mode and cmdk. Trimming here while handing cmdk the raw
-  // string meant a whitespace-only input rendered the grouped view while cmdk was already
-  // filtering and hiding separators — two components disagreeing about whether a search is
-  // running.
+  // ONE normalised query decides the mode AND is what the matcher scores against. What it must
+  // NOT do is reach the input: a controlled value that trims rewrites the user's text as they
+  // type, so pressing Space after `open` gives back `open`, the next key produces `opens`, and
+  // `open settings` is unreachable. The raw string stays editable; the normalised one is derived.
   const query = search.trim();
   const searching = query.length > 0;
   // Grouped FIRST, then flattened. Filtering `commands` again along a second path would be a
@@ -353,8 +353,11 @@ function PaletteSurface({
         // every encoded id begins and ends with a quote, so a query containing one matched
         // everything. The default scorer still does the ranking; it is just given the words a
         // user is actually typing towards.
-        filter: (_value, search, keywords) =>
-          commandDefaultFilter(keywords?.join(" ") ?? "", search),
+        // Scored against the NORMALISED query rather than cmdk's raw one, so the mode decision
+        // and the matching agree: a whitespace-only input is no search to either, and leading or
+        // trailing space does not quietly change anyone's ranking.
+        filter: (_value, _search, keywords) =>
+          commandDefaultFilter(keywords?.join(" ") ?? "", query),
       }}
       contentProps={{ onCloseAutoFocus: handleCloseAutoFocus }}
     >
@@ -370,7 +373,7 @@ function PaletteSurface({
       </DialogDescription>
       <CommandInput
         placeholder={placeholder}
-        value={query}
+        value={search}
         onValueChange={setSearch}
       />
       <CommandList>
