@@ -1454,10 +1454,41 @@ function propertyNameOf(name: ts.PropertyName): string | undefined {
  * the inline half was written.
  */
 function isDefinitelyNothing(initializer: ts.Expression): boolean {
-  if (ts.isIdentifier(initializer)) return initializer.text === "undefined";
-  if (initializer.kind === ts.SyntaxKind.NullKeyword) return true;
+  const value = withoutTypeWrappers(initializer);
+  if (ts.isIdentifier(value)) return value.text === "undefined";
+  if (value.kind === ts.SyntaxKind.NullKeyword) return true;
   // `void 0` is the other spelling of the same intent.
-  return ts.isVoidExpression(initializer);
+  return ts.isVoidExpression(value);
+}
+
+/**
+ * An expression with the wrappers that emit nothing peeled away.
+ *
+ * `as`, `satisfies`, `!` and parentheses are all erased before the code runs,
+ * so `undefined as string | undefined` and `(undefined)` reach React as exactly
+ * `undefined` — and React emits no declaration for either. Reading only the
+ * outer node saw an `AsExpression`, decided it was not written as nothing, and
+ * reported a call site that paints nothing at all.
+ *
+ * A false positive here is worse than it looks: `undefined as string |
+ * undefined` is the ORDINARY way to write an optional style in a typed
+ * codebase, so the check was rejecting the idiomatic spelling of the very thing
+ * it exists to permit.
+ *
+ * Applied where the question is "what does this evaluate to", never where the
+ * question is about the written type — nothing here reads types.
+ */
+function withoutTypeWrappers(expression: ts.Expression): ts.Expression {
+  let value = expression;
+  while (
+    ts.isAsExpression(value) ||
+    ts.isSatisfiesExpression(value) ||
+    ts.isParenthesizedExpression(value) ||
+    ts.isNonNullExpression(value)
+  ) {
+    value = value.expression;
+  }
+  return value;
 }
 
 /**
@@ -1553,10 +1584,13 @@ function emitsValue(
   resolver: ReturnType<typeof styleResolver>,
   seen = new Set<string>()
 ): boolean {
-  if (isDefinitelyNothing(value)) return false;
-  if (ts.isIdentifier(value) && !seen.has(value.text)) {
-    seen.add(value.text);
-    const bound = resolver.valueOf(value.text);
+  const inner = withoutTypeWrappers(value);
+  if (isDefinitelyNothing(inner)) return false;
+  // Unwrapped before the binding lookup too, so `(colour as string)` resolves
+  // through the same identifier path a bare `colour` does.
+  if (ts.isIdentifier(inner) && !seen.has(inner.text)) {
+    seen.add(inner.text);
+    const bound = resolver.valueOf(inner.text);
     if (bound) return emitsValue(bound, resolver, seen);
   }
   return true;
@@ -2152,6 +2186,26 @@ describe("the tab indicator contract", () => {
     [
       "an inline property set to null",
       "<TabsTrigger style={{ borderBottomColor: null }} />",
+    ],
+    // Erased before the code runs, so React receives exactly `undefined` and
+    // emits no declaration. `undefined as string | undefined` is the ORDINARY
+    // way to write an optional style in a typed codebase, so reporting it
+    // rejected the idiomatic spelling of the thing this check exists to permit.
+    [
+      "an inline property widened with an `as` assertion",
+      "<TabsTrigger style={{ borderBottomColor: undefined as string | undefined }} />",
+    ],
+    [
+      "an inline property widened with `satisfies`",
+      "<TabsTrigger style={{ borderBottomColor: undefined satisfies string | undefined }} />",
+    ],
+    [
+      "an inline property wrapped in parentheses",
+      "<TabsTrigger style={{ borderBottomColor: (undefined) }} />",
+    ],
+    [
+      "the same assertion around a parenthesised nothing",
+      "<TabsTrigger style={{ borderBottomColor: (undefined) as string | undefined }} />",
     ],
     // Tailwind's own child variants. `*` compiles to `:is(& > *)` and `**` to
     // `:is(& *)`, so both land on children and neither can repaint the tab.
