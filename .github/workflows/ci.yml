@@ -553,27 +553,34 @@ jobs:
           missing=""
           [ -f dist/index.mjs ] || missing="$missing client(dist/index.mjs)"
           [ -f dist/color.mjs ] || missing="$missing server-safe(dist/color.mjs)"
-          # Still running when the artifacts appear, checked BEFORE the kill.
+          # Producing the artifacts is not the claim. tsup writes them before its declaration
+          # phase, so a pair of ONE-SHOT builds is still alive when they appear and would pass any
+          # check made at this moment. What separates a watcher from a one-shot build is that it
+          # REBUILDS, so a source is edited and the artifact it produces is required to change.
           #
-          # Stated plainly, because it is weaker than it looks: this does NOT separate a watcher
-          # from a one-shot build. tsup writes these files before its declaration phase, so a pair
-          # of one-shot builds is still alive at this moment too.
-          #
-          # The check that WOULD separate them is editing a source and requiring a rebuild. It is
-          # not here because `tsup --watch` in this package does not currently rebuild at all — it
-          # logs `Change detected` and emits nothing, measured on one watcher and on two, and on
-          # the shell script this replaced. That is a real defect and it is filed separately; a
-          # control that fails for a reason this pull request does not cause would only teach
-          # people to ignore it.
-          alive=yes
-          kill -0 "$dev_pid" 2>/dev/null || alive=no
+          # An added export rather than a comment: tsup strips comments, so a comment-only edit
+          # leaves the output byte-identical whether or not a rebuild ran, and the probe could not
+          # detect one in either direction.
+          before=$(cksum dist/color.mjs | awk '{print $1"-"$2}')
+          printf '\nexport const __watcherProbe = "probe";\n' >> src/lib/color/index.ts
+
+          rebuilt=no
+          for _ in $(seq 1 60); do
+            if [ "$(cksum dist/color.mjs | awk '{print $1"-"$2}')" != "$before" ]; then
+              rebuilt=yes
+              break
+            fi
+            sleep 1
+          done
+
+          git checkout -- src/lib/color/index.ts
           kill "$dev_pid" 2>/dev/null || true
 
-          if [ -n "$missing" ] || [ "$alive" = "no" ]; then
-            [ -n "$missing" ] && echo "The dev script did not produce output for:$missing"
-            [ "$alive" = "no" ] && echo "The dev script exited before its outputs were complete."
+          if [ "$rebuilt" = "no" ]; then
+            echo "Editing a source did not change the artifact it produces, so that command built"
+            echo "once rather than watching."
             echo "--- dev script output ---"
             cat /tmp/dev.log
             exit 1
           fi
-          echo "Both commands produced their output and the script was still running."
+          echo "Both commands produced their output, and an edit triggered a rebuild."
