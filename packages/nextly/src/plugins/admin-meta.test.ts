@@ -1079,8 +1079,14 @@ describe("adminMetaPermissions", () => {
    * `export` is the positive control: a genuine custom permission on the same
    * plugin, which must survive the widening.
    */
-  it("counts a plugin's own contributed collection as an entity", () => {
+  it("counts a contributed collection boot merged as an entity", () => {
     const collected = adminMetaPermissions({
+      // As the booted config arrives: `registerServices` folds
+      // `contributes.collections` into `collections` before publishing, so the
+      // contribution is already here. This fold reads that rather than
+      // re-deriving entity slugs from the declarations, which would be a second
+      // answer to which entities exist.
+      collections: [{ slug: "submissions" }],
       plugins: asPlugins([
         {
           name: "@acme/forms",
@@ -1100,34 +1106,29 @@ describe("adminMetaPermissions", () => {
   });
 
   /**
-   * A host may remap a contributed entity with the public
-   * `plugin.rename({ forms: "contact-forms" })` API, and the schema fold seeds
-   * against the RENAMED slug. Widening with the declared name would leave a
-   * `publish` declaration on the renamed entity looking plugin-owned.
-   *
-   * `export` on the renamed slug is the positive control: still a genuine
-   * custom permission, so the assertion cannot pass by everything being
-   * dropped.
+   * The separating case for reading the merged config rather than the
+   * declarations. Boot's schema fold runs over the PRE-transform plugin list,
+   * so a plugin a `setup` transformer added has its contributions skipped — its
+   * collection is absent from the booted `collections`. Re-deriving here would
+   * classify `reports` as an entity and drop the declaration as adopted, while
+   * the seeder writes it as a plugin-owned custom permission.
    */
-  it("counts a renamed contributed collection under its resolved slug", () => {
+  it("does not invent an entity boot never merged", () => {
     const collected = adminMetaPermissions({
+      collections: [],
       plugins: asPlugins([
         {
-          name: "@acme/forms",
+          name: "@acme/added-by-setup",
           version: "1.0.0",
-          renameMap: { forms: "contact-forms" },
           contributes: {
-            collections: [{ slug: "forms" }],
-            permissions: [
-              { action: "publish", resource: "contact-forms" },
-              { action: "export", resource: "contact-forms" },
-            ],
+            collections: [{ slug: "reports" }],
+            permissions: [{ action: "publish", resource: "reports" }],
           },
         },
       ]),
     });
 
-    expect(collected.map(p => p.slug)).toEqual(["export-contact-forms"]);
+    expect(collected.map(p => p.slug)).toEqual(["publish-reports"]);
   });
 
   /**

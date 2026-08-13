@@ -79,12 +79,11 @@ const globalForBoot = globalThis as unknown as {
  * plugin list, the entities plugins contribute, and the app-level permission
  * declarations that can collide with them.
  */
-type BootedConfigView = Partial<
-  Pick<
-    SanitizedNextlyConfig,
-    "plugins" | "collections" | "singles" | "permissions"
-  >
->;
+type BootedConfigView = Pick<
+  SanitizedNextlyConfig,
+  "plugins" | "collections" | "singles"
+> &
+  Pick<SanitizedNextlyConfig, "permissions">;
 
 /**
  * `booted`'s explicitly-set keys laid over `base`.
@@ -96,16 +95,23 @@ function overlayDefined(
   base: SanitizedNextlyConfig,
   booted: BootedConfigView
 ): SanitizedNextlyConfig {
+  // Every key of `BootedConfigView` is taken, `undefined` included. These four
+  // are blocks boot OWNS, so its answer is authoritative in both directions: a
+  // transformer that removes the last app-level permission returns
+  // `permissions: undefined`, and skipping that would preserve the raw
+  // declaration — leaving `/admin-meta` folding against a collision the running
+  // config resolved, and degrading to an empty set that hides every seeded
+  // plugin permission.
+  //
+  // Skipping `undefined` was right when this overlaid the WHOLE config, where
+  // it protected `typescript`, `db` and `storage` from a transformed value that
+  // never carries them. Narrowing the type to what boot owns removed the reason.
   return {
     ...base,
-    ...(booted.plugins !== undefined ? { plugins: booted.plugins } : {}),
-    ...(booted.collections !== undefined
-      ? { collections: booted.collections }
-      : {}),
-    ...(booted.singles !== undefined ? { singles: booted.singles } : {}),
-    ...(booted.permissions !== undefined
-      ? { permissions: booted.permissions }
-      : {}),
+    plugins: booted.plugins,
+    collections: booted.collections,
+    singles: booted.singles,
+    permissions: booted.permissions,
   };
 }
 
@@ -199,9 +205,17 @@ export function setBootedConfig(config: NextlyServiceConfig): void {
   // same fact: a boot whose transformers removed every plugin must stop this
   // store advertising the ones the author declared.
   globalForBoot.__nextly_bootConfig = {
+    // Normalized, because the sanitized shape these overlay onto requires them
+    // and an absent list means the same as an empty one: a boot whose
+    // transformers removed every plugin, collection or single must stop the
+    // store advertising the ones the author declared.
     plugins: config.plugins ?? [],
-    collections: config.collections,
-    singles: config.singles,
+    collections: config.collections ?? [],
+    singles: config.singles ?? [],
+    // NOT normalized: `permissions` is genuinely optional on the sanitized
+    // config, so `undefined` is a value here — "boot registered no app-level
+    // permissions" — and the overlay must carry it rather than fall back to the
+    // author's raw declaration.
     permissions: config.permissions,
   };
 }

@@ -34,7 +34,6 @@ import type {
 import { pluginAdminSlug } from "./plugin-slug";
 import { collectPluginRoutes } from "./routes/collect-routes";
 import { isRouteError } from "./routes/route-error";
-import { resolvePluginSelf } from "./self";
 import { validatedClientConfig } from "./validate-client-config";
 import { validatePluginSlugs } from "./validate-slugs";
 
@@ -297,26 +296,18 @@ export function adminMetaPermissions(
   config: PermissionConfigSource & { plugins?: PluginDefinition[] }
 ): CollectedPermission[] {
   const plugins = config.plugins ?? [];
-  const withContributed: PermissionConfigSource = {
-    ...config,
-    collections: [
-      ...(config.collections ?? []),
-      ...plugins.flatMap(plugin =>
-        Object.values(resolvePluginSelf(plugin).collections).map(slug => ({
-          slug,
-        }))
-      ),
-    ],
-    singles: [
-      ...(config.singles ?? []),
-      ...plugins.flatMap(plugin =>
-        Object.values(resolvePluginSelf(plugin).singles).map(slug => ({ slug }))
-      ),
-    ],
-  };
 
   try {
-    return collectCustomPermissions(withContributed, plugins);
+    // The config AS GIVEN. No widening from plugin declarations: the booted
+    // config's `collections` and `singles` are already contribution-merged —
+    // `registerServices` folds `contributes.{collections,singles}` in before it
+    // publishes — and boot's own `collectCustomPermissions` call reads exactly
+    // this shape. Re-deriving entity slugs here would be a second answer to
+    // "which entities exist", and it would be the WRONG one: it classifies a
+    // contribution from a plugin the schema fold never merged, so a lifecycle
+    // declaration on it reads as adopted here while the seeder makes it a
+    // plugin-owned custom permission.
+    return collectCustomPermissions(config, plugins);
   } catch (error) {
     if (isPermissionCollision(error)) return [];
     throw error;
