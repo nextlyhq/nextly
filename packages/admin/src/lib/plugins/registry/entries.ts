@@ -31,7 +31,7 @@ export const REGISTRY_ENTRIES: RegistryPlugin[] = [
     category: "content",
     tags: ["blocks", "editor", "pages"],
     icon: { lucide: "Layout" },
-    config: { exportName: "pageBuilder", callArgs: "" },
+    config: { exportName: "pageBuilder", callArgs: "", adminModule: true },
     links: {
       homepage: "https://nextlyhq.com",
       repository: "https://github.com/nextlyhq/nextly",
@@ -48,7 +48,11 @@ export const REGISTRY_ENTRIES: RegistryPlugin[] = [
     // `callArgs: null` — the export goes in uncalled. The factory returns a
     // FormBuilderPluginResult whose definition is at `.plugin`, and the package
     // exports the unwrapped value for exactly this use.
-    config: { exportName: "formBuilderPlugin", callArgs: null },
+    config: {
+      exportName: "formBuilderPlugin",
+      callArgs: null,
+      adminModule: true,
+    },
     links: {
       homepage: "https://nextlyhq.com",
       repository: "https://github.com/nextlyhq/nextly",

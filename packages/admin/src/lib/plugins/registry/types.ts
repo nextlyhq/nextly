@@ -53,6 +53,17 @@ export interface RegistryPlugin {
      * are different facts about the package's API, not two spellings of one.
      */
     callArgs: string | null;
+    /**
+     * Whether the package ships an `/admin` side-effect module that the app's
+     * admin route has to import.
+     *
+     * A fourth edit, in a different file, and omitting it is not a small
+     * miss: the plugin installs and its server half runs, so nothing errors,
+     * while its admin UI silently never registers — the form builder degrades
+     * to plain JSON inputs. Declared rather than assumed, because it is a fact
+     * about the package's export map that only some plugins have.
+     */
+    adminModule?: boolean;
   };
   links?: { homepage?: string; repository?: string; docs?: string };
 }

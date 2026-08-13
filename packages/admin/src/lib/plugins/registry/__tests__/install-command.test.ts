@@ -1,5 +1,5 @@
 /**
- * The three lines a reader copies to add a plugin.
+ * The lines a reader copies to add a plugin.
  *
  * Two properties matter and they are separate: the lines must be derived from
  * the entry rather than stored beside it, and the install must name a version.
@@ -14,6 +14,7 @@ import { adminVersion } from "@admin/lib/admin-version";
 
 import pkg from "../../../../../package.json";
 import {
+  adminImportStatement,
   importStatement,
   installCommand,
   pluginsArrayEntry,
@@ -92,6 +93,25 @@ describe("config lines", () => {
     expect(
       pluginsArrayEntry(entry({ exportName: "thing", callArgs: null }))
     ).toBe("thing");
+  });
+
+  /**
+   * A fourth edit, in the admin route page rather than the config. Skipping it
+   * leaves the plugin installed and its server half running while its admin UI
+   * silently never registers, so the recipe has to name it.
+   */
+  it("asks for the admin module only when the package ships one", () => {
+    expect(
+      adminImportStatement(
+        entry({ exportName: "thing", callArgs: "", adminModule: true })
+      )
+    ).toBe('import "@acme/thing/admin";');
+
+    // The separating case: a plugin without an `/admin` export must not be
+    // told to import one, or the recipe names a subpath that does not resolve.
+    expect(
+      adminImportStatement(entry({ exportName: "thing", callArgs: "" }))
+    ).toBeUndefined();
   });
 
   it("places required arguments inside the call", () => {

@@ -10,6 +10,7 @@ import { adminVersion } from "@admin/lib/admin-version";
 import { categoryLabel } from "@admin/lib/plugins/plugin-categories";
 import {
   PACKAGE_MANAGERS,
+  adminImportStatement,
   importStatement,
   installCommand,
   pluginsArrayEntry,
@@ -24,7 +25,16 @@ import type { RegistryPlugin } from "@admin/lib/plugins/registry/types";
  * looking at the thing they clicked, and a toast in the corner asks them to
  * look somewhere else to learn that something local succeeded.
  */
-function CopyLine({ value, label }: { value: string; label: string }) {
+function CopyLine({
+  value,
+  label,
+  file,
+}: {
+  value: string;
+  label: string;
+  /** The file this line goes in, when it is not the one the section names. */
+  file?: string;
+}) {
   const [outcome, setOutcome] = useState<"idle" | "copied" | "failed">("idle");
 
   // The Clipboard API needs a secure context, so an admin served over plain
@@ -57,6 +67,11 @@ function CopyLine({ value, label }: { value: string; label: string }) {
     <div>
       <p className="mb-1.5 text-xs font-medium text-muted-foreground">
         {label}
+        {file && (
+          <span className="ml-1.5 font-mono font-normal opacity-80">
+            {file}
+          </span>
+        )}
       </p>
       <div className="flex items-stretch gap-2">
         <code className="min-w-0 flex-1 overflow-x-auto rounded-md border border-border bg-muted/40 px-3 py-2 font-mono text-xs leading-relaxed">
@@ -89,6 +104,15 @@ function CopyLine({ value, label }: { value: string; label: string }) {
           manually.
         </p>
       )}
+      {outcome === "copied" && (
+        // Success is announced too, and only to assistive technology. The
+        // button's `aria-label` overrides its descendants, so swapping the
+        // glyph changes nothing a screen reader can perceive — sighted users
+        // already have the tick, and this is the equivalent for everyone else.
+        <p className="sr-only" role="status">
+          {label} copied to the clipboard.
+        </p>
+      )}
     </div>
   );
 }
@@ -99,8 +123,8 @@ function CopyLine({ value, label }: { value: string; label: string }) {
  * Deliberately thin, and the reason is the invariant the whole surface is
  * built on: verified content only ever appears in the verified section. Nothing
  * here has been observed running, so there is no contributions section, no
- * permissions and no routes — only what the catalogue claims, plus the three
- * lines that would make the claims checkable.
+ * permissions and no routes — only what the catalogue claims, plus the lines
+ * that would make the claims checkable.
  *
  * @module pages/dashboard/plugins/components/NotInstalledPlugin
  */
@@ -111,6 +135,7 @@ export function NotInstalledPlugin({
 }): React.ReactElement {
   const [manager, setManager] = useState<PackageManager>("pnpm");
   const label = categoryLabel(plugin.category);
+  const adminImport = adminImportStatement(plugin);
 
   return (
     <div className="max-w-3xl">
@@ -173,10 +198,9 @@ export function NotInstalledPlugin({
           ))}
         </div>
 
-        {/* Three lines because the reader makes three edits, each copyable on
-            its own: the import and the array entry land in different places in
-            the same file, so joining them into one block would be a snippet
-            nobody can paste anywhere. */}
+        {/* One line per edit, each copyable on its own: the import and the
+            array entry land in different places in the same file, so joining
+            them into one block would be a snippet nobody can paste anywhere. */}
         <CopyLine
           label="Install command"
           value={installCommand(plugin.id, manager, adminVersion())}
@@ -186,6 +210,20 @@ export function NotInstalledPlugin({
           label="Plugins array entry"
           value={pluginsArrayEntry(plugin)}
         />
+        {adminImport && (
+          <div className="border-t border-border pt-4">
+            <p className="mb-3 text-xs text-muted-foreground">
+              This plugin also ships admin UI, which is registered by importing
+              it in your admin route page. Skip it and the plugin still loads —
+              its editors just fall back to plain inputs.
+            </p>
+            <CopyLine
+              label="Admin route import"
+              value={adminImport}
+              file="app/admin/[[...params]]/page.tsx"
+            />
+          </div>
+        )}
       </section>
 
       {/* States the boundary rather than leaving it implied: a reader looking

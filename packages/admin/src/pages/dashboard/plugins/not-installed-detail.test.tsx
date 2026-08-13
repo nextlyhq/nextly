@@ -126,6 +126,31 @@ describe("plugin detail, not installed", () => {
   });
 
   /**
+   * The admin-module step, which only some plugins need. Form Builder ships an
+   * `/admin` side-effect module; skip it and the plugin installs, its server
+   * half runs, and its builder silently degrades to plain inputs.
+   */
+  it("asks for the admin route import when the plugin ships one", async () => {
+    renderDetail("nextlyhq-plugin-form-builder");
+
+    expect(
+      await screen.findByText('import "@nextlyhq/plugin-form-builder/admin";')
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * The separating case. SEO has no `/admin` export, so telling a reader to
+   * import one would name a subpath that does not resolve.
+   */
+  it("omits the admin route import for a plugin without one", async () => {
+    renderDetail("nextlyhq-plugin-seo");
+
+    await screen.findByRole("heading", { name: "SEO" });
+    expect(screen.queryByText(/\/admin";$/)).toBeNull();
+    expect(screen.queryByText("Admin route import")).toBeNull();
+  });
+
+  /**
    * The catalogue query suspends. The only boundary above this page is
    * `RootLayout`'s `fallback={null}`, which exists to hide a lazy chunk
    * swapping in, so without a local one the page is blank for the duration of

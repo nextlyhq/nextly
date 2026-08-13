@@ -87,6 +87,21 @@ export function importStatement(plugin: RegistryPlugin): string {
  * object whose definition sits at `.plugin`, so calling it here would be
  * wrong rather than merely verbose.
  */
+/**
+ * The side-effect import the app's admin route needs, for plugins that ship
+ * an `/admin` module — `undefined` for those that do not.
+ *
+ * Its own line rather than part of the config recipe because it goes in a
+ * different file: the admin route page, not `nextly.config.ts`. Undefined
+ * rather than an empty string, so a caller has to decide whether to render a
+ * step at all instead of rendering a blank one.
+ */
+export function adminImportStatement(
+  plugin: RegistryPlugin
+): string | undefined {
+  return plugin.config.adminModule ? `import "${plugin.id}/admin";` : undefined;
+}
+
 export function pluginsArrayEntry(plugin: RegistryPlugin): string {
   const { exportName, callArgs } = plugin.config;
   return callArgs === null ? exportName : `${exportName}(${callArgs})`;
