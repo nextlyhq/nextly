@@ -21,7 +21,8 @@ export type DocumentFormatVersion = 1;
 export const DOCUMENT_FORMAT_VERSION: DocumentFormatVersion = 1;
 
 /**
- * What a stored builder document IS:
+ * What a stored builder document IS, and every legal `kind` for validation and
+ * exhaustive iteration:
  * - `page`      — an entry's blocks-field content
  * - `pattern`   — a copy-on-insert saved subtree (including full-page patterns)
  * - `component` — a linked, reusable definition with exposed props/slots/variants
@@ -31,22 +32,23 @@ export const DOCUMENT_FORMAT_VERSION: DocumentFormatVersion = 1;
  *
  * The enum is closed: an unknown kind is a validation error in strict mode and
  * preserved untouched in forgiving mode, the same policy as unknown block types.
+ *
+ * The LIST is the declaration and the type is derived from it, the way the
+ * binding vocabularies are. Written the other way round the two are independent
+ * declarations that happen to agree: removing an entry from the list leaves the
+ * type still permitting it, so `BlockDocument` accepts a kind the published
+ * schema and the generated parser both reject, and every test on both sides
+ * still passes. Deriving makes the format unable to be half-changed.
  */
-export type DocumentKind =
-  | "page"
-  | "pattern"
-  | "component"
-  | "region"
-  | "template";
-
-/** Every legal `kind`, for validation and exhaustive iteration. */
-export const DOCUMENT_KINDS: readonly DocumentKind[] = [
+export const DOCUMENT_KINDS = [
   "page",
   "pattern",
   "component",
   "region",
   "template",
-];
+] as const;
+
+export type DocumentKind = (typeof DOCUMENT_KINDS)[number];
 
 /**
  * Document-level settings. Deliberately minimal: SEO and publishing state are
@@ -321,14 +323,10 @@ export interface Condition {
  * Interactive states styles can target. A closed set: extending it after the
  * format freeze is a document-format migration, not an edit.
  */
-export type StyleState = "base" | "hover" | "focus" | "active";
+/** Derived from the list for the same reason as {@link DOCUMENT_KINDS}. */
+export const STYLE_STATES = ["base", "hover", "focus", "active"] as const;
 
-export const STYLE_STATES: readonly StyleState[] = [
-  "base",
-  "hover",
-  "focus",
-  "active",
-];
+export type StyleState = (typeof STYLE_STATES)[number];
 
 /**
  * A breakpoint id referencing the site-level breakpoint definitions (viewport

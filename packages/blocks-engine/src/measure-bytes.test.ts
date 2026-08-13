@@ -100,6 +100,106 @@ describe("measureBytes", () => {
     expect(measureBytes(document, 2 * 1024 * 1024).exceeded).toBe(true);
   });
 
+  it("keeps counting inside a slot whose key is refused", () => {
+    // A refused KEY is a fact about the key, not permission to stop looking.
+    // `JSON.parse` produces `__proto__` as an ordinary own property, so a
+    // document can hide a subtree under one — and skipping the value meant the
+    // nodes beneath it were counted as zero and the bytes as none, so a
+    // document over both caps reported neither and the schema then walked
+    // exactly what the caps existed to refuse.
+    const hidden = Array.from({ length: 10 }, (_, index) => ({
+      id: `h${index}`,
+      type: "core/text",
+      version: 1,
+      props: { text: "x".repeat(100) },
+    }));
+    // Parsed from TEXT. Writing `{ __proto__: hidden }` as a literal sets the
+    // prototype instead of creating a property, so the fixture would carry no
+    // such key and the test would pass without ever reaching the mechanism.
+    // `JSON.parse` is the thing that produces it as an ordinary own property,
+    // which is also why a stored document can contain one.
+    const slots = JSON.parse(
+      `{"__proto__": ${JSON.stringify(hidden)}}`
+    ) as Record<string, unknown>;
+    // The precondition: it really is an own key rather than a prototype
+    // assignment, which is the only reason the walk can reach it at all.
+    expect(Object.hasOwn(slots, "__proto__")).toBe(true);
+
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "a", type: "core/section", version: 1, props: {}, slots }],
+    };
+
+    const survey = surveyDocument(document, {
+      maxBytes: 1000,
+      maxDepth: 12,
+      maxNodes: 2,
+    });
+
+    // Refused for the key AND bounded for what it hid.
+    expect(survey.unserializable).toBe(true);
+    expect(survey.tooManyNodes || survey.tooLarge).toBe(true);
+  });
+
+  it("reads a toJSON hook once, as the writer does", () => {
+    // `JSON.stringify` retrieves the property once and calls what it got.
+    // Reading it twice — once to type-test, once to invoke — lets an accessor
+    // return a different function each time, so the hook that is MEASURED is
+    // not the hook that RUNS.
+    // The FIRST read returns the large serializer, later reads an empty one,
+    // which is the direction that matters: a walk reading twice type-tests the
+    // large hook and then invokes the small one, measuring far less than the
+    // writer emits. The reverse ordering would over-count, which is safe.
+    //
+    // `bytes` cannot be compared against `JSON.stringify` here, because the
+    // writer's own read would be a THIRD one and would see the empty hook. The
+    // read count and the measured size are the two halves instead.
+    let reads = 0;
+    const value = {
+      get toJSON() {
+        reads += 1;
+        const payload = reads === 1 ? "x".repeat(2000) : "";
+        return () => payload;
+      },
+    };
+
+    const survey = measureBytes(
+      pageWith({ a: value }),
+      Number.MAX_SAFE_INTEGER
+    );
+
+    expect(reads).toBe(1);
+    expect(survey.bytes).toBeGreaterThan(2000);
+  });
+
+  it("does not run a hidden record property's toJSON", () => {
+    // `JSON.stringify` skips a non-enumerable property without reading its
+    // value, so its hook never runs. Normalizing before checking enumerability
+    // executed document-supplied code the serializer would never reach, which
+    // turns a hidden property into a way to run something expensive or stateful
+    // inside a precondition.
+    let invoked = 0;
+    const props: Record<string, unknown> = { visible: 1 };
+    Object.defineProperty(props, "hidden", {
+      value: {
+        toJSON() {
+          invoked += 1;
+          return "ran";
+        },
+      },
+      enumerable: false,
+      writable: true,
+      configurable: true,
+    });
+
+    const survey = measureBytes(pageWith(props), Number.MAX_SAFE_INTEGER);
+
+    expect(invoked).toBe(0);
+    // Still refused: the schema's direct read would see a field storage drops.
+    expect(survey.unserializable).toBe(true);
+  });
+
   it("refuses an over-long array without enumerating its keys", () => {
     // Brackets and commas alone are not the floor. Every position costs at
     // least one more byte, so an array can pass a bracket-and-comma check and

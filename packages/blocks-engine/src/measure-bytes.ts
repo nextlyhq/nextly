@@ -99,9 +99,15 @@ function serializesAs(value: unknown): boolean {
  * original object disagrees with the writer on both the size and the drop.
  */
 function asSerialized(value: unknown, key: string): unknown {
-  return typeof (value as { toJSON?: unknown } | null | undefined)?.toJSON ===
-    "function"
-    ? (value as { toJSON: (key: string) => unknown }).toJSON(key)
+  // Retrieved ONCE, then tested and invoked, because `JSON.stringify` reads the
+  // property a single time and calls whatever that read produced. Reading it
+  // twice — once to type-test, once to call — lets an accessor hand back a
+  // different function each time: a hook returning a 2 KB serializer on the
+  // first read and an empty one on the second measured 101 bytes for a value
+  // the writer emits at 2,101, and the cap passed it.
+  const hook = (value as { toJSON?: unknown } | null | undefined)?.toJSON;
+  return typeof hook === "function"
+    ? (hook as (this: unknown, key: string) => unknown).call(value, key)
     : value;
 }
 
@@ -436,13 +442,23 @@ export function surveyDocument(
       const key = keyed ? frame.names![index] : String(index);
       const member = readMember(container, key);
 
-      // `toJSON` FIRST, because that is what the writer writes. A value
-      // defining it is serialized as whatever it returns rather than as the
-      // fields it happens to carry, and the hook can also return something JSON
-      // omits — so both the size and the drop are decided here.
+      // Enumerability decides whether the writer ever LOOKS at this member, and
+      // on a record it does not: `JSON.stringify` skips a non-enumerable
+      // property without reading its value, so its `toJSON` is never called.
+      // Normalizing first ran document-supplied code the serializer would not
+      // have run, which turns a hidden property into a way to execute something
+      // expensive or stateful inside a precondition. An array index is the
+      // opposite case — JSON writes it whatever its enumerability — so the rule
+      // is the record's alone.
+      const hidden = keyed && member.present && !member.enumerable;
+
+      // `toJSON` next, because that is what the writer writes. A value defining
+      // it is serialized as whatever it returns rather than as the fields it
+      // happens to carry, and the hook can also return something JSON omits —
+      // so both the size and the drop are decided here.
       let held: unknown = member.present ? member.value : undefined;
       let threw = false;
-      if (member.present) {
+      if (member.present && !hidden) {
         try {
           held = asSerialized(member.value, key);
         } catch {
@@ -460,16 +476,9 @@ export function surveyDocument(
         if (held !== member.value) unserializable = true;
       }
 
-      // Enumerability means different things to the serializer on the two
-      // containers. `JSON.stringify` omits a non-enumerable RECORD property —
-      // so the schema, which reads directly, would see a field storage drops —
-      // but it serializes an array element by index regardless. Applying the
-      // record rule to both refused documents JSON handles correctly.
-      const skipped =
-        !member.present ||
-        threw ||
-        (keyed && !member.enumerable) ||
-        !serializesAs(held);
+      // A hidden record property is one the schema's direct read would see and
+      // storage would not, so it is refused rather than silently ignored.
+      const skipped = !member.present || threw || hidden || !serializesAs(held);
 
       // Read BEFORE the continuation is pushed, so `emitted` carries this
       // member's outcome; the continuation still goes on the stack ahead of the
@@ -507,16 +516,24 @@ export function surveyDocument(
         key,
         container === root
       );
-      if (placement === "refused") {
-        unserializable = true;
-        continue;
-      }
+      // A refused PLACEMENT is a fact about the key, not permission to stop
+      // looking. Skipping the value left everything beneath it unmeasured: ten
+      // valid nodes under a slot named `__proto__` were counted as zero nodes
+      // and zero bytes, so a document over both caps reported neither, and the
+      // schema then walked the subtree the caps existed to refuse. The refusal
+      // is recorded and the walk continues into the value at the placement the
+      // key would have had.
+      if (placement === "refused") unserializable = true;
+      const reached =
+        placement === "refused"
+          ? { kind: "nodeList" as FrameKind, depth: frame.depth + 1 }
+          : placement;
 
       if (typeof held === "object" && held !== null) {
         stack.push({
           value: held,
-          kind: placement.kind,
-          depth: placement.depth,
+          kind: reached.kind,
+          depth: reached.depth,
           // Already through `toJSON`. The writer calls the hook once and writes
           // what it returns as-is, so normalizing a replacement that itself
           // defines `toJSON` would measure a value nothing ever produces.
@@ -527,7 +544,7 @@ export function surveyDocument(
         // as a scalar and never opening a `node` frame let a list of primitives
         // pass every structural bound, leaving the schema to walk what the caps
         // exist to refuse.
-        if (placement.kind === "node") {
+        if (reached.kind === "node") {
           nodes += 1;
           if (nodes > limits.maxNodes) return { ...done(), tooManyNodes: true };
         }
