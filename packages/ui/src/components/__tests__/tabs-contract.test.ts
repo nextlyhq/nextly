@@ -1465,13 +1465,46 @@ function styleObjectsFor(attribute: ts.JsxAttribute): {
  * past it — the same shape as the shorthand entry beside it. A computed key
  * built from a variable is not decidable here and is left alone.
  */
-function propertyNameOf(name: ts.PropertyName): string | undefined {
+function propertyNameOf(
+  name: ts.PropertyName,
+  resolver: ReturnType<typeof styleResolver>
+): string | undefined {
   if (ts.isIdentifier(name) || ts.isStringLiteral(name)) return name.text;
   if (ts.isComputedPropertyName(name)) {
-    const key = name.expression;
-    if (ts.isStringLiteral(key) || ts.isNoSubstitutionTemplateLiteral(key)) {
-      return key.text;
-    }
+    return staticKeyOf(name.expression, resolver);
+  }
+  return undefined;
+}
+
+/**
+ * The property a computed key names, when that is decidable without running it.
+ *
+ * A literal is the easy case. A local constant is the one that matters:
+ * `const key = "borderBottomColor"; style={{ [key]: "red" }}` repaints the
+ * indicator exactly as the literal spelling does, and reading only the literal
+ * form walked past it — so the check reported clean on a call site that paints.
+ *
+ * Followed through the same resolver the values use, so a key and a value
+ * declared side by side are read the same way, and wrappers are peeled first so
+ * `[key as string]` resolves like a bare `key`.
+ *
+ * `seen` stops a self-referential binding from recursing. Anything else — a
+ * template with substitutions, a call, a member access — stays undecidable and
+ * returns undefined, which leaves the property unnamed rather than guessed.
+ */
+function staticKeyOf(
+  expression: ts.Expression,
+  resolver: ReturnType<typeof styleResolver>,
+  seen = new Set<string>()
+): string | undefined {
+  const value = withoutTypeWrappers(expression);
+  if (ts.isStringLiteral(value) || ts.isNoSubstitutionTemplateLiteral(value)) {
+    return value.text;
+  }
+  if (ts.isIdentifier(value) && !seen.has(value.text)) {
+    seen.add(value.text);
+    const bound = resolver.valueOf(value.text);
+    if (bound) return staticKeyOf(bound, resolver, seen);
   }
   return undefined;
 }
@@ -1572,7 +1605,7 @@ function declaredProperties(
       continue;
     }
     if (ts.isPropertyAssignment(property)) {
-      const name = propertyNameOf(property.name);
+      const name = propertyNameOf(property.name, resolver);
       if (name) setOnEach(name, emitsValue(property.initializer, resolver));
       continue;
     }
@@ -1589,7 +1622,7 @@ function declaredProperties(
     // written at the key. What it returns is not decidable here, so it counts
     // as emitting.
     if (ts.isGetAccessorDeclaration(property)) {
-      const name = propertyNameOf(property.name);
+      const name = propertyNameOf(property.name, resolver);
       if (name) setOnEach(name, true);
     }
   }
@@ -2074,6 +2107,22 @@ describe("the tab indicator contract", () => {
     [
       "an owned property declared through a getter",
       '<TabsTrigger style={{ get borderBottomColor() { return "red"; } }} />',
+    ],
+    // A computed key built from a local constant names the property exactly as
+    // the literal spelling does, and React emits the same declaration. Reading
+    // only the literal form walked past it and reported clean on a call site
+    // that repaints the indicator.
+    [
+      "an owned property behind a computed key bound to a constant",
+      'const key = "borderBottomColor";\n<TabsTrigger style={{ [key]: "red" }} />',
+    ],
+    [
+      "the same constant behind a type assertion",
+      'const key = "borderBottomColor" as const;\n<TabsTrigger style={{ [key as string]: "red" }} />',
+    ],
+    [
+      "a getter whose name is a computed constant",
+      'const key = "borderBottomColor";\n<TabsTrigger style={{ get [key]() { return "red"; } }} />',
     ],
     [
       "a shorthand that replaces an owned longhand",
