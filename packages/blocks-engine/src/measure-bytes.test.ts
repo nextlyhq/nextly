@@ -46,6 +46,18 @@ function withExtra(): unknown[] {
   return array;
 }
 
+/**
+ * Whether the counter refused the value because it has no stored form.
+ *
+ * `measureBytes` reports one `exceeded` boolean with a `reason`, so "is this
+ * unwritable" is a narrowing rather than a field. Written once here so each
+ * test asks the question rather than restating the union.
+ */
+function unwritable(value: unknown, limit = Number.MAX_SAFE_INTEGER): boolean {
+  const measured = measureBytes(value, limit);
+  return measured.exceeded && measured.reason === "unwritable";
+}
+
 describe("measureBytes", () => {
   it("counts exactly what JSON.stringify emits", () => {
     const cases: Array<[string, unknown]> = [
@@ -267,7 +279,7 @@ describe("measureBytes", () => {
 
     expect(invoked).toBe(0);
     // Still refused: the schema's direct read would see a field storage drops.
-    expect(survey.unserializable).toBe(true);
+    expect(survey.exceeded && survey.reason === "unwritable").toBe(true);
   });
 
   it("refuses an over-long array without enumerating its keys", () => {
@@ -324,14 +336,11 @@ describe("measureBytes", () => {
     const survey = measureBytes(document, Number.MAX_SAFE_INTEGER);
 
     expect(survey.bytes).toBe(realBytes(document));
-    expect(survey.unserializable).toBe(true);
+    expect(survey.exceeded && survey.reason === "unwritable").toBe(true);
 
     // The control: the same array without the extra property is accepted, so
     // the refusal is of the property rather than of arrays in general.
-    expect(
-      measureBytes(pageWith({ a: [1, 2] }), Number.MAX_SAFE_INTEGER)
-        .unserializable
-    ).toBe(false);
+    expect(unwritable(pageWith({ a: [1, 2] }))).toBe(false);
   });
 
   it("does not read an INHERITED name as a property the array carries", () => {
@@ -350,9 +359,7 @@ describe("measureBytes", () => {
       // failing to take effect.
       expect("customCss" in ([1, 2] as unknown as object)).toBe(true);
 
-      expect(
-        measureBytes(document, Number.MAX_SAFE_INTEGER).unserializable
-      ).toBe(false);
+      expect(unwritable(document)).toBe(false);
     } finally {
       delete polluted.customCss;
     }
@@ -374,7 +381,9 @@ describe("measureBytes", () => {
         pageWith({ a: array }),
         Number.MAX_SAFE_INTEGER
       );
-      expect(survey.unserializable, name).toBe(true);
+      expect(survey.exceeded && survey.reason === "unwritable", name).toBe(
+        true
+      );
       expect(survey.bytes, name).toBe(realBytes(pageWith({ a: array })));
     }
   });
@@ -404,8 +413,7 @@ describe("measureBytes", () => {
 
     expect(() => measureBytes(document, 10_000_000)).not.toThrow();
     const result = measureBytes(document, 10_000_000);
-    expect(result.unserializable).toBe(true);
-    expect(result.exceeded).toBe(false);
+    expect(result.exceeded && result.reason === "unwritable").toBe(true);
   });
 
   it("counts a repeated subtree once per occurrence", () => {
@@ -418,9 +426,7 @@ describe("measureBytes", () => {
     expect(measureBytes(document, Number.MAX_SAFE_INTEGER).bytes).toBe(
       realBytes(document)
     );
-    expect(measureBytes(document, Number.MAX_SAFE_INTEGER).unserializable).toBe(
-      false
-    );
+    expect(unwritable(document)).toBe(false);
   });
 
   it("refuses an accessor without invoking it", () => {
@@ -438,7 +444,7 @@ describe("measureBytes", () => {
       },
     });
 
-    expect(measureBytes(hostile, 2 * 1024 * 1024).unserializable).toBe(true);
+    expect(unwritable(hostile, 2 * 1024 * 1024)).toBe(true);
     expect(invoked).toBe(0);
   });
 
@@ -515,9 +521,7 @@ describe("measureBytes", () => {
       },
     });
 
-    expect(measureBytes({ items: array }, 2 * 1024 * 1024).unserializable).toBe(
-      true
-    );
+    expect(unwritable({ items: array }, 2 * 1024 * 1024)).toBe(true);
     expect(invoked).toBe(0);
   });
 
@@ -535,7 +539,7 @@ describe("measureBytes", () => {
     );
 
     expect(() => measureBytes({ nested: hostile }, 1024)).not.toThrow();
-    expect(measureBytes({ nested: hostile }, 1024).unserializable).toBe(true);
+    expect(unwritable({ nested: hostile }, 1024)).toBe(true);
   });
 
   it("counts own properties only", () => {

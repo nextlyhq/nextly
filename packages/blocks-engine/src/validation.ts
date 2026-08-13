@@ -163,6 +163,8 @@ export const ISSUE_CODES = {
   "node-count-exceeded":
     "The document has more nodes than the allowed maximum.",
   "document-too-large": "The serialized document exceeds the byte limit.",
+  "document-unwritable":
+    "The document holds a value JSON cannot write, so it has no stored form.",
   "document-size-warning":
     "The serialized document is approaching the byte limit.",
   "missing-node-id": "A node is missing its id or the id is empty.",
@@ -499,13 +501,31 @@ function checkLimits(
   // never finished.
   if (survey.tooDeep || survey.tooManyNodes) return;
 
-  const { bytes, tooLarge: exceeded } = survey;
-  if (exceeded) {
+  // The CAUSE, not just the refusal. A document over the limit is fixed by
+  // removing content; one holding a value JSON cannot write is not made smaller
+  // by deleting blocks, and reporting it as "too large" sends its author to
+  // work that cannot help.
+  //
+  // Read off the SAME survey that answered depth and node count, rather than
+  // from a second measurement. Over-limit is reported ahead of unwritable when
+  // a document is both: the byte issue is what gates the precise walk
+  // downstream, so losing it to the other cause is what lets an unbounded
+  // traversal run.
+  const { bytes } = survey;
+  if (survey.tooLarge) {
     issues.push({
       path: "",
       code: "document-too-large",
       severity: "error",
       message: `Document exceeds the maximum of ${limits.maxBytes} bytes.`,
+    });
+  } else if (survey.unserializable) {
+    issues.push({
+      path: "",
+      code: "document-unwritable",
+      severity: "error",
+      message:
+        "Document holds a value JSON cannot write, so it has no stored form.",
     });
   } else if (bytes > limits.maxBytes * LIMIT_WARNING_RATIO) {
     issues.push({

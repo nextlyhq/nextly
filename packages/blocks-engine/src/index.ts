@@ -76,6 +76,11 @@ export {
 export type { NodeLocation, TreePosition } from "./tree";
 
 export { measureBytes, surveyDocument } from "./measure-bytes";
+// The measurement's return type travels with the function. Without it a
+// consumer naming `measureBytes`'s result has to rebuild the union by hand or
+// reach for `ReturnType`, and a hand-rebuilt copy is the second statement of a
+// contract that then drifts from the first.
+export type { ByteMeasurement } from "./measure-bytes";
 export { validate, ISSUE_CODES } from "./validation";
 /**
  * The registry-independent facts about a node, exported so a caller holding no

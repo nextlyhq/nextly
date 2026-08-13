@@ -907,6 +907,42 @@ export type BuilderOp =
  * already treats as absent — so the rule is applied by READING through this
  * rather than by adding a check beside each read.
  */
+/**
+ * Whether a field resolved through the PROTOTYPE would change what happens.
+ *
+ * The ownership guards exist because a value reached through the prototype is
+ * absent from what `JSON.stringify` writes, so the edit happens and the stored
+ * op cannot reproduce it. That argument needs the inherited value to mean
+ * something. An inherited `undefined` means exactly what an absent field means:
+ * the replayed op resolves it to `undefined` too, so the placement it
+ * reproduces IS the placement that happened, and refusing it turns harmless
+ * pollution into an editor that cannot place anything at the top level —
+ * `Object.prototype.slot = undefined` rejects every insert and move.
+ *
+ * Read through the DESCRIPTOR rather than the property, because an inherited
+ * accessor would otherwise run while this decides whether to refuse the op —
+ * document-supplied code executed by a guard, on a path whose whole purpose is
+ * to reject before anything happens. An accessor is treated as significant
+ * without being invoked: what it would return is unknowable without running it,
+ * and a value that cannot be shown to be absent has to be assumed present.
+ */
+function inheritedValueWouldBeLost(
+  record: Record<string, unknown>,
+  field: string
+): boolean {
+  if (!(field in record) || Object.hasOwn(record, field)) return false;
+  for (
+    let link: object | null = Object.getPrototypeOf(record) as object | null;
+    link !== null;
+    link = Object.getPrototypeOf(link) as object | null
+  ) {
+    const descriptor = Object.getOwnPropertyDescriptor(link, field);
+    if (descriptor === undefined) continue;
+    return !(holdsAValue(descriptor) && descriptor.value === undefined);
+  }
+  return false;
+}
+
 function ownValue(record: Record<string, unknown>, field: string): unknown {
   return Object.hasOwn(record, field) ? record[field] : undefined;
 }
@@ -1736,23 +1772,26 @@ function assertFitsCaps(
     ? measureBytes(before, Number.POSITIVE_INFINITY).bytes
     : limits.maxBytes;
   const size = measureBytes(result, ceiling);
-  // Unstorable and too large are different verdicts, and saying so is the point.
+  // Unstorable and too large are different verdicts, and the message says which.
   // A cyclic document, or one holding `undefined`, a function or a `Date`,
   // cannot be written at any size — reporting that as an overage would tell an
   // author their two-node page had outgrown a two-megabyte cap and send them
   // deleting content that was never the problem.
-  if (size.unserializable) {
-    throw new OpError(
-      `${verb}: this would leave the document holding a value that cannot be ` +
-        `stored — a cycle, or something JSON does not preserve. The edit ` +
-        `would apply and then fail to save.`
-    );
-  }
+  //
+  // `exceeded` covers BOTH, which is why the refusal is one branch rather than
+  // two: a caller asking only whether the document fits still refuses one that
+  // has no stored form. Reading a separate flag for that is fail-open, and was
+  // measured to be — it silently stopped this guard refusing cyclic documents
+  // until a second check was added by hand.
   if (size.exceeded) {
     throw new OpError(
-      `${verb}: this would leave the document over ${String(ceiling)} bytes, ` +
-        `past the ${String(limits.maxBytes)} it may hold. The edit would ` +
-        `apply and then fail to save.`
+      size.reason === "unwritable"
+        ? `${verb}: this would leave the document holding a value that cannot ` +
+          `be stored — a cycle, or something JSON does not preserve. The ` +
+          `edit would apply and then fail to save.`
+        : `${verb}: this would leave the document over ${String(ceiling)} ` +
+          `bytes, past the ${String(limits.maxBytes)} it may hold. The edit ` +
+          `would apply and then fail to save.`
     );
   }
 }
@@ -2176,7 +2215,7 @@ function assertPosition(at: TreePosition, verb: string): void {
   // in this file reached nine sites because each round added a guard next to
   // whichever instance it was shown, and this is the ownership class's fifth.
   for (const field of ["index", "parentId", "slot"] as const) {
-    if (field in at && !Object.hasOwn(at, field)) {
+    if (inheritedValueWouldBeLost(at, field)) {
       throw new OpError(
         `${verb}: a position whose ${field} comes from the prototype rather ` +
           `than from the position cannot be applied: the placement would ` +
@@ -2629,7 +2668,7 @@ export function applyOp(
   // Checked against the vocabulary rather than per branch, so a field added to
   // an op later cannot be dispatched on without being owned.
   for (const field of OP_VOCABULARY) {
-    if (field in op && !Object.hasOwn(op, field)) {
+    if (inheritedValueWouldBeLost(op, field)) {
       throw new OpError(
         `an op whose ${describe(field)} comes from the prototype rather than ` +
           `from the op cannot be applied: the edit would run and the op would ` +

@@ -111,6 +111,63 @@ function asSerialized(value: unknown, key: string): unknown {
     : value;
 }
 
+export type ByteMeasurement =
+  | { bytes: number; exceeded: false }
+  | { bytes: number; exceeded: true; reason: "over-limit" | "unwritable" };
+
+/**
+ * A value `JSON.stringify` REFUSES, rather than writes or drops.
+ *
+ * The third thing the writer can do with a value, and the one this counter had
+ * no way to express: `undefined`, functions and symbols are DROPPED
+ * ({@link serializesAs}); everything else is written; and a BigInt makes
+ * `JSON.stringify` throw. Counting it as an ordinary value reports
+ * `measureBytes({ x: 1n }, 100)` as fitting in 6 bytes while the writer refuses
+ * the whole document.
+ *
+ * The boxed form is included because `Object(1n)` is a BigInt OBJECT, so
+ * `typeof` reports `"object"` and the walk would treat it as an ordinary record
+ * with no own keys — two bytes for a value that cannot be written at all.
+ *
+ * How that boxed form is detected is stated at the check itself, because the
+ * cheap-looking alternatives are all wrong in ways that are not visible from
+ * here.
+ */
+function refusedByWriter(value: unknown): boolean {
+  if (typeof value === "bigint") return true;
+  if (typeof value !== "object" || value === null) return false;
+  // The internal slot, and NOTHING else. Every cheaper test asks the value a
+  // question, and a value in a block document is untrusted input:
+  //
+  // - `Symbol.toStringTag` is an ordinary writable property, so the tag both
+  //   over-reports — `{ [Symbol.toStringTag]: "BigInt", x: 1 }` is written as
+  //   `{"x":1}` — and runs a document-supplied getter that `JSON.stringify`
+  //   never runs, since it ignores symbol keys entirely.
+  // - Reading that tag's DESCRIPTOR instead avoids the getter and still
+  //   executes a Proxy's `getOwnPropertyDescriptor` trap. Measured: an empty
+  //   proxy whose trap throws only for `Symbol.toStringTag` is written as `{}`
+  //   by the writer while the probe raises out of a function contracted to
+  //   report rather than throw.
+  // - The prototype chain cannot decide it either. Measured:
+  //   `setPrototypeOf(Object(1n), Object.prototype)` is still refused by the
+  //   writer, so a prototype filter reports a storable document that the
+  //   writer then rejects — the counter and the writer disagreeing, which is
+  //   the one thing this function exists to prevent.
+  //
+  // `BigInt.prototype.valueOf` reads an internal slot: measured against a Proxy
+  // logging every trap, it triggers none, and it cannot be spoofed by any
+  // property the document sets. It costs a thrown exception per non-BigInt
+  // object, which is the price of asking a question the value cannot answer
+  // dishonestly; the count is bounded by the byte cap that admits those objects
+  // in the first place.
+  try {
+    BigInt.prototype.valueOf.call(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Serialized size of a non-object value, bounded like everything else here. */
 function scalarBytes(value: unknown, budget: number): number {
   if (typeof value === "string") return 2 + utf8ByteLength(value, budget);
@@ -371,7 +428,9 @@ export function surveyDocument(
   /** Account for a value that cannot contain others. */
   const takeScalar = (held: unknown): boolean => {
     bytes += scalarBytes(held, limits.maxBytes - bytes);
-    if (!isSerializableScalar(held)) unserializable = true;
+    if (!isSerializableScalar(held) || refusedByWriter(held)) {
+      unserializable = true;
+    }
     return bytes > limits.maxBytes;
   };
 
@@ -620,6 +679,13 @@ export function surveyDocument(
       continue;
     }
 
+    // A value the WRITER refuses, asked of objects as well as scalars. A boxed
+    // BigInt is an object, and one whose prototype has been replaced looks like
+    // an ordinary empty record to a prototype test while `JSON.stringify` still
+    // throws on it — so the slot has to be consulted here, not only where
+    // scalars are counted.
+    if (refusedByWriter(value)) unserializable = true;
+
     if (onPath.has(value)) {
       // Its own ancestor. `JSON.stringify` throws here, and descending would
       // not terminate.
@@ -746,10 +812,7 @@ export function surveyDocument(
  * canonical validator asks only about size, and giving it its own traversal is
  * how the two implementations that this replaced came to disagree.
  */
-export function measureBytes(
-  root: unknown,
-  limit: number
-): { bytes: number; exceeded: boolean; unserializable: boolean } {
+export function measureBytes(root: unknown, limit: number): ByteMeasurement {
   const survey = surveyDocument(root, {
     maxBytes: limit,
     // The byte question is being asked, so the structural bounds must not stop
@@ -757,9 +820,23 @@ export function measureBytes(
     maxDepth: Number.MAX_SAFE_INTEGER,
     maxNodes: Number.MAX_SAFE_INTEGER,
   });
-  return {
-    bytes: survey.bytes,
-    exceeded: survey.tooLarge,
-    unserializable: survey.unserializable,
-  };
+  // `exceeded` stays ONE boolean meaning "refused", with `reason` saying why.
+  // Two independent flags read as tidier and are the more dangerous surface: a
+  // caller asking only `exceeded` compiles, passes, and quietly stops refusing
+  // documents that have no stored form at all.
+  //
+  // Over-limit is reported ahead of unwritable for a document that is both,
+  // because the byte verdict is what gates the precise walk downstream. Losing
+  // it to the other cause is what lets an unbounded traversal run. Which of the
+  // two a doubly-invalid document reports is otherwise decided by the order the
+  // walk happens to reach them, which no caller can predict; making that
+  // order-independent among enqueued siblings is the pending-stack scan, filed
+  // with the walk's redesign.
+  if (survey.tooLarge) {
+    return { bytes: survey.bytes, exceeded: true, reason: "over-limit" };
+  }
+  if (survey.unserializable) {
+    return { bytes: survey.bytes, exceeded: true, reason: "unwritable" };
+  }
+  return { bytes: survey.bytes, exceeded: false };
 }
