@@ -438,7 +438,10 @@ function wins(owned: Utility, caller: Utility): boolean {
     .every(variant => callerVariants.has(variant));
   // Carrying every variant the owned class carries is SUFFICIENT, not
   // necessary, which is why the cascade is asked as well rather than instead.
-  return asQualified || outranks(owned, caller);
+  // Restating the appearance is a third route: it wins nothing today and holds
+  // the same appearance anyway, so it survives a change to the primitive that
+  // the call site never hears about.
+  return asQualified || outranks(owned, caller) || restates(owned, caller);
 }
 
 /**
@@ -564,21 +567,93 @@ const declarationsOf = perClass(declarationsOfUncached);
  * outright and needs no such test.
  */
 function disagree(owned: string, caller: string): boolean {
-  // Expanded on both sides, for the same reason the intersection is: a caller's
-  // `outline` shorthand and the primitive's `outline-style` are the same
-  // declaration seen at two granularities, and compared as raw names they never
-  // met — so a rule that replaces the owned outline read as agreeing with it.
-  const expand = (declarations: Map<string, string>): Map<string, string> => {
-    const flat = new Map<string, string>();
-    for (const [property, value] of declarations) {
-      for (const longhand of expandsTo(property)) flat.set(longhand, value);
-    }
-    return flat;
-  };
-  const ownedDeclarations = expand(declarationsOf(owned));
-  for (const [property, value] of expand(declarationsOf(caller))) {
+  const ownedDeclarations = expandDeclarations(declarationsOf(owned));
+  for (const [property, value] of expandDeclarations(declarationsOf(caller))) {
     const existing = ownedDeclarations.get(property);
     if (existing !== undefined && existing !== value) return true;
+  }
+  return false;
+}
+
+/**
+ * Declarations restated at every granularity they can be compared at.
+ *
+ * A caller's `outline` shorthand and the primitive's `outline-style` are the
+ * same declaration seen at two granularities, and compared as raw names they
+ * never met — so a rule that replaces the owned outline read as agreeing with
+ * it.
+ */
+function expandDeclarations(
+  declarations: Map<string, string>
+): Map<string, string> {
+  const flat = new Map<string, string>();
+  for (const [property, value] of declarations) {
+    for (const longhand of expandsTo(property)) flat.set(longhand, value);
+  }
+  return flat;
+}
+
+/**
+ * Whether a value is a composition whose other slots belong to someone else.
+ *
+ * Tailwind uses one property as a shared canvas: `box-shadow` is a list of
+ * `var()` slots, and a ring utility fills `--tw-ring-shadow` while leaving
+ * `--tw-shadow` for whoever else is on the element. A value containing a slot
+ * the utility fills ITSELF is such a canvas, so what it holds is a composition
+ * rather than an appearance of its own.
+ */
+function fillsSharedCanvas(value: string, own: Set<string>): boolean {
+  return [...value.matchAll(/var\(\s*(--[a-zA-Z0-9-]+)/g)].some(match =>
+    own.has(match[1] ?? "")
+  );
+}
+
+/**
+ * The declarations a utility makes exclusively its own.
+ *
+ * The shared canvas is excluded, and that exclusion is what makes an equality
+ * comparison meaningful at all: `shadow-sm` and `focus-visible:ring-2` both
+ * write `box-shadow` with byte-identical text while contributing through
+ * different variables, so on the raw declarations every ring and every shadow
+ * in the repository would read as restating each other.
+ */
+function exclusiveDeclarationsUncached(cls: string): Map<string, string> {
+  const declarations = declarationsOf(cls);
+  const own = new Set(declarations.keys());
+  const exclusive = new Map<string, string>();
+  for (const [property, value] of declarations) {
+    if (fillsSharedCanvas(value, own)) continue;
+    exclusive.set(property, value);
+  }
+  return exclusive;
+}
+
+const exclusiveDeclarationsOf = perClass(exclusiveDeclarationsUncached);
+
+/**
+ * Whether a caller declares an owned appearance AGAIN, with the same value.
+ *
+ * Nothing is displaced and nothing conflicts, so neither the merge nor the
+ * cascade comparison can see it: `aria-[controls]:outline-none` beside the
+ * primitive's `focus-visible:outline-none` shares no variant, and the values
+ * are equal so `disagree` correctly reports no override. It is still a second
+ * copy of one appearance, and the copy is what survives when the primitive
+ * changes — the day the outline becomes a visible ring, this rule goes on
+ * suppressing it from a call site that never mentioned the change.
+ *
+ * Asked as an ADDITIONAL way to hold owned appearance, never by weakening
+ * `disagree`: that function's rejection branch is load-bearing, and stubbing it
+ * to always return true reports a state-qualified utility that touches nothing
+ * the primitive draws.
+ */
+function restates(owned: Utility, caller: Utility): boolean {
+  const ownedDeclarations = expandDeclarations(
+    exclusiveDeclarationsOf(owned.full)
+  );
+  for (const [property, value] of expandDeclarations(
+    exclusiveDeclarationsOf(caller.full)
+  )) {
+    if (ownedDeclarations.get(property) === value) return true;
   }
   return false;
 }
@@ -716,12 +791,12 @@ function dependenciesOfUncached(cls: string): string[] {
   const own = new Set(declarations.keys());
   const found = new Set<string>();
   for (const value of declarations.values()) {
-    const referenced = [...value.matchAll(/var\(\s*(--[a-zA-Z0-9-]+)/g)].map(
-      match => match[1] ?? ""
-    );
-    // A value carrying one of this utility's own slots is a shared canvas.
-    if (referenced.some(property => own.has(property))) continue;
-    for (const property of referenced) found.add(property);
+    // A value carrying one of this utility's own slots is a shared canvas, and
+    // the same test decides which declarations are exclusively its own.
+    if (fillsSharedCanvas(value, own)) continue;
+    for (const match of value.matchAll(/var\(\s*(--[a-zA-Z0-9-]+)/g)) {
+      found.add(match[1] ?? "");
+    }
   }
   return [...found];
 }
@@ -2399,6 +2474,14 @@ describe("the tab indicator contract", () => {
     [
       "an owned property set to a locally shadowed undefined",
       'function Row() {\n  const undefined = "red";\n  return <TabsTrigger style={{ borderBottomColor: undefined }} />;\n}',
+    ],
+    // A second copy of an owned appearance, declared with the same value under
+    // a different variant. Nothing is displaced and nothing conflicts today,
+    // which is exactly why no comparison saw it — and the day the primitive
+    // changes its outline, this rule keeps suppressing it.
+    [
+      "an owned declaration restated under a different variant",
+      '<TabsTrigger className="aria-[controls]:outline-none" />',
     ],
   ])("catches %s", (_label, body) => {
     // The positive controls. Each is a shape an earlier version returned clean
