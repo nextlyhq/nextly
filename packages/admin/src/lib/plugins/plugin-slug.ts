@@ -1,23 +1,15 @@
 /**
- * Derive a plugin's admin slug from its package name.
+ * A plugin's admin slug, from core.
  *
- * `"@acme/p"` becomes `"acme-p"`. One implementation for the whole admin, so
- * a table row and the router cannot disagree about where a plugin lives.
+ * The admin addresses a plugin by the slug core derives when it namespaces
+ * that plugin's admin routes and looks up host `pluginOverrides`. Those have
+ * to be the same string: a table row linking to a slug the server derives
+ * differently is a dead link, and the two would agree on the day they were
+ * written and drift silently afterwards.
  *
- * The algorithm mirrors `pluginAdminSlug` in core, which derives the same slug
- * server-side for a different consumer (host `pluginOverrides` lookups and
- * plugin admin route namespacing). The two cannot share a module without the
- * admin importing a core internal, so the case table in `plugin-slug.test.ts`
- * is what keeps them honest: it is the contract, and it fails on either side
- * drifting.
+ * Exported under the admin's own name so call sites read locally, but there is
+ * one implementation and it lives in core.
  *
  * @module lib/plugins/plugin-slug
  */
-
-/** Lower-case, collapse every non-alphanumeric run to a dash, trim dashes. */
-export function pluginSlug(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
+export { pluginAdminSlug as pluginSlug } from "nextly/config";

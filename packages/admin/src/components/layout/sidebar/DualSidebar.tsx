@@ -20,11 +20,14 @@ import {
   filterCollectionItems,
   filterSingleItems,
 } from "@admin/lib/permissions/authorization";
+import { resolveCollectionPlacement } from "@admin/lib/plugins/collection-placement";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 import { resolvePluginIcon } from "@admin/lib/plugins/resolve-plugin-icon";
 import { cn } from "@admin/lib/utils";
 import type { ApiCollection } from "@admin/types/entities";
 
+import { hasPluginsSection } from "./lib/has-plugins-section";
+import { isSubSidebarCategory, isSubSidebarOpen } from "./lib/has-sub-sidebar";
 import { resolveItemHref as resolveItemHrefHelper } from "./lib/resolve-item-href";
 import type { MainMenuCategory, MainMenuItem } from "./sidebar-types";
 import { getFilteredMenuItems } from "./sidebar-types";
@@ -48,10 +51,9 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
   const showBuilder = branding?.showBuilder ?? true;
 
   // Runtime-controlled builder visibility from /api/admin-meta
-  const hasInstalledPlugins = (branding?.plugins?.length ?? 0) > 0;
   const baseMenuItems = useMemo(
-    () => getFilteredMenuItems(showBuilder, hasInstalledPlugins),
-    [showBuilder, hasInstalledPlugins]
+    () => getFilteredMenuItems(showBuilder),
+    [showBuilder]
   );
 
   // Compute standalone plugins from branding metadata
@@ -187,14 +189,13 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
     return filterSingleItems(allSingles, capabilities);
   }, [singlesData?.items, capabilities]);
 
+  // Bound to this render's metadata rather than reimplemented: the rail's
+  // visibility and the panel's contents must agree about where a collection
+  // belongs, and two implementations of that would let the rail offer a
+  // section whose destinations have all moved elsewhere.
   const getCollectionPlacement = useMemo(() => {
-    return (collection: ApiCollection): string | undefined => {
-      if (!pluginMetadata) return undefined;
-      const meta = pluginMetadata.find(p =>
-        (p.collections ?? []).includes(collection.name)
-      );
-      return meta?.placement ?? meta?.group ?? undefined;
-    };
+    return (collection: ApiCollection): string | undefined =>
+      resolveCollectionPlacement(collection.name, pluginMetadata);
   }, [pluginMetadata]);
 
   const hasPermissionDataPending =
@@ -223,18 +224,18 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
       isSinglesError ||
       permittedSingles.some(single => !single.admin?.hidden));
 
-  const hasPluginsSection =
-    capabilities.canViewCollections &&
-    (hasPermissionDataPending ||
-      isCollectionsLoading ||
-      isCollectionsError ||
-      permittedCollections.some(collection => {
-        if (!collection.admin?.isPlugin || collection.admin?.hidden)
-          return false;
-        const placement = getCollectionPlacement(collection);
-        return !placement || placement === "plugins";
-      }) ||
-      (branding?.plugins?.length ?? 0) > 0);
+  const pluginsSectionVisible = hasPluginsSection(capabilities, {
+    // Loading only. A FAILED collections query is not pending: it will never
+    // resolve into visible collections, and for a user without
+    // `canManageSettings` the panel then has no destination at all, so keeping
+    // the rail item would open an empty panel rather than defer a decision.
+    isPending: hasPermissionDataPending || isCollectionsLoading,
+    hasVisiblePluginCollection: permittedCollections.some(collection => {
+      if (!collection.admin?.isPlugin || collection.admin?.hidden) return false;
+      const placement = getCollectionPlacement(collection);
+      return !placement || placement === "plugins";
+    }),
+  });
 
   const hasMediaSection = hasPermissionDataPending
     ? true
@@ -271,7 +272,7 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
           case "singles":
             return hasSinglesSection;
           case "plugins":
-            return hasPluginsSection;
+            return pluginsSectionVisible;
           case "media":
             return hasMediaSection;
           case "settings":
@@ -286,7 +287,7 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
       filteredMenuItems,
       hasCollectionsSection,
       hasSinglesSection,
-      hasPluginsSection,
+      pluginsSectionVisible,
       hasMediaSection,
       hasSettingsSection,
       hasBuildersSection,
@@ -413,35 +414,14 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
     return filterCollectionItems(visible, capabilities);
   }, [collectionsData, capabilities]);
 
-  // Determine if we should show the second sidebar. For media the sub-sidebar
-  // holds the folder tree, so it follows the tree's visibility toggle.
-  const hasSubSidebar =
-    [
-      "collections",
-      "singles",
-      "plugins",
-      "settings",
-      ...(showBuilder ? ["builders" as const] : []),
-    ].includes(selectedMain) ||
-    selectedMain.startsWith("standalone-") ||
-    (selectedMain === "media" && isFolderTreeVisible);
-
-  const CATEGORIES_WITH_SUB_SIDEBAR = [
-    "collections",
-    "singles",
-    "media",
-    "plugins",
-    "settings",
-    "builders",
-  ];
-
-  // Media only has a sub-sidebar while the folder tree is visible; treating
-  // it as a sub-sidebar category with the tree hidden would turn the mobile
-  // Media icon into a button that opens nothing instead of a link.
   const hasSubSidebarCategory = (id: string) =>
-    (CATEGORIES_WITH_SUB_SIDEBAR.includes(id) &&
-      (id !== "media" || isFolderTreeVisible)) ||
-    id.startsWith("standalone-");
+    isSubSidebarCategory(id, isFolderTreeVisible);
+
+  const hasSubSidebar = isSubSidebarOpen(
+    selectedMain,
+    visibleMenuItems.map(item => item.id),
+    isFolderTreeVisible
+  );
 
   // The Settings icon lands on the first subpage the user can actually OPEN —
   // gated on each route's own guard, not the broader "can see the link" flag, so
@@ -467,7 +447,12 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
                 : ROUTES.SETTINGS;
 
   const resolveItemHref = (item: MainMenuItem): string =>
-    resolveItemHrefHelper(item, visibleStandalonePlugins, settingsHref);
+    resolveItemHrefHelper(
+      item,
+      visibleStandalonePlugins,
+      settingsHref,
+      capabilities.canManageSettings
+    );
 
   // Resolve collections for the active standalone plugin section
   const pluginCollectionsForSection = useMemo(() => {

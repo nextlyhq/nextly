@@ -113,8 +113,35 @@ describe("the workflow's use of that derivation", () => {
       line,
       "the matrix names versions inline; it must read them from the node-matrix job"
     ).not.toMatch(/\[\s*"\d/);
-    expect(line).toContain("needs.node-matrix.outputs.versions");
-    expect(line).toContain("needs.node-matrix.outputs.lowest");
+    // Both names OCCURRING is not the property. Swapping them leaves every assertion above green
+    // while scheduled runs exercise only the lowest floor and pull requests run the full matrix —
+    // a plausible broken form the test could not tell from the intended one.
+    //
+    // The expression is `cond && A || B`, so the operand AFTER the `&&` is what a pull request
+    // selects and the one after the `||` is what everything else does.
+    // The whole condition, not just its tail. Matching only `pull_request' &&` accepts
+    // `github.event_name != 'pull_request'`, which reverses the two matrices while satisfying
+    // every assertion here — the plausible broken form this test exists to exclude.
+    // Anchored to the WHOLE `${{ … }}` expression. A prefix match accepts a trailing
+    // `&& fromJSON('["unexpected"]')`, which satisfies every assertion here while selecting a
+    // third matrix — the same class as the operand swap and the inverted condition below it.
+    const chosen =
+      /^\s*node:\s*\$\{\{\s*fromJSON\(\s*github\.event_name\s*==\s*'pull_request'\s*&&\s*([^|]+?)\s*\|\|\s*([^)]+?)\s*\)\s*\}\}\s*$/.exec(
+        line as string
+      );
+    expect(
+      chosen,
+      "the matrix expression is not the expected `event == pull_request && A || B` form"
+    ).not.toBeNull();
+    const [, onPullRequest, otherwise] = chosen as RegExpExecArray;
+    expect(
+      onPullRequest,
+      "a pull request must run the single lowest floor"
+    ).toBe("needs.node-matrix.outputs.lowest");
+    expect(
+      otherwise,
+      "a scheduled or dispatched run must run the full derived matrix"
+    ).toBe("needs.node-matrix.outputs.versions");
   });
 
   it("declares the dependency that makes those outputs available", () => {

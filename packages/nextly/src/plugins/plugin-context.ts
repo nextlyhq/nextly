@@ -32,6 +32,7 @@ import type { DatabaseInstance } from "../types/database-operations";
 import type { AdminPlacement } from "./admin-placement";
 import type { PluginContributions } from "./contributions";
 import { getCoreVersion } from "./core-version";
+import type { PluginCategory } from "./plugin-categories";
 import type { PluginSelf } from "./self";
 import { resolvePluginSelf } from "./self";
 import {
@@ -384,18 +385,16 @@ export interface PluginAdminAppearance {
 
 /**
  * Controlled vocabulary for the admin plugins list's category filter.
- * Deliberately short: a category is only useful when several plugins can
- * share it, so new values are added here rather than typed ad hoc.
+ *
+ * Defined in `./plugin-categories`, which has no imports so the admin can take
+ * it from `nextly/config` without the plugin runtime. Re-exported here because
+ * this is the module a plugin author already imports to declare one.
  */
-export type PluginCategory =
-  | "content"
-  | "forms"
-  | "seo"
-  | "media"
-  | "commerce"
-  | "integration"
-  | "dev-tools"
-  | "other";
+export {
+  PLUGIN_CATEGORIES,
+  isPluginCategory,
+  type PluginCategory,
+} from "./plugin-categories";
 
 // ============================================================
 // Plugin Admin Config Interface
