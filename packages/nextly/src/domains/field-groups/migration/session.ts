@@ -528,10 +528,20 @@ export async function withMigrationSession<T>(
   // stronger behaviour should re-check between steps, which is the only place a cancellation could
   // land intact.
   let lostClaim: ((reason: unknown) => void) | undefined;
+  // 🔴 Whether the claim was reported lost, and it is what decides the RELEASE below.
+  //
+  // Losing the claim does not stop `fn`, so a release on the way out would hand the row to the next
+  // contender while this run is still renaming tables. That is not hypothetical for the transient
+  // case: a renewal that failed on a blip leaves the row still owned by this claim, so the
+  // owner-scoped release below matches and clears it. The run then continues writing with the lock
+  // free. Leaving it alone is both safer and self-correcting — nothing renews it any more, so it
+  // lapses on its own and the TTL performs exactly the recovery it exists for.
+  let claimWasLost = false;
   const claimLost = new Promise<never>((_, reject) => {
     lostClaim = reject;
   });
-  const onLost = (): void =>
+  const onLost = (): void => {
+    claimWasLost = true;
     lostClaim?.(
       NextlyError.serviceUnavailable({
         logMessage:
@@ -542,6 +552,7 @@ export async function withMigrationSession<T>(
         },
       })
     );
+  };
   const renewal = setInterval(() => {
     void renew(adapter, dialect, claim).then(
       held => {
@@ -566,7 +577,12 @@ export async function withMigrationSession<T>(
     // cannot start a second one.
     process.off("SIGINT", onInterrupt);
     process.off("SIGTERM", onTerminate);
-    await release(adapter, claim);
+    // 🔴 Not released once the claim was reported lost. `fn` is still running — nothing here can
+    // stop it — so freeing the row would let the next contender start against a database this run
+    // is still writing to, which is the precise outcome the lock exists to prevent. Doing nothing
+    // is self-correcting: the renewal has stopped, so the claim lapses on its own and the next run
+    // takes it over through the ordinary expiry path.
+    if (!claimWasLost) await release(adapter, claim);
   }
 }
 

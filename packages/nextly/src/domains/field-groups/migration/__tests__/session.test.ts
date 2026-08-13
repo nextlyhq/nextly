@@ -749,6 +749,41 @@ describe("field-group migration session", () => {
     }
   });
 
+  // 🔴 THE case a renewal makes worse if the exit path is naive. A renewal that fails on a blip
+  // leaves the row STILL OWNED by this claim, so an owner-scoped release matches and frees it —
+  // while `fn`, which nothing here can stop, carries on rewriting tables. The next contender would
+  // then start against a database this run is still writing to, which is worse than never having
+  // renewed at all. The claim is left to lapse instead.
+  it("does not free a row it still owns after losing the claim", async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createAdapter({ heldBy: null });
+      const realRunStatement = h.ctx.runStatement.getMockImplementation();
+      h.ctx.runStatement.mockImplementation(async (statement: SQL) => {
+        if (isRenewalStatement(statement)) {
+          throw new Error("connection reset");
+        }
+        await realRunStatement?.(statement);
+      });
+
+      const run = withMigrationSession(
+        { adapter: h.adapter, dialect: "postgresql", label: "run-1" },
+        async () => {
+          await vi.advanceTimersByTimeAsync(LOCK_RENEW_INTERVAL_MS);
+        }
+      );
+      await expect(run).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Still claimed by this run, because the work it protects has not stopped. Left to expire on
+      // its own rather than handed over while that work is in flight.
+      expect(h.owner()).toMatch(/^run-1#/);
+      expect(h.expiresAt()).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("uses a lock table distinct from the schema pipeline's", () => {
     expect(MIGRATION_LOCK_TABLE).toBe("nextly_field_group_lock");
     expect(MIGRATION_LOCK_TABLE).not.toBe("nextly_migrate_lock");
