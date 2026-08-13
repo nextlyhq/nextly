@@ -105,6 +105,24 @@ function makeAdapter(options: { mainTableExists?: boolean } = {}) {
   };
 }
 
+/**
+ * The registry row shape these doubles answer with.
+ *
+ * Named, with the fields the service reads OPTIONAL, so a test can override just the property it is
+ * about. Inferring it from the default object instead pins the exact key set, and every override
+ * then has to restate keys it does not care about — which is how a fixture drifts away from the
+ * case it is describing.
+ */
+interface SingleRowDouble {
+  slug: string;
+  tableName: string;
+  fields?: unknown[];
+  locked?: boolean;
+  schemaHash?: string;
+  status?: boolean;
+  localized?: boolean;
+}
+
 function makeService(adapter: ReturnType<typeof makeAdapter>) {
   const registry = {
     // Read INSIDE the exclusion, so an update plans from the record as it is once the lock is held
@@ -115,15 +133,19 @@ function makeService(adapter: ReturnType<typeof makeAdapter>) {
     getAllSingles: vi.fn(
       async (): Promise<{ slug: string; tableName: string }[]> => []
     ),
-    getSingleBySlug: vi.fn(async (slug: string) => ({
-      slug,
-      tableName: "single_page",
-      fields: [] as unknown[],
-      locked: false,
-      // Present in the default shape because the lost-update check reads it. Omitting it here and
-      // supplying it per test would type the double without the field and reject those overrides.
-      schemaHash: "unchanged",
-    })),
+    getSingleBySlug: vi.fn(
+      async (slug: string): Promise<SingleRowDouble> => ({
+        slug,
+        tableName: "single_page",
+        fields: [] as unknown[],
+        locked: false,
+        // Present in the default shape because the service reads them. Omitting a field here and
+        // supplying it per test would type the double without it and reject those overrides.
+        schemaHash: "unchanged",
+        status: false,
+        localized: false,
+      })
+    ),
     registerSingle: vi.fn(async (row: unknown) => {
       trace.push("registry:write");
       return row;
