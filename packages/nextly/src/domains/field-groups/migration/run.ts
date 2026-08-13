@@ -416,6 +416,31 @@ export async function runFieldGroupMigration(
   // comparison, so movement has to persist THROUGH exhaustion to earn the softer answer.
   let movedSinceLastAttempt = false;
 
+  /**
+   * The plan the most recent attempt got far enough to build.
+   *
+   * 🔴 Kept because a later attempt can fail EARLIER than the one before it. The registry can vanish
+   * between listing the catalog and selecting from it, and that happens before the inner `try`
+   * opens — so exhaustion on the outer path has no manifest in scope and handed back a raw driver
+   * error, in exactly the contended case the documented outcome exists to describe. The inner path
+   * was fixed for this; the outer one still had nothing to report with.
+   */
+  let lastKnownRenames: readonly {
+    readonly from: string;
+    readonly to: string;
+  }[] = [];
+
+  /**
+   * Whether the inner catch has already decided this failure's fate.
+   *
+   * 🔴 The outer fallback must not re-open a question the inner one answered. A refusal the inner
+   * catch deliberately raised at exhaustion — an unmoving world, a conflict rather than a writer —
+   * travels outward through the same channel as a failure the inner catch never saw, and without
+   * this the outer path would catch that refusal and report it as contention, overturning the
+   * decision one frame below it.
+   */
+  let innerAdjudicated = false;
+
   const signatureOf = (error: unknown, lock: LockObservation): string => {
     const reason = NextlyError.is(error)
       ? JSON.stringify(error.logContext ?? {})
@@ -550,6 +575,7 @@ export async function runFieldGroupMigration(
         let columns: TableColumns[];
         let reconciled: ReconciledEntry[];
         const directed = directedRenameEntries(direction, entries);
+        lastKnownRenames = directed.flatMap(tableRenamesOf);
         // Above the try because the steps below the try need them, and none of
         // the three depends on the catalog read the try guards.
         //
@@ -655,6 +681,7 @@ export async function runFieldGroupMigration(
           // own missing-table error. Recognised by the same predicate the outer loop uses, so the
           // two cannot disagree about what is worth re-reading.
           if (!dryRun || !isRetryablePreviewFailure(error, dialect)) {
+            innerAdjudicated = true;
             throw error;
           }
           const signature = signatureOf(error, await observeContention());
@@ -672,13 +699,17 @@ export async function runFieldGroupMigration(
           // the held row behind it is a claim someone left when their process died rather than a
           // writer at work. Reporting that as contention buries a real storage conflict under the
           // word traffic — so it is raised, exactly as it would be with no lock row at all.
-          if (!movedSinceLastAttempt) throw error;
+          if (!movedSinceLastAttempt) {
+            innerAdjudicated = true;
+            throw error;
+          }
 
           // Out of attempts. Report the manifest's plan and say plainly that it was never scored
           // against this database, rather than returning an empty list — which reads as "nothing to
           // do" and is the silent wrong answer this path exists to remove. Derived from `directed`,
           // already in hand, so the fallback cannot disagree with the plan that would have executed.
           const renames = directed.flatMap(tableRenamesOf);
+          lastKnownRenames = renames;
           const reason = tornReadReason(error);
           logger.warn?.("field-group migration dry run could not reconcile", {
             phase: FIELD_GROUP_MIGRATION_PHASE,
@@ -825,12 +856,36 @@ export async function runFieldGroupMigration(
       // list; a rename landing inside either gap surfaces as the driver's own missing-table error,
       // which no refusal ever classified. Recognised by the same code-based classifier the lock
       // observation uses, so the two cannot disagree about what "not there" looks like.
-      if (
-        finalAttempt ||
-        !dryRun ||
-        !isRetryablePreviewFailure(error, dialect)
-      ) {
-        throw error;
+      if (!dryRun || !isRetryablePreviewFailure(error, dialect)) throw error;
+
+      if (finalAttempt) {
+        if (innerAdjudicated) throw error;
+        // 🔴 Exhausted on the OUTER path, which the inner fallback cannot reach. A later attempt can
+        // fail EARLIER than the one before it — the registry vanishing between the catalog listing
+        // and the select happens before the inner `try` opens — so this used to rethrow a raw driver
+        // error in exactly the contended case the documented outcome exists to describe.
+        //
+        // Reported only when a plan was actually built by some attempt AND a holder is observed. An
+        // empty plan is never reported: "nothing to do" is the silent wrong answer this whole path
+        // exists to remove, so an attempt that never got that far refuses instead.
+        if (
+          lastKnownRenames.length === 0 ||
+          (await observeContention()).kind !== "held"
+        ) {
+          throw error;
+        }
+        const reason = tornReadReason(error);
+        logger.warn?.("field-group migration dry run could not reconcile", {
+          phase: FIELD_GROUP_MIGRATION_PHASE,
+          direction,
+          renames: lastKnownRenames.length,
+          attempts,
+          reason,
+        });
+        return previewOutcome({
+          renames: lastKnownRenames,
+          basis: { kind: "unreconciled", reason },
+        });
       }
       // Recorded here too, so a failure that leaves by the outer door counts towards the same
       // judgement. Two paths deciding "did the world move" from different evidence is the drift
