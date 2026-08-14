@@ -34,13 +34,10 @@ interface Band {
  */
 function bandedCanvas(bands: Band[], startY = 0) {
   let y = startY;
-  const moves: number[] = [];
   return {
-    moves,
     pointer: () => ({ x: 0, y }),
     moveBy: async (_dx: number, dy: number) => {
       y += dy;
-      moves.push(dy);
     },
     zoneContainingPointer: async () => {
       const hit = bands.find(b => y >= b.from && y < b.to);
@@ -50,6 +47,19 @@ function bandedCanvas(bands: Band[], startY = 0) {
 }
 
 const ONE_BAND: Band[] = [{ zone: 2, from: 50, to: 90 }];
+
+/**
+ * The depth the pointer ACTUALLY sits at, computed from the band's known edge.
+ *
+ * The separating assertion, and it has to be stated separately from the
+ * returned value: a control that measured from wherever its coarse approach
+ * landed reports a self-consistent depth that is simply not the depth from the
+ * boundary. Comparing the report against this catches that; comparing it
+ * against the request cannot.
+ */
+function trueDepth(band: Band, y: number): number {
+  return y - band.from;
+}
 
 test("stands at exactly the depth it was asked for", async () => {
   // The whole point. The band starts at y=50, so a depth of 12 means y=62 — and
@@ -63,6 +73,9 @@ test("stands at exactly the depth it was asked for", async () => {
   expect(result.insetPx).toBe(12);
   expect(result.refused).toBeUndefined();
   expect(canvas.pointer().y).toBe(62);
+  // The reported depth is the REAL one, measured from the band's edge rather
+  // than from wherever the approach happened to stop.
+  expect(trueDepth(ONE_BAND[0], canvas.pointer().y)).toBe(result.insetPx);
 });
 
 test("lands on the same depth from a coarse approach that overshoots", async () => {
@@ -74,6 +87,7 @@ test("lands on the same depth from a coarse approach that overshoots", async () 
     const result = await dragToInsetInZone(canvas, 10);
     expect(result.insetPx).toBe(10);
     expect(canvas.pointer().y).toBe(60);
+    expect(trueDepth(ONE_BAND[0], canvas.pointer().y)).toBe(result.insetPx);
   }
 });
 
@@ -108,26 +122,21 @@ test("measures from the band it entered, not from where the walk began", async (
   // Dead space between bands is the case a step-count would get wrong: the
   // pointer crosses a gap, and a depth counted from the start position or from
   // the previous band is larger than the depth inside THIS one.
-  const canvas = bandedCanvas([
+  const bands: Band[] = [
     { zone: 0, from: 4, to: 12 },
     { zone: 1, from: 40, to: 80 },
-  ]);
-  // Start already past the first band and inside the gap, so the first band is
-  // never entered and zone 1 is the one measured from.
-  const inGap = bandedCanvas(
-    [
-      { zone: 0, from: 4, to: 12 },
-      { zone: 1, from: 40, to: 80 },
-    ],
-    20
-  );
+  ];
+  // Started past the first band and inside the gap, so the first band is never
+  // entered and zone 1 is the one the depth is measured from.
+  const canvas = bandedCanvas(bands, 20);
   expect(await canvas.zoneContainingPointer()).toBe(-1);
 
-  const result = await dragToInsetInZone(inGap, 9);
+  const result = await dragToInsetInZone(canvas, 9);
 
   expect(result.zone).toBe(1);
   expect(result.insetPx).toBe(9);
-  expect(inGap.pointer().y).toBe(49);
+  expect(canvas.pointer().y).toBe(49);
+  expect(trueDepth(bands[1], canvas.pointer().y)).toBe(result.insetPx);
 });
 
 test("a depth of zero puts the pointer on the first row inside the band", async () => {
@@ -140,4 +149,5 @@ test("a depth of zero puts the pointer on the first row inside the band", async 
   expect(result.refused).toBeUndefined();
   expect(result.insetPx).toBe(0);
   expect(canvas.pointer().y).toBe(50);
+  expect(trueDepth(ONE_BAND[0], canvas.pointer().y)).toBe(result.insetPx);
 });
