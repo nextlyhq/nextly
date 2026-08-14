@@ -46,6 +46,7 @@ import { getNextly as getDirectAPI } from "./direct-api/nextly";
 import { resolveCollectionTableName } from "./domains/schema/utils/resolve-table-name";
 import { NextlyError } from "./errors/nextly-error";
 import { runBootTimeApplyIfDev } from "./init/boot-apply";
+import { awaitBootMigrations } from "./init/boot-migrations-gate";
 import {
   buildServiceConfig,
   type GetNextlyOptions,
@@ -396,6 +397,14 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
  * `getNextly({ config })` directly.
  */
 export async function getCachedNextly(): Promise<Nextly> {
+  // Before ANY return, including the cached one. This is the surface that could
+  // serve during another surface's migration wait: the request-path boot
+  // registers services and then waits for the lock, and everything below keys
+  // off `isServicesRegistered()`, which is true throughout that window. Awaiting
+  // rather than testing means a request racing a normal boot still waits for it,
+  // exactly as before — it only learns the answer once there is one.
+  await awaitBootMigrations();
+
   if (globalForInit.__nextly_cachedInstance) {
     return globalForInit.__nextly_cachedInstance;
   }
