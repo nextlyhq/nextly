@@ -401,6 +401,52 @@ describe("verdictFor", () => {
   });
 });
 
+describe("a pull request that is no longer open", () => {
+  /**
+   * The state that cost four commits: a merged pull request whose branch kept
+   * receiving pushes. Every gate answer below describes an OPEN pull request,
+   * so without this the verdict is "no review at the head" — true, useless, and
+   * repeated forever while the stranded commits sit outside the merge.
+   */
+  it("names a stranded tail rather than reporting missing coverage", () => {
+    const v = verdictFor({
+      missing: [CODEX],
+      blocking: [CODEX],
+      state: "MERGED",
+      stranded: 4,
+    });
+    expect(v.verdict).toBe("MERGED WITH A STRANDED TAIL");
+    expect(v.detail).toEqual({ state: "MERGED", stranded: 4 });
+    expect(v.exitCode).toBe(1);
+  });
+
+  /** A merged pull request whose branch did not move afterwards is done. */
+  it("is satisfied by a merged pull request with nothing stranded", () => {
+    const v = verdictFor({ blocking: [CODEX], state: "MERGED", stranded: 0 });
+    expect(v.verdict).toBe("ALREADY MERGED");
+    expect(v.exitCode).toBe(0);
+  });
+
+  it("treats a closed pull request the same way", () => {
+    expect(
+      verdictFor({ blocking: [CODEX], state: "CLOSED", stranded: 2 }).verdict
+    ).toBe("MERGED WITH A STRANDED TAIL");
+  });
+
+  /**
+   * The control. An OPEN pull request must still be judged on coverage and
+   * threads, which a state check placed too early would skip.
+   */
+  it("still gates an open pull request", () => {
+    const v = verdictFor({
+      missing: [CODEX],
+      blocking: [CODEX],
+      state: "OPEN",
+    });
+    expect(v.verdict).toBe("MISSING REVIEW AT HEAD");
+  });
+});
+
 describe("report", () => {
   const base = {
     head: HEAD,
