@@ -588,13 +588,18 @@ export async function withMigrationSession<T>(
   // to stop watch mode is Ctrl+C and a stuck claim would block every later sync.
   // Releasing on the signal keeps the durable-claim design and removes its cost
   // on the path people actually interrupt — but only for callers that opt in.
+  // Set by the signal path so the completion check below can tell a claim this run GAVE UP
+  // deliberately from one a contender took. Both leave the row not-ours at the end and only the
+  // second is a failure — an interrupt is an orderly shutdown that already signalled its outcome.
+  let releasedOnSignal = false;
   const releaseOnSignal = (signal: NodeJS.Signals): void => {
+    releasedOnSignal = true;
     // The signal is re-raised whether or not the release succeeded: a pool torn
     // down by the same interrupt is the likely failure, and an unobserved
     // rejection there would surface as an unhandled rejection instead of
     // letting the process stop. A claim left behind by a failed release is the
     // ordinary stuck-claim case an operator already has a remedy for.
-    void release(adapter, claim)
+    void release(adapter, dialect, claim)
       .catch(() => undefined)
       .finally(() => {
         process.kill(process.pid, signal);
@@ -678,8 +683,14 @@ export async function withMigrationSession<T>(
   // running, so if nothing else is pending there is nothing left to protect.
   renewal.unref?.();
 
+  // Captured rather than returned from inside the `try`, so the lock verification below can run
+  // AFTER the release without throwing from a `finally`. A throw there would discard an exception
+  // `fn` had already raised — the caller would lose their real failure and be told about the lock
+  // instead, which is the hazard `no-unsafe-finally` names.
+  let heldToTheEnd = true;
+  let result: T;
   try {
-    return await Promise.race([fn(session), claimLost]);
+    result = await Promise.race([fn(session), claimLost]);
   } finally {
     clearInterval(renewal);
     // Removed before releasing, so a signal arriving during an orderly release
@@ -691,8 +702,27 @@ export async function withMigrationSession<T>(
     // is still writing to, which is the precise outcome the lock exists to prevent. Doing nothing
     // is self-correcting: the renewal has stopped, so the claim lapses on its own and the next run
     // takes it over through the ordinary expiry path.
-    if (!claimWasLost) await release(adapter, claim);
+    //
+    // 🔴 A release that finds the row already gone REJECTS the run rather than letting the
+    // callback's value stand. Completing is not the same as having been protected while completing:
+    // the exclusion promises no other run touched these tables meanwhile, and a claim that lapsed
+    // or was taken over means that promise was not kept.
+    if (!claimWasLost) heldToTheEnd = await release(adapter, dialect, claim);
   }
+
+  // Reached only when `fn` RESOLVED — a rejection propagated out of the block above and never gets
+  // here, which is the ordering that keeps the caller's own failure primary.
+  if (!heldToTheEnd && !releasedOnSignal) {
+    throw NextlyError.serviceUnavailable({
+      logMessage:
+        "field-group migration finished without holding its lock; another run may have overlapped it",
+      logContext: {
+        reason: "migration lock was not held at completion",
+        label,
+      },
+    });
+  }
+  return result;
 }
 
 /**
@@ -815,9 +845,21 @@ async function acquire(
 }
 
 /** Release only what we hold, so a late finaliser cannot free someone else's run. */
-async function release(adapter: DrizzleAdapter, claim: string): Promise<void> {
-  await adapter.transaction(async ctx => {
+async function release(
+  adapter: DrizzleAdapter,
+  dialect: MigrationDialect,
+  claim: string
+): Promise<boolean> {
+  return adapter.transaction(async ctx => {
     await ctx.lockRow(MIGRATION_LOCK_TABLE, LOCK_ROW_ID);
+    // 🔴 Read BEFORE clearing, and report it, because the owner-filtered UPDATE below cannot.
+    //
+    // That statement silently affects nothing when the row has moved on — correct as a release,
+    // useless as an ANSWER. A run whose callback finished before a queued renewal reported the
+    // takeover reaches here with `claimWasLost` still false, releases nothing, and returns the
+    // callback's value as though the work had been protected. This is the last observable moment.
+    const before = await readLockState(ctx, dialect);
+    const heldToTheEnd = before?.owner === claim && before.live;
     // Naming the owner as well makes a release affect only a row we still hold.
     await ctx.runStatement(
       sql`UPDATE ${sql.identifier(MIGRATION_LOCK_TABLE)}
@@ -826,5 +868,6 @@ async function release(adapter: DrizzleAdapter, claim: string): Promise<void> {
           WHERE ${sql.identifier("id")} = ${LOCK_ROW_ID}
             AND ${sql.identifier("owner")} = ${claim}`
     );
+    return heldToTheEnd;
   });
 }

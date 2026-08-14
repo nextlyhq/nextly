@@ -277,15 +277,22 @@ describe("field-group migration session", () => {
   // A run that already lost the lock must not free it on its way out: by then
   // the row belongs to whoever took it next, and clearing it would let a third
   // run start while that one is mid-migration.
-  it("releases only a lock it still owns", async () => {
+  it("releases only a lock it still owns, and refuses to call that a success", async () => {
     const h = createAdapter({ heldBy: null });
-    await withMigrationSession(
-      { adapter: h.adapter, dialect: "postgresql", label: "run-1" },
-      async () => {
-        // Someone else takes the row over while this run is in flight.
-        h.takeOver("run-2");
-      }
-    );
+    await expect(
+      withMigrationSession(
+        { adapter: h.adapter, dialect: "postgresql", label: "run-1" },
+        async () => {
+          // Someone else takes the row over while this run is in flight.
+          h.takeOver("run-2");
+        }
+      )
+      // 🔴 The callback COMPLETED, and the run still fails. Completing is not the same as having
+      // been protected while completing: this run was writing with no exclusion from the moment the
+      // row moved, which is the outcome the lock exists to prevent, so returning the callback's
+      // value would hand back a result the lock never covered.
+    ).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
+    // And the release still leaves the contender's claim alone, which is the other half.
     expect(h.owner()).toBe("run-2");
   });
 
