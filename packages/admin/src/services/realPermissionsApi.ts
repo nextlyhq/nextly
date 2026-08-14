@@ -21,13 +21,23 @@ export interface ApiPermissionEntry {
    * to, and it is what the rows record — as opposed to what a configuration
    * declares, which cannot see Schema Builder entities at all.
    */
-  owner?: string | null;
-  /** Heading within the owner's section, when the owner set one. */
-  permissionGroup?: string | null;
-  /** Marked by the seeder when the declaration that created it disappeared. */
-  orphanedAt?: string | null;
-  /** Declared destructive by whoever contributed it. */
-  danger?: boolean;
+  owner: string | null;
+  /**
+   * Heading within the owner's section; null when the owner set none.
+   *
+   * Named for the field the endpoint SERIALIZES. `PermissionService`
+   * `listPermissions` maps its columns to `group` and `orphaned` and returns
+   * that result directly, so a DTO naming the column instead would declare
+   * properties that never cross the wire — always `undefined` at runtime, while
+   * hiding the ones that do arrive.
+   */
+  group: string | null;
+  /** True once the declaring package stopped declaring it. */
+  orphaned: boolean;
+  /** True for a permission the admin should warn before granting. */
+  danger: boolean;
+  /** Grouping label the settings page reads; absent unless the row sets one. */
+  category?: string;
 }
 
 // Canonical pagination meta is { total, page, limit, totalPages, hasNext,

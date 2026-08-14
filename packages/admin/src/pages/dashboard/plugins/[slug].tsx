@@ -40,7 +40,10 @@ import { API_PATH_PREFIX } from "@admin/lib/api/fetcher";
 import { categoryLabel } from "@admin/lib/plugins/plugin-categories";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 import { staticRegistrySource } from "@admin/lib/plugins/registry/static-source";
-import { fetchPermissionsFromApi } from "@admin/services/realPermissionsApi";
+import {
+  type ApiPermissionEntry,
+  fetchPermissionsFromApi,
+} from "@admin/services/realPermissionsApi";
 import type { PluginMetadata } from "@admin/types/branding";
 
 import { NotInstalledPlugin } from "./components/NotInstalledPlugin";
@@ -387,16 +390,67 @@ interface ContributionGroup {
  * Its own query rather than a suspending one, so a caller without the roles
  * read permission degrades THIS card instead of the page.
  */
+/** Retries left to a failure that says nothing about this viewer's access. */
+const DEFAULT_QUERY_RETRIES = 2;
+
+/** Rows per request. The endpoint caps a page; the loop below spans them. */
+const PERMISSION_PAGE_SIZE = 200;
+
+/**
+ * Whether an error is the server REFUSING rather than failing.
+ *
+ * A refusal is an answer about this viewer and repeating it changes nothing. A
+ * network error or a 5xx is the absence of an answer, and the two must not
+ * share a branch: conflating them suppresses the retry that would have
+ * recovered the second, and reports missing permissions to someone who has
+ * them.
+ */
+function isAccessDenial(error: unknown): boolean {
+  const status = (error as { status?: unknown } | null)?.status;
+  return status === 401 || status === 403;
+}
+
+/**
+ * Every permission row, across pages.
+ *
+ * The endpoint sorts globally by resource, so ONE plugin's rows are scattered
+ * rather than grouped — a single page filtered by owner therefore omits rows
+ * silently, and reports "none" for a plugin whose rows all sort late. Paging is
+ * what makes the owner filter answer about the whole set.
+ */
+async function fetchAllPermissions(): Promise<ApiPermissionEntry[]> {
+  const first = await fetchPermissionsFromApi({
+    limit: PERMISSION_PAGE_SIZE,
+    page: 1,
+  });
+  const rows = [...first.data];
+  // Bounded by the total the server reported, and re-read from each response,
+  // so a shrinking result set cannot spin here.
+  for (let page = 2; page <= (first.meta?.totalPages ?? 1); page += 1) {
+    const next = await fetchPermissionsFromApi({
+      limit: PERMISSION_PAGE_SIZE,
+      page,
+    });
+    if (next.data.length === 0) break;
+    rows.push(...next.data);
+  }
+  return rows;
+}
+
 function PluginPermissions({ pluginName }: { pluginName: string }) {
-  const { data, isPending, isError } = useQuery({
+  const { data, isPending, isError, error } = useQuery({
     queryKey: ["plugin-permissions", pluginName],
-    queryFn: () => fetchPermissionsFromApi({ limit: 200 }),
-    // A refusal is an answer about this viewer's access, not a transient
-    // failure, so retrying it only delays the message.
-    retry: false,
+    queryFn: () => fetchAllPermissions(),
+    // Only a DENIAL is an answer about this viewer, so only a denial stops the
+    // retries. A network failure or a 5xx says nothing about access, and
+    // treating it as one both skips the retry that would have recovered it and
+    // tells the viewer they lack a permission they may well hold.
+    retry: (failureCount, err) =>
+      !isAccessDenial(err) && failureCount < DEFAULT_QUERY_RETRIES,
   });
 
-  const owned = (data?.data ?? []).filter(entry => entry.owner === pluginName);
+  const denied = isError && isAccessDenial(error);
+  const owned = (data ?? []).filter(entry => entry.owner === pluginName);
 
   // Rendered even when empty, unlike the configuration-fed groups beside it.
   // An absent section reads as "this plugin declares none", which is a claim
@@ -410,15 +464,21 @@ function PluginPermissions({ pluginName }: { pluginName: string }) {
       {isPending && (
         <p className="text-xs text-muted-foreground">Loading permissions…</p>
       )}
-      {isError && (
+      {denied && (
         <p className="text-xs text-muted-foreground">
           Not available. Reading permissions needs the roles read permission, so
           this list is hidden rather than empty.
         </p>
       )}
+      {isError && !denied && (
+        <p className="text-xs text-muted-foreground">
+          Could not load permissions. This is a failure to ask, not an answer —
+          the plugin may well own some.
+        </p>
+      )}
       {!isPending && !isError && owned.length === 0 && (
         <p className="text-xs text-muted-foreground">
-          This plugin declares no permissions.
+          No permission rows are attributed to this plugin.
         </p>
       )}
       {!isPending && !isError && owned.length > 0 && (

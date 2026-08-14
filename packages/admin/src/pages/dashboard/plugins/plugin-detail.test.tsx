@@ -67,18 +67,31 @@ const plugins: PluginMetadata[] = [
 
 // The permissions card reads the SEEDED ROWS from the authenticated endpoint,
 // so a test rendering the page supplies that answer rather than the network.
-const permissionRows = vi.hoisted(() => ({ current: [] as unknown[] }));
+// `pageSize` is what makes the loop observable: with it below the row count
+// the endpoint answers in several pages, exactly as the real one does past its
+// cap, and a card reading only page one omits whatever sorts late.
+const permissionRows = vi.hoisted(() => ({
+  current: [] as unknown[],
+  pageSize: 200,
+}));
 vi.mock("@admin/services/realPermissionsApi", () => ({
-  fetchPermissionsFromApi: () =>
-    Promise.resolve({
-      data: permissionRows.current,
+  fetchPermissionsFromApi: (options?: { page?: number }) => {
+    const size = permissionRows.pageSize;
+    const page = options?.page ?? 1;
+    const start = (page - 1) * size;
+    return Promise.resolve({
+      data: permissionRows.current.slice(start, start + size),
       meta: {
         total: permissionRows.current.length,
-        page: 1,
-        limit: 200,
-        totalPages: 1,
+        page,
+        limit: size,
+        totalPages: Math.max(
+          1,
+          Math.ceil(permissionRows.current.length / size)
+        ),
       },
-    }),
+    });
+  },
 }));
 
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
@@ -128,6 +141,27 @@ const seededRows = [
 
 beforeEach(() => {
   permissionRows.current = seededRows;
+  permissionRows.pageSize = 200;
+});
+
+/**
+ * The endpoint sorts globally by resource, so one plugin's rows are scattered
+ * across pages rather than grouped. A card reading only the first page filters
+ * a partial set and reports "none" for a plugin whose rows all sort late —
+ * which is indistinguishable from a plugin that genuinely owns none.
+ *
+ * `pageSize: 1` puts the target row on page two, so this fails against any
+ * implementation that does not follow `totalPages`.
+ */
+describe("PluginDetailPage permissions across pages", () => {
+  it("finds a plugin's rows when they fall beyond the first page", async () => {
+    permissionRows.pageSize = 1;
+    // seededRows[1] is the @acme/disabled row, so page one holds only the
+    // @acme/forms one and the target is reachable only by paging.
+    renderPage("acme-disabled");
+
+    expect(await screen.findByText("Purge Archive")).toBeInTheDocument();
+  });
 });
 
 function renderPage(slug: string) {
