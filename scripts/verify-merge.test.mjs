@@ -27,7 +27,9 @@ import {
   OPTIONAL_STATUS_CONTEXTS,
   missingRequired,
   PATH_FILTER_WINDOW,
-  MAINTAINER_ASSOCIATIONS,
+  WRITE_PERMISSIONS,
+  hasWriteAccess,
+  pathsForFiltering,
   PATH_FILTER_COMMIT_LIMIT,
   pageWrapping,
   pathMatches,
@@ -408,13 +410,53 @@ describe("OPTIONAL_STATUS_CONTEXTS", () => {
   });
 });
 
-describe("maintainer associations", () => {
-  it("counts only associations carrying write access", () => {
-    // Any account can submit an APPROVED review, a contributor's own and a
-    // bot's included, so the state alone does not say the project accepted it.
-    expect(MAINTAINER_ASSOCIATIONS).toEqual(["OWNER", "MEMBER", "COLLABORATOR"]);
-    expect(MAINTAINER_ASSOCIATIONS).not.toContain("CONTRIBUTOR");
-    expect(MAINTAINER_ASSOCIATIONS).not.toContain("NONE");
+describe("hasWriteAccess", () => {
+  it("accepts the permissions that actually carry write", () => {
+    for (const p of WRITE_PERMISSIONS) expect(hasWriteAccess(p)).toBe(true);
+  });
+
+  it("refuses read, none, and anything unrecognised", () => {
+    // The case the association allowlist got wrong: in an ORGANISATION
+    // repository `MEMBER` means membership of the org and says nothing about
+    // access here, so a read-only member's approval was counted as the project
+    // accepting the change. A permission is the fact; an association is a label.
+    expect(hasWriteAccess("read")).toBe(false);
+    expect(hasWriteAccess("none")).toBe(false);
+    expect(hasWriteAccess("triage")).toBe(false);
+    expect(hasWriteAccess(null)).toBe(false);
+    expect(hasWriteAccess("SOMETHING_NEW")).toBe(false);
+  });
+});
+
+describe("pathsForFiltering", () => {
+  const many = Array.from({ length: 400 }, (_, i) => `packages/a/${i}.ts`);
+
+  it("applies the 300-file window in BOTH modes", () => {
+    // A property of filter evaluation itself, so it holds whichever event
+    // produced the run.
+    expect(pathsForFiltering({ changedPaths: many, commits: 3, merged: false }))
+      .toHaveLength(300);
+    expect(pathsForFiltering({ changedPaths: many, commits: 3, merged: true }))
+      .toHaveLength(300);
+  });
+
+  it("applies the 1000-commit bypass only BEFORE a merge", () => {
+    // It is a property of the pull request's diff. After a merge the checks
+    // come from a push of the squash commit — one commit, whatever the pull
+    // request contained — so the pull request's count belongs to an event that
+    // is over, and using it would empty the list on any large pull request and
+    // require every workflow regardless of what the push triggered.
+    expect(
+      pathsForFiltering({ changedPaths: many, commits: 1500, merged: false })
+    ).toEqual([]);
+    expect(
+      pathsForFiltering({ changedPaths: many, commits: 1500, merged: true })
+    ).toHaveLength(300);
+  });
+
+  it("returns nothing readable as nothing", () => {
+    expect(pathsForFiltering({ changedPaths: null, commits: 1, merged: false }))
+      .toEqual([]);
   });
 });
 
