@@ -18,13 +18,13 @@ const OLD = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 /** A revision a force-push removed, so the pull request's order lacks it. */
 const ERASED = "dddddddddddddddddddddddddddddddddddddddd";
 
-/** A submitted review, which is the ordinary case the other fixtures vary from. */
 /** The pull request's commit order, which is what decides "later revision". */
 const ORDER = new Map([
   [OLD, 0],
   [HEAD, 1],
 ]);
 
+/** A submitted review, which is the ordinary case the other fixtures vary from. */
 const review = (login, commit_id, id = 1) => ({
   id,
   user: { login },

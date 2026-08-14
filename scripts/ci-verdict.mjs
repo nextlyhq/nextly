@@ -27,10 +27,12 @@
 // command below owns all of the I/O — process, network, git and filesystem.
 // That SPLIT is the claim; it is not a description of every function here.
 //
-// Stating it precisely matters. The pure half is covered by tests, the I/O
-// half is not, and it is where this module's defects have actually lived: a
-// head read from the wrong source, and three references left dangling by one
-// block move — none of which a green suite could see.
+// Stating it precisely matters because the two halves fail differently. A
+// pure function can only be wrong about the inputs it was given, and a test
+// can give it any of them. The I/O half is wrong about the WORLD — a ref that
+// moved, a history that is shallow, an entry point that did not match — and
+// none of those is reachable by importing a function, so a suite that only
+// imports can be green while the program does not run at all.
 
 import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
@@ -581,7 +583,7 @@ async function main(argv) {
     "--repo",
     repoArg,
     "--json",
-    "headRefName,isCrossRepository,headRepositoryOwner,headRepository,state,headRefOid",
+    "headRefName,isCrossRepository,headRepositoryOwner,headRepository,state,headRefOid,baseRefOid",
   ]);
   // A fork's branch is not on `origin`, so the ref is read from the repository
   // that HAS it. `refs/pull/<pr>/head` is not a substitute: it is the same
@@ -862,7 +864,7 @@ async function main(argv) {
       "--repo",
       repoArg,
       "--json",
-      "state,headRefOid",
+      "state,headRefOid,baseRefOid",
     ]);
     const rv = gh([
       "api",
@@ -881,6 +883,11 @@ async function main(argv) {
       head: headOf(),
       state: live.state,
       mergedHead: live.headRefOid,
+      // A review is evidence about a DIFF, and the diff is base..head.
+      // Retargeting a stacked pull request moves the base while the head SHA
+      // stays put, so head equality alone would reuse reviews taken when the
+      // parent stack was not in scope.
+      base: live.baseRefOid,
       reviews: rv,
       threads: th,
       issueComments: ic,
@@ -896,6 +903,7 @@ async function main(argv) {
       s.head,
       s.state,
       s.mergedHead,
+      s.base,
       s.rewrites,
       fingerprint(s.reviews, s.threads, s.issueComments),
     ]);
@@ -928,9 +936,13 @@ async function main(argv) {
   ) {
     const observed = snapshot();
 
-    if (observed.head !== head || observed.state !== meta.state) {
+    if (
+      observed.head !== head ||
+      observed.state !== meta.state ||
+      observed.base !== meta.baseRefOid
+    ) {
       process.stderr.write(
-        "ci-verdict: head or lifecycle moved since the first read; re-run\n"
+        "ci-verdict: head, base or lifecycle moved since the first read; re-run\n"
       );
       return 2;
     }
