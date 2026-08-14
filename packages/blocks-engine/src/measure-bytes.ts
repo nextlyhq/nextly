@@ -318,10 +318,31 @@ export interface DocumentSurvey {
   /** More nodes than the cap allows. */
   tooManyNodes: boolean;
   /**
+   * Nodes counted, and the deepest node reached.
+   *
+   * Published because the walk already knows them and a caller that needs the
+   * NUMBERS rather than the verdicts would otherwise re-derive them — which is
+   * the duplicate structural walk this survey exists to remove, reappearing on
+   * the other side of the boundary. `countNodes` and `treeDepth` answer the
+   * same question by a second traversal with its own idea of what a node is.
+   *
+   * Both are LOWER BOUNDS once any limit was breached, because the walk stops
+   * at the first breach rather than finishing to produce a total nobody asked
+   * for.
+   */
+  nodes: number;
+  depth: number;
+  /**
    * The value holds something JSON does not preserve: a BigInt, a function, a
    * symbol, a symbol-keyed property, `undefined`, a non-finite number, `-0`, an
-   * object that is not a plain record, an accessor that threw, or a repeated
-   * reference.
+   * object that is not a plain record, an accessor that threw, or a CIRCULAR
+   * reference — one that is its own ancestor.
+   *
+   * A repeated reference that is NOT circular is legal and is not reported:
+   * `JSON.stringify` duplicates the subtree, so two siblings pointing at one
+   * object serialize fine and are counted once per occurrence. Saying
+   * "repeated" here described the opposite of what the walk does, on a
+   * contract published through `/format`.
    *
    * Also the two shapes JSON rewrites rather than refuses, which are easy to
    * miss because nothing throws: an array HOLE, which comes back as `null`, and
@@ -407,6 +428,7 @@ export function surveyDocument(
   let bytes = 0;
   let unserializable = false;
   let nodes = 0;
+  let deepest = 0;
 
   // Objects on the CURRENT PATH, not every object seen. A repeated reference
   // that is not a cycle is legal JSON — the serializer duplicates the subtree —
@@ -423,6 +445,8 @@ export function surveyDocument(
     tooDeep: false,
     tooManyNodes: nodes > limits.maxNodes,
     unserializable,
+    nodes,
+    depth: deepest,
   });
 
   /** Account for a value that cannot contain others. */
@@ -613,10 +637,20 @@ export function surveyDocument(
           value: descend,
           kind: reached.kind,
           depth: reached.depth,
-          // Already through `toJSON`, unless we deliberately kept the original
-          // for structural accounting — in which case the hook has not been
-          // applied to what is being pushed and must not be skipped.
-          normalized: !(structural && substituted),
+          // ALWAYS normalized, including when we deliberately kept the
+          // original for structural accounting. Marking it unnormalized made
+          // the later frame invoke the hook a SECOND time, with the root key
+          // `""` rather than the member key the writer passes — and then
+          // discard the replacement anyway. A node hook ran twice and a
+          // document serializing to 3,105 bytes surveyed as 96.
+          //
+          // So a substituted structural member is walked as the ORIGINAL, once,
+          // and its bytes are the original's rather than the replacement's.
+          // That is a deliberate inexactness confined to a document already
+          // refused: a substitution sets `unserializable`, which `validate()`
+          // reports as `document-unwritable`, so no accepted document is ever
+          // measured this way.
+          normalized: true,
         });
       } else if (typeof held === "object" && held !== null) {
         stack.push({
@@ -670,6 +704,7 @@ export function surveyDocument(
 
     if (kind === "node") {
       nodes += 1;
+      if (depth > deepest) deepest = depth;
       if (depth > limits.maxDepth) return { ...done(), tooDeep: true };
       if (nodes > limits.maxNodes) return { ...done(), tooManyNodes: true };
     }

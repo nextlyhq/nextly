@@ -760,7 +760,7 @@ export function parseBlockDocument(value: unknown): BlockDocumentParseResult {
     return {
       success: false,
       issues: [
-        "Document holds a value JSON cannot represent unchanged (a BigInt, a function, a symbol, `undefined`, a non-finite number, `-0`, an object that is not a plain record, an unreadable accessor, or a repeated reference).",
+        "Document holds a value JSON cannot represent unchanged (a BigInt, a function, a symbol, `undefined`, a non-finite number, `-0`, an object that is not a plain record, an unreadable accessor, or a circular reference).",
       ],
     };
   }

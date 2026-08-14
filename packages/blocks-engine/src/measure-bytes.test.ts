@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { countNodes, treeDepth } from "./limits";
 import { measureBytes, surveyDocument } from "./measure-bytes";
 
 /**
@@ -183,6 +184,91 @@ describe("measureBytes", () => {
 
     expect(survey.tooManyNodes).toBe(true);
     expect(survey.unserializable).toBe(true);
+  });
+
+  it("agrees with countNodes and treeDepth, which answer the same question", () => {
+    // Three implementations of "how many nodes, how deep" exist: this survey,
+    // and the engine's `countNodes`/`treeDepth`, which the builder's cap checks
+    // still call. Until the builder derives its answers from the survey, this
+    // is what stops the two drifting — a divergence would otherwise be visible
+    // only on the documents that sit between them, which is exactly when nobody
+    // is looking.
+    const leaf = (id: string) => ({
+      id,
+      type: "core/text",
+      version: 1,
+      props: {},
+    });
+    const cases: Array<[string, { nodes: unknown[] }]> = [
+      ["empty", { nodes: [] }],
+      ["flat", { nodes: [leaf("a"), leaf("b"), leaf("c")] }],
+      [
+        "nested through slots",
+        {
+          nodes: [
+            {
+              ...leaf("root"),
+              type: "core/section",
+              slots: {
+                left: [leaf("l1"), leaf("l2")],
+                right: [
+                  {
+                    ...leaf("mid"),
+                    type: "core/section",
+                    slots: { inner: [leaf("deep")] },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    ];
+
+    for (const [label, forest] of cases) {
+      const survey = surveyDocument(
+        { formatVersion: 1, kind: "page", ...forest },
+        {
+          maxBytes: Number.MAX_SAFE_INTEGER,
+          maxDepth: Number.MAX_SAFE_INTEGER,
+          maxNodes: Number.MAX_SAFE_INTEGER,
+        }
+      );
+      const nodes = forest.nodes as Parameters<typeof countNodes>[0];
+      expect(survey.nodes, `${label}: node count`).toBe(countNodes(nodes));
+      expect(survey.depth, `${label}: depth`).toBe(treeDepth(nodes));
+    }
+  });
+
+  it("runs a structural member's toJSON exactly once", () => {
+    // Keeping the ORIGINAL for structural counting must not also mean re-running
+    // the hook on it. Marking the pushed value unnormalized did exactly that:
+    // the hook ran a second time, with the root key `""` instead of the member
+    // key the writer passes, and the replacement was then discarded anyway — so
+    // a document serializing to 3,105 bytes surveyed as 96 under a 1,000-byte
+    // cap.
+    let calls = 0;
+    const keys: string[] = [];
+    const node = {
+      id: "root",
+      type: "core/section",
+      version: 1,
+      props: { pad: "x".repeat(3000) },
+      toJSON(key: string) {
+        calls += 1;
+        keys.push(key);
+        return { id: "root", type: "core/section", version: 1, props: {} };
+      },
+    };
+
+    surveyDocument(
+      { formatVersion: 1, kind: "page", nodes: [node] },
+      { maxBytes: 1000, maxDepth: 12, maxNodes: 5000 }
+    );
+
+    expect(calls).toBe(1);
+    // The writer passes the member key, never the root key, for a nested value.
+    expect(keys).toEqual(["0"]);
   });
 
   it("counts a node's own subtree, not its toJSON replacement's", () => {
