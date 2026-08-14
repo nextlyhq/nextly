@@ -28,6 +28,18 @@ vi.mock("../field-group-table-provisioning", () => ({
     bound.push(tableName);
   }),
   reconcileComponentCompanion: vi.fn(async () => {}),
+  // The update path probes which discriminator column the existing table carries before it moves
+  // anything. Stubbed to the current spelling: these tests are about which field CHANGES are
+  // accepted, and a real probe would make every one of them a test of the catalog instead.
+  resolveComponentTypeColumn: vi.fn(async () => "type"),
+}));
+
+// Enabling localization is gated on the app declaring a `localization` block, and that gate runs
+// BEFORE the schema check these tests are about. Left real, a fixture that turns localization on
+// is refused for a missing config and never reaches the guard — a test passing on the wrong
+// rejection. Its own behaviour is covered where it lives.
+vi.mock("../../../i18n/config/require-app-config", () => ({
+  assertLocalizationConfigured: vi.fn(),
 }));
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
@@ -81,9 +93,15 @@ function registryDouble() {
  * failure these tests inject; routing it into the exclusion's probe as well would refuse the create
  * before it started, and every assertion below would be describing a different path.
  */
-function adapterDouble(tableExists: () => Promise<boolean>) {
+function adapterDouble(
+  tableExists: () => Promise<boolean>,
+  // The dialect the service reads its column shapes for. Parameterised because whether a change
+  // needs DDL is a per-dialect question: the same `maxLength` edit alters a MySQL VARCHAR and
+  // leaves a SQLite TEXT untouched, and a guard tested on one dialect says nothing about the other.
+  dialect: "postgresql" | "mysql" | "sqlite" = "postgresql"
+) {
   return withMigrationLockSurface({
-    getCapabilities: () => ({ dialect: "postgresql" as const }),
+    getCapabilities: () => ({ dialect }),
     // The parameter is declared even though nothing here reads it: `entityStatements` reads the
     // recorded calls, and a mock with no declared parameters records them as an empty tuple.
     executeQuery: vi.fn(async (_sql: string) => []),
@@ -327,5 +345,605 @@ describe("a create whose generated names would not fit is refused", () => {
     });
 
     expect(migrationStatus).toBe("applied");
+  });
+});
+
+/**
+ * A registry that returns a stored field group, so an UPDATE can be driven through the service.
+ *
+ * `getComponent` is what the update re-reads inside the exclusion to re-establish its preconditions,
+ * so it decides both the old field set the diff is taken against and whether the group is localized.
+ */
+function registryWithGroup(args: {
+  fields: { name: string; type: string; localized?: boolean }[];
+  localized?: boolean;
+}) {
+  const record = {
+    slug: "hero",
+    tableName: "comp_hero",
+    fields: args.fields,
+    localized: args.localized ?? false,
+    locked: false,
+    schemaVersion: 1,
+  };
+  return {
+    getAllComponents: vi.fn().mockResolvedValue([]),
+    registerComponent: vi.fn(async (row: unknown) => row),
+    getComponent: vi.fn().mockResolvedValue(record),
+    updateComponent: vi.fn(async () => record),
+  };
+}
+
+describe("a field-group update refuses what it cannot deliver", () => {
+  // 🔴 THE defect this guards. This path alters the COMPANION table only, so a field whose column
+  // lives on the main table needs DDL it never emits — and before the guard the request answered
+  // SUCCESS while writing a schema hash for columns that were never created.
+  it("refuses a field that needs a column on the main table", async () => {
+    const registry = registryWithGroup({
+      fields: [{ name: "heading", type: "text" }],
+    });
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    const refusal = await service
+      .updateFieldGroup({
+        slug: "hero",
+        fields: [
+          { name: "heading", type: "text" },
+          { name: "subheading", type: "text" },
+        ] as never,
+      })
+      .catch((error: unknown) => error);
+
+    // Asserted on the REASON, not the code: this method raises VALIDATION_ERROR for a malformed
+    // plugin option too, so the code alone cannot tell the two apart.
+    expect(refusal).toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: [
+          expect.objectContaining({
+            path: "fields.subheading",
+            code: "requires_schema_change",
+          }),
+        ],
+      },
+    });
+    // Nothing was written: a refusal has to happen before the row moves, not after.
+    expect(registry.updateComponent).not.toHaveBeenCalled();
+  });
+
+  // 🔴 THE control that stops the guard from breaking the one path that works. A translatable field
+  // on a LOCALIZED group lives in `comp_<slug>_locales`, which `reconcileCompanion` does apply — so
+  // refusing it would take away working behaviour in the name of fixing a defect.
+  it("allows a translatable field on a localized group, which the companion applies", async () => {
+    const registry = registryWithGroup({
+      localized: true,
+      fields: [{ name: "heading", type: "text", localized: true }],
+    });
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    await expect(
+      service.updateFieldGroup({
+        slug: "hero",
+        fields: [
+          { name: "heading", type: "text", localized: true },
+          { name: "subheading", type: "text", localized: true },
+        ] as never,
+      })
+    ).resolves.toMatchObject({
+      record: expect.objectContaining({ slug: "hero" }),
+    });
+
+    // 🔴 Asserted on the COMPANION CALL, not on the registry write. Checking only that the row was
+    // updated leaves the control green if `reconcileCompanion` were removed or bypassed — the
+    // promise still resolves and `updateComponent` is still reached, while `subheading` is never
+    // added to `comp_hero_locales`. The claim is "the companion applies it", so the companion call
+    // is what has to be observed.
+    const { reconcileComponentCompanion } = await import(
+      "../field-group-table-provisioning"
+    );
+    expect(reconcileComponentCompanion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tableName: "comp_hero",
+        localized: true,
+        newFields: expect.arrayContaining([
+          expect.objectContaining({ name: "subheading" }),
+        ]),
+      })
+    );
+    expect(registry.updateComponent).toHaveBeenCalled();
+  });
+
+  // 🔴 THE case a definition-level diff cannot see. The field keeps its name and its `type`, so a
+  // predicate comparing field definitions reports no change — while `integer` -> `decimal` alters
+  // the column on every dialect. Comparing what the DDL generator would BUILD catches it; comparing
+  // what the author wrote does not.
+  it("refuses a storage change that leaves the field definition looking the same", async () => {
+    const registry = registryWithGroup({
+      fields: [{ name: "score", type: "number", dbType: "integer" }] as never,
+    });
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    const refusal = await service
+      .updateFieldGroup({
+        slug: "hero",
+        fields: [{ name: "score", type: "number", dbType: "decimal" }] as never,
+      })
+      .catch((error: unknown) => error);
+
+    expect(refusal).toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: [
+          expect.objectContaining({
+            path: "fields.score",
+            code: "requires_schema_change",
+          }),
+        ],
+      },
+    });
+    expect(registry.updateComponent).not.toHaveBeenCalled();
+  });
+
+  // 🔴 THE case a column comparison cannot see. `unique` creates `uq_<table>_<column>` and leaves
+  // the column itself byte-identical, so a check that reads only the column shape accepts the edit
+  // and the constraint is never created — duplicates stay physically permitted while the registry
+  // records the field as unique.
+  it("refuses a uniqueness change, which alters an index and not the column", async () => {
+    const registry = registryWithGroup({
+      fields: [{ name: "code", type: "text" }],
+    });
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    const refusal = await service
+      .updateFieldGroup({
+        slug: "hero",
+        fields: [{ name: "code", type: "text", unique: true }] as never,
+      })
+      .catch((error: unknown) => error);
+
+    expect(refusal).toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: [
+          expect.objectContaining({
+            path: "fields.code",
+            code: "requires_schema_change",
+          }),
+        ],
+      },
+    });
+    expect(registry.updateComponent).not.toHaveBeenCalled();
+  });
+
+  // 🔴 THE control against over-refusing. SQLite has one string type, so a `maxLength` edit renders
+  // to the same TEXT column and needs no DDL at all. Refusing it would send a caller to an apply
+  // flow for a database change that does not exist — and the Direct API has no apply flow to send
+  // them to.
+  it("allows a bound change that renders to the same column on this dialect", async () => {
+    const registry = registryWithGroup({
+      fields: [{ name: "heading", type: "text", maxLength: 100 }] as never,
+    });
+    const adapter = adapterDouble(async () => true, "sqlite");
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    await expect(
+      service.updateFieldGroup({
+        slug: "hero",
+        fields: [{ name: "heading", type: "text", maxLength: 255 }] as never,
+      })
+    ).resolves.toMatchObject({
+      record: expect.objectContaining({ slug: "hero" }),
+    });
+  });
+
+  // 🔴 THE case the main table cannot see, because the column is not on it. A localized field's
+  // column lives in `comp_<slug>_locales`, and the companion reconciler diffs that table by NAME
+  // only — so a same-named field whose storage changes emits no ALTER there either, and the group
+  // would advance describing a column shape the companion does not have.
+  it("refuses a storage change to a field whose column lives in the companion", async () => {
+    const registry = registryWithGroup({
+      localized: true,
+      fields: [
+        { name: "score", type: "number", dbType: "integer", localized: true },
+      ] as never,
+    });
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    const refusal = await service
+      .updateFieldGroup({
+        slug: "hero",
+        fields: [
+          { name: "score", type: "number", dbType: "decimal", localized: true },
+        ] as never,
+      })
+      .catch((error: unknown) => error);
+
+    expect(refusal).toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: [
+          expect.objectContaining({
+            path: "fields.score",
+            code: "requires_schema_change",
+          }),
+        ],
+      },
+    });
+    expect(registry.updateComponent).not.toHaveBeenCalled();
+  });
+
+  // 🔴 THE case that DESTROYS content rather than leaving a stale shape. `heading` -> `title` on an
+  // already-localized group is invisible to a name-keyed comparison, and the companion reconciler
+  // reads it as ADD `title`, DROP `heading` — every stored translation goes with the drop, with no
+  // rename resolution because a PATCH has nowhere to ask the question.
+  it("refuses a rename on a localized group, which the companion would apply as a drop", async () => {
+    const registry = registryWithGroup({
+      localized: true,
+      fields: [{ name: "heading", type: "text", localized: true }],
+    });
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    const refusal = await service
+      .updateFieldGroup({
+        slug: "hero",
+        fields: [{ name: "title", type: "text", localized: true }] as never,
+      })
+      .catch((error: unknown) => error);
+
+    expect(refusal).toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: expect.arrayContaining([
+          expect.objectContaining({
+            path: "fields.title",
+            code: "requires_schema_change",
+          }),
+          expect.objectContaining({
+            path: "fields.heading",
+            code: "requires_schema_change",
+          }),
+        ]),
+      },
+    });
+    expect(registry.updateComponent).not.toHaveBeenCalled();
+  });
+
+  // 🔴 The same ambiguity through the OTHER companion path. Enabling localization while renaming
+  // hides the change twice over: both names are translatable under the requested state, so neither
+  // appears on the main table, and the enable planner seeds only new columns whose name already
+  // exists on main — so `title` is seeded from nothing and `heading` is left behind on main.
+  it("refuses a rename that arrives with localization being enabled", async () => {
+    const registry = registryWithGroup({
+      localized: false,
+      fields: [{ name: "heading", type: "text", localized: true }],
+    });
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    const refusal = await service
+      .updateFieldGroup({
+        slug: "hero",
+        localized: true,
+        fields: [{ name: "title", type: "text", localized: true }] as never,
+      })
+      .catch((error: unknown) => error);
+
+    expect(refusal).toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: expect.arrayContaining([
+          expect.objectContaining({ code: "requires_schema_change" }),
+        ]),
+      },
+    });
+    expect(registry.updateComponent).not.toHaveBeenCalled();
+  });
+
+  // 🔴 THE property the desired-table builder drops on purpose. It carries no DEFAULT for a user
+  // column, because the diff engine compares it against a live database whose reported defaults
+  // would otherwise churn — but the field group's CREATOR does emit a checkbox default, so a
+  // `defaultValue` edit changes the column while leaving the desired table byte-identical.
+  it("refuses a checkbox default change, which the desired table does not carry", async () => {
+    const registry = registryWithGroup({
+      fields: [
+        { name: "featured", type: "checkbox", defaultValue: false },
+      ] as never,
+    });
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    const refusal = await service
+      .updateFieldGroup({
+        slug: "hero",
+        fields: [
+          { name: "featured", type: "checkbox", defaultValue: true },
+        ] as never,
+      })
+      .catch((error: unknown) => error);
+
+    expect(refusal).toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: [
+          expect.objectContaining({
+            path: "fields.featured",
+            code: "requires_schema_change",
+          }),
+        ],
+      },
+    });
+    expect(registry.updateComponent).not.toHaveBeenCalled();
+  });
+
+  // 🔴 THE one-sided case the PAIR rule cannot see. Enabling localization while REMOVING a
+  // translatable field: the removal has no matching add, so the rename check passes it, both main
+  // snapshots omit the field because it is translatable under the requested state, and the enable
+  // planner derives its companion from the NEW fields alone — so nothing drops the column that is
+  // still physically on the main table. The registry would stop describing a field whose data is
+  // sitting on a column nothing will read again.
+  it("refuses removing a translatable field while localization is being enabled", async () => {
+    const registry = registryWithGroup({
+      localized: false,
+      fields: [
+        { name: "heading", type: "text", localized: true },
+        { name: "body", type: "text", localized: true },
+      ] as never,
+    });
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    const refusal = await service
+      .updateFieldGroup({
+        slug: "hero",
+        localized: true,
+        fields: [{ name: "heading", type: "text", localized: true }] as never,
+      })
+      .catch((error: unknown) => error);
+
+    expect(refusal).toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: expect.arrayContaining([
+          expect.objectContaining({
+            path: "fields.body",
+            code: "requires_schema_change",
+          }),
+        ]),
+      },
+    });
+    expect(registry.updateComponent).not.toHaveBeenCalled();
+  });
+
+  // The control that keeps the enable path usable: a plain enable, dropping nothing, still works.
+  // Without it a rule that refused every enable would satisfy the case above.
+  it("allows a plain enable that removes no translatable field", async () => {
+    const registry = registryWithGroup({
+      localized: false,
+      fields: [{ name: "heading", type: "text", localized: true }] as never,
+    });
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    await expect(
+      service.updateFieldGroup({ slug: "hero", localized: true })
+    ).resolves.toMatchObject({
+      record: expect.objectContaining({ slug: "hero" }),
+    });
+  });
+
+  // 🔴 The control that scopes the rule above to ENABLEMENT. On a group that is ALREADY localized
+  // the companion exists, so `buildCompanionReconcileStatements` emits a real DROP COLUMN for a
+  // removed translatable field — that is appliable, and refusing it would take working behaviour
+  // away. Without this, a rule that read the localization state wrongly and refused every drop
+  // would still satisfy the enablement case.
+  it("allows removing a translatable field from an already-localized group", async () => {
+    const registry = registryWithGroup({
+      localized: true,
+      fields: [
+        { name: "heading", type: "text", localized: true },
+        { name: "body", type: "text", localized: true },
+      ] as never,
+    });
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    await expect(
+      service.updateFieldGroup({
+        slug: "hero",
+        fields: [{ name: "heading", type: "text", localized: true }] as never,
+      })
+    ).resolves.toMatchObject({
+      record: expect.objectContaining({ slug: "hero" }),
+    });
+  });
+
+  // 🔴 THE transition a column-shape comparison cannot see, because one side HAS no column. A
+  // localized `component` field stores its data in its own table and materialises nothing in the
+  // companion; changing it to `text` under the same name needs an ADD COLUMN that the reconciler
+  // never emits — it diffs raw localized NAMES, and the name was already there. The registry and
+  // the runtime would advance to a companion column nothing created.
+  it("refuses a localized field that gains a companion column under the same name", async () => {
+    const registry = registryWithGroup({
+      localized: true,
+      fields: [{ name: "body", type: "component", localized: true }] as never,
+    });
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    const refusal = await service
+      .updateFieldGroup({
+        slug: "hero",
+        fields: [{ name: "body", type: "text", localized: true }] as never,
+      })
+      .catch((error: unknown) => error);
+
+    expect(refusal).toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: expect.arrayContaining([
+          expect.objectContaining({
+            path: "fields.body",
+            code: "requires_schema_change",
+          }),
+        ]),
+      },
+    });
+    expect(registry.updateComponent).not.toHaveBeenCalled();
+  });
+
+  // The reverse, which strands the old column instead of missing a new one.
+  it("refuses a localized field that loses its companion column", async () => {
+    const registry = registryWithGroup({
+      localized: true,
+      fields: [{ name: "body", type: "text", localized: true }] as never,
+    });
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    const refusal = await service
+      .updateFieldGroup({
+        slug: "hero",
+        fields: [{ name: "body", type: "component", localized: true }] as never,
+      })
+      .catch((error: unknown) => error);
+
+    expect(refusal).toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: expect.arrayContaining([
+          expect.objectContaining({ code: "requires_schema_change" }),
+        ]),
+      },
+    });
+    expect(registry.updateComponent).not.toHaveBeenCalled();
+  });
+
+  // 🔴 The cost of recording columnless fields in the companion map, corrected. Swapping one
+  // `component` field for a differently named one is one add and one drop BY KEY, which reads as a
+  // rename pair — while neither materialises a companion column and the reconciler emits nothing
+  // for either. Refusing it would reject a safe metadata-only edit.
+  it("allows swapping one columnless localized field for another", async () => {
+    const registry = registryWithGroup({
+      localized: true,
+      fields: [{ name: "body", type: "component", localized: true }] as never,
+    });
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    await expect(
+      service.updateFieldGroup({
+        slug: "hero",
+        fields: [
+          { name: "aside", type: "component", localized: true },
+        ] as never,
+      })
+    ).resolves.toMatchObject({
+      record: expect.objectContaining({ slug: "hero" }),
+    });
+  });
+
+  // The control that keeps the narrowing from swallowing the rename it was carved out of: two
+  // fields that DO render columns, swapped, is still the destructive pair.
+  it("still refuses a rename between two column-backed localized fields", async () => {
+    const registry = registryWithGroup({
+      localized: true,
+      fields: [{ name: "body", type: "text", localized: true }] as never,
+    });
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    const refusal = await service
+      .updateFieldGroup({
+        slug: "hero",
+        fields: [{ name: "aside", type: "text", localized: true }] as never,
+      })
+      .catch((error: unknown) => error);
+
+    expect(refusal).toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: expect.arrayContaining([
+          expect.objectContaining({ code: "requires_schema_change" }),
+        ]),
+      },
+    });
+  });
+
+  // A layout-only field has no column anywhere, so adding one cannot need DDL on any table.
+  it("allows a field that produces no column at all", async () => {
+    const registry = registryWithGroup({
+      fields: [{ name: "heading", type: "text" }],
+    });
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    await expect(
+      service.updateFieldGroup({
+        slug: "hero",
+        fields: [
+          { name: "heading", type: "text" },
+          { name: "layout", type: "component" },
+        ] as never,
+      })
+    ).resolves.toMatchObject({
+      record: expect.objectContaining({ slug: "hero" }),
+    });
   });
 });
