@@ -160,6 +160,13 @@ export function createPocDriver(page: Page): CanvasDriver {
   let pointer: Point = { x: 0, y: 0 };
 
   const driver: CanvasDriver = {
+    // Zero, because this canvas has no target-switch hysteresis at all:
+    // `plugin-page-builder` registers no collision priority and no dwell, and a
+    // 2px jitter at a boundary flips the indicator on every move. Declaring a
+    // dwell it does not have would spend a wait per reading for lag that never
+    // happens, and would let a real hysteresis defect hide inside the wait.
+    dwellAllowanceMs: 0,
+
     async mountTree(fixture: CanvasFixture) {
       await gotoAdmin(page, `/collections/pages/${fixture.entryId}`);
       await expect(page.locator("iframe")).toBeVisible({ timeout: 30_000 });
@@ -204,7 +211,21 @@ export function createPocDriver(page: Page): CanvasDriver {
       // dnd-kit flips aria-grabbed on the source while a drag is active, so the
       // signal is the library's own accessibility state rather than a class the
       // canvas happens to add.
-      return page.evaluate(
+      //
+      // BOTH documents, because the source can live in either. A panel drag's
+      // source is host chrome; a drag of a block already in the canvas has its
+      // source inside the iframe. Searching only the host reports `false` for a
+      // fully active canvas drag — and since that half of the engine-parity
+      // case runs under an expected-failure marker, the capability arriving
+      // would still look exactly like the capability missing.
+      if (
+        await page.evaluate(
+          () => !!document.querySelector('[aria-grabbed="true"]')
+        )
+      ) {
+        return true;
+      }
+      return canvasFrame().evaluate(
         () => !!document.querySelector('[aria-grabbed="true"]')
       );
     },
@@ -341,14 +362,23 @@ export function createPocDriver(page: Page): CanvasDriver {
       pointer = { ...point };
       await page.mouse.move(pointer.x, pointer.y);
       await page.mouse.down();
-      pointer = { x: pointer.x + DRAG_THRESHOLD_PX, y: pointer.y };
-      await page.mouse.move(pointer.x, pointer.y);
+      await driver.crossActivationThreshold();
     },
 
     async pressAt(point: Point) {
       pointer = { ...point };
       await page.mouse.move(pointer.x, pointer.y);
       await page.mouse.down();
+    },
+
+    async crossActivationThreshold() {
+      // The one place this driver performs its activation motion. `startDragAt`
+      // calls it too, so the GESTURE is single-sourced rather than only the
+      // distance: sharing the constant alone leaves two code paths that agree
+      // today and diverge the moment activation needs a different direction,
+      // several moves, or another event — and both would still compile.
+      pointer = { x: pointer.x + DRAG_THRESHOLD_PX, y: pointer.y };
+      await page.mouse.move(pointer.x, pointer.y);
     },
 
     async moveBy(dx: number, dy: number) {
