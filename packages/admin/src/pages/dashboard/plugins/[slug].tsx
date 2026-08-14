@@ -478,7 +478,9 @@ function PluginPermissions({ pluginName }: { pluginName: string }) {
       )}
       {!isPending && !isError && owned.length === 0 && (
         <p className="text-xs text-muted-foreground">
-          No permission rows are attributed to this plugin.
+          No current permission rows are attributed to this plugin. Rows
+          retained from a version that no longer declares them are not listed
+          here.
         </p>
       )}
       {!isPending && !isError && owned.length > 0 && (
