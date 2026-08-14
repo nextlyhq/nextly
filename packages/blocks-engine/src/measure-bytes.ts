@@ -614,10 +614,17 @@ export function surveyDocument(
     tooLarge: bytes > maxBytes,
     tooDeep: deepest > maxDepth,
     tooManyNodes: nodes > maxNodes,
-    // DERIVED, never accumulated alongside. It is the published union of the
-    // two questions above, and computing it separately would let a value set
+    // DERIVED, never accumulated alongside. It is the published union of ALL
+    // THREE questions above, and computing it separately would let a value set
     // one of them without setting this.
-    unserializable: unwritable || lossy,
+    //
+    // `unreadable` belongs in it, and leaving it out is fail-OPEN rather than a
+    // narrowing: `measureBytes` refuses on this field, so a document the walk
+    // declined to read would come back `exceeded: false` and be accepted by a
+    // caller that asks nothing else. The published contract already named this
+    // case — "an accessor that threw" — so excluding it would also be a silent
+    // change to what the field means.
+    unserializable: unwritable || lossy || unreadable,
     nodes,
     depth: deepest,
   });
@@ -756,6 +763,14 @@ export function surveyDocument(
 
       if (skipped) {
         lossy = true;
+        // A hook that THREW is not the same skip as a member the writer merely
+        // drops. `JSON.stringify` calls the same hook and propagates the same
+        // throw, so the document has no stored form; and the value behind it
+        // was never measured, so nothing downstream is bounded by these totals.
+        if (threw) {
+          unwritable = true;
+          unreadable = true;
+        }
 
         // A skipped member is still a member, and the caps still have to
         // describe it. Refusing a member says what STORAGE will do with it; it
@@ -959,9 +974,18 @@ export function surveyDocument(
     if (refusedByWriter(value)) unwritable = true;
 
     if (onPath.has(value)) {
-      // Its own ancestor. `JSON.stringify` throws here, and descending would
-      // not terminate.
-      unwritable = true;
+      // Its own ancestor, so descending would not terminate. The walk stops
+      // either way and the totals become lower bounds.
+      //
+      // Whether the WRITER throws is a different question, and on a
+      // structural-only branch the answer is no. That branch exists because a
+      // `toJSON` replacement was taken for the bytes while the original tree is
+      // still walked for depth and node count — so the cycle being followed here
+      // is in a tree `JSON.stringify` never visits, and the replacement it does
+      // visit may be perfectly writable. The substitution has already recorded
+      // itself as a rewrite; calling it unwritable would report a document with
+      // no stored form when it has one.
+      if (frame.structuralOnly !== true) unwritable = true;
       unreadable = true;
       continue;
     }

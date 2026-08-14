@@ -471,6 +471,34 @@ function collectBreakpointIds(
   return ids;
 }
 
+/**
+ * Whole-document verdicts, which a per-value walk can restate more precisely.
+ *
+ * Each of these describes the document as a WHOLE — its size, or what the
+ * writer would do to it — rather than naming a place in it. A consumer that
+ * walks the document itself can report the same fact against the actual key,
+ * so it needs to know which issues are summaries it is entitled to replace.
+ *
+ * Exported because that consumer would otherwise keep its own list, and a list
+ * in another package is a second statement of this one: `plugin-page-builder`
+ * held exactly such a set, naming two of these, and adding a third verdict here
+ * silently reclassified it there — the precise per-key report was dropped in
+ * favour of the summary it was meant to replace.
+ *
+ * `invalid-document` is deliberately NOT here. It says the walk cannot run at
+ * all, so nothing can restate it.
+ *
+ * Kept beside the code that emits them: a new document-level verdict is added
+ * in this file, and belongs in this set in the same edit.
+ */
+export const DOCUMENT_VERDICT_CODES: ReadonlySet<IssueCode> = new Set([
+  "document-too-large",
+  "document-unwritable",
+  "document-unreadable",
+  "document-lossy",
+  "document-size-warning",
+]);
+
 function checkLimits(
   doc: BlockDocument,
   limits: DocumentLimits,

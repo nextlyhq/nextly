@@ -59,6 +59,73 @@ function unwritable(value: unknown, limit = Number.MAX_SAFE_INTEGER): boolean {
   return measured.exceeded && measured.reason === "unwritable";
 }
 
+describe("the three things the writer can do", () => {
+  const LIMITS = { maxBytes: 1_000_000, maxDepth: 12, maxNodes: 5_000 };
+
+  it("refuses a document it could not read, through measureBytes too", () => {
+    // The published `unserializable` is what `measureBytes` refuses on, and
+    // `packages/builder/src/ops.ts` asks it nothing else — so a walk that
+    // declined to read something must reach that field, or an operation accepts
+    // a value that fails to save. Excluding it is fail-OPEN rather than a
+    // narrowing, which is why this asserts the refusal rather than the flag.
+    const hostile = new Proxy(
+      { a: 1 },
+      {
+        ownKeys() {
+          throw new Error("no");
+        },
+      }
+    );
+
+    const survey = surveyDocument(hostile, LIMITS);
+    expect(survey.unreadable).toBe(true);
+    expect(survey.complete).toBe(false);
+    expect(survey.unserializable).toBe(true);
+
+    expect(measureBytes(hostile, 1_000_000).exceeded).toBe(true);
+    // And `JSON.stringify` agrees the document has no stored form, which is
+    // what makes accepting it the wrong answer rather than a lenient one.
+    expect(() => JSON.stringify(hostile)).toThrow();
+  });
+
+  it("treats a member hook that throws as unwritable, not merely rewritten", () => {
+    // `JSON.stringify` calls the same hook and propagates the same throw, so
+    // this document has no stored form; and the value behind the hook was never
+    // measured, so the totals are lower bounds. Reporting it as a rewrite says
+    // the document can be stored and that these numbers are trustworthy, and
+    // neither is true.
+    const doc = {
+      a: {
+        toJSON() {
+          throw new Error("no");
+        },
+      },
+    };
+
+    const survey = surveyDocument(doc, LIMITS);
+    expect(survey.unwritable).toBe(true);
+    expect(survey.complete).toBe(false);
+    expect(() => JSON.stringify(doc)).toThrow();
+  });
+
+  it("separates a document JSON rewrites from one it refuses", () => {
+    // The distinction the whole split exists for, asserted against the writer
+    // rather than against an expectation of it.
+    const sparse: unknown[] = [];
+    sparse[1] = "b";
+
+    const rewritten = surveyDocument({ a: sparse }, LIMITS);
+    expect(rewritten.lossy).toBe(true);
+    expect(rewritten.unwritable).toBe(false);
+    expect(rewritten.complete).toBe(true);
+    expect(JSON.stringify({ a: sparse })).toBe('{"a":[null,"b"]}');
+
+    const refused = surveyDocument({ a: 1n }, LIMITS);
+    expect(refused.unwritable).toBe(true);
+    expect(() => JSON.stringify({ a: 1n })).toThrow();
+  });
+});
+
 describe("measureBytes", () => {
   it("counts exactly what JSON.stringify emits", () => {
     const cases: Array<[string, unknown]> = [

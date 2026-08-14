@@ -19,7 +19,11 @@
  */
 
 import type { BlockDocument, BreakpointSet } from "@nextlyhq/blocks-engine";
-import { validate, walkNodes } from "@nextlyhq/blocks-engine";
+import {
+  DOCUMENT_VERDICT_CODES,
+  validate,
+  walkNodes,
+} from "@nextlyhq/blocks-engine";
 
 import type { DocumentKind } from "./blocks-options";
 
@@ -93,7 +97,13 @@ export function validateBlocksValue(
   // STRUCTURE: it is too large, or it holds a value JSON cannot write. Neither
   // makes the tree unsafe to walk, so neither should block the richer walks
   // below — blocking on them costs the author the more useful answer.
-  const NON_STRUCTURAL = new Set(["document-too-large", "document-unwritable"]);
+  // Asked of the engine rather than restated here. This set names the engine's
+  // own whole-document verdicts, and a copy of it in this package is a second
+  // statement that goes stale silently: the engine gained a third and a fourth
+  // verdict, a two-name copy classified them as structural, and the precise
+  // per-key report below was dropped in favour of the summary it exists to
+  // replace.
+  const NON_STRUCTURAL = DOCUMENT_VERDICT_CODES;
 
   // The engine owns every structural rule: ids, depth, node and byte caps,
   // slot legality, the kind enum, binding and style shapes.
