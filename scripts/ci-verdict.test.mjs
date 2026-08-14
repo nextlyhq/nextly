@@ -367,6 +367,40 @@ describe("changesRequested", () => {
   });
 
   /**
+   * Presence is not enough: the head must be the FINAL revision. A branch that
+   * fast-forwards to an already-reviewed child during the commit request and
+   * returns before every ref recheck yields an order that CONTAINS the head and
+   * continues past it, and a delayed approval pinned to that child would then
+   * clear an objection at the head while the child is not what merges.
+   */
+  it("does not read absence as erasure when the order continues past the head", () => {
+    const CHILD = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    const reviews = [
+      {
+        ...at("CHANGES_REQUESTED", "2026-08-14T10:00:00Z", 1),
+        commit_id: ERASED,
+      },
+      { ...at("APPROVED", "2026-08-14T11:00:00Z", 2), commit_id: CHILD },
+      at("COMMENTED", "2026-08-14T12:00:00Z", 3),
+    ];
+    // HEAD is present, and the order does not end there.
+    const pastHead = new Map([
+      [OLD, 0],
+      [HEAD, 1],
+      [CHILD, 2],
+    ]);
+    expect(
+      report({
+        ...BASE,
+        reviews,
+        threads: [],
+        revisionOrder: pastHead,
+        revisionOrderComplete: true,
+      }).verdict
+    ).toBe("CHANGES REQUESTED");
+  });
+
+  /**
    * The control for the case above, in the opposite direction. An approval
    * naming a revision the pull request no longer has speaks to code that will
    * not merge, so it cannot answer an objection against live history — and
