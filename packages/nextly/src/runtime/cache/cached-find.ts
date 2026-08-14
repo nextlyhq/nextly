@@ -73,9 +73,12 @@ export interface CachedFindOptions {
  * // Public entry detail — cached and busted when any post changes. Tag with the
  * // collection tag; a slug-routed read has no entry id until the fetch resolves.
  * //
- * // `status: "published"` is not decoration. `find()` defaults to
- * // `overrideAccess: true`, so a slug filter alone can return a draft and cache
- * // it for every visitor; that scope is enforced even on a trusted read.
+ * // Two independent hazards, and `status` answers only one. `find()` defaults to
+ * // `overrideAccess: true`, so a slug filter alone can return a DRAFT —
+ * // `status: "published"` is enforced even on a trusted read and fixes that.
+ * // It does NOT evaluate per-row ACCESS rules: a published row only its owner
+ * // may read is still returned. A shared key is correct only for a collection
+ * // with no read rules; otherwise use the per-user form below.
  * const post = await cachedFind(
  *   () =>
  *     nextly.find({
