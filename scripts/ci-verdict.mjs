@@ -83,7 +83,7 @@ export function reviewersAtHead(reviews, head) {
  * head-scoped version discards the whole objection the moment the author
  * pushes, which is the state it most needs to survive.
  */
-export function changesRequested(reviews, head = undefined) {
+export function changesRequested(reviews, revisionOrder = undefined) {
   if (!Array.isArray(reviews)) return [];
   // Ordered oldest first, so each account's later reviews decide what survives.
   const ordered = reviews
@@ -119,9 +119,17 @@ export function changesRequested(reviews, head = undefined) {
       // and a dismissed changes-request is already represented by its own row
       // no longer reading `CHANGES_REQUESTED`.
       if (review.state !== "APPROVED") continue;
+      // Cleared when the approval speaks to the objected revision or a LATER
+      // one, decided from the pull request's own commit order rather than from
+      // timestamps. Reviews arrive out of order, so a later-submitted approval
+      // pinned to an earlier revision says nothing about the objected one —
+      // and comparing against the current head instead resurrects a clearance
+      // every time the head moves past the revision that made it.
+      const at = revisionOrder?.get(review.commit_id);
+      const objected = revisionOrder?.get(objectedAt);
       const clears =
         review.commit_id === objectedAt ||
-        (head !== undefined && review.commit_id === head);
+        (at !== undefined && objected !== undefined && at >= objected);
       if (clears) outstanding.delete(login);
     }
   }
@@ -282,6 +290,7 @@ export function verdictFor({
  */
 export function report({
   head,
+  revisionOrder,
   reviews,
   threads,
   issueComments,
@@ -309,7 +318,7 @@ export function report({
   // revisions — pushing a commit does not answer it — while whether a given
   // approval supersedes one is a question about which revision that approval
   // spoke to.
-  const refused = changesRequested(reviews, head);
+  const refused = changesRequested(reviews, revisionOrder);
   const { verdict, detail, exitCode } = verdictFor({
     missing,
     unresolved,
@@ -487,7 +496,24 @@ async function main(argv) {
       state: meta.state,
       stranded: 0,
     });
-    process.stdout.write(`${JSON.stringify(closed, null, 2)}\n`);
+    // The review evidence was never QUERIED for a closed pull request, so the
+    // empty collections above are an artefact of the shortcut rather than an
+    // observation. Serialized as unavailable so a consumer cannot read
+    // "nothing outstanding" from a question nobody asked.
+    process.stdout.write(
+      `${JSON.stringify(
+        {
+          ...closed,
+          reviewed_head: "unavailable",
+          missing_reviews: "unavailable",
+          unresolved_threads: "unavailable",
+          rate_limited: "unavailable",
+          changes_requested: "unavailable",
+        },
+        null,
+        2
+      )}\n`
+    );
     return closed.exitCode;
   }
 
@@ -498,6 +524,16 @@ async function main(argv) {
     "--paginate",
     "--slurp",
   ]).flat();
+  // The pull request's own commit ORDER, which is what decides whether one
+  // review's revision is later than another's. Timestamps cannot: reviews
+  // arrive out of order, and the current head is a moving target that
+  // resurrects a clearance as soon as it advances past the revision that made
+  // it.
+  const revisionOrder = new Map(
+    gh(["api", `repos/${repo}/pulls/${pr}/commits`, "--paginate", "--slurp"])
+      .flat()
+      .map((commit, index) => [commit.sha, index])
+  );
   const issueComments = gh([
     "api",
     `repos/${repo}/issues/${pr}/comments`,
@@ -724,6 +760,7 @@ async function main(argv) {
 
   const result = report({
     head,
+    revisionOrder,
     reviews,
     threads,
     issueComments,
