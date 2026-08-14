@@ -90,13 +90,13 @@ const slug = typeof doc.slug === "string" ? doc.slug : undefined;
 
   ```ts
   // Public: same for every reader, so a stable key is correct.
-  cachedFind(() => nextly.findBySlug("posts", slug), {
-    tags: nextlyTags("posts"),
-    keyParts: ["posts", slug],
-  });
+  cachedFind(
+    () => nextly.find({ collection: "posts", where: { slug: { equals: slug } } }),
+    { tags: nextlyTags("posts"), keyParts: ["posts", slug] }
+  );
 
   // Per-user: the caller's id is part of what makes the entry unique.
-  cachedFind(() => nextly.find("orders", { user }), {
+  cachedFind(() => nextly.find({ collection: "orders", user }), {
     tags: nextlyTags("orders"),
     keyParts: ["orders", "list", user.id],
   });
