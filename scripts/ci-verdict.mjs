@@ -434,6 +434,28 @@ export function report({
 }
 
 /**
+ * A comparable value for everything volatile in a review snapshot.
+ *
+ * Compared by CONTENT rather than by count: a body-only `CHANGES_REQUESTED`
+ * arriving between two reads, or an existing thread being unresolved, leaves
+ * every array length unchanged — so a length check accepts a snapshot that has
+ * already gone stale and only ever catches the shape of change it was written
+ * for. Issue comments are included because the rate-limit marker is EDITED IN
+ * PLACE: a blocking reviewer can add or remove it with no review submitted and
+ * no ref moving, leaving every other signal identical while the verdict flips.
+ *
+ * Module scope deliberately. It closes over nothing but `RATE_LIMIT_MARKER`,
+ * and defining it inside the command tied its lifetime to one block — which is
+ * how a later rearrangement of that block took the definition with it.
+ */
+const fingerprint = (rv, th, ic) =>
+  JSON.stringify([
+    rv.map(r => [r?.id, r?.user?.login, r?.commit_id, r?.state]),
+    th.map(t => [t?.isResolved, t?.comments?.nodes?.[0]?.author?.login]),
+    ic.map(c => [c?.id, c?.user?.login, RATE_LIMIT_MARKER.test(c?.body ?? "")]),
+  ]);
+
+/**
  * Command line entry: `node scripts/ci-verdict.mjs <pr>`.
  *
  * Kept behind the module-vs-main check so importing the decisions never
@@ -716,16 +738,6 @@ async function main(argv) {
   // IN PLACE: a blocking reviewer can add or remove it without any review being
   // submitted and without the head moving, so every other check here stays
   // identical while the verdict it feeds flips.
-  const fingerprint = (rv, th, ic) =>
-    JSON.stringify([
-      rv.map(r => [r?.id, r?.user?.login, r?.commit_id, r?.state]),
-      th.map(t => [t?.isResolved, t?.comments?.nodes?.[0]?.author?.login]),
-      ic.map(c => [
-        c?.id,
-        c?.user?.login,
-        RATE_LIMIT_MARKER.test(c?.body ?? ""),
-      ]),
-    ]);
   const reviewsNow = gh([
     "api",
     `repos/${repo}/pulls/${pr}/reviews`,
