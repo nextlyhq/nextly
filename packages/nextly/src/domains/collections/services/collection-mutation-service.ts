@@ -4532,16 +4532,23 @@ export class CollectionMutationService extends BaseService {
       // verdict that has stopped being true. Exploiting it requires an actor who
       // held legitimate access moments earlier.
       //
-      // Closing it properly means authorizing inside the transaction with the
-      // row locked, which every access evaluator would have to accept an
-      // executor to do: they currently read through the pooled adapter, and
-      // mixing pooled reads with an open transaction is what stalls the pool.
+      // Closing it means authorizing against the row as locked, and the parts
+      // that would take are already here rather than absent:
+      // `checkCollectionAccess` accepts a transaction-bound `executor` so its
+      // RBAC and metadata reads run on the transaction's own connection instead
+      // of taking a second pooled one, and `updateEntryInTransaction` already
+      // calls it that way. What remains is routing this path through the same
+      // shape, which is work rather than a blocker.
       //
-      // Two things follow for anyone editing this method. Work added between
-      // here and the transaction widens the window, so prefer to add it before
-      // this check or inside the transaction. And a rule that must be judged
-      // against the row as locked belongs in the under-lock re-check the publish
-      // path already uses, not here.
+      // Two things follow for anyone editing this method, and the first is a
+      // rule rather than a preference: do NOT move validation, relationship
+      // resolution or hook dispatch ahead of this check to shorten the gap.
+      // Authorization is a precondition, so work placed before it runs for
+      // callers who are about to be refused, and hooks in particular have
+      // effects outside this process. Add such work INSIDE the transaction.
+      //
+      // Second, a rule that must be judged against the row as locked belongs in
+      // the under-lock re-check the publish path already uses, not here.
       const accessDenied = await this.accessService.checkCollectionAccess(
         params.collectionName,
         "update",
