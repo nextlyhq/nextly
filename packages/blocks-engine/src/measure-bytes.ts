@@ -316,7 +316,28 @@ function memberPlacement(
  * The stack is explicit so deep nesting cannot overflow, every bound stops the
  * walk at its first breach, and no branch reads a value it has not guarded.
  */
+/** Bounds a survey was measured against, as primitive numbers. */
+export interface SurveyedLimits {
+  maxBytes: number;
+  maxDepth: number;
+  maxNodes: number;
+}
+
 export interface DocumentSurvey {
+  /**
+   * The bounds this survey ENFORCED, snapshotted before the walk began.
+   *
+   * Published because a caller that goes on to walk the same document must
+   * bound its own work by the same numbers. Reading them again from the limits
+   * object asks a question that has already been answered, and can be answered
+   * differently the second time: an accessor returning a small bound for the
+   * check and a large one afterwards leaves the caller's walk unbounded while
+   * this survey's verdict says the document was refused.
+   *
+   * Primitive numbers, because `bounded` rejects anything else — so a consumer
+   * of this field cannot be handed an accessor at one remove.
+   */
+  limits: SurveyedLimits;
   /** Serialized size in bytes; a lower bound once `tooLarge` is set. */
   bytes: number;
   /** The byte cap was passed. */
@@ -471,6 +492,14 @@ export function surveyDocument(
   const maxBytes = bounded(limits.maxBytes, "maxBytes");
   const maxDepth = bounded(limits.maxDepth, "maxDepth");
   const maxNodes = bounded(limits.maxNodes, "maxNodes");
+  // Built once and shared by every survey this walk returns, so a caller cannot
+  // be handed two objects that disagree, and frozen because the bound a caller
+  // reads must be the one that was enforced rather than one a later reader set.
+  const enforced: SurveyedLimits = Object.freeze({
+    maxBytes,
+    maxDepth,
+    maxNodes,
+  });
 
   let bytes = 0;
   let unserializable = false;
@@ -500,6 +529,7 @@ export function surveyDocument(
   // the walk, so reading them here reports the same breach the exit detected
   // rather than a stale one.
   const done = (): DocumentSurvey => ({
+    limits: enforced,
     bytes,
     tooLarge: bytes > maxBytes,
     tooDeep: deepest > maxDepth,
