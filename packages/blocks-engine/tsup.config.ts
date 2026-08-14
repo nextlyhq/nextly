@@ -4,7 +4,7 @@ import { defineConfig } from "tsup";
 // stay importable from Node scripts, edge runtimes, and the browser alike, so
 // it bundles nothing and targets plain ESM.
 export default defineConfig({
-  entry: ["src/index.ts"],
+  entry: ["src/index.ts", "src/format.ts"],
   format: ["esm"],
   dts: true,
   clean: true,

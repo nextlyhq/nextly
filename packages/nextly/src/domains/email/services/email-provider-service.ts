@@ -14,6 +14,7 @@
  */
 
 import { randomUUID } from "crypto";
+import { isDeepStrictEqual } from "util";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { and, eq, desc, ne } from "drizzle-orm";
@@ -229,6 +230,222 @@ export class EmailProviderService extends BaseService {
    * The message names the variable because the operator is one environment
    * setting away from working, and a variable name is not itself a secret.
    */
+  /**
+   * A provider's configuration, parsed and checked to be storable as it is.
+   *
+   * Parsing happens HERE rather than at each caller, because every property
+   * below is about what may be persisted, and a caller that parsed on its own
+   * would be a write that skipped the checks.
+   *
+   * The parsed value is `unknown` by design — the erased form does not expose
+   * the type — so each property is checked rather than assumed.
+   */
+  private storableConfiguration(
+    type: string,
+    input: unknown
+  ): Record<string, unknown> {
+    const provider = getEmailProviderRegistry().get(type);
+
+    // Parsed from an OWN-PROPERTY tree, never from the object as it arrived.
+    // Measured on zod 4.1.12: a schema reads a value off the prototype chain
+    // and materialises it into its output as an OWN property, and it does so
+    // for a REQUIRED field as well as an optional one -- so "it parsed" stops
+    // meaning "the caller supplied it". A Direct API caller passing
+    // `Object.create({ apiKey })`, or a polluted `Object.prototype`, would
+    // otherwise have a credential nobody sent encrypted and persisted, and it
+    // stays active after the prototype is restored.
+    //
+    // `Object.hasOwn` is NOT a usable guard here, because the value is already
+    // an own property of the parser's output by the time anything could ask.
+    // The serialisation is what removes it: `JSON.stringify` reads own
+    // enumerable properties only, so the parser never sees the inherited one.
+    const parsed = provider.parseConfiguration(this.ownFieldsOf(type, input));
+
+    // A provider whose parser returns something other than an object cannot
+    // have its configuration persisted at all, and failing here names which
+    // provider did it; storing the value regardless would put a string or an
+    // array in a column every reader expects to hold fields.
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      Array.isArray(parsed)
+    ) {
+      throw new NextlyError({
+        code: "BUSINESS_RULE_VIOLATION",
+        publicMessage: `Email provider "${type}" parsed its configuration into a ${Array.isArray(parsed) ? "list" : typeof parsed}, and a configuration must be an object of fields. Return the parsed object from \`parseConfig\`.`,
+        logContext: { reason: "email-provider-parsed-not-object", type },
+      });
+    }
+
+    // What an adapter runs on is not this value. It is this value written as
+    // JSON into the column, read back, and parsed AGAIN — `createAdapterFrom`
+    // re-parses whatever it is handed, which is what keeps an adapter from
+    // being built out of a row nothing validated. So the property that has to
+    // hold is that parsing the stored form returns the stored form, and it is
+    // checked here rather than left as an assumption about how parsers behave.
+    //
+    // Two ways a parser breaks it, neither visible at the call site:
+    //
+    // It may DERIVE a value rather than reshape one. `Buffer.from(key)
+    // .toString("base64")` encodes on the way in and encodes the encoding on
+    // the way out, so the adapter authenticates with a doubly-encoded
+    // credential and the provider answers "bad key" about a key the operator
+    // entered correctly.
+    //
+    // Or it may return something JSON cannot carry — a `Date`, a `Map`, a
+    // `Set` — which reads back as a string or as an empty object, so the
+    // adapter receives a shape its own parser just rejected.
+    //
+    // Compared against the ROUND-TRIPPED form rather than the parsed one,
+    // because the round-tripped form is what a reader gets and therefore what
+    // the parser has to be a fixed point OF. That makes `undefined` a third
+    // way to fail rather than an exception to the rule: a parser returning
+    // `{ label: undefined }` has JSON drop the key and then puts it back, so
+    // the value in hand and the value in the column are different objects.
+    // Rejecting it is the same answer as for a `Date`, and for the same
+    // reason — return only what the column can hold.
+    const stored = parsed as Record<string, unknown>;
+
+    // Serialised ONCE and parsed TWICE. `roundTripped` is what a reader gets
+    // and is handed to the parser; `unchanged` is an independent copy that
+    // nothing else touches, and it is what the comparison is made against.
+    //
+    // Two objects rather than one because a parser may normalise IN PLACE and
+    // return its input, which is an ordinary thing to write. Comparing the
+    // result against the object it just mutated compares a value with itself
+    // and passes whatever the parser did -- so an in-place derivation would
+    // have walked through the check this exists to be.
+    let serialized: string | undefined;
+    try {
+      serialized = JSON.stringify(stored);
+    } catch (error) {
+      // A `bigint`, a cycle, or a `toJSON` that throws. Reported as the
+      // provider-configuration fault it is, because the raw `TypeError` would
+      // surface as a generic internal failure naming neither the provider nor
+      // what to change.
+      throw new NextlyError({
+        code: "BUSINESS_RULE_VIOLATION",
+        publicMessage: `Email provider "${type}" parsed its configuration into a value that cannot be written as JSON, so it cannot be stored. Return only what JSON can carry from \`parseConfig\`.`,
+        logContext: {
+          reason: "email-provider-configuration-not-serialisable",
+          type,
+          detail: error instanceof Error ? error.message : String(error),
+        },
+      });
+    }
+
+    // `JSON.stringify` returns `undefined` rather than throwing when the root
+    // has a `toJSON` that returns nothing, so the catch above never sees it and
+    // `JSON.parse(undefined)` then throws a `SyntaxError` the caller reads as a
+    // generic internal failure. Rejected here as the same fault, because it is
+    // one: the value cannot be written to the column.
+    if (serialized === undefined) {
+      throw new NextlyError({
+        code: "BUSINESS_RULE_VIOLATION",
+        publicMessage: `Email provider "${type}" parsed its configuration into a value that cannot be written as JSON, so it cannot be stored. Return only what JSON can carry from \`parseConfig\`.`,
+        logContext: {
+          reason: "email-provider-configuration-not-serialisable",
+          type,
+        },
+      });
+    }
+
+    const roundTripped: unknown = JSON.parse(serialized);
+    const unchanged: unknown = JSON.parse(serialized);
+
+    // Checked again after the round trip, not only before it. A `toJSON` -- on
+    // the object itself or on a `Date` inside it -- can turn a record into a
+    // scalar or a list, and the first guard read the value the parser returned
+    // rather than the value the column will hold. A passthrough parser then
+    // makes the two sides agree, so the fixed-point check accepts it and every
+    // later reader gets something it assumes is an object of fields.
+    if (
+      typeof roundTripped !== "object" ||
+      roundTripped === null ||
+      Array.isArray(roundTripped)
+    ) {
+      throw new NextlyError({
+        code: "BUSINESS_RULE_VIOLATION",
+        publicMessage: `Email provider "${type}" parsed its configuration into a value that becomes a ${Array.isArray(roundTripped) ? "list" : typeof roundTripped} once written as JSON, and a configuration must be an object of fields. Return the parsed object from \`parseConfig\`.`,
+        logContext: {
+          reason: "email-provider-stored-form-not-object",
+          type,
+        },
+      });
+    }
+
+    let reparsed: unknown;
+    try {
+      reparsed = provider.parseConfiguration(roundTripped);
+    } catch {
+      // A parser that REJECTS its own stored output fails the same property,
+      // and reaches it by throwing rather than by returning something else.
+      // Left as one outcome: both mean the row could not be read back.
+      reparsed = undefined;
+    }
+    // TWO properties, and each misses what the other catches.
+    //
+    // The parsed value must SURVIVE the round trip: a `Date`, a `Map`, an
+    // `Infinity` or a class instance is written as something else, and a
+    // pass-through parser that accepts both forms then agrees with itself
+    // while the adapter receives an ISO string where a `Date` was returned.
+    // Re-parsing alone cannot see that, because both sides of it are already
+    // past the column.
+    //
+    // And re-parsing the stored form must RETURN it, which is what catches a
+    // parser that derives rather than one that loses a type.
+    if (
+      !isDeepStrictEqual(stored, unchanged) ||
+      !isDeepStrictEqual(reparsed, unchanged)
+    ) {
+      throw new NextlyError({
+        code: "BUSINESS_RULE_VIOLATION",
+        publicMessage: `Email provider "${type}" cannot store this configuration, because parsing what would be saved does not return what was saved. Its \`parseConfig\` must accept its own output unchanged -- derive values in \`createAdapter\` instead, and return only what JSON can carry.`,
+        logContext: { reason: "email-provider-parse-not-a-fixed-point", type },
+      });
+    }
+
+    // The VALIDATED form, not the object it was derived from. `encryptConfiguration`
+    // serialises again, and returning the original would mean the value written
+    // to the column is the product of a second serialisation that nothing
+    // checked -- so a stateful getter or `toJSON` could store something that
+    // never passed the checks above. Returning what was validated makes "what
+    // is stored is what was checked" true by construction rather than by
+    // argument, and the two are now the same object.
+    return roundTripped as Record<string, unknown>;
+  }
+
+  /**
+   * A configuration reduced to its OWN enumerable fields.
+   *
+   * `JSON.stringify` reads own enumerable properties only, so the round trip
+   * is what strips an inherited one -- and doing it BEFORE the parser runs is
+   * what stops a schema from reading the prototype and reporting success.
+   *
+   * A value that cannot be written is reported as the provider-configuration
+   * fault it is, rather than reaching the parser and failing later as
+   * something less specific.
+   */
+  private ownFieldsOf(type: string, input: unknown): unknown {
+    let serialized: string | undefined;
+    try {
+      serialized = JSON.stringify(input);
+    } catch (error) {
+      throw new NextlyError({
+        code: "BUSINESS_RULE_VIOLATION",
+        publicMessage: `Email provider "${type}" was sent a configuration that cannot be written as JSON, so it cannot be stored.`,
+        logContext: {
+          reason: "email-provider-input-not-serialisable",
+          type,
+          detail: error instanceof Error ? error.message : String(error),
+        },
+      });
+    }
+    // `undefined` for an absent configuration, which a parser may legitimately
+    // accept -- handed through unchanged rather than turned into `null`.
+    return serialized === undefined ? undefined : JSON.parse(serialized);
+  }
+
   private encryptConfiguration(config: Record<string, unknown>): string {
     if (!this.encryptionSecret) {
       throw new NextlyError({
@@ -643,9 +860,15 @@ export class EmailProviderService extends BaseService {
     // insert. Without this a row stores happily and fails only when something
     // tries to send through it, inside a catch that reports `{ success: false }`
     // -- so the operator learns at the worst moment and with the least detail.
-    getEmailProviderRegistry()
-      .get(data.type)
-      .validateConfig(data.configuration);
+    // The PARSED configuration is what gets stored, so that the row and the
+    // value the adapter runs on are the same thing. They were not: the service
+    // stored whatever the caller sent while the adapter closed over the parse
+    // result, and every difference between the two became a defect somewhere
+    // that read the row.
+    const parsedConfiguration = this.storableConfiguration(
+      data.type,
+      data.configuration
+    );
 
     const id = randomUUID();
     const now = new Date();
@@ -656,7 +879,7 @@ export class EmailProviderService extends BaseService {
       type: data.type,
       fromEmail: data.fromEmail,
       fromName: data.fromName ?? null,
-      configuration: this.encryptConfiguration(data.configuration),
+      configuration: this.encryptConfiguration(parsedConfiguration),
       isDefault: data.isDefault ?? false,
       isActive: data.isActive ?? true,
       createdAt: now,
@@ -914,9 +1137,10 @@ export class EmailProviderService extends BaseService {
               this.declaredConfigPaths(data.type as string)
             )
           : {};
-      getEmailProviderRegistry()
-        .get(data.type as string)
-        .validateConfig(submitted);
+      const parsedSubmitted = this.storableConfiguration(
+        data.type as string,
+        submitted
+      );
 
       // Persist the replacement even when the update carried no configuration.
       // Validating `{}` and then not writing it leaves the PREVIOUS provider's
@@ -924,7 +1148,7 @@ export class EmailProviderService extends BaseService {
       // parser would receive stale credentials, which is exactly what
       // "a type change replaces rather than merges" is supposed to prevent.
       if (data.configuration === undefined) {
-        updateData.configuration = this.encryptConfiguration(submitted);
+        updateData.configuration = this.encryptConfiguration(parsedSubmitted);
         // This branch REPLACES the stored configuration without the caller
         // having sent one, so the diff below -- which only runs when
         // `data.configuration` is present -- would have reported a type change
@@ -983,9 +1207,10 @@ export class EmailProviderService extends BaseService {
       // `data.type` is applied a few lines above, so a change from smtp to
       // resend would otherwise have its configuration checked by the SMTP
       // parser and stored under resend -- accepted here and unusable at send.
-      getEmailProviderRegistry()
-        .get(effectiveType)
-        .validateConfig(mergedConfig);
+      const parsedMerged = this.storableConfiguration(
+        effectiveType,
+        mergedConfig
+      );
 
       // Compared BEFORE encryption. Encryption is randomised -- a fresh salt
       // and IV per call -- so two encryptions of identical configuration never
@@ -1002,11 +1227,15 @@ export class EmailProviderService extends BaseService {
       // the type-change branch: comparing against the `{}` fallback would
       // report "unchanged" for a save that replaced a credential nobody could
       // read with one they can.
+      // Compared on the PARSED form, which is what is now stored. Comparing
+      // the merged input against a stored parsed value reported a change on
+      // every save whose parser normalises anything — a trimmed credential
+      // differs from its own stored form on the way in, and never after.
       configurationChanged =
         !existing.readable ||
-        JSON.stringify(existingConfig) !== JSON.stringify(mergedConfig);
+        JSON.stringify(existingConfig) !== JSON.stringify(parsedMerged);
 
-      updateData.configuration = this.encryptConfiguration(mergedConfig);
+      updateData.configuration = this.encryptConfiguration(parsedMerged);
     }
     if (data.isActive !== undefined) updateData.isActive = data.isActive;
     if (data.isDefault !== undefined) updateData.isDefault = data.isDefault;

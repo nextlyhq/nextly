@@ -70,6 +70,15 @@ export function buildServiceConfig(
     const { config: nextlyConfig, ...rest } = providedConfig;
     Object.assign(serviceConfig, rest);
 
+    // AFTER the caller spread, and derived only from the nested config, so a
+    // caller cannot set it directly. It is internal wiring, not an option: the
+    // gate it opens must match what `runProdMigrationsIfEnabled` will actually
+    // do, and that reads `config.db.runMigrationsOnBoot`. A caller passing a
+    // conflicting top-level value would open no gate while migrations ran
+    // anyway — the exact unguarded window this exists to close.
+    serviceConfig.runMigrationsOnBoot =
+      nextlyConfig?.db?.runMigrationsOnBoot === true;
+
     // If storagePlugins not explicitly provided, use from nextly.config.ts
     if (!serviceConfig.storagePlugins && nextlyConfig?.storage) {
       serviceConfig.storagePlugins = nextlyConfig.storage;

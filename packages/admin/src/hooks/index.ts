@@ -32,6 +32,16 @@ export type {
 export { useDebounce } from "./useDebounce";
 export { useDebouncedValue, useDebouncedState } from "./useDebouncedValue";
 
+// Table hooks - List pagination
+//
+// The page/size state a list runs on, with the first-page resets built in, so
+// the rule lives with the state rather than in each caller's handler. Exported
+// here because the list pages that need it are spread across the admin and
+// reach their hooks through this barrel; `useServerTable` above composes it
+// rather than restating it.
+export { usePagination } from "./usePagination";
+export type { PaginationState, UsePaginationOptions } from "./usePagination";
+
 // Utility hooks - Form Protection
 export { useUnsavedChanges } from "./useUnsavedChanges";
 export type {

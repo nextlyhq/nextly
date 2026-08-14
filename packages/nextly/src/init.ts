@@ -46,6 +46,7 @@ import { getNextly as getDirectAPI } from "./direct-api/nextly";
 import { resolveCollectionTableName } from "./domains/schema/utils/resolve-table-name";
 import { NextlyError } from "./errors/nextly-error";
 import { runBootTimeApplyIfDev } from "./init/boot-apply";
+import { awaitBootMigrations } from "./init/boot-migrations-gate";
 import {
   buildServiceConfig,
   type GetNextlyOptions,
@@ -204,6 +205,18 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
   // above return it rather than spawning duplicate DB connections.
   const initPromise = (async (): Promise<Nextly> => {
     try {
+      // INSIDE the published promise, never before it. An `await` above this
+      // point yields after the `__nextly_initPromise` check but before the
+      // promise is stored, so two simultaneous cold calls both pass that check
+      // and both call `registerServices()` — restoring the duplicate adapter
+      // connections the latch exists to prevent, against databases that
+      // auto-suspend and time out on a connection storm.
+      //
+      // When services are ALREADY registered the branch below is skipped
+      // entirely, so this is also the only place the public factory learns that
+      // another surface is still waiting on the migrate lock.
+      await awaitBootMigrations();
+
       if (!isServicesRegistered()) {
         // Build final config from provided options
         const finalConfig = buildServiceConfig(options);
@@ -259,7 +272,12 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
 
         // Production sibling of boot-apply: when `db.runMigrationsOnBoot` is on,
         // apply committed migration files (prod only; no-op in dev). Wired at
-        // both init entry points. Failure-safe — it logs but never throws.
+        // both init entry points.
+        //
+        // NOT failure-safe, deliberately, and it used to say it was. Ordinary
+        // failures are still logged and swallowed, but a boot that could not
+        // establish whether migrations ran THROWS: serving a schema nobody
+        // verified is worse than not starting.
         const { runProdMigrationsIfEnabled } = await import(
           "./init/prod-migrations"
         );
@@ -391,6 +409,14 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
  * `getNextly({ config })` directly.
  */
 export async function getCachedNextly(): Promise<Nextly> {
+  // Before ANY return, including the cached one. This is the surface that could
+  // serve during another surface's migration wait: the request-path boot
+  // registers services and then waits for the lock, and everything below keys
+  // off `isServicesRegistered()`, which is true throughout that window. Awaiting
+  // rather than testing means a request racing a normal boot still waits for it,
+  // exactly as before — it only learns the answer once there is one.
+  await awaitBootMigrations();
+
   if (globalForInit.__nextly_cachedInstance) {
     return globalForInit.__nextly_cachedInstance;
   }

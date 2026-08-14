@@ -32,6 +32,7 @@
 // Without this, the global singleton initializes empty and
 // find('posts') throws "Schema not in registry".
 import { getNextly } from "nextly";
+import type { WhereFilter } from "nextly";
 import { cachedFind, nextlyTags } from "nextly/runtime";
 import nextlyConfig from "@nextly-config";
 
@@ -576,7 +577,9 @@ export async function getRelatedPosts(
 
     const excludeCurrent = { slug: { not_equals: currentSlug } };
 
-    const tryQuery = (keySuffix: string, where: Record<string, unknown>) =>
+    // Typed as WhereFilter rather than a bare record so a malformed operator
+    // is rejected here instead of inside the `and` array the query builds.
+    const tryQuery = (keySuffix: string, where: WhereFilter) =>
       cachedFind(
         async () => {
           const nextly = await getNextly({ config: nextlyConfig });

@@ -161,13 +161,13 @@ describe("descriptor constraints are honoured by the parser", () => {
     };
 
     expect(() =>
-      smtpDefinition.validateConfig({ ...config, port: 0 })
+      smtpDefinition.parseConfiguration({ ...config, port: 0 })
     ).toThrow();
     expect(() =>
-      smtpDefinition.validateConfig({ ...config, port: 65536 })
+      smtpDefinition.parseConfiguration({ ...config, port: 65536 })
     ).toThrow();
     expect(() =>
-      smtpDefinition.validateConfig({ ...config, port: 465 })
+      smtpDefinition.parseConfiguration({ ...config, port: 465 })
     ).not.toThrow();
   });
 });
@@ -309,7 +309,7 @@ describe("the field rules hold at the registry boundary too", () => {
     type: "hand-built",
     label: "Hand Built",
     configFields,
-    validateConfig: () => {},
+    parseConfiguration: (input: unknown) => input,
     createAdapterFrom: () => ({
       send: () => Promise.resolve({ success: true, messageId: "x" }),
     }),
@@ -1146,7 +1146,7 @@ describe("descriptor text rules hold at the registry boundary too", () => {
             help: {},
           } as unknown as EmailProviderConfigField,
         ],
-        validateConfig: () => {},
+        parseConfiguration: (input: unknown) => input,
         createAdapterFrom: () => ({
           send: () => Promise.resolve({ success: true, messageId: "x" }),
         }),
@@ -1161,7 +1161,7 @@ describe("descriptor text rules hold at the registry boundary too", () => {
         type: "hand-built",
         label: 42,
         configFields: [],
-        validateConfig: () => {},
+        parseConfiguration: (input: unknown) => input,
         createAdapterFrom: () => ({
           send: () => Promise.resolve({ success: true, messageId: "x" }),
         }),
@@ -1712,7 +1712,7 @@ describe("what a descriptor publishes about a field", () => {
           credentials: { user: "postmaster", pass: "hunter2" },
         } as unknown as EmailProviderConfigField,
       ],
-      validateConfig: () => {},
+      parseConfiguration: (input: unknown) => input,
       createAdapterFrom: () => ({
         send: () => Promise.resolve({ success: true, messageId: "x" }),
       }),
@@ -1746,7 +1746,7 @@ describe("what a descriptor publishes about a field", () => {
           blankAs: "empty",
         },
       ],
-      validateConfig: () => {},
+      parseConfiguration: (input: unknown) => input,
       createAdapterFrom: () => ({
         send: () => Promise.resolve({ success: true, messageId: "x" }),
       }),

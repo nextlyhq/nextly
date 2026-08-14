@@ -17,6 +17,7 @@ import {
   shutdownServices,
 } from "../di";
 import type { NextlyServiceConfig } from "../di/register";
+import { awaitBootMigrations } from "../init/boot-migrations-gate";
 import { buildServiceConfig } from "../init/build-service-config";
 import { seedAllPermissions } from "../init/seed-permissions";
 import { ensureHmrListener } from "../runtime/hmr-listener";
@@ -357,6 +358,12 @@ export async function ensureServicesInitialized(): Promise<void> {
   });
   _initInFlight = run;
   await run;
+
+  // After registration, because this is the request path's own gate: a boot on
+  // ANOTHER surface may still be waiting on the migrate lock, and this one must
+  // not start dispatching until that settles. Resolves immediately when no boot
+  // opened the gate.
+  await awaitBootMigrations();
 }
 
 // The in-flight recovery/registration pass concurrent callers await.
