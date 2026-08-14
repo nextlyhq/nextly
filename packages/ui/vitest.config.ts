@@ -1,6 +1,53 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
+/**
+ * The directories the tab-contract scan walks.
+ *
+ * Real paths, not globs, because these are handed to the WATCHER. chokidar
+ * removed glob support in v4, so `watcher.add("<root>/packages/**")` subscribes
+ * to a literal path of that name — which does not exist — and no event is ever
+ * emitted for anything beneath it.
+ */
+const SCAN_ROOTS = ["packages", "apps", "templates"].map(root =>
+  fileURLToPath(new URL(`../../${root}`, import.meta.url)).replace(/\\/g, "/")
+);
+
+/**
+ * The repository root, as an absolute path with forward slashes.
+ *
+ * Vitest matches a rerun trigger against the path its watcher emits, which is
+ * ABSOLUTE, so a relative glob cannot match one however it is spelled: measured
+ * against the picomatch Vitest resolves, `../**` + `/*.tsx` against
+ * `<root>/packages/admin/src/ApiKeyTable.tsx` is false. A glob beginning `**` +
+ * `/` matches an absolute path because the leading `**` absorbs the prefix,
+ * which is why the `src`-scoped triggers below work and hid this for the roots.
+ *
+ * Backslashes are replaced because picomatch treats one as an escape rather
+ * than a separator, so a Windows path would match nothing.
+ */
+const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(
+  /\\/g,
+  "/"
+);
+
 export default defineConfig({
+  plugins: [
+    {
+      name: "watch-the-scanned-roots",
+      // Two different mechanisms have to agree before a watch session reruns:
+      // the watcher must EMIT an event for the file, and `forceRerunTriggers`
+      // must MATCH the path it emits. The triggers below only ever answered the
+      // second question. Vitest's server is rooted at this package, so nothing
+      // outside it was watched at all and the matcher was never consulted for
+      // the call sites this suite exists to read — measured with a real
+      // `vitest --watch` session, where touching a `packages/admin` file
+      // produced no rerun while touching one in `packages/ui` did.
+      configureServer(server) {
+        for (const root of SCAN_ROOTS) server.watcher.add(root);
+      },
+    },
+  ],
   test: {
     // The suites read `theme.css` and the package sources through the
     // filesystem rather than importing them, so Vitest has no module
@@ -10,7 +57,28 @@ export default defineConfig({
       "**/package.json/**",
       "**/vitest.config.*/**",
       "**/vite.config.*/**",
-      "**/src/**/*.{ts,tsx}",
+      // Every extension the tab-contract scan reads, not only the TypeScript
+      // ones. That scan walks the repository with `readFileSync`, so a `.js` or
+      // `.jsx` call site is in no module graph Vitest can invalidate — without
+      // this a watch session keeps showing the previous green after a real
+      // violation is added. Kept in step with `CALL_SITE_EXTENSIONS` in
+      // `src/components/__tests__/tabs-contract.test.ts`, which asserts this
+      // list covers it.
+      "**/src/**/*.{ts,tsx,js,jsx}",
+      // And every ROOT that scan walks, not only this package, and the WHOLE
+      // of each root rather than its `src`. The traversal recurses from the
+      // root, so `packages/foo/examples/demo.jsx` is a call site it reads — and
+      // a `src`-only trigger left that file able to gain a violation with the
+      // suite never rerunning. The scan's reach is what these have to match,
+      // not the convention most files happen to follow.
+      //
+      // Absolute for the reason given above. The contract in
+      // `src/components/__tests__/tabs-contract.test.ts` runs every file the
+      // scan actually reads through the matcher Vitest uses, so a glob that
+      // matches nothing fails there rather than passing as a string.
+      `${REPO_ROOT}packages/**/*.{ts,tsx,js,jsx}`,
+      `${REPO_ROOT}apps/**/*.{ts,tsx,js,jsx}`,
+      `${REPO_ROOT}templates/**/*.{ts,tsx,js,jsx}`,
       "**/src/**/*.css",
       // The declaration build runs through both tsup configs, and a child
       // process loads them — they are in no module graph Vitest can invalidate,
