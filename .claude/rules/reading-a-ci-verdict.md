@@ -43,6 +43,21 @@ the snapshot that proves "nothing had run" stops reproducing within hours. The
 shape is durable, the numbers are not, and a stale count cited as current is the
 same error this file is about.
 
+**So record the EVENT, not the state.** The distinction matters more than
+timestamping, because a perishable claim does not merely expire — it discredits
+the durable claim welded to it. "It merged with all eight checks queued,
+nothing having run" is two statements: _it merged while its checks were queued_
+is an event and stays true forever, while _nothing ran_ rots within minutes.
+Anyone re-checking later sees an ordinary green result, concludes the whole note
+was misread, and discards the true half with the false one.
+
+Two `queued` rows are a photograph of something that is by definition about to
+stop being true. Write down what HAPPENED and the query that would have shown
+it; leave the counts as illustration, marked as of a moment. Where a durable
+witness exists, prefer it outright — `skipped` persists, which is why the
+dependent-job cascade below makes a better standing example than any count of
+pending jobs.
+
 ## Ask whether the RUN exists, not how many checks there are
 
 A workflow that never fired and a workflow waiting for a runner look the same
