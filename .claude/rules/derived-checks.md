@@ -231,10 +231,20 @@ asked it the question:
   the check RAN on it**, and that is not inherited from the positive control
   being green: a fixture excluded by a glob, never discovered, or wired to a
   path that no longer exists produces exactly the same silence as a valid input
-  correctly passed. So make the invocation observable for this fixture — assert
-  it was among the inputs read, or mutate this same fixture into the reportable
-  form and require THAT to be reported, which proves the input reaches the
-  mechanism while leaving the valid case as the thing being asserted.
+  correctly passed. So make the invocation observable for THIS fixture: assert
+  it was among the inputs the run read.
+
+  Mutating the same fixture into the reportable form and requiring that to be
+  reported is the tempting cheaper version, and it is sound only where
+  SELECTION is invariant under the mutation. Where what gets selected depends
+  on the property being reported — a scan that lists candidate files by
+  grepping for the violating form, a changed-files filter, a query whose
+  predicate is the finding — the mutated copy is selected precisely BECAUSE it
+  now violates, while the original stays outside the input set exactly as
+  before. The mutation then demonstrates the mechanism on an input the real run
+  never had, and the silence it was meant to license is still silence by
+  absence. Use it only after checking that the same fixture is selected either
+  way, and prefer the direct assertion when you cannot show that.
 
 One pair per SUBSHAPE, because a family of findings usually is not one shape.
 A scanner that handles a named alias can still misread a namespace alias and a
@@ -412,12 +422,18 @@ three, a query capped by a server-side maximum nobody set. The violation on
 page two is as absent as it was before, and now a population assertion vouches
 for the run.
 
-So assert the population you EXPECT, not merely a nonzero one. What that costs
-is small and it varies by check: exhaust the pagination and say so; compare
-against a count from a different source; require the specific members you know
-must be there; or plant a sentinel in the region a truncated read would miss
-and require it back. Any of those distinguishes a complete read from a lucky
-prefix, and `> 0` distinguishes neither.
+So assert the population you EXPECT, not merely a nonzero one — and assert it by
+MEMBERSHIP, because a count is the same substitution one level up. A selector
+that drops one expected member and duplicates or adds another matches any total
+you compare against, while the dropped member and whatever violation it carried
+stay unseen; the total agreeing is then evidence of arithmetic, not of coverage.
+
+What actually separates a complete read from a lucky prefix, and it varies by
+check: exhaust the pagination and assert the exhaustion happened rather than
+assuming the loop ran; require the specific IDENTITIES you know must be present;
+or plant a sentinel in the region a truncated read would miss and require it
+back. Each of those names something the read must contain. A count names
+nothing, and `> 0` names less.
 
 The tell is a sentence where the evidence names one thing and the conclusion
 names a family: a queue, a marker, a control — against load, a merge, a set of
@@ -444,21 +460,30 @@ Read the scope first, because the asymmetry inverts and the inverted case is a
 security hole rather than a style preference.
 
 **Classify by what a MISS costs, at the call site — never by the check's form.**
-"Lint" is a shape, not a consequence. This repository runs `gitleaks` from two
-places and they classify OPPOSITELY, which is the clearest argument available
-that the call site rather than the check decides. `.husky/pre-commit` runs it
-when the binary is present and prints a nudge when it is not — deliberately
-fail-open, and right to be, since a tool missing from a laptop must not stop
-work. `secret-scan.yml` is the precondition, and says so itself: "this is the
-enforcement gate". A miss there puts a credential in the repository. A taxonomy
-sorting by form files both under lint and then advises preferring the miss for
-the one that cannot afford it.
+"Lint" is a shape, not a consequence. This repository runs `gitleaks` from three
+call sites, and they do not classify alike, which is the clearest argument
+available that the call site rather than the check decides:
 
-Read the enforcing side's own boundary before leaning on it, rather than
-assuming it covers whatever the advisory side skipped. That workflow is
-`pull_request: branches: [main]`, so a pull request stacked on another feature
-branch never triggers it — the layering is real for the main-targeting case and
-absent for the stacked one.
+- `.husky/pre-commit` runs it when the binary is present and prints a nudge when
+  it is not. Deliberately fail-open, and right to be — a tool missing from a
+  laptop must not stop work.
+- `secret-scan.yml` on `pull_request: branches: [main]` is the PRECONDITION. It
+  runs before the commit can reach `main`, so a miss there is what puts a
+  credential in the repository.
+- `secret-scan.yml` on `push: branches: [main]` is neither. It runs after the
+  commit is already on `main`, so it cannot prevent anything; it detects. Useful,
+  and not a gate.
+
+The last two are one workflow file, which is exactly why the FILE is the wrong
+unit to classify. Reading "the workflow is the enforcement gate" off its own
+header — which is what an earlier version of this paragraph did — quietly counts
+post-commit detection as prevention, and the remedy for a credential that has
+already landed is rotation and history rewriting rather than a failed check.
+
+Read the enforcing invocation's own boundary too, rather than assuming it covers
+whatever the advisory side skipped. It is `branches: [main]`, so a pull request
+stacked on another feature branch never triggers it — the layering is real for
+the main-targeting case and absent for the stacked one.
 
 **An advisory check** is one whose false negative costs only the defect it
 failed to report — a convention guard, a dead-code or dead-class warning, a
