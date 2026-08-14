@@ -257,6 +257,16 @@ export interface UpdateFieldGroupArgs extends DirectAPIConfig {
     /** Updated field configurations */
     fields?: Record<string, unknown>[];
 
+    /**
+     * Whether this field group stores translatable values per locale.
+     *
+     * Omitted leaves the persisted setting alone. Changing it MOVES DATA: enabling seeds the
+     * companion table from the main one and drops those columns, disabling restores and archives
+     * them. Enabling requires the app's `localization` config, without which the tables would take
+     * a shape the runtime cannot write to.
+     */
+    localized?: boolean;
+
     /** Updated admin configuration */
     admin?: {
       category?: string;
