@@ -348,16 +348,47 @@ function jsxUsesOf(
   return uses;
 }
 
+/**
+ * Whether this node introduces a scope that can bind a name.
+ *
+ * Two families, and they bind different things: a function-like node binds its
+ * PARAMETERS, a block-like node binds the `const` and `let` declared directly
+ * in it. Naming only the first attributed a block's own `pager` to an outer
+ * declaration, so a correctly placed footer was reported because some unrelated
+ * branch rendered a different pager under the same name.
+ *
+ * `ts.isFunctionLike` answers the first family without listing its members, so
+ * only the block containers are written out — and that list is closed by the
+ * LANGUAGE rather than by this file. These are the block scope containers
+ * ECMAScript defines, which is what separates enumerating them here from the
+ * earlier rounds of adding whichever JSX wrapper kind had last slipped through:
+ * that list had no end, and this one is finite and already complete.
+ *
+ * `var` is function-scoped rather than block-scoped, and is treated as
+ * block-scoped here. That direction only ever SKIPS a use, which costs a missed
+ * finding — never a report against correct code, which is the expensive
+ * direction for a check that gates every pull request.
+ */
 function isScope(node: ts.Node): boolean {
   return (
-    ts.isFunctionDeclaration(node) ||
-    ts.isFunctionExpression(node) ||
-    ts.isArrowFunction(node) ||
-    ts.isMethodDeclaration(node)
+    ts.isFunctionLike(node) ||
+    ts.isBlock(node) ||
+    ts.isModuleBlock(node) ||
+    ts.isCaseBlock(node) ||
+    ts.isForStatement(node) ||
+    ts.isForInStatement(node) ||
+    ts.isForOfStatement(node) ||
+    ts.isCatchClause(node)
   );
 }
 
-/** Whether a function binds `name` itself, as a parameter or as a local. */
+/**
+ * Whether a scope binds `name` itself, as a parameter or as a local.
+ *
+ * The parameter loop reads a signature's own list; the walk below covers the
+ * declaration forms a block holds, including a loop's initializer and a catch
+ * clause's variable, since both are children of the scope node itself.
+ */
 function declaresName(scope: ts.Node, name: string): boolean {
   for (const parameter of (scope as ts.SignatureDeclaration).parameters ?? []) {
     if (ts.isIdentifier(parameter.name) && parameter.name.text === name) {
@@ -389,7 +420,7 @@ function declaresName(scope: ts.Node, name: string): boolean {
 }
 
 /**
- * The function body a node sits in, or undefined at module level.
+ * The innermost scope a node sits in, or undefined at module level.
  *
  * Asks `isScope` rather than restating its list, so "what counts as a scope"
  * has one answer. Two copies would drift the moment a node kind is added to
@@ -856,6 +887,43 @@ describe("list pagination", () => {
     expect(detachedPagers(shadowed), "shadowed in a nested scope").toHaveLength(
       0
     );
+
+    // A BLOCK binds `const` too. Treating only functions as scopes attributed
+    // the inner `pager` to the outer declaration, so a footer that is correctly
+    // placed was reported because an unrelated branch rendered its own.
+    const blockShadowed = parse(
+      "block-shadowed.tsx",
+      "function List() {\n" +
+        "  const pager = <Pagination page={1} />;\n" +
+        "  if (compact) {\n" +
+        "    const pager = <Panel />;\n" +
+        "    render(<><DataTableView columns={c} rows={r} />{pager}</>);\n" +
+        "  }\n" +
+        "  return <DataTableView columns={c} rows={r} footer={pager} />;\n" +
+        "}"
+    );
+    expect(
+      detachedPagers(blockShadowed),
+      "shadowed in a nested block"
+    ).toHaveLength(0);
+
+    // The same block WITHOUT its own binding still reports, so the fix is not
+    // "anything inside a block is excused" -- which would blind the check to
+    // every pager rendered from a branch.
+    const blockSibling = parse(
+      "block-sibling.tsx",
+      "function List() {\n" +
+        "  const pager = <Pagination page={1} />;\n" +
+        "  if (compact) {\n" +
+        "    render(<><DataTableView columns={c} rows={r} />{pager}</>);\n" +
+        "  }\n" +
+        "  return <DataTableView columns={c} rows={r} />;\n" +
+        "}"
+    );
+    expect(
+      detachedPagers(blockSibling),
+      "unshadowed use inside a block"
+    ).toHaveLength(1);
 
     // An ALIASED table import. The pager is matched by binding, so the owner of
     // its footer must be too -- otherwise an import refactor makes a correctly
