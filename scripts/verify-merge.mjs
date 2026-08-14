@@ -480,6 +480,19 @@ export function pageWrapping(key) {
  * Their verdict is deliberately advisory, so the status carrying it must not
  * become a blocker through the other surface.
  */
+/**
+ * Author associations that carry write access, and so can approve on the
+ * project's behalf.
+ *
+ * Any account can submit an APPROVED review, including a contributor's own and
+ * a bot's, so the state alone does not say the project accepted the change.
+ */
+export const MAINTAINER_ASSOCIATIONS = Object.freeze([
+  "OWNER",
+  "MEMBER",
+  "COLLABORATOR",
+]);
+
 export const OPTIONAL_STATUS_CONTEXTS = Object.freeze(["CodeRabbit"]);
 
 export function statusAsRun(status) {
@@ -571,6 +584,9 @@ export function pathMatches(glob, path) {
  */
 /** How many files GitHub's own path filtering looks at, and no more. */
 export const PATH_FILTER_WINDOW = 300;
+
+/** Past this many commits GitHub runs the workflow without evaluating filters. */
+export const PATH_FILTER_COMMIT_LIMIT = 1000;
 
 export function workflowApplies(pathsIgnore, changedPaths) {
   if (!Array.isArray(pathsIgnore) || pathsIgnore.length === 0) return true;
@@ -701,6 +717,7 @@ export function landedWhole({ checkable, reason, candidates }) {
 // ---------------------------------------------------------------------------
 
 import { execFileSync } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 const REPO = "nextlyhq/nextly";
@@ -840,7 +857,7 @@ export function main(argv) {
     "api",
     `repos/${REPO}/pulls/${pr}`,
     "--jq",
-    "{cross:.head.repo.full_name!=.base.repo.full_name,repo:.head.repo.full_name,branch:.head.ref,merged:.merged,mergeSha:.merge_commit_sha,head:.head.sha,state:.state,draft:.draft,changedFiles:.changed_files,baseRepo:.base.repo.full_name}",
+    "{cross:.head.repo.full_name!=.base.repo.full_name,repo:.head.repo.full_name,branch:.head.ref,merged:.merged,mergeSha:.merge_commit_sha,head:.head.sha,state:.state,draft:.draft,changedFiles:.changed_files,baseRepo:.base.repo.full_name,commits:.commits}",
   ]);
   const remotes = configuredRemotes();
   REMOTE_FOR_FETCH = remoteForRepo(meta.repo, remotes);
@@ -863,8 +880,13 @@ export function main(argv) {
   // the merge reports on a tree nobody has.
   const subject = merged ? meta.mergeSha : tip;
 
-  const rewrites = countRewriteEvents(timelinePages(pr));
-  const reach = checkability({ tip, rewriteEvents: rewrites });
+  // Only read before it is needed. Rewrite reachability answers whether a merge
+  // took the whole branch, which an open pull request has not yet asked — so
+  // querying it there lets an unrelated endpoint failure refuse a verdict the
+  // gate could otherwise give.
+  const reach = merged
+    ? checkability({ tip, rewriteEvents: countRewriteEvents(timelinePages(pr)) })
+    : { checkable: true, reason: "not-merged" };
 
   // Only after a merge is there a merge to have lost anything. Run before one,
   // this compares the API's cached head against the ref and reports ordinary
@@ -923,7 +945,14 @@ export function main(argv) {
   // platform actually made: where the first 300 are all ignored, the workflow is
   // skipped and creates no check-runs, so requiring one on the strength of file
   // 301 demands a check that can never arrive.
-  const filterPaths = changedPaths.slice(0, PATH_FILTER_WINDOW);
+  // Past 1000 commits GitHub stops evaluating path filters and runs the
+  // workflow regardless, so deciding from paths there would excuse a check that
+  // did run. An empty list makes every workflow applicable, which is the
+  // direction that requires evidence.
+  const filterPaths =
+    meta.commits > PATH_FILTER_COMMIT_LIMIT
+      ? []
+      : changedPaths.slice(0, PATH_FILTER_WINDOW);
 
   // Read from the workflow, for the trigger whose run produced the checks being
   // judged: `pull_request` before a merge, `push` to the base branch after one.
@@ -1053,7 +1082,9 @@ export function main(argv) {
     eligibility: { state: meta.state, draft: meta.draft, merged },
     codexReviewedSha: reviewedSha,
     coderabbitReviewCount: coderabbit,
-    approvalCount: reviews.filter(r => r?.state === "APPROVED").length,
+    approvalCount: reviews.filter(
+      r => r?.state === "APPROVED" && MAINTAINER_ASSOCIATIONS.includes(r?.author_association)
+    ).length,
   });
 
   // Nothing is printed until the freshness read below has decided. Emitting the
@@ -1108,6 +1139,23 @@ export function main(argv) {
  * `run` is injectable so this decision can be given a failure and asked what it
  * returns; that is the only reason it is a parameter.
  */
+/**
+ * `process.argv[1]` as the URL `import.meta.url` would report for it.
+ *
+ * `import.meta.url` is percent-encoded AND resolved through symlinks, while
+ * `argv[1]` is neither, so comparing them directly fails whenever the path
+ * contains a character needing encoding or sits under a symlinked prefix — on
+ * macOS `/tmp` resolves to `/private/tmp`, so an ordinary invocation there
+ * silently declines to run and exits reporting nothing.
+ */
+function entryHref(argvPath) {
+  try {
+    return pathToFileURL(realpathSync(argvPath)).href;
+  } catch {
+    return "";
+  }
+}
+
 export function runCli(argv, run = main) {
   try {
     return run(argv);
@@ -1122,7 +1170,7 @@ export function runCli(argv, run = main) {
 
 if (
   process.argv[1] &&
-  import.meta.url === pathToFileURL(process.argv[1]).href
+  import.meta.url === entryHref(process.argv[1])
 ) {
   // `process.exitCode`, not `process.exit()`. Exiting terminates Node before a
   // redirected stdout finishes flushing, truncating exactly the blocker names a

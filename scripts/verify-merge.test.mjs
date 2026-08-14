@@ -27,6 +27,8 @@ import {
   OPTIONAL_STATUS_CONTEXTS,
   missingRequired,
   PATH_FILTER_WINDOW,
+  MAINTAINER_ASSOCIATIONS,
+  PATH_FILTER_COMMIT_LIMIT,
   pageWrapping,
   pathMatches,
   remoteForRepo,
@@ -403,6 +405,24 @@ describe("OPTIONAL_STATUS_CONTEXTS", () => {
     expect(OPTIONAL_STATUS_CONTEXTS).not.toContain(
       "action-semantic-pull-request"
     );
+  });
+});
+
+describe("maintainer associations", () => {
+  it("counts only associations carrying write access", () => {
+    // Any account can submit an APPROVED review, a contributor's own and a
+    // bot's included, so the state alone does not say the project accepted it.
+    expect(MAINTAINER_ASSOCIATIONS).toEqual(["OWNER", "MEMBER", "COLLABORATOR"]);
+    expect(MAINTAINER_ASSOCIATIONS).not.toContain("CONTRIBUTOR");
+    expect(MAINTAINER_ASSOCIATIONS).not.toContain("NONE");
+  });
+});
+
+describe("PATH_FILTER_COMMIT_LIMIT", () => {
+  it("matches the point GitHub stops evaluating path filters", () => {
+    // Past it the workflow runs regardless, so deciding from paths would excuse
+    // a check that did run.
+    expect(PATH_FILTER_COMMIT_LIMIT).toBe(1000);
   });
 });
 
@@ -1027,8 +1047,9 @@ describe("staleVerification", () => {
   });
 
   it("catches a pull request CLOSED or drafted mid-check", () => {
-    // Neither moves the tip nor the merged flag, so the two named comparisons
-    // this replaced both passed while GitHub had stopped permitting the merge.
+    // Neither moves the tip nor the merged flag, so a comparison naming only
+    // those two reports the verification as fresh while GitHub has already
+    // stopped permitting the merge.
     expect(staleVerification(OPEN, { ...OPEN, state: "closed" })).toBe(
       "state-changed-during-verification"
     );
