@@ -20,6 +20,7 @@ import {
   Package,
   Route,
   Settings as SettingsIcon,
+  Shield,
 } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { Breadcrumbs } from "@admin/components/shared";
