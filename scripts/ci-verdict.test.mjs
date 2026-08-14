@@ -17,6 +17,12 @@ const HEAD = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const OLD = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
 /** A submitted review, which is the ordinary case the other fixtures vary from. */
+/** The pull request's commit order, which is what decides "later revision". */
+const ORDER = new Map([
+  [OLD, 0],
+  [HEAD, 1],
+]);
+
 const review = (login, commit_id, id = 1) => ({
   id,
   user: { login },
@@ -27,6 +33,7 @@ const review = (login, commit_id, id = 1) => ({
 /** A pull request that is otherwise clean, so one varied field decides. */
 const BASE = {
   head: HEAD,
+  revisionOrder: ORDER,
   reviews: [review(CODEX, HEAD)],
   threads: [],
   issueComments: [],
@@ -124,7 +131,7 @@ describe("changesRequested", () => {
       at("CHANGES_REQUESTED", "2026-08-14T10:00:00Z", 1),
       at("COMMENTED", "2026-08-14T11:00:00Z", 2),
     ];
-    expect(changesRequested(reviews, HEAD)).toEqual([CODEX]);
+    expect(changesRequested(reviews, ORDER)).toEqual([CODEX]);
     expect(report({ ...BASE, reviews, threads: [] }).verdict).toBe(
       "CHANGES REQUESTED"
     );
@@ -135,7 +142,7 @@ describe("changesRequested", () => {
       at("CHANGES_REQUESTED", "2026-08-14T10:00:00Z", 1),
       at("APPROVED", "2026-08-14T11:00:00Z", 2),
     ];
-    expect(changesRequested(reviews, HEAD)).toEqual([]);
+    expect(changesRequested(reviews, ORDER)).toEqual([]);
     expect(report({ ...BASE, reviews, threads: [] }).verdict).toBe("CLEAN");
   });
 
@@ -154,7 +161,7 @@ describe("changesRequested", () => {
       at("CHANGES_REQUESTED", "2026-08-14T10:00:00Z", 1),
       at("DISMISSED", "2026-08-14T11:00:00Z", 2),
     ];
-    expect(changesRequested(reviews, HEAD)).toEqual([CODEX]);
+    expect(changesRequested(reviews, ORDER)).toEqual([CODEX]);
     expect(reviewersAtHead(reviews, HEAD)).toEqual([CODEX]);
   });
 
@@ -168,7 +175,7 @@ describe("changesRequested", () => {
       at("COMMENTED", "2026-08-14T10:00:00Z", 1),
       at("CHANGES_REQUESTED", "2026-08-14T11:00:00Z", 2),
     ];
-    expect(changesRequested(reviews, HEAD)).toEqual([CODEX]);
+    expect(changesRequested(reviews, ORDER)).toEqual([CODEX]);
   });
 
   /**
@@ -182,7 +189,7 @@ describe("changesRequested", () => {
       { ...at("CHANGES_REQUESTED", "2026-08-14T10:00:00Z", 1), commit_id: OLD },
       at("COMMENTED", "2026-08-14T11:00:00Z", 2),
     ];
-    expect(changesRequested(reviews, HEAD)).toEqual([CODEX]);
+    expect(changesRequested(reviews, ORDER)).toEqual([CODEX]);
     expect(reviewersAtHead(reviews, HEAD)).toEqual([CODEX]);
     expect(report({ ...BASE, reviews, threads: [] }).verdict).toBe(
       "CHANGES REQUESTED"
@@ -195,7 +202,7 @@ describe("changesRequested", () => {
       { ...at("CHANGES_REQUESTED", "2026-08-14T10:00:00Z", 1), commit_id: OLD },
       at("APPROVED", "2026-08-14T11:00:00Z", 2),
     ];
-    expect(changesRequested(reviews, HEAD)).toEqual([]);
+    expect(changesRequested(reviews, ORDER)).toEqual([]);
     expect(report({ ...BASE, reviews, threads: [] }).verdict).toBe("CLEAN");
   });
 
@@ -210,10 +217,33 @@ describe("changesRequested", () => {
       at("CHANGES_REQUESTED", "2026-08-14T10:00:00Z", 1),
       { ...at("APPROVED", "2026-08-14T11:00:00Z", 2), commit_id: OLD },
     ];
-    expect(changesRequested(reviews, HEAD)).toEqual([CODEX]);
+    expect(changesRequested(reviews, ORDER)).toEqual([CODEX]);
     expect(report({ ...BASE, reviews, threads: [] }).verdict).toBe(
       "CHANGES REQUESTED"
     );
+  });
+
+  /**
+   * Three revisions: objected on A, approved on B, head moves to C. The
+   * clearance was a fact about A and B and must survive the head advancing —
+   * a rule comparing the approval against the CURRENT head resurrects an
+   * objection every time someone pushes.
+   */
+  it("keeps a clearance made on an intermediate revision", () => {
+    const A = OLD;
+    const B = "cccccccccccccccccccccccccccccccccccccccc";
+    const C = HEAD;
+    const order = new Map([
+      [A, 0],
+      [B, 1],
+      [C, 2],
+    ]);
+    const reviews = [
+      { ...at("CHANGES_REQUESTED", "2026-08-14T10:00:00Z", 1), commit_id: A },
+      { ...at("APPROVED", "2026-08-14T11:00:00Z", 2), commit_id: B },
+      { ...at("COMMENTED", "2026-08-14T12:00:00Z", 3), commit_id: C },
+    ];
+    expect(changesRequested(reviews, order)).toEqual([]);
   });
 
   /** An approval on the very revision objected to clears it, head or not. */
@@ -222,7 +252,7 @@ describe("changesRequested", () => {
       { ...at("CHANGES_REQUESTED", "2026-08-14T10:00:00Z", 1), commit_id: OLD },
       { ...at("APPROVED", "2026-08-14T11:00:00Z", 2), commit_id: OLD },
     ];
-    expect(changesRequested(reviews, HEAD)).toEqual([]);
+    expect(changesRequested(reviews, ORDER)).toEqual([]);
   });
 });
 
