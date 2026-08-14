@@ -338,6 +338,18 @@ async function main(argv) {
 
   const repo = `${owner}/${name}`;
   const { execFileSync } = await import("node:child_process");
+  // `git` does not read GH_TOKEN, and the workflow checks out with
+  // `persist-credentials: false`, so `ls-remote` against a private repository
+  // would fail after the API lookups had already succeeded. This points git at
+  // the same credentials `gh` is using.
+  try {
+    execFileSync("gh", ["auth", "setup-git", "--hostname", host], {
+      stdio: "ignore",
+    });
+  } catch {
+    // Unauthenticated public access still works; a private repository fails
+    // later at `ls-remote`, with a message naming the ref it could not read.
+  }
   // Each query is its own process and its failure is its own exception: a
   // rejected request must reach the caller as a refusal, never as empty data.
   // `--hostname` on every API call, and a host-qualified `--repo`. Parsing the
@@ -567,8 +579,11 @@ async function main(argv) {
         ].includes(event?.event)
       ).length;
 
+  // Only a MERGED pull request has a tail worth screening. Closed-without-
+  // merging is settled by the lifecycle alone, so running the rewrite screen
+  // there can refuse as NOT CHECKABLE a state that was never in question.
   let rewritten = 0;
-  if (meta.state !== "OPEN") {
+  if (meta.state === "MERGED") {
     rewritten = rewriteEvents();
     if (rewritten > 0) {
       process.stderr.write(
@@ -579,7 +594,7 @@ async function main(argv) {
   }
 
   let stranded = 0;
-  if (meta.state !== "OPEN" && meta.headRefOid && meta.headRefOid !== head) {
+  if (meta.state === "MERGED" && meta.headRefOid && meta.headRefOid !== head) {
     // Fetched from the remote that HAS it: a fork's head is not on `origin`,
     // so asking the base repository throws before the count can be taken.
     execFileSync("git", ["fetch", headRemote, head], { stdio: "ignore" });
@@ -620,7 +635,7 @@ async function main(argv) {
   // recording an event that makes the tail uncheckable. An empty range from a
   // mutable ref is not proof that nothing was there — it is proof that nothing
   // is there NOW, and the timeline is the only record that the ref moved.
-  if (meta.state !== "OPEN" && rewriteEvents() !== rewritten) {
+  if (meta.state === "MERGED" && rewriteEvents() !== rewritten) {
     process.stderr.write(
       "ci-verdict: branch history rewritten mid-run; tail NOT CHECKABLE\n"
     );
