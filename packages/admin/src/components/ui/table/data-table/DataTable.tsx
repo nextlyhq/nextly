@@ -17,7 +17,6 @@ import type { DataFetcher, PaginationConfig } from "@nextlyhq/ui";
 import { X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
-import { Pagination } from "@admin/components/shared/pagination";
 import { useServerTable } from "@admin/hooks/useServerTable";
 
 import { DataTableView } from "./DataTableView";
@@ -287,20 +286,18 @@ export function DataTable<Row extends object>({
           // consumer outside the responsive placement rather than just this
           // component. paginationMeta.page is the 1-indexed wire value; the
           // controls and handlePageChange both work in 0-indexed page numbers.
-          footer={
-            <Pagination
-              currentPage={paginationMeta.page - 1}
-              totalPages={paginationMeta.totalPages}
-              totalItems={paginationMeta.total}
-              pageSize={paginationMeta.limit}
-              pageSizeOptions={paginationConfig.pageSizeOptions}
-              showPageSizeSelector={paginationConfig.showPageSizeSelector}
-              maxVisiblePages={paginationConfig.maxVisiblePages}
-              onPageChange={handlePageChange}
-              onPageSizeChange={handlePageSizeChange}
-              isLoading={loading}
-            />
-          }
+          pagination={{
+            currentPage: paginationMeta.page - 1,
+            totalPages: paginationMeta.totalPages,
+            totalItems: paginationMeta.total,
+            pageSize: paginationMeta.limit,
+            pageSizeOptions: paginationConfig.pageSizeOptions,
+            showPageSizeSelector: paginationConfig.showPageSizeSelector,
+            maxVisiblePages: paginationConfig.maxVisiblePages,
+            onPageChange: handlePageChange,
+            onPageSizeChange: handlePageSizeChange,
+            isLoading: loading,
+          }}
         />
       </div>
 

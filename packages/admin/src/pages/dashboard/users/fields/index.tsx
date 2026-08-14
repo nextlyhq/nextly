@@ -802,8 +802,10 @@ function UserFieldsTable() {
             </Table>
           </DndContext>
 
-          {/* Pagination inside table wrapper - always show if table is shown */}
-          {/* <div className="table-footer  border-t border-border bg-[var(--nx-table-header-bg)] p-4"> */}
+          {/* Rendered directly rather than handed to a table, because this list
+              is not a DataTableView: the rows are drag-reorderable and drawn by
+              a DndContext over a plain Table, so there is no two-view
+              responsive decision for a table to place a pager for. */}
           <Pagination
             currentPage={page}
             totalPages={Math.max(1, totalPages)}
@@ -813,12 +815,9 @@ function UserFieldsTable() {
             onPageSizeChange={handlePageSizeChange}
             totalItems={totalItems + filteredStaticFields.length}
             // Named rather than left as the default "Pagination". A screen
-            // reader announces this control by that name, and the admin
-            // renders several pagers across its pages, so a generic one says
-            // nothing about which list it moves. The placement guard also
-            // identifies this pager by the label: a count cannot tell two
-            // identical pagers apart, so an exemption written for one of them
-            // would otherwise excuse whichever came first.
+            // reader announces this control by that name, and the admin renders
+            // several pagers across its pages, so a generic one says nothing
+            // about which list it moves.
             ariaLabel="User fields pagination"
           />
           {/* </div> */}

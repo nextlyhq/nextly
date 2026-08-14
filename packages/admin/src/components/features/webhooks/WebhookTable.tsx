@@ -11,7 +11,6 @@ import type React from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Edit, List, Power, Send, Trash2 } from "@admin/components/icons";
-import { Pagination } from "@admin/components/shared/pagination";
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { DataTableView } from "@admin/components/ui/table/data-table";
 import type {
@@ -232,18 +231,16 @@ export const WebhookTable: React.FC<WebhookTableProps> = ({
         rowActions={rowActions}
         registryKey="webhooks"
         ariaLabel="Webhook endpoints table"
-        footer={
-          <Pagination
-            currentPage={page}
-            totalPages={Math.max(1, totalPages)}
-            pageSize={pageSize}
-            pageSizeOptions={[10, 25, 50]}
-            onPageChange={setPage}
-            onPageSizeChange={handlePageSizeChange}
-            totalItems={totalItems}
-            isLoading={isLoading}
-          />
-        }
+        pagination={{
+          currentPage: page,
+          totalPages: Math.max(1, totalPages),
+          pageSize,
+          pageSizeOptions: [10, 25, 50],
+          onPageChange: setPage,
+          onPageSizeChange: handlePageSizeChange,
+          totalItems,
+          isLoading,
+        }}
         emptyMessage="No webhook endpoints yet. Create one to start receiving events."
       />
     </ListShell>

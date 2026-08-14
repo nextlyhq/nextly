@@ -21,7 +21,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { BulkActionBar } from "@admin/components/features/entries/EntryList/BulkActionBar";
 import { UserDeleteDialog } from "@admin/components/features/user-dialog";
 import { BulkDeleteDialog } from "@admin/components/shared/bulk-action-dialogs";
-import { Pagination } from "@admin/components/shared/pagination";
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { toast } from "@admin/components/ui";
 import { DataTableView } from "@admin/components/ui/table/data-table";
@@ -502,19 +501,19 @@ export default function UserTable() {
           rowActions={rowActions}
           registryKey="users"
           ariaLabel="Users table"
-          footer={
-            data && data.meta.totalPages > 0 ? (
-              <Pagination
-                currentPage={page}
-                totalPages={data.meta.totalPages}
-                totalItems={data.meta.total}
-                pageSize={pageSize}
-                pageSizeOptions={[10, 25, 50]}
-                onPageChange={setPage}
-                onPageSizeChange={handlePageSizeChange}
-                isLoading={isLoading}
-              />
-            ) : undefined
+          pagination={
+            data && data.meta.totalPages > 0
+              ? {
+                  currentPage: page,
+                  totalPages: data.meta.totalPages,
+                  totalItems: data.meta.total,
+                  pageSize,
+                  pageSizeOptions: [10, 25, 50],
+                  onPageChange: setPage,
+                  onPageSizeChange: handlePageSizeChange,
+                  isLoading,
+                }
+              : undefined
           }
           error={
             isError

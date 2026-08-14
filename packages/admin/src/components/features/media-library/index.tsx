@@ -812,22 +812,22 @@ export function MediaLibrary({
                 // The list view is a table, so its pager goes to the table
                 // rather than beside it. The grid branch above keeps its own,
                 // because a grid has no row-versus-card view to place it for.
-                footer={
-                  !isLoading && !error && data && data.data.length > 0 ? (
-                    <Pagination
-                      currentPage={page}
-                      totalPages={totalPages}
-                      pageSize={pageSize}
-                      pageSizeOptions={[12, 24, 48, 96]}
-                      showPageSizeSelector
-                      onPageChange={handlePageChange}
-                      onPageSizeChange={handlePageSizeChange}
-                      // The other half of the pair above: same props, other
-                      // view, so the name is what tells them apart to a screen
-                      // reader and to the placement guard.
-                      ariaLabel="Media list pagination"
-                    />
-                  ) : undefined
+                pagination={
+                  !isLoading && !error && data && data.data.length > 0
+                    ? {
+                        currentPage: page,
+                        totalPages,
+                        pageSize,
+                        pageSizeOptions: [12, 24, 48, 96],
+                        showPageSizeSelector: true,
+                        onPageChange: handlePageChange,
+                        onPageSizeChange: handlePageSizeChange,
+                        // The other half of the pair above: same props, other
+                        // view, so the name is what tells a screen reader
+                        // which list it moves.
+                        ariaLabel: "Media list pagination",
+                      }
+                    : undefined
                 }
               />
             </>

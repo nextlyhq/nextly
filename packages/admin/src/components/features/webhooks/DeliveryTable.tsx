@@ -18,7 +18,6 @@ import {
 import type React from "react";
 import { useMemo } from "react";
 
-import { Pagination } from "@admin/components/shared/pagination";
 import { DataTableView } from "@admin/components/ui/table/data-table";
 import type { NextlyColumn } from "@admin/components/ui/table/data-table";
 import {
@@ -205,19 +204,17 @@ export const DeliveryTable: React.FC<DeliveryTableProps> = ({
         // showing. This list is the one most often read on a narrow screen
         // while chasing a failed delivery, which is the layout a detached pager
         // gets wrong.
-        footer={
-          <Pagination
-            currentPage={page}
-            totalPages={Math.max(1, totalPages)}
-            pageSize={pageSize}
-            pageSizeOptions={[20, 50, 100]}
-            onPageChange={onPageChange}
-            onPageSizeChange={onPageSizeChange}
-            totalItems={totalItems}
-            itemLabel="deliveries"
-            isLoading={isLoading}
-          />
-        }
+        pagination={{
+          currentPage: page,
+          totalPages: Math.max(1, totalPages),
+          pageSize,
+          pageSizeOptions: [20, 50, 100],
+          onPageChange,
+          onPageSizeChange,
+          totalItems,
+          itemLabel: "deliveries",
+          isLoading,
+        }}
       />
     </div>
   );

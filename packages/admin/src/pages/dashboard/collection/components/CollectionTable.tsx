@@ -29,7 +29,6 @@ import { BulkActionBar } from "@admin/components/features/entries/EntryList/Bulk
 import * as Icons from "@admin/components/icons";
 import { Lock } from "@admin/components/icons";
 import { BulkDeleteDialog } from "@admin/components/shared/bulk-action-dialogs";
-import { Pagination } from "@admin/components/shared/pagination";
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { toast } from "@admin/components/ui";
 import { DataTableView } from "@admin/components/ui/table/data-table";
@@ -648,19 +647,19 @@ export default function CollectionTable() {
             // in the column's gap on mobile. The gate is
             // unchanged and still hides the pager before the first response, so
             // an empty list shows no controls to page through.
-            footer={
-              data && data.meta.totalPages > 0 ? (
-                <Pagination
-                  currentPage={page}
-                  totalPages={data.meta.totalPages}
-                  pageSize={pageSize}
-                  pageSizeOptions={[10, 25, 50]}
-                  onPageChange={setPage}
-                  onPageSizeChange={handlePageSizeChange}
-                  isLoading={isFetching}
-                  totalItems={data.meta.total}
-                />
-              ) : undefined
+            pagination={
+              data && data.meta.totalPages > 0
+                ? {
+                    currentPage: page,
+                    totalPages: data.meta.totalPages,
+                    pageSize,
+                    pageSizeOptions: [10, 25, 50],
+                    onPageChange: setPage,
+                    onPageSizeChange: handlePageSizeChange,
+                    isLoading: isFetching,
+                    totalItems: data.meta.total,
+                  }
+                : undefined
             }
           />
         </>

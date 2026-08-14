@@ -27,7 +27,6 @@ import {
 import { Columns, Edit, Info, Plus, Trash2 } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
-import { Pagination } from "@admin/components/shared/pagination";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { Link } from "@admin/components/ui/link";
@@ -321,21 +320,21 @@ function ImageSizesContent({
         // showing. This list paginates in memory rather than
         // over the wire, so the gate counts the filtered rows: a search that
         // matches nothing should leave no controls behind.
-        footer={
-          filteredSizes.length > 0 ? (
-            <Pagination
-              currentPage={page}
-              totalPages={Math.max(
-                1,
-                Math.ceil(filteredSizes.length / pageSize)
-              )}
-              totalItems={filteredSizes.length}
-              pageSize={pageSize}
-              onPageChange={setPage}
-              onPageSizeChange={handlePageSizeChange}
-              isLoading={isLoading}
-            />
-          ) : undefined
+        pagination={
+          filteredSizes.length > 0
+            ? {
+                currentPage: page,
+                totalPages: Math.max(
+                  1,
+                  Math.ceil(filteredSizes.length / pageSize)
+                ),
+                totalItems: filteredSizes.length,
+                pageSize,
+                onPageChange: setPage,
+                onPageSizeChange: handlePageSizeChange,
+                isLoading,
+              }
+            : undefined
         }
       />
 
