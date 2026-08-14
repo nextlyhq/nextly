@@ -4,6 +4,19 @@ import { defineBlock } from "../../core/registry";
 import { str } from "./util";
 
 /**
+ * "Whatever the row decided", as a value a Select can carry.
+ *
+ * Radix refuses an item whose value is the empty string, because it reserves
+ * that for "nothing is chosen" — the state that shows the placeholder. Taking
+ * the row's alignment is a choice an author makes, not an absence, so it needs
+ * a name of its own.
+ */
+const INHERIT_ALIGN = "inherit";
+
+/** The alignments a column may take instead of the row's. */
+const SELF_ALIGNMENTS = ["flex-start", "center", "flex-end", "stretch"];
+
+/**
  * One cell of a `core/columns` row.
  *
  * Exists so a column is a block rather than a wrapper. The row used to build an
@@ -26,7 +39,7 @@ export const column = defineBlock({
   label: "Column",
   icon: "Columns",
   category: "layout",
-  defaultProps: { width: "", verticalAlign: "" },
+  defaultProps: { width: "", verticalAlign: INHERIT_ALIGN },
   contentFields: [
     {
       name: "width",
@@ -38,10 +51,10 @@ export const column = defineBlock({
       name: "verticalAlign",
       type: "select",
       label: "Vertical align",
-      options: ["", "flex-start", "center", "flex-end", "stretch"].map(v => ({
-        value: v,
-        label: v === "" ? "inherit from row" : v,
-      })),
+      options: [
+        { value: INHERIT_ALIGN, label: "Inherit from row" },
+        ...SELF_ALIGNMENTS.map(v => ({ value: v, label: v })),
+      ],
     },
   ],
   supports: {
@@ -57,7 +70,11 @@ export const column = defineBlock({
   },
   render: ({ props, slots, className }) => {
     const width = str(props.width, "");
-    const align = str(props.verticalAlign, "");
+    // Only an alignment the field offers reaches `alignSelf`; anything else —
+    // the sentinel, or a value a hand-edited document carries — leaves the row
+    // in charge, which is what a column with no opinion of its own should do.
+    const align = str(props.verticalAlign, INHERIT_ALIGN);
+    const selfAlign = SELF_ALIGNMENTS.includes(align) ? align : undefined;
     return (
       <div
         className={className}
@@ -71,7 +88,7 @@ export const column = defineBlock({
             ? { flex: "1 1 240px" }
             : { flex: `0 0 ${width}`, width }),
           minWidth: 0,
-          ...(align === "" ? {} : { alignSelf: align }),
+          ...(selfAlign ? { alignSelf: selfAlign } : {}),
         }}
       >
         {slots.default}

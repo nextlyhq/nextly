@@ -21,9 +21,19 @@ interface ImageProps extends MediaValue {
   rounded?: boolean;
 }
 
+/**
+ * "Whatever shape the file already is", as a value a Select can carry.
+ *
+ * Radix refuses an item whose value is the empty string — it reserves that for the
+ * unset state that shows the placeholder — so keeping the image's own ratio needs a
+ * name rather than an absence. Any value that is not `W/H` leaves the ratio alone,
+ * so this reads the same to the renderer as the unset it replaces.
+ */
+const ORIGINAL_ASPECT = "original";
+
 export const image = defineBlock<ImageProps>({
   type: "core/image",
-  version: 1,
+  version: 2,
   label: "Image",
   icon: "Image",
   category: "media",
@@ -32,8 +42,17 @@ export const image = defineBlock<ImageProps>({
     alt: "",
     caption: "",
     link: { href: "" },
-    aspectPreset: "",
+    aspectPreset: ORIGINAL_ASPECT,
     rounded: false,
+  },
+  // A stored image carries `""` for its ratio, which the Select reads as "nothing
+  // chosen" and shows as a placeholder instead of the choice the author made.
+  migrate: (old, from) => {
+    const props = { ...(old as ImageProps) };
+    if (from < 2 && props.aspectPreset === "") {
+      props.aspectPreset = ORIGINAL_ASPECT;
+    }
+    return { props };
   },
   contentFields: [
     { name: "media", type: "media", label: "Image", bindable: true },
@@ -44,7 +63,7 @@ export const image = defineBlock<ImageProps>({
       type: "select",
       label: "Aspect ratio",
       options: [
-        { value: "", label: "Original" },
+        { value: ORIGINAL_ASPECT, label: "Original" },
         { value: "1/1", label: "Square" },
         { value: "4/3", label: "Standard" },
         { value: "3/4", label: "Portrait" },
