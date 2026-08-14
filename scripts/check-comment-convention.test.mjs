@@ -130,7 +130,7 @@ describe("the file walk", () => {
     // Pinned independently of SOURCE_EXTENSIONS. Iterating the exported list alone makes the
     // assertion vacuous for a deleted entry: drop ".cjs" from the code and the loop simply stops
     // asking about it, so tracked .cjs files leave CI with every test still green.
-    for (const required of [".ts", ".tsx", ".mts", ".js", ".mjs", ".cjs", ".css", ".yml", ".sh"]) {
+    for (const required of [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".css", ".yml", ".yaml", ".sh"]) {
       expect(SOURCE_EXTENSIONS, `${required} is no longer scanned`).toContain(required);
     }
 
@@ -166,7 +166,10 @@ describe("the file walk", () => {
     // The membership assertion the loop above cannot make: it checks that each NAMED root is
     // real, not that the roots worth naming are named. `templates` ships to users and was
     // absent, so 121 files were unchecked while the scan reported clean.
-    for (const required of ["packages", "apps", "e2e", "templates", "scripts"]) {
+    // "." is listed because it is what reaches the repository ROOT, where eslint.config.mjs and
+    // lint-staged.config.mjs live. The named roots below it are covered by "." and kept because
+    // they are what the scope MEANS to a reader; dropping "." alone would silently narrow it.
+    for (const required of [".", "packages", "apps", "e2e", "templates", "scripts"]) {
       expect(DEFAULT_ROOTS, `${required} is outside the enforced scope`).toContain(required);
     }
   });

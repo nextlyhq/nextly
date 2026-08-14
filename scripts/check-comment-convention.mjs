@@ -106,6 +106,9 @@ export const FORBIDDEN = [
     // the noun that follows names the review artefact rather than a person or a permission.
     pattern: /\breview\s+(?:finding|feedback|comment|note)s?\b/i,
     why: "names a review artefact rather than the code",
+    // Suppressed in review tooling, where the artefact is the DATA being processed: "the review
+    // comment body is read from payload.body" describes the code.
+    domainVocabulary: true,
   },
   {
     // The ACTOR carries the verdict, not the verb. "the operator asked", "the caller asked" and
@@ -171,6 +174,7 @@ const HASH_COMMENT_EXTENSIONS = [".yml", ".yaml", ".sh"];
 export function readOptionsFor(path) {
   return {
     hashComments: HASH_COMMENT_EXTENSIONS.some(ext => path.endsWith(ext)),
+    shell: path.endsWith(".sh"),
     jsx: path.endsWith(".tsx") || path.endsWith(".jsx"),
     lineComments: !path.endsWith(".css"),
     domainVocabularyAllowed: isReviewDomain(path),
@@ -330,9 +334,9 @@ export function sourceFiles(root) {
  * escapes it. It is a floor rather than a boundary, and worth having because the failure it
  * catches is one nothing else in the repository can see.
  */
-export function commentText(source, { lineComments = true, jsx = false, hashComments = false } = {}) {
+export function commentText(source, { lineComments = true, jsx = false, hashComments = false, shell = false } = {}) {
   // YAML and shell are not JavaScript. Their comments start at `#`, which TypeScript cannot lex.
-  if (hashComments) return hashLineComments(source);
+  if (hashComments) return hashLineComments(source, { shell });
 
   // CSS is not JavaScript, so TypeScript cannot lex it. It has block comments and nothing else.
   if (!lineComments) return cssBlockComments(source);
@@ -450,7 +454,7 @@ function jsxTextRanges(source) {
  * Quotes are tracked because a `#` inside them is literal in both dialects. A shebang is skipped:
  * `#!/usr/bin/env bash` is an interpreter directive rather than prose.
  */
-function hashLineComments(source) {
+function hashLineComments(source, { shell = false } = {}) {
   const comments = [];
   const lines = source.split("\n");
   for (let i = 0; i < lines.length; i += 1) {
@@ -460,7 +464,10 @@ function hashLineComments(source) {
     for (let at = 0; at < line.length; at += 1) {
       const c = line[at];
       if (quote) {
-        if (c === "\\") at += 1;
+        // A backslash escapes inside double quotes, and is LITERAL inside shell single quotes -
+        // `echo 'a\\' # x` closes at the quote. YAML single quotes escape only by doubling, so
+        // the same rule holds there.
+        if (c === "\\" && quote === '"') at += 1;
         else if (c === quote) quote = "";
         continue;
       }
@@ -470,7 +477,11 @@ function hashLineComments(source) {
       }
       // A control operator ends a word, so a # directly after one opens a comment: `x && #c`,
       // `x; #c`, `x | #c`. Only whitespace would miss those.
-      if (c === "#" && (at === 0 || /[\s;&|()]/.test(line[at - 1]))) {
+      // In shell a control operator ends a word, so `x && #c` is a comment. YAML has no such
+      // operators: there a `#` needs whitespace before it, and applying the shell rule would read
+      // `key: a;#b` - a legal scalar - as one.
+      const boundary = shell ? /[\s;&|()]/ : /\s/;
+      if (c === "#" && (at === 0 || boundary.test(line[at - 1]))) {
         comments.push(line.slice(at + 1));
         break;
       }
@@ -526,6 +537,12 @@ const ENDS_A_VALUE = new Set([
   ts.SyntaxKind.NullKeyword,
   ts.SyntaxKind.PlusPlusToken,
   ts.SyntaxKind.MinusMinusToken,
+  // `const x = /re/ / 2` and `const x = {} / 2` both divide. CloseBraceToken also ends a BLOCK,
+  // after which a slash would open a regex - so this errs towards division, deliberately and in
+  // the direction the file already states: mistaking a regex for division reports its body as a
+  // comment, which is visible, while the reverse swallows a real comment silently.
+  ts.SyntaxKind.RegularExpressionLiteral,
+  ts.SyntaxKind.CloseBraceToken,
 ]);
 
 /**
