@@ -1,5 +1,46 @@
 /**
- * No call site may repaint the tab indicator.
+ * A BEST-EFFORT LINT over call sites that repaint the tab indicator.
+ *
+ * Read this first, because the name of the file oversells it. A pass means
+ * "no violation this scanner could see", NOT "no violation". The scan reads
+ * source syntax, and syntax has an unbounded surface: 24 review rounds
+ * produced 94 findings and not one round came back empty, with the last three
+ * finding gaps in the previous round's fixes. Treat a green here as evidence,
+ * never as a guarantee, and never as a reason to skip looking.
+ *
+ * KNOWN GAPS, left open deliberately rather than patched:
+ *
+ *   - a namespace member destructured off a shadowed namespace import
+ *     (`const { TabsTrigger: T } = UI` where a local `UI` shadows the import)
+ *   - a `className` bound through a `const` reaching the class walk without a
+ *     resolver, so a constant-bound owned class is not read
+ *   - an equal-value restatement under a DIFFERENT caller variant, where the
+ *     owned rule still wins the cascade by emission order
+ *   - `require` resolved by text rather than by binding, so a local function
+ *     named `require` is read as CommonJS
+ *   - an object spread inside a class map (`cn({ ...{ "border-b-0": true } })`)
+ *     is not traversed, so a class clsx applies is not read
+ *   - a METHOD in a JSX spread (`{...{ onClick() {} }}`) makes the whole spread
+ *     unreadable, even though its key is statically known to be unrelated
+ *   - a REASSIGNED component alias freezes ownership at its declaration, so
+ *     `let T = Other; T = TabsTrigger` is missed and the reverse is reported
+ *     falsely. Deliberate: following it needs reaching-definitions dataflow,
+ *     roughly 700 lines of which this change already removed after measuring
+ *     that it guarded zero real call sites
+ *
+ * WHY THEY ARE NOT FIXED. Measured across the repository: 124 files consume
+ * these primitives and NONE overrides the underline or the corners. Every real
+ * override is layout or size — `mx-3 mt-2.5`, `w-full justify-start`,
+ * `h-8 bg-transparent p-0`, `text-xs` — which the design intends to allow, and
+ * which `cn()` composition exists to serve. So this guards a violation that has
+ * not occurred, and closing four obscure spellings of it does not change that.
+ *
+ * The repeated overrides above are the real signal: `h-8/h-7 bg-transparent
+ * p-0` and `text-xs` want a named variant on the primitive, which is how the
+ * other 11 `cva` components in this package express the same thing. That is the
+ * follow-up, and it addresses the actual pressure rather than policing it.
+ *
+ * The original rationale follows, and still holds for what the scan DOES read:
  *
  * `Tabs` is an underline control: the active state is a 2px bottom border on the
  * trigger, and the trigger is square so that border runs flush to its edges. The
@@ -56,8 +97,17 @@
  * overridable, so completeness was never available.
  */
 
-import { readFileSync, readdirSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -80,7 +130,9 @@ const REPO = resolve(HERE, "../../../../..");
  * first-party consumer. Omitting them would mean reporting repository-wide
  * conformance from a subset of the repository.
  */
-const SCAN_ROOTS = ["packages", "apps", "templates"].map(r => resolve(REPO, r));
+const SCAN_ROOT_NAMES = ["packages", "apps", "templates"] as const;
+
+const SCAN_ROOTS = SCAN_ROOT_NAMES.map(r => resolve(REPO, r));
 
 /** The primitive itself declares the contract; it is not a call site. */
 const PRIMITIVE = resolve(REPO, "packages/ui/src/components/tabs.tsx");
@@ -428,7 +480,10 @@ function wins(owned: Utility, caller: Utility): boolean {
     .every(variant => callerVariants.has(variant));
   // Carrying every variant the owned class carries is SUFFICIENT, not
   // necessary, which is why the cascade is asked as well rather than instead.
-  return asQualified || outranks(owned, caller);
+  // Restating the appearance is a third route: it wins nothing today and holds
+  // the same appearance anyway, so it survives a change to the primitive that
+  // the call site never hears about.
+  return asQualified || outranks(owned, caller) || restates(owned, caller);
 }
 
 /**
@@ -485,13 +540,19 @@ function specificityOf(selector: string): Specificity {
             .reduce((best, one) => (compare(one, best) > 0 ? one : best), ZERO);
     return add(contribution, specificityOf(rest));
   }
-  const ids = selector.match(/#[\w-]+/g)?.length ?? 0;
+  // An attribute selector counts as ONE, and what it holds is data: a `#` or a
+  // `.` inside `[data-foo="#bar"]` is a character in a value, not an id or a
+  // class. Counted verbatim it inflated the caller's rank and overrode a
+  // source-order result that had already decided the question.
+  const attributes = selector.match(/\[[^\]]*\]/g)?.length ?? 0;
+  const structure = selector.replace(/\[[^\]]*\]/g, "");
+  const ids = structure.match(/#[\w-]+/g)?.length ?? 0;
   const classes =
-    (selector.match(/(?<!\\\\)&/g)?.length ?? 0) +
-    (selector.match(/\.[\w-]+/g)?.length ?? 0) +
-    (selector.match(/\[[^\]]*\]/g)?.length ?? 0) +
-    (selector.match(/(?<!:):[\w-]+/g)?.length ?? 0);
-  const elements = selector.match(/::[\w-]+/g)?.length ?? 0;
+    (structure.match(/(?<!\\\\)&/g)?.length ?? 0) +
+    (structure.match(/\.[\w-]+/g)?.length ?? 0) +
+    attributes +
+    (structure.match(/(?<!:):[\w-]+/g)?.length ?? 0);
+  const elements = structure.match(/::[\w-]+/g)?.length ?? 0;
   return [ids, classes, elements];
 }
 
@@ -554,21 +615,115 @@ const declarationsOf = perClass(declarationsOfUncached);
  * outright and needs no such test.
  */
 function disagree(owned: string, caller: string): boolean {
-  // Expanded on both sides, for the same reason the intersection is: a caller's
-  // `outline` shorthand and the primitive's `outline-style` are the same
-  // declaration seen at two granularities, and compared as raw names they never
-  // met — so a rule that replaces the owned outline read as agreeing with it.
-  const expand = (declarations: Map<string, string>): Map<string, string> => {
-    const flat = new Map<string, string>();
-    for (const [property, value] of declarations) {
-      for (const longhand of expandsTo(property)) flat.set(longhand, value);
-    }
-    return flat;
-  };
-  const ownedDeclarations = expand(declarationsOf(owned));
-  for (const [property, value] of expand(declarationsOf(caller))) {
+  const ownedDeclarations = expandDeclarations(declarationsOf(owned));
+  for (const [property, value] of expandDeclarations(declarationsOf(caller))) {
     const existing = ownedDeclarations.get(property);
     if (existing !== undefined && existing !== value) return true;
+  }
+  return false;
+}
+
+/**
+ * Declarations restated at every granularity they can be compared at.
+ *
+ * A caller's `outline` shorthand and the primitive's `outline-style` are the
+ * same declaration seen at two granularities, and compared as raw names they
+ * never met — so a rule that replaces the owned outline read as agreeing with
+ * it.
+ */
+function expandDeclarations(
+  declarations: Map<string, string>
+): Map<string, string> {
+  const flat = new Map<string, string>();
+  for (const [property, value] of declarations) {
+    // The value decides ownership for some properties, so it is passed rather
+    // than only recorded — a `border-image-source: none` names the property
+    // while supplying no image at all.
+    for (const longhand of expandsTo(property, value))
+      flat.set(longhand, value);
+  }
+  return flat;
+}
+
+/**
+ * Whether a value is a composition whose other slots belong to someone else.
+ *
+ * Tailwind uses one property as a shared canvas: `box-shadow` is a list of
+ * `var()` slots, and a ring utility fills `--tw-ring-shadow` while leaving
+ * `--tw-shadow` for whoever else is on the element. A value containing a slot
+ * the utility fills ITSELF is such a canvas, so what it holds is a composition
+ * rather than an appearance of its own.
+ */
+function fillsSharedCanvas(value: string, own: Set<string>): boolean {
+  return [...value.matchAll(/var\(\s*(--[a-zA-Z0-9-]+)/g)].some(match =>
+    own.has(match[1] ?? "")
+  );
+}
+
+/**
+ * The declarations a utility makes exclusively its own.
+ *
+ * The shared canvas is excluded, and that exclusion is what makes an equality
+ * comparison meaningful at all: `shadow-sm` and `focus-visible:ring-2` both
+ * write `box-shadow` with byte-identical text while contributing through
+ * different variables, so on the raw declarations every ring and every shadow
+ * in the repository would read as restating each other.
+ */
+function exclusiveDeclarationsUncached(cls: string): Map<string, string> {
+  const declarations = declarationsOf(cls);
+  const own = new Set(declarations.keys());
+  const exclusive = new Map<string, string>();
+  for (const [property, value] of declarations) {
+    if (fillsSharedCanvas(value, own)) continue;
+    exclusive.set(property, value);
+  }
+  return exclusive;
+}
+
+const exclusiveDeclarationsOf = perClass(exclusiveDeclarationsUncached);
+
+/**
+ * Whether a caller declares an owned appearance AGAIN, with the same value.
+ *
+ * Nothing is displaced and nothing conflicts, so neither the merge nor the
+ * cascade comparison can see it: `aria-[controls]:outline-none` beside the
+ * primitive's `focus-visible:outline-none` shares no variant, and the values
+ * are equal so `disagree` correctly reports no override. It is still a second
+ * copy of one appearance, and the copy is what survives when the primitive
+ * changes — the day the outline becomes a visible ring, this rule goes on
+ * suppressing it from a call site that never mentioned the change.
+ *
+ * Asked as an ADDITIONAL way to hold owned appearance, never by weakening
+ * `disagree`: that function's rejection branch is load-bearing, and stubbing it
+ * to always return true reports a state-qualified utility that touches nothing
+ * the primitive draws.
+ */
+function restates(owned: Utility, caller: Utility): boolean {
+  // An UNQUALIFIED caller declaration against a STATE-QUALIFIED owned one is
+  // not a second copy of anything, and this is the one pairing where the
+  // restatement route was wrong.
+  //
+  // `disabled:opacity-50` styles a state; a caller's plain `opacity-50`
+  // states the base. They name the same declaration in different
+  // circumstances: the variant rule is more specific and still wins while
+  // disabled, and if the primitive later fades to `opacity-40` the owned rule
+  // keeps winning there, so nothing the caller wrote suppresses the change.
+  // Reporting it asked whether two declarations look alike rather than
+  // whether one takes the other over.
+  //
+  // A caller carrying its OWN variant is the case this route exists for, and
+  // it stays: `aria-[controls]:outline-none` beside an owned
+  // `focus-visible:outline-none` is one appearance written twice for two
+  // states, and the copies drift the moment either changes. A caller carrying
+  // the owned variants exactly is already decided by `asQualified` above.
+  if (owned.variants.length > 0 && caller.variants.length === 0) return false;
+  const ownedDeclarations = expandDeclarations(
+    exclusiveDeclarationsOf(owned.full)
+  );
+  for (const [property, value] of expandDeclarations(
+    exclusiveDeclarationsOf(caller.full)
+  )) {
+    if (ownedDeclarations.get(property) === value) return true;
   }
   return false;
 }
@@ -587,18 +742,145 @@ function disagree(owned: string, caller: string): boolean {
  * does not see, and the consequence of missing one is a report rather than a
  * silence, which is the safer direction for a check whose findings are read.
  */
-function excludeEachOther(a: string, b: string): boolean {
+/**
+ * A selector with the parts that qualify an ANCESTOR removed.
+ *
+ * A qualifier only contradicts another when both constrain the same element.
+ * Tailwind's `group-*` variants compile to a functional group holding a
+ * descendant combinator — `group-not-disabled:` becomes
+ * `&:is(:where(.group):not(*:disabled) *)` — where the negation describes the
+ * GROUP and the subject is the trailing `*`. Read whole, that negation looks
+ * like a contradiction of the tab's own `:disabled`, and a caller that really
+ * can apply to a disabled tab inside an enabled group was excluded from every
+ * comparison.
+ *
+ * Distinct from `subjectOf`, which picks the last compound after a TOP-LEVEL
+ * combinator: the combinator here sits inside the parentheses, where that scan
+ * cannot see it. This runs first so the two compose rather than overlap.
+ *
+ * Dropping the whole group rather than parsing out its subject is deliberate:
+ * what remains is a selector with FEWER requirements, so it excludes less and
+ * compares more, and comparing is the reporting side.
+ */
+function withoutAncestorQualifiers(selector: string): string {
+  let out = "";
+  let at = 0;
+  while (at < selector.length) {
+    const functional = /^:(is|where|has|not)\(/.exec(selector.slice(at));
+    if (!functional) {
+      out += selector[at];
+      at += 1;
+      continue;
+    }
+    const open = at + functional[0].length;
+    let depth = 1;
+    let end = open;
+    while (end < selector.length && depth > 0) {
+      if (selector[end] === "(") depth += 1;
+      else if (selector[end] === ")") depth -= 1;
+      end += 1;
+    }
+    const inner = selector.slice(open, end - 1);
+    // A combinator at the group's own level means it relates two elements, so
+    // what it requires is not a requirement on the subject.
+    const describesAncestor =
+      splitTopLevel(inner, " ").length > 1 ||
+      splitTopLevel(inner, ">").length > 1;
+    if (!describesAncestor) out += selector.slice(at, end);
+    at = end;
+  }
+  return out;
+}
+
+function excludeEachOther(whole: string, other: string): boolean {
+  const a = withoutAncestorQualifiers(whole);
+  const b = withoutAncestorQualifiers(other);
   const negatedIn = (selector: string): string[] =>
     [...selector.matchAll(/:not\(([^)]*)\)/g)].map(match =>
-      (match[1] ?? "").trim()
+      // A leading `*` is the universal selector Tailwind writes inside the
+      // negation — `not-disabled:` compiles to `&:not(*:disabled)` while the
+      // required side is a bare `&:disabled`. Compared verbatim the two never
+      // met, so the clearest disjoint pair in the vocabulary read as coexisting.
+      (match[1] ?? "").trim().replace(/^\*/, "")
     );
   const requires = (selector: string, qualifier: string): boolean =>
     qualifier.length > 0 &&
     selector.replace(/:not\([^)]*\)/g, "").includes(qualifier);
-  return (
+  if (
     negatedIn(a).some(qualifier => requires(b, qualifier)) ||
     negatedIn(b).some(qualifier => requires(a, qualifier))
+  ) {
+    return true;
+  }
+  if (attributesConflict(a, b)) return true;
+  return complementaryStates(a, b);
+}
+
+/**
+ * Pseudo-classes that describe the two sides of one state.
+ *
+ * An element is on exactly one side of each, so a rule qualified by one can
+ * never apply beside a rule qualified by the other. Written positively, which
+ * is why neither the negation test nor the attribute test above sees them:
+ * `enabled:` and `disabled:` contradict each other without a `:not()` or an
+ * attribute value anywhere in either selector.
+ */
+const COMPLEMENTARY_STATES = [
+  [":enabled", ":disabled"],
+  [":read-only", ":read-write"],
+  [":required", ":optional"],
+  [":valid", ":invalid"],
+  [":in-range", ":out-of-range"],
+];
+
+function complementaryStates(a: string, b: string): boolean {
+  // Matched on a boundary so `:enabled` is not found inside a longer name, and
+  // read outside any negation, which the test above already compares.
+  const has = (selector: string, state: string): boolean =>
+    new RegExp(`${state}(?![a-z-])`).test(
+      selector
+        // A quoted attribute value is DATA. `data-[foo=:enabled]:` compiles to
+        // `&[data-foo=":enabled"]`, which says nothing about the element's
+        // state, and matching the text inside it invented a contradiction.
+        .replace(/"[^"]*"|'[^']*'/g, '""')
+        .replace(/:not\([^)]*\)/g, "")
+    );
+  return COMPLEMENTARY_STATES.some(
+    ([one, other]) =>
+      (has(a, one ?? "") && has(b, other ?? "")) ||
+      (has(a, other ?? "") && has(b, one ?? ""))
   );
+}
+
+/**
+ * Whether two selectors demand different values of the SAME attribute.
+ *
+ * An element has one value per attribute, so `[data-state="active"]` and
+ * `[data-state="inactive"]` never match together — the form the primitive's own
+ * active and inactive rules are written in, and one no negation appears in.
+ *
+ * Read outside any `:not()`, because a negated attribute states the opposite
+ * requirement and the negation is already compared above.
+ */
+function attributesConflict(a: string, b: string): boolean {
+  const required = (selector: string): Map<string, Set<string>> => {
+    const found = new Map<string, Set<string>>();
+    for (const match of selector
+      .replace(/:not\([^)]*\)/g, "")
+      .matchAll(/\[([a-zA-Z0-9_-]+)\s*=\s*"([^"]*)"\]/g)) {
+      const name = match[1] ?? "";
+      const values = found.get(name) ?? new Set<string>();
+      values.add(match[2] ?? "");
+      found.set(name, values);
+    }
+    return found;
+  };
+  const other = required(b);
+  for (const [name, values] of required(a)) {
+    const theirs = other.get(name);
+    if (theirs && ![...values].some(value => theirs.has(value))) return true;
+  }
+  return false;
 }
 
 /**
@@ -706,17 +988,73 @@ function dependenciesOfUncached(cls: string): string[] {
   const own = new Set(declarations.keys());
   const found = new Set<string>();
   for (const value of declarations.values()) {
-    const referenced = [...value.matchAll(/var\(\s*(--[a-zA-Z0-9-]+)/g)].map(
-      match => match[1] ?? ""
-    );
-    // A value carrying one of this utility's own slots is a shared canvas.
-    if (referenced.some(property => own.has(property))) continue;
-    for (const property of referenced) found.add(property);
+    // A value carrying one of this utility's own slots is a shared canvas, and
+    // the same test decides which declarations are exclusively its own.
+    if (fillsSharedCanvas(value, own)) continue;
+    for (const match of value.matchAll(/var\(\s*(--[a-zA-Z0-9-]+)/g)) {
+      found.add(match[1] ?? "");
+    }
   }
   return [...found];
 }
 
 const dependenciesOf = perClass(dependenciesOfUncached);
+
+/**
+ * The attributes a JSX spread carries, when they can be read here.
+ *
+ * Only an object literal is read, for the same reason a style prop is: knowing
+ * what a name holds means tracing it. `readable` false means the spread may
+ * carry anything, which includes the two props this contract owns.
+ */
+function spreadAttributes(
+  attribute: ts.JsxSpreadAttribute,
+  checker: ts.TypeChecker
+): {
+  /**
+   * One entry per object the spread can resolve to.
+   *
+   * Kept apart rather than flattened, because the objects are ALTERNATIVES:
+   * `{...(flag ? a : b)}` renders one of them, and merging the two let a safe
+   * value from one branch stand in for a forbidden value in the other.
+   */
+  alternatives: Array<Array<{ name: string; value: ts.Expression }>>;
+  readable: boolean;
+} {
+  const resolver = styleResolver(checker);
+  const { objects, readable } = resolver.objectsFrom(attribute.expression);
+  if (!readable) return { alternatives: [], readable: false };
+  const alternatives: Array<Array<{ name: string; value: ts.Expression }>> = [];
+  for (const object of objects) {
+    const attributes: Array<{ name: string; value: ts.Expression }> = [];
+    for (const property of object.properties) {
+      // A shorthand names its key, and that is all this needs when the key is
+      // not a prop the contract owns: `{...{ value }}` is the ordinary way to
+      // pass Radix's `value`, and reporting the whole spread as unreadable
+      // rejected it on the strength of syntax that proves it harmless.
+      if (ts.isShorthandPropertyAssignment(property)) {
+        if (!OWNED_PROPS.includes(property.name.text)) continue;
+        // An owned prop carried as a shorthand still hides its VALUE.
+        return { alternatives: [], readable: false };
+      }
+      if (!ts.isPropertyAssignment(property)) {
+        // A spread inside the spread is a value this does not read, and the
+        // props it carries are unknown rather than absent.
+        return { alternatives: [], readable: false };
+      }
+      // Same reader again: a computed key that is statically a string names
+      // its prop as plainly as an identifier does, and treating it as unknown
+      // rejected `{...{ ["value"]: "a" }}` on syntax that decides it.
+      const named = propertyNameOf(property.name, resolver);
+      if (named === undefined) {
+        return { alternatives: [], readable: false };
+      }
+      attributes.push({ name: named, value: property.initializer });
+    }
+    alternatives.push(attributes);
+  }
+  return { alternatives, readable: true };
+}
 
 /** Which of a component's owned classes a caller's `className` takes over. */
 function displacedBy(exported: string, classes: string): string[] {
@@ -883,7 +1221,7 @@ function compiled(bare: string): string | null {
 function propertiesOfUncached(cls: string): string[] {
   const css = compiled(cls);
   if (css == null) return [];
-  return [...new Set(setBy(css).flatMap(expandsTo))];
+  return [...new Set(setBy(css).flatMap(property => expandsTo(property)))];
 }
 
 const propertiesOf = perClass(propertiesOfUncached);
@@ -903,7 +1241,11 @@ const propertiesOf = perClass(propertiesOfUncached);
 function reachedByUncached(cls: string): string[] {
   const css = compiled(cls);
   if (css == null) return [];
-  return [...new Set([...setBy(css), ...readBy(css)].flatMap(expandsTo))];
+  return [
+    ...new Set(
+      [...setBy(css), ...readBy(css)].flatMap(property => expandsTo(property))
+    ),
+  ];
 }
 
 const reachedBy = perClass(reachedByUncached);
@@ -963,11 +1305,48 @@ const REACHES_BOTTOM = new Set([
 ]);
 
 const BORDER_ASPECTS = ["width", "style", "color"];
+
+/**
+ * The border-image properties that can put an image over the border.
+ *
+ * Only the shorthand and `-source`, because only they can supply one. While
+ * `border-image-source` is its initial `none` there is no image to draw, so
+ * `-slice`, `-width`, `-outset` and `-repeat` change nothing on screen and the
+ * primitive's own bottom border renders exactly as it did. Owning all five
+ * reported those four as repainting an underline they cannot reach; they fall
+ * through to standing for themselves, and intersect nothing the primitive owns.
+ */
+const BORDER_IMAGE = /^border-image(?:-source)?$/;
 const ANY_CORNER = /^border(-[a-z]+)*-radius$/;
 const BOTTOM_OFFSET = /^margin(-(bottom|block-end|block|y))?$/;
 
-function expandsTo(property: string): string[] {
+function expandsTo(property: string, value?: string): string[] {
   const kebab = property.replace(/([A-Z])/g, "-$1").toLowerCase();
+  // A border IMAGE replaces what the border draws, on every edge it covers.
+  // Checked before the shorthand split because it is not one: `border-image`
+  // names no edge and no aspect, so the pattern below does not match it and it
+  // stood for itself — a name that intersects nothing the primitive owns, while
+  // a gradient painted straight over the underline on every tab.
+  if (BORDER_IMAGE.test(kebab)) {
+    // `none` is the initial value of `border-image-source`, so it supplies no
+    // image and the primitive's ordinary border renders exactly as it did.
+    // Owning the property whatever it holds reported the spelling that draws
+    // NOTHING.
+    //
+    // `initial` is the same state named a different way: CSS defines it as
+    // "reset to the initial value", which for this property IS `none`. Matching
+    // the one spelling asked how the value was written rather than what it
+    // does, and reported a call site that covers nothing.
+    // `initial` and `unset` both name the initial value, which for
+    // `border-image-source` IS `none`. They differ only for INHERITED
+    // properties, where `unset` means `inherit` -- and this one is not
+    // inherited, so both supply no image and cover nothing.
+    const drawn = value?.trim().toLowerCase();
+    if (drawn === "none" || drawn === "initial" || drawn === "unset") {
+      return [kebab];
+    }
+    return BORDER_ASPECTS.map(aspect => `border-bottom-${aspect}`);
+  }
   const border = BORDER_PROPERTY.exec(kebab);
   if (border) {
     const [, edge, aspect] = border;
@@ -1005,12 +1384,16 @@ function expandsTo(property: string): string[] {
  */
 const RESETS_EVERYTHING = "all";
 
-function ownsStyleProperty(slot: string, property: string): boolean {
+function ownsStyleProperty(
+  slot: string,
+  property: string,
+  value?: string
+): boolean {
   const owned = ownedCssProperties()[slot];
   if (!owned) return false;
   const kebab = property.replace(/([A-Z])/g, "-$1").toLowerCase();
   if (kebab === RESETS_EVERYTHING) return owned.size > 0;
-  return expandsTo(property).some(p => owned.has(p));
+  return expandsTo(property, value).some(p => owned.has(p));
 }
 
 /**
@@ -1022,19 +1405,78 @@ function ownsStyleProperty(slot: string, property: string): boolean {
  * not hypothetical — the store is full of links — so the traversal only follows
  * real directories.
  */
+/**
+ * Whether a file can hold a JSX call site.
+ *
+ * Every extension in which JSX is legal, which is the three below and not only
+ * the TypeScript ones: a JavaScript Next.js app writes JSX in `.js` and `.jsx`
+ * routinely, so `app/page.js` is an ordinary place for a call site to live.
+ * `.ts` is excluded because an element cannot appear there at all.
+ *
+ * Named once because the Turbo input globs must cover exactly these. An
+ * extension the scan reads but the hash does not cover is a file that can
+ * change while a cached result is replayed, and a replayed pass is
+ * indistinguishable from one that ran. `turbo.json` is static JSON and cannot
+ * import this list, so a contract test below asserts the two agree.
+ */
+const CALL_SITE_EXTENSIONS = [".tsx", ".jsx", ".js"] as const;
+
+/**
+ * Directories whose contents are generated rather than written.
+ *
+ * `.next` is the one that makes this load-bearing rather than tidy: a
+ * contributor who has run the playground dev server has thousands of generated
+ * `.js` chunks under it, and a scan that reads JavaScript would parse every one
+ * of them. That is slow, and worse, it makes the result depend on whether
+ * somebody happened to build locally — a suite that reads generated output is
+ * reading a different repository on each machine.
+ *
+ * Every name here is one that ONLY ever denotes generated output, and the list
+ * is short for that reason rather than by oversight. `build`, `out` and
+ * `coverage` are deliberately absent: they are output conventions at particular
+ * project locations, but they are also ordinary Next.js route segments, so
+ * `app/build/page.js` is a real call site. Pruning by BASENAME anywhere in the
+ * tree would drop it before the extension check ran — a false green produced by
+ * the very list meant to keep the scan honest.
+ */
+const GENERATED_DIRECTORIES = new Set(["node_modules", ".turbo", ".next"]);
+
+/**
+ * `dist` is pruned only where it is a package's build output.
+ *
+ * It does not belong in the list above, by that list's own rule: `dist` is an
+ * output convention at a particular location AND an ordinary Next.js route
+ * segment, so `app/dist/page.js` is a real call site and pruning by basename
+ * dropped it before the extension check ever ran — the same failure the list
+ * documents for `app/build/page.js`.
+ *
+ * What separates the two is not the name but the position: a build directory
+ * sits beside the `package.json` of the package it was built from.
+ */
+function isBuildOutput(directory: string, parent: string): boolean {
+  return directory === "dist" && existsSync(join(parent, "package.json"));
+}
+
+function isCallSite(name: string): boolean {
+  return CALL_SITE_EXTENSIONS.some(extension => name.endsWith(extension));
+}
+
 function sourceFiles(dir: string, found: string[] = []): string[] {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const name = entry.name;
-    if (name === "node_modules" || name === "dist" || name === ".turbo") {
-      continue;
-    }
+    if (GENERATED_DIRECTORIES.has(name) || isBuildOutput(name, dir)) continue;
     const full = join(dir, name);
     if (entry.isDirectory()) {
       // `__tests__` is skipped deliberately: a test may construct violating
       // markup on purpose to show a rule fires, and scanning it would report
       // the proof as the problem.
       if (name !== "__tests__") sourceFiles(full, found);
-    } else if (entry.isFile() && name.endsWith(".tsx") && full !== PRIMITIVE) {
+      // `.jsx` as well as `.tsx`. JSX is a supported source form here —
+      // `create-nextly-app` scaffolds JavaScript projects — and an extension
+      // this scan does not name is a call site it never reads. That failure is
+      // silent in the worst way: the file-count control still passes, because
+      // the `.tsx` files it counts are all still there.
+    } else if (entry.isFile() && isCallSite(name) && full !== PRIMITIVE) {
       found.push(full);
     }
   }
@@ -1051,14 +1493,92 @@ function sourceFiles(dir: string, found: string[] = []): string[] {
  * from the delimiters of a JSX element being grammatical, so no character-class
  * approximation of them holds.
  */
-function parse(file: string, source: string): ts.SourceFile {
-  return ts.createSourceFile(
+/**
+ * The compiler options the binder runs under.
+ *
+ * `noLib` is load-bearing rather than a saving. It is what makes an unshadowed
+ * `undefined` resolve to NO symbol, which is how a local `const undefined` is
+ * told apart from the global one; with a lib loaded both would resolve to a
+ * declaration and the two cases would read alike. `noResolve` keeps the program
+ * to the single file: nothing here reads a type or follows an import, so
+ * resolving the module graph would buy nothing and cost the whole workspace.
+ */
+const BINDER_OPTIONS: ts.CompilerOptions = {
+  noResolve: true,
+  noLib: true,
+  allowJs: true,
+  jsx: ts.JsxEmit.Preserve,
+  types: [],
+};
+
+/**
+ * Parse as TSX, and BIND, so names resolve the way the language resolves them.
+ *
+ * The binder rather than a scope walk written here, because every lexical form
+ * that declares a name is a form the walk has to know about: a parameter, a
+ * catch binding, an import, a function declaration, a loop variable. A hand
+ * written resolver is a list of the ones remembered, and the ones forgotten
+ * fail SILENTLY — the search continues outward and finds a different binding of
+ * the same name, which reads as a confident answer about the wrong declaration.
+ * `getSymbolAtLocation` answers from the same tables the compiler itself uses,
+ * so shadowing, parameters and alias identity are correct by construction
+ * rather than by enumeration.
+ *
+ * One program per file keeps `violationsIn` a pure function of its source,
+ * which is what lets every case below state a whole file and read the result.
+ */
+function parse(
+  file: string,
+  source: string
+): { sourceFile: ts.SourceFile; checker: ts.TypeChecker } {
+  const sourceFile = ts.createSourceFile(
     file,
     source,
     ts.ScriptTarget.Latest,
     /* setParentNodes */ true,
     ts.ScriptKind.TSX
   );
+  const host: ts.CompilerHost = {
+    getSourceFile: name => (name === file ? sourceFile : undefined),
+    getDefaultLibFileName: () => "lib.d.ts",
+    writeFile: () => {},
+    getCurrentDirectory: () => REPO,
+    getCanonicalFileName: name => name,
+    useCaseSensitiveFileNames: () => true,
+    getNewLine: () => "\n",
+    fileExists: name => name === file,
+    readFile: name => (name === file ? source : undefined),
+  };
+  const checker = ts
+    .createProgram([file], BINDER_OPTIONS, host)
+    .getTypeChecker();
+  return { sourceFile, checker };
+}
+
+/**
+ * The declaration a name refers to HERE, or undefined when it refers to none.
+ *
+ * Undefined has two meanings that callers must keep apart: a global (there is
+ * no declaration in this file) and a name the binder could not resolve. Both
+ * say "not a local binding", which is all any caller here asks.
+ *
+ * A shorthand needs its own question. In `{ borderBottomColor }` the identifier
+ * is both the property name and the value, and `getSymbolAtLocation` answers
+ * with the PROPERTY — a member of the object literal, whose declaration is the
+ * shorthand itself. Following that resolves the value to the entry that holds
+ * it, so a shorthand bound to `undefined` looked like a colour and was
+ * reported. The value binding is a separate lookup.
+ */
+function declarationOf(
+  identifier: ts.Identifier,
+  checker: ts.TypeChecker
+): ts.Declaration | undefined {
+  const parent = identifier.parent;
+  const symbol =
+    ts.isShorthandPropertyAssignment(parent) && parent.name === identifier
+      ? checker.getShorthandAssignmentValueSymbol(parent)
+      : checker.getSymbolAtLocation(identifier);
+  return symbol?.valueDeclaration;
 }
 
 /**
@@ -1077,8 +1597,23 @@ function reachesThePrimitive(specifier: string, importer: string): boolean {
   if (OWNING_MODULES.includes(specifier)) return true;
   if (!specifier.startsWith(".")) return false;
   const target = resolve(dirname(resolve(REPO, importer)), specifier);
-  // A module specifier carries no extension; the primitive is a `.tsx` file.
-  return `${target}.tsx` === PRIMITIVE || target === PRIMITIVE;
+  // Three spellings reach the same file and all are in use here.
+  //
+  // Extensionless is the common one. An exact path covers a specifier that
+  // already names the file. And a `.js` specifier resolves to the adjacent
+  // TypeScript SOURCE under NodeNext resolution -- `../tabs.js` IS `tabs.tsx`
+  // -- which is not an exotic spelling: 33 files in the scanned roots import
+  // that way. Appending `.tsx` to an already-suffixed path produced
+  // `tabs.js.tsx`, so every one of those call sites scanned clean.
+  //
+  // The substitution is anchored to the END of the string, so a directory
+  // named `foo.js/` cannot have its interior rewritten.
+  const asSource = target.replace(/\.(js|jsx|mjs|cjs)$/, "");
+  return (
+    target === PRIMITIVE ||
+    `${target}.tsx` === PRIMITIVE ||
+    `${asSource}.tsx` === PRIMITIVE
+  );
 }
 
 interface Ownership {
@@ -1098,13 +1633,28 @@ interface Ownership {
  * name from another library, would otherwise be held to this contract and fail
  * for a corner it is entitled to.
  */
-function ownershipIn(sourceFile: ts.SourceFile): {
+function ownershipIn(
+  sourceFile: ts.SourceFile,
+  checker: ts.TypeChecker
+): {
   ownership: Ownership;
   exportedNameOf: Map<string, string>;
+  owning: Map<ts.Node, string>;
+  owningNamespaces: Set<ts.Declaration>;
 } {
   const names = new Set<string>();
   const namespaces = new Set<string>();
   const exportedNameOf = new Map<string, string>();
+  // Keyed on the NAME NODE each owning binding declares, so a tag can be
+  // matched by which declaration it resolves to rather than by how it is
+  // spelled. A local component may legitimately reuse an imported name, and
+  // holding it to this contract failed a component entitled to its own classes.
+  const owning = new Map<ts.Node, string>();
+  // The DECLARATIONS that bind an owned namespace, in either spelling. A name
+  // set cannot answer this: `import * as UI` and `const UI = require(...)`
+  // resolve to different node kinds, and testing for one of them silently
+  // dropped the other.
+  const owningNamespaces = new Set<ts.Declaration>();
 
   const visit = (node: ts.Node): void => {
     if (
@@ -1121,11 +1671,56 @@ function ownershipIn(sourceFile: ts.SourceFile): {
           if (OWNED_EXPORTS.includes(exported)) {
             names.add(specifier.name.text);
             exportedNameOf.set(specifier.name.text, exported);
+            owning.set(specifier.name, exported);
           }
         }
       }
       if (bindings && ts.isNamespaceImport(bindings)) {
         namespaces.add(bindings.name.text);
+        owningNamespaces.add(bindings);
+      }
+    }
+    // `require` is the same two imports in JavaScript's other spelling, and
+    // `.js`/`.jsx` call sites are scanned, so a CommonJS consumer reaches this
+    // primitive exactly as an ESM one does.
+    if (ts.isVariableDeclaration(node) && node.initializer) {
+      const required = requiredFrom(node.initializer);
+      if (
+        required !== undefined &&
+        reachesThePrimitive(required.module, sourceFile.fileName)
+      ) {
+        // `const TabsTrigger = require("x").TabsTrigger` selects one export, so
+        // the binding names that component rather than the module.
+        if (required.exported !== undefined) {
+          if (
+            ts.isIdentifier(node.name) &&
+            OWNED_EXPORTS.includes(required.exported)
+          ) {
+            names.add(node.name.text);
+            exportedNameOf.set(node.name.text, required.exported);
+            owning.set(node.name, required.exported);
+          }
+        } else if (ts.isIdentifier(node.name)) {
+          namespaces.add(node.name.text);
+          owningNamespaces.add(node);
+        }
+        if (
+          required.exported === undefined &&
+          ts.isObjectBindingPattern(node.name)
+        ) {
+          for (const element of node.name.elements) {
+            const source = element.propertyName ?? element.name;
+            if (
+              ts.isIdentifier(source) &&
+              ts.isIdentifier(element.name) &&
+              OWNED_EXPORTS.includes(source.text)
+            ) {
+              names.add(element.name.text);
+              exportedNameOf.set(element.name.text, source.text);
+              owning.set(element.name, source.text);
+            }
+          }
+        }
       }
     }
     // An alias carries ownership forward, and it can be written three ways.
@@ -1135,13 +1730,16 @@ function ownershipIn(sourceFile: ts.SourceFile): {
     if (ts.isVariableDeclaration(node) && node.initializer) {
       const exported = exportedFrom(
         node.initializer,
-        names,
         namespaces,
-        exportedNameOf
+        owning,
+        owningNamespaces,
+        exportedNameOf,
+        checker
       );
       if (exported && ts.isIdentifier(node.name)) {
         names.add(node.name.text);
         exportedNameOf.set(node.name.text, exported);
+        owning.set(node.name, exported);
       }
       // `const { TabsTrigger: Trigger } = UI` names the same component again.
       if (
@@ -1158,6 +1756,7 @@ function ownershipIn(sourceFile: ts.SourceFile): {
           ) {
             names.add(element.name.text);
             exportedNameOf.set(element.name.text, source.text);
+            owning.set(element.name, source.text);
           }
         }
       }
@@ -1165,7 +1764,49 @@ function ownershipIn(sourceFile: ts.SourceFile): {
     ts.forEachChild(node, visit);
   };
   visit(sourceFile);
-  return { ownership: { names, namespaces }, exportedNameOf };
+  return {
+    ownership: { names, namespaces },
+    exportedNameOf,
+    owning,
+    owningNamespaces,
+  };
+}
+
+/**
+ * What a `require(...)` initializer names: the module, and the export selected
+ * from it when one is.
+ *
+ * Three spellings reach the same place. `const UI = require("x")` and
+ * `const { TabsTrigger } = require("x")` are the CommonJS forms of the two
+ * imports read above, and `const TabsTrigger = require("x").TabsTrigger` is a
+ * third that neither describes — it binds ONE export under a plain name, so
+ * reading it as the namespace form would hold the wrong shape, and reading it
+ * as nothing let a CommonJS call site through untouched.
+ *
+ * A member access is followed for the same reason `exportedFrom` follows one
+ * off a namespace import, and no further: element access is read by neither,
+ * so the two agree on what a member is.
+ */
+function requiredFrom(
+  initializer: ts.Expression
+): { module: string; exported?: string } | undefined {
+  const value = withoutTypeWrappers(initializer);
+  if (ts.isPropertyAccessExpression(value)) {
+    const required = requiredFrom(value.expression);
+    // Only one member deep: `require("x").a.b` names no export of `x`.
+    if (!required || required.exported !== undefined) return undefined;
+    return { module: required.module, exported: value.name.text };
+  }
+  if (
+    ts.isCallExpression(value) &&
+    ts.isIdentifier(value.expression) &&
+    value.expression.text === "require" &&
+    value.arguments.length === 1
+  ) {
+    const first = value.arguments[0];
+    if (first && ts.isStringLiteral(first)) return { module: first.text };
+  }
+  return undefined;
 }
 
 /**
@@ -1177,20 +1818,50 @@ function ownershipIn(sourceFile: ts.SourceFile): {
  */
 function exportedFrom(
   initializer: ts.Expression,
-  names: Set<string>,
   namespaces: Set<string>,
-  exportedNameOf: Map<string, string>
+  owning: Map<ts.Node, string>,
+  owningNamespaces: Set<ts.Declaration>,
+  exportedNameOf: Map<string, string>,
+  checker: ts.TypeChecker
 ): string | undefined {
-  if (ts.isIdentifier(initializer) && names.has(initializer.text)) {
-    return exportedNameOf.get(initializer.text);
+  // Which binding the name REFERS to, not how it is spelled. Matching the
+  // text against the file-wide set held a LOCAL component to the contract of
+  // an import it shadows — `const TabsTrigger = Other; const Local =
+  // TabsTrigger` recorded `Local` as owning the primitive. The JSX tag is
+  // already resolved this way, and an alias has to be resolved the same way
+  // or the two disagree about what a name means in one file.
+  if (ts.isIdentifier(initializer)) {
+    const declaration = declarationOf(initializer, checker);
+    // A resolved declaration answers on its own. Nothing resolving is the
+    // ordinary case for an import of a module this program never loads, and
+    // the text is all there is then — the same fallback, and the same order,
+    // that `exportedTagOf` applies to the JSX tag.
+    if (!declaration) return exportedNameOf.get(initializer.text);
+    const declared = (declaration as { name?: ts.Node }).name;
+    return declared ? owning.get(declared) : undefined;
   }
   if (
     ts.isPropertyAccessExpression(initializer) &&
     ts.isIdentifier(initializer.expression) &&
-    namespaces.has(initializer.expression.text) &&
     OWNED_EXPORTS.includes(initializer.name.text)
   ) {
-    return initializer.name.text;
+    // The namespace half resolves by BINDING too, for the same reason the
+    // alias half above does: a local `const UI = { TabsTrigger: Other }` that
+    // shadows `import * as UI` is a different object, and matching the text
+    // held its member to the primitive's contract. `owningNamespaces` holds
+    // the DECLARATIONS the namespace imports introduced, so membership in it
+    // is the question, not membership in a set of spellings.
+    const declaration = declarationOf(initializer.expression, checker);
+    if (declaration) {
+      return owningNamespaces.has(declaration)
+        ? initializer.name.text
+        : undefined;
+    }
+    // Nothing resolved: the module was never loaded, and the text is all
+    // there is — the same fallback, in the same order, as the alias half.
+    if (namespaces.has(initializer.expression.text)) {
+      return initializer.name.text;
+    }
   }
   return undefined;
 }
@@ -1199,18 +1870,38 @@ function exportedFrom(
 function exportedTagOf(
   tag: ts.JsxTagNameExpression,
   ownership: Ownership,
-  exportedNameOf: Map<string, string>
+  exportedNameOf: Map<string, string>,
+  owning: Map<ts.Node, string>,
+  owningNamespaces: Set<ts.Declaration>,
+  checker: ts.TypeChecker
 ): string | undefined {
-  if (ts.isIdentifier(tag)) return exportedNameOf.get(tag.text);
+  if (ts.isIdentifier(tag)) {
+    // Which binding the tag REFERS to, not how it is spelled. An imported name
+    // can be shadowed by a local component, and reading the text alone held
+    // that component to a contract about a different one entirely.
+    const declaration = declarationOf(tag, checker);
+    if (!declaration) return exportedNameOf.get(tag.text);
+    const declared = (declaration as { name?: ts.Node }).name;
+    // A resolved declaration answers on its own; falling back to the text here
+    // would restore exactly the shadowing this replaces.
+    return declared ? owning.get(declared) : undefined;
+  }
   // `<UI.TabsTrigger>` is a property access, not an identifier, so a traversal
   // testing only for identifiers walks straight past a namespace import.
   if (
     ts.isPropertyAccessExpression(tag) &&
     ts.isIdentifier(tag.expression) &&
-    ownership.namespaces.has(tag.expression.text) &&
     OWNED_EXPORTS.includes(tag.name.text)
   ) {
-    return tag.name.text;
+    // The namespace is a binding too, and a local object can shadow the import
+    // exactly as a local component can shadow a named one. Resolved the same
+    // way, so both spellings answer from the binder rather than from a
+    // file-wide set of names.
+    const declaration = declarationOf(tag.expression, checker);
+    if (declaration) {
+      return owningNamespaces.has(declaration) ? tag.name.text : undefined;
+    }
+    if (ownership.namespaces.has(tag.expression.text)) return tag.name.text;
   }
   return undefined;
 }
@@ -1223,50 +1914,116 @@ function exportedTagOf(
  * covered. A bare identifier contributes nothing, which is the documented hole
  * rather than a silent one.
  */
-function literalStrings(node: ts.Node, found: string[] = []): string[] {
+/**
+ * The operand a LITERAL condition selects, when the condition decides it.
+ *
+ * `undefined` when the condition is not written as a literal, which means both
+ * operands stay in play — anything depending on state can be taken.
+ *
+ * One implementation for both halves of the contract. The class side resolved
+ * these and the style side did not, so `true ? {} : { borderBottomColor: "red" }`
+ * was reported for a branch the condition can never reach, while the same
+ * condition around a class was correctly ignored.
+ */
+function selectedByLiteralCondition(
+  node: ts.Expression
+): ts.Expression | undefined {
+  if (ts.isConditionalExpression(node)) {
+    const decided = staticTruthiness(node.condition);
+    if (decided === undefined) return undefined;
+    return decided ? node.whenTrue : node.whenFalse;
+  }
+  if (!ts.isBinaryExpression(node)) return undefined;
+  const operator = node.operatorToken.kind;
+  // `??` chooses on presence rather than on truth, so it is asked separately.
+  if (operator === ts.SyntaxKind.QuestionQuestionToken) {
+    return isDefinitelyPresent(node.left) ? node.left : undefined;
+  }
+  if (
+    operator !== ts.SyntaxKind.AmpersandAmpersandToken &&
+    operator !== ts.SyntaxKind.BarBarToken
+  ) {
+    return undefined;
+  }
+  // The operand each operator YIELDS, not merely the one it evaluates: `0 && x`
+  // is the value `0`, which names no class and is no style object. Asked of the
+  // one truthiness evaluator, so `false`, `0`, `null` and `""` are decided the
+  // same way rather than only the boolean spelling — and so a name holding a
+  // known value is decided at all.
+  const decided = staticTruthiness(node.left);
+  if (decided === undefined) return undefined;
+  if (operator === ts.SyntaxKind.AmpersandAmpersandToken) {
+    return decided ? node.right : node.left;
+  }
+  return decided ? node.left : node.right;
+}
+
+function literalStrings(
+  node: ts.Node,
+  found: string[] = [],
+  resolver?: { declarationOf(i: ts.Identifier): ts.Declaration | undefined }
+): string[] {
+  // Asked before any operand is visited, so a concatenation contributes the
+  // string it evaluates to rather than its halves. Splitting on whitespace
+  // happens downstream, and by then two pieces are indistinguishable from two
+  // separate classes.
+  if (ts.isExpression(node)) {
+    const whole = staticStringOf(node);
+    if (whole !== undefined) {
+      found.push(whole);
+      return found;
+    }
+  }
   if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
     found.push(node.text);
   } else if (ts.isTemplateExpression(node)) {
     found.push(node.head.text);
     for (const span of node.templateSpans) {
       found.push(span.literal.text);
-      literalStrings(span.expression, found);
+      literalStrings(span.expression, found, resolver);
     }
     return found;
   }
   // A branch that can never be taken contributes no class. `cn("w-full", false &&
   // "border-b-0")` is the ordinary conditional-class form, and `cn` never
   // receives the second string — collecting it reported a call site for a class
-  // it does not apply. Only literal conditions are decided here; anything whose
-  // value depends on state stays collected, because it can be taken.
-  if (
-    ts.isBinaryExpression(node) &&
-    node.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken &&
-    node.left.kind === ts.SyntaxKind.FalseKeyword
-  ) {
-    return found;
+  // it does not apply.
+  if (ts.isExpression(node)) {
+    const selected = selectedByLiteralCondition(node);
+    if (selected) return literalStrings(selected, found, resolver);
   }
-  if (
-    ts.isBinaryExpression(node) &&
-    node.operatorToken.kind === ts.SyntaxKind.BarBarToken &&
-    node.left.kind === ts.SyntaxKind.TrueKeyword
-  ) {
-    literalStrings(node.left, found);
+  // `cn({ "border-b-0": false })` applies nothing. In this form the KEY is the
+  // class and the VALUE is the condition, so walking the object as plain text
+  // collected a class the caller switched off — and collected an unrelated
+  // key's value as though it were a class name too.
+  if (ts.isObjectLiteralExpression(node)) {
+    for (const property of node.properties) {
+      // `cn({ rounded })` is `{ rounded: rounded }` to clsx, so the KEY names
+      // the class exactly as the written-out form does. A filter on the node
+      // kind walked past it, and the shorthand is the shorter spelling most
+      // callers reach for.
+      if (ts.isShorthandPropertyAssignment(property)) {
+        if (staticTruthiness(property.name, resolver) !== false)
+          found.push(property.name.text);
+        continue;
+      }
+      if (!ts.isPropertyAssignment(property)) continue;
+      if (staticTruthiness(property.initializer, resolver) === false) continue;
+      // Asked through the one reader that answers "what property is this",
+      // rather than restating two of the node kinds it knows about. Restating
+      // them meant `cn({ ["border-b-0"]: true })` named no class here while
+      // the style half read the identical form — one question with two
+      // implementations, and they had already drifted.
+      const named = propertyNameOf(property.name);
+      if (named !== undefined) found.push(named);
+    }
     return found;
-  }
-  if (ts.isConditionalExpression(node)) {
-    if (node.condition.kind === ts.SyntaxKind.TrueKeyword) {
-      return literalStrings(node.whenTrue, found);
-    }
-    if (node.condition.kind === ts.SyntaxKind.FalseKeyword) {
-      return literalStrings(node.whenFalse, found);
-    }
   }
   // The braces matter. `ts.forEachChild` stops at the first callback that
   // returns something truthy, so a concise arrow returning the accumulator
   // visits one child and reports the rest as absent.
   ts.forEachChild(node, child => {
-    literalStrings(child, found);
+    literalStrings(child, found, resolver);
   });
   return found;
 }
@@ -1283,85 +2040,122 @@ function literalStrings(node: ts.Node, found: string[] = []): string[] {
  * in the other order, invents one. Which declaration a name refers to is a
  * lexical question, and the answer is the nearest enclosing one.
  */
-function styleResolver(attribute: ts.JsxAttribute): {
-  objectsFrom(
-    expression: ts.Expression | undefined,
-    seen?: Set<ts.Node>
-  ): ts.ObjectLiteralExpression[];
-  valueOf(name: string): ts.Expression | undefined;
+/**
+ * Resolve the objects a `style` prop can hand React, and what they declare.
+ *
+ * An inline style on an owned element must be written where it can be READ:
+ * an object literal, or a choice between object literals. Anything that has to
+ * be traced to know its value — a name, a call, a member access — is reported
+ * as unresolvable rather than analysed.
+ *
+ * That is a deliberate limit, and the reason is worth stating because the
+ * alternative was tried at length. Answering "what does this variable hold at
+ * this point" is reaching-definitions analysis: assignments, branches, loops,
+ * closures, aliases and in-place mutation, each interacting with the others.
+ * Written by hand it grew to roughly seven hundred lines and kept producing
+ * defects of a kind no test here could see, because a wrong answer looks
+ * exactly like a right one. The compiler does not expose that analysis, and a
+ * test file is the wrong place to reimplement it.
+ *
+ * The narrower question this asks instead is decidable by construction: the
+ * expression either IS a literal, or it is not. What it costs is that a
+ * computed style must be written inline or moved to a class, which is a rule a
+ * reader can follow. What it buys is that "no violation" means the scan read
+ * the value, rather than that it failed to find one.
+ *
+ * Property VALUES inside the literal are still followed through a `const`
+ * binding, because that is a single lookup with no flow to model, and the
+ * binder resolves shadowing correctly on its own. A `let` is not followed: its
+ * value depends on what ran, which is the question this stops asking.
+ */
+function styleResolver(checker: ts.TypeChecker): {
+  objectsFrom(expression: ts.Expression | undefined): {
+    objects: ts.ObjectLiteralExpression[];
+    /** False when the expression has to be traced to know what it holds. */
+    readable: boolean;
+    /**
+     * True when one alternative supplies NO object at all.
+     *
+     * Distinct from an empty object list, which says every alternative
+     * supplies nothing. This says SOME branch does, and the caller has to
+     * keep whatever preceded the spread reachable on that branch.
+     */
+    absent: boolean;
+  };
+  valueOf(identifier: ts.Identifier): ts.Expression | undefined;
+  declarationOf(identifier: ts.Identifier): ts.Declaration | undefined;
 } {
-  const initializerOf = (name: string): ts.Expression | undefined => {
-    const declared = (scope: ts.Node): ts.Expression | undefined => {
-      let found: ts.Expression | undefined;
-      // Only the scope's OWN statements, so a declaration nested inside a
-      // sibling function is not mistaken for one in this scope.
-      ts.forEachChild(scope, statement => {
-        if (!ts.isVariableStatement(statement)) return;
-        for (const declaration of statement.declarationList.declarations) {
-          if (
-            ts.isIdentifier(declaration.name) &&
-            declaration.name.text === name &&
-            declaration.initializer
-          ) {
-            found = declaration.initializer;
-          }
-        }
-      });
-      return found;
-    };
-    for (
-      let scope: ts.Node | undefined = attribute;
-      scope;
-      scope = scope.parent
-    ) {
-      if (
-        ts.isBlock(scope) ||
-        ts.isSourceFile(scope) ||
-        ts.isCaseClause(scope)
-      ) {
-        const found = declared(scope);
-        if (found) return found;
-      }
-    }
-    return undefined;
+  /**
+   * What a `const` holds, for a name the binder resolves to one here.
+   *
+   * `undefined` for anything else — a `let`, a parameter, an import — because
+   * each can hold a different value by the time the element renders.
+   */
+  const valueOf = (identifier: ts.Identifier): ts.Expression | undefined => {
+    const declaration = declarationOf(identifier, checker);
+    if (!declaration || !ts.isVariableDeclaration(declaration))
+      return undefined;
+    const list = declaration.parent;
+    const isConst =
+      ts.isVariableDeclarationList(list) &&
+      (list.flags & ts.NodeFlags.Const) !== 0;
+    return isConst ? declaration.initializer : undefined;
   };
 
-  /**
-   * Every object an expression can evaluate to HERE.
-   *
-   * A style prop routinely selects between shapes, and every branch a
-   * conditional can take is a shape the element can render, so each is
-   * returned. Spreads are deliberately NOT followed here: a spread's contents
-   * are not a separate style object, they are earlier entries of the one being
-   * built, and treating them as separate reported a source whose value the
-   * outer object had already replaced.
-   */
+  /** The one lookup `isDefinitelyNothing` reads, usable before the API exists. */
+  const declarations = {
+    declarationOf: (identifier: ts.Identifier): ts.Declaration | undefined =>
+      declarationOf(identifier, checker),
+  };
+
   const objectsFrom = (
-    root: ts.Expression | undefined,
-    seen = new Set<ts.Node>()
-  ): ts.ObjectLiteralExpression[] => {
+    root: ts.Expression | undefined
+  ): {
+    objects: ts.ObjectLiteralExpression[];
+    readable: boolean;
+    absent: boolean;
+  } => {
     const objects: ts.ObjectLiteralExpression[] = [];
+    const seen = new Set<ts.Node>();
+    let readable = true;
+    let absent = false;
     const walk = (node: ts.Expression | undefined): void => {
-      // Bounded so a `const a = b, b = a` cycle cannot loop forever, and so one
-      // identifier is not expanded twice through two paths.
-      if (!node || seen.has(node)) return;
+      // `style={}` carries no expression, and React receives no style. There
+      // is nothing here to trace, so it is read rather than reported — but it
+      // IS a branch that supplies nothing, which the caller has to know.
+      if (!node) {
+        absent = true;
+        return;
+      }
+      if (seen.has(node)) return;
       seen.add(node);
+      // Parentheses, `as`, `satisfies` and `!` are erased before the code runs,
+      // so what they wrap is what React receives.
+      const unwrapped = withoutTypeWrappers(node);
+      if (unwrapped !== node) return walk(unwrapped);
       if (ts.isObjectLiteralExpression(node)) {
         objects.push(node);
         return;
       }
-      if (ts.isParenthesizedExpression(node)) return walk(node.expression);
-      // `as CSSProperties` and `satisfies` wrap the value without changing it.
-      if (ts.isAsExpression(node) || ts.isSatisfiesExpression(node)) {
-        return walk(node.expression);
-      }
+      // A literal condition decides its branch, and the branch it excludes is
+      // one React never receives. Asked through the same helper the class half
+      // uses, so one spelling of "this cannot be taken" is not resolved on one
+      // side of the contract and reported on the other.
+      const selected = selectedByLiteralCondition(node);
+      if (selected) return walk(selected);
+      // A choice between shapes is still readable: every branch is written
+      // here, so each is a style the element can render and all are checked.
       if (ts.isConditionalExpression(node)) {
         walk(node.whenTrue);
         walk(node.whenFalse);
         return;
       }
-      // `&&`, `||` and `??` each choose between their operands at runtime, so
-      // both sides are shapes the element can render.
+      // A branch that contributes NOTHING is still a branch the element can
+      // take, and it leaves whatever came before it standing. Spreading
+      // `...(flag ? { x: undefined } : undefined)` was read as the clearing
+      // branch alone, so a property the other branch preserves looked cleared
+      // on every render. Recorded as an empty alternative rather than as no
+      // alternative at all, which is what made the difference invisible.
       if (
         ts.isBinaryExpression(node) &&
         (node.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken ||
@@ -1372,26 +2166,56 @@ function styleResolver(attribute: ts.JsxAttribute): {
         walk(node.right);
         return;
       }
-      if (ts.isIdentifier(node)) walk(initializerOf(node.text));
+      // `undefined`, `null` and the other spellings of nothing are VALUES
+      // React receives as no style, not names that have to be traced. Asked
+      // through the helper the property half uses, so one spelling of "paints
+      // nothing" is not accepted as a property value and then reported as
+      // unreadable when it is the whole prop — which rejected both
+      // `style={undefined}` and the branch of a literal condition that
+      // resolves to it.
+      if (isDefinitelyNothing(node, declarations)) {
+        absent = true;
+        return;
+      }
+      // A name, a call, a member access, a spread of one: knowing what this
+      // holds means tracing it, which is the analysis this deliberately does
+      // not do. Reported as unreadable rather than assumed empty — an empty
+      // object list reports nothing, which is the silent direction.
+      readable = false;
     };
     walk(root);
-    return objects;
+    return { objects, readable, absent };
   };
 
-  return { objectsFrom, valueOf: initializerOf };
+  return { objectsFrom, valueOf, ...declarations };
 }
 
-/** The objects an element's `style` prop can resolve to here. */
-function styleObjectsFor(attribute: ts.JsxAttribute): {
+/** The objects a `style` expression can resolve to here. */
+function styleObjectsFrom(
+  value: ts.Expression | undefined,
+  checker: ts.TypeChecker
+): {
   objects: ts.ObjectLiteralExpression[];
+  readable: boolean;
   resolver: ReturnType<typeof styleResolver>;
 } {
-  const resolver = styleResolver(attribute);
+  const resolver = styleResolver(checker);
+  return { ...resolver.objectsFrom(value), resolver };
+}
+
+/** The objects an element's `style` attribute can resolve to here. */
+function styleObjectsFor(
+  attribute: ts.JsxAttribute,
+  checker: ts.TypeChecker
+): ReturnType<typeof styleObjectsFrom> {
   const initializer = attribute.initializer;
-  if (!initializer || !ts.isJsxExpression(initializer)) {
-    return { objects: [], resolver };
+  // `style` written as a plain string — `style="x"` — is not an object React
+  // can read, and is not this contract's business either. A bare `style` has
+  // no initializer and paints nothing, which the resolver reads on its own.
+  if (initializer && !ts.isJsxExpression(initializer)) {
+    return { objects: [], readable: true, resolver: styleResolver(checker) };
   }
-  return { objects: resolver.objectsFrom(initializer.expression), resolver };
+  return styleObjectsFrom(initializer?.expression, checker);
 }
 
 /**
@@ -1407,15 +2231,181 @@ function styleObjectsFor(attribute: ts.JsxAttribute): {
  * past it — the same shape as the shorthand entry beside it. A computed key
  * built from a variable is not decidable here and is left alone.
  */
-function propertyNameOf(name: ts.PropertyName): string | undefined {
+function propertyNameOf(
+  name: ts.PropertyName,
+  // Optional, because two callers ask this question without one in hand. A
+  // literal computed key is decidable regardless; only following a key through
+  // a `const` binding needs the resolver.
+  resolver?: ReturnType<typeof styleResolver>
+): string | undefined {
   if (ts.isIdentifier(name) || ts.isStringLiteral(name)) return name.text;
   if (ts.isComputedPropertyName(name)) {
-    const key = name.expression;
-    if (ts.isStringLiteral(key) || ts.isNoSubstitutionTemplateLiteral(key)) {
-      return key.text;
-    }
+    return staticKeyOf(name.expression, resolver);
   }
   return undefined;
+}
+
+/**
+ * The property a computed key names, when that is decidable without running it.
+ *
+ * A literal is the easy case. A local constant is the one that matters:
+ * `const key = "borderBottomColor"; style={{ [key]: "red" }}` repaints the
+ * indicator exactly as the literal spelling does, and reading only the literal
+ * form walked past it — so the check reported clean on a call site that paints.
+ *
+ * Followed through the same resolver the values use, so a key and a value
+ * declared side by side are read the same way, and wrappers are peeled first so
+ * `[key as string]` resolves like a bare `key`.
+ *
+ * `seen` stops a self-referential binding from recursing. It holds DECLARATIONS
+ * rather than names, because a name is not what a binding IS: two bindings can
+ * share a spelling, and an alias chain may legitimately pass through both. The
+ * declaration is what makes them one binding or two, so it is what a cycle has
+ * to be measured in. Anything else — a template with substitutions, a call, a
+ * member access — stays undecidable and returns undefined, which leaves the
+ * property unnamed rather than guessed.
+ *
+ * KNOWN LIMIT, and it is a hole rather than a decision to be comfortable with:
+ * a reassignable key escapes. `let k = "x"; k = "borderBottomColor";
+ * style={{ [k]: "red" }}` paints the indicator and is not reported, because the
+ * binding is not `const` and its declaration initializer is not what runs.
+ *
+ * The asymmetry with values is deliberate. For a VALUE the property is already
+ * known to be owned, so undecidable defaults to "it emits" and the call site is
+ * reported — the conservative side. For a KEY, undecidable means the property
+ * is not known at all, and defaulting to "owned" would report every computed
+ * key in the repository, including the overwhelming majority that name nothing
+ * this primitive draws.
+ */
+function staticKeyOf(
+  expression: ts.Expression,
+  resolver: ReturnType<typeof styleResolver> | undefined,
+  seen = new Set<ts.Declaration>()
+): string | undefined {
+  const value = withoutTypeWrappers(expression);
+  if (ts.isStringLiteral(value) || ts.isNoSubstitutionTemplateLiteral(value)) {
+    return value.text;
+  }
+  if (ts.isIdentifier(value)) {
+    if (!resolver) return undefined;
+    const declaration = resolver.declarationOf(value);
+    if (!declaration || seen.has(declaration)) return undefined;
+    seen.add(declaration);
+    // The binder resolved this identifier at its own position, so an alias
+    // like `const key = sourceKey` already refers to whatever `sourceKey`
+    // meant where the alias was written.
+    const bound = resolver.valueOf(value);
+    if (bound) return staticKeyOf(bound, resolver, seen);
+  }
+  return undefined;
+}
+
+/**
+ * The string a value is written as, when it is written as one.
+ *
+ * Some properties are owned or not depending on what they hold, so the value
+ * travels with the name rather than being discarded at the key.
+ */
+function staticStringOf(
+  expression: ts.Expression,
+  resolver?: ReturnType<typeof styleResolver>,
+  seen = new Set<ts.Declaration>()
+): string | undefined {
+  const inner = withoutTypeWrappers(expression);
+  if (ts.isStringLiteral(inner) || ts.isNoSubstitutionTemplateLiteral(inner)) {
+    return inner.text;
+  }
+  // `"border-b-" + "0"` is ONE class at runtime. Read as two operands it is
+  // two names that are each harmless, so a caller passing an owned class in
+  // pieces scanned clean — the concatenation has to be performed here, where
+  // both halves are known, rather than left to whoever splits on whitespace.
+  if (
+    ts.isBinaryExpression(inner) &&
+    inner.operatorToken.kind === ts.SyntaxKind.PlusToken
+  ) {
+    const left = staticStringOf(inner.left, resolver, seen);
+    const right = staticStringOf(inner.right, resolver, seen);
+    return left !== undefined && right !== undefined ? left + right : undefined;
+  }
+  // A name holding the value is the same value. `const noImage = "none"` draws
+  // no border image exactly as the literal spelling does, and reading only the
+  // literal form reported a call site that paints nothing.
+  if (!resolver || !ts.isIdentifier(inner)) return undefined;
+  const declaration = resolver.declarationOf(inner);
+  if (!declaration || seen.has(declaration)) return undefined;
+  seen.add(declaration);
+  const bound = resolver.valueOf(inner);
+  return bound ? staticStringOf(bound, resolver, seen) : undefined;
+}
+
+/**
+ * What a value is worth in a boolean test, when that is decidable.
+ *
+ * `undefined` for anything whose truthiness depends on what it holds at
+ * runtime, which keeps the write it guards in play.
+ */
+function staticTruthiness(
+  value: ts.Expression,
+  // Optional because two callers reach this without one. Absent, a bare
+  // `undefined` stays undecided rather than assumed unshadowed.
+  resolver?: { declarationOf(i: ts.Identifier): ts.Declaration | undefined }
+): boolean | undefined {
+  const inner = withoutTypeWrappers(value);
+  if (
+    ts.isObjectLiteralExpression(inner) ||
+    ts.isArrayLiteralExpression(inner)
+  ) {
+    return true;
+  }
+  if (ts.isStringLiteral(inner) || ts.isNoSubstitutionTemplateLiteral(inner)) {
+    return inner.text.length > 0;
+  }
+  if (ts.isNumericLiteral(inner)) return Number(inner.text) !== 0;
+  // `undefined` is falsy to clsx exactly as `null` and `false` are, and it is
+  // an ordinary IDENTIFIER rather than a keyword, so the kind tests below walk
+  // past it -- leaving `cn({ "border-b-0": undefined })` reported as displacing
+  // a class clsx never applies, which is the ordinary spelling of an optional
+  // condition. The resolver settles shadowing: a local binding named
+  // `undefined` is a value this cannot decide.
+  //
+  // Only this one case is borrowed from `isDefinitelyNothing`, NOT the whole
+  // predicate. That helper answers "does React paint anything for this style
+  // value", under which `true` paints nothing -- while `true` in a class-map
+  // condition is TRUTHY and applies the class. The two questions overlap and
+  // are not the same, and delegating wholesale inverted this one.
+  if (
+    resolver &&
+    ts.isIdentifier(inner) &&
+    inner.text === "undefined" &&
+    !resolver.declarationOf(inner)
+  ) {
+    return false;
+  }
+  if (inner.kind === ts.SyntaxKind.TrueKeyword) return true;
+  if (inner.kind === ts.SyntaxKind.FalseKeyword) return false;
+  if (inner.kind === ts.SyntaxKind.NullKeyword) return false;
+  if (ts.isVoidExpression(inner)) return false;
+  return undefined;
+}
+
+/**
+ * Whether a value is certainly neither `null` nor `undefined`.
+ *
+ * Narrow on purpose: it decides whether a `??=` can fire, and answering "yes"
+ * removes a value from consideration. Only forms that cannot be nullish however
+ * they are read qualify, so anything unfamiliar keeps the write in play.
+ */
+function isDefinitelyPresent(value: ts.Expression): boolean {
+  const inner = withoutTypeWrappers(value);
+  return (
+    ts.isObjectLiteralExpression(inner) ||
+    ts.isArrayLiteralExpression(inner) ||
+    ts.isStringLiteral(inner) ||
+    ts.isNoSubstitutionTemplateLiteral(inner) ||
+    ts.isNumericLiteral(inner) ||
+    inner.kind === ts.SyntaxKind.TrueKeyword ||
+    inner.kind === ts.SyntaxKind.FalseKeyword
+  );
 }
 
 /**
@@ -1426,12 +2416,88 @@ function propertyNameOf(name: ts.PropertyName): string | undefined {
  * decidable here and must keep being reported, because the same variable holds a
  * colour on the next render — which is exactly how the violation that motivated
  * the inline half was written.
+ *
+ * `undefined` is a NAME, not a keyword, so a local declaration of it is a
+ * colour like any other. It counts as nothing only when it resolves to no
+ * declaration in this file, which is what the global one does.
+ *
+ * The empty string is React's own spelling of absence, not an assumption made
+ * here: `renderToStaticMarkup(<div style={{ borderBottomColor: "" }} />)`
+ * emits no `style` attribute at all, while the same property with a colour
+ * emits `border-bottom-color:red`. Clearing a style with `""` is an ordinary
+ * conditional form, so reporting it rejected the idiom the check exists to
+ * permit.
  */
-function isDefinitelyNothing(initializer: ts.Expression): boolean {
-  if (ts.isIdentifier(initializer)) return initializer.text === "undefined";
-  if (initializer.kind === ts.SyntaxKind.NullKeyword) return true;
+function isDefinitelyNothing(
+  initializer: ts.Expression,
+  // Only the binder lookup is read, and declaring that is what lets the
+  // resolver ask this question while it is still being built.
+  resolver: {
+    declarationOf(identifier: ts.Identifier): ts.Declaration | undefined;
+  }
+): boolean {
+  const value = withoutTypeWrappers(initializer);
+  if (ts.isIdentifier(value)) {
+    return value.text === "undefined" && !resolver.declarationOf(value);
+  }
+  if (ts.isStringLiteral(value) || ts.isNoSubstitutionTemplateLiteral(value)) {
+    return value.text === "";
+  }
+  // React emits no declaration for a boolean either, verified the same way:
+  // `{ borderBottomColor: false }` and `true` both render an element with no
+  // `style` attribute at all.
+  if (
+    value.kind === ts.SyntaxKind.TrueKeyword ||
+    value.kind === ts.SyntaxKind.FalseKeyword
+  ) {
+    return true;
+  }
+  if (value.kind === ts.SyntaxKind.NullKeyword) return true;
   // `void 0` is the other spelling of the same intent.
-  return ts.isVoidExpression(initializer);
+  return ts.isVoidExpression(value);
+}
+
+/**
+ * An expression with the wrappers that emit nothing peeled away.
+ *
+ * `as`, `satisfies`, `!` and parentheses are all erased before the code runs,
+ * so `undefined as string | undefined` and `(undefined)` reach React as exactly
+ * `undefined` — and React emits no declaration for either. Reading only the
+ * outer node saw an `AsExpression`, decided it was not written as nothing, and
+ * reported a call site that paints nothing at all.
+ *
+ * A false positive here is worse than it looks: `undefined as string |
+ * undefined` is the ORDINARY way to write an optional style in a typed
+ * codebase, so the check was rejecting the idiomatic spelling of the very thing
+ * it exists to permit.
+ *
+ * Applied where the question is "what does this evaluate to", never where the
+ * question is about the written type — nothing here reads types.
+ */
+function withoutTypeWrappers(expression: ts.Expression): ts.Expression {
+  let value = expression;
+  while (
+    ts.isAsExpression(value) ||
+    ts.isSatisfiesExpression(value) ||
+    ts.isParenthesizedExpression(value) ||
+    ts.isNonNullExpression(value)
+  ) {
+    value = value.expression;
+  }
+  return value;
+}
+
+/**
+ * One property an object declares: whether React emits it, and what it holds.
+ *
+ * The value travels with the name because ownership is not always decided by
+ * the property alone — `border-image-source` replaces the border when it names
+ * an image and leaves it alone when it names `none`.
+ */
+interface DeclaredProperty {
+  emits: boolean;
+  /** The value when it is written as a literal string, else undefined. */
+  value: string | undefined;
 }
 
 /**
@@ -1448,8 +2514,13 @@ function isDefinitelyNothing(initializer: ts.Expression): boolean {
 function declaredProperties(
   object: ts.ObjectLiteralExpression,
   resolver: ReturnType<typeof styleResolver>,
-  onPath = new Set<ts.Node>()
-): Array<Map<string, boolean>> {
+  onPath = new Set<ts.Node>(),
+  // Set when a spread source cannot be read. A spread's contents are entries of
+  // the object being built, so an unreadable one leaves the object itself only
+  // partly known — and dropping it silently is the direction that reports
+  // nothing, which is how a spread carrying an owned property would vanish.
+  unreadable = { value: false }
+): Array<Map<string, DeclaredProperty>> {
   // A LIST of possible results, not one. A spread whose source is chosen at
   // runtime — `active ? { borderBottomColor: c } : {}` — produces different
   // objects on different renders, and merging them into a single map let the
@@ -1466,16 +2537,24 @@ function declaredProperties(
   if (onPath.has(object)) return [new Map()];
   onPath.add(object);
 
-  let variants: Array<Map<string, boolean>> = [new Map()];
-  const setOnEach = (name: string, emits: boolean): void => {
-    for (const variant of variants) variant.set(name, emits);
+  let variants: Array<Map<string, DeclaredProperty>> = [new Map()];
+  const setOnEach = (name: string, state: DeclaredProperty): void => {
+    for (const variant of variants) variant.set(name, state);
   };
 
   for (const property of object.properties) {
     if (ts.isSpreadAssignment(property)) {
-      const branches = resolver
-        .objectsFrom(property.expression)
-        .flatMap(source => declaredProperties(source, resolver, onPath));
+      const spread = resolver.objectsFrom(property.expression);
+      if (!spread.readable) unreadable.value = true;
+      const branches = spread.objects.flatMap(source =>
+        declaredProperties(source, resolver, onPath, unreadable)
+      );
+      // The branch that supplies nothing is an alternative like any other, and
+      // on it every property set before this spread survives untouched.
+      // Dropping it meant `...(flag ? { x: undefined } : undefined)` was read
+      // as though the clearing branch always ran, so a value the other branch
+      // preserves looked cleared on every render.
+      if (spread.absent) branches.push(new Map());
       if (branches.length === 0) continue;
       variants = variants.flatMap(base =>
         branches.map(branch => new Map([...base, ...branch]))
@@ -1483,8 +2562,13 @@ function declaredProperties(
       continue;
     }
     if (ts.isPropertyAssignment(property)) {
-      const name = propertyNameOf(property.name);
-      if (name) setOnEach(name, emitsValue(property.initializer, resolver));
+      const name = propertyNameOf(property.name, resolver);
+      if (name) {
+        setOnEach(name, {
+          emits: emitsValue(property.initializer, resolver),
+          value: staticStringOf(property.initializer, resolver),
+        });
+      }
       continue;
     }
     // A shorthand entry is a different node kind with the same effect:
@@ -1492,7 +2576,10 @@ function declaredProperties(
     // does, and a visitor keyed on `PropertyAssignment` alone walks past it. Its
     // value lives in the binding, which `emitsValue` follows.
     if (ts.isShorthandPropertyAssignment(property)) {
-      setOnEach(property.name.text, emitsValue(property.name, resolver));
+      setOnEach(property.name.text, {
+        emits: emitsValue(property.name, resolver),
+        value: undefined,
+      });
       continue;
     }
     // A getter is a third spelling again: React reads the property and emits
@@ -1500,8 +2587,8 @@ function declaredProperties(
     // written at the key. What it returns is not decidable here, so it counts
     // as emitting.
     if (ts.isGetAccessorDeclaration(property)) {
-      const name = propertyNameOf(property.name);
-      if (name) setOnEach(name, true);
+      const name = propertyNameOf(property.name, resolver);
+      if (name) setOnEach(name, { emits: true, value: undefined });
     }
   }
   onPath.delete(object);
@@ -1525,13 +2612,27 @@ function declaredProperties(
 function emitsValue(
   value: ts.Expression,
   resolver: ReturnType<typeof styleResolver>,
-  seen = new Set<string>()
+  seen = new Set<ts.Declaration>()
 ): boolean {
-  if (isDefinitelyNothing(value)) return false;
-  if (ts.isIdentifier(value) && !seen.has(value.text)) {
-    seen.add(value.text);
-    const bound = resolver.valueOf(value.text);
-    if (bound) return emitsValue(bound, resolver, seen);
+  const inner = withoutTypeWrappers(value);
+  if (isDefinitelyNothing(inner, resolver)) return false;
+  // Unwrapped before the binding lookup too, so `(colour as string)` resolves
+  // through the same identifier path a bare `colour` does.
+  if (ts.isIdentifier(inner)) {
+    const declaration = resolver.declarationOf(inner);
+    // Keyed on the declaration, so two bindings that share a name are two
+    // entries and a chain crossing a shadow is not mistaken for a cycle.
+    if (!declaration || seen.has(declaration)) return true;
+    seen.add(declaration);
+    // Any value the name can hold here is a value React can receive, so the
+    // property emits unless EVERY one of them is written as nothing. Each
+    // branch carries its own trail, or one branch's visits would cut another's
+    // short and report it as emitting.
+    // Followed only through a `const`. Anything else can hold a different
+    // value by the time the element renders, and assuming it emits is the
+    // reporting side.
+    const bound = resolver.valueOf(inner);
+    if (bound) return emitsValue(bound, resolver, new Set(seen));
   }
   return true;
 }
@@ -1540,11 +2641,18 @@ function emitsValue(
 function ownedStyleProperty(
   slot: string,
   object: ts.ObjectLiteralExpression,
-  resolver: ReturnType<typeof styleResolver>
+  resolver: ReturnType<typeof styleResolver>,
+  unreadable = { value: false }
 ): string | undefined {
-  for (const variant of declaredProperties(object, resolver)) {
-    for (const [name, emits] of variant) {
-      if (emits && ownsStyleProperty(slot, name)) return name;
+  for (const variant of declaredProperties(
+    object,
+    resolver,
+    undefined,
+    unreadable
+  )) {
+    for (const [name, state] of variant) {
+      if (state.emits && ownsStyleProperty(slot, name, state.value))
+        return name;
     }
   }
   return undefined;
@@ -1556,9 +2664,26 @@ interface Violation {
   why: string;
 }
 
+/** The props this contract reads on an owned element. */
+const OWNED_PROPS = ["className", "style"];
+
+/**
+ * Where an owned prop's value comes from, once the attribute list is resolved.
+ *
+ * The two spellings are kept apart rather than normalised to an expression,
+ * because a report says which one it read — `displaces` for an attribute
+ * written on the element, `spreads` for one carried in by an object.
+ */
+type PropSource =
+  | { kind: "attribute"; attribute: ts.JsxAttribute }
+  | { kind: "spread"; at: ts.Node; value: ts.Expression };
+
 function violationsIn(file: string, source: string): Violation[] {
-  const sourceFile = parse(file, source);
-  const { ownership, exportedNameOf } = ownershipIn(sourceFile);
+  const { sourceFile, checker } = parse(file, source);
+  const { ownership, exportedNameOf, owning, owningNamespaces } = ownershipIn(
+    sourceFile,
+    checker
+  );
   const found: Violation[] = [];
   const at = (node: ts.Node): number =>
     sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line +
@@ -1566,34 +2691,150 @@ function violationsIn(file: string, source: string): Violation[] {
 
   const visit = (node: ts.Node): void => {
     if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
-      const exported = exportedTagOf(node.tagName, ownership, exportedNameOf);
+      const exported = exportedTagOf(
+        node.tagName,
+        ownership,
+        exportedNameOf,
+        owning,
+        owningNamespaces,
+        checker
+      );
       if (exported) {
+        // JSX props are one object built left to right, so a later attribute
+        // REPLACES an earlier one of the same name: `{...props} className="x"`
+        // renders `x` however `props` was written. Checking each attribute
+        // where it appears asked about values the element never receives, so
+        // the surviving source of each owned prop is resolved first and only
+        // that one is read.
+        // A LIST per prop, not one source: a spread between object literals
+        // supplies alternatives rather than a sequence, and every alternative
+        // is a value the element can render.
+        const effective = new Map<string, PropSource[]>();
+        // A spread whose contents cannot be read may carry either owned prop,
+        // so it stops mattering only once BOTH are written again after it.
+        const unread: Array<{ at: ts.Node; awaiting: Set<string> }> = [];
+        const take = (name: string, sources: PropSource[]): void => {
+          effective.set(name, sources);
+          for (const spread of unread) spread.awaiting.delete(name);
+        };
+
         for (const attribute of node.attributes.properties) {
-          if (!ts.isJsxAttribute(attribute)) continue;
-          const name = attribute.name.getText(sourceFile);
-          if (name === "style") {
-            const { objects, resolver } = styleObjectsFor(attribute);
-            const property = objects
-              .map(object => ownedStyleProperty(exported, object, resolver))
-              .find(Boolean);
-            if (property) {
-              found.push({
-                file,
-                line: at(attribute),
-                why: `sets \`${property}\` inline, which beats every class the primitive applies`,
-              });
+          // `<TabsTrigger {...props} />` carries whatever `props` holds, which
+          // includes `style` and `className`. Skipping spreads left the whole
+          // contract bypassable by one idiom, on both halves at once.
+          if (ts.isJsxSpreadAttribute(attribute)) {
+            const spread = spreadAttributes(attribute, checker);
+            if (!spread.readable) {
+              unread.push({ at: attribute, awaiting: new Set(OWNED_PROPS) });
+              continue;
+            }
+            for (const name of OWNED_PROPS) {
+              const carried = spread.alternatives
+                .map(alternative => alternative.find(a => a.name === name))
+                .filter(found => found !== undefined)
+                .map(
+                  (found): PropSource => ({
+                    kind: "spread",
+                    at: attribute,
+                    value: found.value,
+                  })
+                );
+              if (carried.length === 0) continue;
+              // Only a spread EVERY alternative supplies replaces what came
+              // before. When one branch omits the prop, that branch renders
+              // the earlier value, so the earlier value is still in play.
+              take(
+                name,
+                carried.length === spread.alternatives.length
+                  ? carried
+                  : [...(effective.get(name) ?? []), ...carried]
+              );
             }
             continue;
           }
-          if (name !== "className" || !attribute.initializer) continue;
-          const classes = literalStrings(attribute.initializer).join(" ");
-          const displaced = displacedBy(exported, classes);
+          if (!ts.isJsxAttribute(attribute)) continue;
+          const name = attribute.name.getText(sourceFile);
+          if (OWNED_PROPS.includes(name)) {
+            take(name, [{ kind: "attribute", attribute }]);
+          }
+        }
+
+        const lineOf = (source: PropSource): number =>
+          at(source.kind === "attribute" ? source.attribute : source.at);
+
+        for (const spread of unread) {
+          if (spread.awaiting.size === 0) continue;
+          found.push({
+            file,
+            line: at(spread.at),
+            why: "spreads props this scan cannot read, which may carry `style` or `className` — spread an object literal, or pass the props this primitive owns explicitly",
+          });
+        }
+
+        // Reported once per distinct sentence. Two alternatives of one spread
+        // sit on the same line, and repeating an identical message for each
+        // says nothing the first did not.
+        const said = new Set<string>();
+        const report = (line: number, why: string): void => {
+          const key = `${line}:${why}`;
+          if (said.has(key)) return;
+          said.add(key);
+          found.push({ file, line, why });
+        };
+
+        for (const className of effective.get("className") ?? []) {
+          const classValue =
+            className.kind === "attribute"
+              ? className.attribute.initializer
+              : className.value;
+          if (!classValue) continue;
+          const displaced = displacedBy(
+            exported,
+            literalStrings(classValue, [], styleResolver(checker)).join(" ")
+          );
           if (displaced.length > 0) {
-            found.push({
-              file,
-              line: at(attribute),
-              why: `displaces ${displaced.join(", ")} — the primitive owns that appearance, and every surface should change with it`,
-            });
+            report(
+              lineOf(className),
+              `${className.kind === "spread" ? "spreads" : "displaces"} ${displaced.join(", ")} — the primitive owns that appearance, and every surface should change with it`
+            );
+          }
+        }
+
+        for (const style of effective.get("style") ?? []) {
+          const line = lineOf(style);
+          const verb = style.kind === "spread" ? "spreads" : "sets";
+          const { objects, readable, resolver } =
+            style.kind === "attribute"
+              ? styleObjectsFor(style.attribute, checker)
+              : styleObjectsFrom(style.value, checker);
+          // An expression the scan cannot read is reported for BEING
+          // unreadable, rather than passed over. Tracing what a name holds at
+          // this point is the analysis this contract deliberately does not do,
+          // and staying silent about it would mean "no violation" and "could
+          // not tell" looked the same from outside.
+          if (!readable) {
+            report(
+              line,
+              `${verb} an inline style this scan cannot read — write it as a literal object, or move it to \`className\` so the primitive keeps its appearance`
+            );
+          } else {
+            const spreadUnreadable = { value: false };
+            const property = objects
+              .map(object =>
+                ownedStyleProperty(exported, object, resolver, spreadUnreadable)
+              )
+              .find(Boolean);
+            if (property) {
+              report(
+                line,
+                `${verb} \`${property}\` inline, which beats every class the primitive applies`
+              );
+            } else if (spreadUnreadable.value) {
+              report(
+                line,
+                "spreads an inline style this scan cannot read — write it as a literal object, or move it to `className` so the primitive keeps its appearance"
+              );
+            }
           }
         }
       }
@@ -1619,7 +2860,7 @@ function violations(): Violation[] {
   return found;
 }
 
-describe("the tab indicator contract", () => {
+describe("the tab indicator lint", () => {
   beforeAll(async () => {
     designSystem = await loadDesignSystem();
   });
@@ -1710,6 +2951,26 @@ describe("the tab indicator contract", () => {
     expect(violationsIn("packages/ui/src/components/probe.tsx", real)).toEqual(
       []
     );
+
+    // A `.js` specifier resolves to the adjacent TypeScript SOURCE under
+    // NodeNext, so `../tabs.js` IS `tabs.tsx`. Not an exotic spelling: 33 files
+    // in the scanned roots import that way, and appending `.tsx` to an
+    // already-suffixed path produced `tabs.js.tsx`, so every one scanned clean.
+    //
+    // Asserted HERE rather than in the tables above, because those prepend a
+    // real `@nextlyhq/ui` import to every fixture — which owns the tag on its
+    // own and would have made this pass whether or not the specifier resolved.
+    const runtime = `import { TabsTrigger } from "../tabs.js";\n${body}`;
+    expect(
+      violationsIn("packages/ui/src/components/probe/probe.tsx", runtime)
+    ).not.toEqual([]);
+
+    // And the substitution must not widen the match: a sibling module whose
+    // name merely ENDS in `tabs` is a different file.
+    const sibling = `import { TabsTrigger } from "../other-tabs.js";\n${body}`;
+    expect(
+      violationsIn("packages/ui/src/components/probe/probe.tsx", sibling)
+    ).toEqual([]);
   });
 
   it("finds files to check, so a clean result means conforming and not unscanned", () => {
@@ -1723,7 +2984,8 @@ describe("the tab indicator contract", () => {
   });
 
   /** Every probe imports the way a real call site does, so tags resolve. */
-  const IMPORT = `import { TabsList, TabsTrigger } from "@nextlyhq/ui";\n`;
+  const IMPORT = `import * as UI from "@nextlyhq/ui";
+import { TabsList, TabsTrigger } from "@nextlyhq/ui";\n`;
 
   it.each([
     // The shapes a pattern-based scan returned clean on. Each removes the
@@ -1983,13 +3245,192 @@ describe("the tab indicator contract", () => {
       "an owned property declared through a getter",
       '<TabsTrigger style={{ get borderBottomColor() { return "red"; } }} />',
     ],
+    // A constant-computed key names the property exactly as the literal
+    // spelling does, and React emits the same declaration — so the two must be
+    // treated identically. The distinguishing property is that the key is
+    // decidable without running the code, not how it is spelled.
+    [
+      "an owned property behind a computed key bound to a constant",
+      'const key = "borderBottomColor";\n<TabsTrigger style={{ [key]: "red" }} />',
+    ],
+    [
+      "the same constant behind a type assertion",
+      'const key = "borderBottomColor" as const;\n<TabsTrigger style={{ [key as string]: "red" }} />',
+    ],
+    [
+      "a getter whose name is a computed constant",
+      'const key = "borderBottomColor";\n<TabsTrigger style={{ get [key]() { return "red"; } }} />',
+    ],
     [
       "a shorthand that replaces an owned longhand",
       '<TabsTrigger className="aria-[controls]:[outline:2px_solid_red]" />',
     ],
+    // A border image paints over the border the primitive draws, on every tab
+    // including the inactive ones whose colour it owns. It names no edge and no
+    // aspect, so it reaches the underline without mentioning it.
+    [
+      "a border image painted over the underline",
+      '<TabsTrigger className="[border-image:linear-gradient(red,red)_1]" />',
+    ],
+    [
+      "the same border image set inline",
+      '<TabsTrigger style={{ borderImage: "linear-gradient(red,red) 1" }} />',
+    ],
+    // The one longhand that can put an image there. It is what keeps the
+    // narrowing below honest: the other four are reported by nothing, so
+    // without a case on `-source` a mapping that owned no border image at all
+    // would pass.
+    [
+      "a border image supplied by the source longhand",
+      '<TabsTrigger style={{ borderImageSource: "linear-gradient(red,red)" }} />',
+    ],
     [
       "a destructured namespace member",
       'import * as UI from "@nextlyhq/ui";\nconst { TabsTrigger: Trigger } = UI;\n<Trigger className="border-b-0" />',
+    ],
+    // A reassignable binding is not its declaration initializer. Reading it as
+    // one concludes the element paints nothing while it paints — a false
+    // NEGATIVE, which is the direction that lets a real violation ship, and the
+    // one an immutable-binding control cannot see.
+    [
+      "a reassigned binding that held nothing at its declaration",
+      'let c: string | undefined = undefined;\nc = "red";\n<TabsTrigger style={{ borderBottomColor: c }} />',
+    ],
+    [
+      "the same reassigned binding behind an assertion",
+      'let c: string | undefined = undefined;\nc = "red";\n<TabsTrigger style={{ borderBottomColor: c as string | undefined }} />',
+    ],
+    // An alias resolved in the WRONG scope. `key` means what `sourceKey` meant
+    // where the alias was written; resolving it beside the element picks up an
+    // inner `sourceKey` the alias never saw.
+    [
+      "a computed key aliasing a constant shadowed near the element",
+      'const sourceKey = "borderBottomColor";\nconst key = sourceKey;\nfunction Row() {\n  const sourceKey = "width";\n  return <TabsTrigger style={{ [key]: "red" }} />;\n}',
+    ],
+    // An alias chain CROSSING a shadowed name. Two distinct bindings spelled
+    // `key`, so a cycle guard keyed on the spelling stops at the second one and
+    // never reaches the owned property the chain names.
+    [
+      "a computed key aliased through a second binding of the same name",
+      'const key = "borderBottomColor";\nfunction Row() {\n  const alias = key;\n  {\n    const key = alias;\n    return <TabsTrigger style={{ [key]: "red" }} />;\n  }\n}',
+    ],
+    // A second copy of an owned appearance, declared with the same value under
+    // a different variant. Nothing is displaced and nothing conflicts today,
+    // which is exactly why no comparison saw it — and the day the primitive
+    // changes its outline, this rule keeps suppressing it.
+    [
+      "an owned declaration restated under a different variant",
+      '<TabsTrigger className="aria-[controls]:outline-none" />',
+    ],
+    // Pseudo-class TEXT inside an attribute value is data. This rule really can
+    // apply beside the primitive's disabled one.
+    [
+      "a rule whose attribute value merely spells a state",
+      '<TabsTrigger className="data-[foo=:enabled]:opacity-100" />',
+    ],
+    // A `break` above the reset can carry control out of the `do` body before
+    // it runs, so the owned value is still one the element can render.
+    [
+      "an owned property a do-body reset behind a break does not clear",
+      'let style: Record<string, string> = { borderBottomColor: "red" };\ndo {\n  if (Math.random() > 0) break;\n  style = {};\n} while (false);\n<TabsTrigger style={style} />',
+    ],
+    // The CommonJS spelling of a namespace import.
+    [
+      "a class on a namespace member behind a CommonJS require",
+      'const UI = require("@nextlyhq/ui");\n<UI.TabsTrigger className="border-b-0" />',
+    ],
+    // A spread of a NAME. The outer object does clear the property, so nothing
+    // is repainted today — but knowing that requires reading what the name
+    // holds, and `const` does not settle it: an object is mutable in place
+    // whatever the binding says. Reported for being unreadable, which is the
+    // honest answer rather than a guess in either direction.
+    [
+      "a spread of a name the scan cannot read",
+      'const inherited = { borderBottomColor: "red" };\n<TabsTrigger style={{ ...inherited, borderBottomColor: undefined }} />',
+    ],
+    // The shapes that used to be traced. Each is now reported for what it is —
+    // an inline style whose value this scan does not read — rather than
+    // analysed by a flow model. One per kind, because they all reach the same
+    // branch and a longer list would only restate it.
+    [
+      "an inline style held in a mutable binding",
+      'let style = { borderBottomColor: "red" };\n<TabsTrigger style={style} />',
+    ],
+    ["an inline style built by a call", "<TabsTrigger style={buildStyle()} />"],
+    [
+      "an inline style read from a member access",
+      "<TabsTrigger style={theme.tab} />",
+    ],
+    // A JSX spread carries whatever the object holds, including the two props
+    // this contract owns. Skipping spreads left both halves bypassable by one
+    // idiom.
+    [
+      "an owned property spread in as a literal style prop",
+      'const props = { style: { borderBottomColor: "red" } };\n<TabsTrigger {...{ style: { borderBottomColor: "red" } }} />',
+    ],
+    [
+      "a displacing class spread in as a literal className",
+      '<TabsTrigger {...{ className: "border-b-0" }} />',
+    ],
+    // And a spread whose contents cannot be read at all, which may carry
+    // either of them.
+    [
+      "a spread of props the scan cannot read",
+      'const props = { className: "border-b-0" };\n<TabsTrigger {...props} />',
+    ],
+    // The CommonJS spelling of a NAMED import: one export selected off the
+    // require call, bound under a plain name rather than a namespace.
+    [
+      "a class on a component required as a member",
+      'const TabsTrigger = require("@nextlyhq/ui").TabsTrigger;\n<TabsTrigger className="border-b-0" />',
+    ],
+    // A later attribute only replaces the prop it NAMES. `className` leaves the
+    // spread's `style` exactly where it was.
+    [
+      "a spread style a later className does not replace",
+      '<TabsTrigger {...{ style: { borderBottomColor: "red" } }} className="w-full" />',
+    ],
+    // An unreadable spread may carry either owned prop, so writing one of them
+    // again afterwards leaves the other still coming from the spread.
+    [
+      "an unreadable spread with only one owned prop written after it",
+      '<TabsTrigger {...rest} className="w-full" />',
+    ],
+    // The objects a conditional spread chooses between are ALTERNATIVES: one
+    // of them renders, so a safe value in one branch does not excuse a
+    // forbidden value in the other.
+    [
+      "a class in one branch of a conditional spread",
+      '<TabsTrigger {...(flag ? { className: "border-b-0" } : { className: "w-full" })} />',
+    ],
+    // Only a spread every alternative supplies replaces what came before; a
+    // branch that omits the prop renders the earlier value.
+    [
+      "a class a spread replaces in only one of its branches",
+      '<TabsTrigger className="border-b-0" {...(flag ? { style: {} } : { className: "w-full" })} />',
+    ],
+    // `cn({ rounded })` is `{ rounded: rounded }` to clsx, so the key names
+    // the class exactly as the written-out form does.
+    [
+      "an owned class named by a class-map shorthand",
+      "const rounded = true;\n<TabsList className={cn({ rounded })} />",
+    ],
+    // One class at runtime, whichever way it is spelled in the source.
+    [
+      "an owned class written as a concatenation",
+      '<TabsTrigger className={"border-b-" + "0"} />',
+    ],
+    // clsx reads a computed literal key as the class it spells, exactly as the
+    // written-out key beside it.
+    [
+      "an owned class named by a computed key in a class map",
+      '<TabsTrigger className={cn({ ["border-b-0"]: true })} />',
+    ],
+    // The branch that supplies no object still renders, and on it the value
+    // set before the spread survives.
+    [
+      "an owned property a conditional spread clears in only one branch",
+      '<TabsTrigger style={{ borderBottomColor: "red", ...(flag ? { borderBottomColor: undefined } : undefined) }} />',
     ],
   ])("catches %s", (_label, body) => {
     // The positive controls. Each is a shape an earlier version returned clean
@@ -2127,6 +3568,46 @@ describe("the tab indicator contract", () => {
       "an inline property set to null",
       "<TabsTrigger style={{ borderBottomColor: null }} />",
     ],
+    // Erased before the code runs, so React receives exactly `undefined` and
+    // emits no declaration. `undefined as string | undefined` is the ORDINARY
+    // way to write an optional style in a typed codebase, so reporting it
+    // rejected the idiomatic spelling of the thing this check exists to permit.
+    [
+      "an inline property widened with an `as` assertion",
+      "<TabsTrigger style={{ borderBottomColor: undefined as string | undefined }} />",
+    ],
+    [
+      "an inline property widened with `satisfies`",
+      "<TabsTrigger style={{ borderBottomColor: undefined satisfies string | undefined }} />",
+    ],
+    [
+      "an inline property wrapped in parentheses",
+      "<TabsTrigger style={{ borderBottomColor: (undefined) }} />",
+    ],
+    [
+      "the same assertion around a parenthesised nothing",
+      "<TabsTrigger style={{ borderBottomColor: (undefined) as string | undefined }} />",
+    ],
+    // The non-null branch. `!` asserts to the COMPILER that a value is present
+    // and erases entirely at runtime, so `undefined!` still reaches React as
+    // `undefined` and still emits nothing. Without this case, deleting
+    // `ts.isNonNullExpression` from the unwrapper leaves the suite green.
+    [
+      "an inline property with a non-null assertion on nothing",
+      "<TabsTrigger style={{ borderBottomColor: undefined! }} />",
+    ],
+    // The unwrapping in front of the BINDING lookup, which is a second path
+    // through the same helper. A wrapper around an identifier has to be peeled
+    // before the resolver is asked, or the lookup never happens and the value
+    // is reported on the strength of its wrapper alone.
+    [
+      "a bound nothing behind an assertion",
+      "const empty = undefined;\n<TabsTrigger style={{ borderBottomColor: empty as string | undefined }} />",
+    ],
+    [
+      "a bound nothing behind a non-null assertion",
+      "const empty = undefined;\n<TabsTrigger style={{ borderBottomColor: empty! }} />",
+    ],
     // Tailwind's own child variants. `*` compiles to `:is(& > *)` and `**` to
     // `:is(& *)`, so both land on children and neither can repaint the tab.
     [
@@ -2176,9 +3657,160 @@ describe("the tab indicator contract", () => {
       "a class literal behind a statically false guard",
       '<TabsTrigger className={cn("w-full", false && "border-b-0")} />',
     ],
+    // A PARAMETER shadowing an outer constant. The name is the parameter, whose
+    // value the caller supplies, so the property is undecidable — not the outer
+    // constant's. Walking past the parameter named an owned property for an
+    // element that renders whatever it is passed.
     [
-      "a spread whose owned property the object then clears",
-      'const inherited = { borderBottomColor: "red" };\n<TabsTrigger style={{ ...inherited, borderBottomColor: undefined }} />',
+      "a computed key bound to a parameter shadowing an outer constant",
+      'const key = "borderBottomColor";\nfunction Row(key = "width") {\n  return <TabsTrigger style={{ [key]: "red" }} />;\n}',
+    ],
+    // The border-image longhands that cannot draw. With `border-image-source`
+    // at its initial `none` there is no image, so these change nothing on
+    // screen and the primitive's own bottom border renders as it did.
+    [
+      "border-image longhands with no source to draw",
+      '<TabsTrigger style={{ borderImageRepeat: "round", borderImageSlice: "30", borderImageWidth: "4px", borderImageOutset: "2px" }} />',
+    ],
+    // React emits no declaration for an empty string, verified with
+    // `renderToStaticMarkup`: `{ borderBottomColor: "" }` renders no `style`
+    // attribute at all. Clearing a style with `""` is an ordinary conditional
+    // spelling, so reporting it rejects the idiom the check exists to permit.
+    [
+      "an owned property cleared with an empty string",
+      '<TabsTrigger style={{ borderBottomColor: "" }} />',
+    ],
+    // A branch the condition can never take. The class half already resolves
+    // literal conditions, so reading both branches of a style prop held the two
+    // halves of one contract to different standards.
+    [
+      "an owned property in a statically unreachable branch",
+      '<TabsTrigger style={true ? {} : { borderBottomColor: "red" }} />',
+    ],
+    // A rule that can never apply beside the owned one it matches. `disabled:`
+    // and `not-disabled:` select complementary states, so neither can restate
+    // or override the other however the cascade ranks them.
+    [
+      "an equal declaration under a negated form of the owned qualifier",
+      '<TabsTrigger className="not-disabled:opacity-50" />',
+    ],
+    // React emits no declaration for a boolean, the same as for an empty
+    // string: both render an element carrying no `style` attribute at all.
+    [
+      "an owned property set to a boolean",
+      "<TabsTrigger style={{ borderBottomColor: false }} />",
+    ],
+    // One element cannot be both enabled and disabled, so these rules never
+    // apply together however the cascade ranks them.
+    [
+      "a rule qualified by the complement of an owned state",
+      '<TabsTrigger className="enabled:opacity-50" />',
+    ],
+    // `none` is the initial value of `border-image-source`: it supplies no
+    // image, so the primitive's ordinary bottom border renders unchanged.
+    [
+      "a border image explicitly set to none",
+      '<TabsTrigger style={{ borderImageSource: "none" }} />',
+    ],
+    // A constant holding `none` draws no border image, as the literal does.
+    [
+      "a border image whose none is written as a constant",
+      'const noImage = "none";\n<TabsTrigger style={{ borderImageSource: noImage }} />',
+    ],
+    // Guards that are not spelled as booleans are still statically decided.
+    [
+      "a class literal behind a statically falsy non-boolean guard",
+      '<TabsTrigger className={cn(0 && "border-b-0")} />',
+    ],
+    // A local component may reuse an imported name and is entitled to its own
+    // appearance; the tag refers to the local binding, not the import.
+    [
+      "a class on a local component shadowing an imported name",
+      'function Row() {\n  const TabsTrigger = (p: Record<string, unknown>) => <div {...p} />;\n  return <TabsTrigger className="border-b-0" />;\n}',
+    ],
+    // A local object may shadow a namespace import exactly as a local component
+    // may shadow a named one; the tag refers to the local binding.
+    [
+      "a class on a namespace member shadowing an imported namespace",
+      'import * as UI from "@nextlyhq/ui";\nfunction Row() {\n  const UI = { TabsTrigger: (p: Record<string, unknown>) => <div {...p} /> };\n  return <UI.TabsTrigger className="border-b-0" />;\n}',
+    ],
+    // In an object map the KEY is the class and the VALUE is the condition, so
+    // a key switched off applies nothing.
+    [
+      "a class map entry switched off by its value",
+      '<TabsTrigger className={cn({ "border-b-0": false })} />',
+    ],
+    // A `#` inside an attribute VALUE is data, not an id selector.
+    [
+      "an attribute value that merely contains a hash",
+      '<TabsTrigger className="not-data-[foo=#bar]:opacity-100" />',
+    ],
+    // `undefined` is a VALUE React receives as no style, not a name that has
+    // to be traced, so there is nothing here the scan failed to read.
+    ["a style prop written as undefined", "<TabsTrigger style={undefined} />"],
+    // Props are one object built left to right, so both later attributes
+    // replace what the spread carried and neither spread value is rendered.
+    [
+      "a spread whose owned props are both written again after it",
+      '<TabsTrigger {...{ className: "border-b-0", style: { borderBottomColor: "red" } }} className="w-full" style={{ width: 2 }} />',
+    ],
+    // The same rule reaches an unreadable spread: once both owned props are
+    // written after it, nothing it could have carried survives.
+    [
+      "an unreadable spread with both owned props written after it",
+      '<TabsTrigger {...rest} className="w-full" style={{ width: 2 }} />',
+    ],
+    // A shorthand names its key, and a key that is not an owned prop cannot
+    // carry one. `{...{ value }}` is the ordinary way to pass Radix's `value`.
+    [
+      "a spread carrying an unrelated prop as a shorthand",
+      'const value = "a";\n<TabsTrigger {...{ value }} />',
+    ],
+    [
+      "a spread carrying an unrelated prop written out",
+      '<TabsTrigger {...{ role: "tab" }} />',
+    ],
+    // Ownership follows the BINDING, not the spelling. A local component that
+    // shadows the import is a different component, and so is an alias of it.
+    [
+      "an alias of a name that shadows the import",
+      'function Row() {\n  const TabsTrigger = Other;\n  const Local = TabsTrigger;\n  return <Local className="border-b-0" />;\n}',
+    ],
+    // Ownership follows the BINDING for a namespace exactly as it does for a
+    // plain alias: a local object that shadows `import * as UI` is not it.
+    [
+      "a member of an object that shadows a namespace import",
+      'function Row() {\n  const UI = { TabsTrigger: Other };\n  const Trigger = UI.TabsTrigger;\n  return <Trigger className="border-b-0" />;\n}',
+    ],
+    // A computed key that is statically a string names its prop as plainly as
+    // an identifier does.
+    [
+      "a spread carrying an unrelated prop under a computed key",
+      '<TabsTrigger {...{ ["value"]: "a" }} />',
+    ],
+    // The base state, not a copy of the disabled treatment: the owned variant
+    // rule is more specific and keeps winning while disabled.
+    [
+      "an unqualified class restating a state-qualified owned rule",
+      '<TabsTrigger className="opacity-50" />',
+    ],
+    // CSS defines `initial` for this property AS `none`, so it draws nothing.
+    [
+      "a border image source reset to initial",
+      '<TabsTrigger style={{ borderImageSource: "initial" }} />',
+    ],
+    // clsx omits a key whose condition is falsy, and `undefined` is the
+    // ordinary spelling of an optional one. It is an IDENTIFIER rather than a
+    // keyword, so a test on node kind walks past it.
+    [
+      "a class map whose condition is undefined",
+      '<TabsTrigger className={cn({ "border-b-0": undefined })} />',
+    ],
+    // `unset` on a NON-inherited property is its initial value, which for
+    // `border-image-source` is `none`, so it covers nothing.
+    [
+      "a border image source reset to unset",
+      '<TabsTrigger style={{ borderImageSource: "unset" }} />',
     ],
   ])("does not report %s", (_label, body) => {
     // The complement, and the reason this is a contract rather than a ban. A
@@ -2188,18 +3820,16 @@ describe("the tab indicator contract", () => {
     expect(violationsIn("probe.tsx", IMPORT + body)).toEqual([]);
   });
 
-  it("resolves a style identifier in its own scope, not by name", () => {
-    // A whole-file name search takes whichever declaration is visited last, so
-    // an unrelated `const s` in a LATER function hid this violation. Both
-    // orders are asserted, because the defect is symmetric: the other order
-    // invents a violation on a tab whose own style is harmless.
-    const hidden = `${IMPORT}function a() { const s = { borderBottomColor: c }; return <TabsTrigger style={s} />; }
-function b() { const s = { width: 2 }; return <div style={s} />; }`;
-    expect(violationsIn("probe.tsx", hidden)).not.toEqual([]);
+  it("does not read an inline style held under a name", () => {
+    // Replaces a case that asserted WHICH declaration a style identifier
+    // resolved to. Objects are no longer traced through bindings at all, so the
+    // question that test answered is one the scan has stopped asking; what
+    // matters now is that both spellings are reported rather than silently
+    // resolved to the wrong one.
+    const both = `${IMPORT}function a() { const s = { borderBottomColor: c }; return <TabsTrigger style={s} />; }
+function b() { const s = { width: 2 }; return <TabsTrigger style={s} />; }`;
 
-    const invented = `${IMPORT}function a() { const s = { width: 2 }; return <TabsTrigger style={s} />; }
-function b() { const s = { borderBottomColor: c }; return <div style={s} />; }`;
-    expect(violationsIn("probe.tsx", invented)).toEqual([]);
+    expect(violationsIn("probe.tsx", both)).toHaveLength(2);
   });
 
   it("still reads a style declared beside the element", () => {
@@ -2246,5 +3876,284 @@ function b() { const s = { borderBottomColor: c }; return <div style={s} />; }`;
         "needs a different indicator, change `packages/ui/src/components/tabs.tsx` " +
         "so every surface changes with it."
     ).toEqual([]);
+  });
+});
+
+/**
+ * The traversal reads every file a call site can live in.
+ *
+ * A scan is only as wide as its extension list, and an extension it does not
+ * name is a call site it never reads. That gap is invisible from the outside:
+ * the repository-wide contract still passes, and so does a control that counts
+ * how many files were scanned, because the `.tsx` files it counts are all still
+ * there. Only asking the traversal directly separates the two.
+ */
+describe("which files the call-site scan reads", () => {
+  it("reads .jsx as well as .tsx, and nothing that cannot hold an element", () => {
+    const dir = mkdtempSync(join(tmpdir(), "tabs-scan-"));
+    try {
+      for (const name of ["a.tsx", "b.jsx", "c.ts", "d.js", "e.css"]) {
+        writeFileSync(join(dir, name), "");
+      }
+
+      // Generated output, which reading JavaScript would otherwise pull in by
+      // the thousand on any machine where the playground has been built.
+      mkdirSync(join(dir, ".next"));
+      writeFileSync(join(dir, ".next", "chunk.js"), "");
+
+      // And a route that happens to be NAMED like an output directory. Pruning
+      // by basename would drop this, which is a call site going silently
+      // unread — the failure the pruning list is supposed to prevent, caused by
+      // the pruning list.
+      mkdirSync(join(dir, "build"));
+      writeFileSync(join(dir, "build", "page.js"), "");
+
+      // `dist` is the same shape and was pruned by name anyway. Both spellings
+      // are here because they fail apart: this one has no `package.json`
+      // beside it, so it is a route rather than build output.
+      mkdirSync(join(dir, "dist"));
+      writeFileSync(join(dir, "dist", "page.js"), "");
+
+      // The same name WITH a manifest beside it is a package's build output,
+      // and stays pruned. Without this the fix reads as "never prune dist",
+      // which would walk every built package in the repository.
+      mkdirSync(join(dir, "pkg"));
+      writeFileSync(join(dir, "pkg", "package.json"), "{}");
+      mkdirSync(join(dir, "pkg", "dist"));
+      writeFileSync(join(dir, "pkg", "dist", "bundle.js"), "");
+
+      const found = sourceFiles(dir).map(path => path.slice(dir.length + 1));
+
+      expect(found.sort()).toEqual(
+        [
+          "a.tsx",
+          "b.jsx",
+          "d.js",
+          join("build", "page.js"),
+          join("dist", "page.js"),
+        ].sort()
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("covers every scan root and extension in both Turbo tasks", () => {
+    // The traversal and the cache have to agree about which files matter. An
+    // extension or a root the scan reads but the hash does not cover is a file
+    // that can change while Turbo replays a cached green, and a replayed pass
+    // is indistinguishable from one that ran.
+    //
+    // `turbo.json` is static JSON and cannot import the lists above, so the
+    // agreement is asserted here rather than assumed.
+    //
+    // Every ROOT-and-extension pair, not merely every extension: a glob for
+    // `packages/**/*.js` says nothing about a call site under `apps`, and a
+    // check that only asks "is this extension mentioned anywhere" stays green
+    // while half the coverage is gone.
+    const config = JSON.parse(
+      readFileSync(resolve(HERE, "../../../turbo.json"), "utf8").replace(
+        // The file carries `//` comments, which `JSON.parse` rejects.
+        /^\s*\/\/.*$/gm,
+        ""
+      )
+    ) as { tasks: Record<string, { inputs?: string[] }> };
+
+    // Derived from the roots the traversal actually walks, so a root added
+    // there cannot be forgotten here. `templates` is covered by a single broad
+    // glob rather than per-extension ones, which is why a root is satisfied by
+    // EITHER spelling: what matters is that every file the scan reads is
+    // hashed, not how the glob is written.
+    const satisfies = (inputs: Set<string>, root: string): string[] => {
+      if (inputs.has(`$TURBO_ROOT$/${root}/**`)) return [];
+      return CALL_SITE_EXTENSIONS.map(
+        extension => `$TURBO_ROOT$/${root}/**/*${extension}`
+      ).filter(glob => !inputs.has(glob));
+    };
+
+    // Both tasks: a gap in either replays a stale result for that task alone.
+    for (const task of ["test", "test:coverage"]) {
+      const inputs = new Set(config.tasks[task]?.inputs ?? []);
+      const missing = SCAN_ROOT_NAMES.flatMap(root => satisfies(inputs, root));
+
+      // The missing globs are named, because this rule is only ever broken by
+      // someone adding an extension or a root who does not know the second
+      // task list exists — and a bare `false` tells them nothing.
+      expect({ task, missing }).toEqual({ task, missing: [] });
+    }
+  });
+
+  it("reruns in watch mode for every root and extension it reads", async () => {
+    // The scan reaches call sites with `readFileSync`, so Vitest has no module
+    // dependency on them: without an explicit trigger a watch session keeps
+    // displaying the previous green after a real violation is added.
+    //
+    // Both halves matter, and the ROOT half is the one that is easy to miss.
+    // The triggers are resolved relative to this package, so a glob under
+    // `**/src` subscribes to `packages/ui` alone — a call site in
+    // `packages/admin`, an app or a template could gain a violation and the
+    // suite reporting on it would never rerun.
+    // The REAL triggers and the REAL matcher, on REAL paths.
+    //
+    // Each of those three is what makes the answer mean anything. The config is
+    // IMPORTED rather than parsed, so the assertion reads the value Vitest
+    // loads instead of a rendering of it. picomatch is resolved THROUGH Vitest,
+    // so the matcher here is the one that decides at runtime and cannot drift
+    // to a different version. And the paths are ABSOLUTE, because absolute is
+    // what the watcher emits: a glob is only covering a file if it matches the
+    // string the matcher is actually handed.
+    const { default: config } = (await import("../../../vitest.config")) as {
+      default: { test?: { forceRerunTriggers?: string[] } };
+    };
+    const triggers = config.test?.forceRerunTriggers ?? [];
+    const fromHere = createRequire(import.meta.url);
+    const isMatch = fromHere(
+      fromHere.resolve("picomatch", {
+        paths: [dirname(fromHere.resolve("vitest/package.json"))],
+      })
+    ).isMatch as (path: string, globs: string[]) => boolean;
+
+    // A negative control first, so a matcher that says yes to everything — the
+    // one way every assertion below could pass while covering nothing — is
+    // caught before its answers are trusted. A Markdown file is read by no
+    // scan and must not trigger a rerun.
+    expect(isMatch(resolve(REPO, "packages/ui/README.md"), triggers)).toBe(
+      false
+    );
+
+    // Every root-and-extension pair the scan CAN read, whether or not the
+    // repository currently holds such a file.
+    //
+    // Checking only the files that exist today is an assertion satisfied by
+    // absence: there is no `.jsx` call site anywhere under a scan root, so
+    // removing `jsx` from every trigger left this case green while the next
+    // `.jsx` file added would change without rerunning the suite. The pairs are
+    // derived from the same two lists the traversal uses, so a root or an
+    // extension added there arrives here on its own.
+    //
+    // Both depths, because they fail differently: a `**/src/**` trigger covers
+    // the nested one and silently misses a file directly under the root.
+    // Three depths, because they fail differently and each one has a trigger
+    // shape that covers the others and misses it: a `**/src/**` glob covers the
+    // nested file and misses the package-level one, and a glob requiring at
+    // least one child directory covers both and misses a file sitting directly
+    // in the root — which `sourceFiles` reaches, since it recurses from the
+    // root itself rather than from the packages inside it.
+    // Forward slashes, because that is the string the matcher is handed at
+    // runtime: Vitest normalises a watcher path with `slash(id)` before
+    // testing it, and picomatch reads a backslash as an ESCAPE rather than a
+    // separator. Handing it a native Windows path would put every probe in
+    // `unwatchedProbes` and fail this suite on a correctly configured watch.
+    const forwardSlashes = (path: string): string => path.replace(/\\/g, "/");
+    const repoRoot = forwardSlashes(REPO);
+    const probes = SCAN_ROOT_NAMES.flatMap(root =>
+      CALL_SITE_EXTENSIONS.flatMap(extension =>
+        [
+          `probe-package/src/nested/probe${extension}`,
+          `probe-package/probe${extension}`,
+          `probe${extension}`,
+        ].map(leaf => forwardSlashes(resolve(REPO, root, leaf)))
+      )
+    );
+    const unwatchedProbes = probes
+      .filter(path => !isMatch(path, triggers))
+      .map(path => path.replace(`${repoRoot}/`, ""));
+    expect(unwatchedProbes).toEqual([]);
+
+    // Matching is only HALF the mechanism, and the half that was never checked
+    // is the one that failed three times: Vitest reruns when its watcher emits
+    // an event AND a trigger matches the path. The server is rooted at this
+    // package, so nothing outside it was watched at all and the matcher was
+    // never consulted for the call sites this suite reads.
+    //
+    // chokidar removed glob support in v4, so a watched entry has to be a REAL
+    // PATH. That is what this asserts, and it is what separates the three
+    // broken generations from the working one: `../**/*.tsx` is not a path,
+    // `<root>/packages/**/*.tsx` is not a path, `<root>/packages` is.
+    const watched: string[] = [];
+    const plugins = (config as { plugins?: unknown[] }).plugins ?? [];
+    for (const plugin of plugins) {
+      const configureServer = (
+        plugin as { configureServer?: (server: unknown) => void }
+      ).configureServer;
+      configureServer?.({
+        watcher: { add: (path: string) => watched.push(path) },
+      });
+    }
+
+    // Proves the hook ran at all before anything is concluded from what it
+    // recorded: an empty list would otherwise satisfy every assertion below.
+    expect(watched.length).toBeGreaterThan(0);
+
+    const notReal = watched.filter(path => !existsSync(path));
+    expect(notReal).toEqual([]);
+
+    const unwatchedRoots = SCAN_ROOTS.filter(
+      root =>
+        !watched.some(path => root === path || root.startsWith(`${path}/`))
+    ).map(root => root.replace(`${REPO}/`, ""));
+    expect(unwatchedRoots).toEqual([]);
+
+    // And every file the scan actually reads, which covers shapes no synthetic
+    // path anticipates. Named individually: the list is only ever wrong for a
+    // whole tree at a time, and a bare count says nothing about which.
+    const unwatched = scanned().filter(file => !isMatch(file, triggers));
+    expect(unwatched).toEqual([]);
+  });
+
+  it("treats complementary states as unable to apply together", () => {
+    // Asserted on the coexistence test directly, because through `violationsIn`
+    // it cannot be isolated: every disjoint pair in this primitive's vocabulary
+    // also meets a rule it genuinely DOES coexist with, so the call site is
+    // reported either way and the outcome cannot separate the two causes.
+    // `data-[state=active]:border-transparent` is the worked example — it is
+    // disjoint from the inactive border, and at the same time a real override
+    // of `hover:border-primary`, which an active hovered tab matches.
+    //
+    // Both spellings the vocabulary produces, taken from what Tailwind actually
+    // compiles rather than from how the variants are written:
+    //   `not-disabled:` -> `&:not(*:disabled)`   against `&:disabled`
+    //   `data-[state=active]:` -> `&[data-state="active"]`
+    expect(excludeEachOther("&:not(*:disabled)", "&:disabled")).toBe(true);
+    expect(
+      excludeEachOther('&[data-state="active"]', '&[data-state="inactive"]')
+    ).toBe(true);
+
+    // An ancestor's qualifier is not the subject's. A disabled tab inside a
+    // group that is NOT disabled matches both rules, so they coexist and the
+    // comparison has to run — `group-not-disabled:` compiles the negation into
+    // a descendant group, where it describes the group and not the tab.
+    expect(
+      excludeEachOther("&:is(:where(.group):not(*:disabled) *)", "&:disabled")
+    ).toBe(false);
+
+    // The positive control. Without it a test that answered `true` to
+    // everything would pass both cases above, and every comparison in the
+    // contract would be silently skipped as "cannot apply together".
+    expect(excludeEachOther("&:hover", '&[data-state="active"]')).toBe(false);
+    expect(
+      excludeEachOther('&[data-state="active"]', '&[data-state="active"]')
+    ).toBe(false);
+  });
+
+  it("finds a violation behind a CommonJS require", () => {
+    // `.js` and `.jsx` are scanned, so a CommonJS consumer reaches this
+    // primitive exactly as an ESM one does and is held to the same contract.
+    const source =
+      'const { TabsTrigger } = require("@nextlyhq/ui");\n' +
+      '<TabsTrigger className="border-b-0" />';
+
+    expect(violationsIn("probe.js", source)).not.toEqual([]);
+  });
+
+  it("finds a violation in a .jsx call site", () => {
+    // The positive control the extension list exists for. Parsed as TSX, which
+    // handles JSX, so the only thing that decides this is whether the file was
+    // read at all.
+    const source =
+      'import { TabsTrigger } from "@nextlyhq/ui";\n' +
+      '<TabsTrigger className="border-b-0" />';
+
+    expect(violationsIn("probe.jsx", source)).not.toEqual([]);
   });
 });
