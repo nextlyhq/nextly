@@ -83,6 +83,18 @@ function supportStore(): Map<string, SupportDefinition> {
 const BLOCK_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 /**
+ * Whether a string is a well-formed block name: two lowercase slug segments around one `/`.
+ *
+ * Exported so every registration path asks the SAME question. There were three gates checking
+ * block names by the time this was written and one of them tested `includes("/")`, which accepts
+ * `core/columns/` — a name no real block can have, so a `parent` naming it matches nothing and
+ * every instance of the declaring block becomes unsaveable with the declaration looking correct.
+ */
+export function isBlockName(value: unknown): value is string {
+  return typeof value === "string" && BLOCK_NAME_RE.test(value);
+}
+
+/**
  * The highest version a block may declare. Migration chains a bounded number of
  * steps, so a version above this could never carry its oldest stored nodes
  * forward — registration refuses it rather than promise an upgrade path that

@@ -135,6 +135,7 @@ export {
   registerBlocks,
   registerSupport,
   getBlock,
+  isBlockName,
   hasBlock,
   allBlocks,
   getBlockSource,

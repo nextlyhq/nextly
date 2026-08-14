@@ -101,6 +101,47 @@ describe("a legacy columns row", () => {
     expect(x.id).not.toBe(y.id);
   });
 
+  it("does not reuse an id the stored document already holds", () => {
+    // The prefix is a label, not a guarantee. Ids arrive from plugins and hand-authored JSON as
+    // well as `crypto.randomUUID()`, so a stored node may legitimately be called `legacy-wrap:x`.
+    // A duplicate is not cosmetic: the style compiler keys nodes BY ID, so two nodes sharing one
+    // produce a single selector and the author's styles land on the synthetic column.
+    const legacyChild = makeNode("core/heading", { text: "a" });
+    const collider: BlockNode = {
+      ...makeNode("core/heading", { text: "b" }),
+      id: `legacy-wrap:${legacyChild.id}`,
+    };
+    const root = node("core/container", {
+      default: [node("core/columns", { default: [legacyChild] }), collider],
+    });
+
+    const out = normalizeLegacySlots(root, defaultBlockRegistry);
+    const ids: string[] = [];
+    const walk = (n: BlockNode) => {
+      ids.push(n.id);
+      for (const kids of Object.values(n.slots ?? {})) kids.forEach(walk);
+    };
+    walk(out);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("resolves a collision the SAME way on every pass", () => {
+    // The collision path must stay hydration-safe too: suffixed rather than randomised, so the
+    // server and the client agree on a document neither of them edited.
+    const legacyChild = makeNode("core/heading", { text: "a" });
+    const collider: BlockNode = {
+      ...makeNode("core/heading", { text: "b" }),
+      id: `legacy-wrap:${legacyChild.id}`,
+    };
+    const root = node("core/container", {
+      default: [node("core/columns", { default: [legacyChild] }), collider],
+    });
+    const idOf = (n: BlockNode) => n.slots?.default[0].slots?.default[0].id;
+    expect(idOf(normalizeLegacySlots(root, defaultBlockRegistry))).toBe(
+      idOf(normalizeLegacySlots(root, defaultBlockRegistry))
+    );
+  });
+
   it("leaves a document already in the current shape untouched, by IDENTITY", () => {
     // Identity rather than equality, because every page saved since the change takes this path on
     // every render. Rebuilding a tree that did not need it would cost each of them a full walk's

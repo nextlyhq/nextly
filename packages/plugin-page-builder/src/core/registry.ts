@@ -5,6 +5,8 @@
  * third party adds a block with one `registerBlock()` call and no core edit.
  * Types are namespaced (`core/heading`, `acme/pricing-table`) to stay collision-free.
  */
+import { isBlockName } from "@nextlyhq/blocks-engine";
+
 import { slotsOf } from "./block-structure";
 import { makeNode } from "./tree";
 import { type BlockDefinition, type BlockNode, type ControlDef } from "./types";
@@ -75,9 +77,10 @@ export function createBlockRegistry(): BlockRegistry {
         const named =
           Array.isArray(def.parent) &&
           def.parent.length > 0 &&
-          def.parent.every(
-            name => typeof name === "string" && name.includes("/")
-          );
+          // The CANONICAL predicate, imported rather than restated. A local `includes("/")`
+          // accepted `core/columns/`, which no real block can be called — so the parent matched
+          // nothing, every instance became unsaveable, and the declaration looked correct.
+          def.parent.every(isBlockName);
         if (!named) {
           throw new Error(
             `Block type "${def.type}" parent must be a non-empty array of namespaced block names like "core/columns".`

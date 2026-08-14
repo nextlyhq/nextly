@@ -40,10 +40,44 @@ import { DEFAULT_SLOT, type BlockNode, type SlotSpec } from "./types";
 /**
  * Marks an id this transform derived rather than one an author's document stored.
  *
- * Distinguishable on sight when it appears in a class name or a React key, and namespaced so it
- * cannot collide with a stored id.
+ * Distinguishable on sight when it appears in a class name or a React key. It is NOT a guarantee
+ * of uniqueness: a stored document may legitimately contain a node whose id is already
+ * `legacy-wrap:x`, and nothing forbids it — ids come from plugins and from hand-authored JSON as
+ * well as from `crypto.randomUUID()`. Uniqueness is established against the actual document
+ * instead, by {@link freeId}.
  */
 const LEGACY_WRAPPER_PREFIX = "legacy-wrap:";
+
+/** Every id in this tree, so a derived one can be checked against what is really there. */
+function collectIds(node: BlockNode, into: Set<string>): Set<string> {
+  into.add(node.id);
+  for (const children of Object.values(node.slots ?? {})) {
+    for (const child of children) collectIds(child, into);
+  }
+  return into;
+}
+
+/**
+ * A derived id that is not already in use, and the reservation that keeps it that way.
+ *
+ * A duplicate id is not cosmetic here: `documentNodeClasses` and the style compiler key nodes BY
+ * ID, so two nodes sharing one produce one selector — styles meant for the author's node land on
+ * the synthetic column, or hide it, on the published page.
+ *
+ * Suffixed rather than randomised on collision, because this runs on the server and again on the
+ * client for one stored document and the two passes must agree. The same input yields the same
+ * suffix, since the ids it checks against are the same both times.
+ */
+function freeId(base: string, taken: Set<string>): string {
+  let candidate = base;
+  let n = 2;
+  while (taken.has(candidate)) {
+    candidate = `${base}#${String(n)}`;
+    n += 1;
+  }
+  taken.add(candidate);
+  return candidate;
+}
 
 /**
  * The one type a slot would accept in place of a child it refuses, if there is exactly one.
@@ -89,7 +123,15 @@ function wrapperForRefusedChild(
  */
 export function normalizeLegacySlots(
   node: BlockNode,
-  registry: BlockRegistry
+  registry: BlockRegistry,
+  /**
+   * Ids already in use, collected from the WHOLE tree before any wrapper is made.
+   *
+   * Gathered once at the entry rather than per node: a derived id must avoid every stored id in
+   * the document, including ones in branches this walk has not reached yet, and a check that only
+   * knew the ids it had already passed would collide with anything below it.
+   */
+  taken: Set<string> = collectIds(node, new Set())
 ): BlockNode {
   const stored = node.slots;
   if (!stored) return node;
@@ -101,7 +143,7 @@ export function normalizeLegacySlots(
   for (const [slotName, children] of Object.entries(stored)) {
     const spec = declared?.find(s => s.name === slotName);
     const next = children.map(child => {
-      const deeper = normalizeLegacySlots(child, registry);
+      const deeper = normalizeLegacySlots(child, registry, taken);
       // A child the slot already accepts is left exactly as it is, including its identity.
       if (!spec || slotAdmits(spec, child.type)) {
         if (deeper !== child) changed = true;
@@ -130,7 +172,10 @@ export function normalizeLegacySlots(
       const wrapper = createNode(wrapperType, registry, {
         [DEFAULT_SLOT]: [deeper],
       });
-      return { ...wrapper, id: `${LEGACY_WRAPPER_PREFIX}${child.id}` };
+      return {
+        ...wrapper,
+        id: freeId(`${LEGACY_WRAPPER_PREFIX}${child.id}`, taken),
+      };
     });
     slots[slotName] = next;
   }

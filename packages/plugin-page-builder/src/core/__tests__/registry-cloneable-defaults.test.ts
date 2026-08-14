@@ -87,6 +87,16 @@ describe("parent metadata on the legacy registry", () => {
     ).toThrow(/non-empty array/);
   });
 
+  it("refuses a name the engine's grammar rejects, not merely one without a slash", () => {
+    // `core/columns/` contains a slash and is not a block name any registration accepts, so a
+    // parent naming it matches nothing — every instance unsaveable, with the declaration looking
+    // right. The gate now asks the canonical predicate rather than its own weaker one.
+    const registry = createBlockRegistry();
+    expect(() =>
+      registry.register(defWith({ parent: ["core/columns/"] }))
+    ).toThrow(/non-empty array/);
+  });
+
   it("refuses an empty array, which permits no placement at all", () => {
     const registry = createBlockRegistry();
     expect(() => registry.register(defWith({ parent: [] }))).toThrow(
