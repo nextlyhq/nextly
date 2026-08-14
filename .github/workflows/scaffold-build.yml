@@ -384,7 +384,18 @@ jobs:
           cd /tmp/scaffold-build/scaffolded-app
           node "$GITHUB_WORKSPACE/scripts/pin-workspace-packages.mjs" \
             /tmp/nextly-workspace-packs "${{ matrix.pm }}"
-          ${{ matrix.pm }} install
+
+          # The pin rewrites dependency specifiers AFTER the scaffold generated its
+          # lockfile, so the two disagree by design at this point. pnpm turns
+          # frozen-lockfile ON by default when CI is set and then refuses the install with
+          # ERR_PNPM_OUTDATED_LOCKFILE — measured, with exactly that code — so the repin
+          # has to say it means it. npm has no equivalent default: `npm install` updates
+          # the lockfile, and it is `npm ci` that would refuse.
+          if [ "${{ matrix.pm }}" = "pnpm" ]; then
+            pnpm install --no-frozen-lockfile
+          else
+            npm install
+          fi
 
           # The assertion this whole step exists for, and it has to compare CONTENT: the
           # install exits 0 either way, and a registry copy carries the same name and version

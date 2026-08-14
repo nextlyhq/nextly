@@ -121,14 +121,42 @@ function entriesOf(dir) {
   }
 }
 
-/** The entries a previous run recorded owning, or an empty list. */
+/**
+ * The entries a previous run recorded owning.
+ *
+ * An ABSENT manifest means there is nothing to clean and returns an empty list.
+ * A manifest that exists but cannot be read is a different answer and throws:
+ * `writeFileSync` is not atomic, so an interrupted build can leave a truncated
+ * file, and reading that as "owns nothing" would leave the previous index in
+ * place while the status flips to empty — the search page would then load and
+ * serve unpublished results. Refusing is the safe direction, because the build
+ * stops with a cause instead of shipping stale content.
+ */
 function readOwnedEntries(dir) {
+  const path = join(dir, MANIFEST);
+  let raw;
   try {
-    const parsed = JSON.parse(readFileSync(join(dir, MANIFEST), "utf-8"));
-    return Array.isArray(parsed.entries) ? parsed.entries : [];
-  } catch {
-    return [];
+    raw = readFileSync(path, "utf-8");
+  } catch (err) {
+    if (err.code === "ENOENT") return [];
+    throw err;
   }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(
+      `${path} exists but is not valid JSON (${err.message}). It records which ` +
+        "files the previous search index created; delete it to rebuild from scratch."
+    );
+  }
+  if (!Array.isArray(parsed.entries)) {
+    throw new Error(
+      `${path} has no "entries" array, so the previous index cannot be identified. ` +
+        "Delete it to rebuild from scratch."
+    );
+  }
+  return parsed.entries;
 }
 
 /**
