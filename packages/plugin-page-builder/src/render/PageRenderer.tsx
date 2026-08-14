@@ -9,6 +9,7 @@ import type { ReactNode } from "react";
 
 import { sanitizeCustomCss } from "../core/css-sanitize";
 import { pruneUndeclaredSlots } from "../core/declared-slots";
+import { normalizeLegacySlots } from "../core/normalize-legacy";
 import { defaultBlockRegistry, type BlockRegistry } from "../core/registry";
 import {
   compileDocumentStyles,
@@ -73,9 +74,19 @@ export function PageRenderer({
   //
   // The reusable library is pruned too. A library block is rendered by the same code and can hold
   // a stale slot for the same reason.
+  //
+  // Normalized in the same breath, and for a related reason. A slot can gain an allowlist after
+  // pages were saved through it — `core/columns` accepted any block and now accepts only
+  // `core/column` — and nothing migrates a stored page on its way to a reader. Without this a
+  // published page changes layout the moment the new block ships, before its author has opened
+  // the editor. Reading order matters: pruning first means normalization never considers children
+  // under a slot no definition declares.
   const document = {
     ...stored,
-    root: pruneUndeclaredSlots(stored.root, registry),
+    root: normalizeLegacySlots(
+      pruneUndeclaredSlots(stored.root, registry),
+      registry
+    ),
   };
   // A falsy library entry is left exactly as it is rather than pruned as a node. The library can be
   // rebuilt from stored data, and every path downstream already tolerates one — `pageStyleKeys` and
@@ -86,7 +97,16 @@ export function PageRenderer({
     ? Object.fromEntries(
         Object.entries(storedRefs).map(([id, target]) => [
           id,
-          target ? pruneUndeclaredSlots(target, registry) : target,
+          // Normalized as the root is, and for the same reason: a library entry is a stored
+          // subtree of the same age, so it can hold a legacy row exactly as the page can. Pruning
+          // it and not normalizing it would fix one of the two places a published layout can
+          // change and leave the other.
+          target
+            ? normalizeLegacySlots(
+                pruneUndeclaredSlots(target, registry),
+                registry
+              )
+            : target,
         ])
       )
     : storedRefs;
