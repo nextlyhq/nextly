@@ -133,7 +133,7 @@ describe("the file walk", () => {
         // The checker and its test are excluded by name: both necessarily contain what they
         // forbid. Subtracting them here keeps the comparison against the repository honest
         // rather than loosening it to an inequality that would hide a real gap.
-        .filter(path => !EXCLUDED_FILES.has(path.split("/").pop()));
+        .filter(path => !EXCLUDED_FILES.has(path));
       const seen = scanned.filter(path => path.endsWith(ext));
       expect(seen.length, `${ext}: scanner saw ${seen.length} of ${tracked.length}`).toBe(
         tracked.length
@@ -183,9 +183,18 @@ describe("the allowlist", () => {
   // the comment it exempts, which turns the allowlist into a way of silencing the check rather
   // than a record of what predates it. Lower this as entries are removed; never raise it.
   const EXPECTED_ENTRIES = 153;
+  const EXPECTED_TOTAL = 318;
 
   it("matches its pinned size exactly", () => {
     expect(readAllowlist().size).toBe(EXPECTED_ENTRIES);
+  });
+
+  it("matches its pinned TOTAL exactly", () => {
+    // The size alone cannot see growth: adding an offence to a file already listed raises that
+    // entry's count and leaves the number of entries untouched, so a shrink-only list grows
+    // while every size assertion still passes. Lower both numbers as offences are fixed.
+    const total = [...readAllowlist().values()].reduce((sum, e) => sum + e.count, 0);
+    expect(total).toBe(EXPECTED_TOTAL);
   });
 
   it("names files that exist", () => {

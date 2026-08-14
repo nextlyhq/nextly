@@ -109,8 +109,8 @@ export const EXCLUDED_FILES = new Set([
   // every rejected form. Excluding two files by name is the honest fix; teaching the extractor
   // to tell a definition from a use would make it a parser, which is the unbounded surface this
   // deliberately is not.
-  "check-comment-convention.mjs",
-  "check-comment-convention.test.mjs",
+  "scripts/check-comment-convention.mjs",
+  "scripts/check-comment-convention.test.mjs",
 ]);
 
 /**
@@ -213,11 +213,16 @@ export function readAllowlist(root = process.cwd()) {
  * lines is not either. Both would otherwise fail as new offences and teach people to regenerate
  * the file, which is the habit that turns a record into a rubber stamp.
  */
+/** One line, capped, for display only - never for the digest, which needs the whole text. */
+function shorten(text) {
+  return text.length > 140 ? `${text.slice(0, 140)}…` : text;
+}
+
 export function digestOffences(offences) {
   const normalised = offences
     .map(one => one.replace(/\s+/g, " ").trim())
     .sort()
-    .join(" ");
+    .join("\u0000");
   return createHash("sha256").update(normalised).digest("hex").slice(0, 16);
 }
 
@@ -252,7 +257,10 @@ export function sourceFiles(root) {
       const parts = path.split("/");
       return (
         !parts.some(part => EXCLUDED_DIRS.has(part)) &&
-        !EXCLUDED_FILES.has(parts[parts.length - 1])
+        // Matched on the whole repository-relative path. A basename comparison would exempt any
+        // file anywhere in the monorepo that happened to share the name, so a package adding its
+        // own copy would drop out of the scan without the exclusion list changing.
+        !EXCLUDED_FILES.has(path)
       );
     });
 }
@@ -288,11 +296,12 @@ export function commentText(source) {
   for (const match of withoutLiterals.matchAll(/\/\*[\s\S]*?\*\//g)) {
     comments.push(source.slice(match.index, match.index + match[0].length));
   }
-  // A colon may precede a line comment in valid JavaScript — `case 1:// ...`, `retry:// ...` —
-  // so it is NOT excluded here. It once was, as a way of not reading `https://` as a comment, and
-  // that job now belongs to the literal blanking above: a URL lives in a string, and the string is
-  // already blank by the time this runs. Keeping the colon exclusion as well cost both switch-case
-  // forms, which pass CI carrying any narration at all.
+  // The preceding character may be a colon: `case 1:// ...` and `retry:// ...` are both valid
+  // JavaScript, and excluding the colon would leave those comments unread.
+  //
+  // A URL's `//` is not a risk here, because a URL lives inside a string and the blanking above
+  // has already emptied it. Quotes and the backslash stay excluded: those mark text this pass
+  // cannot see into.
   for (const match of withoutLiterals.matchAll(/(^|[^"'`\\])\/\/(.*)$/gm)) {
     const start = match.index + match[1].length + 2;
     comments.push(source.slice(start, start + match[2].length));
@@ -396,12 +405,18 @@ function main() {
       continue;
     }
     for (const { why, comment } of offencesIn(readFileSync(file, "utf8"))) {
-      // Collapsed to one line and truncated. The extractor blanks string literals before
-      // matching, so the stored text carries runs of spaces where data used to be; printing it
-      // raw spreads a single finding over several ragged lines and buries which comment it is.
-      const excerpt = comment.replace(/\s+/g, " ").trim().slice(0, 120);
+      // Stored WHOLE, and shortened only where it is printed.
+      //
+      // The digest is taken over these strings, so anything dropped here is text the identity
+      // check cannot see: truncating first would let the tail of a long comment be rewritten
+      // while its first hundred characters, and therefore its digest, stayed the same.
+      //
+      // Whitespace is collapsed because that is not a difference worth failing on - a comment
+      // reflowed across lines is the same comment - and doing it here keeps the stored form and
+      // the hashed form identical rather than normalising twice.
+      const text = comment.replace(/\s+/g, " ").trim();
       const path = relative(process.cwd(), file).split(sep).join("/");
-      byFile.set(path, [...(byFile.get(path) ?? []), `${why} — ${excerpt}`]);
+      byFile.set(path, [...(byFile.get(path) ?? []), `${why} — ${text}`]);
     }
   }
 
@@ -413,14 +428,14 @@ function main() {
     if (!entry) {
       failures.push(
         `${path} — ${found.length} offence(s), 0 allowed:\n` +
-          found.map(one => `      ${one}`).join("\n")
+          found.map(one => `      ${shorten(one)}`).join("\n")
       );
       continue;
     }
     if (found.length > entry.count) {
       failures.push(
         `${path} — ${found.length} offence(s), ${entry.count} allowed:\n` +
-          found.map(one => `      ${one}`).join("\n")
+          found.map(one => `      ${shorten(one)}`).join("\n")
       );
       continue;
     }
@@ -430,7 +445,7 @@ function main() {
     if (found.length === entry.count && digestOffences(found) !== entry.digest) {
       failures.push(
         `${path} — ${found.length} offence(s) as recorded, but not the same ones:\n` +
-          found.map(one => `      ${one}`).join("\n")
+          found.map(one => `      ${shorten(one)}`).join("\n")
       );
     }
   }
