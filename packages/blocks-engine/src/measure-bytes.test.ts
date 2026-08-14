@@ -338,6 +338,97 @@ describe("measureBytes", () => {
     ).not.toThrow();
   });
 
+  it("runs no toJSON anywhere beneath a hidden value", () => {
+    // The writer never reaches a non-enumerable property, so nothing under it is
+    // serialized — and running a hook down there would execute
+    // document-supplied code the serializer does not, inside a precondition.
+    // The no-hook mode has to travel the whole subtree, not just the member it
+    // started at.
+    let calls = 0;
+    const node = {
+      id: "n1",
+      type: "core/text",
+      version: 1,
+      props: {},
+      toJSON() {
+        calls += 1;
+        return { id: "n1", type: "core/text", version: 1, props: {} };
+      },
+    };
+    const document: Record<string, unknown> = {
+      formatVersion: 1,
+      kind: "page",
+    };
+    Object.defineProperty(document, "nodes", {
+      value: [node],
+      enumerable: false,
+      writable: true,
+      configurable: true,
+    });
+    // The precondition: the writer really does drop the whole branch.
+    expect(JSON.stringify(document)).not.toContain("n1");
+
+    const survey = surveyDocument(document, {
+      maxBytes: Number.MAX_SAFE_INTEGER,
+      maxDepth: 12,
+      maxNodes: 5000,
+    });
+
+    expect(calls).toBe(0);
+    // Still counted, so the caps describe what the schema will read.
+    expect(survey.nodes).toBe(1);
+    expect(survey.unserializable).toBe(true);
+  });
+
+  it("counts depth for a malformed scalar in a node list", () => {
+    // A present scalar occupies a position exactly as a hole does, so it counts
+    // toward BOTH bounds. Counting it as a node while leaving depth alone made
+    // a chain ending in `null` disagree with `treeDepth`.
+    let inner: unknown = null;
+    for (let level = 0; level < 3; level += 1) {
+      inner = {
+        id: `n${level}`,
+        type: "core/section",
+        version: 1,
+        props: {},
+        slots: { children: [inner] },
+      };
+    }
+    const document = { formatVersion: 1, kind: "page", nodes: [inner] };
+
+    const survey = surveyDocument(document, {
+      maxBytes: Number.MAX_SAFE_INTEGER,
+      maxDepth: Number.MAX_SAFE_INTEGER,
+      maxNodes: Number.MAX_SAFE_INTEGER,
+    });
+
+    const forest = document.nodes as Parameters<typeof countNodes>[0];
+    expect(survey.nodes).toBe(countNodes(forest));
+    expect(survey.depth).toBe(treeDepth(forest));
+  });
+
+  it("refuses a bound that is not a number at all", () => {
+    // `Number.isNaN(undefined)` is false, and so is `Number.isNaN("wat")`, while
+    // every later comparison coerces both to NaN and is false in turn — so a
+    // caller omitting a bound removed it and was told the document fitted.
+    expect(() =>
+      measureBytes("x".repeat(1000), undefined as unknown as number)
+    ).toThrow(RangeError);
+    expect(() =>
+      measureBytes("x".repeat(1000), "wat" as unknown as number)
+    ).toThrow(RangeError);
+    expect(() =>
+      surveyDocument(
+        {},
+        {
+          maxBytes: 100,
+          maxDepth: undefined as unknown as number,
+          maxNodes: 100,
+        }
+      )
+    ).toThrow(RangeError);
+  });
+
   it("runs a structural member's toJSON exactly once", () => {
     // Keeping the ORIGINAL for structural counting must not also mean re-running
     // the hook on it. Marking the pushed value unnormalized did exactly that:

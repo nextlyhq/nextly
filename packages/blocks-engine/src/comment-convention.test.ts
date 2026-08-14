@@ -42,6 +42,21 @@ const FORBIDDEN: Array<{ pattern: RegExp; why: string }> = [
     pattern: /\breviewer\s+(said|asked|found|flagged)\b/i,
     why: "quotes a conversation",
   },
+  {
+    // Ordinal process narration: "the third instance", "the second time".
+    // A comment counting how many times something has been found describes the
+    // history of the work rather than the code, and that history is not
+    // available to whoever reads the file next. It gets past the patterns above
+    // because it narrates without naming a review or a tool.
+    //
+    // Deliberately requires a leading "the" and excludes "first", because
+    // ordinary technical prose counts things: "the first occurrence sees the
+    // `+` that leaves the first root" is a real comment in this package about
+    // parsing, and a broader pattern flagged it. A check that fires on correct
+    // prose gets silenced, and a silenced check is worth less than none.
+    pattern: /\bthe\s+(second|third|fourth|fifth)\s+(time|instance)\b/i,
+    why: "counts how often something was found, which is process history",
+  },
 ];
 
 /**
@@ -128,6 +143,8 @@ describe("code comments describe the code", () => {
       "/* Codex flagged this */",
       "// the reviewer asked for a guard here",
       "// added in this PR",
+      "// the third instance of this shape",
+      "// broken for the second time this week",
     ];
     for (const sample of offending) {
       const [comment] = commentText(sample);
@@ -143,6 +160,7 @@ describe("code comments describe the code", () => {
       "// Counted on discovery rather than on pop, so the cap is reached early.",
       "/* The descriptor reports an accessor without invoking it. */",
       "// A slot named `__proto__` survives JSON as an ordinary own key.",
+      "// the first occurrence sees the `+` that leaves the first root",
     ];
     for (const sample of allowed) {
       const [comment] = commentText(sample);

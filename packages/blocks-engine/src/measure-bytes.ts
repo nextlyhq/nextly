@@ -404,6 +404,13 @@ interface Frame {
   emitted?: boolean;
   /** The value has already been through `toJSON`; do not run the hook twice. */
   normalized?: boolean;
+  /**
+   * This value sits inside something the WRITER never reaches, so no `toJSON`
+   * anywhere beneath it may run: the walk is here for the caps and for what the
+   * schema will read, not to reproduce a serialization that will not happen.
+   * Inherited by every frame pushed from one carrying it.
+   */
+  structuralOnly?: boolean;
 }
 
 /**
@@ -435,9 +442,14 @@ export function surveyDocument(
   // supported way to ask for an exact count, and the walk terminates there on
   // the cycle set rather than on the cap.
   const bounded = (limit: number, name: string): number => {
-    if (Number.isNaN(limit)) {
+    // A PRIMITIVE NUMBER, then the deliberately supported infinities. Testing
+    // for `NaN` alone was not enough: `Number.isNaN(undefined)` is false, and so
+    // is `Number.isNaN("wat")`, while every later `>` comparison coerces both to
+    // `NaN` and is false in turn. A JavaScript caller omitting a bound therefore
+    // removed it and was told the document fitted.
+    if (typeof limit !== "number" || Number.isNaN(limit)) {
       throw new RangeError(
-        `surveyDocument: ${name} is NaN, which would remove the bound it exists to impose.`
+        `surveyDocument: ${name} must be a number, and ${String(limit)} would remove the bound it exists to impose.`
       );
     }
     return limit;
@@ -560,10 +572,11 @@ export function surveyDocument(
       // it is serialized as whatever it returns rather than as the fields it
       // happens to carry, and the hook can also return something JSON omits —
       // so both the size and the drop are decided here.
+      const structuralOnly = frame.structuralOnly === true;
       let held: unknown = member.present ? member.value : undefined;
       let threw = false;
       let substituted = false;
-      if (member.present && !hidden) {
+      if (member.present && !hidden && !structuralOnly) {
         try {
           held = asSerialized(member.value, key);
         } catch {
@@ -600,18 +613,20 @@ export function surveyDocument(
         unserializable = true;
 
         // A skipped member is still a member, and the caps still have to
-        // describe it. Refusing it and then looking away is the third instance
-        // of one shape in this walk — a refused `__proto__` slot hid a whole
-        // subtree the same way — and it fails in two directions here:
+        // describe it. Refusing a member says what STORAGE will do with it; it
+        // says nothing about the work the schema will do reading it, and the
+        // caps exist to bound that work.
+        //
+        // Two shapes make the difference concrete:
         //
         //  - a HOLE in a node list is a position the structural helpers count,
-        //    so omitting it made the survey disagree with `countNodes` and
-        //    `treeDepth` (a 12-deep chain ending in a hole surveyed as 12, not
-        //    13; a sparse `Array(5001)` never reached the node cap);
-        //  - a NON-ENUMERABLE own property is skipped by the writer but is
-        //    still reachable by the schema's direct read, so a hidden `nodes`
-        //    array of 5,001 valid nodes surveyed as zero nodes and 33 bytes,
-        //    and `validate()` then walked the hidden forest anyway.
+        //    so omitting it makes this walk disagree with `countNodes` and
+        //    `treeDepth` — a chain ending in a hole measures one node and one
+        //    level short, and a sparse `Array(5001)` never reaches the cap;
+        //  - a NON-ENUMERABLE own property is invisible to the writer and fully
+        //    visible to the schema's direct read, so a hidden `nodes` array of
+        //    5,001 valid nodes measures as zero nodes and 33 bytes while the
+        //    validator walks every one of them.
         const hiddenPlacement = memberPlacement(
           frame.containerKind ?? "value",
           frame.depth,
@@ -638,6 +653,13 @@ export function surveyDocument(
               kind: hiddenPlacement.kind,
               depth: hiddenPlacement.depth,
               normalized: true,
+              // The whole subtree is walked for STRUCTURE only. The writer never
+              // reaches any of it, so running a `toJSON` beneath it would
+              // execute document-supplied code the serializer does not — the
+              // same reason the hidden member's own hook is not run. Carried
+              // down rather than applied once, or an ordinary node one level in
+              // would have its hook invoked.
+              structuralOnly: true,
             });
           }
         }
@@ -702,6 +724,7 @@ export function surveyDocument(
           value: descend,
           kind: reached.kind,
           depth: reached.depth,
+          structuralOnly,
           // ALWAYS normalized, including when we deliberately kept the
           // original for structural accounting. Marking it unnormalized made
           // the later frame invoke the hook a SECOND time, with the root key
@@ -730,7 +753,14 @@ export function surveyDocument(
         // pass every structural bound, leaving the schema to walk what the caps
         // exist to refuse.
         if (reached.kind === "node") {
+          // A malformed entry occupies a position, so it counts toward BOTH
+          // bounds. Counting it as a node while leaving depth alone made a
+          // chain ending in `null` measure the right number of nodes at the
+          // wrong depth, and disagree with `treeDepth`.
           nodes += 1;
+          if (reached.depth > deepest) deepest = reached.depth;
+          if (reached.depth > limits.maxDepth)
+            return { ...done(), tooDeep: true };
           if (nodes > limits.maxNodes) return { ...done(), tooManyNodes: true };
         }
         if (takeScalar(held)) return { ...done(), tooLarge: true };
@@ -743,7 +773,7 @@ export function surveyDocument(
     // at the top level, and a hook that reads it behaves differently for
     // `undefined` — so the key it is given has to be the one the writer gives.
     let value: unknown = frame.value;
-    if (frame.normalized !== true) {
+    if (frame.normalized !== true && frame.structuralOnly !== true) {
       try {
         value = asSerialized(value, "");
       } catch {
@@ -867,6 +897,7 @@ export function surveyDocument(
         length,
         index: 0,
         containerKind: kind,
+        structuralOnly: frame.structuralOnly,
       });
       continue;
     }
@@ -899,6 +930,7 @@ export function surveyDocument(
       index: 0,
       containerKind: kind,
       keyed: true,
+      structuralOnly: frame.structuralOnly,
     });
   }
 
