@@ -248,20 +248,22 @@ function ariaLabelOf(node: ts.Node, file: ts.SourceFile): string | undefined {
  */
 function extractedName(node: ts.Node, file: ts.SourceFile): string | undefined {
   for (let current = node.parent; current; current = current.parent) {
-    // An enclosing ELEMENT settles it: the pager is written inside other
-    // markup, so wherever that markup goes, it goes.
-    if (ts.isJsxElement(current) || ts.isJsxAttribute(current)) {
-      return undefined;
-    }
+    // A JSX ATTRIBUTE settles it: the pager is written into a prop, so it is
+    // already at its destination and `insideTableFooter` can judge it there.
+    if (ts.isJsxAttribute(current)) return undefined;
+
+    // Enclosing markup does NOT settle it, whatever kind. `const footer =
+    // <div><Pagination /></div>` and `const footer = <><Pagination /></>` are
+    // the same composition refactor with different wrappers, and stopping at
+    // either reports a correctly placed pager. Two rounds went on adding
+    // wrapper kinds here; the walk simply continues now, so there is no list
+    // of accepted wrappers to keep up with.
     if (ts.isVariableDeclaration(current) && ts.isIdentifier(current.name)) {
-      // A FRAGMENT does not settle it, and this is the distinction that took
-      // two attempts. `const footer = <><Pagination /></>` extracts the pager
-      // through a wrapper and `const page = (<><DataTableView /><Pagination />
-      // </>)` is a whole page's markup — identical in shape, opposite in
-      // meaning. What separates them is whether the NAME is rendered somewhere
-      // this file can see: a footer passed as `footer={footer}` is judged at
-      // that use, while page markup that is returned rather than rendered has
-      // no use to judge and is judged where it stands.
+      // What DOES settle it is whether the name is rendered somewhere this
+      // file can see. `const footer = ...` passed as `footer={footer}` is
+      // judged at that use; `const page = (<><DataTableView /><Pagination />
+      // </>)` is a whole page's markup, returned rather than rendered, with no
+      // use to judge — so it is judged where it stands.
       return jsxUsesOf(current.name.text, file).length > 0
         ? current.name.text
         : undefined;
@@ -315,24 +317,44 @@ function inJsxExpression(node: ts.Node): boolean {
   return false;
 }
 
+/**
+ * A detached pager: WHERE it renders, and WHICH pager it is.
+ *
+ * Two nodes, because for an extracted pager they are different ones — the use
+ * is where it lands and the element is what carries its `ariaLabel`. Returning
+ * only the use lost the label, so an exempt pager that someone extracted for
+ * readability stopped matching its exemption and was reported. Returning only
+ * the element would report the wrong line. Both travel together rather than
+ * being recovered from each other later.
+ */
+interface DetachedPager {
+  /** The node to report: the use for an extracted pager, else the element. */
+  at: ts.Node;
+  /** The `<Pagination>` element itself, wherever it was written. */
+  element: ts.Node;
+}
+
 /** Every pager in a file that is NOT inside a table's `footer`, found by binding. */
-function detachedPagers(file: ts.SourceFile): ts.Node[] {
+function detachedPagers(file: ts.SourceFile): DetachedPager[] {
   const names = localNamesOf(PAGER, file);
-  const found: ts.Node[] = [];
+  const found: DetachedPager[] = [];
   const visit = (node: ts.Node): void => {
     const tag = isElementOccurrence(node) ? tagNameOf(node, file) : undefined;
     if (tag !== undefined && names.has(tag)) {
       const name = extractedName(node, file);
       if (name === undefined) {
         // Written in place: judged where it stands.
-        if (!insideTableFooter(node, file)) found.push(node);
+        if (!insideTableFooter(node, file))
+          found.push({ at: node, element: node });
       } else {
         // Extracted: judged at every place the name is rendered. A pager whose
         // uses are all inside a table footer is correctly placed however it was
         // spelled; one used as a sibling is detached however it was spelled.
         // An unused declaration renders nowhere and is reported by neither.
         for (const use of jsxUsesOf(name, file)) {
-          if (!insideTableFooter(use, file)) found.push(use);
+          if (!insideTableFooter(use, file)) {
+            found.push({ at: use, element: node });
+          }
         }
       }
     }
@@ -624,6 +646,41 @@ describe("list pagination", () => {
     );
     expect(detachedPagers(fragmentSibling), "fragment sibling").toHaveLength(1);
 
+    // Extracted inside an ORDINARY element wrapper, not a fragment. Same
+    // refactor again; the walk no longer stops at any wrapper kind, so there
+    // is no list of accepted wrappers to fall behind.
+    const divFooter = parse(
+      "control.tsx",
+      "const footer = <div><Pagination page={1} /></div>;\n" +
+        "const x = <DataTableView columns={c} rows={r} footer={footer} />;"
+    );
+    expect(detachedPagers(divFooter), "element-wrapped footer").toHaveLength(0);
+
+    const divSibling = parse(
+      "control.tsx",
+      "const footer = <div><Pagination page={1} /></div>;\n" +
+        "const x = (<><DataTableView columns={c} rows={r} />{footer}</>);"
+    );
+    expect(detachedPagers(divSibling), "element-wrapped sibling").toHaveLength(
+      1
+    );
+
+    // An extracted pager keeps its LABEL. The reported node is the use, which
+    // carries no attributes, so reading the label off it returns undefined and
+    // an exempt pager stops matching its exemption the moment someone extracts
+    // it for readability.
+    const labelled = parse(
+      "control.tsx",
+      'const pager = <Pagination page={1} ariaLabel="Media grid pagination" />;\n' +
+        "const x = (<><DataTableView columns={c} rows={r} />{pager}</>);"
+    );
+    const [extractedLabelled] = detachedPagers(labelled);
+    expect(extractedLabelled).toBeDefined();
+    expect(
+      extractedLabelled && ariaLabelOf(extractedLabelled.element, labelled),
+      "label survives extraction"
+    ).toBe("Media grid pagination");
+
     // An ALIASED table import. The pager is matched by binding, so the owner of
     // its footer must be too -- otherwise an import refactor makes a correctly
     // placed pager look detached.
@@ -669,14 +726,14 @@ describe("list pagination", () => {
     ] as const) {
       const [pager] = detachedPagers(file);
       expect(pager).toBeDefined();
-      expect(pager && ariaLabelOf(pager, file)).toBe(expected);
+      expect(pager && ariaLabelOf(pager.element, file)).toBe(expected);
     }
 
     // A computed label cannot be matched against the list, so it reads as
     // absent rather than as some string that might accidentally match.
     const computed = parse("c.tsx", "<Pagination ariaLabel={label} />");
     const [dynamic] = detachedPagers(computed);
-    expect(dynamic && ariaLabelOf(dynamic, computed)).toBeUndefined();
+    expect(dynamic && ariaLabelOf(dynamic.element, computed)).toBeUndefined();
   });
 
   it("renders every list pager inside its table", () => {
@@ -695,10 +752,13 @@ describe("list pagination", () => {
       // whichever came first even after the exempt one was deleted.
       const exempt = new Set(NOT_A_TABLE_PAGER.get(relativePath)?.pagers ?? []);
       for (const pager of detachedPagers(file)) {
-        const label = ariaLabelOf(pager, file);
+        // The LABEL comes from the element and the LINE from where it renders.
+        // Reading both off the reported node lost the label whenever a pager
+        // was extracted, so an exempt one stopped matching its exemption.
+        const label = ariaLabelOf(pager.element, file);
         if (label !== undefined && exempt.has(label)) continue;
         detached.push(
-          `${relativePath}:${lineOf(pager, file)} (${label ?? "no ariaLabel"})`
+          `${relativePath}:${lineOf(pager.at, file)} (${label ?? "no ariaLabel"})`
         );
       }
     }
@@ -735,7 +795,7 @@ describe("list pagination", () => {
       // its exempt pager and detaches a different one holds the count still,
       // so a count would go on excusing the replacement; the names do not.
       const found = detachedPagers(file)
-        .map(pager => ariaLabelOf(pager, file) ?? "no ariaLabel")
+        .map(pager => ariaLabelOf(pager.element, file) ?? "no ariaLabel")
         .sort();
       expect(
         found,
@@ -761,8 +821,8 @@ describe("list pagination", () => {
       ).toBeGreaterThan(0);
       for (const pager of pagers) {
         expect(
-          enclosedBy(pager, marker, file),
-          `${path}:${lineOf(pager, file)} sits outside the "${marker}" that ` +
+          enclosedBy(pager.at, marker, file),
+          `${path}:${lineOf(pager.at, file)} sits outside the "${marker}" that ` +
             `draws the card around its table, so it renders outside the card`
         ).toBe(true);
       }
