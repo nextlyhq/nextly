@@ -8,18 +8,22 @@
  * pending migrations. Reading those two sequences side by side suggests a
  * request-triggered cold start seeds against a database that is not ready.
  *
- * It does not, and the reason is that `seedAllPermissions` is not what seeds a
- * collection. `CollectionRegistryService` seeds a collection's permissions when
- * the collection is REGISTERED, and registration happens inside
- * `registerServices` — step one on both paths, ahead of either seeding call.
- * `seedAllPermissions` is a sweep over `dynamic_collections` that covers rows
- * which arrived by some other route.
+ * It does not, and the reason is that nothing a pending migration produces is
+ * an input to seeding. TWO mechanisms put a collection's permissions in place,
+ * and both run ahead of any migration step on either path:
  *
- * Both halves are pinned here because each is load-bearing on its own: the
- * first is what makes the request path correct despite its ordering, and the
- * second is what the first would silently become if the per-registration
- * seeding were ever moved into the post-init step where it looks like it
- * belongs.
+ * `CollectionRegistryService` seeds them when the collection is REGISTERED,
+ * which happens inside `registerServices`. And `seedAllPermissions` sweeps
+ * `dynamic_collections`, which `registerServices` has already written to.
+ *
+ * So the property worth holding is the OUTCOME, and it is asserted here as one
+ * sequence rather than as two separate mechanisms. Pinning either mechanism on
+ * its own would fail an implementation that dropped it and kept the other,
+ * which is a correct implementation — the route serves requests with the
+ * permissions in place either way.
+ *
+ * The second test covers what only the sweep can do, which is a row that
+ * reached `dynamic_collections` without going through registration.
  */
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -78,12 +82,14 @@ async function permissionSlugsFor(
 }
 
 describe("permission seeding across the two boot paths", () => {
-  it("seeds a code-first collection during registerServices, before either path seeds", async () => {
+  it("leaves a code-first collection seeded once the request path has initialised", async () => {
     const handle = await bootRegisterServicesOnly();
 
-    // Read before `seedAllPermissions` is called at all. If this were empty,
-    // the request path would be seeding a collection whose rows depend on a
-    // step that has not run yet — which is the defect the ordering suggests.
+    // The request path's own sequence, in its own order: register services,
+    // then sweep. Nothing between them applies a migration, which is the
+    // ordering the audit questioned.
+    await seedAllPermissions();
+
     expect(await permissionSlugsFor(handle, "articles")).toEqual(
       CRUD_AND_LIFECYCLE
     );
