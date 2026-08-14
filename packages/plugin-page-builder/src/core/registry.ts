@@ -8,6 +8,7 @@
 import { isBlockName } from "@nextlyhq/blocks-engine";
 
 import { slotsOf } from "./block-structure";
+import { isAllowList } from "./slot-allow";
 import { makeNode } from "./tree";
 import { type BlockDefinition, type BlockNode, type ControlDef } from "./types";
 
@@ -84,6 +85,22 @@ export function createBlockRegistry(): BlockRegistry {
         if (!named) {
           throw new Error(
             `Block type "${def.type}" parent must be a non-empty array of namespaced block names like "core/columns".`
+          );
+        }
+      }
+      // A slot's `allowedBlocks` is read as STRUCTURE by every nesting decision, and a malformed
+      // one does not degrade: a reader calling `.some()` on the string `"core/heading"` throws a
+      // TypeError at the first insertion or document validation, a long way from the declaration
+      // that caused it and naming neither. The same door as `parent` above — the package root
+      // exports `defineBlock`, so a JavaScript consumer reaches this registry without ever
+      // passing the engine's own gate, which is the only place this was checked.
+      for (const spec of def.slots ?? []) {
+        if (
+          spec.allowedBlocks !== undefined &&
+          !isAllowList(spec.allowedBlocks)
+        ) {
+          throw new Error(
+            `Block type "${def.type}" slot "${spec.name}" allowedBlocks must be an array of namespaced block names like "core/heading" or namespaces like "core/*".`
           );
         }
       }

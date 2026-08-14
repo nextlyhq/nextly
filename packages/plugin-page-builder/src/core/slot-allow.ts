@@ -18,6 +18,31 @@
  *
  * @module core/slot-allow
  */
+import { isBlockName } from "@nextlyhq/blocks-engine";
+
+/**
+ * Whether a value is a well-formed allow-list: an array of block names and namespace wildcards.
+ *
+ * Lives beside {@link slotAdmits} because the two answer halves of one question — what the syntax
+ * MEANS and what counts as that syntax — and a registration gate that spelled the grammar out
+ * again could accept an entry this reader then ignores. `core/columns/` is the shape that makes
+ * that concrete: a bare `includes("/")` admits it, no block can be named it, and the slot
+ * silently matches nothing.
+ *
+ * A wildcard is checked by substituting a placeholder segment so the name grammar is asked ONCE,
+ * which is also how the engine's own gate does it.
+ */
+export function isAllowList(value: unknown): value is readonly string[] {
+  return (
+    Array.isArray(value) &&
+    value.every(entry => {
+      if (typeof entry !== "string") return false;
+      return isBlockName(
+        entry.endsWith("/*") ? `${entry.slice(0, -2)}/x` : entry
+      );
+    })
+  );
+}
 
 /**
  * Whether `childType` may sit in a slot declared with this allow-list.
