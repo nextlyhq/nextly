@@ -232,8 +232,19 @@ workflows declares `types:`, so none subscribes to `edited`. Retargeting makes
 the branch filter eligible and emits an event nothing is listening for, leaving
 a PR that now LOOKS main-targeting with still no substantive run against it.
 
-Follow it with a push or a rebase, which emits `synchronize`, or close and
-reopen. Then gate on the run, never on the base having been changed.
+Follow it with a push or a REBASE, which emits `synchronize`. Close-and-reopen
+also starts CI and is the worse remedy, because it leaves the head SHA
+unchanged: the diff expands to include the parent stack while every existing
+review still points at that same SHA, so a coverage check keyed on the head
+happily reuses reviews taken when those commits were not in scope. A rebase
+moves the head and invalidates them, which is the outcome you want. Then gate on
+the run, never on the base having been changed.
+
+**Retargeting changes what a review MEANS, not just what CI runs.** A review is
+evidence about a diff, and the diff is `base..head`; moving the base moves the
+diff underneath a head that has not moved. Where a stacked PR is retargeted
+without a rebase, treat every review predating the retarget as stale regardless
+of the SHA it names.
 
 ## A failed job takes its dependents with it, silently
 
@@ -450,6 +461,21 @@ runs against and which returned zero rows when measured. After merging, the
 squash lands on `main` and `push: branches: [main]` runs against it, so the
 merge commit is the one carrying the verdict. Read the head to decide whether to
 merge; read the merge commit to decide whether `main` is healthy.
+
+**`--match-head-commit` is not a boundary around the VERDICT, and this file
+should not let it read as one.** The flag makes the server refuse when the head
+has moved, which closes the push race. It says nothing about review or check
+state: a bot posting a finding between the last verdict query and the merge
+leaves the head untouched, so the merge succeeds with an unresolved thread
+seconds old. The window is narrow and it is real, and every gate described here
+sits inside it.
+
+The only mechanism that actually covers mutable verdict state is a
+server-enforced required status that new reviews invalidate — branch protection
+requiring review approval with stale reviews dismissed on push, or a required
+check the verdict publishes. Until one of those is configured, the honest
+description of everything above is a LOOK taken shortly before merging, not a
+boundary. Say which one you have.
 
 Note that its procedure and this one fail in opposite directions, which is why
 neither substitutes for the other. Content-verification confirmed #766 had
