@@ -253,8 +253,18 @@ new run exists. A plain `git rebase main` is not that: when the branch is
 already a descendant of `main` it reports the branch up to date and changes
 nothing, so the push that follows emits no `synchronize` and the four
 main-filtered workflows stay absent — having done exactly what the instruction
-said. **Prefer an EMPTY COMMIT** (`git commit --allow-empty`) — it moves the head,
-emits `synchronize`, and pushes fast-forward.
+said. **Prefer an EMPTY COMMIT**, then PUSH it:
+
+```bash
+git commit --allow-empty -m "chore: retrigger ci after retarget"
+git push
+```
+
+The commit moves the local head and nothing else; `synchronize` is emitted by
+the PUSH, and until then GitHub has seen no event and started no workflow. The
+same applies to a rebase — a local history rewrite that is never pushed leaves
+the pull request exactly as it was, while looking done from the terminal it was
+run in. An empty commit is preferred because it pushes fast-forward.
 
 `git rebase --force-rebase` also replays, and it is the worse choice HERE
 despite doing the job: the rewritten commits need a non-fast-forward push, so
