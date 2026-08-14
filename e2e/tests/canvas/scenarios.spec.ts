@@ -325,17 +325,23 @@ test("scenario 4: a steady drag over variable-height blocks never reverses", asy
 });
 
 /**
- * Expected failure: this canvas has no target-switch hysteresis.
+ * The target is sticky across a margin, so a 2px jitter cannot move it.
  *
- * The requirement is a sticky target with an 8-12px dead-zone margin or a
- * >100ms dwell, so that oscillating the pointer 2px around any boundary never
- * flips the indicator. Observed here, with the edge bracketed to 1px and the
- * samples taken on opposite sides of it: `[1,2,1,2,...]`, a flip on every move.
+ * The requirement is an 8-12px dead-zone margin or a >100ms dwell, so that
+ * oscillating the pointer 2px around any boundary never flips the indicator.
+ * The canvas satisfies the distance half: a zone holds the target until a
+ * challenger is nearer by the full margin, which no 2px move can achieve.
  *
- * Both halves of the method are load-bearing. Jittering anywhere other than a
- * bracketed edge measures the middle of one zone's catchment, and sampling P
- * and P+2 rather than P-2 and P+2 keeps both samples on the same side; either
- * reports a stable indicator on a canvas that has none.
+ * Both halves of the method are load-bearing, and they are what make a green
+ * run mean anything. Jittering anywhere other than a bracketed edge measures
+ * the middle of one zone's catchment, and sampling P and P+2 rather than P-2
+ * and P+2 keeps both samples on the same side; either one reports a stable
+ * indicator whether or not the margin exists, so the test would keep passing if
+ * the margin were removed.
+ *
+ * The fixture alternates 400px and 24px siblings deliberately: the 24px pitch
+ * is the narrowest spacing the margin has to stay inside, since a margin wider
+ * than the spacing would carry the target past the next zone's centre.
  */
 test("scenario 4b: a 2px jitter at a zone edge keeps the indicator stable", async ({
   page,
@@ -433,11 +439,6 @@ test("scenario 4b: a 2px jitter at a zone edge keeps the indicator stable", asyn
     observed.some(entry => entry.index >= 0),
     `the drag must find a target at all: ${JSON.stringify(observed)}`
   ).toBe(true);
-
-  test.fail(
-    true,
-    "no target-switch hysteresis: the indicator flips on every 2px move"
-  );
 
   // The log's first entry is the state when recording began, so anything after
   // it is a change the jitter caused. -1 is NOT excluded: an indicator that

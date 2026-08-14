@@ -466,12 +466,7 @@ test.describe("a canvas any Nextly editor could ship", () => {
   test("holds its target through a jitter at a zone boundary", async ({
     request,
   }) => {
-    note(
-      PLAN_POINT.targetSwitchHysteresis,
-      "B-7",
-      "this canvas has no switch margin: bracketed at an edge, the target " +
-        "flips on every 2px crossing"
-    );
+    note(PLAN_POINT.targetSwitchHysteresis, "B-7");
     await driver.mountTree(await seedPage(request, FLAT_LIST_FIXTURE));
     // Onto a zone, then to that zone's EDGE. Both halves are preconditions with
     // teeth. Jittering from dead space counts the indicator appearing and
@@ -545,12 +540,6 @@ test.describe("a canvas any Nextly editor could ship", () => {
       transitions[0]?.index,
       "the indicator must be visible to measure whether it moves"
     ).toBeGreaterThanOrEqual(0);
-
-    // Marked only now. Everything above ran unprotected, so a failed seed, a
-    // drag that never reached a zone, a target that never moved, or a probe the
-    // runner was too slow to take stays a real outcome of its own rather than
-    // becoming another expected failure.
-    test.fail(true, "the target flips on every 2px crossing of a zone edge");
 
     // The log's FIRST entry is the state when recording began, not a change, so
     // anything after it is motion the jitter caused. Comparing the whole log

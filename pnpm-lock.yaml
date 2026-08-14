@@ -1310,6 +1310,12 @@ importers:
 
   packages/plugin-page-builder:
     dependencies:
+      '@dnd-kit/abstract':
+        specifier: 0.5.0
+        version: 0.5.0
+      '@dnd-kit/collision':
+        specifier: 0.5.0
+        version: 0.5.0
       '@dnd-kit/dom':
         specifier: 0.5.0
         version: 0.5.0
