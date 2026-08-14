@@ -299,16 +299,35 @@ const MANAGED_END = "<!-- nextly:managed:end -->";
  * marker on the strength of a typo.
  */
 function mergeManagedBlock(existing: string, incoming: string): string {
-  const start = existing.indexOf(MANAGED_START);
-  const end = existing.indexOf(MANAGED_END);
   const block = extractManagedBlock(incoming);
+  const region = findManagedRegion(existing);
 
-  if (start === -1 || end === -1 || end < start) {
-    return `${existing.trimEnd()}\n\n${block}\n`;
-  }
-  return (
-    existing.slice(0, start) + block + existing.slice(end + MANAGED_END.length)
-  );
+  if (!region) return `${existing.trimEnd()}\n\n${block}\n`;
+  return existing.slice(0, region.start) + block + existing.slice(region.end);
+}
+
+/**
+ * The bounds of the LAST self-contained marker pair in `text`, or null when there is none.
+ *
+ * Searching from the END, and requiring the end marker to follow the start it is paired with, is
+ * what keeps an unmatched marker from swallowing content. `indexOf` on each marker independently
+ * pairs the FIRST start with the FIRST end, so a file carrying a stray start marker — from a
+ * hand-edit, or from a previous run that appended a block below one — would have every
+ * developer-written line between the two replaced on the next merge.
+ *
+ * Taking the last pair rather than the first also means a re-run updates the block it appended
+ * previously, instead of walking further up the file each time.
+ */
+function findManagedRegion(
+  text: string
+): { start: number; end: number } | null {
+  const endIndex = text.lastIndexOf(MANAGED_END);
+  if (endIndex === -1) return null;
+
+  const startIndex = text.lastIndexOf(MANAGED_START, endIndex);
+  if (startIndex === -1) return null;
+
+  return { start: startIndex, end: endIndex + MANAGED_END.length };
 }
 
 /**
@@ -334,6 +353,12 @@ function extractManagedBlock(incoming: string): string {
  * adding the pattern that actually works — leaving the scaffold's real `.env` committable.
  *
  * Blank lines are dropped so a re-run cannot accumulate separators.
+ *
+ * The scaffold's lines go FIRST, and for `.gitignore` that is the whole point rather than a
+ * cosmetic choice: git applies the LAST matching pattern, so appending `.env*` after a
+ * deliberate `!/.env` would silently re-ignore a file the developer had un-ignored. Placing the
+ * defaults above leaves every existing rule able to override them, which is the precedence a
+ * developer editing their own file expects.
  */
 function appendMissingLines(existing: string, incoming: string): string {
   const key = (line: string): string => line.replace(/\s+$/, "");
@@ -343,7 +368,9 @@ function appendMissingLines(existing: string, incoming: string): string {
     .filter(line => line.trim() !== "" && !have.has(key(line)));
 
   if (missing.length === 0) return existing;
-  return `${existing.trimEnd()}\n\n${missing.join("\n")}\n`;
+  // Only leading NEWLINES are dropped. `trimStart()` would take leading spaces too, and a leading
+  // space is part of a git ignore pattern — it would rewrite the developer's first rule.
+  return `${missing.join("\n")}\n\n${existing.replace(/^\n+/, "")}`;
 }
 
 /**

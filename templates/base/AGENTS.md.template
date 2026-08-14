@@ -88,21 +88,36 @@ const slug = typeof doc.slug === "string" ? doc.slug : undefined;
   narrowed scope — the caller's identity has to be IN the key, or one user's
   rows get served to another:
 
+  **A read is only "public" if the QUERY makes it so.** `find()` defaults to
+  `overrideAccess: true` — a trusted server read that bypasses access rules — so
+  filtering by slug alone can return a draft, or a row the rules would have
+  hidden, and then cache it for every visitor. Constrain the query explicitly:
+
   ```ts
-  // Public: same for every reader, so a stable key is correct.
+  // Public: `status: "published"` is enforced even on a trusted read, so drafts
+  // cannot reach the shared entry. Same result for every reader → stable key.
   cachedFind(
-    () => nextly.find({ collection: "posts", where: { slug: { equals: slug } } }),
+    () =>
+      nextly.find({
+        collection: "posts",
+        where: { slug: { equals: slug } },
+        status: "published",
+      }),
     { tags: nextlyTags("posts"), keyParts: ["posts", slug] }
   );
 
-  // Per-user: the caller's id is part of what makes the entry unique.
-  cachedFind(() => nextly.find({ collection: "orders", user }), {
-    tags: nextlyTags("orders"),
-    keyParts: ["orders", "list", user.id],
-  });
+  // Per-user: evaluate the access rules as the CALLER, and put their identity in
+  // the key — the entry is no longer the same for every reader.
+  cachedFind(
+    () =>
+      nextly.find({ collection: "orders", user, overrideAccess: false }),
+    { tags: nextlyTags("orders"), keyParts: ["orders", "list", user.id] }
+  );
   ```
 
-  When in doubt, do not cache. A missing cache is slow; a shared one leaks.
+  If the collection carries per-row access rules, a stable key is wrong even when
+  the route looks public. When in doubt, do not cache: a missing cache is slow, a
+  shared one leaks.
 
 ## Conventions worth keeping
 
