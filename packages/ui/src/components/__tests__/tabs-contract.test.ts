@@ -18,6 +18,15 @@
  *     owned rule still wins the cascade by emission order
  *   - `require` resolved by text rather than by binding, so a local function
  *     named `require` is read as CommonJS
+ *   - an object spread inside a class map (`cn({ ...{ "border-b-0": true } })`)
+ *     is not traversed, so a class clsx applies is not read
+ *   - a METHOD in a JSX spread (`{...{ onClick() {} }}`) makes the whole spread
+ *     unreadable, even though its key is statically known to be unrelated
+ *   - a REASSIGNED component alias freezes ownership at its declaration, so
+ *     `let T = Other; T = TabsTrigger` is missed and the reverse is reported
+ *     falsely. Deliberate: following it needs reaching-definitions dataflow,
+ *     roughly 700 lines of which this change already removed after measuring
+ *     that it guarded zero real call sites
  *
  * WHY THEY ARE NOT FIXED. Measured across the repository: 124 files consume
  * these primitives and NONE overrides the underline or the corners. Every real
