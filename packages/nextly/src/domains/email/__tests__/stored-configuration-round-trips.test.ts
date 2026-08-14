@@ -373,4 +373,21 @@ describe("a configuration whose parse is not a fixed point", () => {
       /Email provider "hostile-proxy"/
     );
   });
+
+  // An ARRAY is ordinary configuration and JSON preserves it exactly. Its
+  // `length` is a non-enumerable own key, so a naive own-key comparison
+  // rejects every provider that has one.
+  it("stores a configuration containing an array", async () => {
+    register("with-array", input => ({
+      apiKey: String((input as { apiKey: unknown }).apiKey),
+      scopes: ["send", "read"],
+    }));
+
+    const provider = await write("with-array", { apiKey: "k" });
+    const stored = await service.getProviderDecrypted(provider.id);
+    expect(stored.configuration).toEqual({
+      apiKey: "k",
+      scopes: ["send", "read"],
+    });
+  });
 });

@@ -462,7 +462,15 @@ export class EmailProviderService extends BaseService {
     // reports it, and recursing forever here would never reach that.
     if (seen.has(value)) return;
     seen.add(value);
-    if (Reflect.ownKeys(value).length !== Object.keys(value).length) {
+    // An ARRAY carries `length` as a non-enumerable own key, and JSON writes
+    // arrays back exactly, so comparing key counts on one rejects every
+    // provider with an ordinary `scopes: string[]`. The elements are still
+    // walked below, because a hidden property on an object INSIDE an array
+    // hides just as well as one anywhere else.
+    if (
+      !Array.isArray(value) &&
+      Reflect.ownKeys(value).length !== Object.keys(value).length
+    ) {
       throw new NextlyError({
         code: "BUSINESS_RULE_VIOLATION",
         publicMessage: `Email provider "${type}" parsed its configuration into an object carrying properties JSON cannot write, so what would be stored is not what the adapter would receive. Return plain enumerable fields from \`parseConfig\`.`,
