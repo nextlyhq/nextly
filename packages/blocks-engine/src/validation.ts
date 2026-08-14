@@ -166,6 +166,10 @@ export const ISSUE_CODES = {
   "document-too-large": "The serialized document exceeds the byte limit.",
   "document-unwritable":
     "The document holds a value JSON cannot write, so it has no stored form.",
+  "document-lossy":
+    "The document holds a value JSON rewrites, so the stored form differs from it.",
+  "document-unreadable":
+    "The document holds a member the validator will not read, so it cannot be measured.",
   "document-size-warning":
     "The serialized document is approaching the byte limit.",
   "missing-node-id": "A node is missing its id or the id is empty.",
@@ -334,12 +338,7 @@ export function validate(
     return issues;
   }
 
-  const beforeLimits = issues.length;
   const survey = checkLimits(doc, limits, issues);
-  // Any limit rejection, not the byte one alone. A forest over the node or
-  // depth cap is refused BEFORE its bytes are measured, so asking only about
-  // size would leave the expensive per-value work running on a document already
-  // known to be invalid.
   //
   // `document-unwritable` belongs here for a sharper reason than tidiness: the
   // byte pass could not measure what it refused. A `styles` accessor is
@@ -348,15 +347,18 @@ export function validate(
   // access, runs the getter, and parses everything it returns. Leaving it out
   // meant the one document whose size is UNKNOWN was the one whose values were
   // parsed in full.
-  const overLimits = issues
-    .slice(beforeLimits)
-    .some(
-      issue =>
-        issue.code === "document-too-large" ||
-        issue.code === "document-unwritable" ||
-        issue.code === "node-count-exceeded" ||
-        issue.code === "depth-exceeded"
-    );
+  // Asked of the SURVEY rather than reconstructed from the issues it produced.
+  // Matching issue codes re-derives, from four strings, a fact the walk already
+  // established — and a code list is a second statement of when the numbers are
+  // untrustworthy, which goes stale the first time a fifth way to stop short is
+  // added. `complete` is that fact, derived where it is known.
+  //
+  // The narrow question, deliberately. A document JSON merely REWRITES was
+  // measured in full, so the per-value work below is bounded and skipping it
+  // would drop real issues on a document whose only fault is that a value comes
+  // back changed. It is a measurement that stopped short which leaves nothing
+  // bounded.
+  const overLimits = !survey.complete;
 
   const styleBudget = newStyleIssueBudget();
   const nodeState: NodeCheckState = {
@@ -529,13 +531,38 @@ function checkLimits(
       severity: "error",
       message: `Document exceeds the maximum of ${survey.limits.maxBytes} bytes.`,
     });
-  } else if (survey.unserializable) {
+  } else if (survey.unwritable) {
     issues.push({
       path: "",
       code: "document-unwritable",
       severity: "error",
       message:
         "Document holds a value JSON cannot write, so it has no stored form.",
+    });
+  } else if (!survey.complete) {
+    // Reported after `unwritable` because a cycle is both, and "no stored form"
+    // is the more actionable of the two. Reported BEFORE `lossy` because the
+    // walk stopped short: a value it never reached cannot be described, so any
+    // statement about what JSON would do to this document is a claim about the
+    // part that was measured.
+    issues.push({
+      path: "",
+      code: "document-unreadable",
+      severity: "error",
+      message:
+        "Document holds a member the validator will not read, so it cannot be measured.",
+    });
+  } else if (survey.lossy) {
+    // A DIFFERENT statement, because the document has a stored form and it is
+    // not this one. Reporting it as unwritable said the content could not be
+    // saved at all, which sent an author looking for a value that JSON refuses
+    // when the real answer is that a value they hold will come back changed.
+    issues.push({
+      path: "",
+      code: "document-lossy",
+      severity: "error",
+      message:
+        "Document holds a value JSON rewrites, so the stored form differs from it.",
     });
   } else if (bytes > survey.limits.maxBytes * LIMIT_WARNING_RATIO) {
     issues.push({
@@ -753,6 +780,17 @@ function validateClasses(
   budget?: ReadyStyleIssueBudget,
   overLimits = false
 ): void {
+  // Before the field is READ, not after. Every check below walks a list whose
+  // length the document controls, and each re-reads `node.classes`, so the
+  // field is reached about twice per member — the unbounded work the caps exist
+  // to prevent, on a document whose measurement never bounded anything.
+  //
+  // Safe to skip only because this flag is now the NARROW question. A document
+  // JSON merely rewrites was measured in full, so it does not reach here and
+  // still has its classes validated; a sparse array is exactly that case, and
+  // gating on the wider "not serializable" dropped its `invalid-classes` report
+  // entirely.
+  if (overLimits) return;
   if (node.classes === undefined) return;
   // Index-based, not `.every` (which skips array holes), so a sparse classes
   // array — which serializes to `[null, …]` — is rejected, not accepted.

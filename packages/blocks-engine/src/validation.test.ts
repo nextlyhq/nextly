@@ -1450,14 +1450,15 @@ describe("style keys inherited from a prototype", () => {
     }) as Record<string, unknown>;
     styles.base = { base: { display: "block" } };
     // TWO issues now, and both are true. `invalid-style-values` names the
-    // specific defect; `document-unwritable` is the document-level statement
-    // that what would be stored is not what was validated, reached first
-    // because a custom prototype makes this not a JSON value at all. The second
-    // is additional information rather than noise: a caller reading only the
-    // first error still learns the document cannot be stored, which is the fact
-    // that decides whether to save.
+    // specific defect; `document-lossy` is the document-level statement that
+    // what would be stored is not what was validated. Lossy rather than
+    // unwritable, and the distinction is the point: JSON WRITES this document,
+    // dropping the inherited keys, so it has a stored form and that form is not
+    // this object. Calling it unwritable told an author their content could not
+    // be saved, which sent them looking for a value JSON refuses when the real
+    // answer is that a value they hold will come back missing.
     expect(codesFor(styles)).toEqual([
-      "document-unwritable",
+      "document-lossy",
       "invalid-style-values",
     ]);
   });
@@ -1469,10 +1470,11 @@ describe("style keys inherited from a prototype", () => {
       tablet: { nope: "1px" },
     }) as Record<string, unknown>;
     byBreakpoint.base = { display: "block" };
-    // Both, for the same reason as the case above: the specific defect plus
-    // the document-level statement that it has no stored form.
+    // Both, for the same reason as the case above: the specific defect plus the
+    // document-level statement that the stored form differs from what was
+    // validated.
     expect(codesFor({ base: byBreakpoint })).toEqual([
-      "document-unwritable",
+      "document-lossy",
       "invalid-style-values",
     ]);
   });
@@ -2191,6 +2193,60 @@ describe("measureBytes probes a value only where the writer does", () => {
 });
 
 describe("an unstorable document does not have its values parsed", () => {
+  it("does not enumerate a classes list the byte pass never measured", () => {
+    // An accessor is the walk's own blind spot: reading it runs code the survey
+    // refuses to run, so whatever it holds was never counted and nothing
+    // downstream is bounded by the byte cap. Validation must not then reach the
+    // same field by ordinary property access and walk it in full.
+    let reads = 0;
+    const node = {
+      id: "n1",
+      type: "core/text",
+      version: 1,
+      props: {},
+      get classes() {
+        reads += 1;
+        return Array.from({ length: 5_000 }, (_, i) => `c${i}`);
+      },
+    };
+    const doc = invalidDoc({ formatVersion: 1, kind: "page", nodes: [node] });
+
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+    });
+
+    expect(issues.some(i => i.code === "document-unreadable")).toBe(true);
+    // Zero, not "few". Every check in `validateClasses` re-reads the field, so
+    // any read at all means the list was walked — the assertion has to be on
+    // the field never being touched rather than on a count that looks small.
+    expect(reads).toBe(0);
+  });
+
+  it("still validates the classes of a document JSON merely rewrites", () => {
+    // The other side of the same gate, and the reason it has to be the narrow
+    // question. A sparse array is fully measured — twelve bytes, written by
+    // `JSON.stringify` as `[null,"cls"]` — so the work below IS bounded and
+    // skipping it would drop a real, actionable issue about the document.
+    const classes: unknown[] = [];
+    classes[1] = "cls";
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "n1", type: "core/text", version: 1, props: {}, classes }],
+    });
+
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+    });
+
+    expect(issues.some(i => i.code === "invalid-classes")).toBe(true);
+    // And it is reported as rewritten rather than as impossible to store.
+    expect(issues.some(i => i.code === "document-lossy")).toBe(true);
+    expect(issues.some(i => i.code === "document-unwritable")).toBe(false);
+  });
+
   it("skips per-value work when the byte pass could not measure the document", () => {
     // The byte precondition REFUSES to invoke an accessor, so it never learns
     // how large that field is. The per-value work below reaches the same field
@@ -2232,7 +2288,7 @@ describe("an unstorable document does not have its values parsed", () => {
     });
 
     // Refused, and refused for the right reason.
-    expect(issues.some(i => i.code === "document-unwritable")).toBe(true);
+    expect(issues.some(i => i.code === "document-unreadable")).toBe(true);
 
     // The style tree behind the accessor is never PARSED, which is the
     // unbounded work: every value builds an AST apiece, and the byte pass

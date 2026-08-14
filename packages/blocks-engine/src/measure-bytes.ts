@@ -210,7 +210,12 @@ function scalarBytes(value: unknown, budget: number): number {
  */
 type Member =
   | { present: true; value: unknown; enumerable: boolean }
-  | { present: false };
+  // WHY the value is not in hand, because the three answers differ. A genuinely
+  // absent key is a fact the walk has measured — an array hole costs the four
+  // bytes JSON writes for it, a missing record key costs nothing. An accessor
+  // or a descriptor read that threw is the walk DECLINING to look, so whatever
+  // is behind it went uncounted and the totals become lower bounds.
+  | { present: false; reason: "absent" | "accessor" | "threw" };
 
 /**
  * Read one member of an object or array, without running anything.
@@ -231,11 +236,11 @@ function readMember(container: object, key: string | number): Member {
   try {
     descriptor = Object.getOwnPropertyDescriptor(container, String(key));
   } catch {
-    return { present: false };
+    return { present: false, reason: "threw" };
   }
-  if (descriptor === undefined) return { present: false };
+  if (descriptor === undefined) return { present: false, reason: "absent" };
   if (descriptor.get !== undefined || descriptor.set !== undefined) {
-    return { present: false };
+    return { present: false, reason: "accessor" };
   }
   return {
     present: true,
@@ -378,6 +383,56 @@ export interface DocumentSurvey {
    * a non-index own property on an array, which is dropped entirely.
    */
   unserializable: boolean;
+
+  /**
+   * `JSON.stringify` THROWS on this document, so it has no stored form at all.
+   *
+   * Measured rather than assumed: only a BigInt (boxed or not) and a circular
+   * reference do this. Every other shape {@link unserializable} covers is
+   * written after being changed, so a caller that refuses on this flag refuses
+   * exactly the documents that cannot be persisted.
+   */
+  unwritable: boolean;
+
+  /**
+   * `JSON.stringify` WRITES this document but does not reproduce it.
+   *
+   * An array hole and an `undefined` element become `null`, `-0` becomes `0`,
+   * a symbol-keyed or `undefined` member loses its key, a non-index array
+   * property is dropped, and a `toJSON` substitution replaces the value. The
+   * document has a stored form; it is not this one.
+   *
+   * Separate from {@link unwritable} because the two want different reports. A
+   * document refused as having no stored form when it has one sends its author
+   * to look for a value that is not there.
+   */
+  lossy: boolean;
+
+  /**
+   * The walk DECLINED to read something, so `bytes`, `nodes` and `depth` are
+   * lower bounds rather than totals.
+   *
+   * An accessor is the ordinary case: reading it would run document-supplied
+   * code, which this walk exists to avoid, so whatever it would have returned
+   * went uncounted. A descriptor read or a reflection call that threw is the
+   * same situation arrived at differently.
+   *
+   * Nothing about the writer. `JSON.stringify` invokes an accessor happily, so
+   * such a document may well be storable — it is this measurement that is
+   * incomplete, and a caller about to walk the same document itself is the one
+   * that needs to know.
+   */
+  unreadable: boolean;
+
+  /**
+   * Whether `bytes`, `nodes` and `depth` are totals rather than lower bounds.
+   *
+   * The question a caller actually has before doing bounded work of its own,
+   * derived here so it has one implementation. A caller re-deriving it has to
+   * enumerate every way the walk can stop short — the three caps and
+   * {@link unreadable} — and will not learn about a fourth.
+   */
+  complete: boolean;
 }
 
 export interface SurveyLimits {
@@ -502,7 +557,21 @@ export function surveyDocument(
   });
 
   let bytes = 0;
-  let unserializable = false;
+  // TWO accumulators, because the writer can fail in two ways that call for
+  // different answers, and one flag covering both makes the wider one speak for
+  // the narrower. `JSON.stringify` THROWS on a BigInt and on a cycle, so such a
+  // document has no stored form at all; it WRITES every other shape here and
+  // merely changes it — an array hole and an `undefined` element become `null`,
+  // `-0` becomes `0`, a dropped member loses its key. Reporting the second as
+  // the first tells an author their content cannot be stored when it can.
+  let unwritable = false;
+  let lossy = false;
+  // The walk declined to READ something, so `bytes`, `nodes` and `depth` are
+  // lower bounds rather than totals. Distinct from the two above, which are
+  // statements about the writer on a document this walk measured in full: a
+  // caller that must bound its own traversal needs to know the measurement
+  // stopped short, and cannot learn that from a value being unwritable.
+  let unreadable = false;
   let nodes = 0;
   let deepest = 0;
 
@@ -530,11 +599,25 @@ export function surveyDocument(
   // rather than a stale one.
   const done = (): DocumentSurvey => ({
     limits: enforced,
+    unwritable,
+    lossy,
+    unreadable,
+    // DERIVED from every way the walk can stop short, so a new one is covered
+    // here the moment it sets its own flag. A caller asking "are these numbers
+    // totals?" must not have to re-list the reasons they might not be.
+    complete:
+      !unreadable &&
+      bytes <= maxBytes &&
+      deepest <= maxDepth &&
+      nodes <= maxNodes,
     bytes,
     tooLarge: bytes > maxBytes,
     tooDeep: deepest > maxDepth,
     tooManyNodes: nodes > maxNodes,
-    unserializable,
+    // DERIVED, never accumulated alongside. It is the published union of the
+    // two questions above, and computing it separately would let a value set
+    // one of them without setting this.
+    unserializable: unwritable || lossy,
     nodes,
     depth: deepest,
   });
@@ -542,9 +625,8 @@ export function surveyDocument(
   /** Account for a value that cannot contain others. */
   const takeScalar = (held: unknown): boolean => {
     bytes += scalarBytes(held, maxBytes - bytes);
-    if (!isSerializableScalar(held) || refusedByWriter(held)) {
-      unserializable = true;
-    }
+    if (refusedByWriter(held)) unwritable = true;
+    else if (!isSerializableScalar(held)) lossy = true;
     return bytes > maxBytes;
   };
 
@@ -583,12 +665,12 @@ export function surveyDocument(
             // put an enumerable property on `Object.prototype`.
             if (!Object.prototype.hasOwnProperty.call(array, name)) continue;
             if (arrayIndexOf(name, frame.length) < 0) {
-              unserializable = true;
+              lossy = true;
               break;
             }
           }
         } catch {
-          unserializable = true;
+          unreadable = true;
         }
       }
       continue;
@@ -614,6 +696,12 @@ export function surveyDocument(
 
       const key = keyed ? frame.names![index] : String(index);
       const member = readMember(container, key);
+      // An accessor, or a descriptor read that threw, is the walk declining to
+      // look rather than a key that is not there. Whatever it holds went
+      // uncounted, so the totals stop being totals — while a genuinely absent
+      // key is fully accounted for, as the four bytes JSON writes for an array
+      // hole or as nothing at all for a missing record key.
+      if (!member.present && member.reason !== "absent") unreadable = true;
 
       // Enumerability decides whether the writer ever LOOKS at this member, and
       // on a record it does not: `JSON.stringify` skips a non-enumerable
@@ -649,7 +737,7 @@ export function surveyDocument(
         // back is not the document that was validated. So the bytes come from
         // the normalized value and the flag comes from the substitution.
         substituted = held !== member.value;
-        if (substituted) unserializable = true;
+        if (substituted) lossy = true;
       }
 
       // A hidden record property is one the schema's direct read would see and
@@ -667,7 +755,7 @@ export function surveyDocument(
       });
 
       if (skipped) {
-        unserializable = true;
+        lossy = true;
 
         // A skipped member is still a member, and the caps still have to
         // describe it. Refusing a member says what STORAGE will do with it; it
@@ -750,7 +838,7 @@ export function surveyDocument(
       // schema then walked the subtree the caps existed to refuse. The refusal
       // is recorded and the walk continues into the value at the placement the
       // key would have had.
-      if (placement === "refused") unserializable = true;
+      if (placement === "refused") lossy = true;
       const reached =
         placement === "refused"
           ? { kind: "nodeList" as FrameKind, depth: frame.depth + 1 }
@@ -831,7 +919,7 @@ export function surveyDocument(
       try {
         value = asSerialized(value, "");
       } catch {
-        unserializable = true;
+        unreadable = true;
         continue;
       }
       // Same substitution rule as a member's, and the same structural rule:
@@ -840,12 +928,12 @@ export function surveyDocument(
       // it let a 5,001-node document present an empty forest, count zero nodes,
       // and pass a 5,000 cap.
       if (value !== frame.value) {
-        unserializable = true;
+        lossy = true;
         value = frame.value;
       }
       if (!serializesAs(value)) {
         // Nothing at all is written for a root the writer drops.
-        unserializable = true;
+        lossy = true;
         continue;
       }
     }
@@ -868,12 +956,13 @@ export function surveyDocument(
     // an ordinary empty record to a prototype test while `JSON.stringify` still
     // throws on it — so the slot has to be consulted here, not only where
     // scalars are counted.
-    if (refusedByWriter(value)) unserializable = true;
+    if (refusedByWriter(value)) unwritable = true;
 
     if (onPath.has(value)) {
       // Its own ancestor. `JSON.stringify` throws here, and descending would
       // not terminate.
-      unserializable = true;
+      unwritable = true;
+      unreadable = true;
       continue;
     }
 
@@ -881,9 +970,9 @@ export function surveyDocument(
     // walk is a precondition for parsing untrusted input, so a trap must not
     // take down the process doing the checking.
     try {
-      if (Object.getOwnPropertySymbols(value).length > 0) unserializable = true;
+      if (Object.getOwnPropertySymbols(value).length > 0) lossy = true;
     } catch {
-      unserializable = true;
+      unreadable = true;
       continue;
     }
 
@@ -896,7 +985,7 @@ export function surveyDocument(
     try {
       isArray = Array.isArray(value);
     } catch {
-      unserializable = true;
+      unreadable = true;
       continue;
     }
 
@@ -904,12 +993,15 @@ export function surveyDocument(
     let length = -1;
     if (isArray) {
       const lengthMember = readMember(value, "length");
+      if (!lengthMember.present && lengthMember.reason !== "absent") {
+        unreadable = true;
+      }
       length =
         lengthMember.present && typeof lengthMember.value === "number"
           ? lengthMember.value
           : -1;
       if (length < 0) {
-        unserializable = true;
+        unreadable = true;
         continue;
       }
     }
@@ -957,8 +1049,11 @@ export function surveyDocument(
     }
 
     const shape = isPlainRecordSafely(value);
-    if (!shape.plain) unserializable = true;
-    if (shape.threw) continue;
+    if (!shape.plain) lossy = true;
+    if (shape.threw) {
+      unreadable = true;
+      continue;
+    }
 
     // Own property NAMES rather than `for...in`. Both cost the same for a
     // record, and this sees the non-enumerable keys `for...in` cannot — which
@@ -969,7 +1064,7 @@ export function surveyDocument(
     try {
       names = Object.getOwnPropertyNames(value);
     } catch {
-      unserializable = true;
+      unreadable = true;
       continue;
     }
 
