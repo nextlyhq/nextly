@@ -97,7 +97,7 @@ export const FORBIDDEN = [
     // A numbered task or plan: "Task 17:", "Plan C2". The convention names tasks and plans
     // alongside reviews, and this is the shape they arrive in - a reference to a document the
     // reader has no way to open, describing why the code was written rather than what it does.
-    pattern: /\b(?:[a-z]\d+\s+)?(?:task|plan)\s*(?:[a-z]?\d+|:)/i,
+    pattern: /\b(?:[a-z]\d+\s+)?(?:task|plan)\s*(?:#\s*)?(?:[a-z]?\d+|:)/i,
     why: "names a task or plan rather than the code",
   },
   {
@@ -534,6 +534,9 @@ function hashLineComments(source, { shell = false } = {}) {
   // Quote states suspended by an enclosing `$(`. Shell parses a command substitution as commands
   // even inside double quotes, so `"$(cmd # c)"` holds a real comment: the substitution opens a
   // fresh quoting context and restores the outer one at its `)`.
+  // Whether the open single quote is an ANSI-C one, which is the only single-quoted form in
+  // either dialect that honours backslash escapes.
+  let ansiC = false;
   const substitutions = [];
   // Delimiters opened on the current line, in the order their bodies follow it, and the one now
   // consuming lines. A heredoc body is data the script EMITS rather than prose about the script.
@@ -567,6 +570,15 @@ function hashLineComments(source, { shell = false } = {}) {
 
       // Checked BEFORE the quote state, because that is the whole point: `$(` opens commands even
       // inside double quotes. `$((` is arithmetic, where `<<` is a shift rather than a heredoc.
+      // `$'...'` is ANSI-C quoting, where a backslash escapes the next character - including the
+      // closing quote. A plain shell single quote has no escapes at all, so reading `$'it\\'s'` with
+      // the plain rule closes the string early and reports the rest of the line as a comment.
+      if (shell && !quote && c === "$" && line[at + 1] === "'") {
+        ansiC = true;
+        quote = "'";
+        at += 1;
+        continue;
+      }
       if (shell && quote !== "'" && c === "$" && line[at + 1] === "(") {
         const arithmetic = line[at + 2] === "(";
         substitutions.push({ quote, arithmetic, depth: 0 });
@@ -594,8 +606,22 @@ function hashLineComments(source, { shell = false } = {}) {
       }
 
       if (quote) {
-        if (c === "\\" && quote === '"') at += 1;
-        else if (c === quote) quote = "";
+        // A backslash escapes inside shell double quotes and inside ANSI-C single quotes, and
+        // nowhere else: plain single quotes in either dialect take it literally.
+        if (c === "\\" && (quote === '"' || ansiC)) {
+          at += 1;
+          continue;
+        }
+        if (c === quote) {
+          // YAML escapes a single quote by DOUBLING it, so `'it''s'` is one scalar. Closing on the
+          // first of the pair would hand the rest of a legal value back to the comment scan.
+          if (!shell && quote === "'" && line[at + 1] === "'") {
+            at += 1;
+            continue;
+          }
+          quote = "";
+          ansiC = false;
+        }
         continue;
       }
 

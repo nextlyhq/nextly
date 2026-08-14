@@ -335,6 +335,24 @@ describe("the command", () => {
   });
 });
 
+describe("numbered task and plan labels", () => {
+  // `Task #17:` is the canonical written form and is exactly what the pattern exists to catch, so
+  // requiring the digit to follow the noun immediately left the commonest spelling passing.
+  it("matches a hash-prefixed number", () => {
+    expect(offencesIn("// Task #17: migrate the records").length).toBeGreaterThan(0);
+    expect(offencesIn("// Plan #12: split the adapter").length).toBeGreaterThan(0);
+  });
+
+  it("still matches the bare number", () => {
+    expect(offencesIn("// Task 17: migrate the records").length).toBeGreaterThan(0);
+  });
+
+  it("does not match ordinary prose about a task", () => {
+    // The negative control the widening must not break: "task" is an ordinary word.
+    expect(offencesIn("// the task queue drains oldest first")).toEqual([]);
+  });
+});
+
 describe("the hash dialects", () => {
   // Narration the patterns must match, so each case below turns on WHERE the text sits rather
   // than on what it says. Asserting the offence NAMES this string keeps a case from passing on
@@ -413,6 +431,17 @@ describe("the hash dialects", () => {
       expect(names(shell(`value="$( (echo ok); # ${NARRATION}\n)"`))).toBe(true);
     });
 
+    it("honours backslash escapes inside ANSI-C quoting", () => {
+      // `$'...'` is the one single-quoted form in either dialect where a backslash escapes the
+      // closing quote. Reading it with the plain rule ends the string early and reports the rest
+      // of a valid command as a comment.
+      expect(names(shell(`printf %s $'it\\'s # ${NARRATION}'`))).toBe(false);
+    });
+
+    it("still reads a comment after ANSI-C quoting closes", () => {
+      expect(names(shell(`printf %s $'ok' # ${NARRATION}`))).toBe(true);
+    });
+
     it("does not read a substitution inside single quotes", () => {
       // Single quotes suppress substitution entirely, so this really is literal text.
       expect(names(shell(`value='$(echo ok # ${NARRATION})'\n`))).toBe(false);
@@ -448,6 +477,17 @@ describe("the hash dialects", () => {
 
     it("does not treat an inch mark in a plain scalar as opening one", () => {
       expect(names(yaml(`size: 12" screen # ${NARRATION}`))).toBe(true);
+    });
+
+    it("keeps quote state across a doubled apostrophe", () => {
+      // YAML escapes a single quote by DOUBLING it, so `'it''s # x'` is one scalar and the hash is
+      // data. Closing on the first of the pair hands the rest of a legal value to the comment
+      // scan, which rejects valid configuration - the direction that gets a gate switched off.
+      expect(names(yaml(`key: 'it''s # ${NARRATION}'`))).toBe(false);
+    });
+
+    it("still closes on an ordinary single quote", () => {
+      expect(names(yaml(`key: 'value' # ${NARRATION}`))).toBe(true);
     });
 
     it("still treats a genuinely quoted scalar as data", () => {
