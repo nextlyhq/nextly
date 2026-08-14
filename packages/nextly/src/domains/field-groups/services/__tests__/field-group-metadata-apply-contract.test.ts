@@ -538,6 +538,70 @@ describe("an update whose row write fails after the tables moved", () => {
     expect(registry.updateComponent).toHaveBeenCalledTimes(2);
   });
 
+  // 🔴 Recording `diverged` is only half a control. Without a refusal, an editor opened AFTER the
+  // mark reads the bumped `schema_version` with the STALE stored fields, satisfies
+  // `assertSchemaVersionMatch`, and plans its next transition from a shape the tables no longer
+  // have — the exact retry this state exists to declare unsafe.
+  it("refuses a schema edit on a field group already marked diverged", async () => {
+    const registry = registryWhoseWriteFails({});
+    registry.getComponent = vi
+      .fn()
+      .mockResolvedValue({ ...registry.record, migrationStatus: "diverged" });
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    const refusal = await service
+      .updateFieldGroup({
+        slug: "hero",
+        fields: [{ name: "heading", type: "text" }] as never,
+      })
+      .catch((error: unknown) => error);
+
+    // Asserted on the REASON as well as the code: a stale-version conflict is also a CONFLICT here,
+    // and its message tells the caller to refresh and retry — the opposite of what this one means.
+    expect(refusal).toMatchObject({ code: "CONFLICT" });
+    expect((refusal as NextlyError).publicMessage).toContain(
+      "Reconcile the definition against the tables"
+    );
+    // Refused BEFORE anything moved: a guard that ran after the transition would be describing a
+    // second divergence rather than preventing one.
+    const { reconcileComponentCompanion } = await import(
+      "../field-group-table-provisioning"
+    );
+    expect(reconcileComponentCompanion).not.toHaveBeenCalled();
+    expect(registry.updateComponent).not.toHaveBeenCalled();
+  });
+
+  // The control that keeps the refusal from stranding an operator. A label edit moves no storage,
+  // so locking it out would make a diverged field group harder to reconcile rather than safer.
+  it("still allows a metadata-only edit while diverged", async () => {
+    const registry = registryWhoseWriteFails({});
+    registry.getComponent = vi
+      .fn()
+      .mockResolvedValue({ ...registry.record, migrationStatus: "diverged" });
+    registry.updateComponent = vi.fn(
+      async (
+        _slug: string,
+        _data: Record<string, unknown>,
+        _options?: { source?: string }
+      ) => registry.record
+    );
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    await expect(
+      service.updateFieldGroup({ slug: "hero", label: "Hero (renamed)" })
+    ).resolves.toMatchObject({
+      record: expect.objectContaining({ slug: "hero" }),
+    });
+  });
+
   it("raises the original error, unmarked, when nothing physical moved", async () => {
     // 🔴 The control that stops this becoming a blanket rewrite of every failed update. A label-only
     // edit issues no DDL, so a failed write leaves the row describing the database correctly. There

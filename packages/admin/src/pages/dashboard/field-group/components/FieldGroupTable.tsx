@@ -82,6 +82,11 @@ function getMigrationBadge(status?: FieldGroupMigrationStatus): {
       return { variant: "success", label: "Applied" };
     case "failed":
       return { variant: "destructive", label: "Failed" };
+    // Its own badge rather than falling through to the default. `-` reads as "no migration state",
+    // which is the opposite of what this one means, and it is the state an operator most needs to
+    // find: the tables moved and the stored definition did not.
+    case "diverged":
+      return { variant: "destructive", label: "Diverged" };
     default:
       return { variant: "default", label: "-" };
   }
@@ -548,6 +553,14 @@ export default function FieldGroupTable() {
                     }
                   >
                     Failed
+                  </DropdownMenuCheckboxItem>
+                  <DropdownMenuCheckboxItem
+                    checked={migrationFilter === "diverged"}
+                    onCheckedChange={() =>
+                      handleMigrationFilterChange("diverged")
+                    }
+                  >
+                    Diverged
                   </DropdownMenuCheckboxItem>
                 </DropdownMenuContent>
               </DropdownMenu>

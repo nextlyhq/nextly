@@ -25,4 +25,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-The Direct API now reports whether a field group is localized. A field-group update whose registry write fails after its companion table already changed is recorded as a failed migration and reported as a change that stands, rather than raised as though nothing had happened.
+The Direct API now reports whether a field group is localized. A field-group update whose registry write fails after its companion table already changed is recorded with a new `diverged` migration status and reported as a change that stands, rather than raised as though nothing had happened. `diverged` is deliberately distinct from `failed`: `failed` means the table was never created and retrying is the repair, while `diverged` means the tables hold the new shape and the stored definition holds the old one, so the field group must be reconciled and the edit must NOT be retried. A diverged field group is refused for further schema edits until it is reconciled.

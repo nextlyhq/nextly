@@ -293,6 +293,32 @@ export class FieldGroupMetadataService {
     // existed would be a guard that can never fire, and a guard that cannot fire reads as coverage
     // while proving nothing.
     const existing = await this.registry.getComponent(input.slug);
+    // 🔴 A diverged field group is REFUSED for any edit that would move storage again.
+    //
+    // Recording the state is only half of it. Without this, an editor opened after the mark reads
+    // the bumped `schema_version` together with the STALE stored fields, satisfies
+    // `assertSchemaVersionMatch`, and plans its next transition from a shape the tables no longer
+    // have — the exact retry the state exists to declare unsafe. A status nothing enforces is a
+    // note, not a control.
+    //
+    // Metadata-only edits are deliberately still allowed: a label or a description moves no
+    // storage, and locking an operator out of renaming the thing they are trying to reconcile
+    // would make the state harder to get out of rather than safer.
+    if (
+      existing.migrationStatus === "diverged" &&
+      (input.fields !== undefined || input.localized !== undefined)
+    ) {
+      throw NextlyError.conflict({
+        // `state`, not `version`: the generic version message tells the caller to refresh and
+        // retry, which is precisely the action this refusal exists to prevent.
+        reason: "state",
+        message: `"${input.slug}" is marked as diverged: its tables were changed and its stored definition still describes the previous shape. Reconcile the definition against the tables before editing its schema again. Repeating the edit would plan the next change from a shape the database no longer has.`,
+        logContext: {
+          slug: input.slug,
+          migrationStatus: existing.migrationStatus,
+        },
+      });
+    }
     if (existing.locked && input.source !== "code") {
       throw NextlyError.forbidden({
         logContext: {
