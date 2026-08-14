@@ -266,6 +266,45 @@ export function formatVerdict(verdict) {
  * second: a caller may reasonably retry or escalate an unsettled result, and
  * must never treat it as a pass.
  */
+/**
+ * A git remote URL reduced to `owner/repo`, or null when it names no repository.
+ *
+ * Compared structurally rather than by string equality because one repository
+ * has several spellings — `https://`, `git@`, `ssh://`, with or without `.git`,
+ * with or without a trailing slash — and a check that misses a spelling falls
+ * back to a remote that may be a different repository entirely.
+ */
+export function repoFromRemoteUrl(url) {
+  if (typeof url !== "string") return null;
+  const match =
+    /^(?:https?:\/\/|ssh:\/\/)?(?:[^@/]+@)?github\.com[:/]+([^/]+)\/(.+?)(?:\.git)?\/?$/i.exec(
+      url.trim()
+    );
+  return match ? `${match[1]}/${match[2]}` : null;
+}
+
+/**
+ * The remote to read a pull request's head from.
+ *
+ * The head repository comes from the pull request, never from an assumption
+ * about `origin`. Running from a fork checkout, `origin` is the fork, so a pull
+ * request whose head lives in the upstream repository would resolve against a
+ * same-named branch on the fork — a real, unrelated revision, whose checks and
+ * reviews this gate would then report as the pull request's.
+ *
+ * A local remote is preferred only when it IS that repository, so configured
+ * credentials and transports keep working; otherwise the canonical URL, which
+ * is correct everywhere and needs no local setup.
+ */
+export function remoteForRepo(repoFullName, remotes) {
+  if (typeof repoFullName !== "string" || repoFullName === "") return null;
+  const wanted = repoFullName.toLowerCase();
+  for (const [name, url] of remotes ?? []) {
+    if (repoFromRemoteUrl(url)?.toLowerCase() === wanted) return name;
+  }
+  return `https://github.com/${repoFullName}.git`;
+}
+
 export function exitCode({ landedVerdict, mergeable }) {
   // Read from the landed-whole verdict alone rather than from reachability as
   // well. Reachability answers whether a BRANCH could be compared against a
@@ -532,6 +571,16 @@ function ghLog(merged, tip) {
   return out ? out.split("\n") : [];
 }
 
+/** Every configured remote as `[name, url]`, for matching against the head repository. */
+function configuredRemotes() {
+  const out = execFileSync("git", ["remote", "-v"], { encoding: "utf8" });
+  return out
+    .split("\n")
+    .filter(Boolean)
+    .map(line => line.split(/\s+/))
+    .map(([name, url]) => [name, url]);
+}
+
 /** The branch's real tip, from the ref rather than from the API's cached head. */
 function lsRemoteTip(remote, branch) {
   const out = execFileSync(
@@ -558,9 +607,7 @@ export function main(argv) {
     "--jq",
     "{cross:.head.repo.full_name!=.base.repo.full_name,repo:.head.repo.full_name,branch:.head.ref,merged:.merged,mergeSha:.merge_commit_sha,head:.head.sha}",
   ]);
-  REMOTE_FOR_FETCH = meta.cross
-    ? `https://github.com/${meta.repo}.git`
-    : "origin";
+  REMOTE_FOR_FETCH = remoteForRepo(meta.repo, configuredRemotes());
   const tip = lsRemoteTip(REMOTE_FOR_FETCH, meta.branch);
 
   // `.merged`, never the presence of `.merge_commit_sha`. GitHub populates that
@@ -706,15 +753,62 @@ export function main(argv) {
     process.stdout.write(`    candidate, confirm by content: ${line}\n`);
   }
   process.stdout.write(`${formatVerdict(verdict)}\n`);
+  // Everything above was read across many round trips, all keyed to the `tip`
+  // read at the start. A push landing during them leaves every answer describing
+  // a revision the branch no longer has, and the gate would report a pass for a
+  // commit nothing checked or reviewed.
+  //
+  // This REFUSES on a difference; it must never re-key the verdict to the new
+  // head. That distinction is the whole point, and the opposite mistake is easy
+  // to make here: adopting the fresh head would rubber-stamp exactly the
+  // unverified revision this is detecting. The verdict stays with the revision
+  // that was actually examined, and the caller is told it is now stale.
+  //
+  // It narrows the window rather than closing it — the read and the merge are
+  // still separate operations. `gh pr merge --match-head-commit <tip>` is what
+  // closes it, because there the server refuses.
+  const tipNow = lsRemoteTip(REMOTE_FOR_FETCH, meta.branch);
+  if (tipNow !== tip) {
+    process.stdout.write(
+      `  head moved ${tip.slice(0, 9)} -> ${(tipNow || "(gone)").slice(0, 9)} ` +
+        `during verification; this verdict describes ${tip.slice(0, 9)}\n`
+    );
+    return 2;
+  }
+
   return exitCode({
     landedVerdict: landed.verdict,
     mergeable: verdict.mergeable,
   });
 }
 
+/**
+ * The executable boundary, where a failure to look becomes exit 2.
+ *
+ * Every helper below the pure section throws rather than degrading, which is
+ * right — but an uncaught throw exits 1, and 1 is the code meaning this gate
+ * examined the revision and rejected it. An expired token, an unreachable API,
+ * a malformed response or a failed fetch would therefore be indistinguishable
+ * from a verdict, and a caller would stop rather than retry.
+ *
+ * `run` is injectable so this decision can be given a failure and asked what it
+ * returns; that is the only reason it is a parameter.
+ */
+export function runCli(argv, run = main) {
+  try {
+    return run(argv);
+  } catch (error) {
+    process.stderr.write(
+      `verify-merge: could not complete the check — ${error?.message ?? error}\n` +
+        "This is exit 2 (unanswered), not a rejection. Retry, or check auth.\n"
+    );
+    return 2;
+  }
+}
+
 if (
   process.argv[1] &&
   import.meta.url === pathToFileURL(process.argv[1]).href
 ) {
-  process.exit(main(process.argv.slice(2)));
+  process.exit(runCli(process.argv.slice(2)));
 }

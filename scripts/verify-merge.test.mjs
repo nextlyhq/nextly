@@ -26,8 +26,11 @@ import {
   landedWhole,
   missingRequired,
   pathMatches,
+  remoteForRepo,
+  repoFromRemoteUrl,
   reviewCoverage,
   reviewsCoveringTip,
+  runCli,
   statusAsRun,
   verdictCoversTip,
   workflowApplies,
@@ -695,6 +698,88 @@ describe("INTEGRATION_PATHS_IGNORE against the workflow it mirrors", () => {
     expect(declaredIgnores("pull_request")).toEqual([
       ...INTEGRATION_PATHS_IGNORE,
     ]);
+  });
+});
+
+describe("repoFromRemoteUrl", () => {
+  it("reduces every spelling of one repository to the same name", () => {
+    // A string comparison against a single spelling misses the others and falls
+    // through to a remote that may be a different repository entirely.
+    for (const url of [
+      "https://github.com/nextlyhq/nextly.git",
+      "https://github.com/nextlyhq/nextly",
+      "git@github.com:nextlyhq/nextly.git",
+      "ssh://git@github.com/nextlyhq/nextly.git",
+      "https://github.com/nextlyhq/nextly/",
+    ]) {
+      expect(repoFromRemoteUrl(url)).toBe("nextlyhq/nextly");
+    }
+  });
+
+  it("does not read a DIFFERENT repository as the same one", () => {
+    // The control that gives the case above meaning: without it, a function
+    // returning a constant would satisfy every assertion there.
+    expect(repoFromRemoteUrl("git@github.com:someone/nextly.git")).toBe(
+      "someone/nextly"
+    );
+    expect(repoFromRemoteUrl("https://gitlab.com/nextlyhq/nextly.git")).toBe(
+      null
+    );
+    expect(repoFromRemoteUrl("")).toBe(null);
+  });
+});
+
+describe("remoteForRepo", () => {
+  it("does NOT use origin when origin is a different repository", () => {
+    // Running from a fork checkout, a pull request whose head lives upstream
+    // would otherwise resolve against a same-named branch on the fork — a real,
+    // unrelated revision whose checks and reviews the gate would then report as
+    // this pull request's.
+    const remotes = [
+      ["origin", "git@github.com:contributor/nextly.git"],
+      ["upstream", "https://github.com/nextlyhq/nextly.git"],
+    ];
+
+    expect(remoteForRepo("nextlyhq/nextly", remotes)).toBe("upstream");
+  });
+
+  it("prefers a local remote that IS the repository", () => {
+    // So configured credentials and transports keep working in the ordinary
+    // case rather than every invocation reaching for an anonymous URL.
+    expect(
+      remoteForRepo("nextlyhq/nextly", [
+        ["origin", "git@github.com:nextlyhq/nextly.git"],
+      ])
+    ).toBe("origin");
+  });
+
+  it("falls back to the canonical URL when no remote matches", () => {
+    expect(remoteForRepo("nextlyhq/nextly", [["origin", "/tmp/somewhere"]])).toBe(
+      "https://github.com/nextlyhq/nextly.git"
+    );
+    expect(remoteForRepo("nextlyhq/nextly", [])).toBe(
+      "https://github.com/nextlyhq/nextly.git"
+    );
+  });
+});
+
+describe("runCli", () => {
+  it("reports a failure to LOOK as 2, not as a rejection", () => {
+    // Helpers throw rather than degrading, which is right, but an uncaught
+    // throw exits 1 — the code meaning the gate examined the revision and
+    // rejected it. An expired token would be indistinguishable from a verdict
+    // and a caller would stop rather than retry.
+    expect(
+      runCli(["798"], () => {
+        throw new Error("gh: authentication failed");
+      })
+    ).toBe(2);
+  });
+
+  it("passes a real verdict through untouched", () => {
+    // The control: without it, a wrapper returning 2 unconditionally passes.
+    expect(runCli(["798"], () => 0)).toBe(0);
+    expect(runCli(["798"], () => 1)).toBe(1);
   });
 });
 
