@@ -107,6 +107,77 @@ describe("the parent names each side accepts", () => {
   });
 });
 
+describe("the slot metadata each side accepts", () => {
+  const withSlots = (slots: unknown) => ({
+    name: "acme/thing",
+    version: 1,
+    description: "A block.",
+    example: { props: {} },
+    slots,
+    render: () => null,
+  });
+
+  const bothAccept = (slots: unknown): void => {
+    expect(() =>
+      registerBlocks([withSlots(slots)] as never, { source: "acme" })
+    ).not.toThrow();
+    clearBlocks();
+    const manifest = buildBlockManifest([
+      consumer(),
+      declaring([withSlots(slots)]),
+    ]);
+    // Asserted rather than merely not throwing: a build that silently DROPPED the field would
+    // also not throw, and the dropped-field case is the one half of this finding.
+    expect(manifest.blocks[0]?.slots).toEqual(slots);
+  };
+
+  const neitherAccepts = (slots: unknown): void => {
+    expect(() =>
+      registerBlocks([withSlots(slots)] as never, { source: "acme" })
+    ).toThrow();
+    clearBlocks();
+    expect(() =>
+      buildBlockManifest([consumer(), declaring([withSlots(slots)])])
+    ).toThrow();
+  };
+
+  // The positive controls, and there are two because `allow` has two accepted FORMS. A pair
+  // agreeing only on rejections would satisfy every case below while accepting nothing at all.
+  it("both accept a slot naming an exact block", () => {
+    bothAccept({ default: { allow: ["core/heading"] } });
+  });
+
+  it("both accept a slot naming a namespace wildcard", () => {
+    bothAccept({ default: { allow: ["core/*"] } });
+  });
+
+  it("both accept a slot that restricts nothing", () => {
+    bothAccept({ default: {} });
+  });
+
+  it("neither accepts a non-array allow", () => {
+    // The declaration from the finding. Generation succeeding here is the failure that matters:
+    // `--check` passes and the app then refuses to boot.
+    neitherAccepts({ default: { allow: 42 } });
+  });
+
+  it("neither accepts an allow entry that is not a name", () => {
+    neitherAccepts({ default: { allow: ["shell"] } });
+  });
+
+  it("neither accepts a wildcard in the namespace position", () => {
+    neitherAccepts({ default: { allow: ["*/heading"] } });
+  });
+
+  it("neither accepts a slot spec that is not an object", () => {
+    neitherAccepts({ default: 42 });
+  });
+
+  it("neither accepts slots that are not a record", () => {
+    neitherAccepts(42);
+  });
+});
+
 function consumer(): PluginDefinition {
   return definePlugin({
     name: PAGE_BUILDER_PLUGIN,

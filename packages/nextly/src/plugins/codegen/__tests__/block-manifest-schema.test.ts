@@ -411,7 +411,19 @@ describe("the published JSON Schema", () => {
                   "type": "object",
                 },
                 "slots": {
-                  "additionalProperties": {},
+                  "additionalProperties": {
+                    "additionalProperties": {},
+                    "properties": {
+                      "allow": {
+                        "items": {
+                          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*\\/(?:[a-z0-9]+(?:-[a-z0-9]+)*|\\*)$",
+                          "type": "string",
+                        },
+                        "type": "array",
+                      },
+                    },
+                    "type": "object",
+                  },
                   "propertyNames": {
                     "type": "string",
                   },

@@ -55,7 +55,26 @@ export const BLOCK_MANIFEST_VERSION = 2;
  * `parent: ["shell"]` while `registerBlocks` rejects the same definition, which is the opposite of
  * what an artifact describing what a plugin declared is for.
  */
-const BLOCK_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const NAME_SEGMENT = "[a-z0-9]+(?:-[a-z0-9]+)*";
+
+const BLOCK_NAME_RE = new RegExp(`^${NAME_SEGMENT}\\/${NAME_SEGMENT}$`);
+
+/**
+ * A block name, or a namespace wildcard like `core/*`, as a slot's `allow` list accepts them.
+ *
+ * A wildcard names a SET rather than a block, so it needs its own pattern — but not its own
+ * GRAMMAR. Both are composed from `NAME_SEGMENT`, so the rule for what a segment may contain is
+ * written once and neither pattern can drift from the other.
+ *
+ * A regex rather than a `.refine()`, because this schema is also emitted as JSON Schema for
+ * outside readers and a refinement has no JSON Schema representation. A refined value emits as a
+ * bare `{"type": "string"}`, which would leave the published contract quietly weaker than the one
+ * enforced here — anyone validating a manifest against the artifact we hand them would accept an
+ * `allow` entry this package refuses.
+ */
+const ALLOW_ENTRY_RE = new RegExp(
+  `^${NAME_SEGMENT}\\/(?:${NAME_SEGMENT}|\\*)$`
+);
 
 /**
  * The highest version a declared block may carry.
@@ -188,8 +207,30 @@ export const blockManifestEntrySchema = z
     props: z.record(z.string(), z.unknown()).optional(),
     /** Style capabilities the block opts into. */
     supports: z.record(z.string(), z.unknown()).optional(),
-    /** Named child regions, for container blocks. */
-    slots: z.record(z.string(), z.unknown()).optional(),
+    /**
+     * Named child regions, for container blocks.
+     *
+     * The SPEC is constrained where `props` and `supports` are not, and the line between them is
+     * who owns the contents. Those two carry whatever a plugin puts there and core has no
+     * vocabulary for them. A slot's `allow` is the opposite: the engine defines it, refuses a
+     * malformed one at registration, and every nesting decision reads it as STRUCTURE. Left open
+     * here, generation and `--check` succeed for a configuration that cannot boot — and because
+     * generation DELETES the previous file, that trades a good artifact for a description of an
+     * app that does not start.
+     *
+     * Keys other than `allow` stay open for the same reason `props` does: they belong to whatever
+     * declares the slot, and core would only be guessing at them.
+     */
+    slots: z
+      .record(
+        z.string(),
+        z
+          .object({
+            allow: z.array(z.string().regex(ALLOW_ENTRY_RE)).optional(),
+          })
+          .loose()
+      )
+      .optional(),
     /**
      * The block names this block may be a DIRECT child of; absent means anywhere.
      *
@@ -581,7 +622,11 @@ function toEntry(block: DeclaredBlock, source: string): BlockManifestDraft {
   };
   if (isRecord(block.props)) entry.props = block.props;
   if (isRecord(block.supports)) entry.supports = block.supports;
-  if (isRecord(block.slots)) entry.slots = block.slots;
+  // Passed through whatever its shape, so the SCHEMA judges it — the same reason `parent` below is.
+  // An `isRecord` guard here DROPS a malformed `slots` instead, and a dropped field is an absent
+  // one: the manifest then validates cleanly while `registerBlocks` refuses the same definition at
+  // boot, which is generation succeeding for a configuration that cannot run.
+  if (block.slots !== undefined) entry.slots = block.slots;
   // Carried because the manifest is read to decide where a block may LEGALLY sit — by editor
   // builds and by agents generating documents. Omitting it does not make the restriction lenient;
   // it makes every reader of this file believe there is none, so they generate placements the
