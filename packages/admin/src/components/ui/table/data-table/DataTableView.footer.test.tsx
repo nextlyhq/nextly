@@ -149,4 +149,71 @@ describe("DataTableView footer", () => {
     );
     expect(screen.queryByTestId("footer")).toBeNull();
   });
+
+  // `pagination` is the supported way to paginate a table, so the placement
+  // guarantee the two tests above make for `footer` has to hold for it as well.
+  // Asserting it only for `footer` would leave the path every list actually
+  // uses uncovered, which is the arrangement this file exists to prevent.
+  const PAGER = {
+    currentPage: 0,
+    totalPages: 3,
+    pageSize: 10,
+    onPageChange: () => {},
+    ariaLabel: "Test pagination",
+  };
+
+  it("places a pager given as data inside the table's surface", () => {
+    render(
+      <DataTableView<Row>
+        columns={[{ name: "name", header: "Name" }]}
+        rows={ROWS}
+        pagination={PAGER}
+      />
+    );
+
+    const pager = screen.getByRole("navigation", { name: "Test pagination" });
+    expect(pager).toBeInTheDocument();
+    // Presence is not placement. The pager must be INSIDE the bordered surface
+    // that holds both views, which is what a caller could get wrong while the
+    // pager was passed as markup.
+    expect(tokensOf(pager.parentElement)).toContain("@md/table:border");
+    expect(tokensOf(pager.parentElement)).toContain(
+      "@md/table:overflow-hidden"
+    );
+  });
+
+  it("keeps a data pager in the same surface when a page fails", () => {
+    render(
+      <DataTableView<Row>
+        columns={[{ name: "name", header: "Name" }]}
+        rows={[]}
+        error="Request failed"
+        pagination={PAGER}
+      />
+    );
+
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    const pager = screen.getByRole("navigation", { name: "Test pagination" });
+    expect(tokensOf(pager.parentElement)).toContain("@md/table:border");
+  });
+
+  it("prefers pagination over a footer rather than rendering both", () => {
+    // Two pagers in one slot is not a composition anyone wants, and stacking
+    // them would answer a caller's mistake with a layout instead of letting it
+    // be seen. Asserted so the precedence is a decision rather than whichever
+    // order the JSX happened to be written in.
+    render(
+      <DataTableView<Row>
+        columns={[{ name: "name", header: "Name" }]}
+        rows={ROWS}
+        footer={<div data-testid="footer">custom</div>}
+        pagination={PAGER}
+      />
+    );
+
+    expect(
+      screen.getByRole("navigation", { name: "Test pagination" })
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("footer")).toBeNull();
+  });
 });

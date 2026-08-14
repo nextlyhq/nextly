@@ -41,6 +41,8 @@ import {
 import { MoreHorizontal } from "lucide-react";
 import { useMemo, type KeyboardEvent } from "react";
 
+import { Pagination } from "@admin/components/shared/pagination";
+import type { PaginationProps } from "@admin/components/shared/pagination/types";
 import { navigateTo } from "@admin/lib/navigation";
 import { cn } from "@admin/lib/utils";
 
@@ -110,6 +112,21 @@ export interface DataTableViewProps<Row extends object> {
    * two-pixel band.
    */
   footer?: React.ReactNode;
+  /**
+   * The list's pagination, as DATA rather than markup.
+   *
+   * This is how a table paginates. The placement of a pager depends on which
+   * view is showing and this component is the only one that knows, so it owns
+   * where the pager lands as well as when — and a caller that hands over
+   * `currentPage` and `onPageChange` has no opportunity to put it anywhere.
+   * Passing the pager as markup left that decision at the call site, where the
+   * wrong arrangement is the one you get by writing the markup in reading
+   * order, and several surfaces drifted into it.
+   *
+   * Typed as the pager's own props rather than a restatement of them, so a prop
+   * added there is available here without a second definition to keep in step.
+   */
+  pagination?: PaginationProps;
   emptyMessage?: string;
   ariaLabel?: string;
   /** Draw the desktop table's card border. Disable when a parent supplies one. */
@@ -143,6 +160,7 @@ export function DataTableView<Row extends object>({
   loading = false,
   error = null,
   footer,
+  pagination,
   emptyMessage = "No results found.",
   ariaLabel = "Data table",
   bordered = true,
@@ -308,6 +326,15 @@ export function DataTableView<Row extends object>({
   // a pager that is correctly placed in the normal state moved outside the card
   // the moment a request failed -- the exact defect this component's `footer`
   // exists to prevent.
+  // What the footer slot holds, resolved ONCE for both return paths. Deciding
+  // it separately per branch is how the error path lost the surface: two
+  // answers to one question, agreeing until one of them was edited.
+  //
+  // `pagination` wins over `footer` rather than rendering beside it. Two pagers
+  // in one slot is not a composition anyone wants, and silently stacking them
+  // would answer a mistake with a layout instead of a type error.
+  const footerContent = pagination ? <Pagination {...pagination} /> : footer;
+
   const surfaceClassName = cn(
     // Clipping is NOT part of the card. The table view rounds its own
     // corners through whatever encloses it, and a globally coloured
@@ -339,7 +366,9 @@ export function DataTableView<Row extends object>({
             removing the controls here removes the only way back to a page that
             works. The rows are gone; the navigation out of the failure is not
             part of the failure, and neither is its placement. */}
-        {footer && <div className={surfaceClassName}>{footer}</div>}
+        {footerContent && (
+          <div className={surfaceClassName}>{footerContent}</div>
+        )}
       </div>
     );
   }
@@ -604,7 +633,7 @@ export function DataTableView<Row extends object>({
             </Table>
           </div>
         </div>
-        {footer}
+        {footerContent}
       </div>
     </div>
   );

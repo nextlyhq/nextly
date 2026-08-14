@@ -14,7 +14,6 @@ import { useSuspenseQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Columns } from "@admin/components/icons";
-import { Pagination } from "@admin/components/shared/pagination";
 import { PluginIcon } from "@admin/components/shared/plugin-icon";
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { DataTableView } from "@admin/components/ui/table/data-table";
@@ -23,6 +22,7 @@ import { ListShell } from "@admin/components/ui/table/list-shell";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { UI } from "@admin/constants/ui";
 import { useDebouncedValue } from "@admin/hooks/useDebouncedValue";
+import { usePagination } from "@admin/hooks/usePagination";
 import { publicApi } from "@admin/lib/api/publicApi";
 import { categoryLabel } from "@admin/lib/plugins/plugin-categories";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
@@ -79,23 +79,15 @@ export default function PluginsTable() {
 
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebouncedValue(search, UI.SEARCH_DEBOUNCE_MS);
-  const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState(25);
+  const { page, pageSize, setPage, setPageSize, resetPage } = usePagination();
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
 
   // Reset to the first page when the search term or status filter changes so
   // the slice does not fall out of range against the newly filtered list.
   useEffect(() => {
-    setPage(0);
-  }, [debouncedSearch, statusFilter]);
-
-  // Changing the page size can leave the current page index out of range; snap
-  // back to the first page.
-  const handlePageSizeChange = (newPageSize: number) => {
-    setPageSize(newPageSize);
-    setPage(0);
-  };
+    resetPage();
+  }, [debouncedSearch, statusFilter, resetPage]);
 
   const pluginsWithId = useMemo(() => {
     return (branding?.plugins ?? []).map(plugin => ({
@@ -287,17 +279,17 @@ export default function PluginsTable() {
         }
         registryKey="plugins"
         ariaLabel="Installed plugins table"
-        footer={
-          totalCount > 0 ? (
-            <Pagination
-              currentPage={page}
-              totalPages={Math.ceil(totalCount / pageSize)}
-              pageSize={pageSize}
-              onPageChange={setPage}
-              onPageSizeChange={handlePageSizeChange}
-              totalItems={totalCount}
-            />
-          ) : undefined
+        pagination={
+          totalCount > 0
+            ? {
+                currentPage: page,
+                totalPages: Math.ceil(totalCount / pageSize),
+                pageSize,
+                onPageChange: setPage,
+                onPageSizeChange: setPageSize,
+                totalItems: totalCount,
+              }
+            : undefined
         }
         emptyMessage={
           debouncedSearch || statusFilter !== "all"
