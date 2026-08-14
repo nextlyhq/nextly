@@ -12,7 +12,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { findInvalidSlotEntries, repairInvalidSlot } from "../invalid-slots";
 import { createBlockRegistry } from "../registry";
 import { makeNode } from "../tree";
-import { MAX_NODES, type BlockNode } from "../types";
+import { MAX_DEPTH, MAX_NODES, type BlockNode } from "../types";
 
 /** Empty: every structural answer here comes from the declared structures, as the server path does. */
 const registry = createBlockRegistry();
@@ -82,6 +82,37 @@ describe("a wrap repair against the node limit", () => {
     );
     expect(entry).toMatchObject({ kind: "not-allowed" });
     expect(entry).not.toHaveProperty("wrapWith", "core/column");
+    expect((entry as { wrapWith?: string }).wrapWith).toBeUndefined();
+  });
+});
+
+describe("a wrap repair against the DEPTH limit", () => {
+  /** A misplaced heading wrapped in `depth` further containers, inside a row that refuses it. */
+  function rowHolding(depth: number): BlockNode {
+    let inner = node("core/heading");
+    for (let i = 0; i < depth; i += 1) {
+      inner = node("core/container", { default: [inner] });
+    }
+    // The offender is the CONTAINER chain's outermost node, which the row's allowlist refuses.
+    return node("core/columns", { default: [inner] });
+  }
+
+  it("is offered while the whole subtree still fits", () => {
+    // The positive control at the same shape and a smaller size, so a refusal below cannot be
+    // blamed on the shape itself.
+    const [entry] = findInvalidSlotEntries(rowHolding(2), registry);
+    expect(entry).toMatchObject({
+      kind: "not-allowed",
+      wrapWith: "core/column",
+    });
+  });
+
+  it("is withheld when the subtree's DEEPEST node is already at the limit", () => {
+    // The node being wrapped sits well inside the limit; what does not is the bottom of what it
+    // holds. A check reading only the node's own depth clears the banner and leaves the page
+    // refused at a depth the author never chose and cannot see.
+    const [entry] = findInvalidSlotEntries(rowHolding(MAX_DEPTH), registry);
+    expect(entry).toMatchObject({ kind: "not-allowed" });
     expect((entry as { wrapWith?: string }).wrapWith).toBeUndefined();
   });
 });
