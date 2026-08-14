@@ -22,8 +22,15 @@
 // reviewer read this revision and nothing is left open — never that the code
 // is right.
 //
-// Every function here is pure. The caller fetches; these decide. A function
-// that performs its own I/O cannot be handed the inputs it must get right.
+// The EXPORTED decision helpers are pure: handed evidence, they return a
+// verdict, so a caller can supply the inputs that must be got right. The
+// command below owns all of the I/O — process, network, git and filesystem.
+// That SPLIT is the claim; it is not a description of every function here.
+//
+// Stating it precisely matters. The pure half is covered by tests, the I/O
+// half is not, and it is where this module's defects have actually lived: a
+// head read from the wrong source, and three references left dangling by one
+// block move — none of which a green suite could see.
 
 import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
@@ -484,7 +491,17 @@ export function report({
  */
 const fingerprint = (rv, th, ic) =>
   JSON.stringify([
-    rv.map(r => [r?.id, r?.user?.login, r?.commit_id, r?.state]),
+    // Every field a decision function READS, so the stamp cannot hold still
+    // while an input to the verdict moves. `submitted_at` is here because
+    // `changesRequested` orders reviews by it; omitting it made this a second,
+    // narrower notion of "the evidence changed" than the verdict's own.
+    rv.map(r => [
+      r?.id,
+      r?.user?.login,
+      r?.commit_id,
+      r?.state,
+      r?.submitted_at,
+    ]),
     th.map(t => [t?.isResolved, t?.comments?.nodes?.[0]?.author?.login]),
     ic.map(c => [c?.id, c?.user?.login, RATE_LIMIT_MARKER.test(c?.body ?? "")]),
   ]);
@@ -598,7 +615,11 @@ async function main(argv) {
   // A pull request CLOSED WITHOUT MERGING is settled by its lifecycle alone,
   // and its branch is commonly deleted straight afterwards — so resolving the
   // ref first turned a conclusive answer into `exit 2` for a missing ref.
-  // Emitted directly rather than through `report`, which exists to weigh
+  // Routed THROUGH `report` so every lifecycle emits one schema, then
+  // overlaid: the evidence fields are replaced with "unavailable" because they
+  // were never queried on this path. A second output shape would hand a
+  // consumer reading `head` or `missing_reviews` a different object exactly
+  // where it is least expecting one. Kept for the reader who assumes `report`
   // reviews and threads that cannot change this outcome.
   // Trimmed: a list written with spaces after the commas yields entries that
   // match no login, and an unmatched blocking reviewer is silently dropped —
@@ -781,12 +802,12 @@ async function main(argv) {
   // covering the old head could clear a revision nobody has seen.
   // EVERY volatile input, read together and compared as one value.
   //
-  // Ordering cannot close this, and three successive attempts to order it are
-  // the evidence: each fix made some read last, and whatever was added after it
-  // became the new gap. The head, the lifecycle, the reviews, the threads, the
-  // issue comments and the rewrite events each change without moving any of the
-  // others, so a sequence of individual checks always leaves the earliest ones
-  // unverified at the moment the verdict is computed.
+  // Separately ordered reads cannot form an atomic snapshot, whatever order
+  // they are put in. The head, the lifecycle, the reviews, the threads, the
+  // issue comments and the rewrite events each move independently of the
+  // others, so whichever is read last leaves every earlier one unverified at
+  // the moment the verdict is computed — and making a different one last only
+  // moves which is stale.
   //
   // Requiring two CONSECUTIVE observations to agree removes the ordering
   // question rather than answering it: the snapshot the verdict is computed
