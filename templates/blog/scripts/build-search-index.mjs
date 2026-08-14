@@ -21,6 +21,7 @@
 
 import { execSync } from "node:child_process";
 import {
+  existsSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -120,15 +121,37 @@ function entriesOf(dir) {
   }
 }
 
-/** Record the entries a successful run added, so a later run can remove them. */
+/** The entries a previous run recorded owning, or an empty list. */
+function readOwnedEntries(dir) {
+  try {
+    const parsed = JSON.parse(readFileSync(join(dir, MANIFEST), "utf-8"));
+    return Array.isArray(parsed.entries) ? parsed.entries : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Record the entries this run owns, ACCUMULATING rather than replacing.
+ *
+ * A rebuild rewrites the same files, so on the second successful run they are
+ * already in `before` and the difference is empty. Replacing the record with
+ * that empty difference would disown the index: the next empty build would find
+ * nothing to remove and leave the previous `pagefind.js` and its fragments
+ * being served, which is the stale-results case this manifest exists to prevent.
+ *
+ * The union is right because ownership does not lapse — an entry this script
+ * created stays its to remove, whether or not the latest run re-created it.
+ */
 function recordCreatedEntries(dir, before) {
   const added = entriesOf(dir).filter(
     entry => !before.includes(entry) && entry !== MANIFEST
   );
+  const owned = [...new Set([...readOwnedEntries(dir), ...added])];
   try {
     writeFileSync(
       join(dir, MANIFEST),
-      `${JSON.stringify({ entries: added }, null, 2)}\n`,
+      `${JSON.stringify({ entries: owned }, null, 2)}\n`,
       "utf-8"
     );
   } catch (err) {
@@ -147,10 +170,7 @@ function recordCreatedEntries(dir, before) {
  * deletes a user's assets.
  */
 function removePreviousIndex(dir) {
-  let manifest;
-  try {
-    manifest = JSON.parse(readFileSync(join(dir, MANIFEST), "utf-8"));
-  } catch {
+  if (!existsSync(join(dir, MANIFEST))) {
     if (entriesOf(dir).length > 0) {
       console.log(
         `\n• ${dir} has no ${MANIFEST}, so this script cannot tell which files ` +
@@ -160,7 +180,7 @@ function removePreviousIndex(dir) {
     return false;
   }
 
-  const entries = Array.isArray(manifest.entries) ? manifest.entries : [];
+  const entries = readOwnedEntries(dir);
   const root = resolve(dir);
   for (const entry of entries) {
     // Each path is confined to the output directory, so a manifest carrying
@@ -206,7 +226,6 @@ function writeStatus(state) {
 }
 
 assertSiteDirUsable(resolve(siteDir));
-mkdirSync(resolve(outputDir), { recursive: true });
 
 // A newly scaffolded project has no posts, so nothing renders under blog/ and
 // Pagefind exits non-zero for an empty index. Failing the build there would mean
@@ -231,6 +250,11 @@ if (!containsHtml(resolve(siteDir, globRoot))) {
 // directory that already holds unrelated files, that difference is the whole of
 // what may later be removed.
 const entriesBefore = entriesOf(resolve(outputDir));
+
+// Created here rather than at startup: the empty-index path above returns
+// without writing anything, and creating it earlier left a fresh project with an
+// empty public/pagefind/ directory it never uses.
+mkdirSync(resolve(outputDir), { recursive: true });
 
 try {
   execSync(
