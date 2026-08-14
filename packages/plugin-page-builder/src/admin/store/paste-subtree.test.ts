@@ -10,7 +10,9 @@ import { describe, expect, it } from "vitest";
 
 import "../../render/blocks";
 
+import { defaultBlockRegistry } from "../../core/registry";
 import { makeNode } from "../../core/tree";
+import { validateDocument } from "../../core/validate";
 import type { BlockDocument, BlockNode } from "../../core/types";
 import { editorReducer, initialState } from "./editorStore";
 
@@ -34,6 +36,26 @@ function paste(document: BlockDocument, pasted: BlockNode) {
 }
 
 describe("pasting a subtree", () => {
+  it("still inserts into a page that ALREADY has a fault elsewhere", () => {
+    // This PR creates exactly this page: a stored `core/columns` row holding an ordinary block
+    // stays that way until its author takes the repair. Judging only the result would refuse every
+    // unrelated paste while such a row exists, silently — the Paste action looking broken on
+    // precisely the pages this change affects.
+    const document: BlockDocument = {
+      version: 1,
+      root: node("core/container", {
+        default: [node("core/columns", { default: [node("core/heading")] })],
+      }),
+    };
+    // The precondition: the page really is unsaveable before anything is pasted.
+    expect(
+      validateDocument(document, defaultBlockRegistry, { allowUnknown: true })
+    ).not.toBe(true);
+
+    const next = paste(document, node("core/heading"));
+    expect(next.document.root.slots?.default).toHaveLength(2);
+  });
+
   it("still inserts when an UNRELATED unknown block sits elsewhere on the page", () => {
     // A page may hold a block whose plugin this process has not loaded, and that block is
     // preserved rather than rejected. Judging the whole document with the write path's default

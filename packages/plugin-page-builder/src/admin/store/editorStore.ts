@@ -337,27 +337,29 @@ export function editorReducer(
       );
       // The clipboard is the one insertion path whose payload was built somewhere else, so the
       // destination admitting the outermost block says nothing about the rest of the tree. The
-      // RESULT is checked against the same invariants the save path enforces, rather than the
-      // subtree against a narrower walk of its own: a walk over parent/child pairs cannot see a
-      // fault that is not a pair — an empty undeclared slot on a leaf carries no children to
-      // iterate, and is refused at save exactly as a misplaced block is. Asking the canonical
-      // question here means the reducer cannot produce a document the save path rejects, rather
-      // than not producing the kinds of document someone thought to enumerate.
-      if (
-        validateDocument(
-          { ...state.document, root: pasted },
-          defaultBlockRegistry,
-          // The SAME unknown-block policy the field write path uses. A page may
-          // legitimately hold a block whose plugin this process has not loaded,
-          // and refusing the paste because one exists ELSEWHERE in the document
-          // would make an unrelated edit impossible while preserving nothing —
-          // the structural checks below still apply to every block that IS
-          // known, which is what this call is here for.
-          { allowUnknown: true }
-        ) !== true
-      ) {
-        return state;
-      }
+      // result is checked against the same invariants the save path enforces — a walk over
+      // parent/child pairs cannot see a fault that is not a pair, such as an empty undeclared slot
+      // on a leaf.
+      //
+      // Compared against the document as it WAS, not judged on its own. `validateDocument` reports
+      // the FIRST fault anywhere in the tree, and this PR creates pages that already have one: a
+      // stored `core/columns` row holding ordinary blocks stays that way until its author takes
+      // the repair. Judging only the result would refuse every unrelated paste while such a row
+      // exists, silently, so the Paste action would look broken on exactly the pages this change
+      // affects.
+      //
+      // A page that was ALREADY unsaveable stays editable. That is deliberate: it cannot be made
+      // more unsaveable, the banner already reports what is wrong with it, and blocking the edits
+      // that would help fix it is the defect this avoids rather than a risk it takes.
+      const before = validateDocument(state.document, defaultBlockRegistry, {
+        allowUnknown: true,
+      });
+      const after = validateDocument(
+        { ...state.document, root: pasted },
+        defaultBlockRegistry,
+        { allowUnknown: true }
+      );
+      if (before === true && after !== true) return state;
       return commit(state, pasted, fresh.id);
     }
 
