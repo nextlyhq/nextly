@@ -211,6 +211,18 @@ export interface SlotSpec {
   name: string;
   /** Namespaced block types allowed in this slot. Omit for "any". */
   allowedBlocks?: string[];
+  /**
+   * How this slot arranges its children, when that constrains what may sit between them.
+   *
+   * `"flow"` (the default) is normal block flow, where an extra zero-height element between two
+   * children costs nothing. `"formatted"` is a flex or grid container, where any element between
+   * two children becomes a flex item or a grid cell of its own — so it takes a gap, shifts every
+   * following cell, and the canvas no longer matches the published page.
+   *
+   * Declared rather than inferred because only the block knows: the layout lives in the style its
+   * `render` applies, which nothing outside it can read.
+   */
+  childLayout?: "flow" | "formatted";
 }
 
 /** A reference from a block definition to a style control + the style key it edits. */

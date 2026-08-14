@@ -10,9 +10,11 @@
  *  - In normal block flow (containers, query-loop template) zero-height DropZones are
  *    interleaved between children — they add no layout box, so the output matches the
  *    frontend exactly.
- *  - Inside a GRID a between-child <div> would become an extra grid item and break the
- *    columns, so grid children render directly; each grid cell is an "insert-before"
- *    droppable and the grid itself is an "append" droppable (highlight, no layout box).
+ *  - Inside a slot whose children are laid out by flex or grid, a between-child <div> would
+ *    become a cell of that layout — taking a gap and shifting everything after it — so those
+ *    children render directly; each child is an "insert-before" droppable and the container
+ *    itself is an "append" droppable (highlight, no layout box). Which slots those are is
+ *    declared by `childLayout` on the slot, not decided here.
  *
  * The root container renders via `CanvasNode`; descendants render via `DraggableNode`.
  */
@@ -24,9 +26,10 @@ import {
   type ReactNode,
 } from "react";
 
+import { declaredSlotsOf } from "../../core/block-structure";
 import { defaultBlockRegistry } from "../../core/registry";
 import { documentKey, nodeClass } from "../../core/style-compiler";
-import type { BlockNode } from "../../core/types";
+import { DEFAULT_SLOT, type BlockNode } from "../../core/types";
 import { BlockErrorBoundary } from "../../render/ErrorBoundary";
 import { QUERY_LOOP_TYPE } from "../../render/query/types";
 import { dragSensors } from "../logic/dragSensors";
@@ -49,9 +52,19 @@ const placeholderStyle = {
   background: "var(--nx-pb-ed-muted)",
 };
 
-/** Containers whose children lay out horizontally — no interleaved DropZones (parity). */
-function isHorizontal(node: BlockNode): boolean {
-  return node.type === "core/grid";
+/**
+ * Whether a slot's children are laid out by a flex or grid container.
+ *
+ * Read from the slot's own declaration rather than matched against a list of type names here:
+ * every block that lays its children out that way needs the same treatment, and a name test only
+ * covers the ones whoever wrote it happened to think of. The registry is asked first because a
+ * caller-supplied definition is the whole answer about its own slots; structure answers where no
+ * definition is registered, which is the state the config and server paths run in.
+ */
+function slotIsFormatted(node: BlockNode, slotName: string): boolean {
+  const def = defaultBlockRegistry.get(node.type);
+  const slots = def ? def.slots : declaredSlotsOf(node.type);
+  return slots?.find(s => s.name === slotName)?.childLayout === "formatted";
 }
 
 type RefCb = (el: Element | null) => void;
@@ -99,8 +112,9 @@ function renderSlot(node: BlockNode, slotName: string): ReactNode {
     );
   }
 
-  // Grid: render children directly (each an insert-before droppable). No between-divs.
-  if (isHorizontal(node)) {
+  // A flex or grid slot: render children directly, each its own insert-before droppable. A
+  // between-child div would become a cell of that layout and shift everything after it.
+  if (slotIsFormatted(node, slotName)) {
     return children.map((child, i) => (
       <DraggableNode
         key={child.id}
@@ -201,7 +215,7 @@ function DraggableNode({
   parentId: string;
   slot: string;
   index: number;
-  /** When set (grid child), this element is also an "insert before" drop target. */
+  /** When set (a child of a formatted slot), this element is also an "insert before" target. */
   dropBeforeIndex?: number;
 }): ReactNode {
   const { state, remotePatterns, nodeClasses } = useEditor();
@@ -215,7 +229,7 @@ function DraggableNode({
     sensors: dragSensors,
   });
 
-  // Grid child: "insert before me" target.
+  // A child of a formatted slot: "insert before me" target.
   const before = useDroppable({
     id: `before:${node.id}`,
     type: BLOCK_TYPE,
@@ -224,14 +238,15 @@ function DraggableNode({
     data: { kind: "dropzone", parentId, slot, index: dropBeforeIndex ?? 0 },
   });
 
-  // Grid itself: "append" target for its own default slot.
-  const grid = isHorizontal(node);
+  // A formatted container itself: "append" target for its own default slot, since it has no
+  // trailing DropZone of its own.
+  const formatted = slotIsFormatted(node, DEFAULT_SLOT);
   const appendIndex = node.slots?.default?.length ?? 0;
   const append = useDroppable({
     id: `append:${node.id}`,
     type: BLOCK_TYPE,
     accept: BLOCK_TYPE,
-    disabled: !grid,
+    disabled: !formatted,
     data: {
       kind: "dropzone",
       parentId: node.id,

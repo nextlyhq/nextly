@@ -92,7 +92,13 @@ export const columnsStructure = declareStructure({
   // was nothing to give a width, a background or an alignment to. Naming the
   // child makes each column a block an author can select and style, which is
   // the same split Gutenberg, Elementor and Bricks all arrived at.
-  slots: [{ name: "default", allowedBlocks: ["core/column"] }],
+  slots: [
+    {
+      name: "default",
+      allowedBlocks: ["core/column"],
+      childLayout: "formatted",
+    },
+  ],
 });
 
 /**
@@ -112,7 +118,7 @@ export const columnStructure = declareStructure({
 export const gridStructure = declareStructure({
   type: "core/grid",
   isContainer: true,
-  slots: [{ name: "default" }],
+  slots: [{ name: "default", childLayout: "formatted" }],
 });
 
 export const coverStructure = declareStructure({
@@ -133,16 +139,18 @@ export const queryLoopStructure = declareStructure({
   slots: [{ name: "default" }],
 });
 
+// A row is flex in both orientations, so its children are flex items whichever way it is
+// pointing — the orientation decides the direction, not whether the layout is formatted.
 export const rowStructure = declareStructure({
   type: "core/row",
   isContainer: true,
-  slots: [{ name: "default" }],
+  slots: [{ name: "default", childLayout: "formatted" }],
 });
 
 export const contentCarouselStructure = declareStructure({
   type: "core/content-carousel",
   isContainer: true,
-  slots: [{ name: "default" }],
+  slots: [{ name: "default", childLayout: "formatted" }],
 });
 
 /**
