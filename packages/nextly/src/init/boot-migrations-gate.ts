@@ -21,7 +21,7 @@
  * @module init/boot-migrations-gate
  */
 
-import type { NextlyError } from "../errors";
+import { NextlyError } from "../errors";
 
 const globalForGate = globalThis as unknown as {
   __nextly_bootMigrationsPending?: Promise<void>;
@@ -103,6 +103,35 @@ export function refuseBootMigrations(error: NextlyError): void {
 export function assertBootMigrationsNotRefused(): void {
   const refused = globalForGate.__nextly_bootMigrationsRefused;
   if (refused) throw refused;
+}
+
+/**
+ * Throw unless boot migrations have SETTLED and allowed serving.
+ *
+ * For synchronous consumers, which cannot wait. The Direct API's `getNextly()`
+ * is one: it is exported from the package root and a Server Component can call
+ * `nextly.find()` on it, and it decides readiness from `isServicesRegistered()`
+ * alone — which is true throughout a migration wait.
+ *
+ * Refusing while merely PENDING is the deliberate part. An async consumer waits
+ * for the answer; a synchronous one cannot, so its only choices are to throw or
+ * to query a schema nobody has verified. Throwing is recoverable — the caller
+ * retries and the gate has settled — and the alternative is silently reading a
+ * database this build may not match.
+ */
+export function assertBootMigrationsSettled(): void {
+  const refused = globalForGate.__nextly_bootMigrationsRefused;
+  if (refused) throw refused;
+
+  if (globalForGate.__nextly_bootMigrationsPending) {
+    throw new NextlyError({
+      code: "NEXTLY_BOOT_MIGRATIONS_PENDING",
+      publicMessage:
+        "Boot migrations are still running, so the schema this build expects " +
+        "is not yet confirmed. Retry shortly; this resolves once migrations " +
+        "finish.",
+    });
+  }
 }
 
 /**

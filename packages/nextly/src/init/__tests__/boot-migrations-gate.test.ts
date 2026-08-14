@@ -11,6 +11,7 @@ import { NextlyError } from "../../errors";
 import {
   _resetBootMigrationsGateForTest,
   allowBootMigrations,
+  assertBootMigrationsSettled,
   awaitBootMigrations,
   openBootMigrationsGate,
   refuseBootMigrations,
@@ -145,6 +146,41 @@ describe("the boot-migrations gate", () => {
     await expect(awaitBootMigrations()).rejects.toMatchObject({
       code: "NEXTLY_BOOT_MIGRATIONS_NOT_RUN",
     });
+  });
+
+  /**
+   * The synchronous consumer, which cannot wait. `getNextly()` in the Direct API
+   * is exported from the package root and a Server Component can call
+   * `nextly.find()` on it, so its only choices while the gate is pending are to
+   * throw or to query a schema nobody has verified.
+   */
+  it("refuses a synchronous consumer while migrations are still running", () => {
+    openBootMigrationsGate(true);
+
+    expect(() => assertBootMigrationsSettled()).toThrow(
+      expect.objectContaining({ code: "NEXTLY_BOOT_MIGRATIONS_PENDING" })
+    );
+  });
+
+  it("refuses a synchronous consumer after a refusal", () => {
+    openBootMigrationsGate(true);
+    refuseBootMigrations(refusal());
+
+    expect(() => assertBootMigrationsSettled()).toThrow(
+      expect.objectContaining({ code: "NEXTLY_BOOT_MIGRATIONS_NOT_RUN" })
+    );
+  });
+
+  /**
+   * The control for both. Without it they are satisfied by a function that
+   * throws unconditionally — which would break every Direct API call in
+   * development and in any app that does not run boot migrations.
+   */
+  it("lets a synchronous consumer through once the gate has settled", () => {
+    openBootMigrationsGate(true);
+    allowBootMigrations();
+
+    expect(() => assertBootMigrationsSettled()).not.toThrow();
   });
 
   /**

@@ -53,6 +53,8 @@ export const NEXTLY_ERROR_STATUS = {
   // rather than 409 — a load balancer should take the instance out of rotation
   // and retry it, which is exactly the recovery this refusal wants.
   NEXTLY_BOOT_MIGRATIONS_NOT_RUN: 503,
+  // Still running rather than refused. 503 for the same reason: retry shortly.
+  NEXTLY_BOOT_MIGRATIONS_PENDING: 503,
   NEXTLY_CORE_DESTRUCTIVE_REFUSED: 409,
   NEXTLY_MIGRATION_DRIFT: 409,
   NEXTLY_MIGRATION_APPLY_FAILED: 500,
