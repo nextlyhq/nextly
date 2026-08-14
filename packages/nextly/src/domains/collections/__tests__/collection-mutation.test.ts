@@ -509,10 +509,12 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       expect(mockHookRegistry.executeBeforeOperation).not.toHaveBeenCalled();
       expect(mockHookRegistry.execute).not.toHaveBeenCalled();
       expect(runFieldHooksSpy).not.toHaveBeenCalled();
-      // The stored-hook executor is NOT asserted here. This fixture registers no stored hook, so
-      // it never reaches that seam on the allowed path either - an assertion would be satisfied by
-      // absence and would read as coverage it does not have. Covering it needs a collection
-      // configured with a stored hook, which this fixture does not build.
+      // The stored-hook executor is NOT asserted here, and the reason is a WIRING gap rather than
+      // an unreachable seam: updateEntry calls it unconditionally, but through
+      // `this.hookService.storedHookExecutor` - an injected instance - while the mock above
+      // replaces the exported CLASS. The spy therefore observes nothing the service actually
+      // calls, so an assertion either way would report on the mock rather than on the ordering.
+      // Covering it means giving the fixture a hookService whose storedHookExecutor IS the spy.
     });
 
     it("runs those same hooks for a caller it allows", async () => {
