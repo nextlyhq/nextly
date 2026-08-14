@@ -148,10 +148,21 @@ and, because `ci.yml` was `queued` at that moment, the push would have cancelled
 the one run that mattered.
 
 **The remedies are opposite, which is why guessing is expensive.** Any push
-re-triggers a genuinely dropped run. Pushing at a queued one CANCELS the
-in-flight run and re-queues it at the back, so the fix for one is the way to
-lose another hour on the other — and the fix for a path-filtered absence is to
-do nothing at all.
+re-triggers a genuinely dropped run. The fix for a path-filtered absence is to
+do nothing at all. And pushing at a QUEUED run may cancel it — but only where
+the workflow says so, and that is per workflow rather than a property of
+pushing:
+
+| workflow          | concurrency                        | a push at a queued run                  |
+| ----------------- | ---------------------------------- | --------------------------------------- |
+| `ci.yml`          | group + `cancel-in-progress: true` | cancels and re-queues at the back       |
+| `integration.yml` | group + `cancel-in-progress: true` | cancels and re-queues at the back       |
+| `preview.yml`     | group + `cancel-in-progress: true` | cancels and re-queues at the back       |
+| `secret-scan.yml` | **none declared**                  | starts a SECOND run; the first survives |
+
+So read the workflow's `concurrency:` block before deciding a push is expensive.
+Three of the four here cancel; the fourth does not, and treating its queued run
+as fragile costs a wait for no reason.
 
 ## A stacked base runs none of the jobs that gate a merge
 
@@ -327,16 +338,33 @@ false negative announces itself as "no verdict" and the spoof announces itself
 as approval:
 
 ```sh
+set -o pipefail
+BOT=chatgpt-codex-connector[bot]
+
 # The review objects, newest last. `state` is NOT a verdict — see below.
-gh api "repos/nextlyhq/nextly/pulls/$PR/reviews" --paginate \
-  --jq '.[]|select(.user.login=="chatgpt-codex-connector[bot]")
-        |"\(.id)\t\(.commit_id)"'
+REVIEWS=$(gh api "repos/nextlyhq/nextly/pulls/$PR/reviews" --paginate \
+  --jq --arg b "$BOT" '.[]|select(.user.login==$b)|"\(.id)\t\(.commit_id)"') || {
+  echo "reviews query FAILED — not clean" >&2; exit 2
+}
 
 # The findings attached to each review. A review absent here carried none.
-gh api "repos/nextlyhq/nextly/pulls/$PR/comments" --paginate \
-  --jq '.[]|select(.user.login=="chatgpt-codex-connector[bot]")
-        |.pull_request_review_id' | sort | uniq -c
+FINDINGS=$(gh api "repos/nextlyhq/nextly/pulls/$PR/comments" --paginate \
+  --jq --arg b "$BOT" '.[]|select(.user.login==$b)|.pull_request_review_id') || {
+  echo "comments query FAILED — not clean" >&2; exit 2
+}
+printf '%s\n' "$FINDINGS" | sort | uniq -c
 ```
+
+**Each query is captured and its status checked BEFORE the count is read**, and
+that is not belt-and-braces. Left as a pipeline, the status is `uniq`'s: an
+auth failure, a rate limit or a transient 5xx returns no review IDs, the join
+finds nothing attached to the head's review, and it reports CLEAN. A verdict
+gate that answers "approved" when the API is unreachable is worse than no gate,
+because the failure is invisible at exactly the moment it matters.
+
+`--arg` rather than interpolating the login into the filter: `[bot]` is a
+character class in a jq pattern and a literal in a string comparison, and the
+two are easy to confuse when the value is pasted inline.
 
 **Ask the `reviews` endpoint, not `comments`, and this is the half that decides
 whether a CLEAN verdict is visible at all.** `pulls/$PR/comments` lists review
