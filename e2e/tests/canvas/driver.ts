@@ -458,6 +458,12 @@ async function departureFrom<T>(
   while (current === from && Date.now() < deadline) {
     current = await read();
   }
+  // One reading taken strictly AFTER the deadline before concluding it never
+  // departed. Every read above may have SAMPLED the value before the deadline
+  // and resolved after it — a cross-frame read easily spans that boundary — so
+  // the loop can exit holding a value that was already stale when it was taken,
+  // and report a canvas that committed exactly on time as never having moved.
+  if (current === from) current = await read();
   return current;
 }
 
