@@ -20,15 +20,40 @@ trigger, a base that filters the workflow out, a dependency that skipped its
 dependents, and a run bound to a commit that no longer describes reality each
 produce an identical rollup, and none produces a red anywhere to notice.
 
-**The one habit that covers all of them: name the jobs you require and assert
-`success` on each.** Absence of `failure` is not a verdict — `queued`,
-`in_progress`, `skipped` and _never triggered_ all satisfy it.
+**The one habit that covers all of them: decide which jobs this commit REQUIRES,
+then assert `success` on each of those.** Absence of `failure` is not a
+verdict — `queued`, `in_progress`, `skipped` and _never triggered_ all satisfy
+it.
 
 ```sh
 gh api "repos/nextlyhq/nextly/commits/$SHA/check-runs?per_page=100" --paginate \
   --jq '.check_runs[]|"\(.status)/\(.conclusion // "none")\t\(.name)"' \
   | sort
 ```
+
+**Requiring `success` from a FIXED list is the obvious form and it is wrong
+here**, because some skips are the pipeline working. `ci.yml`'s first job
+decides what the commit can affect and publishes an `inert` output, and
+`Lint / Typecheck / Test / Build` carries `if: needs.changes.outputs.inert != 'true'`.
+A docs-only commit therefore skips it BY DESIGN, and its three dependents with
+it — so a fixed list makes a correct docs-only PR permanently unverifiable, and
+whoever hits that learns to wave the rule through.
+
+The expected set is DERIVED, not enumerated. `Decide what this commit can
+affect` is the job that knows, so it is the one to require unconditionally:
+
+- `Decide what this commit can affect` — must be `success`. It fails open
+  (every early exit sets `inert=false`), so a broken decision costs a full run
+  rather than a silent pass.
+- `inert=true` → `Lint / Typecheck / Test / Build` and its dependents are
+  legitimately `skipped`.
+- `inert=false` → each of them must be `success`.
+
+**Both kinds of skip render identically**, which is the whole difficulty: a job
+skipped because the scope decision excluded it and a job skipped because its
+dependency failed are both `completed/skipped`. What separates them is not the
+row — it is whether the job they depend on succeeded. Read the decision, then
+read the jobs it implies.
 
 Measured on `59d84ddc0`, 39 check-runs: **33 `completed/skipped`**, 3 `success`,
 3 `failure`. Even with every job now finished, a rollup dominated five-to-one by
@@ -72,21 +97,31 @@ sat for a day at 5 green checks, and that one was real.
 
 Both counts have since risen to 17 and 14 as their runs finished, which is the
 point: a check COUNT is a reading of one moment and cannot be re-derived later.
-A full main-targeting PR here lands between 12 and 17 checks depending on which
-`paths` filters its diff trips, so no fixed number separates the two cases
-either. The run-level query is the discriminator; the count is not.
+Nor is there a total to compare against — the matrices expand with the diff, so
+a change touching `templates/` adds `scaffold-build.yml`'s six legs on top of
+everything else. **Do not substitute one fixed number for another**; a document
+whose conclusion is that counts are unreliable should not hand you a range to
+check counts against. The run-level query is the discriminator.
 
-Ask at the workflow level instead:
+Ask at the workflow level, **scoped to the commit and to the workflow you
+require**:
 
 ```sh
-gh run list --branch "$BRANCH" --limit 12 \
-  --json name,status,conclusion,headSha,event \
-  --jq '.[]|"\(.status)/\(.conclusion // "-")  \(.headSha[0:9])  \(.event)  \(.name)"'
+gh run list --commit "$HEAD_SHA" --workflow ci.yml --limit 5 \
+  --json name,status,conclusion,event \
+  --jq '.[]|"\(.status)/\(.conclusion // "-")  \(.event)  \(.name)"'
 ```
 
-A genuine dropped trigger shows only `pull_request_target` runs — PR Title,
-Labeler — and no `pull_request` ones. A busy queue shows the `pull_request` runs
-present and `queued`.
+**`--branch` alone is not enough, and it fails in the reassuring direction.** It
+returns the branch's runs from EARLIER commits as well, so a workflow that was
+dropped for the current head still shows a run — the previous push's — and reads
+as present. It also sweeps in unrelated `pull_request` workflows, so the list
+looks populated whatever happened to the one you care about. Pin `--commit` to
+the head you are gating, and ask per required workflow rather than eyeballing a
+mixed list.
+
+A genuine dropped trigger returns NO run for that workflow at that commit. A
+busy queue returns one, `queued`.
 
 **The remedies are opposite, which is why guessing is expensive.** Any push
 re-triggers a genuinely dropped run. Pushing at a queued one CANCELS the
@@ -157,7 +192,20 @@ broken `main` is fixed, every PR that went red because of it **stays red**. No
 one's checks clear themselves, and a stale red is indistinguishable from a real
 one on inspection.
 
-Each needs an explicit re-run:
+**Re-running the old run does NOT pick the repair up, and this is the part that
+looks like the remedy.** GitHub's documentation is explicit: a re-run "will also
+use the same `GITHUB_SHA` (commit SHA) and `GITHUB_REF` (git ref) of the
+original event that triggered the workflow run". For a `pull_request` run —
+which is every leg of `ci.yml` and `integration.yml` here — that ref is the
+synthetic merge commit computed when the event fired, so the re-run evaluates
+the same combination of your branch and the OLD, broken `main`. It goes red
+again for the original reason, which reads as the failure being real.
+
+So a moved base needs a NEW event, not a repeated one: rebase onto the repaired
+`main`, or push, and let a fresh `pull_request` run compute a new merge commit.
+
+`gh run rerun` remains the right tool for a genuine flake, where the base is not
+in question:
 
 ```sh
 gh run rerun "$RUN_ID"            # whole run
@@ -178,8 +226,8 @@ naming the mechanism before calling something flake.
 The same shape outside CI. Both bots here can report nothing for reasons that
 have nothing to do with the code.
 
-**Match bot logins as a pattern, never by equality.** The logins carry a `[bot]`
-suffix — measured on this repo's PRs:
+**Match the bot's COMPLETE login, which carries a `[bot]` suffix.** Measured on
+this repo's PRs:
 
 ```
 chatgpt-codex-connector[bot]
@@ -187,10 +235,26 @@ coderabbitai[bot]
 pkg-pr-new[bot]
 ```
 
-An exact-equality filter on `chatgpt-codex-connector` returns zero and is
-byte-identical to "not yet reviewed". That cost four watch cycles on #785
-reporting no verdict while a clean one had been sitting there since 03:00. Use
-`select(.user.login|test("codex";"i"))`.
+Filtering for `chatgpt-codex-connector` returns zero, byte-identically to "not
+yet reviewed". That cost four watch cycles on #785 reporting no verdict while a
+clean one had been sitting there since 03:00.
+
+**The suffix was the defect, not the equality — so do not fix it by loosening
+the match.** A substring filter such as `test("codex";"i")` accepts any login
+CONTAINING the word, so any account that can comment on the PR can present
+itself as the trusted reviewer and supply a clean-looking verdict. Trading a
+false negative for a spoofable one is a worse trade than it looks, because the
+false negative announces itself as "no verdict" and the spoof announces itself
+as approval:
+
+```sh
+gh api "repos/nextlyhq/nextly/pulls/$PR/comments" \
+  --jq '.[]|select(.user.login=="chatgpt-codex-connector[bot]")'
+```
+
+Compare against the whole login, or against the App identity. If a filter must
+be pattern-based, anchor it — `test("^chatgpt-codex-connector\\[bot\\]$")` —
+rather than leaving it open at both ends.
 
 **CodeRabbit's review limit is per-ACCOUNT and shared across every lane on this
 machine.** When it is reached it posts a "Review limit reached" comment and
@@ -198,12 +262,23 @@ zero review objects, and its check goes green — so a rate-limited non-review a
 a clean review render the same. Read the comment BODY, not the check colour.
 Some PRs here have never received a CodeRabbit review at all.
 
-**A verdict also names a commit, and a rebase orphans it.** Confirm the sha the
-bot reviewed is still an ancestor of the head you are about to merge:
+**A verdict names a commit, and it is evidence about THAT commit only.** Require
+the reviewed sha to EQUAL the head you are about to merge:
 
 ```sh
-git merge-base --is-ancestor "$REVIEWED_SHA" "$HEAD_SHA"
+[ "$REVIEWED_SHA" = "$HEAD_SHA" ] || echo "verdict is stale; re-request review"
 ```
+
+**Ancestry is the tempting check and it is too weak.** After any ordinary push
+the reviewed sha REMAINS an ancestor of the new head, so
+`git merge-base --is-ancestor` succeeds while the commits added since were never
+looked at — which is precisely the window a review gate exists to close. It
+detects only history rewrites, and a rewrite is not the common case; pushing a
+fix after a clean verdict is.
+
+Where the intervening delta genuinely does not need re-review — a rebase with no
+content change — say so and record which commits were exempted, rather than
+letting an ancestry check make that judgement silently.
 
 ## Where this stops and the other file starts
 
@@ -217,4 +292,5 @@ Note that its procedure and this one fail in opposite directions, which is why
 neither substitutes for the other. Content-verification confirmed #766 had
 landed correctly while two `Integration` jobs were red on its head; status
 verification would have passed a PR whose fix was stranded on the branch. Run
-both, from the merge commit, and require `success` by name.
+both, from the merge commit, and require `success` from the jobs this commit's
+scope decision says should have run.
