@@ -456,9 +456,16 @@ function appendMissingLines(existing: string, incoming: string): string {
     .filter(line => line.trim() !== "" && !have.has(key(line)));
 
   if (missing.length === 0) return existing;
+
+  // A UTF-8 BOM is only a BOM at byte zero. Prepending in front of one moves it into the middle
+  // of the file, where git stops stripping it and it becomes part of the developer's first
+  // pattern instead — so the BOM stays put and the scaffold's lines go after it.
+  const bom = existing.startsWith("\ufeff") ? "\ufeff" : "";
+  const body = existing.slice(bom.length);
+
   // Only leading NEWLINES are dropped. `trimStart()` would take leading spaces too, and a leading
   // space is part of a git ignore pattern — it would rewrite the developer's first rule.
-  return `${missing.join("\n")}\n\n${existing.replace(/^\n+/, "")}`;
+  return `${bom}${missing.join("\n")}\n\n${body.replace(/^\n+/, "")}`;
 }
 
 /**
@@ -501,35 +508,38 @@ async function pointsAtItself(
   destination: string,
   incoming: string
 ): Promise<boolean> {
-  const targets = includeTargets(incoming);
-  if (targets.length === 0) return false;
+  // Nothing to trace when the incoming content includes nothing — the common case, and it must
+  // not pay for a filesystem call it cannot use.
+  const queue = includeTargets(incoming);
+  if (queue.length === 0) return false;
 
   const self = await fs.realpath(destination).catch(() => destination);
 
-  for (const name of targets) {
+  // Breadth-first over the whole include graph, not one hop. The chain that closes a cycle can
+  // run through files this tool never writes — `AGENTS.md` includes `RULES.md`, `RULES.md`
+  // includes the absent `CLAUDE.md` — and every file in it belongs to the developer, so its
+  // length is not something the scaffolder gets to bound.
+  const visited = new Set<string>();
+
+  while (queue.length > 0) {
+    const name = queue.shift()!;
     const targetPath = path.join(targetDir, name);
+    if (visited.has(targetPath)) continue;
+    visited.add(targetPath);
+
+    // Reaching the file being written closes the loop, whether directly or through a chain.
+    if (targetPath === destination) return true;
+
     const resolved = await fs.realpath(targetPath).catch(() => null);
+    // Unresolvable: a dangling pointer installs nothing, so writing it has no upside to weigh
+    // against the target appearing later.
+    if (resolved === null) return true;
+    if (resolved === self) return true;
 
-    // Directly circular, or unresolvable. A dangling pointer installs nothing, so writing it has
-    // no upside to weigh against the risk of the target appearing later.
-    if (resolved === null || resolved === self) return true;
-
-    // Indirectly circular: the file this would point AT already includes the file being written.
-    // `AGENTS.md` holding `@CLAUDE.md` is inert while `CLAUDE.md` is absent — writing the pointer
-    // is what closes the loop, so the hazard is created by this write rather than found by it.
-    const theirIncludes = await fs
-      .readFile(targetPath, "utf-8")
-      .then(includeTargets)
-      .catch(() => []);
-    for (const back of theirIncludes) {
-      const backResolved = await fs
-        .realpath(path.join(targetDir, back))
-        .catch(() => null);
-      if (backResolved === self || path.join(targetDir, back) === destination) {
-        return true;
-      }
-    }
+    const contents = await fs.readFile(targetPath, "utf-8").catch(() => null);
+    if (contents !== null) queue.push(...includeTargets(contents));
   }
+
   return false;
 }
 

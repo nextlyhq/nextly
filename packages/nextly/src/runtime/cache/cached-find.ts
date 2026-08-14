@@ -83,13 +83,17 @@ export interface CachedFindOptions {
  * // It does NOT evaluate per-row ACCESS rules: a published row only its owner
  * // may read is still returned. A shared key is correct only for a collection
  * // with no read rules; otherwise use the per-user form below.
+ * // `find()` returns `{ items, meta }`, so a detail route takes the first item.
  * const post = await cachedFind(
- *   () =>
- *     nextly.find({
- *       collection: "posts",
- *       where: { slug: { equals: slug } },
- *       status: "published",
- *     }),
+ *   async () =>
+ *     (
+ *       await nextly.find({
+ *         collection: "posts",
+ *         where: { slug: { equals: slug } },
+ *         status: "published",
+ *         limit: 1,
+ *       })
+ *     ).items[0] ?? null,
  *   { tags: nextlyTags("posts"), keyParts: ["posts", slug] }
  * );
  *

@@ -9,8 +9,8 @@
  * for a standalone app — instead of the monorepo's own.
  *
  * So the invariant is asserted on the NAME the template stores them under as well as on their
- * arrival in a project. Asserting only the second passes while the source sits in the repository
- * under its special name, which is the state this replaces.
+ * arrival in a project. Checking only the scaffolded output would pass while the source sat in
+ * this repository under its special name, misfiring on every agent that reads it here.
  */
 import {
   link,
@@ -570,6 +570,37 @@ describe("scaffolding over a project that already has these files", () => {
     expect(await readFile(path.join(target, ".gitignore"), "utf-8")).toMatch(
       /^\.env/m
     );
+  }, 30_000);
+
+  it("does not close a cycle that runs through a third file", async () => {
+    // `AGENTS.md` -> `RULES.md` -> `CLAUDE.md`, where CLAUDE.md does not exist yet. Every file
+    // in the chain is the developer's, so its length is not something the scaffolder bounds —
+    // a one-hop check accepts this and the write completes the loop.
+    const after = await scaffoldOver({
+      "AGENTS.md": "# Ours\n\n@RULES.md\n\nHouse rules are split out.\n",
+      "RULES.md": "# Rules\n\n@CLAUDE.md\n",
+    });
+
+    expect(after["AGENTS.md"]).toContain("House rules are split out.");
+    expect(after["RULES.md"]).toContain("@CLAUDE.md");
+    const claude = await readFile(
+      path.join(workdir, "project", "CLAUDE.md"),
+      "utf-8"
+    ).catch(() => "");
+    expect(claude.split("\n").filter(l => l.trim() === "@AGENTS.md")).toEqual(
+      []
+    );
+  }, 30_000);
+
+  it("keeps an existing .gitignore's BOM at byte zero", async () => {
+    // A UTF-8 BOM is only a BOM in first position. Prepending in front of one moves it into the
+    // middle, where git stops stripping it and it becomes part of the developer's first pattern.
+    const after = await scaffoldOver({ ".gitignore": "\ufeffcoverage/\n" });
+
+    expect(after[".gitignore"].startsWith("\ufeff")).toBe(true);
+    // Exactly one, and their pattern is clean of it.
+    expect(after[".gitignore"].split("\ufeff")).toHaveLength(2);
+    expect(after[".gitignore"]).toMatch(/^coverage\/$/m);
   }, 30_000);
 
   it("does not write through a CLAUDE.md symlink", async () => {
