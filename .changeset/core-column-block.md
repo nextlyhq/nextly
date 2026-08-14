@@ -29,6 +29,8 @@ Add `core/column` as a real block and restrict `core/columns` to accept only col
 
 A block whose slot refuses it is now reported by the repair banner and repaired by WRAPPING it in the one type the slot admits, so a page stored with loose children in a columns row can be fixed without discarding them. The block library's Insert button applies the same drop rules a drag does, inserting into the nearest place that accepts the block and reporting when there is nowhere. Slots declare whether they lay their children out with flex or grid, so the canvas stops interleaving drop zones that would become cells of that layout.
 
+A block can declare the parents it may sit under (`parent`, matching the field of the same name in Gutenberg's block metadata), which is the half a slot's `allowedBlocks` cannot express — `core/column` uses it so inserting a Column while one is selected produces a sibling in the row rather than a column nested inside a column.
+
 The slot rules are now enforced in the editor's reducer, so paste, keyboard reorder and anything added later cannot write a document the save path refuses — previously only drag-and-drop consulted them. Documents are migrated when the editor loads them, which is what makes any block's `migrate` reachable at all.
 
 Fixes a crash opening an Image's aspect-ratio control: Radix refuses a select item whose value is the empty string.

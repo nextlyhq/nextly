@@ -181,3 +181,56 @@ describe("finding where an inserted block goes", () => {
     }
   });
 });
+
+describe("a block that restricts which parents it may sit under", () => {
+  /**
+   * Run against the REAL catalogue, because the property is about `core/column` specifically: the
+   * synthetic registry above cannot carry a structural `parent`, which is declared beside the
+   * block rather than on a definition handed to `createBlockRegistry`.
+   */
+  it("walks past a container that would accept it, to the one it belongs in", async () => {
+    const { defaultBlockRegistry } = await import("../../core/registry");
+    await import("../../render/blocks");
+
+    const column = node("core/column", { default: [] }, "col");
+    const root = node(
+      "core/container",
+      {
+        default: [node("core/columns", { default: [column] }, "row")],
+      },
+      "page"
+    );
+
+    // The precondition that makes this test mean something: a column's own slot is unrestricted,
+    // so a nearest-accepting search WOULD stop there without the parent rule.
+    expect(
+      canDrop("core/column", "default", "core/heading", defaultBlockRegistry).ok
+    ).toBe(true);
+
+    // Selecting the column and inserting another must produce a SIBLING, not a nested column.
+    expect(
+      planInsert(root, "col", "core/column", defaultBlockRegistry)
+    ).toEqual({ parentId: "row", slot: "default", index: 1 });
+  });
+
+  it("reports nowhere when no ancestor is a permitted parent", async () => {
+    const { defaultBlockRegistry } = await import("../../core/registry");
+    await import("../../render/blocks");
+
+    const root = node("core/container", { default: [] }, "page");
+    expect(planInsert(root, "page", "core/column", defaultBlockRegistry)).toBe(
+      null
+    );
+  });
+
+  it("still places a block that restricts nothing", async () => {
+    // The positive control: a rule that refused everything would satisfy both cases above.
+    const { defaultBlockRegistry } = await import("../../core/registry");
+    await import("../../render/blocks");
+
+    const root = node("core/container", { default: [] }, "page");
+    expect(
+      planInsert(root, "page", "core/heading", defaultBlockRegistry)?.parentId
+    ).toBe("page");
+  });
+});

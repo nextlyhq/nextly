@@ -33,6 +33,19 @@ export interface BlockStructure {
   isContainer?: boolean;
   /** The slots it declares, in the order it declares them. */
   slots?: SlotSpec[];
+  /**
+   * The only types this block may be a DIRECT child of. Omit for "anywhere".
+   *
+   * The other half of `allowedBlocks`, and not derivable from it. A slot's allowlist is the
+   * parent's statement about what it will hold; this is the child's statement about where it makes
+   * sense. Both are needed because neither implies the other: a slot naming `core/heading` must not
+   * confine headings to it, and a block that is meaningless outside one parent has to say so
+   * itself.
+   *
+   * Named after the same field in Gutenberg's block metadata, which solves this case identically —
+   * its `core/column` declares `parent: ["core/columns"]`.
+   */
+  parent?: string[];
 }
 
 /**
@@ -67,6 +80,18 @@ export function declareStructure(structure: BlockStructure): BlockStructure {
 export function declaredSlotsOf(type: string): SlotSpec[] | undefined {
   const structure = CORE_BLOCK_STRUCTURES[type];
   return structure ? (structure.slots ?? []) : undefined;
+}
+
+/**
+ * The parents a type restricts itself to, from structure ALONE — no renderer, no registry.
+ *
+ * `undefined` means the type states no restriction, which is the common case and is NOT the same
+ * as "this build has no structure for it". Both answer "put it anywhere", so the two are collapsed
+ * here deliberately: a caller cannot act differently on them, and pretending it could would invite
+ * a check that treats an unknown plugin block as forbidden everywhere.
+ */
+export function declaredParentsOf(type: string): string[] | undefined {
+  return CORE_BLOCK_STRUCTURES[type]?.parent;
 }
 
 /**
@@ -114,6 +139,11 @@ export const columnStructure = declareStructure({
   type: "core/column",
   isContainer: true,
   slots: [{ name: "default" }],
+  // A column draws a flex ITEM: its width and alignment are instructions to a flex container, and
+  // the only block that provides one is the row. Sitting anywhere else — including inside another
+  // column, which is where a nearest-accepting search would otherwise put it — it renders as an
+  // ordinary div and the author does not get the column they asked for.
+  parent: ["core/columns"],
 });
 
 export const gridStructure = declareStructure({

@@ -26,7 +26,7 @@
  *
  * @module core/invalid-slots
  */
-import { declaredSlotsOf } from "./block-structure";
+import { declaredParentsOf, declaredSlotsOf } from "./block-structure";
 import { createNode, type BlockRegistry } from "./registry";
 import {
   dropSlots,
@@ -140,9 +140,11 @@ function declaredFor(
 /**
  * The one type that could hold this child inside a restricted slot, if there is exactly one.
  *
- * Three conditions, and each removes a way of guessing wrong: one permitted type, so nothing is
- * being chosen for the author; that type holds children at all; and its own default slot admits
- * this block, so wrapping produces a document that saves rather than a differently invalid one.
+ * Four conditions, and each removes a way of guessing wrong: one permitted type, so nothing is
+ * being chosen for the author; that type holds children at all; its own default slot admits this
+ * block; and this block states no parent restriction that the wrapper would violate. The last two
+ * are independent, and together they are what make the wrap produce a document that saves rather
+ * than a differently invalid one.
  */
 function soleWrapperFor(
   spec: SlotSpec,
@@ -163,6 +165,10 @@ function soleWrapperFor(
   if (inner.allowedBlocks && !inner.allowedBlocks.includes(childType)) {
     return undefined;
   }
+  // And the CHILD's own restriction, which the inner slot's allowlist cannot express. A block that
+  // may only sit under one parent is not made placeable by a wrapper that accepts everything.
+  const childParents = declaredParentsOf(childType);
+  if (childParents && !childParents.includes(wrapperType)) return undefined;
   return wrapperType;
 }
 

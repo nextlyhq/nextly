@@ -93,3 +93,32 @@ describe("insertionIndex", () => {
     expect(insertionIndex(rects, 200)).toBe(3);
   });
 });
+
+describe("a child's own restriction on where it may sit", () => {
+  it("refuses a block whose parent list does not name this container", () => {
+    // The half `allowedBlocks` cannot express: a container's slot accepting everything is not the
+    // same as every block being at home in it.
+    const refusal = canDrop(
+      "core/column",
+      "default",
+      "core/column",
+      defaultBlockRegistry
+    );
+    expect(refusal.ok).toBe(false);
+    expect(refusal.reason).toBe("wrong-parent");
+  });
+
+  it("accepts it in the container its parent list names", () => {
+    expect(
+      canDrop("core/columns", "default", "core/column", defaultBlockRegistry).ok
+    ).toBe(true);
+  });
+
+  it("leaves a block that restricts nothing placeable in that same container", () => {
+    // The positive control. `core/column`'s slot must still take ordinary blocks, or the refusal
+    // above would be a statement about the container rather than about the child.
+    expect(
+      canDrop("core/column", "default", "core/heading", defaultBlockRegistry).ok
+    ).toBe(true);
+  });
+});
