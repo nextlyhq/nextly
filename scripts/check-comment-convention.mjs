@@ -124,20 +124,13 @@ export const FORBIDDEN = [
 /**
  * Files this check does not read.
  *
- * Its own test holds comment SYNTAX inside string literals as fixtures, and the extractor below
- * reads text rather than parsing, so it cannot tell a fixture from prose. Excluding one file by
- * name is the honest fix; teaching the extractor about string literals would make it a parser,
- * which is the unbounded surface this deliberately is not.
+ * Empty, and kept as a declared seam rather than deleted: whatever this check cannot read is
+ * unjudged, so the list is the place that has to stay visible. Its own source and test are NOT
+ * here - an instrument exempt from the control it applies elsewhere is the one thing nothing is
+ * watching, and this file necessarily contains what it forbids, so its existing prose is recorded
+ * in the allowlist like any other file rather than waved through by name.
  */
-export const EXCLUDED_FILES = new Set([
-  // This file and its test, both of which necessarily contain what they forbid: the patterns
-  // name the shapes, the prose explains why each was chosen, and the test holds fixtures of
-  // every rejected form. Excluding two files by name is the honest fix; teaching the extractor
-  // to tell a definition from a use would make it a parser, which is the unbounded surface this
-  // deliberately is not.
-  "scripts/check-comment-convention.mjs",
-  "scripts/check-comment-convention.test.mjs",
-]);
+export const EXCLUDED_FILES = new Set([]);
 
 /**
  * Extensions this reads. The JS family is included because authored source lives there too —
@@ -494,18 +487,38 @@ function heredocDelimiter(line, start) {
   }
   while (line[at] === " " || line[at] === "\t") at += 1;
 
-  const quote = line[at];
-  if (quote === "'" || quote === '"') {
-    const close = line.indexOf(quote, at + 1);
-    if (close === -1) return null;
-    return { delim: line.slice(at + 1, close), stripTabs, end: close + 1 };
-  }
-
+  // The delimiter is ONE word that the shell quote-removes as a whole, so `<<'E'OF` names EOF.
+  // Stopping at the first closing quote would name `E`, and no later line would ever match the
+  // terminator - which suppresses the rest of the file rather than reporting anything.
   let end = at;
-  while (end < line.length && !/[\s;&|()<>]/.test(line[end])) end += 1;
-  const raw = line.slice(at, end).replace(/\\/g, "");
-  if (!/^[A-Za-z_][\w.-]*$/.test(raw)) return null;
-  return { delim: raw, stripTabs, end };
+  let delim = "";
+  let quoted = false;
+  while (end < line.length) {
+    const c = line[end];
+    if (c === "'" || c === '"') {
+      const close = line.indexOf(c, end + 1);
+      if (close === -1) return null;
+      delim += line.slice(end + 1, close);
+      quoted = true;
+      end = close + 1;
+      continue;
+    }
+    if (c === "\\") {
+      if (end + 1 >= line.length) return null;
+      delim += line[end + 1];
+      quoted = true;
+      end += 2;
+      continue;
+    }
+    if (/[\s;&|()<>]/.test(c)) break;
+    delim += c;
+    end += 1;
+  }
+  // A quoted delimiter is unambiguous. An UNQUOTED one must look like a word, because a left
+  // shift reaches here as `<< 2` and opening a heredoc on it would swallow the rest of the file.
+  if (!delim) return null;
+  if (!quoted && !/^[A-Za-z_][\w.-]*$/.test(delim)) return null;
+  return { delim, stripTabs, end };
 }
 
 function hashLineComments(source, { shell = false } = {}) {
@@ -556,15 +569,27 @@ function hashLineComments(source, { shell = false } = {}) {
       // inside double quotes. `$((` is arithmetic, where `<<` is a shift rather than a heredoc.
       if (shell && quote !== "'" && c === "$" && line[at + 1] === "(") {
         const arithmetic = line[at + 2] === "(";
-        substitutions.push({ quote, arithmetic });
+        substitutions.push({ quote, arithmetic, depth: 0 });
         quote = "";
         at += arithmetic ? 2 : 1;
         continue;
       }
+      // A subshell or grouping inside the substitution closes with the same character, so its
+      // `)` must not restore the enclosing quote - doing so would read the rest of a
+      // `"$( (cmd); # c )"` line as quoted data and miss the comment.
+      if (shell && !quote && c === "(" && substitutions.length > 0) {
+        substitutions[substitutions.length - 1].depth += 1;
+        continue;
+      }
       if (shell && !quote && c === ")" && substitutions.length > 0) {
-        const outer = substitutions.pop();
-        if (outer.arithmetic && line[at + 1] === ")") at += 1;
-        quote = outer.quote;
+        const innermost = substitutions[substitutions.length - 1];
+        if (innermost.depth > 0) {
+          innermost.depth -= 1;
+          continue;
+        }
+        substitutions.pop();
+        if (innermost.arithmetic && line[at + 1] === ")") at += 1;
+        quote = innermost.quote;
         continue;
       }
 
@@ -580,8 +605,12 @@ function hashLineComments(source, { shell = false } = {}) {
         continue;
       }
 
+      // Shell allows a quote to open mid-word (`a'b'c` concatenates), but YAML does not: in a
+      // plain scalar an apostrophe or inch mark is ordinary content. Treating `Don't` or
+      // `12" screen` as opening a scalar swallows the rest of the line, and the end-of-line reset
+      // comes too late to recover the comment that followed on it.
       if (c === '"' || c === "'") {
-        quote = c;
+        if (shell || at === 0 || /[\s:,[{]/.test(line[at - 1])) quote = c;
         continue;
       }
 

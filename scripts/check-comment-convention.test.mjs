@@ -196,9 +196,14 @@ describe("the file walk", () => {
 describe("the allowlist", () => {
   // Pinned so growth appears in the diff. Without it an entry can be added in the same commit as
   // the comment it exempts, which turns the allowlist into a way of silencing the check rather
-  // than a record of what predates it. Lower this as entries are removed; never raise it.
-  const EXPECTED_ENTRIES = 244;
-  const EXPECTED_TOTAL = 458;
+  // than a record of what predates it. Lower these as entries are removed.
+  //
+  // Raising them is legitimate in exactly one case, which is why these numbers moved once: when
+  // the scan WIDENS to files it previously skipped, whatever those files already contained is by
+  // definition pre-existing. The checker's own source came out of EXCLUDED_FILES and brought 12
+  // recorded offences with it. A raise for any other reason is the silencing this guards against.
+  const EXPECTED_ENTRIES = 245;
+  const EXPECTED_TOTAL = 470;
 
   it("matches its pinned size exactly", () => {
     expect(readAllowlist().size).toBe(EXPECTED_ENTRIES);
@@ -361,6 +366,17 @@ describe("the hash dialects", () => {
       expect(names(shell(`cmd <<A <<B\n# ${NARRATION}\nA\n# ${NARRATION}\nB\n`))).toBe(false);
     });
 
+    it("quote-removes the whole delimiter word", () => {
+      // The shell reads `<<'E'OF` as the single word EOF. Stopping at the first closing quote
+      // names `E`, no later line matches the terminator, and every remaining line is suppressed -
+      // a miss that grows to the end of the file.
+      expect(names(shell(`cat <<'E'OF\ndata\nEOF\n# ${NARRATION}\n`))).toBe(true);
+    });
+
+    it("still treats a mixed-quoted heredoc body as data", () => {
+      expect(names(shell(`cat <<'E'OF\n# ${NARRATION}\nEOF\n`))).toBe(false);
+    });
+
     it("reads a comment after the heredoc closes", () => {
       // The positive control. Without it every assertion above is satisfied by a reader that
       // stopped at the first heredoc and never emitted anything again.
@@ -391,6 +407,12 @@ describe("the hash dialects", () => {
       expect(names(shell(`value="literal # ${NARRATION}"\n`))).toBe(false);
     });
 
+    it("tracks nested parentheses before restoring the outer quote", () => {
+      // A subshell inside the substitution closes with the same character. Popping on it would
+      // restore the enclosing double quote and read the real comment after it as data.
+      expect(names(shell(`value="$( (echo ok); # ${NARRATION}\n)"`))).toBe(true);
+    });
+
     it("does not read a substitution inside single quotes", () => {
       // Single quotes suppress substitution entirely, so this really is literal text.
       expect(names(shell(`value='$(echo ok # ${NARRATION})'\n`))).toBe(false);
@@ -415,6 +437,22 @@ describe("the hash dialects", () => {
 
     it("enters a scalar carrying indentation and chomping indicators", () => {
       expect(names(yaml(`body: |2-\n  # ${NARRATION}\n`))).toBe(false);
+    });
+
+    it("does not treat an apostrophe in a plain scalar as opening one", () => {
+      // `Don't` is ordinary content. Reading the apostrophe as a quote swallows the rest of the
+      // line, and the end-of-line reset comes too late to recover the comment that followed it -
+      // so the narration passes on the SAME line while a next-line control still looks green.
+      expect(names(yaml(`message: Don't panic # ${NARRATION}`))).toBe(true);
+    });
+
+    it("does not treat an inch mark in a plain scalar as opening one", () => {
+      expect(names(yaml(`size: 12" screen # ${NARRATION}`))).toBe(true);
+    });
+
+    it("still treats a genuinely quoted scalar as data", () => {
+      // The negative half of the pair: a quote where a scalar can BEGIN does open one.
+      expect(names(yaml(`key: 'value # ${NARRATION}'`))).toBe(false);
     });
 
     it("still reads an ordinary comment", () => {

@@ -1187,5 +1187,22 @@
   "packages/ui/src/components/__tests__/tabs-contract.test.ts": {
     "count": 1,
     "digests": ["14a03e4440a2cda4"]
+  },
+  "scripts/check-comment-convention.mjs": {
+    "count": 12,
+    "digests": [
+      "0e5f116f2cd25dac",
+      "302483f51f7cf7fe",
+      "3233b1edbe93293f",
+      "4d4b53c6d370830e",
+      "8358497c94b73384",
+      "84a19e8a40a5ed0b",
+      "b604a9886a0e33b6",
+      "c300a9c484d60448",
+      "d1e9a94113a47158",
+      "dc84b3f296521a00",
+      "e0768a0365e686d2",
+      "f1a123b3835b41ba"
+    ]
   }
 }
