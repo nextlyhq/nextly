@@ -382,8 +382,15 @@ export function report({
   // are not the ones being merged — and the head's absence from it is the thing
   // that gives that away. An order that does not reach the revision under
   // judgement cannot license reading any other absence as erasure.
+  // The head must be the FINAL revision, not merely present. A branch that
+  // fast-forwards to an already-reviewed child during the commit request and
+  // returns before every ref recheck yields an order that contains the head and
+  // continues past it — so a delayed approval pinned to that child would clear
+  // an objection at the head, while the child is not what merges. Presence
+  // alone cannot separate that from an order taken while the branch was still.
+  const finalIndex = revisionOrder ? revisionOrder.size - 1 : -1;
   const orderReachesHead =
-    revisionOrderComplete === true && revisionOrder?.get(head) !== undefined;
+    revisionOrderComplete === true && revisionOrder?.get(head) === finalIndex;
   const refused = changesRequested(reviews, revisionOrder, orderReachesHead);
   const { verdict, detail, exitCode } = verdictFor({
     missing,
@@ -849,6 +856,37 @@ async function main(argv) {
   if (headOf() !== head) {
     process.stderr.write(
       "ci-verdict: head moved before the verdict was emitted; re-run\n"
+    );
+    return 2;
+  }
+
+  // The REVIEW evidence is re-read last, because it is what the verdict is made
+  // of and every check between the earlier snapshot and here reads something
+  // else. A blocking reviewer submitting `CHANGES_REQUESTED`, opening a thread
+  // or unresolving one in that window moves no ref and changes no lifecycle, so
+  // each of those checks passes and the verdict would be computed from evidence
+  // already known to be stale. Compared by the same fingerprint, so a change
+  // that leaves every count identical is still caught.
+  if (
+    fingerprint(reviews, threads, issueComments) !==
+    fingerprint(
+      gh([
+        "api",
+        `repos/${repo}/pulls/${pr}/reviews`,
+        "--paginate",
+        "--slurp",
+      ]).flat(),
+      readThreads(),
+      gh([
+        "api",
+        `repos/${repo}/issues/${pr}/comments`,
+        "--paginate",
+        "--slurp",
+      ]).flat()
+    )
+  ) {
+    process.stderr.write(
+      "ci-verdict: review state changed before the verdict was emitted; re-run\n"
     );
     return 2;
   }
