@@ -17,13 +17,26 @@ node scripts/verify-merge.mjs <pr-number>
 It reads the tip from `git ls-remote` rather than the API's cached head, refuses
 when the branch cannot answer, names every blocking job rather than counting
 them, and reports a second reviewer that never ran as distinct from one that
-found nothing. Exit status is the verdict. A gate typed out again by hand is a
-second implementation of the same question, which this repository has a rule
-about.
+found nothing. A gate typed out again by hand is a second implementation of the
+same question, which this repository has a rule about.
+
+**It answers a different question before and after the merge**, because the two
+questions have different subjects. Open, it judges the branch tip — the thing
+being proposed. Merged, it judges `merge_commit_sha`: a squash commit is `main`
+plus the change rather than the tree CI ran on, and the two disagree. Measured
+on one merged pull request here, the branch head reported the CI job and one
+integration leg as `success` while the merge commit had them queued.
+
+**Exit status distinguishes three outcomes, and the third is not a softer
+second.** `0` passed, `1` blocked, `2` did not get to answer — a rewritten
+history, or a candidate list from the landed-whole screen that nobody has
+settled by content yet. A caller may retry or escalate a `2`; it must never read
+one as a pass.
 
 `scripts/verify-merge.mjs` implements the judgements below as pure functions —
 whether a branch can answer the question at all, whether a job counts as
-passing, whether a review verdict belongs to the revision being merged, and
+passing, whether a check was ever DUE to report given the paths the pull request
+touches, whether a review verdict belongs to the revision being merged, and
 whether a second reviewer looked. `scripts/verify-merge.test.mjs` runs them
 against the inputs that produced this repository's actual false cleans, and
 `pnpm test:scripts` runs it in CI.
