@@ -96,16 +96,6 @@ import type {
 const Tabs = Root;
 
 /**
- * TabsList - Container for tab triggers
- *
- * Design Specs:
- * - Height: 40px (h-10)
- * - Border-radius: none (for underline style)
- * - Background: transparent
- * - Layout: inline-flex (horizontal by default, use orientation="vertical" on Tabs root for vertical)
- * @public
- */
-/**
  * The list's own appearance, as variants rather than as classes each caller
  * repeats.
  *
@@ -132,6 +122,16 @@ const tabsListVariants = cva(
   }
 );
 
+/**
+ * TabsList - Container for tab triggers
+ *
+ * Design Specs:
+ * - Height: 40px (h-10)
+ * - Border-radius: none (for underline style)
+ * - Background: transparent
+ * - Layout: inline-flex (horizontal by default, use orientation="vertical" on Tabs root for vertical)
+ * @public
+ */
 const TabsList = forwardRef<
   TabsListRef,
   TabsListBaseProps & VariantProps<typeof tabsListVariants>
@@ -145,25 +145,6 @@ const TabsList = forwardRef<
 ));
 TabsList.displayName = List.displayName;
 
-/**
- * TabsTrigger - Clickable tab button
- *
- * Design Specs:
- * - Border-radius: none (Gmail-style underline tabs)
- * - Padding: 6px 16px (px-4 py-2)
- * - Font: text-sm (14px), font-medium (500)
- * - Transition: 150ms (design system standard)
- * - Active state: blue text with blue bottom  border border-border (2px)
- * - Hover: blue text with blue bottom  border border-border
- * - Gmail-inspired clean underline style
- *
- * Accessibility:
- * - Keyboard navigation: Arrow keys, Home, End
- * - Focus ring: 2px with offset (WCAG 2.2 compliant)
- * - Disabled state: pointer-events-none, opacity-50
- * - Data attributes: [data-state="active|inactive"], [data-disabled]
- * @public
- */
 /**
  * The trigger's own appearance. `size` carries the type scale only: everything
  * that draws the tab -- the square corners, the 2px underline, the active and
@@ -185,6 +166,25 @@ const tabsTriggerVariants = cva(
   }
 );
 
+/**
+ * TabsTrigger - Clickable tab button
+ *
+ * Design Specs:
+ * - Border-radius: none (Gmail-style underline tabs)
+ * - Padding: 6px 16px (px-4 py-2)
+ * - Font: text-sm (14px), font-medium (500)
+ * - Transition: 150ms (design system standard)
+ * - Active state: blue text with blue bottom  border border-border (2px)
+ * - Hover: blue text with blue bottom  border border-border
+ * - Gmail-inspired clean underline style
+ *
+ * Accessibility:
+ * - Keyboard navigation: Arrow keys, Home, End
+ * - Focus ring: 2px with offset (WCAG 2.2 compliant)
+ * - Disabled state: pointer-events-none, opacity-50
+ * - Data attributes: [data-state="active|inactive"], [data-disabled]
+ * @public
+ */
 const TabsTrigger = forwardRef<
   TabsTriggerRef,
   TabsTriggerBaseProps & VariantProps<typeof tabsTriggerVariants>
