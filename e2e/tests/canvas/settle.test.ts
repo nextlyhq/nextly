@@ -78,7 +78,7 @@ test("throws rather than returning a value from a reader that never holds still"
       DEFAULT_DWELL_ALLOWANCE_MS,
       "test reading"
     )
-  ).rejects.toThrow(/test reading was still changing/);
+  ).rejects.toThrow(/test reading changed on all \d+ settling rounds/);
 });
 
 test("tolerates a reader that settles only after changing more than once", async () => {
@@ -137,4 +137,19 @@ test("takes the default for a driver that declares no dwell", async () => {
   const read = dwellingReader(1, 2, DEFAULT_DWELL_ALLOWANCE_MS / 2);
 
   expect(await settledTarget({ readActiveTarget: read })).toBe(2);
+});
+
+test("tolerates a change when the driver declares no dwell", async () => {
+  // A canvas with a distance margin declares an allowance of 0, and the PoC
+  // does. Deriving the settling budget from that allowance made it zero too, so
+  // a single asynchronous re-render between two reads — which a live canvas
+  // does routinely — raised a harness error instead of returning the settled
+  // value. The tolerance is a COUNT of changes, not a duration.
+  let reads = 0;
+  const value = await settledValue(async () => {
+    reads += 1;
+    return reads <= 1 ? 1 : 2;
+  }, 0);
+
+  expect(value).toBe(2);
 });

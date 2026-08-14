@@ -490,21 +490,22 @@ export async function settledValue<T>(
   allowanceMs: number,
   subject = "reading"
 ): Promise<T> {
-  const budgetMs = SETTLE_ROUNDS * allowanceMs;
-  const deadline = Date.now() + budgetMs;
   let value = await read();
-  // At least one full round, so a canvas declaring a zero dwell still gets its
-  // reading taken rather than falling straight through an expired deadline.
+  // Bounded by ROUNDS, never by a clock. What is being tolerated is a canvas
+  // changing its mind a bounded number of times, and each round already bounds
+  // its own wait by the allowance — so a wall-clock budget adds nothing and
+  // collapses to zero for a canvas that declares no dwell, where it would turn
+  // a single asynchronous re-render between two reads into a harness error
+  // instead of a settled reading.
   for (let round = 0; round < SETTLE_ROUNDS; round += 1) {
     const next = await departureFrom(read, value, allowanceMs);
     if (next === value) return value;
     value = next;
-    if (Date.now() >= deadline) break;
   }
   throw new Error(
-    `the ${subject} was still changing after ${String(budgetMs)}ms with a ` +
-      `stationary pointer (last seen ${String(value)}), so nothing read here ` +
-      `is settled`
+    `the ${subject} changed on all ${String(SETTLE_ROUNDS)} settling rounds ` +
+      `with a stationary pointer (last seen ${String(value)}), so nothing read ` +
+      `here is settled`
   );
 }
 
