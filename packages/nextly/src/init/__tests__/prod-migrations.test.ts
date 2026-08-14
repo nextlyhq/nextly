@@ -1,4 +1,5 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { NextlyError } from "../../errors";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -44,12 +45,74 @@ function args(over: Record<string, unknown> = {}) {
 }
 
 describe("runProdMigrationsIfEnabled", () => {
+  beforeEach(() => {
+    // Process-global by design — the refusal must outlive a request — so it has
+    // to be cleared between cases or the first refusal fails every test after.
+    delete (globalThis as { __nextly_bootMigrationsRefused?: unknown })
+      .__nextly_bootMigrationsRefused;
+  });
+
   /**
    * The lock timing out tells this process nothing about whether the holder
    * migrated. Serving anyway is the case that put a replica on an unmigrated
    * schema while logging `complete (0 applied)` — `applied` is 0 here and 0 on
    * an up-to-date database, so the count cannot distinguish them.
    */
+  /**
+   * The refusal has to outlive the request that raised it. Both entry points
+   * run migrations inside `if (!isServicesRegistered())`, and DI is already
+   * marked registered by the time this throws — so without stickiness the very
+   * next request skips migrations and serves the schema the process refused.
+   *
+   * Second call passes a migrateCore that would SUCCEED, so this cannot pass by
+   * the failure simply repeating.
+   */
+  it("keeps refusing on later calls, even when migrations would now succeed", async () => {
+    process.env.NODE_ENV = "production";
+    await expect(
+      runProdMigrationsIfEnabled(
+        args({
+          migrateCore: vi.fn(async () => ({
+            applied: 0,
+            coreChanged: false,
+            ran: false,
+          })),
+        }) as never
+      )
+    ).rejects.toMatchObject({ code: "NEXTLY_BOOT_MIGRATIONS_NOT_RUN" });
+
+    const wouldSucceed = vi.fn(async () => ({
+      applied: 3,
+      coreChanged: false,
+      ran: true,
+    }));
+    await expect(
+      runProdMigrationsIfEnabled(args({ migrateCore: wouldSucceed }) as never)
+    ).rejects.toMatchObject({ code: "NEXTLY_BOOT_MIGRATIONS_NOT_RUN" });
+    expect(wouldSucceed).not.toHaveBeenCalled();
+  });
+
+  /**
+   * MySQL reports a busy lock by THROWING `NEXTLY_MIGRATE_LOCK_BUSY` rather
+   * than returning `ran: false`, so a catch that rethrew only the refusal let
+   * MySQL serve the unmigrated schema this change exists to prevent.
+   */
+  it("refuses when the lock was busy on a dialect that throws instead", async () => {
+    process.env.NODE_ENV = "production";
+    const a = args({
+      migrateCore: vi.fn(async () => {
+        throw new NextlyError({
+          code: "NEXTLY_MIGRATE_LOCK_BUSY",
+          publicMessage: "busy",
+        });
+      }),
+    });
+
+    await expect(runProdMigrationsIfEnabled(a as never)).rejects.toMatchObject({
+      code: "NEXTLY_BOOT_MIGRATIONS_NOT_RUN",
+    });
+  });
+
   it("refuses to start when the migrations did not run", async () => {
     process.env.NODE_ENV = "production";
     const a = args({

@@ -183,11 +183,36 @@ export async function withMigrateLock<T>(
     }
     case "mysql": {
       const my = db as PgLike;
+      // `GET_LOCK`'s second argument IS the wait: 0 returns immediately, a
+      // positive number blocks for that many seconds. Passing 0 unconditionally
+      // meant `mode: "wait"` was silently fail-fast on MySQL — it threw
+      // `NEXTLY_MIGRATE_LOCK_BUSY` where Postgres reports `ran: false`, so the
+      // two dialects disagreed about what a busy lock even IS, and a caller
+      // handling one outcome was unprotected on the other.
+      const waitSeconds =
+        opts?.mode === "wait"
+          ? Math.ceil(
+              (opts.maxWaitMs ??
+                (opts.ttlSeconds ?? DEFAULT_TTL_SECONDS) * 1000) / 1000
+            )
+          : 0;
       const acquired = toRows(
-        await my.execute(sql`SELECT GET_LOCK(${MYSQL_LOCK_NAME}, 0) AS locked`)
+        await my.execute(
+          sql`SELECT GET_LOCK(${MYSQL_LOCK_NAME}, ${waitSeconds}) AS locked`
+        )
       );
       const v = acquired[0]?.locked;
-      if (!(v === 1 || v === true)) lockBusy();
+      if (!(v === 1 || v === true)) {
+        // Same split as Postgres: waiting and still not getting it is an
+        // OUTCOME the caller decides on; fail-fast is an error.
+        if (opts?.mode === "wait") {
+          opts.logger?.warn?.(
+            "[Nextly] migrate lock still held after waiting; migrations SKIPPED."
+          );
+          return { ran: false, reason: "lock-held" };
+        }
+        lockBusy();
+      }
       try {
         return { ran: true, value: await fn() };
       } finally {
