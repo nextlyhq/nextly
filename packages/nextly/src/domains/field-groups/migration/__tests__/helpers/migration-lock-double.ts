@@ -95,6 +95,22 @@ export function isClaimLive(lock: LockRow): boolean {
   );
 }
 
+/**
+ * Whether the claim would still be there when its next renewal falls due.
+ *
+ * The stricter of the two questions the real statement answers: a lease can be live at the instant
+ * it is read and gone before anything renews it, so a claimant needs this one rather than
+ * {@link isClaimLive}. The margin is READ FROM THE STATEMENT rather than restated here — a copy
+ * would keep agreeing with the session's constant right up until someone retuned it.
+ */
+export function isClaimUsable(lock: LockRow, marginSeconds: number): boolean {
+  return (
+    lock.owner !== null &&
+    (lock.expiresAt === null ||
+      lock.expiresAt > lock.clock.now() + marginSeconds)
+  );
+}
+
 // Built from the constant rather than spelled out, so a rename of the table moves these with it.
 const TABLE = MIGRATION_LOCK_TABLE;
 
@@ -111,7 +127,7 @@ const NOW = String.raw`(?:clock_timestamp\(\)|NOW\(\)|unixepoch\(\))`;
 const EXPIRY = String.raw`(?:clock_timestamp\(\) \+ make_interval\(secs => \$(?<ttlPg>\d+)\)|DATE_ADD\(NOW\(\), INTERVAL \$(?<ttlMysql>\d+) SECOND\)|unixepoch\(\) \+ \$(?<ttlSqlite>\d+))`;
 
 const LOCK_STATE = new RegExp(
-  String.raw`^SELECT "owner", CASE WHEN "owner" IS NOT NULL AND \("expires_at" IS NULL OR "expires_at" > ${NOW}\) THEN 1 ELSE 0 END AS "live" FROM "${TABLE}" WHERE "id" = \$\d+$`
+  String.raw`^SELECT "owner", CASE WHEN "owner" IS NOT NULL AND \("expires_at" IS NULL OR "expires_at" > ${NOW}\) THEN 1 ELSE 0 END AS "live", CASE WHEN "owner" IS NOT NULL AND \("expires_at" IS NULL OR "expires_at" > ${EXPIRY}\) THEN 1 ELSE 0 END AS "usable" FROM "${TABLE}" WHERE "id" = \$\d+$`
 );
 const ROW_EXISTS = new RegExp(
   String.raw`^SELECT "id" FROM "${TABLE}" WHERE "id" = \$\d+$`
@@ -219,7 +235,13 @@ export function interpretLockStatement(
     // reported whether or not the claim has lapsed — the row still holds the name of whoever wrote
     // it last, and it is the flag rather than the absence of a name that says the claim is dead.
     return lock.seeded
-      ? [{ owner: lock.owner, live: isClaimLive(lock) ? 1 : 0 }]
+      ? [
+          {
+            owner: lock.owner,
+            live: isClaimLive(lock) ? 1 : 0,
+            usable: isClaimUsable(lock, boundTtl(groups, params)) ? 1 : 0,
+          },
+        ]
       : [];
   }
   if (matched?.kind === "claim") {

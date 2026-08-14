@@ -7,6 +7,7 @@ import { NextlyError } from "../../../../errors/nextly-error";
 import {
   getMigrationLockDdl,
   LOCK_RENEW_INTERVAL_MS,
+  LOCK_RENEW_MARGIN_SECONDS,
   LOCK_LOSS_AFTER_MS,
   LOCK_TTL_SECONDS,
   MIGRATION_LOCK_TABLE,
@@ -805,6 +806,43 @@ describe("field-group migration session", () => {
     }
   });
 
+  // "Not yet expired" is not "safe to start work on". The claim UPDATE and its read-back are two
+  // statements, and a process descheduled between them can spend most of the TTL there — coming back
+  // to a lease that is genuinely live and has less left than the interval before anything renews it.
+  // Starting a migration on that is starting it unprotected: the row lapses while `fn` is running
+  // and a contender takes it.
+  it("refuses a claim whose lease cannot survive to its first renewal", async () => {
+    let paused = false;
+    const h = createAdapter({
+      heldBy: null,
+      onStatement: kind => {
+        if (kind === "claim" && !paused) {
+          paused = true;
+          // Long enough to eat most of the lease, short enough to leave it LIVE — which is the
+          // whole point: the previous check passes here and the work still ends up unprotected.
+          h.clock.advance(LOCK_TTL_SECONDS - LOCK_RENEW_MARGIN_SECONDS + 5);
+        }
+      },
+    });
+
+    const ran = vi.fn();
+    await expect(
+      withMigrationSession(
+        { adapter: h.adapter, dialect: "postgresql", label: "run-1" },
+        async () => ran()
+      )
+    ).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
+
+    // The migration never started, which is the outcome that matters.
+    expect(ran).not.toHaveBeenCalled();
+
+    // 🔴 The controls that make this about the MARGIN rather than about expiry. The pause happened,
+    // and the lease was still live when it was judged — so a plain liveness test would have accepted
+    // this claim and let the run proceed.
+    expect(paused).toBe(true);
+    expect(h.expiresAt() as number).toBeGreaterThan(h.clock.now());
+  });
+
   // Being told you lost the lock AFTER the lease already expired is not a warning, it is a report:
   // by then a contender could have taken the row and started writing. The margin has to leave the
   // caller time to stop, so the loss is declared while the claim is still live.
@@ -830,11 +868,21 @@ describe("field-group migration session", () => {
         // Never settles: the callback is still working when the claim is given up, which is the
         // whole situation the margin exists for.
         () => new Promise<void>(() => undefined)
-      ).catch((error: unknown) => {
-        expiryAtLoss = h.expiresAt();
-        nowAtLoss = h.clock.now();
-        throw error;
-      });
+      );
+
+      // 🔴 The rejection handler is attached HERE, synchronously, and returns the error as a VALUE
+      // rather than rethrowing. The loop below drives the timers for many turns before anything
+      // awaits this, and a rejection that lands with no handler attached is an unhandled rejection:
+      // vitest reports it as an error and EXITS 1 while still printing every test as passed. Awaiting
+      // the assertion after the loop is what creates that gap, so the handler cannot wait for it.
+      const settled = run.then(
+        () => undefined,
+        (error: unknown) => {
+          expiryAtLoss = h.expiresAt();
+          nowAtLoss = h.clock.now();
+          return error;
+        }
+      );
 
       // 🔴 Let the claim land BEFORE the clock starts moving. Acquisition is asynchronous, so
       // without this it completes after the first step and writes its expiry from an
@@ -857,7 +905,9 @@ describe("field-group migration session", () => {
         await vi.advanceTimersByTimeAsync(LOCK_RENEW_INTERVAL_MS);
       }
 
-      await expect(run).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
+      // `undefined` here would mean the run RESOLVED, which is its own failure and must not read as
+      // a missing rejection.
+      expect(await settled).toMatchObject({ code: "SERVICE_UNAVAILABLE" });
 
       // Positive control: the loss actually happened inside the loop above, so the comparison
       // below is reading values a rejection wrote rather than initialisers.

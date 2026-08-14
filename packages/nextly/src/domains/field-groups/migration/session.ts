@@ -75,23 +75,43 @@ function lockStateQuery(dialect: MigrationDialect): SQL {
       CASE WHEN ${sql.identifier("owner")} IS NOT NULL
             AND (${sql.identifier("expires_at")} IS NULL
                  OR ${sql.identifier("expires_at")} > ${nowExpression(dialect)})
-           THEN 1 ELSE 0 END AS ${sql.identifier("live")}
+           THEN 1 ELSE 0 END AS ${sql.identifier("live")},
+      CASE WHEN ${sql.identifier("owner")} IS NOT NULL
+            AND (${sql.identifier("expires_at")} IS NULL
+                 OR ${sql.identifier("expires_at")} > ${futureExpression(dialect, LOCK_RENEW_MARGIN_SECONDS)})
+           THEN 1 ELSE 0 END AS ${sql.identifier("usable")}
       FROM ${sql.identifier(MIGRATION_LOCK_TABLE)}
       WHERE ${sql.identifier("id")} = ${LOCK_ROW_ID}`;
 }
 
-/** The lock row as the database reports it, with liveness already decided there. */
+/**
+ * The lock row as the database reports it, with both liveness questions already decided there.
+ *
+ * Two answers rather than one, because two callers ask genuinely different questions and collapsing
+ * them would make one of them wrong. `live` is "would this claim still exclude a contender right
+ * now", which is what an OBSERVER reports to an operator. `usable` is the stricter "will this claim
+ * still be here when its next renewal is due", which is what a claimant needs before it starts
+ * work: a lease with less than one renewal interval left is live and is about to lapse unrenewed.
+ *
+ * Both are computed in the same statement, on the database's own clock, so no part of either
+ * depends on this process's idea of the time.
+ */
 interface LockState {
   readonly owner: string | null;
   readonly live: boolean;
+  readonly usable: boolean;
 }
 
 /** Read the row, or `undefined` when there is no row to read. */
 function toLockState(
-  row: { owner: string | null; live: unknown } | undefined
+  row: { owner: string | null; live: unknown; usable: unknown } | undefined
 ): LockState | undefined {
   if (row === undefined) return undefined;
-  return { owner: row.owner, live: Number(row.live) === 1 };
+  return {
+    owner: row.owner,
+    live: Number(row.live) === 1,
+    usable: Number(row.usable) === 1,
+  };
 }
 
 /**
@@ -127,6 +147,20 @@ export const LOCK_LOSS_AFTER_MS =
   LOCK_TTL_SECONDS * 1000 - 2 * LOCK_RENEW_INTERVAL_MS;
 
 /**
+ * How much lease a claim must still have for its holder to rely on it.
+ *
+ * 🔴 "Not yet expired" is not the same as "safe to start work on". A claim is renewed on a timer, so
+ * the first renewal is a whole interval away; a lease with less than that left is live at the
+ * instant it is read and gone before anything renews it. That gap is not hypothetical — the write
+ * and the read-back are separate statements, and a process descheduled between them can spend most
+ * of the TTL there, coming back to a claim that passes a liveness test and cannot survive to its
+ * own first renewal.
+ *
+ * One interval, so the requirement is exactly "this will still be here when I next touch it".
+ */
+export const LOCK_RENEW_MARGIN_SECONDS = LOCK_RENEW_INTERVAL_MS / 1000;
+
+/**
  * The database's own clock, and an expiry computed from it, per dialect.
  *
  * 🔴 Never the application's clock. Two processes contending for this row can sit on machines whose
@@ -151,17 +185,21 @@ function nowExpression(dialect: MigrationDialect): SQL {
   return dialect === "mysql" ? sql`NOW()` : sql`clock_timestamp()`;
 }
 
-function expiryExpression(dialect: MigrationDialect): SQL {
+function futureExpression(dialect: MigrationDialect, seconds: number): SQL {
   if (dialect === "sqlite") {
-    return sql`unixepoch() + ${LOCK_TTL_SECONDS}`;
+    return sql`unixepoch() + ${seconds}`;
   }
   if (dialect === "mysql") {
-    return sql`DATE_ADD(NOW(), INTERVAL ${LOCK_TTL_SECONDS} SECOND)`;
+    return sql`DATE_ADD(NOW(), INTERVAL ${seconds} SECOND)`;
   }
   // The same clock as `nowExpression`, deliberately: an expiry written from transaction time and a
   // liveness test taken at statement time would disagree about when the lease ends, and the pair
   // has to share one frame of reference to mean anything.
-  return sql`clock_timestamp() + make_interval(secs => ${LOCK_TTL_SECONDS})`;
+  return sql`clock_timestamp() + make_interval(secs => ${seconds})`;
+}
+
+function expiryExpression(dialect: MigrationDialect): SQL {
+  return futureExpression(dialect, LOCK_TTL_SECONDS);
 }
 
 /** The row, read inside the transaction that is about to decide the claim. */
@@ -172,6 +210,7 @@ async function readLockState(
   const rows = await ctx.queryStatement<{
     owner: string | null;
     live: unknown;
+    usable: unknown;
   }>(lockStateQuery(dialect));
   return toLockState(rows[0]);
 }
@@ -201,7 +240,7 @@ async function renew(
     // says so — reporting a successful renewal on a lease a contender may take the instant this
     // commits, while the callback carries on believing it is protected.
     const after = await readLockState(ctx, dialect);
-    return after?.owner === claim && after.live;
+    return after?.owner === claim && after.usable;
   });
 }
 
@@ -221,6 +260,7 @@ async function readLockStateOutsideTransaction(
   const rows = await adapter.queryStatement<{
     owner: string | null;
     live: unknown;
+    usable: unknown;
   }>(lockStateQuery(dialect));
   return toLockState(rows[0]);
 }
@@ -881,7 +921,7 @@ async function acquire(
     // because the honest answer is that acquisition did not establish exclusion, not that the row
     // was empty.
     const after = await readLockState(ctx, dialect);
-    if (after?.owner !== claim || !after.live) {
+    if (after?.owner !== claim || !after.usable) {
       return { ok: false, heldBy: after?.owner ?? null };
     }
     return { ok: true };
