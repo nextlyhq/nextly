@@ -332,6 +332,29 @@ describe("scaffolding over a project that already has these files", () => {
     expect(after["AGENTS.md"]).toContain("Agent guide for this Nextly project");
   }, 30_000);
 
+  it("does not swallow prose before an unmatched END marker", async () => {
+    // The mirror of the stray-start case, and the one a backward search introduces: a VALID block,
+    // then prose, then a stray end. Pairing the valid start with the LAST end deletes the prose
+    // between them.
+    const after = await scaffoldOver({
+      "AGENTS.md": [
+        "<!-- nextly:managed:start -->",
+        "old generated content",
+        "<!-- nextly:managed:end -->",
+        "",
+        "Deployment runbook lives in the wiki.",
+        "",
+        "<!-- nextly:managed:end -->",
+      ].join("\n"),
+    });
+
+    expect(after["AGENTS.md"]).toContain(
+      "Deployment runbook lives in the wiki."
+    );
+    expect(after["AGENTS.md"]).not.toContain("old generated content");
+    expect(after["AGENTS.md"]).toContain("Agent guide for this Nextly project");
+  }, 30_000);
+
   it("puts scaffold ignore rules ABOVE the developer's, so theirs still win", async () => {
     // git applies the LAST matching pattern, so appending `.env*` after a deliberate `!/.env`
     // would silently re-ignore a file the developer had un-ignored.
@@ -391,7 +414,12 @@ describe("scaffolding over a project that already has these files", () => {
     // reports a regular file for both, because that is what a hard link is — only the link
     // count separates them.
     const shared = path.join(workdir, "shared-AGENTS.md");
-    await writeFile(shared, "# Shared\n\nHouse style lives here.\n", "utf-8");
+    // Carries a PLACEHOLDER on purpose. The merge declines a linked destination, but the
+    // recursive placeholder pass is a SECOND writer and sees a hard link as an ordinary file —
+    // without a token here it has nothing to substitute and the second writer stays invisible.
+    const sharedText =
+      "# Shared\n\nHouse style lives here.\n\nDialect: {{databaseDialect}}\n";
+    await writeFile(shared, sharedText, "utf-8");
     await link(shared, path.join(target, "AGENTS.md"));
 
     await copyTemplate({
@@ -409,7 +437,10 @@ describe("scaffolding over a project that already has these files", () => {
     // The shared file is one inode reached by two names, so merging into either edits both —
     // and the other name may belong to a different project entirely.
     const sharedAfter = await readFile(shared, "utf-8");
-    expect(sharedAfter).toBe("# Shared\n\nHouse style lives here.\n");
+    expect(sharedAfter).toBe(sharedText);
+    // Named explicitly: the placeholder must still be a placeholder. Substituting it would mean
+    // a write reached the shared inode from the recursive pass.
+    expect(sharedAfter).toContain("{{databaseDialect}}");
   }, 30_000);
 
   it("does not duplicate a CLAUDE.md pointer that is already there", async () => {
