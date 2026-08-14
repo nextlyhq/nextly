@@ -68,8 +68,27 @@ jobs:
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
+      # `continue-on-error` is NOT used here, and that is the whole point of the
+      # job. It masks every outcome equally: a verdict that refuses, a crash, a
+      # missing file — all become a green step. This workflow exists to make
+      # "nothing ran" visible, so it must not report a pass when nothing ran.
+      #
+      # The two outcomes are separated by exit code instead. The script exits 1
+      # for a verdict that refuses, which is information about the PULL REQUEST
+      # and must not fail an advisory job; anything else means the gate itself
+      # could not answer, which is information about the GATE and should be red.
       - name: Report the verdict
-        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node scripts/ci-verdict.mjs "${{ github.event.pull_request.number }}"
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set +e
+          node scripts/ci-verdict.mjs "$PR_NUMBER"
+          code=$?
+          set -e
+          case "$code" in
+            0) echo "::notice title=Review verdict::CLEAN" ;;
+            1) echo "::notice title=Review verdict::not clean — see the JSON above" ;;
+            *) echo "::error title=Review verdict::the gate could not run (exit $code)"
+               exit "$code" ;;
+          esac
