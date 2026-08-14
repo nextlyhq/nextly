@@ -21,8 +21,7 @@
 import type { BlockDocument, BreakpointSet } from "@nextlyhq/blocks-engine";
 import {
   DOCUMENT_VERDICT_CODES,
-  INCOMPLETE_SURVEY_CODES,
-  validate,
+  validateDocument,
   walkNodes,
 } from "@nextlyhq/blocks-engine";
 
@@ -108,10 +107,19 @@ export function validateBlocksValue(
 
   // The engine owns every structural rule: ids, depth, node and byte caps,
   // slot legality, the kind enum, binding and style shapes.
-  const documentIssues = validate(doc, {
+  // The survey the engine judged this document with, rather than a verdict
+  // reconstructed from issue codes. Whether a second pass is affordable is a
+  // question about the MEASUREMENT, and a code answers a different one — what is
+  // wrong with the document — so the two disagree exactly where it matters: a
+  // document JSON rewrites is fully measured and safe to walk, one holding an
+  // accessor is neither, and both are errors.
+  const { issues: allDocumentIssues, survey } = validateDocument(doc, {
     breakpoints: NO_BREAKPOINTS,
     mode: "forgiving",
-  }).filter(issue => issue.severity === "error");
+  });
+  const documentIssues = allDocumentIssues.filter(
+    issue => issue.severity === "error"
+  );
   const structuralIssues = documentIssues.filter(
     issue => !NON_STRUCTURAL.has(issue.code)
   );
@@ -138,15 +146,16 @@ export function validateBlocksValue(
   // stopped on a value it could not write while still under the cap, and the
   // engine can only say THAT the document is unwritable, never which key.
   //
-  // Asked of the engine rather than named here, and it is more than tidiness:
-  // an UNREADABLE document belongs in this gate too, for a sharper reason than
-  // size. The survey declines to invoke an accessor so that document-supplied
+  // Asked of the survey, not inferred. An UNREADABLE document is the sharp
+  // case: the walk declines to invoke an accessor so that document-supplied
   // code never runs inside a precondition, and `unserializableIssues` calls
   // `JSON.stringify`, which invokes it. Walking on would execute exactly the
   // code the refusal existed to avoid and materialize whatever it returns.
-  const unmeasured = documentIssues.some(issue =>
-    INCOMPLETE_SURVEY_CODES.has(issue.code)
-  );
+  //
+  // `complete` covers the byte cap and the structural caps too, and covers a
+  // fourth case a code list could not name at all: a byte count taken from a
+  // value the writer will not emit.
+  const unmeasured = !survey.complete;
 
   const precise: Issue[] = [];
   if (structuralIssues.length === 0 && !unmeasured) {

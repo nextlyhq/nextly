@@ -332,6 +332,11 @@ export interface DocumentSurvey {
    * check and a large one afterwards leaves the caller's walk unbounded while
    * this survey's verdict says the document was refused.
    *
+   * `readonly` on the PROPERTY as well as its members. Freezing the inner
+   * object leaves `survey.limits = {...}` legal, and a walk reading the
+   * replacement would be bounded by numbers this survey never enforced — which
+   * is the whole point of publishing the snapshot.
+   *
    * `Readonly<SurveyLimits>` rather than a second interface of the same three
    * members: the shape a caller passes IN and the shape it reads back OUT are
    * the same three bounds, and two names for them would drift and would ask a
@@ -342,7 +347,7 @@ export interface DocumentSurvey {
    * Primitive numbers, because `bounded` rejects anything else — so a consumer
    * of this field cannot be handed an accessor at one remove.
    */
-  limits: Readonly<SurveyLimits>;
+  readonly limits: Readonly<SurveyLimits>;
   /** Serialized size in bytes; a lower bound once `tooLarge` is set. */
   bytes: number;
   /** The byte cap was passed. */
@@ -594,11 +599,10 @@ export function surveyDocument(
   // of them overrides a field.
   //
   // Each verdict is a comparison the walk's own counters already answer, so a
-  // return site that asserted its own verdict would be a second implementation
-  // of the same question: the two agree on the day they are written, and a
-  // break in either leaves the other producing the expected result. That is not
-  // hypothetical here — a single-site break in the byte verdict left the walk
-  // returning the right answer from the other site.
+  // return site asserting its own verdict would be a second implementation of
+  // the same question. Two implementations agree on the day they are written
+  // and a break in either leaves the other producing the expected result, so
+  // the pair is untestable one site at a time.
   //
   // `deepest` and `nodes` are advanced immediately before the check that ends
   // the walk, so reading them here reports the same breach the exit detected

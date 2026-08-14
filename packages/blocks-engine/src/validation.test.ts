@@ -780,11 +780,12 @@ describe("validation never throws on adversarial input", () => {
     // Exactly one, and the message must quote the bound that was ENFORCED
     // rather than whichever value a later read produced.
     expect(reads).toBe(1);
+    // The WHOLE message, not a substring of it. `includes("10")` is satisfied
+    // by "100" and by the getter's own 1000000000, so it passes on exactly the
+    // implementation this asserts against.
     expect(
-      issues.some(
-        i => i.code === "node-count-exceeded" && i.message.includes("10")
-      )
-    ).toBe(true);
+      issues.filter(i => i.code === "node-count-exceeded").map(i => i.message)
+    ).toEqual(["Document exceeds the maximum of 10 nodes."]);
   });
 
   it("bounds the path text unknown class warnings can return", () => {
@@ -2189,6 +2190,56 @@ describe("measureBytes probes a value only where the writer does", () => {
 
     expect(() => JSON.stringify({ v: disguised })).toThrow(TypeError);
     expect(measureBytes({ v: disguised }, 1_000).exceeded).toBe(true);
+  });
+});
+
+describe("a document is told what is actually wrong with it", () => {
+  it("calls a rewritten document rewritten, not unreadable", () => {
+    // A node hook returning a replacement is READ perfectly well; JSON simply
+    // rewrites it. Its survey is incomplete because the byte count is then the
+    // original's, and reporting incompleteness as the verdict told an author the
+    // validator refused to read a member it had read — sending them to look for
+    // a member that is not the problem.
+    const node = {
+      id: "n1",
+      type: "core/text",
+      version: 1,
+      props: {},
+      toJSON() {
+        return "x".repeat(2000);
+      },
+    };
+    const codes = validate(
+      invalidDoc({ formatVersion: 1, kind: "page", nodes: [node] }),
+      { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" }
+    ).map(issue => issue.code);
+
+    expect(codes).toContain("document-lossy");
+    expect(codes).not.toContain("document-unreadable");
+  });
+
+  it("still calls an unread member unreadable", () => {
+    // The other direction, so the case above cannot pass by never reporting
+    // `document-unreadable` at all. An accessor IS a member the walk declined
+    // to read, and that verdict is the true one.
+    const props: Record<string, unknown> = {};
+    Object.defineProperty(props, "payload", {
+      enumerable: true,
+      get() {
+        return "x".repeat(100);
+      },
+    });
+    const codes = validate(
+      invalidDoc({
+        formatVersion: 1,
+        kind: "page",
+        nodes: [{ id: "n1", type: "core/text", version: 1, props }],
+      }),
+      { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" }
+    ).map(issue => issue.code);
+
+    expect(codes).toContain("document-unreadable");
+    expect(codes).not.toContain("document-lossy");
   });
 });
 

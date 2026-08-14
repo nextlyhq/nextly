@@ -83,6 +83,7 @@ export { measureBytes, surveyDocument } from "./measure-bytes";
 export type { ByteMeasurement } from "./measure-bytes";
 export {
   validate,
+  validateDocument,
   ISSUE_CODES,
   DOCUMENT_VERDICT_CODES,
   INCOMPLETE_SURVEY_CODES,
@@ -109,6 +110,7 @@ export type {
   BlockTypeLookup,
   ClassLookup,
   IssueCode,
+  ValidationResult,
   IssueSeverity,
   TokenLookup,
   ValidationContext,
