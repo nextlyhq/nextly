@@ -35,6 +35,7 @@ import {
   repoFromRemoteUrl,
   requiredChecks,
   reviewCoverage,
+  SUBMITTED_REVIEW_STATES,
   reviewsCoveringTip,
   runCli,
   staleVerification,
@@ -253,6 +254,18 @@ describe("verdictCoversTip", () => {
   it("rejects a missing verdict rather than treating absence as agreement", () => {
     expect(verdictCoversTip("", FULL_TIP)).toBe(false);
     expect(verdictCoversTip(undefined, FULL_TIP)).toBe(false);
+  });
+});
+
+describe("SUBMITTED_REVIEW_STATES", () => {
+  it("names the states that ARE coverage rather than excluding one", () => {
+    expect(SUBMITTED_REVIEW_STATES).toEqual([
+      "APPROVED",
+      "CHANGES_REQUESTED",
+      "COMMENTED",
+    ]);
+    expect(SUBMITTED_REVIEW_STATES).not.toContain("DISMISSED");
+    expect(SUBMITTED_REVIEW_STATES).not.toContain("PENDING");
   });
 });
 
@@ -618,14 +631,43 @@ describe("reviewsCoveringTip", () => {
   it("ignores a review written against an EARLIER revision", () => {
     // Counting it reports a reviewer as having covered a commit it never saw.
     const reviews = [
-      { user: { login: "coderabbitai[bot]" }, commit_id: other },
+      { user: { login: "coderabbitai[bot]" }, commit_id: other, state: "COMMENTED" },
+    ];
+
+    expect(reviewsCoveringTip(reviews, tip, "coderabbitai[bot]")).toEqual([]);
+  });
+
+  it("does NOT count a DISMISSED review, which GitHub invalidated", () => {
+    // A dismissed review says nothing and opens no thread, so counting it makes
+    // the gate read clean on a revision whose only review was withdrawn — with
+    // the unresolved thread count at zero for the same reason.
+    const reviews = [
+      { user: { login: "coderabbitai[bot]" }, commit_id: tip, state: "DISMISSED" },
+    ];
+
+    expect(reviewsCoveringTip(reviews, tip, "coderabbitai[bot]")).toEqual([]);
+  });
+
+  it("does NOT count an unsubmitted PENDING draft", () => {
+    const reviews = [
+      { user: { login: "coderabbitai[bot]" }, commit_id: tip, state: "PENDING" },
+    ];
+
+    expect(reviewsCoveringTip(reviews, tip, "coderabbitai[bot]")).toEqual([]);
+  });
+
+  it("does NOT count a state this code has never met", () => {
+    // The property that makes a NAMED set the right shape: excluding one state
+    // grants coverage to every other, including any added later.
+    const reviews = [
+      { user: { login: "coderabbitai[bot]" }, commit_id: tip, state: "SOMETHING_NEW" },
     ];
 
     expect(reviewsCoveringTip(reviews, tip, "coderabbitai[bot]")).toEqual([]);
   });
 
   it("counts a review whose commit_id IS the tip", () => {
-    const reviews = [{ user: { login: "coderabbitai[bot]" }, commit_id: tip }];
+    const reviews = [{ user: { login: "coderabbitai[bot]" }, commit_id: tip, state: "COMMENTED" }];
 
     expect(reviewsCoveringTip(reviews, tip, "coderabbitai[bot]")).toHaveLength(
       1
@@ -634,7 +676,7 @@ describe("reviewsCoveringTip", () => {
 
   it("ignores another reviewer's review of the same revision", () => {
     const reviews = [
-      { user: { login: "chatgpt-codex-connector[bot]" }, commit_id: tip },
+      { user: { login: "chatgpt-codex-connector[bot]" }, commit_id: tip, state: "COMMENTED" },
     ];
 
     expect(reviewsCoveringTip(reviews, tip, "coderabbitai[bot]")).toEqual([]);
@@ -648,7 +690,7 @@ describe("reviewsCoveringTip", () => {
     // truncating both sides identifies no particular commit.
     const short = tip.slice(0, 9);
     const reviews = [
-      { user: { login: "coderabbitai[bot]" }, commit_id: short },
+      { user: { login: "coderabbitai[bot]" }, commit_id: short, state: "COMMENTED" },
     ];
 
     expect(reviewsCoveringTip(reviews, short, "coderabbitai[bot]")).toEqual([]);
