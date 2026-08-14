@@ -34,7 +34,7 @@ import { fileURLToPath } from "node:url";
 
 import { expect, test, type Page } from "@playwright/test";
 
-import { POC_GEOMETRY_SETTLE_MS } from "./poc-driver";
+import { DROP_ZONES, POC_GEOMETRY_SETTLE_MS } from "./poc-driver";
 
 const CANVAS_CSS = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -131,6 +131,35 @@ const NON_GEOMETRY_PROPERTIES = new Set([
 const PROBE_STATES = [null, "data-drag", "data-active"];
 
 /**
+ * Every class the driver measures, DERIVED from the driver's own selector.
+ *
+ * `nx-pb-dropzone-empty` does not carry `nx-pb-dropzone` — they are two classes, not a class and
+ * a modifier — and the driver waits on both. A probe that only ever wore the first could not
+ * measure a transition added to the empty placeholder, so the allowance for a target the driver
+ * really does wait on would have no maintenance path at all.
+ *
+ * Split from `DROP_ZONES` rather than restated here, so a third zone shape added to the driver is
+ * measurable by this test without anyone remembering to come back.
+ */
+const PROBE_CLASSES = DROP_ZONES.split(",").map(part =>
+  part.trim().replace(/^\./, "")
+);
+
+/**
+ * Custom properties the fixture defines, for a rule that reads one.
+ *
+ * The probe injects the pinned rule into a bare document rather than into the canvas, so a
+ * `var()` naming something defined elsewhere — a theme token, another canvas rule — resolves to
+ * nothing here. CSS then treats the declaration as invalid at computed-value time and
+ * `getComputedStyle` reports the INITIAL `0s`, which is the dangerous direction: a zone moving
+ * for 200ms measures as instant and any allowance covers it.
+ *
+ * So an unresolved reference is refused rather than measured, and this is where the definition
+ * goes to make it measurable. Empty because the pinned rule reads no variable today.
+ */
+const PROBE_CUSTOM_PROPERTIES: Record<string, string> = {};
+
+/**
  * How long the geometry in a rule keeps moving, computed BY THE BROWSER.
  *
  * The rule is injected into a real document and the resulting `transition-*` longhands are read
@@ -149,38 +178,79 @@ async function geometrySpanMs(
   // is what a browser can accept.
   const rule = declaration.trim().replace(/^"/, "").replace(/",?$/, "");
   const result = await page.evaluate(
-    ([css, safe, states, geometry]) => {
+    ([css, safe, states, geometry, classes, customProps]) => {
+      const props = customProps as Record<string, string>;
+      const vars = document.createElement("style");
+      vars.textContent = `:root{${Object.entries(props)
+        .map(([name, value]) => `${name}:${value}`)
+        .join(";")}}`;
+      document.head.append(vars);
+
       const style = document.createElement("style");
       style.textContent = css as string;
       document.head.append(style);
       const el = document.createElement("div");
-      el.className = "nx-pb-dropzone";
       document.body.append(el);
+      const cleanup = () => {
+        el.remove();
+        style.remove();
+        vars.remove();
+      };
 
       // The rule must actually apply to the probe, or every timing read below is the browser's
       // initial value and the span comes out zero — indistinguishable from a transition that was
       // deliberately removed. The selector is taken as text and handed to `matches`, so nothing
-      // here interprets it; the states are tried in turn because a qualified rule is a normal
-      // edit rather than a strange one.
-      const selector = (css as string).slice(0, (css as string).indexOf("{"));
-      let applied: string | null | undefined;
-      for (const state of states as (string | null)[]) {
-        for (const attr of states as (string | null)[]) {
-          if (attr) el.removeAttribute(attr);
+      // here interprets it; class and state are tried in turn because a rule on the empty
+      // placeholder, or qualified by a state, is an ordinary edit rather than a strange one.
+      const selector = (css as string)
+        .slice(0, (css as string).indexOf("{"))
+        .trim();
+      let matched = false;
+      for (const cls of classes as string[]) {
+        for (const state of states as (string | null)[]) {
+          el.className = cls;
+          for (const attr of states as (string | null)[]) {
+            if (attr) el.removeAttribute(attr);
+          }
+          if (state) el.setAttribute(state, "");
+          if (el.matches(selector)) {
+            matched = true;
+            break;
+          }
         }
-        if (state) el.setAttribute(state, "");
-        if (el.matches(selector.trim())) {
-          applied = state;
-          break;
-        }
+        if (matched) break;
       }
-      if (applied === undefined) {
-        el.remove();
-        style.remove();
-        return { matched: false, ms: 0, unclassified: [] as string[] };
+      if (!matched) {
+        cleanup();
+        return {
+          matched: false,
+          ms: 0,
+          unclassified: [] as string[],
+          unresolvedVars: [] as string[],
+        };
       }
 
       const computed = getComputedStyle(el);
+
+      // A custom property that resolves to nothing makes the whole declaration invalid at
+      // computed-value time, and the browser then reports the INITIAL transition rather than an
+      // error. Checked directly against the element instead of inferred from a zero duration,
+      // which a legitimately instant transition also produces.
+      const referenced = [
+        ...new Set(
+          [...(css as string).matchAll(/var\(\s*(--[A-Za-z0-9_-]+)/g)].map(
+            m => m[1]
+          )
+        ),
+      ];
+      const unresolvedVars = referenced.filter(
+        name => computed.getPropertyValue(name).trim() === ""
+      );
+      if (unresolvedVars.length > 0) {
+        cleanup();
+        return { matched: true, ms: 0, unclassified: [], unresolvedVars };
+      }
+
       const seconds = (value: string) =>
         value.split(",").map(v => Number.parseFloat(v.trim()) * 1000);
       const properties = computed.transitionProperty
@@ -193,21 +263,22 @@ async function geometrySpanMs(
       // zero would read those as instant and report a geometry transition as taking no time.
       const cycled = (list: number[], i: number) =>
         list.length === 0 ? 0 : list[i % list.length];
+      const spanAt = (i: number) => cycled(durations, i) + cycled(delays, i);
 
-      // The LAST entry naming a property is the one CSS uses, so a name repeated with different
-      // timings resolves to its final tuple rather than its longest. Taking the maximum instead
-      // reports `transition-property:height,height;transition-duration:.3s,.1s` as 300ms when the
-      // height transition really runs for 100 — which sends whoever reads the failure off to
-      // lengthen every wait in the probe for a transition that had already finished.
-      const lastEntry = new Map<string, number>();
-      properties.forEach((property, i) => lastEntry.set(property, i));
+      // `all` MATCHES every property, so it is a competing entry for each named one rather than a
+      // separate row: with `height,all`, CSS gives height the `all` entry's timing because it
+      // comes later. Comparing only identical strings keeps the two apart and reports height's
+      // own earlier entry, which over-states the span.
+      const lastAll = properties.lastIndexOf("all");
+      const named = [
+        ...new Set(properties.filter(p => p !== "all" && p !== "none")),
+      ];
 
       const unclassified: string[] = [];
-      let longest = 0;
-      for (const [property, i] of lastEntry) {
-        // `none` is the browser's way of saying there is no transition at all, which is a real
-        // answer of zero rather than a property it could not place.
-        if (property === "none") continue;
+      // `all` covers the geometry properties nothing else names, so its own entry counts whatever
+      // the named ones say.
+      let longest = lastAll === -1 ? 0 : spanAt(lastAll);
+      for (const property of named) {
         if ((safe as string[]).includes(property)) continue;
         if (!(geometry as string[]).includes(property)) {
           // On neither list: it may move the edge and this cannot tell. Collected rather than
@@ -215,17 +286,21 @@ async function geometrySpanMs(
           unclassified.push(property);
           continue;
         }
-        longest = Math.max(longest, cycled(durations, i) + cycled(delays, i));
+        // The LAST entry naming this property wins, and `all` is one of the things that can name
+        // it — so the effective entry is whichever of the two comes later.
+        const effective = Math.max(properties.lastIndexOf(property), lastAll);
+        longest = Math.max(longest, spanAt(effective));
       }
-      el.remove();
-      style.remove();
-      return { matched: true, ms: longest, unclassified };
+      cleanup();
+      return { matched: true, ms: longest, unclassified, unresolvedVars };
     },
     [
       rule,
       [...NON_GEOMETRY_PROPERTIES],
       PROBE_STATES,
       [...GEOMETRY_PROPERTIES],
+      PROBE_CLASSES,
+      PROBE_CUSTOM_PROPERTIES,
     ] as const
   );
 
@@ -234,6 +309,13 @@ async function geometrySpanMs(
       `the pinned rule "${rule}" matches no drop-zone probe element, so its timing cannot be ` +
         `read and a zero span here would be indistinguishable from a removed transition. Add the ` +
         `state it is qualified by to PROBE_STATES.`
+    );
+  }
+  if (result.unresolvedVars.length > 0) {
+    throw new Error(
+      `the pinned rule reads ${result.unresolvedVars.join(", ")}, which resolve to nothing in this ` +
+        `fixture — so the browser discards the declaration and reports the initial 0s, which any ` +
+        `allowance covers. Add each to PROBE_CUSTOM_PROPERTIES with the value the canvas gives it.`
     );
   }
   if (result.unclassified.length > 0) {
@@ -337,6 +419,20 @@ test("the span derivation reads geometry and ignores the rest", async ({
   // A rule that deliberately disables movement is a real answer of zero, not a failed derivation.
   // The allowance covers it, and asserting it away would fail a correct canvas.
   expect(await span("transition:height 0s")).toBe(0);
+
+  // `all` is a competing entry for `height`, not a separate row: it comes later, so CSS gives
+  // height ITS timing. Keeping the two apart reports height's own earlier 300 and over-states the
+  // span, which fails the allowance and sends the reader off to lengthen every wait.
+  expect(
+    await span("transition-property:height,all;transition-duration:.3s,.1s")
+  ).toBe(100);
+
+  // The same pair the other way round, which is what separates "resolve against all" from "always
+  // take the last entry". Here `all` is EARLIER, so height keeps its own 100 — while `all` still
+  // governs every geometry property height does not name, and 300 is the honest answer.
+  expect(
+    await span("transition-property:all,height;transition-duration:.3s,.1s")
+  ).toBe(300);
 });
 
 test("the span derivation refuses what it cannot answer", async ({ page }) => {
@@ -370,4 +466,44 @@ test("the span derivation refuses what it cannot answer", async ({ page }) => {
       '".nx-pb-dropzone[data-drag]{transition:height .2s}",'
     )
   ).toBe(200);
+
+  // The EMPTY placeholder is the driver's other target and does not carry `nx-pb-dropzone`, so a
+  // probe wearing only that class could never measure a transition added here. Its allowance is
+  // waited on exactly as the between-item zone's is.
+  expect(
+    await geometrySpanMs(
+      page,
+      '".nx-pb-dropzone-empty{transition:height .2s}",'
+    )
+  ).toBe(200);
+
+  // A rule reading a custom property nothing defines is REFUSED, not measured. The browser
+  // discards the declaration and reports the initial 0s, which any allowance covers — so this is
+  // the shape that passes while a zone is still moving.
+  await expect(
+    geometrySpanMs(
+      page,
+      '".nx-pb-dropzone{transition:height var(--zone-duration)}",'
+    )
+  ).rejects.toThrow(/--zone-duration/);
+});
+
+test("a variable-backed duration resolves once the fixture defines it", async ({
+  page,
+}) => {
+  // The positive control on the refusal above: it must be a missing DEFINITION that refuses, not
+  // the presence of `var()`. Without this, a derivation that rejected every variable would pass
+  // the rejection case and leave the documented remedy — add it to PROBE_CUSTOM_PROPERTIES —
+  // broken, which is the maintenance path the refusal message promises.
+  PROBE_CUSTOM_PROPERTIES["--zone-duration"] = ".2s";
+  try {
+    expect(
+      await geometrySpanMs(
+        page,
+        '".nx-pb-dropzone{transition:height var(--zone-duration)}",'
+      )
+    ).toBe(200);
+  } finally {
+    delete PROBE_CUSTOM_PROPERTIES["--zone-duration"];
+  }
 });
