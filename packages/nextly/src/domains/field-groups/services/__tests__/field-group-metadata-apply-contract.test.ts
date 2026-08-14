@@ -708,6 +708,68 @@ describe("a field-group update refuses what it cannot deliver", () => {
     expect(registry.updateComponent).not.toHaveBeenCalled();
   });
 
+  // 🔴 THE one-sided case the PAIR rule cannot see. Enabling localization while REMOVING a
+  // translatable field: the removal has no matching add, so the rename check passes it, both main
+  // snapshots omit the field because it is translatable under the requested state, and the enable
+  // planner derives its companion from the NEW fields alone — so nothing drops the column that is
+  // still physically on the main table. The registry would stop describing a field whose data is
+  // sitting on a column nothing will read again.
+  it("refuses removing a translatable field while localization is being enabled", async () => {
+    const registry = registryWithGroup({
+      localized: false,
+      fields: [
+        { name: "heading", type: "text", localized: true },
+        { name: "body", type: "text", localized: true },
+      ] as never,
+    });
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    const refusal = await service
+      .updateFieldGroup({
+        slug: "hero",
+        localized: true,
+        fields: [{ name: "heading", type: "text", localized: true }] as never,
+      })
+      .catch((error: unknown) => error);
+
+    expect(refusal).toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: expect.arrayContaining([
+          expect.objectContaining({
+            path: "fields.body",
+            code: "requires_schema_change",
+          }),
+        ]),
+      },
+    });
+    expect(registry.updateComponent).not.toHaveBeenCalled();
+  });
+
+  // The control that keeps the enable path usable: a plain enable, dropping nothing, still works.
+  // Without it a rule that refused every enable would satisfy the case above.
+  it("allows a plain enable that removes no translatable field", async () => {
+    const registry = registryWithGroup({
+      localized: false,
+      fields: [{ name: "heading", type: "text", localized: true }] as never,
+    });
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    await expect(
+      service.updateFieldGroup({ slug: "hero", localized: true })
+    ).resolves.toMatchObject({
+      record: expect.objectContaining({ slug: "hero" }),
+    });
+  });
+
   // A layout-only field has no column anywhere, so adding one cannot need DDL on any table.
   it("allows a field that produces no column at all", async () => {
     const registry = registryWithGroup({

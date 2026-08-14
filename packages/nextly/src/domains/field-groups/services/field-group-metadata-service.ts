@@ -581,6 +581,20 @@ export class FieldGroupMetadataService {
         changed.add(name);
     }
 
+    // 🔴 A DROP is only appliable when the companion already exists, which an ENABLE means it does
+    // not.
+    //
+    // Both main-table snapshots are built at the requested state, so a field that is translatable
+    // under it never appears on either — including one this edit REMOVES, whose column is still
+    // physically on the main table because the group is not localized yet. The enable planner then
+    // derives its companion from the NEW fields alone, so nothing drops that column: the registry
+    // stops describing the field while its data sits on a column nothing will ever read again.
+    //
+    // The pair rule above cannot catch it, because a removal on its own has no matching add.
+    if (!args.wasLocalized && args.localized && companionDropped.length > 0) {
+      for (const name of companionDropped) changed.add(name);
+    }
+
     if (changed.size === 0) return;
 
     const names = [...changed];
