@@ -39,6 +39,14 @@ const zoneCollisionDetector = createZoneCollisionDetector();
  * A context rather than a prop because the tree recurses through each block's
  * own `render`, which receives finished slot elements: there is no single call
  * path to thread a depth argument along.
+ *
+ * EVERY droppable on the canvas must carry a priority from this scale, not just
+ * the zones here. A droppable that omits `collisionPriority` keeps whatever the
+ * detector assigned — `High` (3) when the pointer is inside it, `Normal` (2)
+ * otherwise — and since priority is compared before everything else, such a
+ * target outranks any zone shallower than that number however the rectangles
+ * lie. The two scales are not comparable, so an unset priority is not a neutral
+ * default: it is a constant that wins the first three levels of the tree.
  */
 const CanvasDepthContext = createContext(0);
 

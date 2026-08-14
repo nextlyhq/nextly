@@ -330,10 +330,43 @@ export function DataTableView<Row extends object>({
   // it separately per branch is how the error path lost the surface: two
   // answers to one question, agreeing until one of them was edited.
   //
-  // `pagination` wins over `footer` rather than rendering beside it. Two pagers
-  // in one slot is not a composition anyone wants, and silently stacking them
-  // would answer a mistake with a layout instead of a type error.
-  const footerContent = pagination ? <Pagination {...pagination} /> : footer;
+  // Both render, footer first, rather than one displacing the other. `footer`
+  // takes an arbitrary node and not a pager, so a caller can legitimately hold a
+  // selection summary or bulk actions there while paginating -- a summary above
+  // its pager is a real arrangement. Letting `pagination` win would drop that
+  // content with both props public, both permitted by the type, and nothing
+  // reporting the loss. Footer first because a summary describes the rows above
+  // it and the pager moves between them.
+  // Whether the caller's footer will put anything on screen, decided by REACT's
+  // rule rather than by JavaScript's. The two disagree in both directions and
+  // each disagreement is a real defect:
+  //
+  //   truthiness  drops `0`, which React renders as "0" -- so a caller passing
+  //               `selectedIds.length` with nothing selected loses its footer;
+  //   nullishness keeps `false`, which React renders as nothing -- so the
+  //               ubiquitous `footer={show && <Summary />}` draws an empty
+  //               bordered surface under the table when `show` is false.
+  //
+  // React renders nothing for `null`, `undefined` and booleans, and renders
+  // numbers and strings. That set is closed and defined by React, which is what
+  // separates listing it here from guessing at values.
+  const footerRendersNothing =
+    footer === null ||
+    footer === undefined ||
+    typeof footer === "boolean" ||
+    footer === "";
+
+  // The limit worth stating rather than hiding: a component that RETURNS null
+  // still counts as content here, because no inspection of the node can know
+  // what it renders without rendering it. That case draws an empty surface, and
+  // the fix for it belongs at the caller, which knows.
+  const footerContent =
+    !footerRendersNothing || pagination !== undefined ? (
+      <>
+        {footer}
+        {pagination !== undefined && <Pagination {...pagination} />}
+      </>
+    ) : undefined;
 
   const surfaceClassName = cn(
     // Clipping is NOT part of the card. The table view rounds its own
