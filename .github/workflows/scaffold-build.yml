@@ -232,6 +232,21 @@ jobs:
         shell: bash
         run: |
           mkdir -p /tmp/nextly-workspace-packs
+
+          # The earlier build step covers `create-nextly-app` and `nextly` (and, through the
+          # dependency graph, the adapters). It does NOT cover admin, ui, plugin-form-builder
+          # or plugin-sdk — and these packages publish only `dist`, so packing one unbuilt
+          # SUCCEEDS and yields a tarball of metadata with no code. The pin would then replace
+          # working registry packages with empty ones and the leg would fail to resolve an
+          # entry point, blaming the template.
+          #
+          # The trailing `...` includes each package itself as well as its dependencies.
+          pnpm turbo build --filter=nextly... --filter=@nextlyhq/admin... \
+            --filter=@nextlyhq/ui... --filter=@nextlyhq/adapter-drizzle... \
+            --filter=@nextlyhq/adapter-sqlite... --filter=@nextlyhq/adapter-postgres... \
+            --filter=@nextlyhq/adapter-mysql... --filter=@nextlyhq/plugin-form-builder... \
+            --filter=@nextlyhq/plugin-sdk...
+
           for dir in packages/nextly packages/admin packages/ui \
                      packages/adapter-drizzle packages/adapter-sqlite \
                      packages/adapter-postgres packages/adapter-mysql \
@@ -239,12 +254,21 @@ jobs:
             (cd "$dir" && pnpm pack --pack-destination /tmp/nextly-workspace-packs)
           done
 
-          # A control on that loop: `pnpm pack` exiting 0 for each package is not the same as
-          # the directory holding them, and an empty directory would make the pin below a
-          # no-op that silently falls through to the registry.
+          # Controls on that loop. Counting files is not enough: `pnpm pack` exits 0 for an
+          # unbuilt package too, so the count would be nine while the tarballs held no code.
+          # Each one is opened and required to contain a `dist` entry.
           count=$(ls /tmp/nextly-workspace-packs/*.tgz 2>/dev/null | wc -l)
           echo "packed tarballs: $count"
           [ "$count" -ge 9 ] || { echo "expected at least 9 tarballs, got $count"; exit 1; }
+
+          for tgz in /tmp/nextly-workspace-packs/*.tgz; do
+            files=$(tar -tzf "$tgz" | grep -c '^package/dist/' || true)
+            echo "$(basename "$tgz"): $files dist entries"
+            [ "$files" -gt 0 ] || {
+              echo "$(basename "$tgz") contains no dist/ — it was packed unbuilt"
+              exit 1
+            }
+          done
 
       - name: Scaffold with a real install
         shell: bash
