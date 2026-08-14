@@ -169,7 +169,20 @@ export function verdictFor({
   limited = [],
   refused = [],
   blocking = [],
+  state = "OPEN",
+  stranded = 0,
 } = {}) {
+  // A merged pull request is not a gate outcome, and every other answer here
+  // describes one. Reporting "no review at the head" for a merged PR is true
+  // and useless: the branch keeps moving after the merge, so the gate would
+  // repeat that forever while commits pushed since sit outside the merge.
+  if (state !== "OPEN") {
+    return {
+      verdict: stranded > 0 ? "MERGED WITH A STRANDED TAIL" : "ALREADY MERGED",
+      detail: { state, stranded },
+      exitCode: stranded > 0 ? 1 : 0,
+    };
+  }
   const blockingMissing = missing.filter(login => blocking.includes(login));
   const blockingLimited = limited.filter(login => blocking.includes(login));
   const blockingRefused = refused.filter(login => blocking.includes(login));
@@ -220,6 +233,8 @@ export function report({
   issueComments,
   blocking,
   advisory = [],
+  state = "OPEN",
+  stranded = 0,
 }) {
   // De-duplicated: a login named in both lists would otherwise be reported
   // missing twice, which reads as two reviewers rather than one.
@@ -236,10 +251,14 @@ export function report({
     limited,
     refused,
     blocking,
+    state,
+    stranded,
   });
 
   return {
     head,
+    state,
+    stranded_commits: stranded,
     reviewed_head: reviewersAtHead(reviews, head),
     missing_reviews: missing,
     // JSON has no infinity, so an unavailable count would serialise as `null`
@@ -303,7 +322,7 @@ async function main(argv) {
     "--repo",
     repo,
     "--json",
-    "headRefName,isCrossRepository,headRepositoryOwner,headRepository",
+    "headRefName,isCrossRepository,headRepositoryOwner,headRepository,state,headRefOid",
   ]);
   // A fork's branch is not on `origin`, so the ref is read from the repository
   // that HAS it. `refs/pull/<pr>/head` is not a substitute: it is the same
@@ -414,6 +433,21 @@ async function main(argv) {
     return 2;
   }
 
+  // A merged pull request keeps a branch that can still be pushed to, and
+  // GitHub's own `headRefOid` freezes at the revision that merged. Commits
+  // after that point are in neither, so they are counted here rather than left
+  // to be noticed.
+  let stranded = 0;
+  if (meta.state !== "OPEN" && meta.headRefOid && meta.headRefOid !== head) {
+    execFileSync("git", ["fetch", "origin", head], { stdio: "ignore" });
+    stranded = execFileSync(
+      "git",
+      ["rev-list", "--count", `${meta.headRefOid}..${head}`],
+      { encoding: "utf8" }
+    ).trim();
+    stranded = Number(stranded) || 0;
+  }
+
   const result = report({
     head,
     reviews,
@@ -421,6 +455,8 @@ async function main(argv) {
     issueComments,
     blocking,
     advisory,
+    state: meta.state,
+    stranded,
   });
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   return result.exitCode;
