@@ -564,12 +564,7 @@ test.describe("a canvas any Nextly editor could ship", () => {
   test("shifts no existing block when its drop zones appear", async ({
     request,
   }) => {
-    note(
-      PLAN_POINT.zeroLayoutShift,
-      "B-6",
-      "this canvas's drop zones take layout space, so every block below the " +
-        "pointer moves — the same shortfall checklist.spec.ts already marks"
-    );
+    note(PLAN_POINT.zeroLayoutShift, "B-6");
     await driver.mountTree(await seedPage(request, FLAT_LIST_FIXTURE));
 
     const before = await driver.readBlockBoxes();
