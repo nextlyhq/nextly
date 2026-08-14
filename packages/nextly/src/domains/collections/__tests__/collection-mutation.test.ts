@@ -508,8 +508,11 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       // hook executor free to move above the gate with this test still green.
       expect(mockHookRegistry.executeBeforeOperation).not.toHaveBeenCalled();
       expect(mockHookRegistry.execute).not.toHaveBeenCalled();
-      expect(storedHookExecute).not.toHaveBeenCalled();
       expect(runFieldHooksSpy).not.toHaveBeenCalled();
+      // The stored-hook executor is NOT asserted here. This fixture registers no stored hook, so
+      // it never reaches that seam on the allowed path either - an assertion would be satisfied by
+      // absence and would read as coverage it does not have. Covering it needs a collection
+      // configured with a stored hook, which this fixture does not build.
     });
 
     it("runs those same hooks for a caller it allows", async () => {

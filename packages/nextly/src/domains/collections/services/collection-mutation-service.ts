@@ -4532,8 +4532,9 @@ export class CollectionMutationService extends BaseService {
       // verdict that has stopped being true. Exploiting it requires an actor who
       // held legitimate access moments earlier.
       //
-      // Two facts about closing it, and no proposed remedy, because the last
-      // three attempts at one here were each wrong in a different direction.
+      // Two facts about closing it, and no remedy: a remedy stated here would
+      // have to name a path, and every path this method could take differs from
+      // it in ways the next two paragraphs make concrete.
       //
       // The evaluator can already read inside a transaction:
       // `checkCollectionAccess` takes a transaction-bound `executor` so its RBAC
