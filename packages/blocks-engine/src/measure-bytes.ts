@@ -486,10 +486,23 @@ export function surveyDocument(
   const onPath = new Set<object>();
   const stack: Frame[] = [{ value: root, kind: "value", depth: 0 }];
 
+  // The ONE place a verdict is decided. Every exit below returns this, and none
+  // of them overrides a field.
+  //
+  // Each verdict is a comparison the walk's own counters already answer, so a
+  // return site that asserted its own verdict would be a second implementation
+  // of the same question: the two agree on the day they are written, and a
+  // break in either leaves the other producing the expected result. That is not
+  // hypothetical here — a single-site break in the byte verdict left the walk
+  // returning the right answer from the other site.
+  //
+  // `deepest` and `nodes` are advanced immediately before the check that ends
+  // the walk, so reading them here reports the same breach the exit detected
+  // rather than a stale one.
   const done = (): DocumentSurvey => ({
     bytes,
     tooLarge: bytes > maxBytes,
-    tooDeep: false,
+    tooDeep: deepest > maxDepth,
     tooManyNodes: nodes > maxNodes,
     unserializable,
     nodes,
@@ -651,9 +664,9 @@ export function surveyDocument(
           nodes += 1;
           if (hiddenPlacement.depth > deepest) deepest = hiddenPlacement.depth;
           if (hiddenPlacement.depth > maxDepth) {
-            return { ...done(), tooDeep: true };
+            return done();
           }
-          if (nodes > maxNodes) return { ...done(), tooManyNodes: true };
+          if (nodes > maxNodes) return done();
         }
 
         // A hidden value is not readable by the writer but IS readable by the
@@ -683,7 +696,7 @@ export function surveyDocument(
         // writes nothing for it — which is why this is the array branch only.
         if (!keyed) {
           bytes += 4;
-          if (bytes > maxBytes) return { ...done(), tooLarge: true };
+          if (bytes > maxBytes) return done();
         }
         continue;
       }
@@ -691,7 +704,7 @@ export function surveyDocument(
       if (keyed) {
         bytes +=
           utf8ByteLength(key, maxBytes) + 3 + (frame.emitted === true ? 1 : 0);
-        if (bytes > maxBytes) return { ...done(), tooLarge: true };
+        if (bytes > maxBytes) return done();
       }
 
       const placement = memberPlacement(
@@ -771,10 +784,10 @@ export function surveyDocument(
           // wrong depth, and disagree with `treeDepth`.
           nodes += 1;
           if (reached.depth > deepest) deepest = reached.depth;
-          if (reached.depth > maxDepth) return { ...done(), tooDeep: true };
-          if (nodes > maxNodes) return { ...done(), tooManyNodes: true };
+          if (reached.depth > maxDepth) return done();
+          if (nodes > maxNodes) return done();
         }
-        if (takeScalar(held)) return { ...done(), tooLarge: true };
+        if (takeScalar(held)) return done();
       }
       continue;
     }
@@ -811,12 +824,12 @@ export function surveyDocument(
     if (kind === "node") {
       nodes += 1;
       if (depth > deepest) deepest = depth;
-      if (depth > maxDepth) return { ...done(), tooDeep: true };
-      if (nodes > maxNodes) return { ...done(), tooManyNodes: true };
+      if (depth > maxDepth) return done();
+      if (nodes > maxNodes) return done();
     }
 
     if (typeof value !== "object" || value === null) {
-      if (takeScalar(value)) return { ...done(), tooLarge: true };
+      if (takeScalar(value)) return done();
       continue;
     }
 
@@ -889,7 +902,7 @@ export function surveyDocument(
       // writes one element per position whether or not that position is
       // present.
       bytes += 2 + Math.max(0, length - 1);
-      if (bytes > maxBytes) return { ...done(), tooLarge: true };
+      if (bytes > maxBytes) return done();
 
       // Every position costs at least one more byte — the shortest thing JSON
       // can write at one is a single digit, and a hole costs four — so an array
@@ -898,7 +911,7 @@ export function surveyDocument(
       // proportional to `length` for an array it was always going to reject.
       if (bytes + length > maxBytes) {
         bytes += length;
-        return { ...done(), tooLarge: true };
+        return done();
       }
 
       stack.push({
@@ -931,7 +944,7 @@ export function surveyDocument(
     }
 
     bytes += 2; // braces
-    if (bytes > maxBytes) return { ...done(), tooLarge: true };
+    if (bytes > maxBytes) return done();
 
     stack.push({
       value,
