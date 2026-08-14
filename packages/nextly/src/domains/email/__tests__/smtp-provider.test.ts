@@ -267,7 +267,7 @@ describe("the SMTP descriptor agrees with the SMTP parser", () => {
     // docs/guides/email.mdx configures Mailpit with SMTP_USER= and SMTP_PASS=
     // empty. A client validating from the descriptor must be able to submit it.
     expect(() =>
-      smtpDefinition.validateConfig({
+      smtpDefinition.parseConfiguration({
         host: "localhost",
         port: 1025,
         secure: false,
@@ -280,7 +280,7 @@ describe("the SMTP descriptor agrees with the SMTP parser", () => {
     // The positive control for the test above: loosening the descriptor must
     // not loosen the rule, only move where it is stated.
     expect(() =>
-      smtpDefinition.validateConfig({
+      smtpDefinition.parseConfiguration({
         host: "smtp.example.com",
         port: 587,
         secure: false,

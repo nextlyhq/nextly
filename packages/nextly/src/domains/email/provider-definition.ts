@@ -1114,11 +1114,20 @@ export function secretFieldMustBeTextual(
  * contravariant in it, so `EmailProviderDefinition<unknown>` rejects every
  * concrete definition.
  *
- * The erased form takes `unknown` and never exposes the parsed value, which
- * removes the need to cast one back. `createAdapterFrom` parses AND builds, so
- * the typed value stays inside the closure that knows its type — and an
+ * The erased form takes `unknown` and returns the parsed value as `unknown`.
+ * The TYPE stays inside the closure that knows it, which is what removes the
+ * need to cast one back; `createAdapterFrom` still parses AND builds, so an
  * adapter cannot be constructed from configuration that was never validated.
- * That is a safety property, not only a typing convenience.
+ * That safety property is unchanged.
+ *
+ * What changed is that the parsed VALUE now comes back out, because the caller
+ * that persists a configuration has to persist the one the adapter will run
+ * on. While it did not, the stored configuration and the configuration the
+ * adapter received could differ, and nothing reconciled them: a parser doing
+ * `raw.trim()` meant containment compared a padded credential against an
+ * unpadded one, and a `z.coerce` meant the admin rendered a value its own
+ * control could not hold. Both were patched at the symptom before the cause
+ * was addressed here.
  */
 export interface RegisteredEmailProvider {
   type: string;
@@ -1128,8 +1137,15 @@ export interface RegisteredEmailProvider {
   senderGuidance?: string;
   capabilities?: EmailProviderCapabilities;
   configFields: ReadonlyArray<EmailProviderConfigField>;
-  /** Throw if this configuration is unusable. Discards the parsed value. */
-  validateConfig: (input: unknown) => void;
+  /**
+   * Parse this configuration, or throw if it is unusable.
+   *
+   * Returns the PARSED value, which is what a caller must persist: what the
+   * adapter runs on is this, not the input. `unknown` rather than the concrete
+   * type, so the erasure holds — a caller can store it and hand it back, and
+   * cannot read it as anything in particular.
+   */
+  parseConfiguration: (input: unknown) => unknown;
   /** Validate and build in one step; the parsed value never escapes. */
   createAdapterFrom: (input: unknown) => EmailProviderAdapter;
   /** Present only when the definition supplied a probe. */
@@ -1526,9 +1542,7 @@ export function defineEmailProvider<TConfig>(
     senderGuidance: definition.senderGuidance,
     capabilities: definition.capabilities,
     configFields: definition.configFields,
-    validateConfig: (input: unknown): void => {
-      parse(input);
-    },
+    parseConfiguration: (input: unknown): unknown => parse(input),
     // Parses AND builds, so the typed value never escapes the closure that
     // knows its type. Nothing here catches: the containment above does it.
     createAdapterFrom: (input: unknown): EmailProviderAdapter => {
