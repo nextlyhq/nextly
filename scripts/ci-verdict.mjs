@@ -255,20 +255,40 @@ async function main(argv) {
   const repo = process.env.GH_REPO ?? "nextlyhq/nextly";
   const [owner, name] = repo.split("/");
   const { execFileSync } = await import("node:child_process");
+  // `ls-remote` needs the ref to be current, and a stale local view of origin
+  // would reintroduce the lag this function reads the ref to avoid.
+  execFileSync("git", ["fetch", "origin", "--quiet"], { stdio: "ignore" });
 
   // Each query is its own process and its failure is its own exception: a
   // rejected request must reach the caller as a refusal, never as empty data.
   const gh = args =>
     JSON.parse(execFileSync("gh", args, { encoding: "utf8", maxBuffer: 64e6 }));
-  const head = gh([
+  // The head comes from the REF, not from the pull request object. GitHub's
+  // `headRefOid` lags a push — measured a full commit behind while `ls-remote`
+  // was already correct — so a gate reading it can certify a revision that is
+  // no longer the head, which is the exact class of defect it exists to stop.
+  const branch = gh([
     "pr",
     "view",
     pr,
     "--repo",
     repo,
     "--json",
-    "headRefOid",
-  ]).headRefOid;
+    "headRefName",
+  ]).headRefName;
+  const headOf = () => {
+    const line = execFileSync(
+      "git",
+      ["ls-remote", "origin", `refs/heads/${branch}`],
+      {
+        encoding: "utf8",
+      }
+    ).trim();
+    const sha = line.split(/\s+/)[0];
+    if (!sha) throw new Error(`no such ref on origin: refs/heads/${branch}`);
+    return sha;
+  };
+  const head = headOf();
   const reviews = gh([
     "api",
     `repos/${repo}/pulls/${pr}/reviews`,
@@ -311,15 +331,7 @@ async function main(argv) {
   // The head is re-read AFTER the other queries. A push landing mid-run would
   // otherwise be judged against the revision captured at the start, so a review
   // covering the old head could clear a revision nobody has seen.
-  const headNow = gh([
-    "pr",
-    "view",
-    pr,
-    "--repo",
-    repo,
-    "--json",
-    "headRefOid",
-  ]).headRefOid;
+  const headNow = headOf();
   if (headNow !== head) {
     process.stderr.write(
       `ci-verdict: head moved ${head} -> ${headNow}; re-run\n`
