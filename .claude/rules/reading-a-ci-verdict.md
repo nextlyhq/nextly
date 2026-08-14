@@ -369,6 +369,19 @@ The properties a verdict gate has to hold are below. **They are implemented in
 `scripts/ci-verdict.mjs` with a `.test.mjs` neighbour**, run by
 `pnpm test:scripts` in CI, rather than written out here as shell.
 
+**Moving the decisions into testable code does not move the RISK there with
+them, and that is worth knowing before treating the split as the end of the
+work.** The pure functions became coverable and were covered; the defect that
+survived longest afterwards was in the I/O seam the split deliberately left
+outside them — the gate read its head from the pull request object rather than
+from the ref, so it judged a revision that was no longer current. Measured on
+this document's own pull request: same PR, same minute, `CLEAN` from the stale
+source and `MISSING REVIEW AT HEAD` from the ref.
+
+A seam with no tests is where the next defect lives, and separating concerns
+tells you exactly where that seam is. Test what you can, then go and look at
+what is left.
+
 That placement is the finding, not a filing preference. This section originally
 carried the gate as a runnable snippet, and it was wrong in eight successive
 ways that each read as working code — `gh api --jq --arg`, which that endpoint
@@ -402,6 +415,13 @@ The properties, each earned by a version that got it wrong:
   threads are UNRESOLVED? GitHub already tracks the second, it is bot-agnostic,
   and it survives several reviews at one SHA. Counting findings was always a
   proxy for it.
+- **Resolve the head from the REF, not from the pull request object.**
+  `gh pr view --json headRefOid` lags a push — measured a full commit behind
+  while `git ls-remote origin refs/heads/<branch>` was already correct. A gate
+  reading it certifies the revision BEFORE the one you are about to merge, and
+  a recheck that also reads `headRefOid` compares one stale value to another
+  and never fires. Resolve `headRefName` from `gh`, then the SHA from
+  `ls-remote`, after a fetch.
 - **Fail closed, and REFUSE rather than report.** Every query failing means the
   answer is unavailable, which is not a clean one; and a verdict that is printed
   but not connected to an exit status lets the caller walk on.
