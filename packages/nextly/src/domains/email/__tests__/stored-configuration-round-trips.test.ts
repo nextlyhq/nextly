@@ -295,24 +295,6 @@ describe("a configuration whose parse is not a fixed point", () => {
     }
   });
 
-  // A non-enumerable own property is dropped by JSON and ignored by
-  // isDeepStrictEqual, so both comparisons agree over a property the column
-  // never holds and the adapter gets back on every reparse.
-  it("refuses a parser returning a non-enumerable property", async () => {
-    register("hidden", input => {
-      const out = { apiKey: String((input as { apiKey: unknown }).apiKey) };
-      Object.defineProperty(out, "token", {
-        value: "derived",
-        enumerable: false,
-      });
-      return out;
-    });
-
-    await expect(write("hidden", { apiKey: "k" })).rejects.toThrow(
-      /properties JSON cannot write/
-    );
-  });
-
   // An INHERITED field is materialised by zod into its parsed output as an own
   // property, so a caller that never sent the credential has one persisted.
   it("does not persist a configuration field the caller never sent", async () => {
@@ -335,43 +317,6 @@ describe("a configuration whose parse is not a fixed point", () => {
 
     const stored = await service.getProviderDecrypted(provider.id);
     expect(stored.configuration).toEqual({ apiKey: "k" });
-  });
-
-  // The same hole one level down: a non-enumerable property on a NESTED object
-  // is dropped by JSON and ignored by isDeepStrictEqual just as a root one is.
-  it("refuses a non-enumerable property below the root", async () => {
-    register("hidden-nested", input => {
-      const auth = {};
-      Object.defineProperty(auth, "token", {
-        value: "derived",
-        enumerable: false,
-      });
-      return { apiKey: String((input as { apiKey: unknown }).apiKey), auth };
-    });
-
-    await expect(write("hidden-nested", { apiKey: "k" })).rejects.toThrow(
-      /properties JSON cannot write/
-    );
-  });
-
-  // Inspecting the parsed value runs USER code when it is a proxy, and that
-  // has to fail as a provider-configuration fault rather than a raw TypeError.
-  it("reports a parsed value whose inspection throws", async () => {
-    register("hostile-proxy", input => {
-      void input;
-      return new Proxy(
-        {},
-        {
-          ownKeys() {
-            throw new TypeError("ownKeys trap exploded");
-          },
-        }
-      );
-    });
-
-    await expect(write("hostile-proxy", { apiKey: "k" })).rejects.toThrow(
-      /Email provider "hostile-proxy"/
-    );
   });
 
   // An ARRAY is ordinary configuration and JSON preserves it exactly. Its

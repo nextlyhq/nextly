@@ -261,32 +261,6 @@ export class EmailProviderService extends BaseService {
     // enumerable properties only, so the parser never sees the inherited one.
     const parsed = provider.parseConfiguration(this.ownFieldsOf(type, input));
 
-    // Every own key in the WHOLE tree must be one the column can hold. A
-    // non-enumerable or symbol-keyed own property is dropped by
-    // `JSON.stringify` AND ignored by `isDeepStrictEqual`, so both comparisons
-    // below would agree over a property the column never receives -- while
-    // every reparse recreates it and the adapter runs on a credential that was
-    // never saved. Root-only was not enough: `configuration.auth.token` hides
-    // exactly as well one level down.
-    //
-    // Inside a `try`, because reading keys off the parsed value RUNS provider
-    // code when it is a proxy, and a trap that throws would otherwise escape as
-    // a raw `TypeError` naming neither the provider nor what to change.
-    try {
-      this.assertOnlyWritableKeys(type, parsed);
-    } catch (error) {
-      if (error instanceof NextlyError) throw error;
-      throw new NextlyError({
-        code: "BUSINESS_RULE_VIOLATION",
-        publicMessage: `Email provider "${type}" parsed its configuration into a value that could not be inspected, so it cannot be stored.`,
-        logContext: {
-          reason: "email-provider-configuration-not-inspectable",
-          type,
-          detail: error instanceof Error ? error.message : String(error),
-        },
-      });
-    }
-
     // A provider whose parser returns something other than an object cannot
     // have its configuration persisted at all, and failing here names which
     // provider did it; storing the value regardless would put a string or an
@@ -452,39 +426,6 @@ export class EmailProviderService extends BaseService {
    * fault it is, rather than reaching the parser and failing later as
    * something less specific.
    */
-  private assertOnlyWritableKeys(
-    type: string,
-    value: unknown,
-    seen = new Set<object>()
-  ): void {
-    if (typeof value !== "object" || value === null) return;
-    // A cycle is JSON's problem rather than this check's; `JSON.stringify`
-    // reports it, and recursing forever here would never reach that.
-    if (seen.has(value)) return;
-    seen.add(value);
-    // An ARRAY carries `length` as a non-enumerable own key, and JSON writes
-    // arrays back exactly, so comparing key counts on one rejects every
-    // provider with an ordinary `scopes: string[]`. The elements are still
-    // walked below, because a hidden property on an object INSIDE an array
-    // hides just as well as one anywhere else.
-    if (
-      !Array.isArray(value) &&
-      Reflect.ownKeys(value).length !== Object.keys(value).length
-    ) {
-      throw new NextlyError({
-        code: "BUSINESS_RULE_VIOLATION",
-        publicMessage: `Email provider "${type}" parsed its configuration into an object carrying properties JSON cannot write, so what would be stored is not what the adapter would receive. Return plain enumerable fields from \`parseConfig\`.`,
-        logContext: {
-          reason: "email-provider-configuration-not-enumerable",
-          type,
-        },
-      });
-    }
-    for (const nested of Object.values(value)) {
-      this.assertOnlyWritableKeys(type, nested, seen);
-    }
-  }
-
   private ownFieldsOf(type: string, input: unknown): unknown {
     let serialized: string | undefined;
     try {
