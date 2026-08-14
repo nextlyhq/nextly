@@ -275,6 +275,38 @@ describe("changesRequested", () => {
   });
 
   /**
+   * The SAME-revision control the previous pair was missing, and the case that
+   * makes the two directions asymmetric. A reviewer approves the head, then
+   * submits `CHANGES_REQUESTED` on that same unchanged head: the objection is
+   * their newer position and must stand. Treating equality as coverage here
+   * reports a blocking reviewer as clean, and the objection itself supplies the
+   * head coverage that lets the verdict reach CLEAN.
+   */
+  it("keeps an objection submitted after an approval on the same revision", () => {
+    const reviews = [
+      at("APPROVED", "2026-08-14T10:00:00Z", 1),
+      at("CHANGES_REQUESTED", "2026-08-14T11:00:00Z", 2),
+    ];
+    expect(changesRequested(reviews, ORDER, true)).toEqual([CODEX]);
+    expect(report({ ...BASE, reviews, threads: [] }).verdict).toBe(
+      "CHANGES REQUESTED"
+    );
+  });
+
+  /**
+   * Its counterpart, which must NOT regress: an approval arriving after an
+   * objection on the same revision still clears it. Equality answers in this
+   * direction because the approval is the later word.
+   */
+  it("clears an objection when the approval on that revision came after", () => {
+    const reviews = [
+      at("CHANGES_REQUESTED", "2026-08-14T10:00:00Z", 1),
+      at("APPROVED", "2026-08-14T11:00:00Z", 2),
+    ];
+    expect(changesRequested(reviews, ORDER, true)).toEqual([]);
+  });
+
+  /**
    * The control: an objection naming a revision the approval does NOT cover
    * still stands. Without it, "an approval was seen" would swallow every later
    * objection regardless of which revision each named.

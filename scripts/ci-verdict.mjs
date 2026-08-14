@@ -136,12 +136,19 @@ export function changesRequested(
       // objection submitted after an approval but pinned to an earlier commit
       // describes code the approval already spoke for, and recording it would
       // report a reviewer as blocking a revision they signed off.
+      // `strict`, because equality means opposite things in the two
+      // directions. An approval naming the revision an objection already names
+      // ANSWERS it — that approval arrived second. An objection naming the
+      // revision an approval already names is the reviewer's NEWER position on
+      // an unchanged tree, and suppressing it would report a blocking reviewer
+      // as clean. Only a strictly newer approval pre-empts an objection.
       const answered = (approvals.get(login) ?? []).some(approvedAt =>
         approvalCovers(
           approvedAt,
           review.commit_id,
           revisionOrder,
-          revisionOrderComplete
+          revisionOrderComplete,
+          { strict: true }
         )
       );
       if (answered) continue;
@@ -186,11 +193,15 @@ function approvalCovers(
   approvedAt,
   objectedAt,
   revisionOrder,
-  revisionOrderComplete
+  revisionOrderComplete,
+  { strict = false } = {}
 ) {
   // An approval naming the objected revision answers it whether or not either
-  // is still in the order, which is what makes this the first question asked.
-  if (approvedAt === objectedAt) return true;
+  // is still in the order, which is what makes this the first question asked —
+  // EXCEPT when the caller is asking the reverse question, whether a prior
+  // approval pre-empts an objection that arrived later. There the same revision
+  // means the objection is the newer word on an unchanged tree.
+  if (approvedAt === objectedAt) return !strict;
   const at = revisionOrder?.get(approvedAt);
   const objected = revisionOrder?.get(objectedAt);
   // Absence from the order is read in ONE direction only, and the asymmetry is
@@ -212,7 +223,7 @@ function approvalCovers(
   // because a caller that never supplied the flag has not established the
   // property it would otherwise be read as asserting.
   if (objected === undefined) return revisionOrderComplete === true;
-  return at >= objected;
+  return strict ? at > objected : at >= objected;
 }
 
 /** Required reviewers with no review at `head`, in the order they were required. */
