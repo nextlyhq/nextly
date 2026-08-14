@@ -38,11 +38,17 @@ response, including one whose rows are all `queued`, and including an empty
 clean this file is about. Read it, then assert `success` on each job the scope
 decision requires, and exit nonzero otherwise.
 
-**Query the PR HEAD sha, not the merge sha.** They are different commits and
-only one carries the checks: measured on this PR, `commits/<head>/check-runs`
-returned 31 rows and `commits/<merge_commit_sha>/check-runs` returned 0. For an
-open PR that `merge_commit_sha` is GitHub's own test-merge, which nothing runs
-against. (Inside a workflow the relationship inverts, but only for `pull_request`:
+**Query the PR HEAD sha, not the merge sha.** Measured on this PR,
+`commits/<head>/check-runs` returned 31 rows and
+`commits/<merge_commit_sha>/check-runs` returned 0.
+
+**That is about where the check RECORDS are attached, not about what CI
+executed.** The two are easy to run together and they are different: those
+workflows check out `refs/pull/N/merge`, so what was BUILT AND TESTED is your
+branch merged with the base, while the resulting check-runs are attached to the
+PR HEAD. So the head is where to look them up, and "the head tree passed" is
+not what a green check means — it means the merge of head and base passed.
+ (Inside a workflow the relationship inverts, but only for `pull_request`:
 there `github.sha` IS the synthetic merge commit. On `pull_request_target` it is
 the tip of the BASE branch — `main` for an ordinary PR, and the PARENT FEATURE
 BRANCH for a stacked one, so `labeler.yml` and `pr-title.yml` see whichever the
@@ -247,8 +253,18 @@ new run exists. A plain `git rebase main` is not that: when the branch is
 already a descendant of `main` it reports the branch up to date and changes
 nothing, so the push that follows emits no `synchronize` and the four
 main-filtered workflows stay absent — having done exactly what the instruction
-said. `git rebase --force-rebase` (or `--no-ff`) replays regardless, and an
-empty commit or a close-and-reopen also start CI.
+said. **Prefer an EMPTY COMMIT** (`git commit --allow-empty`) — it moves the head,
+emits `synchronize`, and pushes fast-forward.
+
+`git rebase --force-rebase` also replays, and it is the worse choice HERE
+despite doing the job: the rewritten commits need a non-fast-forward push, so
+GitHub records `head_ref_force_pushed`, and `verifying-merged-work.md` treats
+any such event as disqualifying — its tail check reports NOT CHECKABLE from
+then on, permanently, because a force-push can erase a tail and the surviving
+ref cannot prove otherwise. Taking a remedy from this file that disables the
+companion procedure is a bad trade for a retarget. Close-and-reopen also starts
+CI, with the caveat below.
+
 
 The check that follows depends on which you picked, and conflating them rejects
 a remedy that worked:
