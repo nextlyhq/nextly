@@ -91,10 +91,10 @@ function roundTrip(nodes: BlockNode[], op: BuilderOp) {
  *
  * Measured before the number was chosen, because a tolerance added to survive
  * noise is subtracted from detection: `applyOp` over this fixture takes 1,459 ms
- * on a developer machine, against 49-55 s observed on a loaded CI worker. At
+ * on a developer machine, against 49-55 s on a memory-constrained worker. At
  * that spread a 120 s budget still fails a regression an order of magnitude
- * worse than today, while the previous 30 s produced reds that read as a
- * caller's defect — twice on branches that never touched this package.
+ * worse than today, while a 30 s one fails on load alone — and a test whose red
+ * means "the worker was busy" teaches its readers to re-run reds.
  *
  * The budget is generous because it is not the thing being asserted, matching
  * `MEASUREMENT_TIMEOUT_MS` in `blocks-engine`'s performance suite.
@@ -1745,27 +1745,47 @@ describe("what the boundary checks before editing at all", () => {
 });
 
 describe("a guard that must not crash on the input it refuses", () => {
+  it("refuses a deeply nested value without exhausting the stack", () => {
+    // A recursive walk leaked a native RangeError here, so the document broke
+    // the guard that exists to refuse it and the byte cap never ran.
+    let deep: Record<string, unknown> = {};
+    const root = deep;
+    for (let level = 0; level < 15_000; level += 1) {
+      const next: Record<string, unknown> = {};
+      deep.child = next;
+      deep = next;
+    }
+
+    let thrown: unknown;
+    try {
+      applyOp(doc(), { kind: "update", id: "a", patch: { props: root } });
+    } catch (error) {
+      thrown = error;
+    }
+    // The op may be accepted or refused — what must NOT happen is a native
+    // stack overflow escaping instead of an OpError.
+    expect(thrown).not.toBeInstanceOf(RangeError);
+    // Nesting fifteen thousand deep is what breaks a recursive walk, so the
+    // depth is load-bearing and cannot be reduced to make this quicker.
+  }, 30_000);
+
   it(
-    "refuses a deeply nested value without exhausting the stack",
+    "refuses a very wide slot without exceeding the call-argument limit",
     () => {
-      // A recursive walk leaked a native RangeError here, so the document broke
-      // the guard that exists to refuse it and the byte cap never ran.
-      let deep: Record<string, unknown> = {};
-      const root = deep;
-      for (let level = 0; level < 15_000; level += 1) {
-        const next: Record<string, unknown> = {};
-        deep.child = next;
-        deep = next;
-      }
+      // `push(...children)` passes each child as a call ARGUMENT, and V8 caps
+      // those — so a wide enough slot threw before the walk could refuse it.
+      const wide = node("wide", {
+        main: Array.from({ length: 150_000 }, (_unused, index) =>
+          node(`w-${String(index)}`)
+        ),
+      });
 
       let thrown: unknown;
       try {
-        applyOp(doc(), { kind: "update", id: "a", patch: { props: root } });
+        applyOp(doc([wide]), { kind: "remove", id: "wide" });
       } catch (error) {
         thrown = error;
       }
-      // The op may be accepted or refused — what must NOT happen is a native
-      // stack overflow escaping instead of an OpError.
       expect(thrown).not.toBeInstanceOf(RangeError);
       // A generous ceiling, not a fix. The fixture size is load-bearing —
       // 150,000 exceeds V8's call-argument cap, which is the whole point — and CI
@@ -1775,58 +1795,40 @@ describe("a guard that must not crash on the input it refuses", () => {
     REFUSAL_TIMEOUT_MS
   );
 
-  it("refuses a very wide slot without exceeding the call-argument limit", () => {
-    // `push(...children)` passes each child as a call ARGUMENT, and V8 caps
-    // those — so a wide enough slot threw before the walk could refuse it.
-    const wide = node("wide", {
-      main: Array.from({ length: 150_000 }, (_unused, index) =>
-        node(`w-${String(index)}`)
-      ),
-    });
-
-    let thrown: unknown;
-    try {
-      applyOp(doc([wide]), { kind: "remove", id: "wide" });
-    } catch (error) {
-      thrown = error;
-    }
-    expect(thrown).not.toBeInstanceOf(RangeError);
-    // A generous ceiling, not a fix. The fixture size is load-bearing —
-    // 150,000 exceeds V8's call-argument cap, which is the whole point — and CI
-    // runs several matrices at once, so the default budget measures the machine
-    // rather than this code.
-  }, 30_000);
-
-  it("counts a very wide slot without exceeding the call-argument limit", () => {
-    // An UPDATE, because a remove never reaches the cap check: only an edit
-    // that could make the document larger is measured against the node and byte
-    // caps, and the counter is where the remaining spread was. A remove walks
-    // the forest and stops, so the case above leaves this path untouched.
-    const wide = node("wide", {
-      main: Array.from({ length: 150_000 }, (_unused, index) =>
-        node(`w-${String(index)}`)
-      ),
-    });
-
-    let thrown: unknown;
-    try {
-      applyOp(doc([wide]), {
-        kind: "update",
-        id: "wide",
-        patch: { name: "renamed" },
+  it(
+    "counts a very wide slot without exceeding the call-argument limit",
+    () => {
+      // An UPDATE, because a remove never reaches the cap check: only an edit
+      // that could make the document larger is measured against the node and byte
+      // caps, and the counter is where the remaining spread was. A remove walks
+      // the forest and stops, so the case above leaves this path untouched.
+      const wide = node("wide", {
+        main: Array.from({ length: 150_000 }, (_unused, index) =>
+          node(`w-${String(index)}`)
+        ),
       });
-    } catch (error) {
-      thrown = error;
-    }
-    // Refused or applied, either is a legitimate answer to a document this
-    // large. A native RangeError is not: it means the count that decides which
-    // one broke before it could decide.
-    expect(thrown).not.toBeInstanceOf(RangeError);
-    // A generous ceiling, not a fix. The fixture size is load-bearing —
-    // 150,000 exceeds V8's call-argument cap, which is the whole point — and CI
-    // runs several matrices at once, so the default budget measures the machine
-    // rather than this code.
-  }, 30_000);
+
+      let thrown: unknown;
+      try {
+        applyOp(doc([wide]), {
+          kind: "update",
+          id: "wide",
+          patch: { name: "renamed" },
+        });
+      } catch (error) {
+        thrown = error;
+      }
+      // Refused or applied, either is a legitimate answer to a document this
+      // large. A native RangeError is not: it means the count that decides which
+      // one broke before it could decide.
+      expect(thrown).not.toBeInstanceOf(RangeError);
+      // A generous ceiling, not a fix. The fixture size is load-bearing —
+      // 150,000 exceeds V8's call-argument cap, which is the whole point — and CI
+      // runs several matrices at once, so the default budget measures the machine
+      // rather than this code.
+    },
+    REFUSAL_TIMEOUT_MS
+  );
 });
 
 describe("the document's own identity fields", () => {
