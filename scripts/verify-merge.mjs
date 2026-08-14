@@ -176,6 +176,7 @@ export function gateVerdict({
   unresolvedThreads,
   checkRuns,
   changedPaths,
+  required,
   codexReviewedSha,
   coderabbitReviewCount,
 }) {
@@ -211,7 +212,7 @@ export function gateVerdict({
       detail: "no check-runs reported for this revision",
     });
   } else {
-    for (const name of missingRequired(checkRuns, changedPaths)) {
+    for (const name of missingRequired(checkRuns, changedPaths, required)) {
       blockers.push({
         kind: "required-check-absent",
         detail: `${name} never reported — no build or test coverage for this revision`,
@@ -305,6 +306,36 @@ export function remoteForRepo(repoFullName, remotes) {
   return `https://github.com/${repoFullName}.git`;
 }
 
+/**
+ * Whether the verdict still describes the pull request that was examined.
+ *
+ * Everything the gate reads is taken across many round trips and keyed to the
+ * revision AND the mode observed at the start. Two things can move underneath
+ * that, and only one of them is a revision:
+ *
+ * - the branch gains a commit, so the answers describe a revision it no longer
+ *   has;
+ * - the pull request MERGES, which usually leaves the tip untouched — so a tip
+ *   comparison alone passes while every answer was taken in the pre-merge mode,
+ *   judging the branch head with the landed-whole question never asked.
+ *
+ * Returns a reason rather than a boolean so the caller can say which moved.
+ * Deliberately reports staleness only: adopting the new values would rubber
+ * stamp exactly the unverified state this detects.
+ */
+export function staleVerification({
+  mergedAtStart,
+  mergedNow,
+  tipAtStart,
+  tipNow,
+}) {
+  if (mergedAtStart !== mergedNow) {
+    return mergedNow ? "merged-during-verification" : "unmerged-during-verification";
+  }
+  if (tipAtStart !== tipNow) return "head-moved";
+  return null;
+}
+
 export function exitCode({ landedVerdict, mergeable }) {
   // Read from the landed-whole verdict alone rather than from reachability as
   // well. Reachability answers whether a BRANCH could be compared against a
@@ -315,6 +346,27 @@ export function exitCode({ landedVerdict, mergeable }) {
   if (landedVerdict === "not-checkable") return 2;
   if (landedVerdict === "candidates") return 2;
   return mergeable ? 0 : 1;
+}
+
+/**
+ * Slurped pages, refused unless every one of them was actually read.
+ *
+ * `--paginate --slurp` yields an array of pages, and a page that failed arrives
+ * as `null` rather than as an error. `flat()` carries that through and the
+ * optional access downstream discards it, so a partly-unread response becomes a
+ * SHORTER list that looks complete: fewer changed files can turn a source change
+ * into a documentation-only one and excuse every integration check.
+ */
+export function flatPages(pages, label) {
+  if (!Array.isArray(pages)) {
+    throw new TypeError(`${label}: expected an array of pages`);
+  }
+  for (const page of pages) {
+    if (page === null || typeof page !== "object") {
+      throw new TypeError(`${label}: a page could not be read`);
+    }
+  }
+  return pages;
 }
 
 /**
@@ -346,11 +398,10 @@ export function statusAsRun(status) {
  * and no tests. Absence of the expected name is the only thing that separates
  * them, and absence is invisible to any filter over what IS present.
  */
-export function missingRequired(
-  checkRuns,
-  changedPaths,
-  required = REQUIRED_CHECKS
-) {
+export function missingRequired(checkRuns, changedPaths, required) {
+  if (!Array.isArray(required)) {
+    throw new TypeError("missingRequired needs the required-check list");
+  }
   if (!Array.isArray(checkRuns)) {
     throw new TypeError("missingRequired needs an array of check-runs");
   }
@@ -425,29 +476,67 @@ export function workflowApplies(pathsIgnore, changedPaths) {
  * that editing the workflow fails CI here instead of silently widening what
  * this gate will pass.
  */
-export const INTEGRATION_PATHS_IGNORE = Object.freeze(["docs/**", "**/*.md"]);
+/**
+ * The `paths-ignore` globs a workflow declares under one trigger.
+ *
+ * The gate reads the workflow itself rather than holding a copy of its filter.
+ * A copy is a second implementation of the same question: it agrees on the day
+ * it is written, and afterwards the workflow can be edited while the copy keeps
+ * looking correct, at which point the gate waits for a check that will never
+ * report or excuses one that should have.
+ *
+ * The TRIGGER matters and is not interchangeable. Before a merge the checks come
+ * from the `pull_request` run; after one they come from `push` to the base
+ * branch, and the two blocks are edited independently. Reading whichever is
+ * nearest would answer about the wrong run.
+ */
+export function workflowPathsIgnore(workflowText, trigger) {
+  if (typeof workflowText !== "string" || typeof trigger !== "string") {
+    throw new TypeError("workflowPathsIgnore needs the workflow text and a trigger");
+  }
+  const lines = workflowText.split("\n");
+  const start = lines.findIndex(line => line.trimEnd() === `  ${trigger}:`);
+  if (start === -1) return [];
+
+  const globs = [];
+  let collecting = false;
+  for (const line of lines.slice(start + 1)) {
+    // Any line at the trigger's own indent or shallower ends the block, so a
+    // filter belonging to the NEXT trigger is never read as this one's.
+    if (/^ {0,2}\S/.test(line)) break;
+    if (line.trim() === "paths-ignore:") {
+      collecting = true;
+      continue;
+    }
+    if (!collecting) continue;
+    const entry = /^\s*-\s*["']?([^"'\s]+)["']?\s*$/.exec(line);
+    if (!entry) break;
+    globs.push(entry[1]);
+  }
+  return globs;
+}
 
 /**
  * Checks whose absence means the revision has no coverage, not that it is
  * clean, each with the filter deciding whether it was due to report.
  */
-export const REQUIRED_CHECKS = Object.freeze([
-  // Every other job in `ci.yml` hangs off this one through `needs: [ci]`, so if
-  // it never reported then the browser, scaffold and dev-script jobs did not
-  // run either, however many unrelated workflows went green.
-  { name: "Lint / Typecheck / Test / Build", pathsIgnore: [] },
-  // Its own workflow, unfiltered, on every pull request, and the repository
-  // calls it the enforcement gate.
-  { name: "gitleaks", pathsIgnore: [] },
-  // The only coverage any dialect-specific behaviour has: the unit suites mock
-  // the drivers and the browser tests run on sqlite alone. Listing the CI job
-  // and gitleaks while omitting these meant a run where `integration.yml`
-  // created no check-runs passed on the strength of the other two being green,
-  // which is the same absence-is-invisible defect one workflow along.
-  { name: "Integration (postgres)", pathsIgnore: INTEGRATION_PATHS_IGNORE },
-  { name: "Integration (mysql)", pathsIgnore: INTEGRATION_PATHS_IGNORE },
-  { name: "Integration (sqlite)", pathsIgnore: INTEGRATION_PATHS_IGNORE },
-]);
+export function requiredChecks(integrationPathsIgnore) {
+  return [
+    // Every other job in `ci.yml` hangs off this one through `needs: [ci]`, so
+    // if it never reported then the browser, scaffold and dev-script jobs did
+    // not run either, however many unrelated workflows went green. `ci.yml`
+    // filters in a job rather than at the trigger, so it always reports.
+    { name: "Lint / Typecheck / Test / Build", pathsIgnore: [] },
+    // Its own workflow, unfiltered, on every pull request.
+    { name: "gitleaks", pathsIgnore: [] },
+    // The only coverage any dialect-specific behaviour has: the unit suites
+    // mock the drivers and the browser tests run on sqlite alone.
+    { name: "Integration (postgres)", pathsIgnore: integrationPathsIgnore },
+    { name: "Integration (mysql)", pathsIgnore: integrationPathsIgnore },
+    { name: "Integration (sqlite)", pathsIgnore: integrationPathsIgnore },
+  ];
+}
+
 
 /**
  * Reviews that examined THIS revision, by the record's own `commit_id`.
@@ -500,6 +589,7 @@ export function landedWhole({ checkable, reason, candidates }) {
 // ---------------------------------------------------------------------------
 
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 const REPO = "nextlyhq/nextly";
@@ -641,27 +731,50 @@ export function main(argv) {
     ? landedWhole({ ...reach, candidates })
     : { verdict: "n/a", reason: "not merged", candidates: [] };
 
+  // Paginated. `per_page=100` alone caps the response at one page, so a
+  // revision with more than 100 runs hid every later one from `blockingJobs` —
+  // a queued or failed job on page two simply not existing as far as the gate
+  // was concerned.
   const checkRuns = subject
-    ? ghJson([
-        "api",
-        `repos/${REPO}/commits/${subject}/check-runs?per_page=100`,
-        "--jq",
-        ".check_runs",
-      ])
+    ? flatPages(
+        ghJson([
+          "api",
+          "--paginate",
+          "--slurp",
+          `repos/${REPO}/commits/${subject}/check-runs?per_page=100`,
+        ]),
+        "check-runs"
+      ).flatMap(page => page.check_runs ?? [])
     : [];
 
   // Every file the pull request touches, so a check that was never due to run
   // is not reported as one that failed to. Paginated: a change set larger than
   // one page would otherwise look small enough to have skipped a workflow.
-  const changedPaths = ghJson([
-    "api",
-    "--paginate",
-    "--slurp",
-    `repos/${REPO}/pulls/${pr}/files?per_page=100`,
-  ])
+  const changedPaths = flatPages(
+    ghJson([
+      "api",
+      "--paginate",
+      "--slurp",
+      `repos/${REPO}/pulls/${pr}/files?per_page=100`,
+    ]),
+    "changed files"
+  )
     .flat()
     .map(file => file?.filename)
     .filter(name => typeof name === "string");
+
+  // Read from the workflow, for the trigger whose run produced the checks being
+  // judged: `pull_request` before a merge, `push` to the base branch after one.
+  // The two blocks are edited independently, so answering from the wrong one
+  // waits for a check that will never report or excuses one that should have.
+  const integrationIgnore = workflowPathsIgnore(
+    readFileSync(
+      new URL("../.github/workflows/integration.yml", import.meta.url),
+      "utf8"
+    ),
+    merged ? "push" : "pull_request"
+  );
+  const required = requiredChecks(integrationIgnore);
   // Paginated. A pull request with more than 100 review threads would
   // otherwise have everything past the first page counted as resolved, which
   // is the reassuring direction.
@@ -738,6 +851,7 @@ export function main(argv) {
     unresolvedThreads: threads,
     checkRuns: allChecks,
     changedPaths,
+    required,
     codexReviewedSha: reviewedSha,
     coderabbitReviewCount: coderabbit,
   });
@@ -767,11 +881,23 @@ export function main(argv) {
   // It narrows the window rather than closing it — the read and the merge are
   // still separate operations. `gh pr merge --match-head-commit <tip>` is what
   // closes it, because there the server refuses.
-  const tipNow = lsRemoteTip(REMOTE_FOR_FETCH, meta.branch);
-  if (tipNow !== tip) {
+  // The merged STATE is re-read alongside the tip, not only the tip. A pull
+  // request that merges during the intervening calls usually leaves its branch
+  // untouched, so a tip comparison alone passes — while every answer above was
+  // taken in the pre-merge mode, judging the branch head with the landed-whole
+  // question never asked. The mode is as much a part of what was verified as
+  // the revision is.
+  const stale = staleVerification({
+    mergedAtStart: merged,
+    mergedNow:
+      ghText(["api", `repos/${REPO}/pulls/${pr}`, "--jq", ".merged"]) === "true",
+    tipAtStart: tip,
+    tipNow: lsRemoteTip(REMOTE_FOR_FETCH, meta.branch),
+  });
+  if (stale) {
     process.stdout.write(
-      `  head moved ${tip.slice(0, 9)} -> ${(tipNow || "(gone)").slice(0, 9)} ` +
-        `during verification; this verdict describes ${tip.slice(0, 9)}\n`
+      `  ${stale}: this verdict describes ${tip.slice(0, 9)} as it stood when ` +
+        "the check began, and is no longer current\n"
     );
     return 2;
   }

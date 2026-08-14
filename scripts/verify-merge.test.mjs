@@ -14,8 +14,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import {
-  INTEGRATION_PATHS_IGNORE,
-  REQUIRED_CHECKS,
+  flatPages,
   blockingJobs,
   checkability,
   countRewriteEvents,
@@ -28,12 +27,15 @@ import {
   pathMatches,
   remoteForRepo,
   repoFromRemoteUrl,
+  requiredChecks,
   reviewCoverage,
   reviewsCoveringTip,
   runCli,
+  staleVerification,
   statusAsRun,
   verdictCoversTip,
   workflowApplies,
+  workflowPathsIgnore,
 } from "./verify-merge.mjs";
 
 const forcePush = { event: "head_ref_force_pushed" };
@@ -48,6 +50,14 @@ const FULL_TIP = "91fd9500285dcf264e3609a916b7518b591b51f3";
 const CODE_CHANGE = ["packages/nextly/src/index.ts"];
 /** A change set `integration.yml` ignores at the trigger, so it never runs. */
 const DOCS_CHANGE = ["docs/guide.md", "docs/api/reference.md"];
+/** The integration filter, read from the workflow exactly as the gate reads it. */
+const INTEGRATION_YML = readFileSync(
+  fileURLToPath(new URL("../.github/workflows/integration.yml", import.meta.url)),
+  "utf8"
+);
+const PR_IGNORE = workflowPathsIgnore(INTEGRATION_YML, "pull_request");
+const REQUIRED = requiredChecks(PR_IGNORE);
+
 /** Every required check present and green, which is what a pass needs. */
 const allGreen = () => [
   green(CI),
@@ -257,6 +267,7 @@ describe("gateVerdict", () => {
     unresolvedThreads: 0,
     checkRuns: allGreen(),
     changedPaths: CODE_CHANGE,
+    required: REQUIRED,
     codexReviewedSha: "91fd950028",
     coderabbitReviewCount: 3,
   };
@@ -344,6 +355,7 @@ describe("formatVerdict", () => {
         unresolvedThreads: 1,
         checkRuns: allGreen(),
         changedPaths: CODE_CHANGE,
+        required: REQUIRED,
         codexReviewedSha: FULL_TIP.slice(0, 10),
         coderabbitReviewCount: 1,
       })
@@ -360,6 +372,7 @@ describe("formatVerdict", () => {
         unresolvedThreads: 0,
         checkRuns: allGreen(),
         changedPaths: CODE_CHANGE,
+        required: REQUIRED,
         codexReviewedSha: FULL_TIP.slice(0, 10),
         coderabbitReviewCount: 0,
       })
@@ -401,7 +414,7 @@ describe("missingRequired", () => {
     // its jobs while `secret-scan.yml` succeeded yields a non-empty,
     // all-green set containing no build and no tests. Absence is invisible to
     // any filter over what is present.
-    expect(missingRequired([green("gitleaks")], CODE_CHANGE)).toContain(
+    expect(missingRequired([green("gitleaks")], CODE_CHANGE, REQUIRED)).toContain(
       "Lint / Typecheck / Test / Build"
     );
   });
@@ -412,7 +425,7 @@ describe("missingRequired", () => {
     const runs = allGreen();
     runs[0] = queued("Lint / Typecheck / Test / Build");
 
-    expect(missingRequired(runs, CODE_CHANGE)).toEqual([]);
+    expect(missingRequired(runs, CODE_CHANGE, REQUIRED)).toEqual([]);
   });
 
   it("reports the integration legs a code change was due to run", () => {
@@ -424,7 +437,8 @@ describe("missingRequired", () => {
     expect(
       missingRequired(
         [green("Lint / Typecheck / Test / Build"), green("gitleaks")],
-        CODE_CHANGE
+        CODE_CHANGE,
+        REQUIRED
       )
     ).toEqual([
       "Integration (postgres)",
@@ -440,7 +454,8 @@ describe("missingRequired", () => {
     expect(
       missingRequired(
         [green("Lint / Typecheck / Test / Build"), green("gitleaks")],
-        DOCS_CHANGE
+        DOCS_CHANGE,
+        REQUIRED
       )
     ).toEqual([]);
   });
@@ -449,7 +464,7 @@ describe("missingRequired", () => {
     // An unknown change set must not excuse a check. The failure this whole
     // file guards is a gate reporting clean because it could not see, so the
     // unreadable case resolves toward demanding evidence.
-    expect(missingRequired([green("gitleaks")], undefined)).toEqual([
+    expect(missingRequired([green("gitleaks")], undefined, REQUIRED)).toEqual([
       "Lint / Typecheck / Test / Build",
       "Integration (postgres)",
       "Integration (mysql)",
@@ -458,7 +473,7 @@ describe("missingRequired", () => {
   });
 
   it("names the checks whose ABSENCE means no coverage", () => {
-    expect(REQUIRED_CHECKS.map(c => c.name)).toEqual([
+    expect(REQUIRED.map(c => c.name)).toEqual([
       "Lint / Typecheck / Test / Build",
       "gitleaks",
       "Integration (postgres)",
@@ -498,7 +513,7 @@ describe("workflowApplies", () => {
     // "mostly documentation" as ignored is how a code change loses its
     // database coverage.
     expect(
-      workflowApplies(INTEGRATION_PATHS_IGNORE, [
+      workflowApplies(PR_IGNORE, [
         "docs/guide.md",
         "packages/nextly/src/index.ts",
       ])
@@ -506,12 +521,12 @@ describe("workflowApplies", () => {
   });
 
   it("skips the workflow when every file matches", () => {
-    expect(workflowApplies(INTEGRATION_PATHS_IGNORE, DOCS_CHANGE)).toBe(false);
+    expect(workflowApplies(PR_IGNORE, DOCS_CHANGE)).toBe(false);
   });
 
   it("applies when the change set is unknown or empty", () => {
-    expect(workflowApplies(INTEGRATION_PATHS_IGNORE, undefined)).toBe(true);
-    expect(workflowApplies(INTEGRATION_PATHS_IGNORE, [])).toBe(true);
+    expect(workflowApplies(PR_IGNORE, undefined)).toBe(true);
+    expect(workflowApplies(PR_IGNORE, [])).toBe(true);
   });
 
   it("applies when the workflow declares no filter at all", () => {
@@ -572,6 +587,8 @@ describe("gateVerdict + required checks", () => {
       tip: "91fd9500285dcf264e3609a916b7518b591b51f3",
       unresolvedThreads: 0,
       checkRuns: [green("gitleaks")],
+      changedPaths: CODE_CHANGE,
+      required: REQUIRED,
       codexReviewedSha: "91fd950028",
       coderabbitReviewCount: 1,
     });
@@ -647,57 +664,83 @@ describe("REQUIRED_CHECKS", () => {
     // the enforcement gate. With only the CI job listed, a run where that
     // workflow created no check-run passed on an unrelated workflow being
     // green — absence being invisible, one workflow along.
-    expect(REQUIRED_CHECKS.map(c => c.name)).toContain("gitleaks");
+    expect(REQUIRED.map(c => c.name)).toContain("gitleaks");
 
     const withoutScan = allGreen().filter(run => run.name !== "gitleaks");
-    expect(missingRequired(withoutScan, CODE_CHANGE)).toEqual(["gitleaks"]);
+    expect(missingRequired(withoutScan, CODE_CHANGE, REQUIRED)).toEqual(["gitleaks"]);
   });
 });
 
-describe("INTEGRATION_PATHS_IGNORE against the workflow it mirrors", () => {
-  // The constant is a copy of a filter that lives in `integration.yml`, and two
-  // spellings of one rule drift silently — the copy keeps looking correct while
-  // the workflow moves underneath it, and the gate then excuses a check the
-  // workflow was due to create.
-  const workflow = readFileSync(
-    fileURLToPath(new URL("../.github/workflows/integration.yml", import.meta.url)),
-    "utf8"
-  );
+describe("workflowPathsIgnore", () => {
+  // Replaces a pair of tests that pinned a hand-copied constant against the
+  // workflow. The constant is gone: the gate reads the workflow directly, so
+  // there is no copy left to drift and nothing to pin. What remains to cover is
+  // the parser itself, which is now the only implementation of the filter.
+  it("reads the filter the workflow declares for a trigger", () => {
+    const globs = workflowPathsIgnore(INTEGRATION_YML, "pull_request");
 
-  /** The `paths-ignore` globs declared under one trigger in a workflow file. */
-  const declaredIgnores = trigger => {
-    const lines = workflow.split("\n");
-    const start = lines.findIndex(l => l.trimEnd() === `  ${trigger}:`);
-    if (start === -1) return [];
-    const globs = [];
-    let collecting = false;
-    for (const line of lines.slice(start + 1)) {
-      // Any line at the trigger's own indent or shallower ends the block, so a
-      // filter belonging to the NEXT trigger is never read as this one's.
-      if (/^ {0,2}\S/.test(line)) break;
-      if (line.trim() === "paths-ignore:") {
-        collecting = true;
-        continue;
-      }
-      if (!collecting) continue;
-      const entry = /^\s*-\s*["']?([^"'\s]+)["']?\s*$/.exec(line);
-      if (!entry) break;
-      globs.push(entry[1]);
-    }
-    return globs;
-  };
-
-  it("finds a filter at all, so a failed parse cannot read as agreement", () => {
-    // Without this, restructuring the workflow makes the extractor return
-    // nothing, and an empty list compares equal to an empty list — the parse
-    // failing would certify the mirror rather than fail the build.
-    expect(declaredIgnores("pull_request").length).toBeGreaterThan(0);
+    // Non-empty first: a parser that silently found nothing would satisfy any
+    // comparison against another empty list, so the failure to read would
+    // certify itself.
+    expect(globs.length).toBeGreaterThan(0);
+    expect(globs).toContain("docs/**");
   });
 
-  it("matches what the workflow actually declares", () => {
-    expect(declaredIgnores("pull_request")).toEqual([
-      ...INTEGRATION_PATHS_IGNORE,
-    ]);
+  it("reads the PUSH trigger too, which decides the post-merge run", () => {
+    // The checks judged after a merge come from `push` to the base branch, not
+    // from `pull_request`. The two blocks are edited independently, so a parser
+    // exercised on only one of them can be correct there and wrong for every
+    // merged pull request the gate looks at.
+    const globs = workflowPathsIgnore(INTEGRATION_YML, "push");
+
+    expect(globs.length).toBeGreaterThan(0);
+  });
+
+  it("stops at the end of the trigger's own block", () => {
+    // Without the dedent guard, a filter belonging to the NEXT trigger is read
+    // as this one's, so a workflow filtered on push and not on pull_request
+    // would excuse checks that were due to report.
+    const yaml = [
+      "on:",
+      "  pull_request:",
+      "    branches: [main]",
+      "  push:",
+      "    paths-ignore:",
+      '      - "docs/**"',
+    ].join("\n");
+
+    expect(workflowPathsIgnore(yaml, "pull_request")).toEqual([]);
+    expect(workflowPathsIgnore(yaml, "push")).toEqual(["docs/**"]);
+  });
+
+  it("returns nothing for a trigger the workflow does not declare", () => {
+    // Empty means "no filter", which `workflowApplies` treats as always
+    // applicable — the direction that requires the check rather than excusing
+    // it.
+    expect(workflowPathsIgnore(INTEGRATION_YML, "schedule")).toEqual([]);
+  });
+
+  it("refuses input it cannot read rather than reporting no filter", () => {
+    expect(() => workflowPathsIgnore(undefined, "push")).toThrow(TypeError);
+  });
+});
+
+describe("flatPages", () => {
+  it("refuses a page that could not be read", () => {
+    // `--paginate --slurp` returns a failed page as null. Flattening past it
+    // yields a SHORTER list that looks complete, and a shorter changed-file
+    // list can turn a source change into a documentation-only one and excuse
+    // every integration check.
+    expect(() => flatPages([[{ filename: "a.ts" }], null], "files")).toThrow(
+      TypeError
+    );
+    expect(() => flatPages(null, "files")).toThrow(TypeError);
+  });
+
+  it("passes pages that were all read", () => {
+    const pages = [[{ filename: "a.ts" }], [{ filename: "b.ts" }]];
+
+    expect(flatPages(pages, "files")).toEqual(pages);
   });
 });
 
@@ -780,6 +823,49 @@ describe("runCli", () => {
     // The control: without it, a wrapper returning 2 unconditionally passes.
     expect(runCli(["798"], () => 0)).toBe(0);
     expect(runCli(["798"], () => 1)).toBe(1);
+  });
+});
+
+describe("staleVerification", () => {
+  const A = "a".repeat(40);
+  const B = "b".repeat(40);
+
+  it("catches a merge that happened DURING the check, tip unchanged", () => {
+    // The case a tip comparison cannot see: merging usually leaves the branch
+    // untouched, so the revision matches while every answer above it was taken
+    // in the pre-merge mode — head checks, landed-whole never asked.
+    expect(
+      staleVerification({
+        mergedAtStart: false,
+        mergedNow: true,
+        tipAtStart: A,
+        tipNow: A,
+      })
+    ).toBe("merged-during-verification");
+  });
+
+  it("catches a push during the check", () => {
+    expect(
+      staleVerification({
+        mergedAtStart: false,
+        mergedNow: false,
+        tipAtStart: A,
+        tipNow: B,
+      })
+    ).toBe("head-moved");
+  });
+
+  it("reports nothing when neither moved", () => {
+    // The control. Without it, a function returning a reason unconditionally
+    // satisfies both cases above and the gate could never pass.
+    expect(
+      staleVerification({
+        mergedAtStart: true,
+        mergedNow: true,
+        tipAtStart: A,
+        tipNow: A,
+      })
+    ).toBe(null);
   });
 });
 
