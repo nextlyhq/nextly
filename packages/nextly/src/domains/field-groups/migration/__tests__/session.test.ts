@@ -7,7 +7,7 @@ import { NextlyError } from "../../../../errors/nextly-error";
 import {
   getMigrationLockDdl,
   LOCK_RENEW_INTERVAL_MS,
-  LOCK_RENEWALS_BEFORE_LOSS,
+  LOCK_LOSS_AFTER_MS,
   LOCK_TTL_SECONDS,
   MIGRATION_LOCK_TABLE,
   observeMigrationLock,
@@ -805,75 +805,47 @@ describe("field-group migration session", () => {
     }
   });
 
-  // Losing the claim and finishing the work are concurrent events, so they can land in either
-  // order — and the order decides which mechanism reports the loss. When loss wins, the race
-  // rejects and the test above covers it. When COMPLETION wins, the race carries the callback's
-  // value and the loss arrives afterwards, with nothing left watching for it: the release is
-  // skipped (the work was still running when the row stopped being maintained), which leaves
-  // `heldToTheEnd` at its initial `true`. Both guards therefore pass and the run reports success
-  // on a claim it had already declared lost.
-  it("fails a completed run whose claim was declared lost as it finished", async () => {
+  // `setInterval` fires on a schedule, not on completion, so a renewal slower than the interval
+  // would have a second started underneath it and then a third. Two costs, and the second is the
+  // one that bites: attempts pile up against the connection pool — with `pool.max: 1` each new one
+  // queues behind the last and makes it later still — and their completions arrive out of order,
+  // so any judgement made from the ORDER of results is judging something else.
+  it("never starts a second renewal while one is in flight", async () => {
     vi.useFakeTimers();
     try {
-      // Transaction 1 is the acquisition, 2..5 are the four renewals the TTL allows, 6 is the
-      // release. Sequence numbers rather than call-order guesses, so a change in how many
-      // transactions the session takes fails this loudly instead of silently retargeting it.
-      const ACQUIRE = 1;
-      const LAST_RENEWAL = 1 + LOCK_RENEWALS_BEFORE_LOSS;
-      const RELEASE = LAST_RENEWAL + 1;
+      let started = 0;
+      let startedWhileHung = 0;
+      let ungate: (() => void) | undefined;
+      const hung = new Promise<void>(resolve => {
+        ungate = resolve;
+      });
 
       const h = createAdapter({
         heldBy: null,
         onTransaction: async seq => {
-          if (seq === ACQUIRE) return;
-          if (seq === RELEASE) {
-            // 🔴 The interleaving this test exists for. The final renewal is still in flight when
-            // the release opens, so yielding here lets its failure — and the loss it declares —
-            // land while the release is between its own awaits. That is exactly the window where
-            // the callback has already produced a value and nothing is watching the claim.
-            for (let turn = 0; turn < 50; turn++) await Promise.resolve();
-            return;
-          }
-          // Every renewal fails to reach the database. Not proof the claim is gone, which is why
-          // it takes all four before the session gives up on it.
-          throw new Error("connection reset");
+          // Sequence 1 is the acquisition and must complete, or nothing holds the lock at all.
+          if (seq === 1) return;
+          started += 1;
+          await hung;
         },
       });
 
-      const run = withMigrationSession(
-        { adapter: h.adapter, dialect: "postgresql", label: "run-1" },
-        async () => {
-          // Spend the first three attempts, awaiting each so the failures are genuinely
-          // consecutive rather than overlapping.
-          for (
-            let attempt = 1;
-            attempt < LOCK_RENEWALS_BEFORE_LOSS;
-            attempt++
-          ) {
-            await vi.advanceTimersByTimeAsync(LOCK_RENEW_INTERVAL_MS);
+      await expect(
+        withMigrationSession(
+          { adapter: h.adapter, dialect: "postgresql", label: "run-1" },
+          async () => {
+            // Several intervals, all inside the margin, so nothing here is a loss — the only
+            // question is how many attempts were STARTED while the first had not come back.
+            await vi.advanceTimersByTimeAsync(LOCK_RENEW_INTERVAL_MS * 4);
+            startedWhileHung = started;
+            ungate?.();
           }
-          // 🔴 Synchronous, and NOT awaited. It starts the fourth renewal and returns before that
-          // renewal can settle, which is what makes completion win the race. Awaiting here would
-          // let the loss land first and exercise the other path entirely.
-          vi.advanceTimersByTime(LOCK_RENEW_INTERVAL_MS);
-          return "migrated";
-        }
-      );
+        )
+      ).resolves.toBeUndefined();
 
-      // 🔴 The REASON, not just the code. `heldToTheEnd` reports a different reason from the same
-      // factory, so asserting SERVICE_UNAVAILABLE alone would pass on the guard that was already
-      // there and prove nothing about this one.
-      await expect(run).rejects.toMatchObject({
-        code: "SERVICE_UNAVAILABLE",
-        logContext: {
-          reason: "migration lock claim was lost before completion",
-        },
-      });
-
-      // 🔴 Positive control on WHICH guard fired. The release ran and cleared the row, so it found
-      // the claim still ours and still live and reported `heldToTheEnd` — the pre-existing
-      // completion check had nothing to object to. That is what makes the rejection above evidence
-      // about this race rather than about a takeover the older guard would have caught anyway.
+      // 🔴 Read INSIDE the run, before the release opens its own transaction — otherwise this
+      // counts the release too and the number stops meaning what it says.
+      expect(startedWhileHung).toBe(1);
       expect(h.owner()).toBeNull();
     } finally {
       vi.useRealTimers();
@@ -902,9 +874,7 @@ describe("field-group migration session", () => {
           { adapter: h.adapter, dialect: "postgresql", label: "run-1" },
           async () => {
             // The whole margin, because one failure is deliberately survivable.
-            await vi.advanceTimersByTimeAsync(
-              LOCK_RENEW_INTERVAL_MS * LOCK_RENEWALS_BEFORE_LOSS
-            );
+            await vi.advanceTimersByTimeAsync(LOCK_LOSS_AFTER_MS);
           }
         )
       ).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
@@ -933,9 +903,7 @@ describe("field-group migration session", () => {
       const run = withMigrationSession(
         { adapter: h.adapter, dialect: "postgresql", label: "run-1" },
         async () => {
-          await vi.advanceTimersByTimeAsync(
-            LOCK_RENEW_INTERVAL_MS * LOCK_RENEWALS_BEFORE_LOSS
-          );
+          await vi.advanceTimersByTimeAsync(LOCK_LOSS_AFTER_MS);
         }
       );
       await expect(run).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
@@ -958,12 +926,17 @@ describe("field-group migration session", () => {
     try {
       const h = createAdapter({ heldBy: null });
       const realRunStatement = h.ctx.runStatement.getMockImplementation();
+      // Ticks fire every interval, and the one AT the margin declares loss instead of attempting —
+      // so this many attempts actually reach the database before the session gives up. Derived from
+      // the constants rather than written as a number, so retuning either keeps this a blip instead
+      // of silently turning it into a loss.
+      const ATTEMPTS_BEFORE_LOSS =
+        Math.floor(LOCK_LOSS_AFTER_MS / LOCK_RENEW_INTERVAL_MS) - 1;
       let failures = 0;
       h.ctx.runStatement.mockImplementation(async (statement: SQL) => {
-        // One short of the margin, then recovery — the shape of a blip.
         if (
           isRenewalStatement(statement) &&
-          failures < LOCK_RENEWALS_BEFORE_LOSS - 1
+          failures < ATTEMPTS_BEFORE_LOSS - 1
         ) {
           failures += 1;
           throw new Error("connection reset");
@@ -975,14 +948,17 @@ describe("field-group migration session", () => {
         withMigrationSession(
           { adapter: h.adapter, dialect: "postgresql", label: "run-1" },
           async () => {
+            // Past the margin, so a run that had NOT recovered would have been declared lost.
             await vi.advanceTimersByTimeAsync(
-              LOCK_RENEW_INTERVAL_MS * (LOCK_RENEWALS_BEFORE_LOSS + 1)
+              LOCK_LOSS_AFTER_MS + LOCK_RENEW_INTERVAL_MS
             );
           }
         )
       ).resolves.toBeUndefined();
 
-      expect(failures).toBe(LOCK_RENEWALS_BEFORE_LOSS - 1);
+      // 🔴 The blip has to have actually happened, or this passes on a run that never failed a
+      // renewal at all — the assertion that would be satisfied by absence.
+      expect(failures).toBe(ATTEMPTS_BEFORE_LOSS - 1);
       // Released normally, because the claim was never lost.
       expect(h.owner()).toBeNull();
     } finally {

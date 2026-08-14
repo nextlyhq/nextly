@@ -101,23 +101,30 @@ function toLockState(
  * decides how quickly a dead holder's row becomes claimable. A long TTL there would mean a crash
  * wedges the next run for that long, which is the cost the renewal exists to avoid paying.
  *
- * The interval is a quarter of the TTL, so four consecutive renewals have to fail before the claim
- * lapses. A single slow query or a brief connection blip cannot lose a lock that is still held.
+ * The interval is a small fraction of the TTL so that several attempts fit inside it: a slow query
+ * or a brief connection blip must not lose a lock that is still held. Attempts cost one single-row
+ * update each and never pile up, because only one is ever in flight.
  */
 export const LOCK_TTL_SECONDS = 120;
-export const LOCK_RENEW_INTERVAL_MS = (LOCK_TTL_SECONDS / 4) * 1000;
+export const LOCK_RENEW_INTERVAL_MS = (LOCK_TTL_SECONDS / 8) * 1000;
 
 /**
- * How many renewals must fail IN A ROW before the claim is treated as lost.
+ * How long the session may go without CONFIRMING its lease before it declares the claim lost.
  *
- * DERIVED from the two constants above rather than written as 4, so the margin the comment
- * describes and the number the code enforces cannot drift apart when either is retuned. This is
- * the whole value of the interval being a fraction of the TTL: it buys exactly this many attempts.
+ * 🔴 Elapsed time, NOT a count of failed attempts. A count answers "how many renewals went wrong",
+ * which is only a proxy for the question that decides safety — "how much lease is left" — and it is
+ * a proxy that fails in two independent ways. Attempts can OVERLAP, so completions arrive out of
+ * order and a stale failure can be counted against a lease a later success already extended; and
+ * the count reaches its limit at the moment the lease expires rather than before it, so the work
+ * runs unprotected right up to the deadline and is told only once it is already past.
+ *
+ * Measuring the gap since the last confirmation has neither problem. A late success moves the
+ * confirmation forward and a late failure moves nothing, so ordering stops mattering; and the
+ * threshold can sit wherever the margin needs to be. Here it leaves TWO renewal intervals of lease
+ * still in hand, so the caller is told while it is still protected rather than after.
  */
-export const LOCK_RENEWALS_BEFORE_LOSS = Math.max(
-  1,
-  Math.floor((LOCK_TTL_SECONDS * 1000) / LOCK_RENEW_INTERVAL_MS)
-);
+export const LOCK_LOSS_AFTER_MS =
+  LOCK_TTL_SECONDS * 1000 - 2 * LOCK_RENEW_INTERVAL_MS;
 
 /**
  * The database's own clock, and an expiry computed from it, per dialect.
@@ -644,30 +651,48 @@ export async function withMigrationSession<T>(
       })
     );
   };
-  // 🔴 Consecutive FAILURES, not failures. The TTL is four intervals wide precisely so a slow query
-  // or a dropped connection cannot lose a lock that is still held, and treating the first error as
-  // fatal spent that margin without using it — a brief blip aborted a healthy, half-finished
-  // migration. Counted rather than timed: the margin is defined as a number of renewals, so
-  // counting renewals states it directly and keeps the application's clock out of a decision that
-  // has no business depending on it.
-  let consecutiveFailures = 0;
+  // 🔴 A MONOTONIC clock, and an ELAPSED span rather than an instant. The module comment forbids
+  // deciding anything from the application's clock, and this does not break that rule: the ban is
+  // on comparing an instant here against an instant the database wrote, which two machines whose
+  // clocks disagree would answer differently. This compares two readings taken by THIS process, of
+  // its own progress, and asks only "how long have I been unable to confirm my lease" — a question
+  // no other machine participates in. `performance.now()` rather than `Date.now()` because it does
+  // not step: an NTP correction mid-migration would otherwise expire or extend a claim by accident.
+  let leaseConfirmedAt = performance.now();
+
+  // Only ever one attempt in flight. `setInterval` fires on a schedule, not on completion, so a
+  // renewal slower than the interval would otherwise have a second started underneath it — and with
+  // a single-connection pool those queue against each other, each making the next later still.
+  let renewing = false;
+
   const renewal = setInterval(() => {
+    // Asked BEFORE attempting, because this is the question the attempt cannot answer: a renewal
+    // that never comes back reports nothing at all, and the lease drains while it hangs.
+    if (performance.now() - leaseConfirmedAt >= LOCK_LOSS_AFTER_MS) {
+      onLost();
+      return;
+    }
+    if (renewing) return;
+    renewing = true;
     void renew(adapter, dialect, claim).then(
       held => {
-        // Ownership DISPROVED is not a margin question. The row names someone else, so no number of
-        // retries can win it back and the work is already unprotected.
+        renewing = false;
+        // Ownership DISPROVED is not a margin question. The row names someone else, so no amount of
+        // remaining lease can win it back and the work is already unprotected.
         if (!held) {
           onLost();
           return;
         }
-        consecutiveFailures = 0;
+        // The lease is confirmed as of NOW rather than as of when this attempt started: the
+        // database extended it when the statement ran, and dating it earlier would only ever
+        // shorten the margin.
+        leaseConfirmedAt = performance.now();
       },
       () => {
-        // An error is not proof the claim is gone — only proof this attempt could not ask. Retry
-        // while the lease can still be kept alive, and give up once enough have failed in a row
-        // that the next success could no longer land before the claim lapses.
-        consecutiveFailures += 1;
-        if (consecutiveFailures >= LOCK_RENEWALS_BEFORE_LOSS) onLost();
+        // An error is not proof the claim is gone — only proof this attempt could not ask. It moves
+        // nothing: the confirmation stands where the last success left it, and the elapsed check
+        // above is what eventually gives up.
+        renewing = false;
       }
     );
   }, LOCK_RENEW_INTERVAL_MS);
@@ -705,14 +730,21 @@ export async function withMigrationSession<T>(
   // Reached only when `fn` RESOLVED — a rejection propagated out of the block above and never gets
   // here, which is the ordering that keeps the caller's own failure primary.
   //
-  // 🔴 That same ordering is what makes `claimWasLost` decisive HERE, with no record of which
-  // promise won the race required. `claimLost` only ever REJECTS, so it cannot have won and still
-  // arrive at this line; reaching it with the flag set means the loss was observed while the
-  // callback was finishing — the race took `fn`'s value, and the renewal reporting a takeover ran
-  // before the block above resumed. The release is then skipped for the right reason (work was
-  // still running when the row stopped being ours) which leaves `heldToTheEnd` at its initial
-  // `true`, so the check below cannot see it and the run would report success on a claim a
-  // contender already holds. Completing is not the same as having been protected while completing.
+  // `claimWasLost` is decisive HERE without any record of which promise won the race: `claimLost`
+  // only ever REJECTS, so it cannot have won and still arrive at this line. Reaching it with the
+  // flag set would mean the loss was observed while the callback was finishing, which skips the
+  // release for the right reason (work still running when the row stopped being ours) and leaves
+  // `heldToTheEnd` at its initial `true` — so without this the run would report success on a claim
+  // it had already given up. Completing is not the same as having been protected while completing.
+  //
+  // 🔴 DEFENSIVE, and currently UNREACHABLE — stated rather than left to read as covered. Loss is
+  // declared either by the elapsed check, which runs on a timer callback and therefore cannot
+  // interleave into the microtask gap between the race settling and the line below, or by a renewal
+  // reporting the row is no longer ours-and-live, which the release then reads the same way and
+  // reports through `heldToTheEnd`. No test exercises this branch, because none can reach it. It is
+  // kept because reachability is a property of the current call graph rather than of the code: it
+  // costs one comparison over a value already in hand, and the invariant it states — never report
+  // success on a claim we declared lost — is one the next change to this loop could easily reopen.
   if (claimWasLost) {
     throw NextlyError.serviceUnavailable({
       logMessage:
