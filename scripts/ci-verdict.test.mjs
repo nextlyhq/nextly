@@ -258,6 +258,36 @@ describe("changesRequested", () => {
   });
 
   /**
+   * The mirror of the case below, and it fails in the opposite direction.
+   * A reviewer approves the HEAD, then a delayed `CHANGES_REQUESTED` pinned to
+   * an EARLIER revision arrives afterwards. Timestamp order processes the
+   * approval first, so a rule that only clears what is already on record
+   * records the stale objection and reports the account as blocking a revision
+   * it signed off.
+   */
+  it("does not record an objection an earlier-seen approval already covers", () => {
+    const reviews = [
+      at("APPROVED", "2026-08-14T10:00:00Z", 1),
+      { ...at("CHANGES_REQUESTED", "2026-08-14T11:00:00Z", 2), commit_id: OLD },
+    ];
+    expect(changesRequested(reviews, ORDER, true)).toEqual([]);
+    expect(report({ ...BASE, reviews, threads: [] }).verdict).toBe("CLEAN");
+  });
+
+  /**
+   * The control: an objection naming a revision the approval does NOT cover
+   * still stands. Without it, "an approval was seen" would swallow every later
+   * objection regardless of which revision each named.
+   */
+  it("still records an objection on a revision later than the approval", () => {
+    const reviews = [
+      { ...at("APPROVED", "2026-08-14T10:00:00Z", 1), commit_id: OLD },
+      at("CHANGES_REQUESTED", "2026-08-14T11:00:00Z", 2),
+    ];
+    expect(changesRequested(reviews, ORDER, true)).toEqual([CODEX]);
+  });
+
+  /**
    * Two objections from one account, the second naming an EARLIER revision
    * because reviews arrive out of order. An approval of that earlier revision
    * answers only what it named: retaining a single objection per account lets
