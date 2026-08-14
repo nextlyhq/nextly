@@ -83,6 +83,18 @@ function supportStore(): Map<string, SupportDefinition> {
 const BLOCK_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 /**
+ * Whether a string is a well-formed block name: two lowercase slug segments around one `/`.
+ *
+ * Exported so every registration path asks the SAME question. There were three gates checking
+ * block names by the time this was written and one of them tested `includes("/")`, which accepts
+ * `core/columns/` — a name no real block can have, so a `parent` naming it matches nothing and
+ * every instance of the declaring block becomes unsaveable with the declaration looking correct.
+ */
+export function isBlockName(value: unknown): value is string {
+  return typeof value === "string" && BLOCK_NAME_RE.test(value);
+}
+
+/**
  * The highest version a block may declare. Migration chains a bounded number of
  * steps, so a version above this could never carry its oldest stored nodes
  * forward — registration refuses it rather than promise an upgrade path that
@@ -176,6 +188,87 @@ function assertValidDefinition(def: AnyBlockDefinition): void {
       "NEXTLY_BLOCK_INVALID",
       `block "${def.name}" defaultProps must be a plain object.`
     );
+  }
+  // A slot's `allow` is read by every nesting decision, and a malformed one does not degrade — a
+  // reader spreading `allow: 42` throws `TypeError: spec.allow is not iterable` at the first
+  // validation, repair or insertion lookup, a long way from the definition that caused it and
+  // naming neither. Checked here for the same reason `parent` is: the type rejects it at the
+  // authoring site, and definitions also arrive from JavaScript plugins and from JSON.
+  if (def.slots !== undefined) {
+    if (!isPlainRecord(def.slots)) {
+      fail(
+        "NEXTLY_BLOCK_INVALID",
+        `block "${def.name}" slots must be a plain object keyed by slot name.`
+      );
+    }
+    for (const [slotName, spec] of Object.entries(def.slots)) {
+      if (!isPlainRecord(spec)) {
+        fail(
+          "NEXTLY_BLOCK_INVALID",
+          `block "${def.name}" slot "${slotName}" must be a plain object.`
+        );
+      }
+      const allow = (spec as { allow?: unknown }).allow;
+      if (allow === undefined) continue;
+      // A namespace wildcard is permitted here and is not a block NAME, so this cannot reuse
+      // `isBlockName`: `core/*` names a set rather than a block.
+      const wellFormed =
+        Array.isArray(allow) &&
+        allow.every(entry => {
+          if (typeof entry !== "string") return false;
+          // A wildcard is checked by substituting a placeholder segment, so the name grammar is
+          // asked ONCE. Testing both forms as alternatives narrows the value to `never` on the
+          // second branch, because the predicate is a type guard.
+          const asName = entry.endsWith("/*")
+            ? `${entry.slice(0, -2)}/x`
+            : entry;
+          return isBlockName(asName);
+        });
+      if (!wellFormed) {
+        fail(
+          "NEXTLY_BLOCK_INVALID",
+          `block "${def.name}" slot "${slotName}" allow must be an array of block names like "core/heading" or namespaces like "core/*".`
+        );
+      }
+    }
+  }
+  // `parent` restricts where instances may sit, so a malformed one does not
+  // degrade — it forbids. A bare string is the shape to fear: it is iterable,
+  // so a reader spreading it produces one-character "block names", every real
+  // placement is refused as the wrong parent, and documents already using the
+  // block stop saving. Nothing in the failure names this declaration.
+  //
+  // Checked at REGISTRATION rather than trusted from the type. TypeScript
+  // rejects it at the authoring site, and the definitions that reach here also
+  // arrive from JavaScript plugins, from JSON, and from builds where the types
+  // were never run.
+  if (def.parent !== undefined) {
+    if (
+      !Array.isArray(def.parent) ||
+      def.parent.some(
+        name => typeof name !== "string" || !BLOCK_NAME_RE.test(name)
+      )
+    ) {
+      fail(
+        "NEXTLY_BLOCK_INVALID",
+        `block "${def.name}" parent must be an array of namespaced block names like "core/columns".`
+      );
+    }
+    // An EMPTY list is refused for the same reason a malformed one is, and it is the easier of the
+    // two to write by accident — a list built by filtering or by a config lookup that matched
+    // nothing. Every reader treats a DEFINED array as a restriction, so an empty one permits no
+    // placement at all: the block cannot be a root and cannot be a child, so no document holding
+    // it can ever save, and nothing in that failure names this declaration.
+    //
+    // Omitting `parent` is how a block says it may sit anywhere. There is no arrangement an empty
+    // list expresses that omission does not, so refusing it removes an unusable state rather than
+    // a capability.
+    if (def.parent.length === 0) {
+      fail(
+        "NEXTLY_BLOCK_INVALID",
+        `block "${def.name}" declares an empty parent list, which permits no placement at all. Omit parent to allow the block anywhere.`
+      );
+    }
   }
   if (typeof def.render !== "function") {
     fail(

@@ -113,3 +113,26 @@ describe("validateDocument", () => {
     );
   });
 });
+
+describe("a root whose type is not a string", () => {
+  it("is reported as a malformed type, not as sitting in the wrong place", () => {
+    // The value COERCES to a restricted type name, which is what makes this discriminate: a plain
+    // number reaches the same lookup, finds nothing, and falls through to the shape check whether
+    // or not the guard is present — so a test using one passes either way.
+    //
+    // The root-parent check runs before the walk that validates node shape, so unguarded it
+    // answers first, on a key a property lookup coerced for it: a confident placement verdict
+    // about a node whose type is not a type at all.
+    const doc = {
+      version: 1,
+      root: {
+        id: "r",
+        type: { toString: () => "core/column" },
+        props: {},
+      },
+    };
+    const result = validateDocument(doc, createBlockRegistry());
+    expect(result).toContain("type");
+    expect(result).not.toContain("may only sit inside");
+  });
+});

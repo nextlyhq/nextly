@@ -501,3 +501,17 @@
   color: var(--nx-muted-foreground);
   margin-left: 6px;
 }
+
+/*
+ * The stated absence of an action, where a row has one to report and none to offer.
+ *
+ * Sized and aligned like the button it stands in for, so the list keeps one column of outcomes
+ * rather than a ragged edge where a row happens to be unfixable. Muted and not interactive,
+ * because the one thing worse than no button is one that looks pressable and does nothing.
+ */
+.nx-pb-repair-item-noop {
+  color: var(--nx-muted-foreground);
+  font-size: 0.8125rem;
+  white-space: nowrap;
+  padding: 0 12px;
+}

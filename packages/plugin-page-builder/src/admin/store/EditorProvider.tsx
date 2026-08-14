@@ -130,6 +130,19 @@ export function EditorProvider({
   onDocumentChangeRef.current = onDocumentChange;
 
   // Push document changes to a host form (field mount), not on the initial mount.
+  //
+  // A load-time MIGRATION is deliberately not pushed, and the reason is worth
+  // stating because the opposite looks right. The only channel to the host form
+  // is the same one an edit uses, so pushing an upgrade nobody made marks the
+  // form dirty and arms its navigation guard on a page that was merely opened.
+  // And a push keyed to the incoming document re-fires when the host RESETS the
+  // field to a different entry, writing the previous entry's tree back over it.
+  //
+  // So the upgrade is applied to what the editor SHOWS — which is what stops the
+  // inspector rendering an old value through controls that no longer describe it
+  // — and reaches storage with the author's first real edit. Persisting it
+  // without an edit needs a write that does not mark the form dirty, which is
+  // the host form's API rather than this one's.
   useEffect(() => {
     if (firstRender.current) {
       firstRender.current = false;
