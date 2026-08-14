@@ -329,22 +329,43 @@ function mergeManagedBlock(existing: string, incoming: string): string {
   return existing.slice(0, region.start) + block + existing.slice(region.end);
 }
 
+/** Blank a matched region, preserving length and newlines so indices still line up. */
+function blankRegion(match: string): string {
+  return match.replace(/[^\n]/g, " ");
+}
+
 /**
- * `text` with fenced code blocks and HTML comments blanked out, preserving offsets.
+ * `text` with fenced code blocks blanked out.
  *
- * Both scans below look for markup that a Markdown file can legitimately CONTAIN as an example:
- * a guide documenting the managed markers, or one showing what a `CLAUDE.md` pointer looks like.
- * Read literally, an example reads as the real thing — so a documented marker pair becomes a
- * region a regeneration overwrites, and a documented pointer counts as an installed one.
- *
- * Replacement rather than deletion, so every index the callers compute still refers to the same
- * position in the original string. Newlines are kept for the same reason.
+ * Used by the MARKER scan, which must keep reading HTML comments: the managed markers ARE HTML
+ * comments, so blanking those would blind it to every real region. A marker documented inside a
+ * fence is the only form of example it can encounter, because HTML comments do not nest.
  */
-function withoutMarkdownExamples(text: string): string {
-  const blank = (match: string): string => match.replace(/[^\n]/g, " ");
-  return text
-    .replace(/^[ \t]*(```|~~~)[\s\S]*?^[ \t]*\1[^\n]*$/gm, blank)
-    .replace(/^[ \t]*(?:`[^`\n]*`[ \t]*)+$/gm, blank);
+function withoutFencedExamples(text: string): string {
+  return text.replace(
+    /^[ \t]*(```|~~~)[\s\S]*?^[ \t]*\1[^\n]*$/gm,
+    blankRegion
+  );
+}
+
+/**
+ * `text` with everything that is not an ACTIVE instruction blanked out.
+ *
+ * Used by the include/pointer scan, which asks a different question from the marker scan and
+ * therefore needs a different answer. An `@AGENTS.md` is only an include when the file's reader
+ * would act on it, so three forms must not count:
+ *
+ * - inside a fenced block — an example of what a pointer looks like;
+ * - inside an HTML comment — commented out, deliberately inert;
+ * - inside an inline code span — quoted while being discussed in prose.
+ *
+ * HTML comments are safe to blank HERE precisely because this scan never looks for the managed
+ * markers, which are themselves HTML comments.
+ */
+function withoutInactiveText(text: string): string {
+  return withoutFencedExamples(text)
+    .replace(/<!--[\s\S]*?-->/g, blankRegion)
+    .replace(/`[^`\n]*`/g, blankRegion);
 }
 
 /**
@@ -370,7 +391,7 @@ function findManagedRegion(
   // because a guide can hold an unmatched marker in any position — before the block, after it, or
   // with no partner at all — and each arrangement sends occurrence-based arithmetic to a
   // different wrong region.
-  const scan = withoutMarkdownExamples(text);
+  const scan = withoutFencedExamples(text);
   let cursor = 0;
   let found: { start: number; end: number } | null = null;
 
@@ -429,7 +450,7 @@ function appendMissingLines(existing: string, incoming: string): string {
   const key = (line: string): string => line.replace(/\s+$/, "");
   // Lines inside a fenced example are text ABOUT the file, not lines of it — a guide showing
   // `@AGENTS.md` in a code block has not installed the pointer.
-  const have = new Set(withoutMarkdownExamples(existing).split("\n").map(key));
+  const have = new Set(withoutInactiveText(existing).split("\n").map(key));
   const missing = incoming
     .split("\n")
     .filter(line => line.trim() !== "" && !have.has(key(line)));
@@ -519,7 +540,7 @@ async function pointsAtItself(
  * showing what an include looks like has not made one.
  */
 function includeTargets(text: string): string[] {
-  return withoutMarkdownExamples(text)
+  return withoutInactiveText(text)
     .split("\n")
     .map(line => line.trim())
     .filter(line => line.startsWith("@") && line.length > 1)
@@ -613,12 +634,19 @@ async function restoreShippedNames(
         // Read THROUGH the link for its content, then unlink and write a regular file in its
         // place. The referent keeps whatever it held; only this project's entry stops being a
         // link, which is what git requires for the patterns to apply at all.
-        // Read through the link for its content. NOT `.catch(() => "")`: a target that exists
-        // and cannot be read — permissions, an unexpected type, a transient I/O error — would
-        // then be treated as empty, and materializing over it would DISCARD the developer's
-        // rules while reporting success. Failing here leaves the link untouched, which is the
-        // outcome the merge strategies all share.
-        const existing = await fs.readFile(to, "utf-8");
+        // Read through the link for its content, distinguishing the two ways that can fail.
+        // A DANGLING link has no referent, so there are no rules to carry and materializing
+        // over it is exactly right — that is the case `lstat` selected this branch for. Any
+        // other failure means a referent exists and could not be read (permissions, an
+        // unexpected target type, a transient I/O error); treating that as empty would DISCARD
+        // the developer's rules while reporting success, so it propagates and leaves the link
+        // untouched.
+        const existing = await fs
+          .readFile(to, "utf-8")
+          .catch((error: unknown) => {
+            if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return "";
+            throw error;
+          });
         const incoming = await fs.readFile(from, "utf-8");
         await fs.remove(to);
         await fs.writeFile(

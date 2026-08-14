@@ -505,6 +505,73 @@ describe("scaffolding over a project that already has these files", () => {
     );
   }, 30_000);
 
+  it("does not count a commented-out or inline pointer as installed", async () => {
+    // Three inactive forms. A reader acts on none of them, so the real pointer must still be
+    // added — otherwise the guide is silently unreachable.
+    const after = await scaffoldOver({
+      "CLAUDE.md": [
+        "# Notes",
+        "",
+        // A MULTI-LINE comment, so the include sits alone on its own line. The single-line
+        // form `<!-- @AGENTS.md -->` never matched anyway — the comparison key is the whole
+        // trimmed line — so a fixture using it cannot reach the mechanism.
+        "<!--",
+        "@AGENTS.md",
+        "-->",
+        "",
+        "The scaffold writes an `@AGENTS.md` include at the top.",
+      ].join("\n"),
+    });
+
+    const lines = after["CLAUDE.md"].split("\n").map(l => l.trim());
+    // Positional, because their commented occurrence is ALSO an `@AGENTS.md` line — asserting
+    // the string is present cannot tell an added include from the one already there. Scaffold
+    // lines are written above the developer's content, so an ACTIVE include precedes the
+    // comment that contains the inert one.
+    const firstInclude = lines.indexOf("@AGENTS.md");
+    const commentOpens = lines.indexOf("<!--");
+    expect(commentOpens).toBeGreaterThan(-1);
+    expect(firstInclude).toBeGreaterThan(-1);
+    expect(firstInclude).toBeLessThan(commentOpens);
+    // Their commented and inline mentions survive untouched.
+    expect(after["CLAUDE.md"]).toContain("<!--\n@AGENTS.md\n-->");
+    expect(after["CLAUDE.md"]).toContain("`@AGENTS.md`");
+  }, 30_000);
+
+  it("materializes a DANGLING ignore symlink instead of aborting", async () => {
+    workdir = await mkdtemp(path.join(tmpdir(), "nextly-dangling-ignore-"));
+    const target = path.join(workdir, "project");
+    await mkdir(target, { recursive: true });
+
+    // Points at nothing. `lstat` still selects the materialize branch, and a read that assumed
+    // a readable referent would throw ENOENT and take the whole scaffold down.
+    await symlink(
+      path.join(workdir, "no-such-file"),
+      path.join(target, ".gitignore")
+    );
+
+    await copyTemplate({
+      projectName: "my-app",
+      projectType: "blank",
+      targetDir: target,
+      database: sqlite,
+      packageManager: "npm",
+      templateSource: {
+        basePath: path.join(templatesRoot, "base"),
+        templatePath: path.join(templatesRoot, "blank"),
+      },
+      allowExistingTarget: true,
+    });
+
+    // A dangling link carries no rules, so replacing it with the scaffold's defaults is exactly
+    // right — and `.env` ends up ignored, which the link could never have achieved.
+    const stat = await lstat(path.join(target, ".gitignore"));
+    expect(stat.isSymbolicLink()).toBe(false);
+    expect(await readFile(path.join(target, ".gitignore"), "utf-8")).toMatch(
+      /^\.env/m
+    );
+  }, 30_000);
+
   it("does not write through a CLAUDE.md symlink", async () => {
     workdir = await mkdtemp(path.join(tmpdir(), "nextly-symlink-"));
     const target = path.join(workdir, "project");
