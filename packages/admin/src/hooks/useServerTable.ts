@@ -14,6 +14,7 @@ import { PAGINATION } from "../constants/pagination";
 import { UI } from "../constants/ui";
 
 import { useDebouncedValue } from "./useDebouncedValue";
+import { usePagination } from "./usePagination";
 
 /**
  * Default configuration constants
@@ -156,13 +157,21 @@ export function useServerTable<TData>({
   );
   const [sorting, setSorting] = useState<SortingState>([]);
 
-  // Pagination state
-  const [currentPage, setCurrentPage] = useState(
-    initialParams?.pagination?.page ?? 0
-  );
-  const [currentPageSize, setCurrentPageSize] = useState(
-    initialParams?.pagination?.pageSize ?? paginationConfig.pageSize
-  );
+  // Pagination state, including the first-page resets, comes from the shared
+  // hook rather than being restated here. This file and a dozen list pages
+  // held the same two lines, and the copy that drifted was the one nobody
+  // looked at again.
+  const {
+    page: currentPage,
+    pageSize: currentPageSize,
+    setPage: setCurrentPage,
+    setPageSize: setCurrentPageSize,
+    resetPage,
+  } = usePagination({
+    initialPage: initialParams?.pagination?.page ?? 0,
+    initialPageSize:
+      initialParams?.pagination?.pageSize ?? paginationConfig.pageSize,
+  });
 
   // Search state
   const [searchInput, setSearchInput] = useState(
@@ -174,34 +183,33 @@ export function useServerTable<TData>({
   /**
    * Handle page change
    */
-  const handlePageChange = useCallback((newPage: number) => {
-    setCurrentPage(newPage);
-  }, []);
+  const handlePageChange = setCurrentPage;
 
   /**
-   * Handle page size change
+   * Handle page size change. The return to the first page belongs to the
+   * pagination state, not to this handler.
    */
-  const handlePageSizeChange = useCallback((newPageSize: number) => {
-    setCurrentPageSize(newPageSize);
-    setCurrentPage(0); // Reset to first page
-  }, []);
+  const handlePageSizeChange = setCurrentPageSize;
 
   /**
    * Handle search input change
    */
-  const handleSearchChange = useCallback((search: string) => {
-    setSearchInput(search);
-    setCurrentPage(0); // Reset to first page on search
-  }, []);
+  const handleSearchChange = useCallback(
+    (search: string) => {
+      setSearchInput(search);
+      resetPage(); // A new term changes which rows exist
+    },
+    [resetPage]
+  );
 
   /**
    * Clear search input
    */
   const handleClearSearch = useCallback(() => {
     setSearchInput("");
-    setCurrentPage(0);
+    resetPage();
     searchInputRef.current?.focus();
-  }, []);
+  }, [resetPage]);
 
   /**
    * Handle sorting change
@@ -223,11 +231,11 @@ export function useServerTable<TData>({
         direction: sort.desc ? "desc" : "asc",
       }));
       setSortInfo(newSortInfo);
-      setCurrentPage(0); // Reset to first page on sort change
+      resetPage(); // A new order changes which rows land on this page
     } else {
       setSortInfo([]);
     }
-  }, [sorting]);
+  }, [sorting, resetPage]);
 
   // Fetch data when parameters change
   useEffect(() => {

@@ -32,6 +32,9 @@ export type {
 export { useDebounce } from "./useDebounce";
 export { useDebouncedValue, useDebouncedState } from "./useDebouncedValue";
 
+export { usePagination } from "./usePagination";
+export type { PaginationState, UsePaginationOptions } from "./usePagination";
+
 // Utility hooks - Form Protection
 export { useUnsavedChanges } from "./useUnsavedChanges";
 export type {
