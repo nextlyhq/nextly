@@ -47,6 +47,15 @@ interface RecordedTransition {
 const DROP_ZONES = ".nx-pb-dropzone, .nx-pb-dropzone-empty";
 
 /**
+ * How long this canvas may still be moving a zone's edge after entry, in milliseconds.
+ *
+ * Exported so the guard that compares it against the stylesheet reads the SAME value the driver
+ * uses. A guard restating the number checks a constant against itself and passes while the driver
+ * carries something else entirely.
+ */
+export const POC_GEOMETRY_SETTLE_MS = 120;
+
+/**
  * Block-level insertion targets. A grid registers insert-before and append
  * droppables on the block element itself and signals them with these classes
  * rather than with `data-active` on a separate zone element, so they are a
@@ -166,6 +175,18 @@ export function createPocDriver(page: Page): CanvasDriver {
     // dwell it does not have would spend a wait per reading for lag that never
     // happens, and would let a real hysteresis defect hide inside the wait.
     dwellAllowanceMs: 0,
+
+    // The zone geometry this canvas animates, plus headroom. `IframeCanvas`
+    // transitions a drop zone's height over 100ms; a probe that re-measures
+    // inside that window can read the same whole pixel twice while the edge is
+    // still travelling through it, and return a depth measured from a boundary
+    // that has already moved.
+    //
+    // Stated here rather than inside the probe because the duration belongs to
+    // this canvas. `geometry-settle-matches-the-canvas.test.ts` parses the
+    // stylesheet and fails if the transition ever outgrows this number, so the
+    // two cannot drift silently.
+    geometrySettleMs: POC_GEOMETRY_SETTLE_MS,
 
     async mountTree(fixture: CanvasFixture) {
       await gotoAdmin(page, `/collections/pages/${fixture.entryId}`);

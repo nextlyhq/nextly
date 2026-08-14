@@ -158,6 +158,22 @@ export interface CanvasDriver {
   dwellAllowanceMs?: number;
 
   /**
+   * How long this canvas may still be moving a zone's edge after the pointer
+   * enters it, in milliseconds.
+   *
+   * Declared per driver for the same reason `dwellAllowanceMs` is: the duration
+   * belongs to the canvas — the PoC animates a drop zone's geometry over 100ms
+   * in its own stylesheet — so no constant written into a probe is correct for
+   * every canvas. A probe carrying its own copy re-brackets while the edge is
+   * still travelling once that duration grows, agrees with itself on a whole
+   * pixel, and returns a stale depth with nothing reporting it was rushed.
+   *
+   * Optional: a driver that omits it gets the probe's default. A canvas whose
+   * zone geometry never animates declares 0.
+   */
+  geometrySettleMs?: number;
+
+  /**
    * Ordinal of the active drop zone among ALL drop zones in document order, or
    * -1 when none is active. Ordinal rather than id because the droppable id is
    * not present in the DOM.
@@ -554,16 +570,419 @@ export function dwellAllowanceOf(driver: Partial<CanvasDriver>): number {
  * Returns the containing zone's ordinal, or -1 if none was reached — a value the
  * CALLER must assert on, for the same reason `dragUntilTarget` says so.
  */
+/**
+ * What placing the pointer at a known depth needs, which is less than a whole
+ * canvas.
+ *
+ * `pointer()` is what makes the result a MEASUREMENT rather than an intention:
+ * the inset is reported in pixels of pointer movement, which is the only unit
+ * an assertion about a hysteresis band can be written in. A collision score
+ * cannot serve — `Collision.value` is pointer distance for one collision type
+ * and overlap area for another, so the same number means different things per
+ * candidate kind.
+ */
+type ZoneInsetDriver = Pick<
+  CanvasDriver,
+  "moveBy" | "zoneContainingPointer" | "pointer"
+> &
+  Partial<Pick<CanvasDriver, "geometrySettleMs">>;
+
+/** What the coarse approach observed, which is more than the zone it reached. */
+interface ZoneApproach {
+  /** The zone containing the pointer, or -1 when none was reached. */
+  readonly zone: number;
+  /** Pixels travelled to reach it — 0 when the pointer was already inside. */
+  readonly travelledPx: number;
+}
+
+/**
+ * Step until some zone contains the pointer, reporting how far that took.
+ *
+ * The one coarse walk, because two of them drift: the step size and the
+ * termination rule are the same question asked by `dragUntilInsideZone` and by
+ * the exact-depth probe, and a change to either in one place would silently
+ * make the two disagree while both still returned a number.
+ *
+ * `travelledPx` is what the second caller needs and the first ignores. It bounds
+ * where the boundary can be — having walked in, the edge is at most this far
+ * back — which is how a retreat gets a limit derived from observation rather
+ * than from a constant.
+ */
+async function approachZone(
+  driver: Pick<CanvasDriver, "moveBy" | "zoneContainingPointer" | "pointer">,
+  maxSteps: number
+): Promise<ZoneApproach> {
+  const startedAt = driver.pointer().y;
+  let zone = await driver.zoneContainingPointer();
+  // Bounded in PIXELS and stepped at the probe resolution. The budget a caller
+  // expressed in coarse steps reaches exactly as far as before; what changed is
+  // that every pixel along the way is sampled, so a zone thinner than a coarse
+  // step is entered rather than jumped over.
+  const budgetPx = maxSteps * INSET_APPROACH_PX;
+  for (let moved = 0; moved < budgetPx && zone < 0; moved += INSET_PROBE_PX) {
+    await driver.moveBy(0, INSET_PROBE_PX);
+    zone = await driver.zoneContainingPointer();
+  }
+  return { zone, travelledPx: driver.pointer().y - startedAt };
+}
+
+/** Where {@link dragToInsetInZone} left the pointer, and how it knows. */
+export interface ZoneInset {
+  /** The zone the pointer ended inside, or -1 when none was reached. */
+  readonly zone: number;
+  /**
+   * Pixels of pointer movement PAST the boundary, measured rather than assumed.
+   *
+   * Present only when a boundary was actually found: the pointer is INSIDE
+   * `zone` at this depth, including under `too-narrow`. ABSENT for the refusals
+   * that never located an edge, because there is no boundary for a depth to be
+   * measured from and a `0` there would read as "at the boundary" — a position
+   * the pointer is not standing at.
+   */
+  readonly insetPx?: number;
+  /**
+   * How precisely the boundary itself is known, in pixels.
+   *
+   * A zone edge comes from `getBoundingClientRect()` and is fractional; the
+   * pointer is commanded in whole probe steps. So the boundary this measures
+   * from is the first COMMANDED position inside the zone, which can sit up to
+   * one step past the real edge, and `insetPx` carries that error.
+   *
+   * Reported rather than hidden, because a caller comparing a measured band
+   * against a required range has to widen its bounds by exactly this much. The
+   * alternative — resolving the fractional edge — is not available to a probe
+   * that can only command whole pixels.
+   */
+  readonly resolutionPx: number;
+  /**
+   * Why a request could not be met, absent when it was.
+   *
+   * Three distinct facts, because a caller reports them differently:
+   * `never-entered` is about the canvas drawing no zone in reach;
+   * `too-narrow` is about the FIXTURE, and comes with the deepest depth the
+   * zone does hold, so a caller can say what it would need; and
+   * `boundary-not-found` is about this probe, which cannot locate an edge it
+   * did not cross — a drag already deep inside a tall zone has no boundary in
+   * retreat range, and saying "no zone" there would be false; and `edge-moving`
+   * is about the canvas relaying out underneath the measurement, where a depth
+   * would be a number with no referent.
+   */
+  readonly refused?:
+    | "never-entered"
+    | "too-narrow"
+    | "boundary-not-found"
+    | "edge-moving";
+}
+
+/** Pixels per step while closing on the boundary, once the zone has been found. */
+const INSET_PROBE_PX = 1;
+
+/**
+ * How far one unit of a caller's step budget carries the approach, in pixels.
+ *
+ * A BUDGET SCALE, not a step size. The approach walks at {@link INSET_PROBE_PX}
+ * so it cannot stride over a zone: a drop zone is 6 CSS pixels tall, which at
+ * the 0.5 canvas scale this suite supports is 3 host pixels, and a 4px step
+ * starting at a fractional offset can place the entire span between two
+ * commands — the walk then reports the zone below it, or none at all, and the
+ * helper can never say the first zone was `too-narrow` because it never saw it.
+ *
+ * Kept as the multiplier so a `maxSteps` a caller already passes reaches the
+ * same distance it always did; only the sampling in between got finer.
+ */
+const INSET_APPROACH_PX = 4;
+
+/** How many times the boundary may be re-measured before its motion is a verdict. */
+const EDGE_SETTLE_ATTEMPTS = 3;
+
+/**
+ * The longest a zone edge may still be moving after the pointer enters it.
+ *
+ * The canvas animates a drop zone's height and margin over 100ms when it becomes
+ * the active target, and an animation is CONTINUOUS: two brackets taken back to
+ * back can quantize to the same whole pixel while the edge is still travelling
+ * inside it. Agreement between adjacent samples is therefore necessary and not
+ * sufficient, and no purely positional method can close that — "has an animation
+ * finished" is a question about an interval.
+ *
+ * So this is a clock, deliberately, and it is the canvas's own transition
+ * duration rather than a guess. Paired with the agreement check: the wait covers
+ * the animation, the agreement confirms it is over.
+ */
+const DEFAULT_GEOMETRY_SETTLE_MS = 120;
+
+/**
+ * How long this canvas may still be moving a zone's edge after the pointer
+ * enters it, in milliseconds.
+ *
+ * Declared per driver for the same reason {@link CanvasDriver.dwellAllowanceMs}
+ * is: the duration belongs to the canvas, so no constant written here is
+ * correct for every canvas. A probe carrying its own number is a second copy of
+ * a fact the canvas owns — lengthen the transition and the probe re-brackets
+ * while the edge is still travelling, agrees with itself on a whole pixel, and
+ * returns a stale depth with nothing reporting that anything was rushed.
+ *
+ * Optional: a driver that omits it gets {@link DEFAULT_GEOMETRY_SETTLE_MS}.
+ * Understating it is self-punishing rather than self-serving — measurements
+ * come back stale and the assertions built on them fail — which is what makes
+ * it safe to trust a driver's own answer.
+ */
+
+/** One wait, named for what it is, so no caller invents its own. */
+function settleMs(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * The first pointer position INSIDE `zone`, and the NET distance this moved to find it.
+ *
+ * Two directions, because a zone edge moves both ways. The pointer may start
+ * inside — the ordinary case, where the edge is somewhere above — or OUTSIDE,
+ * which is what the canvas produces when a drop zone takes its 4px active margin
+ * in place of the 3px drag one: the top edge travels DOWN, and a pointer resting
+ * on the old boundary is left above the new one. Retreating from there only ever
+ * moves further away, so a walk that assumed "inside" would report an edge it
+ * was standing a pixel short of as unfindable.
+ *
+ * Returns `null` when no edge is within `limitPx` in either direction, and
+ * restores the pointer before doing so: a measurement that could not be taken
+ * must not also move the drag.
+ *
+ * `movedPx` is signed and NET — positive is downward — so one caller can undo
+ * the whole excursion without tracking its parts.
+ */
+async function bracketZoneEdge(
+  driver: ZoneInsetDriver,
+  zone: number,
+  limitPx: number
+): Promise<{ boundaryY: number; movedPx: number } | null> {
+  let moved = 0;
+  const restore = async (): Promise<null> => {
+    await driver.moveBy(0, -moved);
+    return null;
+  };
+
+  // Forward until the zone is re-entered, for the case where its edge moved out
+  // from under the pointer.
+  let advanced = 0;
+  while (
+    (await driver.zoneContainingPointer()) !== zone &&
+    advanced < limitPx
+  ) {
+    await driver.moveBy(0, INSET_PROBE_PX);
+    moved += INSET_PROBE_PX;
+    advanced += INSET_PROBE_PX;
+  }
+  if ((await driver.zoneContainingPointer()) !== zone) return restore();
+
+  // Back out a pixel at a time until the zone is left.
+  let retreated = 0;
+  let left = false;
+  while (retreated < limitPx) {
+    await driver.moveBy(0, -INSET_PROBE_PX);
+    moved -= INSET_PROBE_PX;
+    retreated += INSET_PROBE_PX;
+    if ((await driver.zoneContainingPointer()) !== zone) {
+      left = true;
+      break;
+    }
+  }
+  if (!left) return restore();
+
+  // One step back in: the pointer is within a step of the boundary, and this
+  // position — not a step count — is what the depth is measured from.
+  await driver.moveBy(0, INSET_PROBE_PX);
+  moved += INSET_PROBE_PX;
+  if ((await driver.zoneContainingPointer()) !== zone) return restore();
+  return { boundaryY: driver.pointer().y, movedPx: moved };
+}
+
+/**
+ * Carry the drag to EXACTLY `wantInsetPx` inside the zone it first enters.
+ *
+ * {@link dragUntilInsideZone} stops at the first coarse step that lands inside
+ * a zone, so where it leaves the pointer is an accident of the step size and no
+ * caller can say how deep it is. That is fine for a containment question and
+ * useless for a hysteresis one: a canvas whose hysteresis is a distance margin
+ * has correctly NOT switched a few pixels past a boundary, because that is
+ * inside its margin and holding the previous target there is what the
+ * requirement asks for. Waiting cannot rescue it — waiting does not move a
+ * pointer, and a distance-based resolver does not change its mind with time.
+ * The only way to ask such a canvas a question is to stand at a KNOWN depth.
+ *
+ * Three phases, and the middle one is what makes the answer exact:
+ *
+ * 1. coarse steps until some zone contains the pointer, REMEMBERING how far it
+ *    travelled — that distance bounds where the boundary can be, so the retreat
+ *    below is derived from observed geometry rather than from a fixed budget;
+ * 2. one-pixel steps BACK until the zone is left, then one forward — the
+ *    boundary is now bracketed to within a step and its position is read from
+ *    the driver rather than inferred from a step count;
+ * 3. forward to the requested depth, re-reading containment so a zone too
+ *    shallow to hold it is reported from the deepest point it does hold.
+ *
+ * The pointer is left INSIDE the reported zone in every outcome but
+ * `never-entered`, and is restored to where it started when no boundary can be
+ * found — a probe that fails is not entitled to leave the drag somewhere else.
+ * `edge-moving` is the one refusal that does NOT rewind: the last bracket left
+ * the pointer just inside the zone, and putting it back where that bracket
+ * began would return it to a position the edge has since travelled past. The
+ * zone reported there is read from the pointer's actual containment rather than
+ * assumed, so the result describes where the drag really is.
+ *
+ * Vertical, matching the axis every zone boundary in this suite is crossed on.
+ */
+export async function dragToInsetInZone(
+  driver: ZoneInsetDriver,
+  wantInsetPx: number,
+  maxSteps = 40,
+  /**
+   * How this waits between edge measurements.
+   *
+   * Injected so a FIXTURE can move its edge at the one moment the probe is
+   * known to be between brackets, rather than after a duration it has to guess.
+   * A fixture keyed to the clock races the process it is testing: pause the
+   * runner for longer than the wait and the edge has already moved before the
+   * first measurement, so the walk lands in the settled band and the test
+   * passes without ever exercising the re-entry it exists to cover.
+   *
+   * The default is the real wait, so nothing about a live canvas changes.
+   */
+  settle: (ms: number) => Promise<void> = settleMs
+): Promise<ZoneInset> {
+  const refuse = (
+    zone: number,
+    reason: NonNullable<ZoneInset["refused"]>
+  ): ZoneInset => ({ zone, resolutionPx: INSET_PROBE_PX, refused: reason });
+
+  // A request this probe cannot represent is a CALLER fault, not a fact about
+  // the canvas — so it throws rather than joining the refusals, which a caller
+  // is meant to read as findings. A fractional depth would silently round up to
+  // the next whole step; a negative or NaN one would skip the walk entirely and
+  // report depth 0 as a success, which is a false measurement rather than a
+  // failed one.
+  if (!Number.isInteger(wantInsetPx) || wantInsetPx < 0) {
+    throw new Error(
+      `dragToInsetInZone needs a whole, non-negative depth in pixels; got ${wantInsetPx}`
+    );
+  }
+  // The same treatment for the budget, and each bad value fails differently:
+  // `Infinity` never terminates and hangs the run until Playwright's outer
+  // timeout — defeating the runaway guard this parameter IS — while `NaN` and a
+  // negative skip the approach entirely and report `never-entered` about a
+  // canvas that was never asked.
+  if (!Number.isInteger(maxSteps) || maxSteps < 0) {
+    throw new Error(
+      `dragToInsetInZone needs a whole, non-negative step budget; got ${maxSteps}`
+    );
+  }
+
+  const { zone, travelledPx } = await approachZone(driver, maxSteps);
+  if (zone < 0) return refuse(-1, "never-entered");
+
+  // How far back the boundary can possibly be. Having WALKED into the zone, it
+  // is the distance travelled plus the step that crossed it. Having started
+  // inside, travelled is 0 and nothing observed bounds it, so the approach
+  // budget stands in — and running out is reported as its own fact rather than
+  // as "no zone".
+  const retreatLimit =
+    travelledPx > 0
+      ? travelledPx + INSET_APPROACH_PX
+      : maxSteps * INSET_APPROACH_PX;
+
+  // The edge is measured until two consecutive measurements AGREE, because a
+  // canvas may RESTYLE a zone at the moment it becomes the active target, and
+  // restyling it moves its own edge and every edge below it. A single reading
+  // taken across that transition is stale by the time the depth is walked, and
+  // the returned depth would be measured from a boundary that has since moved.
+  //
+  // Stated as the property rather than as the rule that currently produces it.
+  // This driver is a vocabulary several canvases implement, so the specific
+  // styling is one canvas's business and is free to change — a canvas that
+  // makes its zones geometrically constant simply settles on the first two
+  // measurements and pays nothing for this loop.
+  //
+  // Measured rather than waited out. A sleep sized to the 100ms transition
+  // would put wall-clock dependence into the one control a band assertion
+  // rests on, and would still be a guess about a duration the canvas owns.
+  let boundaryY: number | null = null;
+  for (let attempt = 0; attempt < EDGE_SETTLE_ATTEMPTS; attempt += 1) {
+    const found = await bracketZoneEdge(driver, zone, retreatLimit);
+    if (!found) return refuse(zone, "boundary-not-found");
+    if (boundaryY === found.boundaryY) break;
+    boundaryY = found.boundaryY;
+    // Exhaustion is decided BEFORE waiting, because the wait is only ever there
+    // to separate one bracket from the NEXT one. After the last bracket there
+    // is no next one, and waiting anyway gives the edge one more interval to
+    // travel — invalidating the containment that bracket just confirmed, so the
+    // refusal reads back `-1` and reports being in no zone at all.
+    if (attempt === EDGE_SETTLE_ATTEMPTS - 1) {
+      // Still moving. Reported rather than measured through: a depth taken from
+      // an edge that is in motion is a number with no referent.
+      //
+      // The pointer is LEFT where the last bracket put it, which that bracket
+      // confirmed was inside the zone as its final act. Undoing its movement
+      // would return the pointer to where this attempt began — a position the
+      // edge has since travelled past, and outside the very zone the result
+      // names. A refusal is still a description of where the pointer is, so it
+      // may not put the pointer somewhere its own `zone` does not cover.
+      //
+      // Read back rather than assumed, because "the bracket said so a moment
+      // ago" is exactly the claim a moving edge invalidates.
+      return refuse(await driver.zoneContainingPointer(), "edge-moving");
+    }
+    // Across the transition rather than adjacent to it. Two brackets taken back
+    // to back land inside the same animation frame and can agree on a whole
+    // pixel the edge is still travelling through.
+    await settle(driver.geometrySettleMs ?? DEFAULT_GEOMETRY_SETTLE_MS);
+  }
+  if (boundaryY === null) return refuse(zone, "boundary-not-found");
+
+  for (let moved = 0; moved < wantInsetPx; moved += INSET_PROBE_PX) {
+    await driver.moveBy(0, INSET_PROBE_PX);
+    if ((await driver.zoneContainingPointer()) !== zone) {
+      // Back to the last contained point, so the reported depth is one the
+      // pointer is actually standing at. Reporting the overshooting step would
+      // overstate the zone's capacity by exactly the step that left it.
+      await driver.moveBy(0, -INSET_PROBE_PX);
+      return {
+        zone,
+        insetPx: driver.pointer().y - boundaryY,
+        resolutionPx: INSET_PROBE_PX,
+        refused: "too-narrow",
+      };
+    }
+  }
+  return {
+    zone,
+    insetPx: driver.pointer().y - boundaryY,
+    resolutionPx: INSET_PROBE_PX,
+  };
+}
+
+/**
+ * Carry the drag until the pointer is INSIDE a zone, not merely until one is
+ * active.
+ *
+ * `dragUntilTarget` stops as soon as a target resolves, and
+ * `@dnd-kit/collision` resolves one by the dragged shape's OVERLAP when no zone
+ * contains the pointer. So "a target is active" and "the pointer is inside that
+ * target" are different states, and every exact claim about mapping — is the
+ * indicator where the pointer is, do two drags resolve the same way — is only
+ * decidable in the second.
+ *
+ * The distinction is not academic: it is where a stale-scroll or unscaled
+ * transform hides. Those implementations select a NEIGHBOURING zone, which any
+ * assertion tolerant of the overlap case accepts.
+ *
+ * Returns the containing zone's ordinal, or -1 if none was reached — a value the
+ * CALLER must assert on, for the same reason `dragUntilTarget` says so.
+ */
 export async function dragUntilInsideZone(
   driver: CanvasDriver,
   maxSteps = 40
 ): Promise<number> {
-  let containing = await driver.zoneContainingPointer();
-  for (let step = 0; step < maxSteps && containing < 0; step += 1) {
-    await driver.moveBy(0, 4);
-    containing = await driver.zoneContainingPointer();
-  }
-  return containing;
+  return (await approachZone(driver, maxSteps)).zone;
 }
 
 /** The two readings that together say "the shell survived the gesture". */
