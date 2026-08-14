@@ -23,14 +23,6 @@ const plugins: PluginMetadata[] = [
     collections: ["forms", "form-submissions"],
     singles: ["form-settings"],
     menu: [{ label: "All Forms", to: "/admin/collections/forms" }],
-    permissions: [
-      {
-        action: "export",
-        resource: "submissions",
-        label: "Export Submissions",
-        danger: true,
-      },
-    ],
     routes: [
       {
         method: "GET",
@@ -45,14 +37,6 @@ const plugins: PluginMetadata[] = [
     enabled: false,
     placement: "plugins",
     collections: ["retained"],
-    permissions: [
-      {
-        action: "purge",
-        resource: "archive",
-        label: "Purge Archive",
-        danger: true,
-      },
-    ],
     whenEnabled: {
       routes: [
         {
@@ -74,8 +58,14 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
 /**
  * The page is two columns with a sticky metadata rail. What these pin is where
  * each half lives: the metadata sits in the rail, and what the plugin
- * contributes — its permissions and API routes included — stays in the main
- * column, visible without an interaction rather than behind one.
+ * contributes stays in the main column, visible without an interaction rather
+ * than behind one.
+ *
+ * Permissions are not among what this suite pins. They are no longer on the
+ * payload these fixtures supply, so an assertion here would pass on absence
+ * rather than on the page's behaviour; that the serializer withholds them is
+ * covered in `packages/nextly/src/plugins/admin-meta.test.ts`, against a
+ * plugin that DECLARES one.
  */
 describe("PluginDetailPage layout", () => {
   function rail() {
@@ -148,9 +138,6 @@ describe("PluginDetailPage", () => {
     );
     expect(screen.getByText("form-submissions")).toBeInTheDocument();
     expect(screen.getByText("form-settings")).toBeInTheDocument();
-    // Permissions are deliberately absent: the public payload no longer
-    // carries them, so nothing here can render one.
-    expect(screen.queryByText("Export Submissions")).toBeNull();
     // Route summary includes the namespaced final URL.
     expect(
       screen.getByText("GET /admin/api/plugins/@acme/forms/submissions/export")
