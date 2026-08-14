@@ -20,6 +20,14 @@
 export const RATE_LIMIT_MARKER = /Review limit reached/;
 
 /**
+ * Review states that represent an opinion its author has published.
+ *
+ * `PENDING` is an unsubmitted draft and `DISMISSED` has been explicitly
+ * withdrawn, so neither is anybody saying anything about the revision.
+ */
+const SUBMITTED = new Set(["APPROVED", "CHANGES_REQUESTED", "COMMENTED"]);
+
+/**
  * The reviewer logins that submitted any review at `head`.
  *
  * Matched on the COMPLETE login. GitHub app logins carry a `[bot]` suffix, so
@@ -35,18 +43,53 @@ export function reviewersAtHead(reviews, head) {
   const seen = new Set();
   for (const review of reviews) {
     const login = review?.user?.login;
-    // A PENDING review is an unsubmitted draft: its author has not said
-    // anything about the revision yet, so counting it reports coverage nobody
-    // provided.
+    // Only a SUBMITTED opinion is coverage. Allowing every state that is not
+    // `PENDING` would count a withdrawn review, and a state this code has not
+    // seen before would default to counting rather than to refusing.
     if (
       typeof login === "string" &&
       review?.commit_id === head &&
-      review?.state !== "PENDING"
+      SUBMITTED.has(review?.state)
     ) {
       seen.add(login);
     }
   }
   return [...seen].sort();
+}
+
+/**
+ * Reviewers whose standing position at `head` is that changes are required.
+ *
+ * A `CHANGES_REQUESTED` review states its case in the body and need not open a
+ * single thread, so thread resolution cannot see it: without this, an explicit
+ * refusal reads as coverage with nothing outstanding.
+ *
+ * The LAST submitted review decides, matching how a reviewer's position is
+ * settled generally — a later `APPROVED` or `COMMENTED` from the same account
+ * supersedes an earlier objection.
+ */
+export function changesRequested(reviews, head) {
+  if (!Array.isArray(reviews) || typeof head !== "string" || head === "") {
+    return [];
+  }
+  const latest = new Map();
+  for (const review of reviews) {
+    const login = review?.user?.login;
+    if (typeof login !== "string") continue;
+    if (review?.commit_id !== head || !SUBMITTED.has(review?.state)) continue;
+    const previous = latest.get(login);
+    // Ties fall to the later element, which is the order the API returns.
+    if (
+      !previous ||
+      `${review.submitted_at ?? ""}` >= `${previous.submitted_at ?? ""}`
+    ) {
+      latest.set(login, review);
+    }
+  }
+  return [...latest.entries()]
+    .filter(([, review]) => review.state === "CHANGES_REQUESTED")
+    .map(([login]) => login)
+    .sort();
 }
 
 /** Required reviewers with no review at `head`, in the order they were required. */
@@ -111,10 +154,12 @@ export function verdictFor({
   missing = [],
   unresolved = 0,
   limited = [],
+  refused = [],
   blocking = [],
 } = {}) {
   const blockingMissing = missing.filter(login => blocking.includes(login));
   const blockingLimited = limited.filter(login => blocking.includes(login));
+  const blockingRefused = refused.filter(login => blocking.includes(login));
 
   // Rate limiting is reported BEFORE absence, because a reviewer that refused
   // for quota is necessarily also absent: ordering absence first would make
@@ -131,6 +176,15 @@ export function verdictFor({
     return {
       verdict: "MISSING REVIEW AT HEAD",
       detail: blockingMissing,
+      exitCode: 1,
+    };
+  }
+  // Checked alongside open threads rather than after them, because a review
+  // stating its case in the body opens none: thread resolution cannot see it.
+  if (blockingRefused.length > 0) {
+    return {
+      verdict: "CHANGES REQUESTED",
+      detail: blockingRefused,
       exitCode: 1,
     };
   }
@@ -158,10 +212,12 @@ export function report({
   const missing = missingReviewers(reviews, head, required);
   const unresolved = unresolvedThreads(threads);
   const limited = rateLimited(issueComments);
+  const refused = changesRequested(reviews, head);
   const { verdict, detail, exitCode } = verdictFor({
     missing,
     unresolved,
     limited,
+    refused,
     blocking,
   });
 
@@ -175,6 +231,7 @@ export function report({
       ? unresolved
       : "unavailable",
     rate_limited: limited,
+    changes_requested: refused,
     advisory,
     verdict,
     detail,
@@ -224,19 +281,51 @@ async function main(argv) {
     "--paginate",
     "--slurp",
   ]).flat();
-  const threads = gh([
-    "api",
-    "graphql",
-    "-F",
-    `pr=${pr}`,
-    "-F",
-    `owner=${owner}`,
-    "-F",
-    `name=${name}`,
-    "-f",
-    "query=query($pr:Int!,$owner:String!,$name:String!){ repository(owner:$owner,name:$name)" +
-      "{ pullRequest(number:$pr){ reviewThreads(first:100){ nodes { isResolved } } } } }",
-  ]).data.repository.pullRequest.reviewThreads.nodes;
+  // Paged explicitly: `reviewThreads(first: 100)` silently truncates, and an
+  // unresolved thread past the first page would leave the verdict clean.
+  const threads = [];
+  let cursor = null;
+  for (;;) {
+    const page = gh([
+      "api",
+      "graphql",
+      "-F",
+      `pr=${pr}`,
+      "-F",
+      `owner=${owner}`,
+      "-F",
+      `name=${name}`,
+      "-F",
+      `cursor=${cursor ?? ""}`,
+      "-f",
+      "query=query($pr:Int!,$owner:String!,$name:String!,$cursor:String){" +
+        " repository(owner:$owner,name:$name){ pullRequest(number:$pr){" +
+        " reviewThreads(first:100, after:$cursor){" +
+        " nodes { isResolved } pageInfo { hasNextPage endCursor } } } } }",
+    ]).data.repository.pullRequest.reviewThreads;
+    threads.push(...page.nodes);
+    if (!page.pageInfo?.hasNextPage) break;
+    cursor = page.pageInfo.endCursor;
+  }
+
+  // The head is re-read AFTER the other queries. A push landing mid-run would
+  // otherwise be judged against the revision captured at the start, so a review
+  // covering the old head could clear a revision nobody has seen.
+  const headNow = gh([
+    "pr",
+    "view",
+    pr,
+    "--repo",
+    repo,
+    "--json",
+    "headRefOid",
+  ]).headRefOid;
+  if (headNow !== head) {
+    process.stderr.write(
+      `ci-verdict: head moved ${head} -> ${headNow}; re-run\n`
+    );
+    return 2;
+  }
 
   const result = report({
     head,
