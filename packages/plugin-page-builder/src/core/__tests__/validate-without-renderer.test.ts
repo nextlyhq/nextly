@@ -39,16 +39,26 @@ describe("the write path with nothing rendered", () => {
   });
 
   it("still knows what slots a migrated block declares", () => {
+    // Named and read individually rather than compared whole: a slot carries fields the write
+    // path never consults — how its children are laid out, for one — and asserting the entire
+    // object makes this fail for a rendering change it has no opinion about.
+    const named = (type: string) =>
+      declaredSlotsOf(type)?.map(slot => slot.name);
+    const allowed = (type: string, name: string) =>
+      declaredSlotsOf(type)?.find(slot => slot.name === name)?.allowedBlocks;
+
     // Structure is data, available at import time, with no React anywhere behind it.
-    expect(declaredSlotsOf("core/container")).toEqual([{ name: "default" }]);
+    expect(named("core/container")).toEqual(["default"]);
+    expect(named("core/columns")).toEqual(["default"]);
+    expect(named("core/column")).toEqual(["default"]);
+    expect(named("core/grid")).toEqual(["default"]);
+
     // Columns carries the catalogue's only slot restriction, and it is read
     // from structure alone here — so the write path enforces what may sit in a
     // column without the renderer having been loaded.
-    expect(declaredSlotsOf("core/columns")).toEqual([
-      { name: "default", allowedBlocks: ["core/column"] },
-    ]);
-    expect(declaredSlotsOf("core/column")).toEqual([{ name: "default" }]);
-    expect(declaredSlotsOf("core/grid")).toEqual([{ name: "default" }]);
+    expect(allowed("core/columns", "default")).toEqual(["core/column"]);
+    expect(allowed("core/column", "default")).toBeUndefined();
+    expect(allowed("core/grid", "default")).toBeUndefined();
   });
 
   it("REFUSES a slot the block does not declare", () => {
