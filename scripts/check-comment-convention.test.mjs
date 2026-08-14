@@ -1,4 +1,7 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join as joinPath } from "node:path";
 import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
@@ -10,6 +13,7 @@ import {
   commentText,
   isReviewDomain,
   offencesIn,
+  digestOffences,
   readAllowlist,
   SOURCE_EXTENSIONS,
   sourceFiles,
@@ -182,8 +186,8 @@ describe("the allowlist", () => {
   // Pinned so growth appears in the diff. Without it an entry can be added in the same commit as
   // the comment it exempts, which turns the allowlist into a way of silencing the check rather
   // than a record of what predates it. Lower this as entries are removed; never raise it.
-  const EXPECTED_ENTRIES = 225;
-  const EXPECTED_TOTAL = 419;
+  const EXPECTED_ENTRIES = 231;
+  const EXPECTED_TOTAL = 428;
 
   it("matches its pinned size exactly", () => {
     expect(readAllowlist().size).toBe(EXPECTED_ENTRIES);
@@ -238,5 +242,69 @@ describe("review-process tooling", () => {
     // Widening it to the directory would take the release tooling's neighbours out of scope
     // without anyone choosing that.
     expect(isReviewDomain(path)).toBe(false);
+  });
+});
+
+
+/**
+ * The CLI itself, run as a process.
+ *
+ * Everything above exercises exported functions, and none of it reaches the parts that decide
+ * whether CI passes: the walk feeding `byFile`, the comparison against the allowlist, and the
+ * exit status. Disconnecting any of those leaves all the assertions above green while the gate
+ * reports success on a repository full of offences.
+ *
+ * So this runs the real entry point against a fixture tree and reads the exit code, which is the
+ * only thing a CI step consults.
+ */
+describe("the command", () => {
+  const CHECKER = new URL("check-comment-convention.mjs", import.meta.url).pathname;
+
+  /** A throwaway repository holding one offence, with the allowlist the run should consult. */
+  function fixture(allowlist) {
+    const root = mkdtempSync(joinPath(tmpdir(), "comment-gate-"));
+    mkdirSync(joinPath(root, "scripts"), { recursive: true });
+    mkdirSync(joinPath(root, "packages"), { recursive: true });
+    writeFileSync(
+      joinPath(root, "scripts", "comment-convention-allowlist.json"),
+      `${JSON.stringify(allowlist, null, 2)}\n`
+    );
+    writeFileSync(joinPath(root, "packages", "offender.ts"), "// Codex asked for this\nexport const x = 1;\n");
+    // Tracked-ness decides what the walk reads, so the fixture needs to be a repository.
+    for (const args of [["init", "-q"], ["add", "-A"]]) {
+      spawnSync("git", args, { cwd: root });
+    }
+    return root;
+  }
+
+  const run = root => spawnSync(process.execPath, [CHECKER, "packages"], { cwd: root, encoding: "utf8" });
+
+  it("exits nonzero and names the file when an offence is not allowlisted", () => {
+    const root = fixture({});
+    try {
+      const result = run(root);
+      expect(result.status, result.stderr + result.stdout).toBe(1);
+      expect(result.stderr).toContain("packages/offender.ts");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("exits zero when that same offence is recorded", () => {
+    // The positive control. Without it the assertion above passes for a command that fails on
+    // everything — a broken path, a crash on startup — and the exit code would look like the gate
+    // working.
+    const root = fixture({});
+    try {
+      const digest = digestOffences(["names a review tool — // Codex asked for this"]);
+      writeFileSync(
+        joinPath(root, "scripts", "comment-convention-allowlist.json"),
+        `${JSON.stringify({ "packages/offender.ts": { count: 1, digests: digest } }, null, 2)}\n`
+      );
+      const result = run(root);
+      expect(result.status, result.stderr + result.stdout).toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

@@ -97,8 +97,15 @@ export const FORBIDDEN = [
     // A numbered task or plan: "Task 17:", "Plan C2". The convention names tasks and plans
     // alongside reviews, and this is the shape they arrive in - a reference to a document the
     // reader has no way to open, describing why the code was written rather than what it does.
-    pattern: /\b(?:task|plan)\s+[a-z]?\d+/i,
+    pattern: /\b(?:[a-z]\d+\s+)?(?:task|plan)\s*(?:[a-z]?\d+|:)/i,
     why: "names a task or plan rather than the code",
+  },
+  {
+    // An explicit process label: "Review finding:", "Review feedback:", "Review comment".
+    // Mechanically distinct from the reviewer-as-role uses the negative controls protect, because
+    // the noun that follows names the review artefact rather than a person or a permission.
+    pattern: /\breview\s+(?:finding|feedback|comment|note)s?\b/i,
+    why: "names a review artefact rather than the code",
   },
   {
     // The ACTOR carries the verdict, not the verb. "the operator asked", "the caller asked" and
@@ -344,6 +351,11 @@ export function commentText(source, { lineComments = true, jsx = false } = {}) {
   // Depth of `{` since each open template interpolation, so a `}` closes the interpolation only
   // when it is the matching one. A template can open inside an interpolation, hence a stack.
   const interpolations = [];
+  // Whether each open paren belongs to an if/while/for HEADER. A slash after such a paren opens a
+  // regular expression - `if (ready) /x/.test(v)` is a statement, not a division - while a slash
+  // after a call or grouping paren divides.
+  const parens = [];
+  let closedControlHeader = false;
   let previous = ts.SyntaxKind.Unknown;
   let token = scanner.scan();
 
@@ -354,7 +366,8 @@ export function commentText(source, { lineComments = true, jsx = false } = {}) {
     // TypeScript's - which is what keeps character classes and escapes correct.
     if (
       (token === ts.SyntaxKind.SlashToken || token === ts.SyntaxKind.SlashEqualsToken) &&
-      !ENDS_A_VALUE.has(previous)
+      (!ENDS_A_VALUE.has(previous) ||
+        (previous === ts.SyntaxKind.CloseParenToken && closedControlHeader))
     ) {
       token = scanner.reScanSlashToken();
     }
@@ -381,6 +394,11 @@ export function commentText(source, { lineComments = true, jsx = false } = {}) {
       interpolations[interpolations.length - 1] -= 1;
     }
 
+    if (token === ts.SyntaxKind.OpenParenToken) {
+      parens.push(CONTROL_HEADERS.has(previous));
+    } else if (token === ts.SyntaxKind.CloseParenToken) {
+      closedControlHeader = parens.pop() === true;
+    }
     if (!TRIVIA.has(token)) previous = token;
     token = scanner.scan();
   }
@@ -399,6 +417,14 @@ function jsxTextRanges(source) {
   visit(sf);
   return ranges;
 }
+
+/** Keywords whose parenthesised header is followed by a statement, not by an operator. */
+const CONTROL_HEADERS = new Set([
+  ts.SyntaxKind.IfKeyword,
+  ts.SyntaxKind.WhileKeyword,
+  ts.SyntaxKind.ForKeyword,
+  ts.SyntaxKind.WithKeyword,
+]);
 
 /** Trivia carries no meaning for the regex-or-division decision, so it must not become `previous`. */
 const TRIVIA = new Set([

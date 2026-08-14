@@ -176,6 +176,46 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           echo "inert=false" >> "$GITHUB_OUTPUT"
 
+  comments:
+    name: Comment convention (describes code, not process)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # Deliberately NOT gated on the inert decision, and not a dependent of the
+    # build job. Its scope is DEFAULT_ROOTS in the script, which starts at the
+    # repository root, so it covers paths the inert filter treats as unable to
+    # affect anything - `.claude/` among them. A source file added there would
+    # otherwise be in the checker's scope while the step that runs it was
+    # skipped, which is coverage on paper only.
+    #
+    # It needs no build and no database: the scan reads tracked files and one
+    # JSON record, so running it unconditionally costs seconds.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Setup Node
+        uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # The comments that predate this check are recorded in
+      # scripts/comment-convention-allowlist.json with a per-file count and one
+      # digest per offence. That record is what lets this run blocking rather
+      # than advisory, and it may only shrink: adding an entry to silence a new
+      # comment is the one use it does not have.
+      - name: Comment convention
+        run: pnpm check:comments
+
   ci:
     name: Lint / Typecheck / Test / Build
     needs: changes
@@ -265,17 +305,6 @@ jobs:
       # so nothing else in this repository can see it — and it decays into a
       # reference to a conversation nobody can retrieve.
       #
-      # Run with no arguments, so the scope is DEFAULT_ROOTS in the script rather
-      # than anything visible at this call site. Change what is covered there.
-      #
-      # The comments that predate the check are recorded in
-      # scripts/comment-convention-allowlist.json with a per-file count, which is
-      # what lets this run blocking rather than advisory. That file may only
-      # shrink: adding an entry to silence a new comment is the one use it does
-      # not have.
-      - name: Comment convention (describes code, not process)
-        run: pnpm check:comments
-
       # The drizzle-v1 migration's own safety net (review-driven: these
       # suites previously executed in NO CI job because the `nextly`
       # package's full test task carries a pre-existing failing baseline).

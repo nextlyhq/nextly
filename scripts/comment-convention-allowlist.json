@@ -395,9 +395,29 @@
     "count": 1,
     "digests": ["6f54fd99320556fb"]
   },
-  "packages/nextly/src/domains/field-groups/migration/__tests__/run.test.ts": {
+  "packages/nextly/src/domains/field-groups/migration/__tests__/manifest.test.ts": {
     "count": 1,
-    "digests": ["5b3ef26496ee17bf"]
+    "digests": ["70f176dd1dce9b1e"]
+  },
+  "packages/nextly/src/domains/field-groups/migration/__tests__/plan.test.ts": {
+    "count": 1,
+    "digests": ["5ed24f2470dc8029"]
+  },
+  "packages/nextly/src/domains/field-groups/migration/__tests__/reconcile.test.ts": {
+    "count": 1,
+    "digests": ["49a0da38df683260"]
+  },
+  "packages/nextly/src/domains/field-groups/migration/__tests__/run.test.ts": {
+    "count": 2,
+    "digests": ["5b3ef26496ee17bf", "680111c22f5bdbbe"]
+  },
+  "packages/nextly/src/domains/field-groups/migration/data-steps.ts": {
+    "count": 2,
+    "digests": ["aae7fd2eadcd06a4", "fd700bb632f1a652"]
+  },
+  "packages/nextly/src/domains/field-groups/migration/parent-pointers.ts": {
+    "count": 1,
+    "digests": ["9fbc34dd96250093"]
   },
   "packages/nextly/src/domains/i18n/companion-join.integration.test.ts": {
     "count": 1,
@@ -406,6 +426,10 @@
   "packages/nextly/src/domains/i18n/migration/__tests__/companion-lifecycle.integration.test.ts": {
     "count": 1,
     "digests": ["1ecb7b4926538ca9"]
+  },
+  "packages/nextly/src/domains/i18n/translation-status.integration.test.ts": {
+    "count": 1,
+    "digests": ["e4e2061ce96e8854"]
   },
   "packages/nextly/src/domains/media/services/media-service.ts": {
     "count": 1,
@@ -679,8 +703,8 @@
     "digests": ["9633a9ff265d1807", "baa40beac929816b"]
   },
   "packages/nextly/src/domains/schema/pipeline/prompt-dispatcher/clack-terminal.ts": {
-    "count": 2,
-    "digests": ["49116782aad1e877", "557e8bada7458d04"]
+    "count": 3,
+    "digests": ["407cf60213c8e35f", "49116782aad1e877", "557e8bada7458d04"]
   },
   "packages/nextly/src/domains/schema/pipeline/pushschema-pipeline-interfaces.ts": {
     "count": 9,
