@@ -285,20 +285,30 @@ instead of predicting what someone would infer from it.
 Read the scope first, because the asymmetry inverts and the inverted case is a
 security hole rather than a style preference.
 
-**An advisory check** — a lint, a convention guard, a dead-code or dead-class
-warning, anything whose rejection costs someone an edit — is the case this
-section is about. A miss costs whatever the defect costs. A false positive costs
-the GUARD: it gets suppressed, worked around, or deleted, and takes its true
-positives with it. So the two are not symmetric, and where they conflict, prefer
-the miss.
+**Classify by what a MISS costs, at the call site — never by the check's form.**
+"Lint" is a shape, not a consequence. This repository's `gitleaks` hook is a
+lint by every structural measure and a mandatory security gate by consequence:
+a miss puts a credential in a commit, and the repo forbids bypassing it. A
+taxonomy that sorted by form would drop it in the advisory bucket and then tell
+you to prefer the miss.
 
-**A precondition is the opposite and must not be widened.** Authorization,
-ownership, validity, quota, release gating, anything guarding a destructive or
-irreversible operation: there a miss PERMITS the prohibited action while a false
-positive merely rejects a valid one, so accepting misses converts a cost saving
-into a hole. `AGENTS.md` already says preconditions run first whatever they cost;
-this is the same instruction from the other side. When such a guard cannot
-decide, it must fail CLOSED and say why, never widen until it stops objecting.
+**An advisory check** is one whose false negative costs only the defect it
+failed to report — a convention guard, a dead-code or dead-class warning, a
+style rule. There a false positive costs the GUARD: it gets suppressed, worked
+around, or deleted, and takes its true positives with it. The two are not
+symmetric, and where they conflict, prefer the miss.
+
+**A precondition must not be widened, whatever it looks like.** Authorization,
+ownership, validity, quota, release gating, secret scanning, anything guarding a
+destructive or irreversible operation: there a miss PERMITS the prohibited
+action while a false positive merely rejects a valid one, so accepting misses
+converts a cost saving into a hole. `AGENTS.md` already says preconditions run
+first whatever they cost; this is the same instruction from the other side. When
+such a guard cannot decide, it must fail CLOSED and say why, never widen until
+it stops objecting.
+
+The question to ask is therefore never "what kind of check is this" but "what
+gets through if this one stays quiet, and who is relying on it not to".
 
 The rest of this section applies to the advisory case only.
 
