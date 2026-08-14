@@ -239,6 +239,9 @@ export function CanvasNode({ node }: { node: BlockNode }): ReactNode {
       slot: appendSlot ?? DEFAULT_SLOT,
       index: appendSlot ? (node.slots?.[appendSlot]?.length ?? 0) : 0,
     },
+    // Targets this node's OWN slot, so it ranks with the zones INSIDE it rather
+    // than with its siblings — the same `depth + 1` the slot content is rendered at.
+    collisionPriority: depth + 1,
   });
   const rootRef = appendSlot ? append.ref : undefined;
   const className = classFor(
@@ -321,6 +324,8 @@ function DraggableNode({
     accept: BLOCK_TYPE,
     disabled: dropBeforeIndex == null,
     data: { kind: "dropzone", parentId, slot, index: dropBeforeIndex ?? 0 },
+    // Targets the slot this node SITS IN, so it ranks with that slot's own zones.
+    collisionPriority: depth,
   });
 
   // A formatted container itself: "append" target for the formatted slot it declares, since that
@@ -339,6 +344,9 @@ function DraggableNode({
       slot: appendSlot ?? DEFAULT_SLOT,
       index: appendIndex,
     },
+    // Targets this node's OWN slot, so it ranks with the zones INSIDE it rather
+    // than with its siblings — the same `depth + 1` the slot content is rendered at.
+    collisionPriority: depth + 1,
   });
 
   const className = classFor(
