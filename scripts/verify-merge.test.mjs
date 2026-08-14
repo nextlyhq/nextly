@@ -710,10 +710,8 @@ describe("REQUIRED_CHECKS", () => {
 });
 
 describe("workflowPathsIgnore", () => {
-  // Replaces a pair of tests that pinned a hand-copied constant against the
-  // workflow. The constant is gone: the gate reads the workflow directly, so
-  // there is no copy left to drift and nothing to pin. What remains to cover is
-  // the parser itself, which is now the only implementation of the filter.
+  // The parser is the only implementation of the integration filter, so these
+  // cover it directly rather than comparing it against a second copy.
   it("reads the filter the workflow declares for a trigger", () => {
     const globs = workflowPathsIgnore(INTEGRATION_YML, "pull_request");
 
@@ -775,6 +773,46 @@ describe("requiredChecks by mode", () => {
     expect(requiredChecks([], { merged: true }).map(c => c.name)).not.toContain(
       TITLE
     );
+  });
+});
+
+describe("maintainer approval", () => {
+  it("reports an unapproved pull request WITHOUT blocking it", () => {
+    // CONTRIBUTING asks for one maintainer approval before merge, and no merge
+    // in this repository carries one. Blocking would refuse every pull request
+    // rather than raise the bar for any, so the gap is surfaced instead.
+    const verdict = gateVerdict({
+      tip: FULL_TIP,
+      unresolvedThreads: 0,
+      checkRuns: allGreen(),
+      changedPaths: CODE_CHANGE,
+      required: REQUIRED,
+      codexReviewedSha: FULL_TIP.slice(0, 10),
+      coderabbitReviewCount: 1,
+      approvalCount: 0,
+    });
+
+    expect(verdict.mergeable).toBe(true);
+    expect(verdict.maintainerApproval).toBe("none");
+    expect(formatVerdict(verdict)).toContain("maintainer approval: none");
+  });
+
+  it("reports an approved one as approved", () => {
+    // The control: without it, a field hardcoded to "none" satisfies the case
+    // above and would report every pull request as unapproved.
+    const verdict = gateVerdict({
+      tip: FULL_TIP,
+      unresolvedThreads: 0,
+      checkRuns: allGreen(),
+      changedPaths: CODE_CHANGE,
+      required: REQUIRED,
+      codexReviewedSha: FULL_TIP.slice(0, 10),
+      coderabbitReviewCount: 1,
+      approvalCount: 2,
+    });
+
+    expect(verdict.maintainerApproval).toBe("approved");
+    expect(formatVerdict(verdict)).not.toContain("maintainer approval");
   });
 });
 

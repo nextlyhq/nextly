@@ -217,6 +217,7 @@ export function gateVerdict({
   eligibility,
   codexReviewedSha,
   coderabbitReviewCount,
+  approvalCount = 0,
 }) {
   const blockers = [];
 
@@ -288,6 +289,12 @@ export function gateVerdict({
     // Reported, never a blocker. The project's decision is to run with one
     // reviewer and know it, rather than to treat its silence as coverage.
     secondReviewer: reviewCoverage(coderabbitReviewCount),
+    // Also reported rather than enforced. CONTRIBUTING.md asks for one
+    // maintainer approval before merge, and no merge in this repository
+    // currently carries one — so blocking on it would refuse every pull request
+    // rather than raise the bar for any. Surfacing it states the gap instead of
+    // hiding it behind a green verdict or making the gate unusable.
+    maintainerApproval: approvalCount > 0 ? "approved" : "none",
   };
 }
 
@@ -300,6 +307,11 @@ export function formatVerdict(verdict) {
   if (verdict.secondReviewer !== "reviewed") {
     lines.push(
       `  ! second reviewer: ${verdict.secondReviewer} (not a blocker; not coverage either)`
+    );
+  }
+  if (verdict.maintainerApproval === "none") {
+    lines.push(
+      "  ! maintainer approval: none (CONTRIBUTING asks for one; not enforced here)"
     );
   }
   return lines.join("\n");
@@ -1022,6 +1034,7 @@ export function main(argv) {
     eligibility: { state: meta.state, draft: meta.draft, merged },
     codexReviewedSha: reviewedSha,
     coderabbitReviewCount: coderabbit,
+    approvalCount: reviews.filter(r => r?.state === "APPROVED").length,
   });
 
   // Nothing is printed until the freshness read below has decided. Emitting the
