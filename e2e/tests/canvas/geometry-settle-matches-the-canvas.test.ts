@@ -42,16 +42,15 @@ const CANVAS_CSS = resolve(
 );
 
 /**
- * The drop-zone geometry, as ONE statement: the declaration exactly as the canvas writes it, and
- * how long the geometry in it keeps moving.
+ * The drop-zone rule carrying the transition, exactly as the canvas writes it.
  *
- * Kept in a single structure so the two cannot be updated apart. They were separate constants, and
- * separate constants invite the half-edit: paste the new declaration, leave the number, and both
- * assertions below pass while the probe tolerates less than the canvas takes. Editing this literal
- * puts the span under the reader's cursor at the moment they change the text.
+ * The only thing here maintained by hand, and deliberately so: an exact-text comparison is what
+ * makes a timing edit VISIBLE rather than silently absorbed. How long that timing lasts is not
+ * written down — {@link geometrySpanMs} computes it in a browser — so there is no second value to
+ * keep in step.
  *
- * `spanMs` is read off `declaration` by a person. It cannot go stale on its own — the only thing
- * that changes it is an edit to that text, which the first assertion refuses.
+ * Do not edit this to clear a failure without reading what changed. The failure is the
+ * notification that the geometry timing moved.
  */
 const PINNED_DECLARATION =
   '".nx-pb-dropzone{height:0;border-radius:3px;transition:height .1s ease,background .1s ease}",';
@@ -109,10 +108,15 @@ async function geometrySpanMs(
         .map(v => v.trim());
       const durations = seconds(computed.transitionDuration);
       const delays = seconds(computed.transitionDelay);
+      // CSS CYCLES a timing list that is shorter than `transition-property`: with three
+      // properties and one duration, all three take that duration. Treating a missing index as
+      // zero would read those as instant and report a geometry transition as taking no time.
+      const cycled = (list: number[], i: number) =>
+        list.length === 0 ? 0 : list[i % list.length];
       let longest = 0;
       properties.forEach((property, i) => {
         if (!(geometry as string[]).includes(property)) return;
-        longest = Math.max(longest, (durations[i] ?? 0) + (delays[i] ?? 0));
+        longest = Math.max(longest, cycled(durations, i) + cycled(delays, i));
       });
       el.remove();
       style.remove();
@@ -179,4 +183,12 @@ test("the span derivation reads geometry and ignores the rest", async ({
   );
   // The browser evaluates what a regex could not.
   expect(await span("transition:height calc(.04s + .03s) ease")).toBe(70);
+  // A timing list SHORTER than the property list is cycled by CSS, not padded with zeros: one
+  // duration across three properties applies to all three. Read as missing, the geometry entry
+  // here would report 0 and pass any allowance.
+  expect(
+    await span(
+      "transition-property:color,background,height;transition-duration:.15s"
+    )
+  ).toBe(150);
 });
