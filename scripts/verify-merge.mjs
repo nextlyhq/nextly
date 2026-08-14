@@ -349,7 +349,12 @@ export function repoFromRemoteUrl(url) {
 export function remoteForRepo(repoFullName, remotes) {
   if (typeof repoFullName !== "string" || repoFullName === "") return null;
   const wanted = repoFullName.toLowerCase();
-  for (const [name, url] of remotes ?? []) {
+  for (const [name, url, kind] of remotes ?? []) {
+    // FETCH records only. A remote may push and fetch different repositories,
+    // and every read here is a fetch — matching a push URL selects a remote that
+    // does not hold the objects, which then fails on the operation rather than
+    // on the selection and reads as a broken revision.
+    if (kind !== undefined && kind !== "(fetch)") continue;
     if (repoFromRemoteUrl(url)?.toLowerCase() === wanted) return name;
   }
   return `https://github.com/${repoFullName}.git`;
@@ -544,6 +549,9 @@ export function pathMatches(glob, path) {
  * a check that never reported, so an unknown change set must require the check
  * and be argued with, rather than excuse it and be believed.
  */
+/** How many files GitHub's own path filtering looks at, and no more. */
+export const PATH_FILTER_WINDOW = 300;
+
 export function workflowApplies(pathsIgnore, changedPaths) {
   if (!Array.isArray(pathsIgnore) || pathsIgnore.length === 0) return true;
   if (!Array.isArray(changedPaths) || changedPaths.length === 0) return true;
@@ -783,7 +791,7 @@ function configuredRemotes() {
     .split("\n")
     .filter(Boolean)
     .map(line => line.split(/\s+/))
-    .map(([name, url]) => [name, url]);
+    .map(([name, url, kind]) => [name, url, kind]);
 }
 
 /** The branch's real tip, from the ref rather than from the API's cached head. */
@@ -888,6 +896,13 @@ export function main(argv) {
   // itself reports.
   assertCompleteFileList(changedPaths.length, meta.changedFiles);
 
+  // GitHub evaluates path filters over the FIRST 300 files of its generated
+  // diff and no further. Judging every path would diverge from the decision the
+  // platform actually made: where the first 300 are all ignored, the workflow is
+  // skipped and creates no check-runs, so requiring one on the strength of file
+  // 301 demands a check that can never arrive.
+  const filterPaths = changedPaths.slice(0, PATH_FILTER_WINDOW);
+
   // Read from the workflow, for the trigger whose run produced the checks being
   // judged: `pull_request` before a merge, `push` to the base branch after one.
   // The two blocks are edited independently, so answering from the wrong one
@@ -937,11 +952,11 @@ export function main(argv) {
     cursor = page.cur;
   }
 
-  // From the review RECORD's own `commit_id`, not from a comment body. An
-  // issue comment is not evidence a review covered a commit: the previous
-  // version matched any backticked hex in the latest bot comment, which
-  // accepts progress text that happens to name the sha and misses a real
-  // review whose sha never appears in prose.
+  // From the review RECORD's own `commit_id`, never from a comment body. An
+  // issue comment is not evidence that a review covered a commit: prose naming
+  // a sha may be progress text rather than a verdict, and a real review whose
+  // sha never appears in its body carries none. Only the record states which
+  // tree was read.
   // `--slurp` returns an array of PAGES and cannot be combined with `--jq`,
   // so the flattening happens here rather than in the query.
   const reviews = ghJson([
@@ -1000,7 +1015,7 @@ export function main(argv) {
     tip,
     unresolvedThreads: threads,
     checkRuns: allChecks,
-    changedPaths,
+    changedPaths: filterPaths,
     required,
     eligibility: { state: meta.state, draft: meta.draft, merged },
     codexReviewedSha: reviewedSha,

@@ -25,6 +25,7 @@ import {
   jobPasses,
   landedWhole,
   missingRequired,
+  PATH_FILTER_WINDOW,
   pageWrapping,
   pathMatches,
   remoteForRepo,
@@ -524,6 +525,26 @@ describe("pathMatches", () => {
   });
 });
 
+describe("PATH_FILTER_WINDOW", () => {
+  it("matches the window GitHub's own path filtering uses", () => {
+    // Judging more files than the platform does diverges from the decision it
+    // actually made: where the first 300 are all ignored the workflow is
+    // skipped and creates no check-runs, so requiring one on the strength of a
+    // later file demands a check that can never arrive.
+    expect(PATH_FILTER_WINDOW).toBe(300);
+  });
+
+  it("treats a change set as ignored when every file IN THE WINDOW matches", () => {
+    const docs = Array.from({ length: PATH_FILTER_WINDOW }, (_, i) => `docs/${i}.md`);
+
+    expect(workflowApplies(PR_IGNORE, docs)).toBe(false);
+    // ...and a source file inside the window still makes it apply.
+    expect(
+      workflowApplies(PR_IGNORE, [...docs.slice(1), "packages/nextly/src/a.ts"])
+    ).toBe(true);
+  });
+});
+
 describe("workflowApplies", () => {
   it("runs the workflow when ONE file escapes the filter", () => {
     // GitHub skips only when every changed file matches, so a pull request
@@ -871,6 +892,22 @@ describe("remoteForRepo", () => {
     ];
 
     expect(remoteForRepo("nextlyhq/nextly", remotes)).toBe("upstream");
+  });
+
+  it("ignores a PUSH record, which may name a different repository", () => {
+    // `git remote -v` lists fetch and push separately and they can differ.
+    // Every read here is a fetch, so matching the push URL selects a remote
+    // without the objects — failing on the operation rather than the selection,
+    // which reads as a broken revision instead of a misconfigured lookup.
+    const remotes = [
+      ["origin", "git@github.com:contributor/nextly.git", "(fetch)"],
+      ["origin", "git@github.com:nextlyhq/nextly.git", "(push)"],
+    ];
+
+    expect(remoteForRepo("nextlyhq/nextly", remotes)).toBe(
+      "https://github.com/nextlyhq/nextly.git"
+    );
+    expect(remoteForRepo("contributor/nextly", remotes)).toBe("origin");
   });
 
   it("prefers a local remote that IS the repository", () => {
