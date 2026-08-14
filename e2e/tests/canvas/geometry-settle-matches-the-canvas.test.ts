@@ -42,24 +42,23 @@ const CANVAS_CSS = resolve(
 );
 
 /**
- * The drop-zone rules carrying a `transition`, exactly as the canvas writes them.
+ * The drop-zone geometry, as ONE statement: the declaration exactly as the canvas writes it, and
+ * how long the geometry in it keeps moving.
  *
- * Do not hand-edit to clear a failure: the failure is the notification that the geometry timing
- * moved, and clearing it without re-deriving {@link PINNED_GEOMETRY_SPAN_MS} silently widens what
- * the probe tolerates.
- */
-const PINNED = [
-  '".nx-pb-dropzone{height:0;border-radius:3px;transition:height .1s ease,background .1s ease}",',
-];
-
-/**
- * How long the geometry above keeps moving, in milliseconds.
+ * Kept in a single structure so the two cannot be updated apart. They were separate constants, and
+ * separate constants invite the half-edit: paste the new declaration, leave the number, and both
+ * assertions below pass while the probe tolerates less than the canvas takes. Editing this literal
+ * puts the span under the reader's cursor at the moment they change the text.
  *
- * Read off {@link PINNED} by a person rather than computed, and it travels with it: the only way
- * this value goes stale is an edit to that declaration, which the assertion below refuses. `height`
- * transitions over `.1s` with no delay; `background` moves no edge this probe measures.
+ * `spanMs` is read off `declaration` by a person. It cannot go stale on its own — the only thing
+ * that changes it is an edit to that text, which the first assertion refuses.
  */
-const PINNED_GEOMETRY_SPAN_MS = 100;
+const PINNED_GEOMETRY = {
+  declaration:
+    '".nx-pb-dropzone{height:0;border-radius:3px;transition:height .1s ease,background .1s ease}",',
+  // `height` transitions over `.1s` with no delay. `background` moves no edge this probe measures.
+  spanMs: 100,
+} as const;
 
 /** Every drop-zone line declaring a transition, trimmed, in file order. */
 function transitionLines(source: string): string[] {
@@ -81,9 +80,9 @@ test("the drop-zone geometry timing has not changed under the probe", () => {
   expect(
     found,
     "the canvas drop-zone transition changed. Re-derive how long its geometry keeps moving, " +
-      "update PINNED_GEOMETRY_SPAN_MS and PINNED here, and raise POC_GEOMETRY_SETTLE_MS in " +
+      "update PINNED_GEOMETRY here — both its declaration AND its spanMs, and raise POC_GEOMETRY_SETTLE_MS in " +
       "poc-driver.ts if the span now exceeds it."
-  ).toEqual(PINNED);
+  ).toEqual([PINNED_GEOMETRY.declaration]);
 });
 
 test("the driver's settle allowance covers that geometry", () => {
@@ -92,7 +91,7 @@ test("the driver's settle allowance covers that geometry", () => {
   expect(
     POC_GEOMETRY_SETTLE_MS,
     `geometrySettleMs is ${String(POC_GEOMETRY_SETTLE_MS)}ms and the drop-zone geometry moves for ` +
-      `${String(PINNED_GEOMETRY_SPAN_MS)}ms, so the probe can re-measure an edge that is still ` +
+      `${String(PINNED_GEOMETRY.spanMs)}ms, so the probe can re-measure an edge that is still ` +
       "travelling. Raise it in poc-driver.ts."
-  ).toBeGreaterThanOrEqual(PINNED_GEOMETRY_SPAN_MS);
+  ).toBeGreaterThanOrEqual(PINNED_GEOMETRY.spanMs);
 });
