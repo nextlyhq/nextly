@@ -328,10 +328,6 @@ async function main(argv) {
   const host = segments.length === 3 ? segments[0] : "github.com";
   const repo = `${owner}/${name}`;
   const { execFileSync } = await import("node:child_process");
-  // `ls-remote` needs the ref to be current, and a stale local view of origin
-  // would reintroduce the lag this function reads the ref to avoid.
-  execFileSync("git", ["fetch", "origin", "--quiet"], { stdio: "ignore" });
-
   // Each query is its own process and its failure is its own exception: a
   // rejected request must reach the caller as a refusal, never as empty data.
   // `--hostname` on every API call, and a host-qualified `--repo`. Parsing the
@@ -370,9 +366,14 @@ async function main(argv) {
   // sends an Enterprise fork lookup to the public host, where it either fails
   // or finds an unrelated repository of the same name and evaluates reviews
   // against its SHA.
+  // Both remotes are derived from the configured repository rather than from
+  // the checkout. `origin` is whatever this working copy happens to point at,
+  // which need not be the repository GH_REPO selected — the API data would then
+  // describe one repository while the SHA came from another.
   const headRemote = meta.isCrossRepository
     ? `https://${host}/${meta.headRepositoryOwner.login}/${meta.headRepository.name}.git`
-    : "origin";
+    : `https://${host}/${repo}.git`;
+
   const headOf = () => {
     const line = execFileSync(
       "git",
@@ -560,17 +561,29 @@ async function main(argv) {
       { encoding: "utf8" }
     ).trim();
     stranded = Number(stranded) || 0;
+  }
 
-    // The head is re-read after the timeline and count, which are several
-    // requests. A push landing during them leaves `headRefOid === head` from
-    // the earlier read, skipping the range entirely and returning success for a
-    // branch that has since grown a tail.
-    if (headOf() !== head) {
-      process.stderr.write(
-        "ci-verdict: head moved during the tail check; re-run\n"
-      );
-      return 2;
-    }
+  // Outside the range block deliberately. When the branch has NOT advanced the
+  // work above is skipped, and that is exactly the case a push landing during
+  // the timeline request turns into a false `ALREADY MERGED` — the condition
+  // that would have caught it was evaluated from a read taken before the push.
+  // The state is re-read for the same reason: a pull request closed mid-run
+  // leaves every SHA and fingerprint identical, so nothing else here can see
+  // it, and the verdict would be computed from a lifecycle that has changed.
+  const settled = gh([
+    "pr",
+    "view",
+    pr,
+    "--repo",
+    repoArg,
+    "--json",
+    "state,headRefOid",
+  ]);
+  if (headOf() !== head || settled.state !== meta.state) {
+    process.stderr.write(
+      "ci-verdict: head or pull-request state changed mid-run; re-run\n"
+    );
+    return 2;
   }
 
   const result = report({
