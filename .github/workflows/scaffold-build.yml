@@ -512,6 +512,21 @@ jobs:
           # on `bundled` — and only the second is where npm strips it out.
           test -f .gitignore || { echo "no .gitignore: a new project would commit its .env"; exit 1; }
 
+          # The agent guide, and the pointer that makes Claude Code read it. Asserted on
+          # every leg because they reach a project by two different routes — from this
+          # checkout on the `local` legs, from the packed tarball on `bundled` — and only
+          # the second is where a missing `files` entry would drop them.
+          test -f AGENTS.md || { echo "no AGENTS.md: the scaffold shipped no agent guide"; exit 1; }
+          test -f CLAUDE.md || { echo "no CLAUDE.md: nothing points Claude Code at AGENTS.md"; exit 1; }
+
+          # The guide is generated from a template, so an unresolved placeholder would ship
+          # `{{databaseDialect}}` to the reader as if it were the answer.
+          if grep -q '{{' AGENTS.md; then
+            echo "AGENTS.md still contains an unreplaced {{placeholder}}"
+            grep -n '{{' AGENTS.md
+            exit 1
+          fi
+
           # `node_modules` says an install ran; it does not say WHICH installer ran. The CLI
           # picks that from the forwarded `npm_config_user_agent`, so a regression there — or a
           # pnpm release that stops forwarding it — would quietly run npm instead, and npm's
