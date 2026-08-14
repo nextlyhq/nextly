@@ -92,7 +92,11 @@ export function reviewersAtHead(reviews, head) {
  * head-scoped version discards the whole objection the moment the author
  * pushes, which is the state it most needs to survive.
  */
-export function changesRequested(reviews, revisionOrder = undefined) {
+export function changesRequested(
+  reviews,
+  revisionOrder = undefined,
+  revisionOrderComplete = false
+) {
   if (!Array.isArray(reviews)) return [];
   // Ordered oldest first, so each account's later reviews decide what survives.
   const ordered = reviews
@@ -128,7 +132,14 @@ export function changesRequested(reviews, revisionOrder = undefined) {
       const objections = outstanding.get(login);
       if (objections === undefined) continue;
       for (const objectedAt of objections) {
-        if (approvalCovers(review.commit_id, objectedAt, revisionOrder)) {
+        if (
+          approvalCovers(
+            review.commit_id,
+            objectedAt,
+            revisionOrder,
+            revisionOrderComplete
+          )
+        ) {
           objections.delete(objectedAt);
         }
       }
@@ -148,7 +159,12 @@ export function changesRequested(reviews, revisionOrder = undefined) {
  * against the current head instead would resurrect a clearance every time the
  * head moves past the revision that made it.
  */
-function approvalCovers(approvedAt, objectedAt, revisionOrder) {
+function approvalCovers(
+  approvedAt,
+  objectedAt,
+  revisionOrder,
+  revisionOrderComplete
+) {
   // An approval naming the objected revision answers it whether or not either
   // is still in the order, which is what makes this the first question asked.
   if (approvedAt === objectedAt) return true;
@@ -164,7 +180,15 @@ function approvalCovers(approvedAt, objectedAt, revisionOrder) {
   // every revision is absent from an empty map, and clearing on the objection's
   // absence alone would turn a failed commit query into a blanket clearance.
   if (at === undefined) return false;
-  if (objected === undefined) return true;
+  // Reading absence as erasure requires the order to be COMPLETE, and the
+  // caller must say so rather than have it assumed. GitHub serves at most 250
+  // commits for one pull request and pagination cannot reach past that, so a
+  // long history yields a map missing revisions nobody removed — and a
+  // truncated order is indistinguishable from a rebased one by inspection.
+  // Defaulting to incomplete keeps the unstated case on the side that refuses,
+  // because a caller that never supplied the flag has not established the
+  // property it would otherwise be read as asserting.
+  if (objected === undefined) return revisionOrderComplete === true;
   return at >= objected;
 }
 
@@ -323,6 +347,7 @@ export function verdictFor({
 export function report({
   head,
   revisionOrder,
+  revisionOrderComplete = false,
   reviews,
   threads,
   issueComments,
@@ -350,7 +375,11 @@ export function report({
   // revisions — pushing a commit does not answer it — while whether a given
   // approval supersedes one is a question about which revision that approval
   // spoke to.
-  const refused = changesRequested(reviews, revisionOrder);
+  const refused = changesRequested(
+    reviews,
+    revisionOrder,
+    revisionOrderComplete
+  );
   const { verdict, detail, exitCode } = verdictFor({
     missing,
     unresolved,
@@ -570,11 +599,31 @@ async function main(argv) {
   // arrive out of order, and the current head is a moving target that
   // resurrects a clearance as soon as it advances past the revision that made
   // it.
+  // The pull request object carries its commit TOTAL as a number, which the
+  // commit listing cannot report about itself: a truncated list looks exactly
+  // like a complete one of that length.
+  const pullObject = gh(["api", `repos/${repo}/pulls/${pr}`]);
   const revisionOrder = new Map(
     gh(["api", `repos/${repo}/pulls/${pr}/commits`, "--paginate", "--slurp"])
       .flat()
       .map((commit, index) => [commit.sha, index])
   );
+  // GitHub serves at most 250 commits from that endpoint and `--paginate`
+  // cannot reach past it, returning a short list and no error. Compared against
+  // the map's SIZE rather than the array's length, because a duplicate sha
+  // would inflate the array while collapsing in the Map and make a truncated
+  // history read as complete.
+  const revisionOrderComplete =
+    typeof pullObject.commits === "number" &&
+    revisionOrder.size >= pullObject.commits;
+  if (!revisionOrderComplete) {
+    const total =
+      typeof pullObject.commits === "number" ? pullObject.commits : "unknown";
+    process.stderr.write(
+      `ci-verdict: commit order incomplete (${revisionOrder.size} of ${total}); ` +
+        `an objection on a revision absent from it will NOT be cleared\n`
+    );
+  }
   const issueComments = gh([
     "api",
     `repos/${repo}/issues/${pr}/comments`,
@@ -802,6 +851,7 @@ async function main(argv) {
   const result = report({
     head,
     revisionOrder,
+    revisionOrderComplete,
     reviews,
     threads,
     issueComments,
