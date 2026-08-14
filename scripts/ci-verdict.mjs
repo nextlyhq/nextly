@@ -730,6 +730,26 @@ async function main(argv) {
   // question rather than answering it: the snapshot the verdict is computed
   // from is bracketed by an identical one taken after it, so nothing the
   // verdict depends on changed across the window in which it was decided.
+  // A branch force-pushed, deleted or restored cannot certify its own tail:
+  // resetting it back to the merged head leaves an empty range indistinguishable
+  // from a branch that never advanced. Counted rather than inspected, because
+  // the timeline records that the ref moved and not what it moved away from.
+  const rewriteEvents = () =>
+    gh([
+      "api",
+      "--paginate",
+      "--slurp",
+      `repos/${repo}/issues/${pr}/timeline?per_page=100`,
+    ])
+      .flat()
+      .filter(event =>
+        [
+          "head_ref_force_pushed",
+          "head_ref_deleted",
+          "head_ref_restored",
+        ].includes(event?.event)
+      ).length;
+
   const snapshot = () => {
     const live = gh([
       "pr",
@@ -803,9 +823,13 @@ async function main(argv) {
     );
     return 2;
   }
-  if (meta.state === "MERGED" && observed.rewrites !== rewritten) {
+  // Any rewrite event at all disqualifies the tail check, so the count is
+  // compared against ZERO rather than against a baseline taken earlier in the
+  // same run. A baseline could only ever say "it did not move WHILE I looked",
+  // which is the weaker claim and the one the empty-range trap already defeats.
+  if (meta.state === "MERGED" && observed.rewrites > 0) {
     process.stderr.write(
-      "ci-verdict: branch history rewritten mid-run; tail NOT CHECKABLE\n"
+      `ci-verdict: ${observed.rewrites} history-rewrite event(s); tail NOT CHECKABLE\n`
     );
     return 2;
   }
