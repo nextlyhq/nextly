@@ -361,7 +361,19 @@ export function report({
     stranded,
   });
 
+  // The verdict leads, and the evidence follows it. Serialised last, these
+  // three sit below every list in the printed object, so a reader that pipes
+  // the output through `head` — or any pager, or a chat window that truncates —
+  // sees the supporting counts and not the refusal they support. The counts are
+  // individually reassuring, `unresolved_threads: 0` most of all, so a cut-off
+  // read does not look partial. Order is not a substitute for the exit status,
+  // which is the only channel a filter cannot silently drop; it removes the
+  // case where a truncated view is actively misleading rather than merely
+  // incomplete.
   return {
+    verdict,
+    exitCode,
+    detail,
     head,
     state,
     // Named for what the range establishes — absence from the merge — rather
@@ -377,9 +389,6 @@ export function report({
     rate_limited: limited,
     changes_requested: refused,
     advisory: effectiveAdvisory,
-    verdict,
-    detail,
-    exitCode,
   };
 }
 
