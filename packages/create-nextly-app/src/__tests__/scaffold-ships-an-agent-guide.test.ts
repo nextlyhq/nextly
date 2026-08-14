@@ -13,6 +13,7 @@
  * under its special name, which is the state this replaces.
  */
 import {
+  link,
   lstat,
   mkdir,
   mkdtemp,
@@ -346,6 +347,36 @@ describe("scaffolding over a project that already has these files", () => {
     expect((await lstat(path.join(target, "CLAUDE.md"))).isSymbolicLink()).toBe(
       true
     );
+  }, 30_000);
+
+  it("does not write through a hard-linked guide", async () => {
+    workdir = await mkdtemp(path.join(tmpdir(), "nextly-hardlink-"));
+    const target = path.join(workdir, "project");
+    await mkdir(target, { recursive: true });
+
+    // A shared guide OUTSIDE the project, with a second directory entry inside it. `lstat`
+    // reports a regular file for both, because that is what a hard link is — only the link
+    // count separates them.
+    const shared = path.join(workdir, "shared-AGENTS.md");
+    await writeFile(shared, "# Shared\n\nHouse style lives here.\n", "utf-8");
+    await link(shared, path.join(target, "AGENTS.md"));
+
+    await copyTemplate({
+      projectName: "my-app",
+      projectType: "blank",
+      targetDir: target,
+      database: sqlite,
+      templateSource: {
+        basePath: path.join(templatesRoot, "base"),
+        templatePath: path.join(templatesRoot, "blank"),
+      },
+      allowExistingTarget: true,
+    });
+
+    // The shared file is one inode reached by two names, so merging into either edits both —
+    // and the other name may belong to a different project entirely.
+    const sharedAfter = await readFile(shared, "utf-8");
+    expect(sharedAfter).toBe("# Shared\n\nHouse style lives here.\n");
   }, 30_000);
 
   it("does not duplicate a CLAUDE.md pointer that is already there", async () => {
