@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import {
+  assertCompleteFileList,
   flatPages,
   blockingJobs,
   checkability,
@@ -916,43 +917,67 @@ describe("runCli", () => {
 describe("staleVerification", () => {
   const A = "a".repeat(40);
   const B = "b".repeat(40);
+  const OPEN = { merged: false, state: "open", draft: false, tip: A };
 
   it("catches a merge that happened DURING the check, tip unchanged", () => {
     // The case a tip comparison cannot see: merging usually leaves the branch
     // untouched, so the revision matches while every answer above it was taken
-    // in the pre-merge mode — head checks, landed-whole never asked.
-    expect(
-      staleVerification({
-        mergedAtStart: false,
-        mergedNow: true,
-        tipAtStart: A,
-        tipNow: A,
-      })
-    ).toBe("merged-during-verification");
+    // in the pre-merge mode.
+    expect(staleVerification(OPEN, { ...OPEN, merged: true })).toBe(
+      "merged-changed-during-verification"
+    );
   });
 
   it("catches a push during the check", () => {
-    expect(
-      staleVerification({
-        mergedAtStart: false,
-        mergedNow: false,
-        tipAtStart: A,
-        tipNow: B,
-      })
-    ).toBe("head-moved");
+    expect(staleVerification(OPEN, { ...OPEN, tip: B })).toBe(
+      "tip-changed-during-verification"
+    );
   });
 
-  it("reports nothing when neither moved", () => {
-    // The control. Without it, a function returning a reason unconditionally
-    // satisfies both cases above and the gate could never pass.
+  it("catches a pull request CLOSED or drafted mid-check", () => {
+    // Neither moves the tip nor the merged flag, so the two named comparisons
+    // this replaced both passed while GitHub had stopped permitting the merge.
+    expect(staleVerification(OPEN, { ...OPEN, state: "closed" })).toBe(
+      "state-changed-during-verification"
+    );
+    expect(staleVerification(OPEN, { ...OPEN, draft: true })).toBe(
+      "draft-changed-during-verification"
+    );
+  });
+
+  it("compares a field neither case above names", () => {
+    // The property that makes this structural rather than a third enumeration:
+    // a key added to the snapshot is compared without this function being
+    // edited. Enumerating fields missed one twice, each time the newest.
     expect(
-      staleVerification({
-        mergedAtStart: true,
-        mergedNow: true,
-        tipAtStart: A,
-        tipNow: A,
-      })
-    ).toBe(null);
+      staleVerification({ ...OPEN, future: 1 }, { ...OPEN, future: 2 })
+    ).toBe("future-changed-during-verification");
+  });
+
+  it("reports nothing when nothing moved", () => {
+    // The control. Without it a function returning a reason unconditionally
+    // satisfies every case above and the gate could never pass.
+    expect(staleVerification(OPEN, { ...OPEN })).toBe(null);
+  });
+
+  it("refuses an unreadable snapshot rather than reporting fresh", () => {
+    expect(staleVerification(OPEN, null)).toBe("eligibility-unreadable");
+  });
+});
+
+describe("assertCompleteFileList", () => {
+  it("refuses a list the API truncated at its cap", () => {
+    // A capped response carries no marker saying so, and the shorter list is
+    // exactly the input that makes a source change look documentation-only.
+    expect(() => assertCompleteFileList(3000, 3412)).toThrow(TypeError);
+  });
+
+  it("refuses when the pull request reported no count", () => {
+    expect(() => assertCompleteFileList(10, undefined)).toThrow(TypeError);
+  });
+
+  it("accepts a complete list", () => {
+    expect(() => assertCompleteFileList(12, 12)).not.toThrow();
   });
 });
 

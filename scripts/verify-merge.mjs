@@ -335,16 +335,17 @@ export function remoteForRepo(repoFullName, remotes) {
  * Deliberately reports staleness only: adopting the new values would rubber
  * stamp exactly the unverified state this detects.
  */
-export function staleVerification({
-  mergedAtStart,
-  mergedNow,
-  tipAtStart,
-  tipNow,
-}) {
-  if (mergedAtStart !== mergedNow) {
-    return mergedNow ? "merged-during-verification" : "unmerged-during-verification";
+export function staleVerification(before, after) {
+  // Compares the WHOLE snapshot rather than naming fields. Enumerating them has
+  // now missed one twice: the merged flag after the tip, and eligibility after
+  // the merged flag — each time the field added last round was the only one
+  // being watched. Anything mutable that reaches a blocker belongs in the
+  // snapshot, and comparing every key means adding one cannot be forgotten here.
+  if (!before || !after) return "eligibility-unreadable";
+  const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+  for (const key of keys) {
+    if (before[key] !== after[key]) return `${key}-changed-during-verification`;
   }
-  if (tipAtStart !== tipNow) return "head-moved";
   return null;
 }
 
@@ -385,6 +386,24 @@ export function flatPages(pages, label, isReadablePage = Array.isArray) {
     }
   }
   return pages;
+}
+
+/**
+ * Refuses a changed-file list the API truncated.
+ *
+ * Silence is the failure here: a capped response carries no marker saying so,
+ * and the shorter list is exactly the input that makes a source change look
+ * like a documentation-only one.
+ */
+export function assertCompleteFileList(retrieved, reported) {
+  if (!Number.isInteger(reported)) {
+    throw new TypeError("changed files: the pull request reported no count");
+  }
+  if (retrieved < reported) {
+    throw new TypeError(
+      `changed files: read ${retrieved} of ${reported}; the list is truncated`
+    );
+  }
 }
 
 /** A paginated page that wraps its array under `key`, as the checks endpoints do. */
@@ -706,8 +725,18 @@ function ghLog(merged, tip) {
  * fall back to whatever the working tree happens to hold.
  */
 function workflowAt(revision, path) {
-  run(["fetch", "origin", revision, "--quiet"]);
-  return execFileSync("git", ["show", `${revision}:${path}`], {
+  // REMOTE_FOR_FETCH, never a literal "origin". From a fork checkout `origin`
+  // is the fork, so a hardcoded fetch aborts on a revision it does not have and
+  // the gate exits 2 for an entirely healthy pull request. `remoteForRepo` has
+  // already answered this question; asking it again differently is how the two
+  // answers diverge.
+  run(["fetch", REMOTE_FOR_FETCH, revision, "--quiet"]);
+  // Read through FETCH_HEAD rather than by the name fetched. `git fetch <remote>
+  // refs/pull/N/merge` does not create a local ref of that name, so naming it in
+  // `git show` fails with `invalid object name` — for a plain sha it happens to
+  // work, which is what let this pass everywhere except the one revision the
+  // pre-merge path actually uses.
+  return execFileSync("git", ["show", `FETCH_HEAD:${path}`], {
     encoding: "utf8",
   });
 }
@@ -746,7 +775,7 @@ export function main(argv) {
     "api",
     `repos/${REPO}/pulls/${pr}`,
     "--jq",
-    "{cross:.head.repo.full_name!=.base.repo.full_name,repo:.head.repo.full_name,branch:.head.ref,merged:.merged,mergeSha:.merge_commit_sha,head:.head.sha,state:.state,draft:.draft}",
+    "{cross:.head.repo.full_name!=.base.repo.full_name,repo:.head.repo.full_name,branch:.head.ref,merged:.merged,mergeSha:.merge_commit_sha,head:.head.sha,state:.state,draft:.draft,changedFiles:.changed_files}",
   ]);
   REMOTE_FOR_FETCH = remoteForRepo(meta.repo, configuredRemotes());
   const tip = lsRemoteTip(REMOTE_FOR_FETCH, meta.branch);
@@ -815,6 +844,13 @@ export function main(argv) {
     .map(file => file?.filename)
     .filter(name => typeof name === "string");
 
+  // The endpoint stops at 3000 files however it is paginated, and a truncated
+  // list is indistinguishable from a complete one. If the part returned happens
+  // to be documentation while a source file falls past the cap, every
+  // integration check is excused. Compared against the count the pull request
+  // itself reports.
+  assertCompleteFileList(changedPaths.length, meta.changedFiles);
+
   // Read from the workflow, for the trigger whose run produced the checks being
   // judged: `pull_request` before a merge, `push` to the base branch after one.
   // The two blocks are edited independently, so answering from the wrong one
@@ -824,8 +860,14 @@ export function main(argv) {
   // outside the pull request's worktree: a later commit adding a path to
   // `paths-ignore` would otherwise excuse checks that an older merge was
   // genuinely due to create.
+  // Pre-merge the workflow runs from `refs/pull/N/merge` — the branch combined
+  // with the CURRENT base — not from the branch tip. A base that has since
+  // stopped ignoring a path would otherwise be judged with the head's older
+  // filter, excusing integration runs that were genuinely due. Post-merge the
+  // squash commit IS the revision the push workflow ran on.
+  const filterRevision = merged ? subject : `refs/pull/${pr}/merge`;
   const integrationIgnore = workflowPathsIgnore(
-    workflowAt(subject, ".github/workflows/integration.yml"),
+    workflowAt(filterRevision, ".github/workflows/integration.yml"),
     merged ? "push" : "pull_request"
   );
   const required = requiredChecks(integrationIgnore, { merged });
@@ -946,13 +988,14 @@ export function main(argv) {
   // taken in the pre-merge mode, judging the branch head with the landed-whole
   // question never asked. The mode is as much a part of what was verified as
   // the revision is.
-  const stale = staleVerification({
-    mergedAtStart: merged,
-    mergedNow:
-      ghText(["api", `repos/${REPO}/pulls/${pr}`, "--jq", ".merged"]) === "true",
-    tipAtStart: tip,
-    tipNow: lsRemoteTip(REMOTE_FOR_FETCH, meta.branch),
-  });
+  // Every mutable fact a blocker depends on, read once at the start and once at
+  // the end. Anything added to this projection is compared automatically.
+  const MUTABLE = "{merged:.merged,state:.state,draft:.draft}";
+  const after = ghJson(["api", `repos/${REPO}/pulls/${pr}`, "--jq", MUTABLE]);
+  const stale = staleVerification(
+    { merged, state: meta.state, draft: meta.draft, tip },
+    { ...after, tip: lsRemoteTip(REMOTE_FOR_FETCH, meta.branch) }
+  );
   if (stale) {
     process.stdout.write(
       `  ${stale}: this verdict describes ${tip.slice(0, 9)} as it stood when ` +
@@ -995,5 +1038,8 @@ if (
   process.argv[1] &&
   import.meta.url === pathToFileURL(process.argv[1]).href
 ) {
-  process.exit(runCli(process.argv.slice(2)));
+  // `process.exitCode`, not `process.exit()`. Exiting terminates Node before a
+  // redirected stdout finishes flushing, truncating exactly the blocker names a
+  // caller needs — and the truncation is silent, so the output looks complete.
+  process.exitCode = runCli(process.argv.slice(2));
 }
