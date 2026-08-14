@@ -431,6 +431,29 @@ is what makes it safe, because it is the server that refuses. Both take
 a merge precondition naming the wrong revision either refuses a correct merge or,
 worse, permits the one it was added to stop.
 
+**Read the full object name; never reconstruct one from an abbreviation.** The
+flag needs all forty characters, every printed form of a SHA is abbreviated, and
+the two failures are not symmetric. A fabricated value that happens to prefix
+the real head still refuses — which is the flag working. A fabricated value is
+never accidentally CORRECT, so the danger is not this command; it is every other
+place a hand-assembled SHA is used where nothing checks it.
+
+Measured while merging the pull request that added `scripts/verify-merge.mjs`: a
+ten-character prefix was padded out to full length and passed here, and GitHub
+answered `Head branch was modified`. That message names a race, and no race had
+occurred — the head was untouched and the SHA was invented. Reading the error at
+face value would have sent the next step chasing a phantom push.
+
+So take it from `git ls-remote origin "refs/heads/$BR"` in the same command that
+uses it, and read `Head branch was modified` as EITHER a moved head or a wrong
+value. The two are indistinguishable from the message, and one of them is a
+typing error rather than an event.
+
+This is the case that argues for the flag most directly, and it is not the race
+this section otherwise describes. A race is narrow and needs bad timing. A
+mistyped revision needs only a person, and care does not prevent it, because the
+wrong value looks exactly like the right one.
+
 Re-reading `ls-remote` immediately before merging is better than not, and it is
 still two operations: a push arriving between the read and the merge is exactly
 the window being closed, and narrowing a race is not closing one. `--match-head-commit`
