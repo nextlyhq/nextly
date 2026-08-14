@@ -11,7 +11,14 @@
  */
 import { expect, test } from "@playwright/test";
 
-import { dragPointerTo, dragUntilTarget } from "./driver";
+import {
+  dragPointerTo,
+  dragToZoneEdge,
+  dragUntilInsideZone,
+  dragUntilTarget,
+  jitterAcrossEdge,
+  settledTarget,
+} from "./driver";
 import type { ActiveTargetTransition, CanvasDriver } from "./driver";
 import { EXTREME_RATIO_FIXTURE, FLAT_LIST_FIXTURE, seedPage } from "./fixtures";
 import { createPocDriver } from "./poc-driver";
@@ -49,26 +56,67 @@ async function startPanelDrag(driver: CanvasDriver) {
  * produces. Comparing the indicator's live rect against the live pointer is
  * what makes the #1705 and #1706 guards real.
  */
-async function expectIndicatorAtPointer(driver: CanvasDriver, label: string) {
+async function expectIndicatorAtPointer(
+  driver: CanvasDriver,
+  label: string
+): Promise<number> {
+  // Driven INTO a zone before the comparison, so the exact reading is always
+  // the one used. `@dnd-kit/collision` resolves to a zone containing the
+  // pointer first and only ranks by the dragged shape's overlap when none does,
+  // and these scenarios can stop on that fallback with the pointer outside
+  // every zone.
+  //
+  // Tolerating that case is what makes this guard weak. An adjacency bound
+  // accepts the NEIGHBOURING zone, which is precisely what a stale-scroll or
+  // unscaled-transform implementation selects — so the two failures this
+  // function exists to catch (#1705, #1706) can satisfy it. Inside a zone,
+  // containment is exact and needs no tolerance at all, and every geometry
+  // scenario can reach such a position.
+  const containing = await dragUntilInsideZone(driver);
+
+  // SETTLED FIRST, then the indicator. `dragUntilInsideZone` has just moved the
+  // pointer into a zone and a canvas whose hysteresis is a dwell may still be
+  // showing the previous one, so comparing that lagging reading with
+  // `containing` would make scenarios 1-3 reject correct scroll, scale and
+  // cross-frame behaviour.
+  //
+  // The ORDER is part of the assertion. Reading the rectangle before the wait
+  // certifies a rectangle belonging to whatever was active before the dwell
+  // expired, so a canvas that activates the right containing zone and then
+  // hides or collapses its new indicator passes on the old target's rect —
+  // the two readings would describe different states while being asserted as
+  // one.
+  const active = await settledTarget(driver);
+
+  // Read after the walk AND after the settle, so it belongs to the position and
+  // the target everything below is about. Reading before the walk would certify
+  // a rectangle from a position the pointer has since left.
   const rect = await driver.readIndicatorRect();
   expect(rect, `${label}: an indicator must be visible`).not.toBeNull();
-
-  // Exact, not within a tolerance. A distance threshold is meaningless here:
-  // collision picks the NEAREST zone, so the pointer legitimately sits up to
-  // half the zone spacing away, and any threshold near that is either slack
-  // enough to accept a neighbour or tight enough to reject a correct answer.
-  // "Is the active zone the nearest one?" has neither problem, and both the
-  // stale-rect and unscaled-transform failures pick a non-nearest zone.
-  const active = await driver.readActiveTarget();
   const nearest = await driver.nearestZoneToPointer();
   test.info().annotations.push({
     type: `${label}-zone`,
-    description: `active=${active} nearest=${nearest}`,
+    description: `active=${active} containing=${containing} nearest=${nearest}`,
   });
+
+  // A precondition, not a fallback. If no position inside a zone can be reached
+  // the mapping question cannot be asked exactly, and answering it approximately
+  // would certify the implementations this is meant to reject.
+  expect(
+    containing,
+    `${label}: the pointer must reach a position inside a zone for containment to be decidable`
+  ).toBeGreaterThanOrEqual(0);
   expect(
     active,
-    `${label}: the active zone must be the nearest to the pointer`
-  ).toBe(nearest);
+    `${label}: the zone containing the pointer must be the active one`
+  ).toBe(containing);
+
+  // Handed back so a caller asserting on POSITION uses the target the pointer
+  // ended on. The containment walk can activate a different zone than the one
+  // the caller reached, and a drop then lands at the new target while an
+  // assertion written against the cached ordinal reports a failure the canvas
+  // did not cause.
+  return active;
 }
 
 test("scenario 1: a library block drags across the iframe boundary", async ({
@@ -87,12 +135,17 @@ test("scenario 1: a library block drags across the iframe boundary", async ({
   // A drop target here is the whole cross-frame question: it means dnd-kit
   // resolved a droppable registered inside the iframe from a pointer event in
   // the host document.
-  const active = await dragUntilTarget(driver);
+  const reached = await dragUntilTarget(driver);
   test
     .info()
-    .annotations.push({ type: "active-target", description: String(active) });
-  expect(active).toBeGreaterThanOrEqual(0);
-  await expectIndicatorAtPointer(driver, "cross-frame");
+    .annotations.push({ type: "active-target", description: String(reached) });
+  expect(reached).toBeGreaterThanOrEqual(0);
+  // The target the pointer ENDED on, which is what the drop will use. The
+  // containment walk inside this helper can activate a different zone than the
+  // one `dragUntilTarget` stopped at — the first may have come from the overlap
+  // fallback — and a position assertion written against the earlier ordinal
+  // then reports a failure for a drop that landed exactly where it was shown.
+  const active = await expectIndicatorAtPointer(driver, "cross-frame");
 
   await driver.drop();
   await expect
@@ -144,7 +197,11 @@ test("scenario 2: droppable geometry survives a host scroll mid-drag", async ({
   ).toBeGreaterThan(50);
 
   await driver.moveBy(0, 1);
-  const after = await driver.readActiveTarget();
+  // The host has just scrolled and the pointer has just moved, so this is
+  // exactly where a dwell-based canvas is permitted to report nothing yet. An
+  // immediate read can catch that gap and fail the assertion below on a canvas
+  // that resolves correctly a moment later.
+  const after = await settledTarget(driver);
 
   test.info().annotations.push({
     type: "scroll-targets",
@@ -290,104 +347,60 @@ test("scenario 4b: a 2px jitter at a zone edge keeps the indicator stable", asyn
 
   await startPanelDrag(driver);
 
-  // Get onto a zone first, then walk until the target CHANGES. Both halves are
-  // required: jittering from a point with no active target measures dead space,
-  // and jittering from the middle of one zone's catchment is not a boundary at
-  // all. Either would report a clean run without testing the thing named in the
-  // title.
-  const first = await dragUntilTarget(driver);
+  // Onto a zone, then to that zone's EDGE. Both halves are required: jittering
+  // from a point with no active target measures dead space, and jittering from
+  // the middle of one zone's catchment is not a boundary at all. Either reports
+  // a clean run without testing the thing named in the title.
+  //
+  // Shared with the acceptance suite rather than written twice. The two suites
+  // ask the same question, and a second copy of this walk is invisible when it
+  // is wrong — the drag still runs and still reports an ordinal.
+  const edge = await dragToZoneEdge(driver);
   expect(
-    first,
+    edge.target,
     "the drag must reach a zone before seeking a boundary"
   ).toBeGreaterThanOrEqual(0);
-
-  let crossed = -1;
-  let previous = first;
-  for (let step = 0; step < 120; step++) {
-    await driver.moveBy(0, 4);
-    const current = await driver.readActiveTarget();
-    if (current >= 0 && current !== previous) {
-      crossed = current;
-      break;
-    }
-    if (current >= 0) previous = current;
-  }
+  // The target must have CHANGED. A canvas whose collision resolution is stuck
+  // on one target forever walks the whole search without a crossing, and every
+  // jitter afterwards is stable — indistinguishable from a compliant 8-12px
+  // margin or dwell. Without this, that unusable implementation produces the
+  // same eventual green as a correct one.
   expect(
-    crossed,
+    edge.crossed,
     "a boundary must actually be crossed, or this measures the middle of one zone"
-  ).toBeGreaterThanOrEqual(0);
-
-  // Bracket the edge of `crossed`'s own catchment. Waiting for `previous` to
-  // return cannot work: the file documents that zones are separated by
-  // block-sized dead space, so the old zone is hundreds of pixels away and six
-  // 1px moves simply run out, leaving the pointer wherever it started.
-  // Search well past the largest hysteresis margin the requirement allows
-  // (8-12px). Failing to find the edge within that distance is not a test
-  // failure: it means the target is sticky, which is the behaviour being asked
-  // for. The jitter below then runs from wherever the pointer sits and simply
-  // observes no flip.
-  const HYSTERESIS_SEARCH_PX = 24;
-  let bracketed = false;
-  for (let step = 0; step < HYSTERESIS_SEARCH_PX; step++) {
-    await driver.moveBy(0, -1);
-    if ((await driver.readActiveTarget()) !== crossed) {
-      // One step back inside, so +/-2px straddles the edge.
-      await driver.moveBy(0, 1);
-      bracketed = true;
-      break;
-    }
-  }
+  ).toBe(true);
+  // An unbracketed edge is INCONCLUSIVE rather than weaker evidence: a resolver
+  // that advances once and never retreats satisfies `crossed`, leaves this
+  // false, and jitters stably from the middle of its catchment — exactly like a
+  // compliant margin. The scenario stops rather than reporting either verdict.
   test.info().annotations.push({
     type: "bracketed",
-    description: String(bracketed),
+    description: String(edge.bracketed),
   });
-  // Step to P-2 first, then alternate by 4px so the samples are P+2 and P-2 —
-  // genuinely opposite sides of the edge. Alternating +/-2 from P samples P+2
-  // and P, both on the same side, which an implementation that switches the
-  // instant the pointer crosses would still pass.
-  await driver.moveBy(0, -2);
-
-  // Recorded from inside the page, not sampled from the test. The requirement
-  // permits hysteresis expressed as a dwell of more than 100ms as an
-  // alternative to a distance margin, and a `readActiveTarget()` between two
-  // moves is a cross-frame round trip that holds the pointer still for the
-  // length of that trip. On a loaded runner that alone can outlast the dwell,
-  // so a canvas that implements the timer correctly would still be seen to
-  // switch on every sample and would stay classified as the known gap below.
-  // Recording separates the observation from the gesture; the moves then run
-  // back to back and the dwell is only as long as a mouse event takes.
-  // Whether the probe was valid at all, established rather than assumed. If a
-  // move took longer than the dwell the requirement allows, the pointer rested
-  // at an endpoint long enough for a compliant timer to commit, and any flip
-  // observed afterwards says nothing about hysteresis.
-  //
-  // Each move is one CDP round trip, so its duration is a property of the
-  // machine rather than of the canvas. A busy runner exceeds the allowance
-  // often enough that the probe has to expect it: the jitter is repeated, and
-  // the first sweep whose slowest move stays inside the allowance is the one
-  // read. Each sweep returns the pointer to where it started, 10 moves of +4
-  // against 10 of -4, so a repeat re-probes the same bracketed edge.
-  const DWELL_ALLOWANCE_MS = 100;
-  const PROBE_SWEEPS = 3;
-  let observed: ActiveTargetTransition[] | undefined;
-  let slowest = Number.POSITIVE_INFINITY;
-
-  for (let sweep = 0; sweep < PROBE_SWEEPS && observed === undefined; sweep++) {
-    const readTransitions = await driver.recordActiveTargetTransitions();
-    const moveDurations: number[] = [];
-    for (let step = 0; step < 20; step++) {
-      const startedAt = Date.now();
-      await driver.moveBy(0, step % 2 === 0 ? 4 : -4);
-      moveDurations.push(Date.now() - startedAt);
-    }
-    const log = await readTransitions();
-    slowest = Math.max(...moveDurations);
-    test.info().annotations.push({
-      type: `jitter-move-durations-ms-sweep-${sweep + 1}`,
-      description: JSON.stringify(moveDurations),
-    });
-    if (slowest < DWELL_ALLOWANCE_MS) observed = log;
+  if (!edge.bracketed) {
+    await driver.cancel();
+    test.skip(
+      true,
+      "the reverse search never found the edge, so a stable jitter cannot be told from a target that only ever advances"
+    );
+    return;
   }
+  // The DWELL-AWARE probe, shared with the acceptance suite so both ask the
+  // question the same way. It steps to P-2 first and alternates by 4 (samples
+  // on genuinely opposite sides of the edge), records transitions from inside
+  // the page rather than sampling between moves, and repeats until a sweep is
+  // fast enough to be conclusive.
+  //
+  // The timing is what makes it valid rather than merely repeated: the
+  // requirement permits hysteresis as a >100ms dwell instead of a distance
+  // margin, and each move is a CDP round trip whose duration belongs to the
+  // machine. If a move outlasts that allowance the pointer rested long enough
+  // for a compliant timer to commit, and any flip afterwards says nothing.
+  const probe = await jitterAcrossEdge(driver);
+  const observed = probe.transitions;
+  const slowest = probe.slowestMoveMs;
+  const DWELL_ALLOWANCE_MS = probe.dwellAllowanceMs;
+  const PROBE_SWEEPS = probe.sweeps;
   await driver.cancel();
 
   // An unmeasurable run is INCONCLUSIVE, not a defect. Failing here would
