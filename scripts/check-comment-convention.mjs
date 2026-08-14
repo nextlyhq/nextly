@@ -616,9 +616,12 @@ function hashLineComments(source, { shell = false } = {}) {
       }
     }
     if (found !== -1) comments.push(line.slice(found + 1));
-    // A YAML single-quoted scalar does not continue across lines the way a shell double-quoted
-    // string does, so an unclosed one is a malformed document rather than a continuation - and
-    // carrying it would swallow every line below it.
+    // A YAML single-quoted scalar CAN span lines, so this is a deliberate trade rather than a
+    // property of the grammar. An apostrophe in a plain scalar - `name: Don't panic` - is
+    // indistinguishable from an opening quote, and carrying the state would then treat the whole
+    // rest of the document as string data and report nothing in it. Resetting costs the opposite
+    // and much narrower error: a `#` on the continuation line of a genuinely multi-line
+    // single-quoted scalar reads as a comment.
     if (!shell && quote === "'") quote = "";
     if (!heredoc && pending.length > 0) heredoc = pending.shift();
   }
