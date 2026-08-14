@@ -11,13 +11,17 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  REQUIRED_CHECKS,
   blockingJobs,
   checkability,
   countRewriteEvents,
   formatVerdict,
   gateVerdict,
   jobPasses,
+  missingRequired,
   reviewCoverage,
+  reviewsCoveringTip,
+  statusAsRun,
   verdictCoversTip,
 } from "./verify-merge.mjs";
 
@@ -25,6 +29,8 @@ const forcePush = { event: "head_ref_force_pushed" };
 const commented = { event: "commented" };
 const green = name => ({ name, status: "completed", conclusion: "success" });
 const queued = name => ({ name, status: "queued", conclusion: null });
+/** The one check whose ABSENCE means no build ran. Fixtures must name it. */
+const CI = "Lint / Typecheck / Test / Build";
 /** A real 40-character object name; the gate refuses anything shorter as a tip. */
 const FULL_TIP = "91fd9500285dcf264e3609a916b7518b591b51f3";
 
@@ -226,7 +232,7 @@ describe("gateVerdict", () => {
   const passing = {
     tip: "91fd9500285dcf264e3609a916b7518b591b51f3",
     unresolvedThreads: 0,
-    checkRuns: [green("CI"), green("gitleaks")],
+    checkRuns: [green(CI), green("gitleaks")],
     codexReviewedSha: "91fd950028",
     coderabbitReviewCount: 3,
   };
@@ -294,7 +300,7 @@ describe("gateVerdict", () => {
     const verdict = gateVerdict({
       ...passing,
       unresolvedThreads: 2,
-      checkRuns: [queued("CI")],
+      checkRuns: [queued(CI)],
       codexReviewedSha: "0dbcb9470",
     });
 
@@ -312,7 +318,7 @@ describe("formatVerdict", () => {
       gateVerdict({
         tip: FULL_TIP,
         unresolvedThreads: 1,
-        checkRuns: [green("CI")],
+        checkRuns: [green(CI)],
         codexReviewedSha: FULL_TIP.slice(0, 10),
         coderabbitReviewCount: 1,
       })
@@ -327,7 +333,7 @@ describe("formatVerdict", () => {
       gateVerdict({
         tip: FULL_TIP,
         unresolvedThreads: 0,
-        checkRuns: [green("CI")],
+        checkRuns: [green(CI)],
         codexReviewedSha: FULL_TIP.slice(0, 10),
         coderabbitReviewCount: 0,
       })
@@ -335,5 +341,118 @@ describe("formatVerdict", () => {
 
     expect(text).toContain("GATE PASSED");
     expect(text).toContain("not-reviewed");
+  });
+});
+
+describe("statusAsRun", () => {
+  it("treats a pending status as NOT passing", () => {
+    // The title check reports through the statuses API, not check-runs. A
+    // gate that reads only check-runs calls the revision green while the
+    // title check is still pending.
+    expect(
+      jobPasses(statusAsRun({ context: "PR title", state: "pending" }))
+    ).toBe(false);
+  });
+
+  it("treats a failing status as NOT passing", () => {
+    expect(
+      jobPasses(statusAsRun({ context: "CodeRabbit", state: "failure" }))
+    ).toBe(false);
+  });
+
+  it("treats a successful status as passing", () => {
+    // The positive control: without it, both cases above pass on a normaliser
+    // that refuses everything.
+    expect(
+      jobPasses(statusAsRun({ context: "CodeRabbit", state: "success" }))
+    ).toBe(true);
+  });
+});
+
+describe("missingRequired", () => {
+  it("reports the CI job when only unrelated workflows reported", () => {
+    // The workflows are independent, so a run where `ci.yml` never created
+    // its jobs while `secret-scan.yml` succeeded yields a non-empty,
+    // all-green set containing no build and no tests. Absence is invisible to
+    // any filter over what is present.
+    expect(missingRequired([green("gitleaks")])).toEqual([
+      "Lint / Typecheck / Test / Build",
+    ]);
+  });
+
+  it("reports nothing when the required check reported, even failing", () => {
+    // Presence, not success — `blockingJobs` judges the outcome. Conflating
+    // them would report a failing required job twice and an absent one never.
+    expect(
+      missingRequired([queued("Lint / Typecheck / Test / Build")])
+    ).toEqual([]);
+  });
+
+  it("names exactly one required check, so its absence is decisive", () => {
+    expect(REQUIRED_CHECKS).toEqual(["Lint / Typecheck / Test / Build"]);
+  });
+});
+
+describe("reviewsCoveringTip", () => {
+  const other = "0".repeat(40);
+  const tip = "9".repeat(40);
+
+  it("ignores a review written against an EARLIER revision", () => {
+    // Counting it reports a reviewer as having covered a commit it never saw.
+    const reviews = [
+      { user: { login: "coderabbitai[bot]" }, commit_id: other },
+    ];
+
+    expect(reviewsCoveringTip(reviews, tip, "coderabbitai[bot]")).toEqual([]);
+  });
+
+  it("counts a review whose commit_id IS the tip", () => {
+    const reviews = [{ user: { login: "coderabbitai[bot]" }, commit_id: tip }];
+
+    expect(reviewsCoveringTip(reviews, tip, "coderabbitai[bot]")).toHaveLength(
+      1
+    );
+  });
+
+  it("ignores another reviewer's review of the same revision", () => {
+    const reviews = [
+      { user: { login: "chatgpt-codex-connector[bot]" }, commit_id: tip },
+    ];
+
+    expect(reviewsCoveringTip(reviews, tip, "coderabbitai[bot]")).toEqual([]);
+  });
+
+  it("refuses an abbreviated tip even when a record matches it exactly", () => {
+    // Both sides abbreviated is the ONLY shape where the length guard decides
+    // anything: against a full `commit_id` the comparison already fails, so a
+    // test using one passes whether or not the guard exists — which is what
+    // the first version of this test did. Coverage must be established against
+    // a full object name; a match obtained by truncating both sides identifies
+    // no particular commit.
+    const short = tip.slice(0, 9);
+    const reviews = [
+      { user: { login: "coderabbitai[bot]" }, commit_id: short },
+    ];
+
+    expect(reviewsCoveringTip(reviews, short, "coderabbitai[bot]")).toEqual([]);
+  });
+});
+
+describe("gateVerdict + required checks", () => {
+  it("blocks when the required check never reported, though every run is green", () => {
+    // The dangerous shape: nothing failed, nothing is pending, and the build
+    // never ran.
+    const verdict = gateVerdict({
+      tip: "91fd9500285dcf264e3609a916b7518b591b51f3",
+      unresolvedThreads: 0,
+      checkRuns: [green("gitleaks")],
+      codexReviewedSha: "91fd950028",
+      coderabbitReviewCount: 1,
+    });
+
+    expect(verdict.mergeable).toBe(false);
+    expect(verdict.blockers.map(b => b.kind)).toContain(
+      "required-check-absent"
+    );
   });
 });

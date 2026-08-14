@@ -211,6 +211,12 @@ export function gateVerdict({
       detail: "no check-runs reported for this revision",
     });
   } else {
+    for (const name of missingRequired(checkRuns)) {
+      blockers.push({
+        kind: "required-check-absent",
+        detail: `${name} never reported — no build or test coverage for this revision`,
+      });
+    }
     for (const job of blockingJobs(checkRuns)) {
       blockers.push({
         kind: "job-not-green",
@@ -247,6 +253,70 @@ export function formatVerdict(verdict) {
     );
   }
   return lines.join("\n");
+}
+
+/**
+ * A commit STATUS, expressed as a check-run so one rule judges both.
+ *
+ * GitHub has two independent surfaces and a gate that reads one sees a partial
+ * picture: `amannn/action-semantic-pull-request` and CodeRabbit both report
+ * through the statuses API, so a check-runs-only query calls a revision green
+ * while the title check is failing. Normalising here means `jobPasses` stays
+ * the single definition of passing rather than growing a second one.
+ */
+export function statusAsRun(status) {
+  const state = status?.state;
+  return {
+    name: status?.context ?? "(unnamed status)",
+    status: state === "pending" ? "in_progress" : "completed",
+    // Only `success` maps to a passing conclusion; `pending`, `failure` and
+    // `error` all keep a value `jobPasses` refuses.
+    conclusion: state === "success" ? "success" : (state ?? null),
+  };
+}
+
+/**
+ * Checks that were expected and never reported at all.
+ *
+ * A non-empty list of check-runs is not evidence that CI ran. The workflows
+ * here are independent, so a run where `ci.yml` never created its jobs while
+ * `secret-scan.yml` succeeded produces a green-looking set containing no build
+ * and no tests. Absence of the expected name is the only thing that separates
+ * them, and absence is invisible to any filter over what IS present.
+ */
+export function missingRequired(checkRuns, required = REQUIRED_CHECKS) {
+  if (!Array.isArray(checkRuns)) {
+    throw new TypeError("missingRequired needs an array of check-runs");
+  }
+  const present = new Set(checkRuns.map(run => run?.name));
+  return required.filter(name => !present.has(name));
+}
+
+/**
+ * The job every other job in `ci.yml` depends on through `needs: [ci]`.
+ *
+ * If it never reported, the browser, scaffold and dev-script jobs did not run
+ * either — so its absence means the revision has no build or test coverage at
+ * all, however many unrelated workflows went green.
+ */
+export const REQUIRED_CHECKS = Object.freeze([
+  "Lint / Typecheck / Test / Build",
+]);
+
+/**
+ * Reviews that examined THIS revision, by the record's own `commit_id`.
+ *
+ * A review describes the tree it read. Counting one written against an earlier
+ * revision reports a reviewer as having covered a commit it never saw — the
+ * same staleness the verdict check refuses, applied to coverage rather than to
+ * findings.
+ */
+export function reviewsCoveringTip(reviews, tip, login) {
+  if (!Array.isArray(reviews)) {
+    throw new TypeError("reviewsCoveringTip needs an array of reviews");
+  }
+  if (typeof tip !== "string" || tip.length < FULL_SHA_LENGTH) return [];
+  return reviews.filter(r => r?.user?.login === login && r?.commit_id === tip);
 }
 
 // ---------------------------------------------------------------------------
@@ -295,30 +365,24 @@ function ghJson(args) {
  * cannot read, and flattening first would throw that distinction away.
  */
 function timelinePages(pr) {
-  const raw = execFileSync(
-    "gh",
-    ["api", "--paginate", `repos/${REPO}/issues/${pr}/timeline?per_page=100`],
-    { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 }
+  // `--slurp` returns ONE array of pages, so the pages stay separate without
+  // this code parsing JSON itself. The previous version counted brackets to
+  // split `--paginate`'s concatenated arrays, which a `[` inside any review
+  // body broke: the depth never returned to zero, the function returned no
+  // pages, and a force-push counted as zero — the false clean this verifier
+  // exists to refuse, introduced by the verifier.
+  return JSON.parse(
+    execFileSync(
+      "gh",
+      [
+        "api",
+        "--paginate",
+        "--slurp",
+        `repos/${REPO}/issues/${pr}/timeline?per_page=100`,
+      ],
+      { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 }
+    )
   );
-  // `gh --paginate` emits one JSON array per page, concatenated. A single
-  // `JSON.parse` sees only the first.
-  const pages = [];
-  let depth = 0;
-  let start = -1;
-  for (let i = 0; i < raw.length; i += 1) {
-    const ch = raw[i];
-    if (ch === "[") {
-      if (depth === 0) start = i;
-      depth += 1;
-    } else if (ch === "]") {
-      depth -= 1;
-      if (depth === 0 && start >= 0) {
-        pages.push(JSON.parse(raw.slice(start, i + 1)));
-        start = -1;
-      }
-    }
-  }
-  return pages;
 }
 
 /** The branch's real tip, from the ref rather than from the API's cached head. */
@@ -361,38 +425,67 @@ export function main(argv) {
         ".check_runs",
       ])
     : [];
-  const threads = Number(
-    ghText([
-      "api",
-      "graphql",
-      "-f",
-      `query=query { repository(owner:"nextlyhq",name:"nextly"){ pullRequest(number:${pr}){ reviewThreads(first:100){ nodes { isResolved } } } } }`,
-      "--jq",
-      "[.data.repository.pullRequest.reviewThreads.nodes[]|select(.isResolved==false)]|length",
-    ])
-  );
-  const codexBody = ghText([
+  // Paginated. A pull request with more than 100 review threads would
+  // otherwise have everything past the first page counted as resolved, which
+  // is the reassuring direction.
+  let threads = 0;
+  let cursor = null;
+  for (;;) {
+    const after = cursor ? `, after: "${cursor}"` : "";
+    const page = JSON.parse(
+      ghText([
+        "api",
+        "graphql",
+        "-f",
+        `query=query { repository(owner:"nextlyhq",name:"nextly"){ pullRequest(number:${pr}){ reviewThreads(first:100${after}){ pageInfo { hasNextPage endCursor } nodes { isResolved } } } } }`,
+        "--jq",
+        "{n:[.data.repository.pullRequest.reviewThreads.nodes[]|select(.isResolved==false)]|length, more:.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage, cur:.data.repository.pullRequest.reviewThreads.pageInfo.endCursor}",
+      ])
+    );
+    threads += page.n;
+    if (!page.more) break;
+    cursor = page.cur;
+  }
+
+  // From the review RECORD's own `commit_id`, not from a comment body. An
+  // issue comment is not evidence a review covered a commit: the previous
+  // version matched any backticked hex in the latest bot comment, which
+  // accepts progress text that happens to name the sha and misses a real
+  // review whose sha never appears in prose.
+  // `--slurp` returns an array of PAGES and cannot be combined with `--jq`,
+  // so the flattening happens here rather than in the query.
+  const reviews = ghJson([
     "api",
-    `repos/${REPO}/issues/${pr}/comments?per_page=100`,
-    "--jq",
-    '[.[]|select(.user.login=="chatgpt-codex-connector[bot]")|.body]|last // ""',
-  ]);
-  const reviewedSha = (String(codexBody).match(/`([0-9a-f]{7,40})`/g) ?? [])
-    .map(match => match.replaceAll("`", ""))
+    "--paginate",
+    "--slurp",
+    `repos/${REPO}/pulls/${pr}/reviews?per_page=100`,
+  ]).flat();
+  const CODEX = "chatgpt-codex-connector[bot]";
+  const reviewedSha = reviews
+    .filter(r => r?.user?.login === CODEX && r?.commit_id)
+    .map(r => r.commit_id)
     .pop();
-  const coderabbit = Number(
-    ghText([
-      "api",
-      `repos/${REPO}/pulls/${pr}/reviews?per_page=100`,
-      "--jq",
-      '[.[]|select(.user.login=="coderabbitai[bot]")]|length',
-    ])
-  );
+  // Scoped to THIS revision: a review of an earlier one is not coverage of it.
+  const coderabbit = reviewsCoveringTip(
+    reviews,
+    tip,
+    "coderabbitai[bot]"
+  ).length;
+
+  // Commit STATUSES are a separate surface from check-runs, and this
+  // repository's title check and CodeRabbit both report through it.
+  const statuses = ghJson([
+    "api",
+    `repos/${REPO}/commits/${tip}/status`,
+    "--jq",
+    ".statuses",
+  ]);
+  const allChecks = [...checkRuns, ...statuses.map(statusAsRun)];
 
   const verdict = gateVerdict({
     tip,
     unresolvedThreads: threads,
-    checkRuns,
+    checkRuns: allChecks,
     codexReviewedSha: reviewedSha,
     coderabbitReviewCount: coderabbit,
   });
@@ -402,6 +495,10 @@ export function main(argv) {
     `  landed-whole check: ${reach.checkable ? "available" : `NOT CHECKABLE (${reach.reason})`}\n`
   );
   process.stdout.write(`${formatVerdict(verdict)}\n`);
+  // Not checkable is not clean. Returning 0 here would let automation treat
+  // the history-rewrite case as a pass — the one state this file exists to
+  // distinguish from a pass.
+  if (!reach.checkable) return 2;
   return verdict.mergeable ? 0 : 1;
 }
 
