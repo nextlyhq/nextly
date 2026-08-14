@@ -34,12 +34,56 @@ function args(over: Record<string, unknown> = {}) {
       executeQuery: async () => undefined,
     },
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    migrateCore: vi.fn(async () => ({ applied: 1, coreChanged: false })),
+    migrateCore: vi.fn(async () => ({
+      applied: 1,
+      coreChanged: false,
+      ran: true,
+    })),
     ...over,
   };
 }
 
 describe("runProdMigrationsIfEnabled", () => {
+  /**
+   * The lock timing out tells this process nothing about whether the holder
+   * migrated. Serving anyway is the case that put a replica on an unmigrated
+   * schema while logging `complete (0 applied)` — `applied` is 0 here and 0 on
+   * an up-to-date database, so the count cannot distinguish them.
+   */
+  it("refuses to start when the migrations did not run", async () => {
+    process.env.NODE_ENV = "production";
+    const a = args({
+      migrateCore: vi.fn(async () => ({
+        applied: 0,
+        coreChanged: false,
+        ran: false,
+      })),
+    });
+
+    await expect(runProdMigrationsIfEnabled(a as never)).rejects.toMatchObject({
+      code: "NEXTLY_BOOT_MIGRATIONS_NOT_RUN",
+    });
+  });
+
+  /**
+   * The positive control for the refusal, and the boundary of it. Every OTHER
+   * boot-migration failure is still swallowed so the app starts — those leave a
+   * database the app can usefully serve, and `nextly migrate` fixes them. Only
+   * "we do not know what we are serving" is fatal.
+   */
+  it("still starts when boot migrations fail for any other reason", async () => {
+    process.env.NODE_ENV = "production";
+    const a = args({
+      migrateCore: vi.fn(async () => {
+        throw new Error("connection reset");
+      }),
+    });
+
+    await expect(
+      runProdMigrationsIfEnabled(a as never)
+    ).resolves.toBeUndefined();
+  });
+
   it("skips unless NODE_ENV=production", async () => {
     process.env.NODE_ENV = "development";
     const a = args();
@@ -71,7 +115,7 @@ describe("runProdMigrationsIfEnabled", () => {
       migrateCore: vi.fn(async (deps: { logger: Record<string, unknown> }) => {
         // Simulate what runFileMigrations actually does.
         (deps.logger.success as (m: string) => void)("Applied x.sql");
-        return { applied: 1, coreChanged: false };
+        return { applied: 1, coreChanged: false, ran: true };
       }),
     });
     await expect(

@@ -10,6 +10,7 @@
 import { resolve } from "node:path";
 
 import { resolveDeclaredSchema } from "../domains/schema/migrate/resolved-schema";
+import { NextlyError } from "../errors";
 
 interface AdapterLike {
   dialect: "postgresql" | "mysql" | "sqlite";
@@ -37,7 +38,7 @@ interface MigrateCoreLike {
     isSettled?: () => Promise<boolean>;
     ensureLedger?: () => Promise<void>;
     knownJunctions?: ReadonlySet<string>;
-  }): Promise<{ applied: number; coreChanged: boolean }>;
+  }): Promise<{ applied: number; coreChanged: boolean; ran: boolean }>;
 }
 
 export interface RunProdMigrationsArgs {
@@ -132,7 +133,7 @@ export async function runProdMigrationsIfEnabled(
       config: args.config,
       deferredExtends: args.deferredExtends,
     });
-    const { applied } = await core({
+    const { applied, ran } = await core({
       dialect: adapter.dialect,
       db: adapter.getDrizzle(),
       adapter,
@@ -143,8 +144,46 @@ export async function runProdMigrationsIfEnabled(
       knownJunctions: resolvedSchema.knownJunctions,
       ensureLedger,
     });
+    // REFUSES rather than serving. `ran: false` means the migrate lock stayed
+    // held past the wait deadline, so this process never learned whether the
+    // schema it is about to serve matches the code. The tempting reading — "the
+    // holder did the work, carry on" — is an assumption: the holder may have
+    // died, been killed, or still be mid-flight, and a lock timing out says
+    // nothing about whether migrations ran.
+    //
+    // `applied` is 0 here and 0 on an up-to-date database, which is why this
+    // previously logged `complete (0 applied)` and started anyway. On a rolling
+    // deploy that is the second replica serving traffic against a schema it
+    // never migrated.
+    //
+    // Failing startup is recoverable and quiet in an orchestrator: the process
+    // exits, the platform restarts it, and by then the holder has usually
+    // finished. A genuinely stuck lock needs `nextly migrate --force-unlock`,
+    // which is the intervention the situation actually calls for.
+    if (!ran) {
+      throw new NextlyError({
+        code: "NEXTLY_BOOT_MIGRATIONS_NOT_RUN",
+        publicMessage:
+          "Boot migrations did not run: the migrate lock was still held after " +
+          "waiting. Refusing to start rather than serve against a schema that " +
+          "may not match this build. This usually resolves on restart once the " +
+          "other instance finishes; if the lock is stale, clear it with " +
+          "`nextly migrate --force-unlock`.",
+      });
+    }
     logger.info(`[Nextly] Boot migrations complete (${applied} applied).`);
   } catch (err) {
+    // A refusal is not a failure to swallow. Every other error here is
+    // recoverable by running `nextly migrate` against a database the app can
+    // still usefully serve; this one means the app does not know what it is
+    // serving, which is the case the refusal exists for.
+    if (
+      err instanceof NextlyError &&
+      err.code === "NEXTLY_BOOT_MIGRATIONS_NOT_RUN"
+    ) {
+      logger.error(`[Nextly] ${err.publicMessage}`);
+      throw err;
+    }
     logger.error(
       `[Nextly] Boot migrations failed: ${
         err instanceof Error ? err.message : String(err)
