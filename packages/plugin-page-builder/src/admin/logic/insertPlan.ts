@@ -3,9 +3,13 @@
  *
  * The library offers two ways to add a block and they arrive at the canvas by different routes: a
  * drag ends on a drop zone, which names its own parent and slot, while Insert has only the
- * selection to go on and has to find a home. `planDrop` answers the first, this answers the second,
- * and both ask `canDrop` — so a slot's allowlist is enforced whichever way a block is added, rather
- * than on the path whoever wrote the rule happened to be looking at.
+ * selection to go on and has to find a home. `planDrop` answers the first and this answers the
+ * second.
+ *
+ * Both ask `canDrop`, and neither ENFORCES it. Paste and keyboard reorder reach the store without
+ * planning anything, so the allowlist is enforced in the reducer, which every insertion passes
+ * through. What this adds is the choice of a target the author will like — the nearest place that
+ * accepts the block — rather than a refusal.
  *
  * Kept React- and @dnd-kit-free so the walk can be unit-tested.
  */

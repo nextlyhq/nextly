@@ -213,8 +213,14 @@ defineBlock({
 });
 ```
 
-Blocks can bump `version` and ship a pure `migrate(old, fromVersion)` — stored documents
-upgrade on read, and unknown blocks are preserved (never dropped).
+Blocks can bump `version` and ship a pure `migrate(old, fromVersion)`, and unknown blocks are
+preserved (never dropped).
+
+Migration runs when the **editor** loads a document, which is the surface that both reads props
+into controls and writes the document back — so a page opened and saved is a page upgraded. The
+**published page does not migrate**: `PageRenderer` draws the stored document as it is. Blocks
+therefore have to read their props defensively whatever version wrote them, which they must do
+anyway for a hand-edited or plugin-authored document.
 
 ## Security
 
