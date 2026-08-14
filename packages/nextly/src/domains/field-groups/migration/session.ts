@@ -185,8 +185,15 @@ async function renew(
     // Read back rather than trusting the update's affected-row count, which dialects report
     // inconsistently. If the row no longer names this claim, someone took the lock over and the work
     // this renewal was protecting is no longer protected.
+    //
+    // 🔴 OWNERSHIP AND LIVENESS, not ownership alone. The row can name this claim and still be
+    // expired: if the transaction is suspended, descheduled or simply slow between writing the
+    // expiry and reading it back, more than the TTL can elapse inside it. `readLockState` reports
+    // that correctly as `live: false`, and an owner-only check discards exactly the field that
+    // says so — reporting a successful renewal on a lease a contender may take the instant this
+    // commits, while the callback carries on believing it is protected.
     const after = await readLockState(ctx, dialect);
-    return after?.owner === claim;
+    return after?.owner === claim && after.live;
   });
 }
 
@@ -795,8 +802,12 @@ async function acquire(
     // inconsistently across dialects, and an absent row would otherwise update
     // nothing and still look like a successful claim, running the migration
     // with no exclusion at all.
+    // The same pair as the renewal readback, for the same reason: a claim that is ours but already
+    // expired is not a claim. Treated as held by whoever the row names — which is this process —
+    // because the honest answer is that acquisition did not establish exclusion, not that the row
+    // was empty.
     const after = await readLockState(ctx, dialect);
-    if (after?.owner !== claim) {
+    if (after?.owner !== claim || !after.live) {
       return { ok: false, heldBy: after?.owner ?? null };
     }
     return { ok: true };
