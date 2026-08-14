@@ -77,7 +77,7 @@ export const FORBIDDEN = [
     // A numbered change, with or without a roadmap-item prefix: "PR 4 migration", "F11 PR 3".
     // Mechanically distinct from the deictic form below and far more common, because it survives
     // being copied between files - the number keeps naming a change nobody can now look up.
-    pattern: /\b(?:[a-z]\d+\s+)?PR\s+\d+/i,
+    pattern: /\b(?:[a-z]\d+\s+)?PR\s+#?\d+/i,
     why: "names a numbered change rather than the code",
     // Suppressed in review tooling, where a pull-request number is the subject matter.
     domainVocabulary: true,
@@ -113,7 +113,7 @@ export const FORBIDDEN = [
     // is a conversation. Anchoring on the verb alone would reject the first three, and anchoring
     // on neither would miss "the control Codex asked for".
     pattern:
-      /\b(?:reviewer|reviewers|founder|maintainer)\s+(?:said|asked|requested|wanted|suggested|flagged|found)\b/i,
+      /\b(?:reviewer|reviewers|founder|maintainer|codex|coderabbit|greptile)\s+(?:said|asked|requested|wanted|suggested|flagged|found)\b/i,
     why: "quotes a conversation",
   },
 ];
@@ -387,7 +387,18 @@ export function commentText(source, { lineComments = true, jsx = false, hashComm
       token === ts.SyntaxKind.SingleLineCommentTrivia ||
       token === ts.SyntaxKind.MultiLineCommentTrivia
     ) {
-      if (!insideJsxText(scanner.getTokenStart())) comments.push(scanner.getTokenText());
+      const start = scanner.getTokenStart();
+      const jsxSpan = jsxText.find(r => start >= r.pos && start < r.end);
+      if (jsxSpan) {
+        // Rendered text, not a comment. Resume at the END of that text rather than at the end of
+        // the line the scanner just consumed: `<div>https://x</div>; // Codex asked` has a real
+        // comment after the URL, and discarding the line would take it too.
+        scanner.resetTokenState(jsxSpan.end);
+        previous = ts.SyntaxKind.Unknown;
+        token = scanner.scan();
+        continue;
+      }
+      comments.push(scanner.getTokenText());
     } else if (token === ts.SyntaxKind.TemplateHead) {
       interpolations.push(0);
     } else if (token === ts.SyntaxKind.OpenBraceToken && interpolations.length > 0) {
@@ -457,7 +468,9 @@ function hashLineComments(source) {
         quote = c;
         continue;
       }
-      if (c === "#" && (at === 0 || /\s/.test(line[at - 1]))) {
+      // A control operator ends a word, so a # directly after one opens a comment: `x && #c`,
+      // `x; #c`, `x | #c`. Only whitespace would miss those.
+      if (c === "#" && (at === 0 || /[\s;&|()]/.test(line[at - 1]))) {
         comments.push(line.slice(at + 1));
         break;
       }
@@ -497,6 +510,8 @@ const ENDS_A_VALUE = new Set([
   // `this.#count / 2` divides. Without this the slash is re-scanned as a regex and swallows
   // the comment that follows it.
   ts.SyntaxKind.PrivateIdentifier,
+  // A postfix non-null assertion ends a value too: `value! / total` divides.
+  ts.SyntaxKind.ExclamationToken,
   ts.SyntaxKind.NumericLiteral,
   ts.SyntaxKind.BigIntLiteral,
   ts.SyntaxKind.StringLiteral,

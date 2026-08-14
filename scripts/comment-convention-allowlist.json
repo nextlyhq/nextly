@@ -448,6 +448,10 @@
     "count": 1,
     "digests": ["0be665a130c86d73"]
   },
+  "packages/nextly/src/domains/dynamic-collections/__tests__/dynamic-collection-schema-service.status-column.test.ts": {
+    "count": 1,
+    "digests": ["03a840eea7fb2d8c"]
+  },
   "packages/nextly/src/domains/dynamic-collections/services/dynamic-collection-validation-service.ts": {
     "count": 1,
     "digests": ["007e99db7dc1923d"]
@@ -469,8 +473,8 @@
     "digests": ["49a0da38df683260"]
   },
   "packages/nextly/src/domains/field-groups/migration/__tests__/run.test.ts": {
-    "count": 2,
-    "digests": ["5b3ef26496ee17bf", "680111c22f5bdbbe"]
+    "count": 3,
+    "digests": ["5b3ef26496ee17bf", "680111c22f5bdbbe", "7986ffc62d99ef45"]
   },
   "packages/nextly/src/domains/field-groups/migration/data-steps.ts": {
     "count": 2,

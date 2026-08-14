@@ -127,6 +127,13 @@ describe("the file walk", () => {
     // `.cts` and `.jsx` currently match no tracked file. They stay on the list because they are
     // valid module suffixes and a future file carrying one should be read from the day it lands,
     // but their assertion below is vacuous and is not evidence of anything.
+    // Pinned independently of SOURCE_EXTENSIONS. Iterating the exported list alone makes the
+    // assertion vacuous for a deleted entry: drop ".cjs" from the code and the loop simply stops
+    // asking about it, so tracked .cjs files leave CI with every test still green.
+    for (const required of [".ts", ".tsx", ".mts", ".js", ".mjs", ".cjs", ".css", ".yml", ".sh"]) {
+      expect(SOURCE_EXTENSIONS, `${required} is no longer scanned`).toContain(required);
+    }
+
     const scanned = sourceFiles(".");
     for (const ext of SOURCE_EXTENSIONS) {
       const tracked = execFileSync("git", ["ls-files", "--", `*${ext}`], {
@@ -186,8 +193,8 @@ describe("the allowlist", () => {
   // Pinned so growth appears in the diff. Without it an entry can be added in the same commit as
   // the comment it exempts, which turns the allowlist into a way of silencing the check rather
   // than a record of what predates it. Lower this as entries are removed; never raise it.
-  const EXPECTED_ENTRIES = 243;
-  const EXPECTED_TOTAL = 457;
+  const EXPECTED_ENTRIES = 244;
+  const EXPECTED_TOTAL = 459;
 
   it("matches its pinned size exactly", () => {
     expect(readAllowlist().size).toBe(EXPECTED_ENTRIES);
@@ -259,6 +266,7 @@ describe("review-process tooling", () => {
  */
 describe("the command", () => {
   const CHECKER = new URL("check-comment-convention.mjs", import.meta.url).pathname;
+  const FIXTURE_SOURCE = "// Codex asked for this\nexport const x = 1;\n";
 
   /** A throwaway repository holding one offence, with the allowlist the run should consult. */
   function fixture(allowlist) {
@@ -269,7 +277,7 @@ describe("the command", () => {
       joinPath(root, "scripts", "comment-convention-allowlist.json"),
       `${JSON.stringify(allowlist, null, 2)}\n`
     );
-    writeFileSync(joinPath(root, "packages", "offender.ts"), "// Codex asked for this\nexport const x = 1;\n");
+    writeFileSync(joinPath(root, "packages", "offender.ts"), FIXTURE_SOURCE);
     // Tracked-ness decides what the walk reads, so the fixture needs to be a repository.
     for (const args of [["init", "-q"], ["add", "-A"]]) {
       spawnSync("git", args, { cwd: root });
@@ -296,10 +304,19 @@ describe("the command", () => {
     // working.
     const root = fixture({});
     try {
-      const digest = digestOffences(["names a review tool — // Codex asked for this"]);
+      // DERIVED from the checker rather than hand-written. A literal offence string here would
+      // stop matching the moment a pattern is added or its `why` reworded, and the failure would
+      // look like the CLI breaking rather than the fixture drifting.
+      const found = offencesIn(FIXTURE_SOURCE).map(
+        one => `${one.why} — ${one.comment.replace(/\s+/g, " ").trim()}`
+      );
       writeFileSync(
         joinPath(root, "scripts", "comment-convention-allowlist.json"),
-        `${JSON.stringify({ "packages/offender.ts": { count: 1, digests: digest } }, null, 2)}\n`
+        `${JSON.stringify(
+          { "packages/offender.ts": { count: found.length, digests: digestOffences(found) } },
+          null,
+          2
+        )}\n`
       );
       const result = run(root);
       expect(result.status, result.stderr + result.stdout).toBe(0);
