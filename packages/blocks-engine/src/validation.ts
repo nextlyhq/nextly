@@ -11,15 +11,18 @@
  */
 import type { BlockDocument, BlockNode, BreakpointSet } from "./document";
 import {
+  BINDING_SOURCES,
   COMPONENT_INSTANCE_TYPE,
   DOCUMENT_FORMAT_VERSION,
   DOCUMENT_KINDS,
   MAX_CLASSES_PER_NODE,
   STYLE_STATES,
+  isBindingSource,
 } from "./document";
 import { describeValue, pointer } from "./issue-text";
 import { DEFAULT_LIMITS, LIMIT_WARNING_RATIO } from "./limits";
 import type { DocumentLimits } from "./limits";
+import { surveyDocument } from "./measure-bytes";
 import { isPlainRecord } from "./plain-record";
 import type { TokenKind } from "./style/catalog-types";
 import { MAX_NAMED_CLASS_NAME_LENGTH } from "./style/named-class";
@@ -160,6 +163,8 @@ export const ISSUE_CODES = {
   "node-count-exceeded":
     "The document has more nodes than the allowed maximum.",
   "document-too-large": "The serialized document exceeds the byte limit.",
+  "document-unwritable":
+    "The document holds a value JSON cannot write, so it has no stored form.",
   "document-size-warning":
     "The serialized document is approaching the byte limit.",
   "missing-node-id": "A node is missing its id or the id is empty.",
@@ -334,11 +339,20 @@ export function validate(
   // depth cap is refused BEFORE its bytes are measured, so asking only about
   // size would leave the expensive per-value work running on a document already
   // known to be invalid.
+  //
+  // `document-unwritable` belongs here for a sharper reason than tidiness: the
+  // byte pass could not measure what it refused. A `styles` accessor is
+  // reported absent rather than invoked, so its megabytes were never counted —
+  // and the per-value work below reaches the same field by ordinary property
+  // access, runs the getter, and parses everything it returns. Leaving it out
+  // meant the one document whose size is UNKNOWN was the one whose values were
+  // parsed in full.
   const overLimits = issues
     .slice(beforeLimits)
     .some(
       issue =>
         issue.code === "document-too-large" ||
+        issue.code === "document-unwritable" ||
         issue.code === "node-count-exceeded" ||
         issue.code === "depth-exceeded"
     );
@@ -454,278 +468,27 @@ function collectBreakpointIds(
   return ids;
 }
 
-/**
- * Count nodes and detect depth-exceedance in one bounded pass. An oversized
- * document costs O(maxNodes), not O(document): once the node cap is passed the
- * traversal stops (the document is already rejected) and the frontier is never
- * allowed to grow past the cap, so a rejected forest cannot exhaust memory.
- */
-function measureForest(
-  nodes: BlockNode[],
-  maxNodes: number,
-  maxDepth: number
-): { count: number; exceededDepth: boolean } {
-  let count = 0;
-  let exceededDepth = false;
-  const queue: Array<{ node: BlockNode; depth: number }> = [];
-  for (let i = 0; i < nodes.length && queue.length <= maxNodes; i++) {
-    queue.push({ node: nodes[i], depth: 1 });
-  }
-  for (let i = 0; i < queue.length; i++) {
-    count++;
-    const { node, depth } = queue[i];
-    if (depth > maxDepth) exceededDepth = true;
-    if (count > maxNodes) break; // already over the cap; no need to count more
-    if (typeof node === "object" && node !== null && node.slots) {
-      for (const children of Object.values(node.slots)) {
-        if (!Array.isArray(children)) continue;
-        for (let c = 0; c < children.length && queue.length <= maxNodes; c++) {
-          queue.push({ node: children[c], depth: depth + 1 });
-        }
-      }
-    }
-  }
-  return { count, exceededDepth };
-}
-
-/**
- * UTF-8 byte length of a string, counted code unit by code unit so a huge
- * string is never materialized into a buffer, stopping once `budget` is passed.
- */
-function utf8ByteLength(s: string, budget: number): number {
-  let bytes = 0;
-  for (let i = 0; i < s.length; i++) {
-    const code = s.charCodeAt(i);
-    if (code < 0x80) {
-      // Serialized size counts JSON escaping. Backspace, tab, newline, form
-      // feed, and carriage return have two-byte short escapes; other control
-      // characters expand to a six-byte \uXXXX; quote and backslash are two.
-      if (
-        code === 0x08 ||
-        code === 0x09 ||
-        code === 0x0a ||
-        code === 0x0c ||
-        code === 0x0d
-      ) {
-        bytes += 2;
-      } else if (code < 0x20) bytes += 6;
-      else if (code === 0x22 || code === 0x5c) bytes += 2;
-      else bytes += 1;
-    } else if (code < 0x800) bytes += 2;
-    else if (code >= 0xd800 && code <= 0xdbff) {
-      // A high surrogate is a 4-byte code point only when a low surrogate
-      // follows. A lone one is not valid UTF-8 and serializes as a six-byte
-      // \uXXXX escape, and must not consume the next unit.
-      const next = s.charCodeAt(i + 1);
-      if (next >= 0xdc00 && next <= 0xdfff) {
-        bytes += 4;
-        i++;
-      } else {
-        bytes += 6;
-      }
-    } else if (code >= 0xdc00 && code <= 0xdfff) {
-      bytes += 6; // lone low surrogate → \uXXXX
-    } else bytes += 3;
-    if (bytes > budget) return bytes;
-  }
-  return bytes;
-}
-
-/**
- * Estimate a document's serialized byte size, aborting as soon as `limit` is
- * passed and WITHOUT materializing the full JSON string — so a document that
- * stays under the node/depth caps but hides a huge string cannot force a giant
- * allocation before being rejected. Iterative, so deep nesting cannot overflow.
- * When the walk completes under the limit, `bytes` is an exact-enough estimate;
- * when `exceeded` is true it stopped early.
- */
-/**
- * Serialized size, counted rather than produced, stopping once past `limit`.
- *
- * `documentBytes` answers the same question by building the JSON string and
- * then a UTF-8 buffer of it, which is fine for a document already known to be
- * of reasonable size and is the wrong tool for DECIDING that. An oversized
- * value has to be rejected without first allocating two copies of itself.
- *
- * Pass `Number.POSITIVE_INFINITY` for an exact count with no early exit; any
- * finite limit makes `bytes` a lower bound once `exceeded` is true.
- */
-/** Whether `JSON.stringify` writes this value rather than dropping it. */
-function serializesAs(value: unknown): boolean {
-  return (
-    typeof value !== "undefined" &&
-    typeof value !== "function" &&
-    typeof value !== "symbol"
-  );
-}
-
-/**
- * A value as `JSON.stringify` will SEE it: through `toJSON` when one exists.
- *
- * The hook runs before the writer decides anything else about the value —
- * including whether the value is writable at all. So a member whose `toJSON`
- * returns `undefined`, a function or a symbol is DROPPED, exactly as if it had
- * held that directly, and a decision made on the original object gets both the
- * size and the drop wrong.
- */
-function asSerialized(value: unknown, key: string): unknown {
-  return typeof (value as { toJSON?: unknown } | null | undefined)?.toJSON ===
-    "function"
-    ? (value as { toJSON: (key: string) => unknown }).toJSON(key)
-    : value;
-}
-
-export function measureBytes(
-  root: unknown,
-  limit: number
-): { bytes: number; exceeded: boolean } {
-  let bytes = 0;
-  // Each entry carries the KEY it sits under, because `toJSON` receives it.
-  // `JSON.stringify` passes the containing property name — the index as a
-  // string inside an array, and `""` for the root — and a hook that reads it
-  // either throws on `undefined` or quietly returns something else. Both make
-  // this counter disagree with the writer it exists to agree with.
-  // `normalized` marks a value whose `toJSON` has ALREADY run. `JSON.stringify`
-  // calls the hook once and writes whatever it returns as-is, so re-normalising
-  // a replacement that itself defines `toJSON` measures a value the writer
-  // never produces.
-  //
-  // `exiting` is the subtree's end marker: it pops after everything beneath it
-  // and releases the object from `open`, which is what makes a value appearing
-  // twice as SIBLINGS legal while a value containing ITSELF is refused.
-  const stack: {
-    value: unknown;
-    key: string;
-    normalized?: boolean;
-    exiting?: object;
-  }[] = [{ value: root, key: "" }];
-  // Ancestors of the value being read. Without this the advertised exact-count
-  // mode (`limit` of `Infinity`) never terminates on a cyclic value: nothing is
-  // ever over the limit, so the early return that stops the walk in capped mode
-  // never fires and each visit queues the same object again. `JSON.stringify`
-  // rejects such a value immediately, and this counter exists to agree with it.
-  const open = new Set<object>();
-  while (stack.length > 0) {
-    const entry = stack.pop();
-    if (entry === undefined) break;
-    if (entry.exiting !== undefined) {
-      open.delete(entry.exiting);
-      continue;
-    }
-    const popped = entry.value;
-    // `toJSON` FIRST, because that is what `JSON.stringify` writes. A value
-    // defining it is serialized as whatever it returns, not as the fields it
-    // happens to carry — and this counter exists to agree with the serializer.
-    // A `Date` is the everyday case: walking its enumerable fields finds none
-    // and counts the empty object at 2 bytes, while the writer emits a 26-byte
-    // quoted timestamp. A caller enforcing a storage cap through this function
-    // would admit data the store then refuses.
-    //
-    // Load-bearing now that this is exported: inside this package every value
-    // reaching it has already been established as plain JSON, so the gap could
-    // not open. A public caller has made no such promise.
-    const value =
-      entry.normalized === true ? popped : asSerialized(popped, entry.key);
-    if (typeof value === "object" && value !== null) {
-      // REPORTED, not thrown. A cyclic value has no serialized form, so it
-      // cannot be stored — which is a verdict this function already has a way
-      // to express. Throwing would be a different contract: callers here
-      // include validators whose whole job is to turn an unstorable document
-      // into a reported issue, and `plugin-page-builder` pins that a circular
-      // document is "refused rather than raised".
-      //
-      // Under a finite limit this was already the outcome, because each revisit
-      // added bytes until the cap stopped the walk. The cycle set is what makes
-      // the exact-count mode (`limit` of `Infinity`) reach the same answer
-      // instead of never terminating.
-      if (open.has(value)) return { bytes, exceeded: true };
-      open.add(value);
-      stack.push({ value, key: entry.key, exiting: value });
-    }
-    if (typeof value === "string") {
-      bytes += 2 + utf8ByteLength(value, limit - bytes);
-    } else if (typeof value === "number") {
-      // `JSON.stringify` writes `null` for a number it cannot represent, so
-      // `NaN` and the infinities cost four bytes rather than the three or eight
-      // their `String()` form suggests. Counting the source spelling reads low
-      // for NaN, which admits a value whose serialized form is over the cap.
-      bytes += Number.isFinite(value) ? String(value).length : 4;
-    } else if (typeof value === "boolean") {
-      bytes += String(value).length;
-    } else if (value === null || value === undefined) {
-      bytes += 4;
-    } else if (Array.isArray(value)) {
-      // Count the array's own structural bytes (brackets + commas) and bail
-      // BEFORE enqueuing elements: a huge array's comma count alone can exceed
-      // the cap, so millions of entries must never be pushed first.
-      bytes += 2 + Math.max(0, value.length - 1);
-      if (bytes > limit) return { bytes, exceeded: true };
-      // An element JSON cannot represent becomes `null` IN AN ARRAY, because an
-      // array's length is part of its meaning. The same value inside an object
-      // is dropped instead — see below. Normalised here so the walk never has
-      // to remember which container a value came from.
-      for (let index = 0; index < value.length; index += 1) {
-        // Decided on what the WRITER will see. An element whose `toJSON`
-        // returns a function or `undefined` becomes `null` in an array just as
-        // a bare one does, and judging the original object keeps a member the
-        // serializer drops.
-        const written = asSerialized(value[index], String(index));
-        stack.push({
-          value: serializesAs(written) ? written : null,
-          key: String(index),
-          normalized: true,
-        });
-      }
-    } else if (typeof value === "object") {
-      // Only the members that will actually be written. `JSON.stringify` DROPS
-      // an object member whose value is `undefined`, a function or a symbol —
-      // key, colon, value and separator all — so charging for one measures a
-      // document larger than the one that gets saved.
-      //
-      // This is not a rounding error in practice. An update that clears a field
-      // leaves an own property holding `undefined`, so an edit that SHRINKS a
-      // document was measured as growing it, and the cap refused the very edit
-      // that would have brought an over-cap document back under.
-      // Filtered on what `toJSON` RETURNS, not on the member as it stands. The
-      // hook runs before the writer decides whether the member is writable at
-      // all, so `{ x: { toJSON: () => undefined } }` is dropped entirely and
-      // serializes to `{}` — charging its key, quotes and colon reports ten
-      // bytes for two, and a caller enforcing a cap rejects data that fits.
-      const entries = Object.entries(value as Record<string, unknown>)
-        .map(([key, member]) => [key, asSerialized(member, key)] as const)
-        .filter(([, member]) => serializesAs(member));
-      // Braces AND the separators between entries, for the same reason the
-      // array branch counts its commas: `{"a":1,"b":2}` carries one comma that
-      // belongs to the object rather than to either entry, so charging it per
-      // entry would over-count the last one and omitting it under-counts every
-      // object with more than one property. Under-counting is the direction
-      // that matters — it lets a document past a cap it actually exceeds, and
-      // the validator, which decides the same question with this counter, then
-      // does not catch it either.
-      bytes += 2 + Math.max(0, entries.length - 1);
-      if (bytes > limit) return { bytes, exceeded: true };
-      for (const [key, val] of entries) {
-        bytes += utf8ByteLength(key, limit) + 3; // quotes + colon
-        if (bytes > limit) return { bytes, exceeded: true };
-        stack.push({ value: val, key, normalized: true });
-      }
-    }
-    if (bytes > limit) return { bytes, exceeded: true };
-  }
-  return { bytes, exceeded: false };
-}
-
 function checkLimits(
   doc: BlockDocument,
   limits: DocumentLimits,
   issues: ValidationIssue[]
 ): void {
-  const { count, exceededDepth } = measureForest(
-    doc.nodes,
-    limits.maxNodes,
-    limits.maxDepth
-  );
-  if (exceededDepth) {
+  // ONE traversal answers all three bounds.
+  //
+  // Depth, node count and serialized size were measured by two separate walks,
+  // and the second of them had to decide what counts as a node and how deep it
+  // sits in order to measure anything at all. So "what is a node" had two
+  // implementations that agreed on the day they were written and nothing to
+  // keep them agreeing — and a document sits between them only when they
+  // disagree, which is exactly when nobody is looking. Every accepted document
+  // also paid for the tree twice.
+  const survey = surveyDocument(doc, {
+    maxBytes: limits.maxBytes,
+    maxDepth: limits.maxDepth,
+    maxNodes: limits.maxNodes,
+  });
+
+  if (survey.tooDeep) {
     issues.push({
       path: "/nodes",
       code: "depth-exceeded",
@@ -733,7 +496,7 @@ function checkLimits(
       message: `Node tree is nested deeper than the maximum of ${limits.maxDepth}.`,
     });
   }
-  if (count > limits.maxNodes) {
+  if (survey.tooManyNodes) {
     issues.push({
       path: "/nodes",
       code: "node-count-exceeded",
@@ -741,20 +504,37 @@ function checkLimits(
       message: `Document exceeds the maximum of ${limits.maxNodes} nodes.`,
     });
   }
-  // A structurally over-cap document is already rejected; skip the byte pass so
-  // an oversized forest is never measured in full.
-  if (exceededDepth || count > limits.maxNodes) return;
+  // A structurally over-cap document is already rejected, and the walk stopped
+  // at that breach — so its byte count is a lower bound rather than a
+  // measurement, and reporting a size from it would report a number that was
+  // never finished.
+  if (survey.tooDeep || survey.tooManyNodes) return;
 
-  // Measure serialized size with a bounded, non-materializing counter: a
-  // document that stays under the node/depth caps but hides a huge string must
-  // still be rejected without allocating a full JSON copy of it.
-  const { bytes, exceeded } = measureBytes(doc, limits.maxBytes);
-  if (exceeded) {
+  // The CAUSE, not just the refusal. A document over the limit is fixed by
+  // removing content; one holding a value JSON cannot write is not made smaller
+  // by deleting blocks, and reporting it as "too large" sends its author to
+  // work that cannot help.
+  //
+  // Read off the SAME survey that answered depth and node count, rather than
+  // from a second measurement. Over-limit is reported ahead of unwritable when
+  // a document is both: the byte issue is what gates the precise walk
+  // downstream, so losing it to the other cause is what lets an unbounded
+  // traversal run.
+  const { bytes } = survey;
+  if (survey.tooLarge) {
     issues.push({
       path: "",
       code: "document-too-large",
       severity: "error",
       message: `Document exceeds the maximum of ${limits.maxBytes} bytes.`,
+    });
+  } else if (survey.unserializable) {
+    issues.push({
+      path: "",
+      code: "document-unwritable",
+      severity: "error",
+      message:
+        "Document holds a value JSON cannot write, so it has no stored form.",
     });
   } else if (bytes > limits.maxBytes * LIMIT_WARNING_RATIO) {
     issues.push({
@@ -1392,8 +1172,6 @@ function isConditionsShapeValid(conditions: unknown): boolean {
   return true;
 }
 
-const BINDING_SOURCES = ["entry", "item", "single", "site"];
-
 /**
  * A binding path is a dot-joined chain of field identifiers, e.g. "title" or
  * "author.name". This rejects expression-like or otherwise malformed strings so
@@ -1452,7 +1230,7 @@ function validateBindings(
     const source: unknown = binding.source;
     if (
       source !== undefined &&
-      (typeof source !== "string" || !BINDING_SOURCES.includes(source))
+      (typeof source !== "string" || !isBindingSource(source))
     ) {
       issues.push({
         path: pointer(bPath, "source"),

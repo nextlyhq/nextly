@@ -19,22 +19,15 @@ import { useEffect, useMemo, useState } from "react";
  * renders and shows a help message instead of silently failing.
  */
 
-interface PagefindResult {
-  url: string;
-  meta?: { title?: string };
-  excerpt?: string;
-}
+// Shapes come from the ambient declaration in src/types/pagefind.d.ts, which is
+// the one description of the bundle this file loads at runtime.
+import type { PagefindDocument } from "/pagefind/pagefind.js";
 
-interface PagefindModule {
-  init?: () => Promise<void>;
-  search: (query: string) => Promise<{
-    results: Array<{ data: () => Promise<PagefindResult> }>;
-  }>;
-}
+type PagefindModule = typeof import("/pagefind/pagefind.js");
 
 export function SearchInput() {
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<PagefindResult[]>([]);
+  const [results, setResults] = useState<PagefindDocument[]>([]);
   const [pagefind, setPagefind] = useState<PagefindModule | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -45,19 +38,33 @@ export function SearchInput() {
     let cancelled = false;
     (async () => {
       try {
-        const mod = (await import(
+        const mod: PagefindModule = await import(
           /* webpackIgnore: true */ /* @vite-ignore */
           "/pagefind/pagefind.js"
-        )) as PagefindModule;
+        );
         if (cancelled) return;
+        // Guarded rather than called directly: the bundle is generated at build
+        // time, so a version skew can leave it without the documented init().
         if (typeof mod.init === "function") {
           await mod.init();
         }
         setPagefind(mod);
       } catch (err) {
         if (cancelled) return;
+        // Two different situations leave the bundle absent, and telling them
+        // apart matters: a project with no published posts has nothing to
+        // index, so repeating "run the build" is advice that can never work.
+        // The build writes which case it was; if that file is missing too,
+        // the build genuinely has not run.
+        const state = await fetch("/search-status.json")
+          .then(r => (r.ok ? r.json() : null))
+          .then(body => (body as { state?: string } | null)?.state)
+          .catch(() => undefined);
+        if (cancelled) return;
         setLoadError(
-          "Search index not found. Run `pnpm build` (or `npm run build`) to generate it, then reload."
+          state === "empty"
+            ? "No posts have been published yet, so there is nothing to search. The index is generated at build time once the first post is live."
+            : "Search index not found. Run `pnpm build` (or `npm run build`) to generate it, then reload."
         );
         console.debug("[search] failed to load pagefind:", err);
       }

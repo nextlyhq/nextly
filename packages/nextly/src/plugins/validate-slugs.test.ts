@@ -114,7 +114,8 @@ describe("buildPluginAdminMeta", () => {
   it("addresses plugins whose slugs differ", () => {
     const meta = buildPluginAdminMeta(
       [plugin("@acme/one"), plugin("@acme/two")],
-      undefined
+      undefined,
+      []
     );
 
     // The positive control: it really does produce metadata for both, so the
@@ -128,7 +129,8 @@ describe("buildPluginAdminMeta", () => {
     try {
       buildPluginAdminMeta(
         [plugin("@acme/plugin-seo"), plugin("acme_plugin_seo")],
-        undefined
+        undefined,
+        []
       );
     } catch (error) {
       reason = (error as { logContext?: { reason?: string } }).logContext

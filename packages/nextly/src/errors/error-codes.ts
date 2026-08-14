@@ -47,6 +47,14 @@ export const NEXTLY_ERROR_STATUS = {
   // Plan C2 — nextly migrate phases.
   NEXTLY_MIGRATE_LOCK_BUSY: 409,
   NEXTLY_BASELINE_LOCK_NOT_HELD: 409,
+  NEXTLY_RESOLVE_LOCK_NOT_HELD: 409,
+  // Boot refused to serve: the migrate lock stayed held past the wait deadline,
+  // so this process never established whether the schema matches the code. 503
+  // rather than 409 — a load balancer should take the instance out of rotation
+  // and retry it, which is exactly the recovery this refusal wants.
+  NEXTLY_BOOT_MIGRATIONS_NOT_RUN: 503,
+  // Still running rather than refused. 503 for the same reason: retry shortly.
+  NEXTLY_BOOT_MIGRATIONS_PENDING: 503,
   NEXTLY_CORE_DESTRUCTIVE_REFUSED: 409,
   NEXTLY_MIGRATION_DRIFT: 409,
   NEXTLY_MIGRATION_APPLY_FAILED: 500,

@@ -32,6 +32,7 @@ import {
   useBranding,
   useBrandingStatus,
 } from "@admin/context/providers/BrandingProvider";
+import { API_PATH_PREFIX } from "@admin/lib/api/fetcher";
 import { categoryLabel } from "@admin/lib/plugins/plugin-categories";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 import { staticRegistrySource } from "@admin/lib/plugins/registry/static-source";
@@ -282,6 +283,8 @@ function PluginDetailContent({ activeSlug }: { activeSlug?: string }) {
 
           {/* What this plugin adds — computed from the plugin's registrations */}
           <Contributions plugin={plugin} />
+
+          <WhenEnabled plugin={plugin} />
         </div>
 
         {/* `self-start` is what makes `sticky` work here: a grid item stretches
@@ -433,7 +436,7 @@ function Contributions({ plugin }: { plugin: PluginMetadata }) {
       label: "API routes",
       icon: Route,
       items: (plugin.routes ?? []).map(r => ({
-        primary: `${r.method} /api/plugins/${pluginSlug(plugin.name)}${r.path}`,
+        primary: `${r.method} ${API_PATH_PREFIX}${r.fullPath}`,
       })),
     },
   ].filter(group => group.items.length > 0);
@@ -446,9 +449,22 @@ function Contributions({ plugin }: { plugin: PluginMetadata }) {
         What this plugin adds
       </h2>
       {!enabled && (
+        // Names which parts survive being disabled and which do not, because
+        // this section now lists both. Permissions are seeded and granted for
+        // every plugin, disabled included, so calling them inactive here would
+        // contradict the roles UI that still offers them.
+        //
+        // The surfaces named as stopped are the ones the payload itself gates
+        // on the enabled flag — routes, menu, pages and settings. It does not
+        // say a grant is inert: a permission is a global slug, any component
+        // may test it through the SDK's `useCan`, and a disabled plugin keeps
+        // its field editors mounted for collections that already use them.
         <p className="mb-3 text-xs text-muted-foreground">
-          This plugin is disabled: its collections and data are retained, but
-          its behavior does not load.
+          This plugin is disabled: its collections, data and permissions are
+          retained, and its permissions stay granted. Its API routes, admin
+          pages, menu items and settings panel are not registered — though the
+          field editors it contributes stay available to collections that use
+          them.
         </p>
       )}
       {/* Auto-fitting tracks rather than a breakpoint. These cards sit inside
@@ -498,6 +514,62 @@ function Contributions({ plugin }: { plugin: PluginMetadata }) {
             </ul>
           </div>
         ))}
+      </div>
+    </section>
+  );
+}
+
+/**
+ * The endpoints a disabled plugin would serve once enabled.
+ *
+ * Routes only. A disabled plugin's PERMISSIONS are seeded like any other
+ * plugin's — the permission fold runs over disabled plugins too — so they are
+ * not pending on anything and presenting them here would say otherwise. Routes
+ * are the half that genuinely does not exist yet: the route fold skips
+ * disabled plugins entirely.
+ *
+ * Renders nothing when the server sent no dormant set, which is every enabled
+ * plugin, every disabled one declaring no routes, and any whose declarations
+ * could not mount.
+ */
+function WhenEnabled({ plugin }: { plugin: PluginMetadata }) {
+  const routes = plugin.whenEnabled?.routes ?? [];
+  if (routes.length === 0) return null;
+
+  return (
+    <section className="mb-8">
+      <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+        Would serve when enabled
+      </h2>
+      {/* Names the restart because the config edit alone does not serve these.
+          Config HMR re-evaluates the route module but does not re-run service
+          registration, plugin initialization or route mounting — see
+          `plugins/initialized-plugins.ts`, which states that a full restart is
+          what actually enables a plugin. Telling an operator to flip the flag
+          and stop there sends them to a route that still 404s. */}
+      <p className="mb-3 text-xs text-muted-foreground">
+        Declared by the plugin and not mounted while it is disabled. Enable it
+        in your Nextly config and restart the app to serve these — editing the
+        config alone does not mount them.
+      </p>
+      <div className="rounded-lg border border-dashed border-border bg-card p-4">
+        <div className="mb-2 flex items-center gap-2">
+          <Route className="h-4 w-4 text-muted-foreground" />
+          <h3 className="text-sm font-medium text-foreground">API routes</h3>
+          <span className="ml-auto text-xs text-muted-foreground">
+            {routes.length}
+          </span>
+        </div>
+        <ul className="space-y-1.5">
+          {routes.map(r => (
+            <li
+              key={`${r.method}-${r.path}`}
+              className="break-words font-mono text-sm text-foreground"
+            >
+              {`${r.method} ${API_PATH_PREFIX}${r.fullPath}`}
+            </li>
+          ))}
+        </ul>
       </div>
     </section>
   );

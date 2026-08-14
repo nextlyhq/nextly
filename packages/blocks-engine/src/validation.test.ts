@@ -14,7 +14,8 @@ import {
   VALIDATION_FIXTURES,
 } from "./validation.fixtures";
 import type { BlockTypeLookup } from "./validation";
-import { ISSUE_CODES, measureBytes, validate } from "./validation";
+import { measureBytes } from "./measure-bytes";
+import { ISSUE_CODES, validate } from "./validation";
 
 function lookup(types: string[]): BlockTypeLookup {
   const set = new Set(types);
@@ -565,7 +566,12 @@ describe("validation never throws on adversarial input", () => {
       issues = validate(doc, {
         breakpoints: FIXTURE_BREAKPOINTS,
         mode: "strict",
-        limits: { maxDepth: 12, maxNodes: 100, maxBytes: 1_000_000 },
+        // The byte cap is deliberately far out of reach. This test is about the
+        // NODE cap bounding the walk, and a forest of 500,000 children also
+        // outruns a 1 MB budget — so a byte limit near the document's real size
+        // decides the outcome before the node cap is consulted, and the
+        // assertion below would be reporting on a bound the test does not name.
+        limits: { maxDepth: 12, maxNodes: 100, maxBytes: 100_000_000 },
       });
     }).not.toThrow();
     expect(issues.some(i => i.code === "node-count-exceeded")).toBe(true);
@@ -1397,7 +1403,17 @@ describe("style keys inherited from a prototype", () => {
       hover: { base: { nope: "1px" } },
     }) as Record<string, unknown>;
     styles.base = { base: { display: "block" } };
-    expect(codesFor(styles)).toEqual(["invalid-style-values"]);
+    // TWO issues now, and both are true. `invalid-style-values` names the
+    // specific defect; `document-unwritable` is the document-level statement
+    // that what would be stored is not what was validated, reached first
+    // because a custom prototype makes this not a JSON value at all. The second
+    // is additional information rather than noise: a caller reading only the
+    // first error still learns the document cannot be stored, which is the fact
+    // that decides whether to save.
+    expect(codesFor(styles)).toEqual([
+      "document-unwritable",
+      "invalid-style-values",
+    ]);
   });
 
   it("are refused at the breakpoint level too", () => {
@@ -1407,7 +1423,12 @@ describe("style keys inherited from a prototype", () => {
       tablet: { nope: "1px" },
     }) as Record<string, unknown>;
     byBreakpoint.base = { display: "block" };
-    expect(codesFor({ base: byBreakpoint })).toEqual(["invalid-style-values"]);
+    // Both, for the same reason as the case above: the specific defect plus
+    // the document-level statement that it has no stored form.
+    expect(codesFor({ base: byBreakpoint })).toEqual([
+      "document-unwritable",
+      "invalid-style-values",
+    ]);
   });
 
   it("are not read off a polluted Object.prototype", () => {
@@ -1884,9 +1905,17 @@ describe("measureBytes agrees with the serializer on hooks and cycles", () => {
     // this was already the answer, because each revisit added bytes until the
     // cap stopped the walk; the cycle set is what makes the exact-count mode
     // reach it instead of never terminating.
+    //
+    // Reported through `reason` rather than through a second flag. Both say a
+    // cycle has no stored form at any size; the difference is that `exceeded`
+    // remains the single "refused" boolean, so a caller asking only whether the
+    // document fits keeps refusing this one. Two independent flags read as
+    // tidier and are fail-OPEN — measured, that shape silently stopped the op
+    // store refusing cyclic documents until the check was added by hand.
     expect(measureBytes(value, Number.POSITIVE_INFINITY)).toEqual({
       bytes: expect.any(Number) as number,
       exceeded: true,
+      reason: "unwritable",
     });
   });
 
@@ -1908,5 +1937,271 @@ describe("measureBytes agrees with the serializer on hooks and cycles", () => {
     const written = Buffer.byteLength(JSON.stringify(value), "utf8");
 
     expect(measureBytes(value, 1_000).bytes).toBe(written);
+  });
+});
+
+describe("measureBytes says WHY a value cannot be stored", () => {
+  it("calls a BigInt unwritable rather than counting it", () => {
+    // `JSON.stringify` THROWS on a BigInt — it neither writes nor drops it — so
+    // counting it as an ordinary value reports a document as fitting that the
+    // writer refuses entirely.
+    expect(measureBytes({ x: 1n }, 100)).toEqual({
+      bytes: expect.any(Number) as number,
+      exceeded: true,
+      reason: "unwritable",
+    });
+  });
+
+  it("calls a boxed BigInt unwritable too", () => {
+    // `Object(1n)` is a BigInt OBJECT, so `typeof` reports "object" and the
+    // walk would treat it as an ordinary record with no own keys.
+    expect(measureBytes({ x: Object(1n) }, 100)).toEqual({
+      bytes: expect.any(Number) as number,
+      exceeded: true,
+      reason: "unwritable",
+    });
+  });
+
+  it("reports over-limit ahead of unwritable when a document is both", () => {
+    // A document can be BOTH unwritable and over the limit, and one `reason`
+    // can only carry one of them. This used to be decided by traversal: the
+    // walk returned at the first refusal it reached, and because the stack is
+    // LIFO that made the answer depend on DECLARATION ORDER — the same two keys
+    // swapped gave opposite reasons, which nothing outside the walk could
+    // predict.
+    //
+    // Order is no longer what decides it. Over-limit is reported first, and the
+    // reason is not aesthetic: the byte verdict is what gates the precise
+    // validation walk downstream, so a document that loses it to the other
+    // cause gets an UNBOUNDED traversal — the bound defeated by key order
+    // alone.
+    //
+    // What this does NOT do is make precedence total, and nothing bounded can:
+    // proving no unwritable value exists anywhere means reading the whole
+    // document, which is the pass this counter exists to avoid. An unwritable
+    // value inside a subtree the cap stopped us entering is still unreported.
+    const padFirst = measureBytes({ pad: "x".repeat(500), bad: 1n }, 100);
+    const badFirst = measureBytes({ bad: 1n, pad: "x".repeat(500) }, 100);
+
+    expect(padFirst.exceeded && padFirst.reason).toBe("over-limit");
+    expect(badFirst.exceeded && badFirst.reason).toBe("over-limit");
+
+    // Unwritable is still reported on its own, so the ordering above is a
+    // precedence rule rather than the reason being unreachable.
+    const small = measureBytes({ bad: 1n }, 1_000);
+    expect(small.exceeded && small.reason).toBe("unwritable");
+
+    // And either way the document is refused, which is what a caller asking
+    // only "does this fit" relies on.
+    expect([padFirst.exceeded, badFirst.exceeded, small.exceeded]).toEqual([
+      true,
+      true,
+      true,
+    ]);
+  });
+
+  it("writes an object that only CLAIMS to be a BigInt", () => {
+    // `Symbol.toStringTag` is an ordinary writable property of the document
+    // under inspection, so `Object.prototype.toString` reports whatever the
+    // document says. This value tags itself `[object BigInt]` and the writer
+    // stores it regardless, which is why the refusal is decided by the internal
+    // slot instead: classifying by the tag would let block props declare
+    // themselves unstorable and lock their own author out.
+    const spoof = { [Symbol.toStringTag]: "BigInt", x: 1 };
+    const written = JSON.stringify({ v: spoof });
+
+    // The positive control for the pair: the writer really does store one and
+    // really does refuse the other, so the two cases are genuinely different
+    // rather than both being accepted.
+    expect(written).toBe('{"v":{"x":1}}');
+    expect(() => JSON.stringify({ v: Object(1n) })).toThrow(TypeError);
+
+    // Refused, but NOT as a BigInt: the symbol-keyed property is one JSON
+    // drops, so the document would not survive storage unchanged.
+    const measuredSpoof = measureBytes({ v: spoof }, 1_000);
+    expect(measuredSpoof.exceeded).toBe(true);
+
+    // THE CONTROL THAT MATTERS. The same object without the symbol key is
+    // accepted and measured exactly as the writer emits it, so the tag
+    // contributed nothing to the refusal above — which is what would break if
+    // classification ever moved back to `Object.prototype.toString`.
+    const plain = { x: 1 };
+    expect(measureBytes({ v: plain }, 1_000)).toEqual({
+      bytes: Buffer.byteLength(JSON.stringify({ v: plain }), "utf8"),
+      exceeded: false,
+    });
+  });
+
+  it("still says over-limit when the document is merely too big", () => {
+    // The distinction is the whole point: these two need opposite advice, and
+    // a single boolean cannot tell an author which one they have.
+    const measured = measureBytes({ x: "y".repeat(500) }, 100);
+
+    expect(measured).toEqual({
+      bytes: expect.any(Number) as number,
+      exceeded: true,
+      reason: "over-limit",
+    });
+  });
+});
+
+describe("measureBytes reads nothing the writer would not", () => {
+  it("does not invoke a Symbol.toStringTag getter the document defined", () => {
+    // `JSON.stringify` ignores symbol keys, so it never runs this getter and
+    // stores the object as `{}`. A measurement that runs it is executing
+    // document-supplied code the writer does not, which lets a throwing getter
+    // escape a function contracted to report rather than raise, and lets a
+    // getter with side effects mutate a document while it is being measured.
+    let reads = 0;
+    const watched = { x: 1 };
+    Object.defineProperty(watched, Symbol.toStringTag, {
+      get: () => {
+        reads += 1;
+        return "BigInt";
+      },
+      configurable: true,
+    });
+
+    const measured = measureBytes({ v: watched }, 1_000);
+
+    expect(reads, "the tag getter ran during measurement").toBe(0);
+    // The verdict is a REFUSAL, and not for the reason this test guards. The
+    // writer stores the object, but it stores it WITHOUT the symbol-keyed
+    // property, and a member JSON drops is the same class as `undefined` and a
+    // function — which this counter refuses so the stored document cannot
+    // differ from the one that was checked. The control below is what shows
+    // the tag played no part.
+    expect(measured.exceeded).toBe(true);
+  });
+
+  it("does not raise when a tag getter throws, because the writer stores it", () => {
+    const hostile = { x: 1 };
+    Object.defineProperty(hostile, Symbol.toStringTag, {
+      get: () => {
+        throw new Error("tag getter");
+      },
+      configurable: true,
+    });
+
+    // The control: the writer really does accept this value, so refusing it
+    // or raising here would be a disagreement with the thing being counted.
+    expect(JSON.stringify({ v: hostile })).toBe('{"v":{"x":1}}');
+    expect(() => measureBytes({ v: hostile }, 1_000)).not.toThrow();
+    // Refused for carrying a symbol-keyed property, which JSON drops — never
+    // by running the getter, which is the property this test exists for.
+    expect(measureBytes({ v: hostile }, 1_000).exceeded).toBe(true);
+  });
+
+  it("still refuses a boxed BigInt that carries a tag of its own", () => {
+    // The slot check is what a declared tag falls through to, so this is the
+    // case proving the fall-through still reaches the right answer.
+    const tagged = Object(1n) as object;
+    Object.defineProperty(tagged, Symbol.toStringTag, {
+      value: "Object",
+      configurable: true,
+    });
+    expect(measureBytes({ v: tagged }, 1_000).exceeded).toBe(true);
+  });
+});
+
+describe("measureBytes probes a value only where the writer does", () => {
+  it("does not execute a proxy's descriptor trap", () => {
+    // The writer reads `toJSON` and own keys, and never asks for
+    // `Symbol.toStringTag`. A probe that does is observable through a Proxy
+    // trap even when no ordinary getter is involved, and a trap that throws
+    // turns a document the writer stores into a raised error.
+    const trapped: string[] = [];
+    const hostile = new Proxy(
+      { x: 1 },
+      {
+        getOwnPropertyDescriptor(target, key) {
+          trapped.push(String(key));
+          if (key === Symbol.toStringTag) throw new Error("descriptor trap");
+          return Reflect.getOwnPropertyDescriptor(target, key);
+        },
+      }
+    );
+
+    // The control: the writer really does accept it, so raising here would be
+    // a disagreement with the thing being counted.
+    expect(JSON.stringify({ v: hostile })).toBe('{"v":{"x":1}}');
+    expect(() => measureBytes({ v: hostile }, 1_000)).not.toThrow();
+    expect(
+      trapped.filter(key => key.includes("toStringTag")),
+      "the counter asked for a symbol the writer never asks for"
+    ).toEqual([]);
+  });
+
+  it("refuses a boxed BigInt whose prototype was replaced", () => {
+    // A prototype-based filter would call this an ordinary object. The writer
+    // still refuses it, so the counter has to as well or the two disagree
+    // about a document that cannot be stored.
+    const disguised = Object(1n) as object;
+    Object.setPrototypeOf(disguised, Object.prototype);
+
+    expect(() => JSON.stringify({ v: disguised })).toThrow(TypeError);
+    expect(measureBytes({ v: disguised }, 1_000).exceeded).toBe(true);
+  });
+});
+
+describe("an unstorable document does not have its values parsed", () => {
+  it("skips per-value work when the byte pass could not measure the document", () => {
+    // The byte precondition REFUSES to invoke an accessor, so it never learns
+    // how large that field is. The per-value work below reaches the same field
+    // by ordinary property access, runs the getter, and parses everything it
+    // returns — so the one document whose size is UNKNOWN was the one whose
+    // values were parsed in full.
+    //
+    // Counting getter invocations is what separates the implementations: both
+    // report the document invalid, and only one of them reads the megabytes.
+    let reads = 0;
+    const node: Record<string, unknown> = {
+      id: "n1",
+      type: "core/text",
+      version: 1,
+      props: {},
+    };
+    Object.defineProperty(node, "styles", {
+      get() {
+        reads += 1;
+        // A token reference the lookup below does NOT know, which is what
+        // `validateStyleValues` reports — so this fixture produces a style
+        // issue when parsed and none when skipped. Without that, the assertion
+        // is satisfied by the fixture rather than by the behaviour.
+        return { base: { base: { color: { $token: "no.such.token" } } } };
+      },
+      enumerable: true,
+      configurable: true,
+    });
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [node],
+    });
+
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+      tokens: { kindOf: () => undefined },
+    });
+
+    // Refused, and refused for the right reason.
+    expect(issues.some(i => i.code === "document-unwritable")).toBe(true);
+
+    // The style tree behind the accessor is never PARSED, which is the
+    // unbounded work: every value builds an AST apiece, and the byte pass
+    // refused to measure this field so nothing bounded it.
+    expect(
+      issues.some(
+        i => i.code === "invalid-style-values" || i.code === "unknown-token"
+      )
+    ).toBe(false);
+
+    // What this does NOT do, stated rather than implied: the property is still
+    // READ, so the getter still runs. Skipping the read entirely would mean not
+    // validating the node's shape at all, and a document is refused on its
+    // shape long before its style values matter. The exposure that closes is
+    // the parsing of whatever the getter returns, not the single invocation.
+    expect(reads).toBeGreaterThan(0);
   });
 });

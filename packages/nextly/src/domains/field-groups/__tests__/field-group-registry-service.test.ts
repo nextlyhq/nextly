@@ -311,6 +311,51 @@ describe("FieldGroupRegistryService", () => {
       expect(updateData.schema_hash).toBe("new-hash");
     });
 
+    // 🔴 `schema_version` is an optimistic lock, and toggling localization MOVES every translatable
+    // column between the main table and `comp_<slug>_locales`. Tying the bump to `fields` alone left
+    // that transition invisible to `assertSchemaVersionMatch`: a preview taken beforehand still
+    // matched, and applying it wrote a stale field set over a shape that had already moved.
+    it("increments schema_version when localization is toggled with no field change", async () => {
+      ctx.adapter.selectOne.mockResolvedValue(
+        dbRow({ locked: 0, localized: 0 })
+      );
+      ctx.adapter.update.mockResolvedValue([dbRow({ schema_version: 2 })]);
+
+      await ctx.service.updateComponent("seo", { localized: true });
+
+      const updateData = ctx.adapter.update.mock.calls[0][1] as Record<
+        string,
+        unknown
+      >;
+      expect(updateData.schema_version).toBe(2);
+      // Nothing about the field set changed, so the migration status must not be disturbed.
+      expect(updateData.fields).toBeUndefined();
+      expect(updateData.migration_status).toBeUndefined();
+    });
+
+    // 🔴 The control that keeps the bump from becoming noise. Compared against the STORED value
+    // rather than merely being present: a request resending the current setting changes no storage,
+    // so invalidating every open editor for it would make the lock fire on saves that conflict with
+    // nothing.
+    it("leaves schema_version alone when localized is resent unchanged", async () => {
+      ctx.adapter.selectOne.mockResolvedValue(
+        dbRow({ locked: 0, localized: 1 })
+      );
+      ctx.adapter.update.mockResolvedValue([dbRow()]);
+
+      await ctx.service.updateComponent("seo", {
+        localized: true,
+        label: "Renamed",
+      });
+
+      const updateData = ctx.adapter.update.mock.calls[0][1] as Record<
+        string,
+        unknown
+      >;
+      expect(updateData.schema_version).toBeUndefined();
+      expect(updateData.label).toBe("Renamed");
+    });
+
     it("throws FORBIDDEN when locked and source is not 'code'", async () => {
       ctx.adapter.selectOne.mockResolvedValue(dbRow({ locked: 1 }));
 

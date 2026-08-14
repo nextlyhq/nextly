@@ -12,6 +12,7 @@ import type { FieldConfig } from "../../collections/fields/types";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { NextlyError } from "../../errors/nextly-error";
 import { assertValidFieldGroupConfig } from "../../field-groups/config/validate-field-group";
+import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import type {
   FieldGroupDefinition,
   CreateFieldGroupArgs,
@@ -218,15 +219,7 @@ export function createFieldGroupsNamespace(
         });
       }
 
-      const updateData: Record<string, unknown> = {};
-
-      if (args.data.label !== undefined) {
-        updateData.label = args.data.label;
-      }
-
-      if (args.data.description !== undefined) {
-        updateData.description = args.data.description;
-      }
+      let validatedFields: FieldConfig[] | undefined;
 
       if (args.data.fields !== undefined) {
         const fieldsTyped = args.data.fields as unknown as FieldConfig[];
@@ -243,26 +236,27 @@ export function createFieldGroupsNamespace(
               : { singular: args.slug },
           fields: fieldsTyped,
         });
-        updateData.fields = fieldsTyped;
-        const { calculateSchemaHash } = await import(
-          "../../domains/schema/services/schema-hash"
-        );
-        updateData.schemaHash = calculateSchemaHash(fieldsTyped);
+        validatedFields = fieldsTyped;
       }
 
-      if (args.data.admin !== undefined) {
-        updateData.admin = args.data.admin;
-      }
-
-      const component = await ctx.fieldGroupRegistryService.updateComponent(
-        args.slug,
-        updateData,
-        { source: "ui" }
-      );
+      // 🔴 Through the metadata service, not the registry. Writing the registry directly is what
+      // made this transport store a new field set and a matching `schema_hash` while running no
+      // DDL at all — the table kept its old columns and only the dispatcher's copy of this
+      // operation ever moved them. The service owns both halves, so all three transports now do
+      // the same thing.
+      const { record } = await ctx.fieldGroupMetadataService.updateFieldGroup({
+        slug: args.slug,
+        label: args.data.label,
+        description: args.data.description,
+        admin: args.data.admin,
+        fields: validatedFields as unknown as FieldDefinition[] | undefined,
+        localized: args.data.localized,
+        source: "ui",
+      });
 
       return {
         message: "Field group updated.",
-        item: mapFieldGroupRecord(component),
+        item: mapFieldGroupRecord(record),
       };
     },
 

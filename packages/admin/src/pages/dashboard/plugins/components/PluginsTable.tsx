@@ -230,7 +230,7 @@ export default function PluginsTable() {
             value={search}
             onChange={setSearch}
             placeholder="Search plugins..."
-            className="w-full border-border bg-background text-foreground md:max-w-sm"
+            className="w-full md:max-w-sm"
           />
           <div className="flex items-center gap-2">
             <div

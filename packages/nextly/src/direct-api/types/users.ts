@@ -34,7 +34,29 @@ import type { DirectAPIConfig } from "./shared";
  * const result = await nextly.users.find({ search: 'john' });
  * ```
  */
-export interface FindUsersArgs extends Omit<FindArgs, "collection"> {
+/**
+ * The `FindArgs` options the users namespace actually forwards.
+ *
+ * Users are a core table with their own query service rather than a dynamic
+ * collection, and `users.find()` passes only pagination through to it. Anything
+ * else inherited from `FindArgs` was accepted and silently discarded: a `where`
+ * clause filtered nothing and returned the first arbitrary user, which reads at
+ * the call site as a successful exact lookup.
+ *
+ * Named as an ALLOW-list rather than as an omission, so the default for anything
+ * new is refusal. A deny-list re-opens itself the moment `FindArgs` gains an
+ * option — the new one would be inherited, ignored at runtime, and produce a
+ * plausible wrong row with no compile error, which is the same failure this
+ * type is here to prevent.
+ *
+ * To support one of the others, forward it in `namespaces/users.ts` and add it
+ * here in the same change.
+ */
+type ForwardedFindOptions = "limit" | "page";
+
+export interface FindUsersArgs
+  extends Pick<FindArgs, ForwardedFindOptions>,
+    DirectAPIConfig {
   /** User collection slug (defaults to 'users') */
   collection?: string;
 

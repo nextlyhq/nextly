@@ -1,0 +1,332 @@
+---
+title: Block document format
+description: The stored shape of a page built with blocks, and what is frozen about it.
+---
+
+A page built with blocks is stored as one JSON document. This page is the
+format's specification: what a document contains, which parts are fixed, and
+which parts are expected to grow.
+
+It is written for anything that produces or consumes a document without going
+through an editor — a migration script, a content generator, an AI agent
+writing a page, or a build step reading one.
+
+## What this format covers
+
+This is the document format of `@nextlyhq/blocks-engine`. It is what the
+`blocks` field stores and what `@nextlyhq/blocks-react` renders.
+
+**The `@nextlyhq/plugin-page-builder` editor does not currently write this
+format.** Its canvas stores a different, internal shape — a single `root`
+container under a `version` key — and there is no adapter between the two. That
+editor is a proof of concept being replaced, and the replacement writes this
+format; until then, a document saved by that canvas will not validate here, and
+that is expected rather than a defect in either.
+
+So: use this specification for the `blocks` field, for the engine, for the
+renderer, and for anything you generate yourself. Do not use it to read what the
+legacy page-builder canvas has already saved.
+
+## Checking a document
+
+```ts
+import { parseBlockDocument } from "nextly";
+
+const result = parseBlockDocument(value);
+if (!result.success) {
+  console.error(result.issues);
+}
+```
+
+`parseBlockDocument` is the entry point to use on a document you did not write.
+It bounds both nesting **depth** and node **count** before parsing, so a hostile
+or merely broken input comes back as invalid rather than consuming the process
+doing the checking. Depth matters because the schema is self-referential, and a
+long enough chain of nested slots exhausts the call stack; count matters because
+a document can be shallow and still enormous, and parsing walks and copies the
+whole forest before it can report anything.
+
+The underlying schema is deliberately not exported, because those bounds are a
+precondition rather than an option.
+
+For a consumer with neither TypeScript nor zod, the format is also published as
+plain JSON Schema:
+
+```ts
+import { blockDocumentJsonSchema } from "nextly";
+```
+
+It is derived from the same definition this package checks against, so what is
+published cannot describe a different format from what Nextly accepts.
+
+### What it does not repair
+
+Anything it accepts, it returns **unchanged**. A checker that quietly tidied its
+input would hand you a document the engine still rejects, with the diagnostic
+already discarded — so unknown fields survive, and a malformed token reference
+stays malformed for the engine to report.
+
+> **Known limitation: the caps assume an ordinary object.** `parseBlockDocument`
+> establishes its size, depth and node bounds by reading property descriptors,
+> and then hands the same value to the schema, which reads it by ordinary
+> property access. For anything `JSON.parse` produces, or any object you built
+> yourself, those two readings are identical.
+>
+> A `Proxy` can make them differ. One whose descriptors report an empty array
+> while its `get` returns thousands of nodes passes every bound and is then
+> walked in full, so the bounds do not hold for it. A non-enumerable named
+> property on an array is invisible in the same way, and survives on the value
+> you get back although storage drops it.
+>
+> Both have the same cause — two readers of one untrusted value — and the fix is
+> to have the bounded walk produce the value everything downstream uses, which
+> changes what this function RETURNS and so is being done as its own change
+> rather than folded in here. **Pass a value you own, or one from
+> `JSON.parse`, and neither case arises.**
+
+**It answers a narrower question than the engine does.** The schema asks _is
+this the block document format at all_; `validate(doc, ctx)` asks _is this a
+legal document for this app_, against the blocks that are actually registered
+and the breakpoints that are actually configured. A document can satisfy the
+schema and still be rejected — an unregistered block type, for example, is
+invisible to a static schema.
+
+Where the schema cannot be exact it stays permissive, because refusing a
+document Nextly would have accepted is worse than accepting one the engine
+rejects a moment later with a better message.
+
+## The envelope
+
+```json
+{
+  "formatVersion": 1,
+  "kind": "page",
+  "nodes": [],
+  "settings": { "styles": {}, "customCss": "" },
+  "assets": { "mediaIds": [] }
+}
+```
+
+`nodes` is a plain array: a page **is** a list of sections. There is no
+synthetic root block, so nothing has to special-case an undeletable, unmovable
+pseudo-node. Document-level concerns live on the envelope instead.
+
+`kind` is closed:
+
+| kind        | what it is                                                           |
+| ----------- | -------------------------------------------------------------------- |
+| `page`      | an entry's blocks-field content                                      |
+| `pattern`   | a copy-on-insert saved subtree, including full-page patterns         |
+| `component` | a linked, reusable definition with exposed props, slots and variants |
+| `region`    | a layout region such as a header or footer                           |
+| `template`  | a collection template                                                |
+
+A layout is a named bundle _referencing_ region documents, so it is not a kind of
+its own.
+
+## A node
+
+```json
+{
+  "id": "01J...",
+  "type": "core/heading",
+  "version": 1,
+  "props": { "text": "Hello", "level": 2 }
+}
+```
+
+`id` is the only way anything addresses a node. Editor operations, locale
+overlays, scoped-CSS class derivation and selection all key on it. **Positional
+addressing is never part of any stored or public contract** — an operation that
+said "the third child" would break the moment anything moved.
+
+`version` is required on every node, not defaulted. It records which schema
+version of its block the node was written against, and both forgiving rendering
+and migration read it unconditionally. A node without one cannot be migrated,
+only guessed at.
+
+Optional fields: `bindings`, `slots`, `styles`, `classes`, `visibility`,
+`locked`, `name`, `customCss`, `cssId`, `attributes`, `migrationFailed`.
+
+### Bindings
+
+A binding is a typed field path, never an expression:
+
+```json
+{ "$bind": "title", "source": "entry", "fallback": "Untitled" }
+```
+
+`source` is one of `entry`, `item`, `single` or `site`. **`single` requires
+`sourceKey`**, the slug of the document to read from; the other sources are
+implied by the render context. A binding naming `single` without a key resolves
+to nothing at read time, so the format rejects it at the point where the slug
+can still be supplied.
+
+`fallback` is what renders when the path resolves to nothing, and it stays in
+`props` as the literal shown if the binding is removed.
+
+> **Bindings are reserved, not yet resolved.** The format accepts and validates
+> them, and the shape above is frozen. Nothing resolves them today: the renderer
+> passes `props` through unchanged, so a bound prop renders its literal `props`
+> value for every entry rather than the bound field.
+>
+> That is safe in itself — the literal is the documented fallback, so a page
+> shows stale content rather than nothing — but a generator that writes `$bind`
+> expecting it to take effect will produce pages that never update. Write the
+> value you want into `props` until resolution ships.
+
+### Visibility
+
+```json
+{
+  "conditions": [[{ "field": "status", "op": "eq", "value": "vip" }]],
+  "devices": { "mobile": false }
+}
+```
+
+The two mechanisms are deliberately separate and must not be conflated:
+
+- **`conditions`** decides whether a node is _served_. A hidden node is omitted
+  from server output entirely, not CSS-hidden. Stored as OR-of-AND (outer array
+  ORs, inner arrays AND) from the start, so a richer editing UI never needs a
+  storage migration.
+- **`devices`** decides whether a _served_ node is shown at a breakpoint. This
+  is presentation, and it is CSS-based.
+
+Conflating them would either leak a conditioned node into the payload or stop a
+hidden-on-mobile node being indexed.
+
+> **`conditions` is reserved, and it currently fails CLOSED.** No evaluator
+> exists — `op` is an open string and nothing decides whether a predicate holds
+> — so the renderer omits any node carrying `conditions` **for every visitor**,
+> rather than serving it to those who match.
+>
+> This is deliberate: conditions gate personalised and status-restricted
+> content, and showing everyone what was meant for some of them cannot be taken
+> back, while content missing from a page is visible and reportable. The
+> consequence is still worth stating plainly: **a node you condition today
+> disappears from the page entirely.** Leave `conditions` unset until the
+> evaluator ships.
+>
+> `devices` is unaffected and works as described.
+
+### Styles
+
+```json
+{
+  "base": {
+    "desktop": { "padding": "16px", "color": { "$token": "brand.primary" } }
+  }
+}
+```
+
+Two axes: state, then breakpoint. The **state** axis is closed — `base`,
+`hover`, `focus`, `active`. The breakpoint axis is not, because breakpoint ids
+are site configuration.
+
+A value of `{ "$token": "..." }` is a design-token reference rather than a
+literal.
+
+## What is frozen, and what may still change
+
+The format follows one rule: **additive-open, semantically-closed.**
+
+| change                                             | cost                   |
+| -------------------------------------------------- | ---------------------- |
+| a new style property                               | free; no format change |
+| a new optional field                               | free                   |
+| removing a field                                   | a format migration     |
+| changing what an existing field means              | a format migration     |
+| widening a closed vocabulary (`kind`, style state) | a format migration     |
+
+So the format can grow without breaking stored documents. What it cannot do is
+change its mind about something already written.
+
+The frozen surface is:
+
+1. **The document and node shapes** above, including `Binding`, `NodeVisibility`,
+   locale overlays, the component-instance node shape, and the document limits.
+
+   The freeze is over the **stored shape**, not over runtime behaviour. `Binding`
+   and `NodeVisibility.conditions` are frozen and reserved while the code that
+   acts on them is not written yet (see the notes in those sections). That is the
+   intended order: a document written against a frozen shape stays valid when
+   resolution arrives, whereas shipping a shape that later has to change would
+   invalidate everything already stored.
+
+2. **The typed-style envelope** — the states × breakpoints structure and the
+   token-reference convention. The style _property catalog_ inside it is
+   additive-open and is not frozen.
+3. **The validation API** — `validate(doc, ctx) → ValidationIssue[]`, where an
+   issue is `{ path, code, message, suggestion?, severity }` and `path` is an
+   RFC 6901 JSON Pointer.
+
+   > **`customCss` is stored, and nothing reads it yet.** The field is part of
+   > the frozen shape on both a node and the document settings, and no validator
+   > inspects it and no compiler emits it. Custom CSS has to be sanitized before
+   > it can be written into a page at all, and that sanitizer does not exist, so
+   > the value round-trips through storage and reaches no stylesheet. Do not
+   > rely on it to style anything yet.
+
+4. **The tree primitives and the reserved operation vocabulary.** The primitives
+   are pure, id-addressed functions over a forest: insert, remove, move, reid,
+   update.
+
+   The editor's operation layer **builds on** these; it does not mirror them.
+   The primitives are permissive by design — `removeNode` removes every node
+   matching an id — while the operation layer refuses cases a stored, replayable
+   edit cannot express safely, such as an id that appears twice, where an
+   inverse could only ever restore one of them. That difference is deliberate,
+   and closing it would reintroduce silent data loss.
+
+5. **The manifest artifact format**, whose block entries carry name, version,
+   description, example, prop schemas, serialized `supports`, and slot rules.
+6. **The bindability rule** — whether a prop can be bound is derived from its
+   field type, never opted into per block. The predicate is `isBindablePropType`.
+7. **The registry read API.** A plugin contributing blocks does so through the
+   page builder's block-registration service rather than a core `contributes`
+   key — blocks belong to the page builder, not to Nextly — so the shape frozen
+   here is the read side (`getBlock`, `allBlocks`, `getBlockSource`,
+   `getSupport`, `allSupports`), not a contribution field.
+
+### Reserved operation names
+
+⚠️ **These names are reserved, not yet callable.** None of them is implemented
+today. They are listed here so that nothing else claims one before the
+composition features ship, and so an implementer can see the intended shape.
+
+| name                 | what it will do                                         |
+| -------------------- | ------------------------------------------------------- |
+| `saveAsPattern`      | save a subtree as a copy-on-insert pattern              |
+| `saveAsComponent`    | save a subtree as a linked, reusable component          |
+| `convertToComponent` | replace a subtree in place with a component instance    |
+| `detachComponent`    | replace a component instance with a copy of its content |
+
+The reservation is a value rather than a sentence, because a list that exists
+only in prose cannot be consulted by the code that would have to honour it:
+
+```ts
+import {
+  RESERVED_OPERATION_NAMES,
+  isReservedOperationName,
+} from "@nextlyhq/blocks-engine";
+```
+
+An operation layer should refuse a reserved name it does not implement, rather
+than reporting it as unknown. "Unknown operation" invites a caller to define
+their own `saveAsPattern`, which is the collision the reservation exists to
+prevent, and it would surface only once the real one shipped.
+
+When these are built they will be operations and API actions rather than editor
+gestures, so a script or an agent can perform them without driving a UI.
+
+## What documents never contain
+
+**Custom JavaScript.** There is no mechanism for custom JS anywhere in the
+format, and this is a deliberate limit rather than an unbuilt feature — unlike
+the reserved fields above, it is not waiting on an implementation.
+
+A block may carry custom CSS at the document level and per node. That CSS is
+**not** sanitized today, because the sanitizer does not exist; the field is
+stored and nothing reads it (see the note on `customCss` above). Sanitization is
+a precondition of ever emitting it, not a property it already has.

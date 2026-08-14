@@ -368,7 +368,15 @@ function engineSurface(): EngineSurface {
     );
   }
 
-  const source = readFileSync(resolve(dirname(manifestPath), types), "utf8");
+  const entry = resolve(dirname(manifestPath), types);
+  // Declarations are gathered across the entry AND its chunks, because the
+  // bundler moves shared ones out of the entry as soon as the package emits a
+  // second entry point. Reading the entry alone silently under-reports the
+  // surface: every type that moved becomes invisible, and an obligation derived
+  // from what is left reads as a clean pass.
+  const source = declarationGraph(entry)
+    .map(file => readFileSync(file, "utf8"))
+    .join("\n");
   const declarations = new Map<string, EngineDeclaration>();
   const heads =
     /^(?:export\s+)?(?:declare\s+)?(type|interface|const|function|class)\s+([A-Za-z0-9_$]+)/gm;
@@ -389,7 +397,10 @@ function engineSurface(): EngineSurface {
     });
   }
 
-  return { declarations, exported: exportedNames(source) };
+  // Exports come from the ENTRY alone. A chunk exports for the entry to
+  // re-export, so reading the graph here would report a private declaration as
+  // published purely because the bundler had to move it.
+  return { declarations, exported: exportedNames(readFileSync(entry, "utf8")) };
 }
 
 /** A `type X = ...` runs to its terminating `;` at nesting depth zero. */

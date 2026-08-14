@@ -21,7 +21,13 @@
     "paths": {
       "@/*": ["./src/*"],
       "@/components/*": ["./src/app/(frontend)/components/*"],
-      "@nextly-config": ["./nextly.config.ts"]
+      "@nextly-config": ["./nextly.config.ts"],
+      // Pagefind's browser bundle is generated into public/ at build time, so it
+      // is imported by URL and cannot be resolved on disk while type-checking.
+      // A `declare module` cannot describe it either: TypeScript treats a rooted
+      // specifier as relative and rejects the declaration (TS2436). Templates
+      // without a search page simply never import it, leaving this mapping inert.
+      "/pagefind/pagefind.js": ["./src/types/pagefind.d.ts"]
     }
   },
   "include": [

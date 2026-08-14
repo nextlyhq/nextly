@@ -907,6 +907,42 @@ export type BuilderOp =
  * already treats as absent — so the rule is applied by READING through this
  * rather than by adding a check beside each read.
  */
+/**
+ * Whether a field resolved through the PROTOTYPE would change what happens.
+ *
+ * The ownership guards exist because a value reached through the prototype is
+ * absent from what `JSON.stringify` writes, so the edit happens and the stored
+ * op cannot reproduce it. That argument needs the inherited value to mean
+ * something. An inherited `undefined` means exactly what an absent field means:
+ * the replayed op resolves it to `undefined` too, so the placement it
+ * reproduces IS the placement that happened, and refusing it turns harmless
+ * pollution into an editor that cannot place anything at the top level —
+ * `Object.prototype.slot = undefined` rejects every insert and move.
+ *
+ * Read through the DESCRIPTOR rather than the property, because an inherited
+ * accessor would otherwise run while this decides whether to refuse the op —
+ * document-supplied code executed by a guard, on a path whose whole purpose is
+ * to reject before anything happens. An accessor is treated as significant
+ * without being invoked: what it would return is unknowable without running it,
+ * and a value that cannot be shown to be absent has to be assumed present.
+ */
+function inheritedValueWouldBeLost(
+  record: Record<string, unknown>,
+  field: string
+): boolean {
+  if (!(field in record) || Object.hasOwn(record, field)) return false;
+  for (
+    let link: object | null = Object.getPrototypeOf(record) as object | null;
+    link !== null;
+    link = Object.getPrototypeOf(link) as object | null
+  ) {
+    const descriptor = Object.getOwnPropertyDescriptor(link, field);
+    if (descriptor === undefined) continue;
+    return !(holdsAValue(descriptor) && descriptor.value === undefined);
+  }
+  return false;
+}
+
 function ownValue(record: Record<string, unknown>, field: string): unknown {
   return Object.hasOwn(record, field) ? record[field] : undefined;
 }
@@ -1736,11 +1772,26 @@ function assertFitsCaps(
     ? measureBytes(before, Number.POSITIVE_INFINITY).bytes
     : limits.maxBytes;
   const size = measureBytes(result, ceiling);
+  // Unstorable and too large are different verdicts, and the message says which.
+  // A cyclic document, or one holding `undefined`, a function or a `Date`,
+  // cannot be written at any size — reporting that as an overage would tell an
+  // author their two-node page had outgrown a two-megabyte cap and send them
+  // deleting content that was never the problem.
+  //
+  // `exceeded` covers BOTH, which is why the refusal is one branch rather than
+  // two: a caller asking only whether the document fits still refuses one that
+  // has no stored form. Reading a separate flag for that is fail-open, and was
+  // measured to be — it silently stopped this guard refusing cyclic documents
+  // until a second check was added by hand.
   if (size.exceeded) {
     throw new OpError(
-      `${verb}: this would leave the document over ${String(ceiling)} bytes, ` +
-        `past the ${String(limits.maxBytes)} it may hold. The edit would ` +
-        `apply and then fail to save.`
+      size.reason === "unwritable"
+        ? `${verb}: this would leave the document holding a value that cannot ` +
+          `be stored — a cycle, or something JSON does not preserve. The ` +
+          `edit would apply and then fail to save.`
+        : `${verb}: this would leave the document over ${String(ceiling)} ` +
+          `bytes, past the ${String(limits.maxBytes)} it may hold. The edit ` +
+          `would apply and then fail to save.`
     );
   }
 }
@@ -1900,6 +1951,58 @@ function rebuild(
     }
     return { ...mapped, slots };
   });
+}
+
+/**
+ * A node whose own fields are written in the DECLARED order.
+ *
+ * An inverse restores a removed field by writing it again, and a written key
+ * lands at the END of the object. So undoing an `unset` of a field that was not
+ * last gives back every value and a different key sequence — and a document is
+ * compared, stored and hashed as JSON, where that is a different document. The
+ * round trip then fails on an edit that restored the data perfectly.
+ *
+ * Ordering the fields the same way every time removes the question rather than
+ * tracking the answer: the alternative is recording the original key sequence on
+ * each inverse, which makes the property hold only while that bookkeeping stays
+ * correct. JSON objects are formally unordered and mature document models do not
+ * treat a node's own field order as meaningful — Automerge's maps have no
+ * insertion order at all, and ProseMirror builds `attrs` from its schema.
+ *
+ * The order comes from {@link NODE_FIELDS}, so there is one statement of the
+ * node's shape rather than a second list that drifts from it. Fields the table
+ * does not know follow, keeping their existing relative order, so a document
+ * written by a newer editor survives a round trip through an older one.
+ *
+ * Order INSIDE a value is untouched. `props` is author data, observable through
+ * `Object.entries`, and {@link equalWithin} compares it order-sensitively for
+ * that reason.
+ *
+ * Assigned through `defineProperty` rather than `out[field] = ...` because a
+ * forward-compatible field could be named `__proto__`, where plain assignment
+ * sets the prototype instead of creating an own property and the field vanishes
+ * from what is stored.
+ */
+function canonicalNode(node: BlockNode): BlockNode {
+  const source = node as unknown as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  const write = (field: string): void => {
+    Object.defineProperty(out, field, {
+      value: source[field],
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+  };
+  for (const field of Object.keys(NODE_FIELDS)) {
+    if (Object.hasOwn(source, field)) write(field);
+  }
+  for (const field of Object.keys(source)) {
+    if (!Object.hasOwn(out, field)) write(field);
+  }
+  // Asserted rather than narrowed: every own field of a validated node is
+  // carried across unchanged, so the result holds exactly what the input did.
+  return out as unknown as BlockNode;
 }
 
 /** A node without the named keys, for an update that removed fields. */
@@ -2112,7 +2215,7 @@ function assertPosition(at: TreePosition, verb: string): void {
   // in this file reached nine sites because each round added a guard next to
   // whichever instance it was shown, and this is the ownership class's fifth.
   for (const field of ["index", "parentId", "slot"] as const) {
-    if (field in at && !Object.hasOwn(at, field)) {
+    if (inheritedValueWouldBeLost(at, field)) {
       throw new OpError(
         `${verb}: a position whose ${field} comes from the prototype rather ` +
           `than from the position cannot be applied: the placement would ` +
@@ -2565,7 +2668,7 @@ export function applyOp(
   // Checked against the vocabulary rather than per branch, so a field added to
   // an op later cannot be dispatched on without being owned.
   for (const field of OP_VOCABULARY) {
-    if (field in op && !Object.hasOwn(op, field)) {
+    if (inheritedValueWouldBeLost(op, field)) {
       throw new OpError(
         `an op whose ${describe(field)} comes from the prototype rather than ` +
           `from the op cannot be applied: the edit would run and the op would ` +
@@ -2885,12 +2988,18 @@ export function applyOp(
       // same document — but every reader between here and storage sees the
       // difference, and this module's own value check is one of them.
       const cleared = op.unset ?? [];
-      const updated =
-        cleared.length === 0
-          ? written
-          : rebuild(written, current =>
-              current.id === op.id ? withoutKeys(current, cleared) : current
-            );
+      // Canonicalised unconditionally, not only when fields were removed. A
+      // patch that WRITES a field the node already had leaves it where it was,
+      // while one that adds a field appends it — so two documents holding the
+      // same values differ by which edit produced them, and the inverse of the
+      // second does not restore the first.
+      const updated = rebuild(written, current =>
+        current.id === op.id
+          ? canonicalNode(
+              cleared.length === 0 ? current : withoutKeys(current, cleared)
+            )
+          : current
+      );
       assertFitsCaps(document, withNodes(document, updated), "update", limits);
       return {
         document: withNodes(document, updated),

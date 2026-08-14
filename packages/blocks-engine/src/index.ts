@@ -11,10 +11,14 @@ export type { SeoDefinitionSource, SeoImageCandidate } from "./derive-seo";
 export {
   DOCUMENT_FORMAT_VERSION,
   DOCUMENT_KINDS,
+  BINDING_SOURCES,
+  BINDING_FORMAT_TYPES,
+  DEFAULT_BINDING_SOURCE,
   COMPONENT_INSTANCE_TYPE,
   STYLE_STATES,
   MAX_BREAKPOINTS_PER_AXIS,
   isTokenRef,
+  isBindingSource,
   isComponentInstance,
 } from "./document";
 export type {
@@ -23,6 +27,7 @@ export type {
   Binding,
   BindingSource,
   BindingFormat,
+  BindingFormatType,
   BreakpointDef,
   BreakpointId,
   BreakpointSet,
@@ -53,6 +58,7 @@ export {
   documentBytes,
 } from "./limits";
 export type { DocumentLimits } from "./limits";
+export type { DocumentSurvey, SurveyLimits } from "./measure-bytes";
 
 export {
   newId,
@@ -69,7 +75,13 @@ export {
 } from "./tree";
 export type { NodeLocation, TreePosition } from "./tree";
 
-export { validate, ISSUE_CODES, measureBytes } from "./validation";
+export { measureBytes, surveyDocument } from "./measure-bytes";
+// The measurement's return type travels with the function. Without it a
+// consumer naming `measureBytes`'s result has to rebuild the union by hand or
+// reach for `ReturnType`, and a hand-rebuilt copy is the second statement of a
+// contract that then drifts from the first.
+export type { ByteMeasurement } from "./measure-bytes";
+export { validate, ISSUE_CODES } from "./validation";
 /**
  * The registry-independent facts about a node, exported so a caller holding no
  * block registry can still refuse a malformed one. The editor's op layer is the
@@ -327,3 +339,13 @@ export {
   type RemotePattern,
   type RemotePatternInput,
 } from "./url-policy";
+
+// The operation names the format reserves for composition flows. Exported so
+// an operation layer can ask rather than restate: a reservation only holds if
+// the code deciding whether to accept a name reads the same list the format
+// spec publishes.
+export {
+  RESERVED_OPERATION_NAMES,
+  isReservedOperationName,
+  type ReservedOperationName,
+} from "./operations";

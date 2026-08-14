@@ -13,6 +13,7 @@ import { getNextly } from "nextly";
 import { cachedFind, nextlyTags } from "nextly/runtime";
 import nextlyConfig from "@nextly-config";
 
+import { toCategory } from "./coerce";
 import type { Category, TaxonomyWithCount } from "./types";
 
 export async function getCategoryBySlug(
@@ -28,7 +29,8 @@ export async function getCategoryBySlug(
           limit: 1,
           depth: 0,
         });
-        return result.items[0] ? (result.items[0] as Category) : null;
+        const found = result.items[0];
+        return found ? toCategory(found) : null;
       },
       {
         tags: nextlyTags("categories"),
@@ -59,7 +61,7 @@ export async function getAllCategories(): Promise<Category[]> {
           limit: 1000,
           depth: 0,
         });
-        return result.items.map(d => d as unknown as Category);
+        return result.items.map(toCategory);
       },
       { tags: nextlyTags("categories"), keyParts: ["categories", "all"] }
     );
@@ -131,7 +133,7 @@ export async function getAllCategoriesWithCounts(): Promise<
               depth: 0,
             });
             return {
-              item: cat as Category,
+              item: toCategory(cat),
               postCount: posts.meta.total,
             };
           })

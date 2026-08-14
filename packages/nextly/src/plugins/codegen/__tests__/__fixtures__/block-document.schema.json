@@ -1,0 +1,370 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "formatVersion": {
+      "type": "number",
+      "const": 1
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["page", "pattern", "component", "region", "template"]
+    },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/__schema0"
+      }
+    },
+    "settings": {
+      "type": "object",
+      "properties": {
+        "styles": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "enum": ["base", "hover", "focus", "active"]
+          },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object"
+            }
+          }
+        },
+        "customCss": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": {}
+    },
+    "assets": {
+      "type": "object",
+      "properties": {
+        "mediaIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": {}
+    }
+  },
+  "required": ["formatVersion", "kind", "nodes"],
+  "additionalProperties": {},
+  "$defs": {
+    "__schema0": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        },
+        "props": {
+          "type": "object",
+          "additionalProperties": {}
+        },
+        "bindings": {
+          "type": "object",
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "$bind": {
+                    "type": "string"
+                  },
+                  "fallback": {},
+                  "format": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "const": "date"
+                          },
+                          "options": {
+                            "type": "object",
+                            "additionalProperties": {}
+                          }
+                        },
+                        "required": ["type"],
+                        "additionalProperties": {}
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "const": "number"
+                          },
+                          "options": {
+                            "type": "object",
+                            "additionalProperties": {}
+                          }
+                        },
+                        "required": ["type"],
+                        "additionalProperties": {}
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "const": "currency"
+                          },
+                          "currency": {
+                            "type": "string"
+                          },
+                          "options": {
+                            "type": "object",
+                            "additionalProperties": {}
+                          }
+                        },
+                        "required": ["type", "currency"],
+                        "additionalProperties": {}
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "const": "relativeTime"
+                          },
+                          "options": {
+                            "type": "object",
+                            "additionalProperties": {}
+                          }
+                        },
+                        "required": ["type"],
+                        "additionalProperties": {}
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "const": "list"
+                          },
+                          "options": {
+                            "type": "object",
+                            "additionalProperties": {}
+                          }
+                        },
+                        "required": ["type"],
+                        "additionalProperties": {}
+                      }
+                    ]
+                  },
+                  "source": {
+                    "type": "string",
+                    "enum": ["entry", "item", "site"]
+                  },
+                  "sourceKey": {
+                    "not": {}
+                  }
+                },
+                "required": ["$bind"],
+                "additionalProperties": {}
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "$bind": {
+                    "type": "string"
+                  },
+                  "fallback": {},
+                  "format": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "const": "date"
+                          },
+                          "options": {
+                            "type": "object",
+                            "additionalProperties": {}
+                          }
+                        },
+                        "required": ["type"],
+                        "additionalProperties": {}
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "const": "number"
+                          },
+                          "options": {
+                            "type": "object",
+                            "additionalProperties": {}
+                          }
+                        },
+                        "required": ["type"],
+                        "additionalProperties": {}
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "const": "currency"
+                          },
+                          "currency": {
+                            "type": "string"
+                          },
+                          "options": {
+                            "type": "object",
+                            "additionalProperties": {}
+                          }
+                        },
+                        "required": ["type", "currency"],
+                        "additionalProperties": {}
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "const": "relativeTime"
+                          },
+                          "options": {
+                            "type": "object",
+                            "additionalProperties": {}
+                          }
+                        },
+                        "required": ["type"],
+                        "additionalProperties": {}
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "const": "list"
+                          },
+                          "options": {
+                            "type": "object",
+                            "additionalProperties": {}
+                          }
+                        },
+                        "required": ["type"],
+                        "additionalProperties": {}
+                      }
+                    ]
+                  },
+                  "source": {
+                    "type": "string",
+                    "const": "single"
+                  },
+                  "sourceKey": {
+                    "type": "string"
+                  }
+                },
+                "required": ["$bind", "source", "sourceKey"],
+                "additionalProperties": {}
+              }
+            ]
+          }
+        },
+        "slots": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/__schema0"
+            }
+          }
+        },
+        "styles": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "enum": ["base", "hover", "focus", "active"]
+          },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object"
+            }
+          }
+        },
+        "classes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "visibility": {
+          "type": "object",
+          "properties": {
+            "conditions": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "field": {
+                      "type": "string"
+                    },
+                    "op": {
+                      "type": "string"
+                    },
+                    "value": {}
+                  },
+                  "required": ["field", "op"],
+                  "additionalProperties": {}
+                }
+              }
+            },
+            "devices": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "boolean"
+              }
+            }
+          },
+          "additionalProperties": {}
+        },
+        "locked": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "customCss": {
+          "type": "string"
+        },
+        "cssId": {
+          "type": "string"
+        },
+        "attributes": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "migrationFailed": {
+          "type": "boolean"
+        }
+      },
+      "required": ["id", "type", "version", "props"],
+      "additionalProperties": {}
+    }
+  }
+}

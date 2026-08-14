@@ -1,5 +1,6 @@
 import type { PluginContext } from "../plugin-context";
 
+import { pluginRouteFullPath } from "./route-path";
 import type { PluginRoute, RouteMethod } from "./route-types";
 
 /**
@@ -43,7 +44,7 @@ export class PluginRouteRegistry {
     route: PluginRoute,
     baseCtx: PluginContext
   ): void {
-    const fullPath = `/plugins/${pluginName}${route.path}`;
+    const fullPath = pluginRouteFullPath(pluginName, route.path);
     this.routes.push({
       pluginName,
       method: route.method,

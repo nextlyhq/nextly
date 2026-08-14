@@ -19,6 +19,12 @@ import type {
   PluginMenuItem,
 } from "./admin-contributions";
 import type { FieldSurface } from "./contributions";
+import { isPermissionCollision } from "./permission-error";
+import {
+  type CollectedPermission,
+  collectCustomPermissions,
+  type PermissionConfigSource,
+} from "./permissions/collect-permissions";
 import { pluginCollectionSlugs } from "./plugin-admin-meta";
 import type {
   PluginAdminAppearance,
@@ -26,6 +32,8 @@ import type {
   PluginDefinition,
 } from "./plugin-context";
 import { pluginAdminSlug } from "./plugin-slug";
+import { collectPluginRoutes } from "./routes/collect-routes";
+import { isRouteError } from "./routes/route-error";
 import { validatedClientConfig } from "./validate-client-config";
 import { validatePluginSlugs } from "./validate-slugs";
 
@@ -74,8 +82,13 @@ export interface PluginAdminMeta {
    */
   clientConfig?: Record<string, unknown>;
   /**
-   * Declared custom permissions (identity + display fields only) — present
-   * only for enabled plugins, like the rest of the behavioral surface.
+   * Declared custom permissions (identity + display fields only).
+   *
+   * Present whatever the enabled state, unlike the rest of the behavioral
+   * surface, because these rows exist whatever the enabled state: the
+   * permission fold covers disabled plugins too, the seeder creates them, and
+   * new ones are granted to super_admin. A disabled plugin's permission is
+   * held and assignable; what it protects is simply not mounted.
    */
   permissions?: Array<{
     action: string;
@@ -90,7 +103,27 @@ export interface PluginAdminMeta {
    * plugin mounts. Present only for enabled plugins (routes of a disabled
    * plugin are not mounted).
    */
-  routes?: Array<{ method: string; path: string }>;
+  routes?: Array<{ method: string; path: string; fullPath: string }>;
+  /**
+   * The routes a DISABLED plugin declares but does not currently serve.
+   *
+   * Routes only, and the omission of permissions is deliberate. Routes are the
+   * asymmetric half: `collectPluginRoutes` covers enabled plugins only, so a
+   * disabled plugin serves none. Permissions are folded over ALL plugins
+   * including disabled ones, seeded, and assigned — so a disabled plugin's
+   * permissions already exist, and listing them here would claim they are
+   * pending when they are not.
+   *
+   * Populated only when the plugin is disabled, so this and `routes` above are
+   * never both present. Nothing may concatenate them: a caller that did would
+   * be claiming a disabled plugin serves endpoints it does not.
+   *
+   * Only routes that could actually mount appear. A path without a leading
+   * slash makes `collectPluginRoutes` throw at boot once the plugin is
+   * enabled, so presenting it as something enabling would add is a promise
+   * this cannot keep.
+   */
+  whenEnabled?: { routes?: PluginAdminMeta["routes"] };
   /** Sidebar menu items — present only for enabled plugins. */
   menu?: PluginMenuItem[];
   /** Custom admin pages — present only for enabled plugins. */
@@ -158,10 +191,157 @@ export { pluginAdminSlug } from "./plugin-slug";
  * Disabled plugins (`enabled: false`) keep their entry (their schema still
  * applies) but contribute NO behavioral admin UI — no menu/pages/settings.
  */
+/**
+ * The routes a plugin would actually serve, with the namespace they answer at.
+ *
+ * Asks `collectPluginRoutes` rather than restating its rules. That function is
+ * the canonical answer to "would these mount": it rejects a path without a
+ * leading slash and rejects two routes sharing a `(method, full path)`.
+ * Re-implementing either predicate here would let the admin advertise a route
+ * boot refuses, which is the whole failure this guards.
+ *
+ * Folded against the plugins that are ALREADY enabled, not against this plugin
+ * alone, because a collision need not be self-inflicted: namespaces are built
+ * from package names, so an enabled `foo` declaring `GET /bar/x` and a
+ * disabled `foo/bar` declaring `GET /x` both resolve to `/plugins/foo/bar/x`.
+ * Enabling the second is what fails, and a fold over one plugin cannot see it.
+ *
+ * The subject is forced enabled, since the question is what WOULD happen. Its
+ * routes are then picked back out by owner: a collision reported against an
+ * already-enabled sibling means the subject's route is the one that could not
+ * be added.
+ *
+ * `undefined` when nothing would mount, so a caller renders nothing rather
+ * than an empty section.
+ */
+function mountableRoutes(
+  plugin: PluginDefinition,
+  siblings: readonly PluginDefinition[]
+): PluginAdminMeta["routes"] | undefined {
+  const routes = plugin.contributes?.routes;
+  if (!routes || routes.length === 0) return undefined;
+
+  // Enabled siblings first, so a collision is attributed to the sibling that
+  // already holds the path and the subject's route is the one rejected.
+  const others = siblings.filter(
+    other => other !== plugin && other.enabled !== false
+  );
+
+  let collected;
+  try {
+    collected = collectPluginRoutes([...others, { ...plugin, enabled: true }]);
+  } catch (error) {
+    // Only route errors reach here — `collectPluginRoutes` throws
+    // `routeInvalidPathError` and `routeCollisionError` and nothing else — and
+    // both mean the same thing to this caller: these declarations do not
+    // mount, so there is nothing honest to advertise. Rethrown otherwise,
+    // since that would be a defect rather than a verdict.
+    if (!isRouteError(error)) throw error;
+    return undefined;
+  }
+
+  // Method + path only, plus the namespace: handlers and middleware are code
+  // and never serialize.
+  const mine = collected.filter(c => c.pluginName === plugin.name);
+  return mine.length > 0
+    ? mine.map(c => ({
+        method: c.method,
+        path: c.path,
+        fullPath: c.fullPath,
+      }))
+    : undefined;
+}
+
+/**
+ * The custom permissions to describe on the PUBLIC admin-meta payload.
+ *
+ * That endpoint is served WITHOUT initializing services, so the config it reads
+ * is whatever the route module stored — before any plugin `setup` transformer
+ * has run. A transformer may legitimately resolve a collision between two
+ * declarations, so the raw list can hold one that boot never sees, and
+ * `collectCustomPermissions` throws on it. Letting that escape would take the
+ * whole endpoint down — branding included — over a configuration that boots.
+ *
+ * Degrades to describing NO custom permissions rather than to describing the
+ * raw declarations: a set that cannot be folded is a set this cannot attribute,
+ * and attributing it wrongly is the thing the fold exists to prevent.
+ *
+ * Deliberately a different failure semantic from `collectPluginInfo`, which
+ * folds the same declarations for the CLI and lets the collision throw — there
+ * an invalid config should be reported, here it should not blank the admin.
+ *
+ * Only the collision is absorbed. Anything else is a defect, and rethrows.
+ *
+ * The entity slugs are widened with each plugin's CONTRIBUTED collections and
+ * singles before folding, taken from `resolvePluginSelf` so they are the slugs
+ * the entities RESOLVE to. A host may remap one with the public
+ * `plugin.rename({ forms: "contact-forms" })` API and the schema fold seeds
+ * against the renamed slug, so widening with the declared name instead would
+ * leave a `publish:contact-forms` declaration looking plugin-owned while boot
+ * drops it as an adopted lifecycle permission. Whether a `publish` declaration is the plugin's own
+ * or one the seeder owns is decided by whether its resource names an entity —
+ * and boot merges contributed entities into the config before that question is
+ * asked, while this endpoint reads a config where they are still absent. Folded
+ * against the narrow view, a plugin declaring `publish` for a collection it
+ * contributes itself would be reported as owning a permission the seeder takes
+ * over.
+ *
+ * This closes the CONFIG half of that gap and not the database half: a Schema
+ * Builder collection lives in `dynamic_collections` and is unknowable here, so
+ * a declaration naming one is still collected as plugin-owned. That limit is
+ * the collector's own and predates this function — see the Builder-entity case
+ * in `seed-system-permissions.integration.test.ts`.
+ */
+export function adminMetaPermissions(
+  config: PermissionConfigSource & { plugins?: PluginDefinition[] }
+): CollectedPermission[] {
+  const plugins = config.plugins ?? [];
+
+  try {
+    // The config AS GIVEN. No widening from plugin declarations: the booted
+    // config's `collections` and `singles` are already contribution-merged —
+    // `registerServices` folds `contributes.{collections,singles}` in before it
+    // publishes — and boot's own `collectCustomPermissions` call reads exactly
+    // this shape. Re-deriving entity slugs here would be a second answer to
+    // "which entities exist", and it would be the WRONG one: it classifies a
+    // contribution from a plugin the schema fold never merged, so a lifecycle
+    // declaration on it reads as adopted here while the seeder makes it a
+    // plugin-owned custom permission.
+    return collectCustomPermissions(config, plugins);
+  } catch (error) {
+    if (isPermissionCollision(error)) return [];
+    throw error;
+  }
+}
+
 export function buildPluginAdminMeta(
   plugins: PluginDefinition[],
-  pluginOverrides: Record<string, PluginOverride> | undefined
+  pluginOverrides: Record<string, PluginOverride> | undefined,
+  permissions: readonly CollectedPermission[]
 ): PluginAdminMeta[] {
+  // The permissions that actually become rows, indexed by the plugin that owns
+  // them.
+  //
+  // TAKEN rather than folded here. A declaration and a seeded permission are
+  // not the same set — `collectCustomPermissions` drops a `publish`/`unpublish`
+  // declaration whose resource is a collection or single, since the seeder
+  // emits that slug itself and keeps the row ownerless — so this must read the
+  // collected set rather than `contributes.permissions`. But collecting it here
+  // as well as at the caller would compute one authoritative answer twice and
+  // leave two projections of it free to drift; `collectPluginInfo` already
+  // collects the same set for the CLI's slug summary.
+  //
+  // `source` rather than `owner` decides what belongs to a plugin: the host's
+  // sentinel owner is the literal `"app"`, and a plugin may legally be named
+  // that, which would file every host-declared permission under it.
+  const ownedPermissions = new Map<string, CollectedPermission[]>();
+  for (const permission of permissions) {
+    if (permission.source !== "plugin") continue;
+    const owned = ownedPermissions.get(permission.owner);
+    if (owned) owned.push(permission);
+    else ownedPermissions.set(permission.owner, [permission]);
+  }
+
   // Here, and not only at boot, because this is the one place a plugin list
   // becomes ADDRESSES: the slug below is the admin's URL for the plugin and
   // the key its host override is read by. Two boot paths do not reach it —
@@ -260,25 +440,38 @@ export function buildPluginAdminMeta(
         meta.entryFormToolbarSlot = admin.entryFormToolbarSlot;
     }
 
-    // Behavioral contributions summarized for the detail page, enabled only:
-    // a disabled plugin's routes are not mounted and its permissions grant
-    // nothing, so listing them would overstate what the install does.
+    // Permissions are serialized whatever the enabled state, because they
+    // EXIST whatever the enabled state: `collectCustomPermissions` folds over
+    // every plugin including disabled ones (D49), the post-init seeder creates
+    // the rows, and new ones are assigned to super_admin. Withholding them
+    // here made the page disagree with the database — an operator could hold a
+    // plugin's permission, see it in the roles UI, and find nothing on the
+    // owning plugin's page to explain where it came from.
+    //
+    // Routes are the genuinely absent half: `collectPluginRoutes` skips
+    // disabled plugins, so a disabled plugin serves none. Those move to
+    // `whenEnabled`, and the `if/else` is what stops a route being reported as
+    // both served and pending.
+    const permissions = ownedPermissions.get(plugin.name);
+    if (permissions && permissions.length > 0) {
+      meta.permissions = permissions.map(p => ({
+        action: p.action,
+        resource: p.resource,
+        // The name the row carries, which the collector already resolved from
+        // the declared label or composed from the action and resource. Sending
+        // it under `label` keeps this page and the roles UI naming the same
+        // permission the same way.
+        label: p.name,
+        ...(p.description ? { description: p.description } : {}),
+        ...(p.danger ? { danger: p.danger } : {}),
+      }));
+    }
+
+    const declaredRoutes = mountableRoutes(plugin, plugins);
     if (isEnabled) {
-      const permissions = plugin.contributes?.permissions;
-      if (permissions && permissions.length > 0) {
-        meta.permissions = permissions.map(p => ({
-          action: p.action,
-          resource: p.resource,
-          ...(p.label ? { label: p.label } : {}),
-          ...(p.description ? { description: p.description } : {}),
-          ...(p.danger ? { danger: p.danger } : {}),
-        }));
-      }
-      const routes = plugin.contributes?.routes;
-      if (routes && routes.length > 0) {
-        // Method + path only: handlers/middleware are code and never serialize.
-        meta.routes = routes.map(r => ({ method: r.method, path: r.path }));
-      }
+      if (declaredRoutes) meta.routes = declaredRoutes;
+    } else if (declaredRoutes) {
+      meta.whenEnabled = { routes: declaredRoutes };
     }
 
     // Custom field types — serialized regardless of enabled state so the

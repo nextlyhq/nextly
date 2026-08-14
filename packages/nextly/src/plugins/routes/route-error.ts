@@ -36,3 +36,19 @@ export function routeInvalidPathError(
     logContext: { reason: "route-invalid-path", pluginName, path },
   });
 }
+
+/**
+ * Whether an error is one of the two a route fold raises.
+ *
+ * Narrow on purpose. A caller that treats "these routes do not mount" as a
+ * verdict must not reach that verdict from an unrelated failure — a
+ * `TypeError` in this module would otherwise be reported to a reader as a
+ * plugin declaring bad routes, which sends them to fix the wrong thing.
+ */
+export function isRouteError(error: unknown): boolean {
+  return (
+    error instanceof NextlyError &&
+    (error.code === "NEXTLY_ROUTE_COLLISION" ||
+      error.code === "NEXTLY_ROUTE_INVALID_PATH")
+  );
+}

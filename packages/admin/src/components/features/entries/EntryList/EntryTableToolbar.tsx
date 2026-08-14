@@ -83,7 +83,7 @@ export function EntryTableToolbar({
             value={globalFilter}
             onChange={onGlobalFilterChange}
             placeholder={`Search ${collection.label}...`}
-            className="w-full border-border bg-background text-foreground"
+            className="w-full"
             data-entry-search-input
           />
         </div>

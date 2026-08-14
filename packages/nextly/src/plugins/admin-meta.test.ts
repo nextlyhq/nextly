@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 
+import type { CollectedPermission } from "./permissions/collect-permissions";
 import type { PluginDefinition } from "./plugin-context";
 
 import { NEXTLY_ERROR_STATUS } from "../errors/error-codes";
 import { NextlyError } from "../errors/nextly-error";
 
-import { buildPluginAdminMeta } from "./admin-meta";
+import { adminMetaPermissions, buildPluginAdminMeta } from "./admin-meta";
+import { isPermissionCollision } from "./permission-error";
 
 const base = {
   name: "@acme/p",
@@ -15,6 +17,26 @@ const base = {
 
 function asPlugins(defs: unknown[]): PluginDefinition[] {
   return defs as PluginDefinition[];
+}
+
+/**
+ * One entry of the collected set, as `collectCustomPermissions` produces it.
+ * Defaults to a plugin-owned permission belonging to `base`, since that is what
+ * most cases here are about.
+ */
+function collectedPermission(
+  overrides: Partial<CollectedPermission> &
+    Pick<CollectedPermission, "action" | "resource">
+): CollectedPermission {
+  return {
+    slug: `${overrides.action}-${overrides.resource}`,
+    name: `${overrides.action} ${overrides.resource}`,
+    owner: base.name,
+    source: "plugin",
+    group: "General",
+    danger: false,
+    ...overrides,
+  };
 }
 
 describe("buildPluginAdminMeta", () => {
@@ -35,7 +57,8 @@ describe("buildPluginAdminMeta", () => {
           },
         },
       ]),
-      undefined
+      undefined,
+      []
     );
     expect(meta[0].fieldTypes?.[0]).toMatchObject({
       type: "page-builder",
@@ -65,7 +88,8 @@ describe("buildPluginAdminMeta", () => {
           },
         },
       ]),
-      undefined
+      undefined,
+      []
     );
     expect(meta[0].fieldTypes?.[0]).toEqual({
       type: "rating",
@@ -91,7 +115,8 @@ describe("buildPluginAdminMeta", () => {
           },
         },
       ]),
-      undefined
+      undefined,
+      []
     );
     expect(meta[0].fieldTypes?.[0]).toEqual({
       type: "rating",
@@ -110,7 +135,8 @@ describe("buildPluginAdminMeta", () => {
           contributes: { admin: { schemaBuilderSlot: "@acme/p/admin#Toggle" } },
         },
       ]),
-      undefined
+      undefined,
+      []
     );
     expect(enabled[0].schemaBuilderSlot).toBe("@acme/p/admin#Toggle");
 
@@ -122,7 +148,8 @@ describe("buildPluginAdminMeta", () => {
           contributes: { admin: { schemaBuilderSlot: "@acme/p/admin#Toggle" } },
         },
       ]),
-      undefined
+      undefined,
+      []
     );
     expect(disabled[0].schemaBuilderSlot).toBeUndefined();
   });
@@ -135,7 +162,8 @@ describe("buildPluginAdminMeta", () => {
           contributes: { admin: { entryFormToolbarSlot: "@acme/p/admin#Bar" } },
         },
       ]),
-      undefined
+      undefined,
+      []
     );
     expect(enabled[0].entryFormToolbarSlot).toBe("@acme/p/admin#Bar");
 
@@ -147,7 +175,8 @@ describe("buildPluginAdminMeta", () => {
           contributes: { admin: { entryFormToolbarSlot: "@acme/p/admin#Bar" } },
         },
       ]),
-      undefined
+      undefined,
+      []
     );
     expect(disabled[0].entryFormToolbarSlot).toBeUndefined();
   });
@@ -179,7 +208,8 @@ describe("buildPluginAdminMeta", () => {
           },
         },
       ]),
-      undefined
+      undefined,
+      []
     );
 
     expect(meta[0].menu).toEqual([
@@ -218,7 +248,8 @@ describe("buildPluginAdminMeta", () => {
           },
         },
       ]),
-      undefined
+      undefined,
+      []
     );
     expect(meta[0].headerSlot).toBe("@acme/p/admin#HeaderBadge");
     expect(meta[0].widgets?.[0]).toMatchObject({
@@ -245,7 +276,8 @@ describe("buildPluginAdminMeta", () => {
           },
         },
       ]),
-      undefined
+      undefined,
+      []
     );
     expect(meta[0].header).toEqual({
       slot: "@acme/p/admin#Publish",
@@ -264,7 +296,8 @@ describe("buildPluginAdminMeta", () => {
           contributes: { admin: { headerSlot: "@acme/p/admin#Badge" } },
         },
       ]),
-      undefined
+      undefined,
+      []
     );
     expect(meta[0].header?.slot).toBe("@acme/p/admin#Badge");
     expect(meta[0].headerSlot).toBe("@acme/p/admin#Badge");
@@ -283,7 +316,8 @@ describe("buildPluginAdminMeta", () => {
           },
         },
       ]),
-      undefined
+      undefined,
+      []
     );
     expect(meta[0].header).toBeUndefined();
     expect(meta[0].headerSlot).toBeUndefined();
@@ -303,7 +337,8 @@ describe("buildPluginAdminMeta", () => {
           },
         },
       ]),
-      undefined
+      undefined,
+      []
     );
     expect(meta[0].headerSlot).toBeUndefined();
     expect(meta[0].widgets).toBeUndefined();
@@ -315,7 +350,8 @@ describe("buildPluginAdminMeta", () => {
     ];
     const enabled = buildPluginAdminMeta(
       asPlugins([{ ...base, contributes: { fieldTypes } }]),
-      undefined
+      undefined,
+      []
     );
     expect(enabled[0].fieldTypes).toEqual([
       { type: "rating", component: "@acme/p/admin#Rating", storage: "number" },
@@ -325,7 +361,8 @@ describe("buildPluginAdminMeta", () => {
     // can still render fields of retained collections.
     const disabled = buildPluginAdminMeta(
       asPlugins([{ ...base, enabled: false, contributes: { fieldTypes } }]),
-      undefined
+      undefined,
+      []
     );
     expect(disabled[0].fieldTypes).toEqual([
       { type: "rating", component: "@acme/p/admin#Rating", storage: "number" },
@@ -343,7 +380,8 @@ describe("buildPluginAdminMeta", () => {
           },
         },
       ]),
-      undefined
+      undefined,
+      []
     );
     // The plugin entry still exists (its schema still applies), but its
     // behavioral admin UI (menu/pages/settings) is skipped per D49.
@@ -366,7 +404,8 @@ describe("buildPluginAdminMeta", () => {
           contributes: { collections: [{ slug: "forms" }] },
         },
       ]),
-      { "acme-p": { order: 5, appearance: { badge: "Beta" } } }
+      { "acme-p": { order: 5, appearance: { badge: "Beta" } } },
+      []
     );
 
     expect(meta[0].placement).toBe("users");
@@ -380,7 +419,7 @@ describe("buildPluginAdminMeta", () => {
   });
 
   it("defaults placement to 'plugins' and has no admin keys when none declared", () => {
-    const meta = buildPluginAdminMeta(asPlugins([{ ...base }]), undefined);
+    const meta = buildPluginAdminMeta(asPlugins([{ ...base }]), undefined, []);
     expect(meta[0].placement).toBe("plugins");
     expect(meta[0].menu).toBeUndefined();
     expect(meta[0].pages).toBeUndefined();
@@ -401,7 +440,8 @@ describe("buildPluginAdminMeta", () => {
           tags: ["forms", "email"],
         },
       ]),
-      undefined
+      undefined,
+      []
     );
     expect(meta[0]).toMatchObject({
       author: "Acme Inc.",
@@ -419,19 +459,21 @@ describe("buildPluginAdminMeta", () => {
       asPlugins([
         { ...base, enabled: false, author: "Acme Inc.", license: "MIT" },
       ]),
-      undefined
+      undefined,
+      []
     );
     expect(meta[0].author).toBe("Acme Inc.");
     expect(meta[0].license).toBe("MIT");
   });
 
   it("serializes the enabled state explicitly", () => {
-    const on = buildPluginAdminMeta(asPlugins([{ ...base }]), undefined);
+    const on = buildPluginAdminMeta(asPlugins([{ ...base }]), undefined, []);
     expect(on[0].enabled).toBe(true);
 
     const off = buildPluginAdminMeta(
       asPlugins([{ ...base, enabled: false }]),
-      undefined
+      undefined,
+      []
     );
     expect(off[0].enabled).toBe(false);
   });
@@ -439,12 +481,19 @@ describe("buildPluginAdminMeta", () => {
   it("serializes dependsOn ranges for the detail page", () => {
     const meta = buildPluginAdminMeta(
       asPlugins([{ ...base, dependsOn: { "@acme/core": "^1.2.0" } }]),
-      undefined
+      undefined,
+      []
     );
     expect(meta[0].dependsOn).toEqual({ "@acme/core": "^1.2.0" });
   });
 
-  it("summarizes declared permissions for enabled plugins only", () => {
+  /**
+   * Whatever the enabled state, because the ROWS exist whatever the enabled
+   * state: the permission fold covers disabled plugins (D49), the seeder
+   * creates them, and new ones are granted to super_admin. Reporting them only
+   * while enabled made this payload disagree with the database.
+   */
+  it("summarizes declared permissions whether or not the plugin is enabled", () => {
     const contributes = {
       permissions: [
         {
@@ -455,9 +504,18 @@ describe("buildPluginAdminMeta", () => {
         },
       ],
     };
+    const collected = [
+      collectedPermission({
+        action: "export",
+        resource: "submissions",
+        name: "Export submissions",
+        danger: true,
+      }),
+    ];
     const enabled = buildPluginAdminMeta(
       asPlugins([{ ...base, contributes }]),
-      undefined
+      undefined,
+      collected
     );
     expect(enabled[0].permissions).toEqual([
       {
@@ -470,9 +528,75 @@ describe("buildPluginAdminMeta", () => {
 
     const disabled = buildPluginAdminMeta(
       asPlugins([{ ...base, enabled: false, contributes }]),
-      undefined
+      undefined,
+      collected
     );
-    expect(disabled[0].permissions).toBeUndefined();
+    // Identical to the enabled case. The separating assertion for the split is
+    // below: routes DO disappear when disabled, so this is not simply "the
+    // enabled flag changes nothing".
+    expect(disabled[0].permissions).toEqual(enabled[0].permissions);
+    expect(disabled[0].permissions).toHaveLength(1);
+  });
+
+  /**
+   * The separating property for taking the collected set rather than
+   * recomputing one. `collectCustomPermissions` DROPS a `publish` declaration
+   * whose resource is a configured collection, because the seeder emits that
+   * slug itself and keeps the row ownerless — so the collected set here holds
+   * only `export`, while the plugin's own `contributes.permissions` still holds
+   * both. Serializing the declaration would put this plugin's label and danger
+   * flag on a permission the roles data does not attribute to it.
+   *
+   * `export` is the positive control: it is present in both, so the assertion
+   * cannot pass by the whole list having been dropped.
+   */
+  it("serializes the collected set, not the plugin's own declaration", () => {
+    const meta = buildPluginAdminMeta(
+      asPlugins([
+        {
+          ...base,
+          contributes: {
+            permissions: [
+              { action: "publish", resource: "posts", label: "Publish posts" },
+              { action: "export", resource: "submissions" },
+            ],
+          },
+        },
+      ]),
+      undefined,
+      [collectedPermission({ action: "export", resource: "submissions" })]
+    );
+
+    expect(meta[0].permissions).toEqual([
+      {
+        action: "export",
+        resource: "submissions",
+        label: "export submissions",
+      },
+    ]);
+  });
+
+  /**
+   * The host's sentinel owner is the literal string `"app"`, so a plugin
+   * legitimately named `app` shares it. Grouping by `owner` alone would file
+   * every host-declared permission under that plugin and report the
+   * application's own permissions as the plugin's contributions.
+   */
+  it("does not attribute host-declared permissions to a plugin named app", () => {
+    const meta = buildPluginAdminMeta(
+      asPlugins([{ ...base, name: "app" }]),
+      undefined,
+      [
+        collectedPermission({
+          action: "purge",
+          resource: "cache",
+          owner: "app",
+          source: "app",
+        }),
+      ]
+    );
+
+    expect(meta[0].permissions).toBeUndefined();
   });
 
   it("summarizes declared routes (method + path only) for enabled plugins only", () => {
@@ -488,15 +612,24 @@ describe("buildPluginAdminMeta", () => {
     };
     const enabled = buildPluginAdminMeta(
       asPlugins([{ ...base, contributes }]),
-      undefined
+      undefined,
+      []
     );
+    // `fullPath` travels too: it is the namespace the dispatcher mounts the
+    // route at, derived from the raw package name, and the admin renders it
+    // rather than rebuilding it from the slug.
     expect(enabled[0].routes).toEqual([
-      { method: "GET", path: "/submissions/export" },
+      {
+        method: "GET",
+        path: "/submissions/export",
+        fullPath: "/plugins/@acme/p/submissions/export",
+      },
     ]);
 
     const disabled = buildPluginAdminMeta(
       asPlugins([{ ...base, enabled: false, contributes }]),
-      undefined
+      undefined,
+      []
     );
     expect(disabled[0].routes).toBeUndefined();
   });
@@ -513,7 +646,8 @@ describe("buildPluginAdminMeta", () => {
           },
         },
       ]),
-      undefined
+      undefined,
+      []
     );
     expect(meta[0].collections).toEqual(["forms"]);
     expect(meta[0].singles).toEqual(["form-settings"]);
@@ -533,7 +667,8 @@ describe("buildPluginAdminMeta — clientConfig", () => {
       withConfig({
         remotePatterns: [{ protocol: "https", hostname: "a.example" }],
       }),
-      undefined
+      undefined,
+      []
     );
     expect(meta[0]?.clientConfig).toEqual({
       remotePatterns: [{ protocol: "https", hostname: "a.example" }],
@@ -556,7 +691,8 @@ describe("buildPluginAdminMeta — clientConfig", () => {
           },
         },
       ]),
-      undefined
+      undefined,
+      []
     );
     expect(meta[0]?.enabled).toBe(false);
     expect(meta[0]?.clientConfig).toEqual({ a: 1 });
@@ -581,7 +717,7 @@ describe("buildPluginAdminMeta — clientConfig", () => {
       // live in the log context, which is where a boot failure is read.
       let thrown: unknown;
       try {
-        buildPluginAdminMeta(withConfig(bad), undefined);
+        buildPluginAdminMeta(withConfig(bad), undefined, []);
       } catch (error) {
         thrown = error;
       }
@@ -602,7 +738,7 @@ describe("buildPluginAdminMeta — clientConfig", () => {
     // client receives is missing a key the plugin wrote. That is a silent
     // shape change, not a harmless omission.
     expect(() =>
-      buildPluginAdminMeta(withConfig({ a: 1, gone: undefined }), undefined)
+      buildPluginAdminMeta(withConfig({ a: 1, gone: undefined }), undefined, [])
     ).toThrow(NextlyError);
   });
 
@@ -615,16 +751,16 @@ describe("buildPluginAdminMeta — clientConfig", () => {
       arr: [1, "two", { three: 3 }],
       nested: { deep: { deeper: [true] } },
     };
-    const meta = buildPluginAdminMeta(withConfig(config), undefined);
+    const meta = buildPluginAdminMeta(withConfig(config), undefined, []);
     expect(meta[0]?.clientConfig).toEqual(config);
   });
 
   it("survives a cycle by refusing rather than by hanging", () => {
     const cyclic: Record<string, unknown> = { a: 1 };
     cyclic.self = cyclic;
-    expect(() => buildPluginAdminMeta(withConfig(cyclic), undefined)).toThrow(
-      NextlyError
-    );
+    expect(() =>
+      buildPluginAdminMeta(withConfig(cyclic), undefined, [])
+    ).toThrow(NextlyError);
   });
 });
 
@@ -640,7 +776,7 @@ describe("buildPluginAdminMeta — clientConfig runtime shapes", () => {
     // it — and every reader downstream assumes an object it can destructure.
     for (const bad of [null, [1, 2], "a string", 42, true]) {
       expect(
-        () => buildPluginAdminMeta(withConfig(bad), undefined),
+        () => buildPluginAdminMeta(withConfig(bad), undefined, []),
         JSON.stringify(bad)
       ).toThrow(NextlyError);
     }
@@ -650,7 +786,7 @@ describe("buildPluginAdminMeta — clientConfig runtime shapes", () => {
     // Observable in the browser as `1 / value`, so it is a mangled copy like
     // any other rather than a rounding detail.
     expect(() =>
-      buildPluginAdminMeta(withConfig({ n: -0 }), undefined)
+      buildPluginAdminMeta(withConfig({ n: -0 }), undefined, [])
     ).toThrow(NextlyError);
   });
 
@@ -666,7 +802,7 @@ describe("buildPluginAdminMeta — clientConfig runtime shapes", () => {
     };
     let thrown: unknown;
     try {
-      buildPluginAdminMeta(withConfig(config), undefined);
+      buildPluginAdminMeta(withConfig(config), undefined, []);
     } catch (error) {
       thrown = error;
     }
@@ -679,12 +815,391 @@ describe("buildPluginAdminMeta — clientConfig runtime shapes", () => {
   it("resolves its status from the canonical table, not an inline literal", () => {
     let thrown: unknown;
     try {
-      buildPluginAdminMeta(withConfig({ when: new Date() }), undefined);
+      buildPluginAdminMeta(withConfig({ when: new Date() }), undefined, []);
     } catch (error) {
       thrown = error;
     }
     expect((thrown as NextlyError).statusCode).toBe(
       NEXTLY_ERROR_STATUS.NEXTLY_PLUGIN_CLIENT_CONFIG_INVALID
     );
+  });
+});
+
+/**
+ * Routes and permissions are asymmetric, and the tests exist to hold that
+ * apart. `collectPluginRoutes` covers enabled plugins only, so a disabled
+ * plugin serves nothing — that is what enabling would add. `collectCustomPermissions`
+ * folds over every plugin including disabled ones, so its permissions are
+ * already seeded and are not pending on anything.
+ */
+describe("dormant routes", () => {
+  const declaring = {
+    name: "@acme/p",
+    version: "1.0.0",
+    contributes: {
+      permissions: [
+        { action: "export", resource: "submissions", danger: true },
+      ],
+      routes: [{ method: "GET", path: "/export", handler: () => undefined }],
+    },
+  } as unknown as PluginDefinition;
+
+  it("reports a disabled plugin's routes as dormant, not active", () => {
+    const [meta] = buildPluginAdminMeta(
+      [{ ...declaring, enabled: false } as PluginDefinition],
+      undefined,
+      []
+    );
+
+    expect(meta.whenEnabled?.routes).toEqual([
+      { method: "GET", path: "/export", fullPath: "/plugins/@acme/p/export" },
+    ]);
+    expect(meta.routes).toBeUndefined();
+  });
+
+  /**
+   * The separating case for the routes/permissions split. A disabled plugin's
+   * permissions are seeded whatever this page shows, so presenting them as
+   * something enabling would ADD would be false — the dormant branch must
+   * carry routes and nothing else.
+   */
+  it("never presents permissions as pending on being enabled", () => {
+    const [meta] = buildPluginAdminMeta(
+      [{ ...declaring, enabled: false } as PluginDefinition],
+      undefined,
+      []
+    );
+
+    expect(Object.keys(meta.whenEnabled ?? {})).toEqual(["routes"]);
+  });
+
+  it("reports an enabled plugin's routes as active, not dormant", () => {
+    const [meta] = buildPluginAdminMeta(
+      [{ ...declaring, enabled: true } as PluginDefinition],
+      undefined,
+      []
+    );
+
+    expect(meta.routes).toEqual([
+      { method: "GET", path: "/export", fullPath: "/plugins/@acme/p/export" },
+    ]);
+    expect(meta.whenEnabled).toBeUndefined();
+  });
+
+  it.each([true, false])(
+    "never carries the active and dormant routes together (enabled=%s)",
+    enabled => {
+      const [meta] = buildPluginAdminMeta(
+        [{ ...declaring, enabled } as PluginDefinition],
+        undefined,
+        []
+      );
+
+      const active = Boolean(meta.routes);
+      const dormant = Boolean(meta.whenEnabled);
+      expect(active && dormant).toBe(false);
+      // Exactly one, so this cannot pass on a plugin that serialized neither.
+      expect(active || dormant).toBe(true);
+    }
+  );
+
+  /**
+   * `collectPluginRoutes` throws on a path without a leading slash, so a
+   * declaration like this cannot mount. Presenting it as something enabling
+   * would add is a promise that boot then refuses.
+   */
+  it("omits a declared route that could not mount", () => {
+    const [meta] = buildPluginAdminMeta(
+      [
+        {
+          name: "@acme/bad",
+          version: "1.0.0",
+          enabled: false,
+          contributes: { routes: [{ method: "GET", path: "export" }] },
+        } as unknown as PluginDefinition,
+      ],
+      undefined,
+      []
+    );
+
+    expect(meta.whenEnabled).toBeUndefined();
+  });
+
+  /**
+   * The second of `collectPluginRoutes`'s two rules, and the one a
+   * leading-slash filter alone would miss. Two declarations sharing a
+   * `(method, full path)` make boot throw NEXTLY_ROUTE_COLLISION, so
+   * advertising both as things enabling would serve is a promise boot refuses.
+   */
+  it("omits declarations that collide with each other", () => {
+    const [meta] = buildPluginAdminMeta(
+      [
+        {
+          name: "@acme/dup",
+          version: "1.0.0",
+          enabled: false,
+          contributes: {
+            routes: [
+              { method: "GET", path: "/export" },
+              { method: "GET", path: "/export" },
+            ],
+          },
+        } as unknown as PluginDefinition,
+      ],
+      undefined,
+      []
+    );
+
+    expect(meta.whenEnabled).toBeUndefined();
+  });
+
+  it("omits the dormant branch for a plugin that declares no routes", () => {
+    const [meta] = buildPluginAdminMeta(
+      [
+        {
+          name: "@acme/bare",
+          version: "1.0.0",
+          enabled: false,
+        } as PluginDefinition,
+      ],
+      undefined,
+      []
+    );
+
+    expect(meta.whenEnabled).toBeUndefined();
+  });
+});
+
+/**
+ * Namespaces are built from package names, so a collision need not be
+ * self-inflicted: an enabled plugin can already own the path a disabled one
+ * would claim. Advertising it as something enabling would serve is a promise
+ * boot refuses.
+ */
+describe("dormant routes against the enabled set", () => {
+  const enabledOwner = {
+    name: "foo",
+    version: "1.0.0",
+    contributes: { routes: [{ method: "GET", path: "/bar/x" }] },
+  } as unknown as PluginDefinition;
+
+  const disabledClaimant = {
+    name: "foo/bar",
+    version: "1.0.0",
+    enabled: false,
+    contributes: { routes: [{ method: "GET", path: "/x" }] },
+  } as unknown as PluginDefinition;
+
+  it("omits a dormant route an enabled plugin already serves", () => {
+    // Both resolve to /plugins/foo/bar/x.
+    const metas = buildPluginAdminMeta(
+      [enabledOwner, disabledClaimant],
+      undefined,
+      []
+    );
+    const claimant = metas.find(m => m.name === "foo/bar");
+
+    expect(claimant?.whenEnabled).toBeUndefined();
+  });
+
+  /**
+   * The control. Without the enabled owner present the same declaration is
+   * perfectly mountable, so the omission above is about the collision rather
+   * than about a route that was never valid.
+   */
+  it("keeps it when no enabled plugin holds that path", () => {
+    const metas = buildPluginAdminMeta([disabledClaimant], undefined, []);
+    const claimant = metas.find(m => m.name === "foo/bar");
+
+    expect(claimant?.whenEnabled?.routes).toEqual([
+      { method: "GET", path: "/x", fullPath: "/plugins/foo/bar/x" },
+    ]);
+  });
+
+  it("leaves the enabled owner's own route reported", () => {
+    const metas = buildPluginAdminMeta(
+      [enabledOwner, disabledClaimant],
+      undefined,
+      []
+    );
+
+    expect(metas.find(m => m.name === "foo")?.routes).toEqual([
+      { method: "GET", path: "/bar/x", fullPath: "/plugins/foo/bar/x" },
+    ]);
+  });
+});
+
+/**
+ * The public admin-meta payload is served WITHOUT initializing services, so the
+ * config it folds is the one the route module stored — before any plugin
+ * `setup` transformer has run.
+ */
+describe("adminMetaPermissions", () => {
+  const colliding = asPlugins([
+    {
+      name: "@acme/a",
+      version: "1.0.0",
+      contributes: { permissions: [{ action: "purge", resource: "cache" }] },
+    },
+    {
+      name: "@acme/b",
+      version: "1.0.0",
+      contributes: { permissions: [{ action: "purge", resource: "cache" }] },
+    },
+  ]);
+
+  /**
+   * A transformer may legitimately resolve this collision, so the raw list can
+   * hold one boot never sees. Throwing here would blank the whole endpoint —
+   * branding included — for an app that boots perfectly well.
+   */
+  it("describes no permissions when the raw declarations collide", () => {
+    expect(adminMetaPermissions({ plugins: colliding })).toEqual([]);
+  });
+
+  /**
+   * The positive control. Without it the assertion above is satisfied by a
+   * function that returns `[]` for every input, which would be the endpoint
+   * silently describing nothing rather than degrading only on a collision.
+   */
+  it("returns the collected set when the declarations are valid", () => {
+    const [a] = colliding;
+    expect(adminMetaPermissions({ plugins: [a] }).map(p => p.slug)).toEqual([
+      "purge-cache",
+    ]);
+  });
+
+  /**
+   * Boot merges a plugin's contributed entities into the config before asking
+   * whether a `publish` declaration names one; this endpoint reads a config
+   * where they are still absent. Without widening, a plugin publishing to a
+   * collection IT contributes is reported as owning a permission the seeder
+   * takes over and keeps ownerless.
+   *
+   * `export` is the positive control: a genuine custom permission on the same
+   * plugin, which must survive the widening.
+   */
+  it("counts a contributed collection boot merged as an entity", () => {
+    const collected = adminMetaPermissions({
+      // As the booted config arrives: `registerServices` folds
+      // `contributes.collections` into `collections` before publishing, so the
+      // contribution is already here. This fold reads that rather than
+      // re-deriving entity slugs from the declarations, which would be a second
+      // answer to which entities exist.
+      collections: [{ slug: "submissions" }],
+      plugins: asPlugins([
+        {
+          name: "@acme/forms",
+          version: "1.0.0",
+          contributes: {
+            collections: [{ slug: "submissions" }],
+            permissions: [
+              { action: "publish", resource: "submissions" },
+              { action: "export", resource: "submissions" },
+            ],
+          },
+        },
+      ]),
+    });
+
+    expect(collected.map(p => p.slug)).toEqual(["export-submissions"]);
+  });
+
+  /**
+   * The separating case for reading the merged config rather than the
+   * declarations. Boot's schema fold runs over the PRE-transform plugin list,
+   * so a plugin a `setup` transformer added has its contributions skipped — its
+   * collection is absent from the booted `collections`. Re-deriving here would
+   * classify `reports` as an entity and drop the declaration as adopted, while
+   * the seeder writes it as a plugin-owned custom permission.
+   */
+  it("does not invent an entity boot never merged", () => {
+    const collected = adminMetaPermissions({
+      collections: [],
+      plugins: asPlugins([
+        {
+          name: "@acme/added-by-setup",
+          version: "1.0.0",
+          contributes: {
+            collections: [{ slug: "reports" }],
+            permissions: [{ action: "publish", resource: "reports" }],
+          },
+        },
+      ]),
+    });
+
+    expect(collected.map(p => p.slug)).toEqual(["publish-reports"]);
+  });
+
+  /**
+   * A reserved system resource is a different REASON but the same rejection,
+   * and it is judged against the same pre-transform list — a transformer can
+   * drop the offending plugin just as it can resolve a duplicate. Boot still
+   * refuses if the declaration survives, which is where the operator sees it;
+   * blanking the admin as well reports it twice and helps nobody.
+   */
+  it("degrades on a reserved system resource too", () => {
+    expect(
+      adminMetaPermissions({
+        plugins: asPlugins([
+          {
+            name: "@acme/a",
+            version: "1.0.0",
+            contributes: {
+              permissions: [{ action: "read", resource: "users" }],
+            },
+          },
+        ]),
+      })
+    ).toEqual([]);
+  });
+
+  /**
+   * What the degradation must NOT absorb, asserted at the CALL SITE. Without
+   * this the `catch` can be widened to swallow everything and the suite stays
+   * green — measured, so it is the case this exists for. The plugin throws on
+   * the property the fold reads, standing in for any unexpected failure inside
+   * it; a defect there must reach the caller rather than be reported as an app
+   * with no custom permissions.
+   */
+  it("rethrows a failure that is not a rejected declaration", () => {
+    const exploding = new Proxy({} as PluginDefinition, {
+      get(target, prop) {
+        if (prop === "contributes") throw new TypeError("boom");
+        return Reflect.get(target, prop);
+      },
+    });
+
+    expect(() => adminMetaPermissions({ plugins: [exploding] })).toThrow(
+      TypeError
+    );
+  });
+
+  /**
+   * The guard itself, so a widened code match is caught as well as a widened
+   * catch.
+   */
+  it("discriminates a collision from any other NextlyError", () => {
+    expect(
+      isPermissionCollision(
+        new NextlyError({
+          code: "NEXTLY_PERMISSION_COLLISION",
+          statusCode: 409,
+          publicMessage: "x",
+          logMessage: "x",
+        })
+      )
+    ).toBe(true);
+    expect(
+      isPermissionCollision(
+        new NextlyError({
+          code: "NEXTLY_ROUTE_COLLISION",
+          statusCode: 409,
+          publicMessage: "x",
+          logMessage: "x",
+        })
+      )
+    ).toBe(false);
+    expect(isPermissionCollision(new Error("boom"))).toBe(false);
   });
 });

@@ -259,7 +259,7 @@ function ImageSizesContent({
             value={search}
             onChange={setSearch}
             placeholder="Search image sizes..."
-            className="w-full bg-background text-foreground border-input"
+            className="w-full"
             isLoading={isLoading}
           />
         }

@@ -97,6 +97,7 @@ import {
 import { registerCollectionHooks } from "../hooks/register-collection-hooks";
 import { registerSingleHooks } from "../hooks/register-single-hooks";
 import { createSanitizationHook } from "../hooks/sanitization-hooks";
+import { openBootMigrationsGate } from "../init/boot-migrations-gate";
 import type { PluginPermission, PluginRole } from "../plugins/contributions";
 import { getCoreVersion } from "../plugins/core-version";
 import { warnUndescribedPlugins } from "../plugins/describe-check";
@@ -129,6 +130,7 @@ import {
 } from "../plugins/services/plugin-services-registry";
 import { clearPluginSubscriptions } from "../plugins/subscription-tracker";
 import { validatePluginSlugs } from "../plugins/validate-slugs";
+import { setBootedConfig } from "../route-handler/auth-handler";
 import type {
   CollectionSource,
   FieldDefinition,
@@ -234,6 +236,15 @@ export interface NextlyServiceConfig {
 
   /** Optional directory for dynamic collection schemas. */
   schemasDir?: string;
+  /**
+   * Whether this boot will run migrations, so registration can open the
+   * boot-migrations gate before it publishes the container.
+   *
+   * Carried on the SERVICE config rather than read from `db` — which this shape
+   * flattens away — because `buildServiceConfig` is the one builder both boot
+   * paths use, so threading it there reaches both without either remembering.
+   */
+  runMigrationsOnBoot?: boolean;
 
   /** Optional directory for dynamic collection migrations. */
   migrationsDir?: string;
@@ -541,6 +552,7 @@ export async function registerServices(
   // would newly refuse pre-existing declarations that boot fine today, whereas a
   // rule that can fire here has to have been written against a field type in
   // this same process.
+
   assertPluginFieldDeclarations(transformedConfig);
 
   const {
@@ -1095,7 +1107,56 @@ export async function registerServices(
     container.register("nextlyDirectAPI", () => getNextly());
   }
 
+  // Opened immediately BEFORE registration publishes, which is the last point
+  // that is both late enough and early enough.
+  //
+  // Early enough: the window this closes is "registered but schema unverified",
+  // and the flag below is what opens that window — so a consumer can never see
+  // registration without also seeing the gate.
+  //
+  // Late enough: everything that can abort a registration — adapter connection,
+  // schema synchronisation, plugin init — has already run. An abort therefore
+  // never leaves a gate open with nobody left to settle it, which would block
+  // every later retry forever on a gate whose owner died.
+  //
+  // No-op unless production boot migrations are configured, so the CLI and the
+  // test harness never open a gate nothing would close.
+  // The UNTRANSFORMED flag, matching what `runProdMigrationsIfEnabled` reads.
+  // `transformedConfig` is the config after plugin `setup` transformers have
+  // run, and that side decides from the nested `db` block, so reading the
+  // transformed value here lets a transformer make the two disagree — opening
+  // no gate while migrations run, or a gate nothing settles. No first-party
+  // transformer touches it today, which is a property of the current plugin set
+  // rather than of the code, and this PR exists because of a window nobody
+  // thought reachable.
+  openBootMigrationsGate(config.runMigrationsOnBoot === true);
+
   globalForReg.__nextly_isRegistered = true;
+
+  // Re-point the handler store at the TRANSFORMED plugin list, and only now.
+  //
+  // `createDynamicHandlers` stores the raw config when the route module is
+  // imported, which is the earliest the config exists but is before any `setup`
+  // transformer has run — so the public admin-meta endpoint, which reads that
+  // store without initializing services, was describing plugins as their author
+  // declared them rather than as they boot. A plugin a transformer enables was
+  // reported disabled while its routes were mounted.
+  //
+  // AFTER the registered flag, not beside the transform that produced the list,
+  // because this metadata claims a runtime that only exists once registration
+  // has succeeded. Published early, a failure in adapter connection, schema
+  // synchronisation or plugin init would leave the endpoint reporting routes as
+  // active for a boot that never mounted them — and admin-meta deliberately
+  // bypasses service initialisation, so nothing downstream would correct it.
+  //
+  // Unconditional: a config whose transformers removed every plugin must clear
+  // the store rather than leave the author's raw list standing there.
+  // The WHOLE transformed config, not a hand-picked field list. A `setup`
+  // transformer may add a top-level collection or single as well as change the
+  // plugin list, and the permission fold decides whether a `publish`
+  // declaration names an entity — so anything left out here silently leaves the
+  // endpoint folding against the raw route config for that field.
+  setBootedConfig(transformedConfig);
 }
 
 // ============================================================

@@ -131,7 +131,7 @@ export async function migrateDownCore(
     planned.push({
       filename,
       downSql,
-      reversible: splitSqlStatements(downSql).length > 0,
+      reversible: splitSqlStatements(downSql, deps.dialect).length > 0,
     });
   }
 
@@ -277,7 +277,7 @@ export async function runMigrateDown(
     };
 
     const execDown = async (sql: string): Promise<number> => {
-      const statements = splitSqlStatements(sql);
+      const statements = splitSqlStatements(sql, dialect);
       await executeTransaction(dz, dialect, async () => {
         for (const statement of statements) {
           await dz.executeQuery(statement);

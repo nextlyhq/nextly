@@ -4,7 +4,12 @@ import { fileURLToPath } from "url";
 import fs from "fs-extra";
 
 import { buildNextConfigTemplate } from "../generators/next-config";
-import type { DatabaseConfig, ProjectApproach, ProjectType } from "../types";
+import type {
+  DatabaseConfig,
+  PackageManager,
+  ProjectApproach,
+  ProjectType,
+} from "../types";
 
 /**
  * Templates whose `nextly.config.ts` registers `formBuilderPlugin`. The
@@ -644,8 +649,11 @@ export async function generatePackageJson(
       "db:setup": "nextly db:sync",
       "db:migrate": "nextly migrate",
       "db:migrate:status": "nextly migrate:status",
+      // No `db:migrate:reset`: `nextly migrate:reset` is not a command the CLI
+      // registers, so the script it generated failed for every scaffolded
+      // project. `migrate:fresh` is the one that drops all tables and re-runs
+      // the migrations, and it is already exposed above.
       "db:migrate:fresh": "nextly migrate:fresh",
-      "db:migrate:reset": "nextly migrate:reset",
       "types:generate": "nextly generate:types",
     },
     dependencies,
@@ -836,6 +844,116 @@ export function generatePnpmWorkspaceYaml(): string {
   );
 }
 
+/**
+ * Generate the `.npmrc` for a scaffolded project, or `null` when it needs none.
+ *
+ * Written only for pnpm scaffolds, and only to undo a side effect of shipping
+ * `pnpm-workspace.yaml`: through pnpm 9.3 the presence of that file makes the
+ * project a workspace ROOT, so an ordinary
+ *
+ *     pnpm add zod
+ *
+ * is refused with `ERR_PNPM_ADDING_TO_ROOT` and a suggestion to pass `-w`. The
+ * check exists to stop a dependency landing in a monorepo's root instead of the
+ * package that wanted it; a scaffolded app has no other package, so there is
+ * nothing for it to protect and it only obstructs.
+ *
+ * Measured: 9.0.0 refuses `pnpm add` without this and accepts it with; 10.18.3
+ * and 11.0.0 accept it either way. Two alternatives were measured and rejected —
+ * declaring the root as a member (`packages: ["."]`) is refused identically, and
+ * the same setting written into `pnpm-workspace.yaml` is not read by pnpm 9 at
+ * all, since that file only became the settings home in 10.6.
+ *
+ * NOT written for npm, yarn or bun, which is the whole reason this is a separate
+ * function rather than an unconditional file: npm reads `.npmrc` too and prints
+ *
+ *     npm warn Unknown project config "ignore-workspace-root-check".
+ *     This will stop working in the next major version of npm.
+ *
+ * on every command. A permanent warning for the majority is a poor trade for a
+ * setting they cannot use.
+ *
+ * The residual gap, stated rather than left to be discovered: a project
+ * scaffolded with npm and later opened with pnpm 9.3 or older still meets
+ * `ERR_PNPM_ADDING_TO_ROOT`. That error names its own remedy, and the affected
+ * pnpm range is closed and shrinking.
+ */
+export function generateNpmrc(packageManager: PackageManager): string | null {
+  if (packageManager !== "pnpm") return null;
+
+  return (
+    "# This project is a single package, not a monorepo. pnpm 9 treats the\n" +
+    "# pnpm-workspace.yaml shipped for its build allowlist as declaring a\n" +
+    "# workspace root, which makes `pnpm add <pkg>` demand a -w flag. There is no\n" +
+    "# other package here for that check to protect.\n" +
+    `${NPMRC_WORKSPACE_ROOT_KEY}=true\n`
+  );
+}
+
+/** The setting {@link generateNpmrc} exists to add, named once so the writer can look for it. */
+const NPMRC_WORKSPACE_ROOT_KEY = "ignore-workspace-root-check";
+
+/**
+ * Give a scaffolded project the `.npmrc` its package manager needs, WITHOUT destroying one that
+ * is already there.
+ *
+ * Appends rather than writes. A scaffold does not always land on an empty directory — the CLI
+ * can overlay an existing project, and a `--local-template` can carry its own `.npmrc` — and that
+ * file is where private registries, auth tokens, proxies and `node-linker` live. Replacing it
+ * would break the install that runs moments later, and would do it by pointing at the wrong
+ * registry rather than by failing loudly.
+ *
+ * An existing declaration of the key WINS, whatever its value. Someone who has written
+ * `ignore-workspace-root-check=false` on purpose means it, and a scaffold is not the right place
+ * to overrule them.
+ *
+ * One helper for both scaffold types, because two copies of "write this file" drift: a correction
+ * to the app path that misses the plugin path is invisible until someone scaffolds a plugin.
+ */
+async function writeScaffoldNpmrc(
+  targetDir: string,
+  packageManager: PackageManager
+): Promise<void> {
+  const addition = generateNpmrc(packageManager);
+  if (!addition) return;
+
+  const npmrcPath = path.join(targetDir, ".npmrc");
+
+  // A SYMLINK here is left completely alone. Reading and writing it back would follow the link
+  // and append to whatever it points at — commonly a shared or home-directory config — so a
+  // scaffold would silently edit settings belonging to every other project on the machine.
+  // `lstat` reports the link itself rather than its target, which is the only way to see this:
+  // `pathExists` and `readFile` both resolve it and report the referent as though it were here.
+  //
+  // Skipping means a pnpm 9 user with a linked `.npmrc` still meets ERR_PNPM_ADDING_TO_ROOT on
+  // their first `pnpm add`. That error names its own remedy; silently rewriting a file outside
+  // the project does not, and is not the scaffolder's to make.
+  const link = await fs.lstat(npmrcPath).catch(() => null);
+  if (link?.isSymbolicLink()) return;
+
+  // A HARD link is the same hazard wearing a disguise `lstat` cannot see through: it reports a
+  // regular file, because that is exactly what a hard link is. The shared config and the path
+  // here are one inode, so appending would edit every project pointing at it.
+  //
+  // `nlink` is what separates them — an ordinary file has one directory entry. Checked after the
+  // symlink test rather than instead of it: the two are different relationships and a file can
+  // only be one of them, so neither check subsumes the other.
+  if (link && link.nlink > 1) return;
+
+  const existing = link ? await fs.readFile(npmrcPath, "utf-8") : "";
+
+  // Matched at the start of a line so a value mentioning the key, or a commented-out example,
+  // is not read as a declaration.
+  const alreadyDeclared = new RegExp(
+    `^\\s*${NPMRC_WORKSPACE_ROOT_KEY}\\s*=`,
+    "m"
+  ).test(existing);
+  if (alreadyDeclared) return;
+
+  const separator = existing === "" || existing.endsWith("\n") ? "" : "\n";
+  await fs.writeFile(npmrcPath, existing + separator + addition, "utf-8");
+}
+
 // ============================================================
 // Copy Template (Main Orchestrator)
 // ============================================================
@@ -851,6 +969,19 @@ export interface CopyTemplateOptions {
   approach?: ProjectApproach;
   /** Explicit paths to base and template directories (from download or --local-template) */
   templateSource?: { basePath: string; templatePath: string };
+  /**
+   * The package manager the project will be installed with, which decides
+   * whether a `.npmrc` is written — see {@link generateNpmrc}.
+   *
+   * REQUIRED, and deliberately so. As an optional field defaulting to npm, the
+   * CLI's one line wiring the detected manager through could be deleted and
+   * every scaffold would silently lose its `.npmrc` — a default is a decision
+   * made for a caller that never stated one, and here the wrong decision is
+   * indistinguishable from the right one until a user runs `pnpm add`. Required
+   * makes that deletion a compile error instead of something a test has to
+   * notice.
+   */
+  packageManager: PackageManager;
   /**
    * Suppress the internal "directory already exists" guard. Set by the
    * installer when it has already negotiated a directory conflict with
@@ -885,6 +1016,7 @@ export async function copyTemplate(
     useYalc = false,
     approach,
     templateSource,
+    packageManager,
     allowExistingTarget = false,
   } = options;
 
@@ -921,7 +1053,13 @@ export async function copyTemplate(
   // app — no base app, no next.config/.env generation, no frontend page. Copy
   // the plugin tree as-is, generate its package.json, fill placeholders, done.
   if (projectType === "plugin") {
-    await copyPluginTemplate({ projectName, typeDir, targetDir, useYalc });
+    await copyPluginTemplate({
+      projectName,
+      typeDir,
+      targetDir,
+      useYalc,
+      packageManager,
+    });
     return;
   }
 
@@ -1062,6 +1200,11 @@ export async function copyTemplate(
   // Step 6c: Give the project back the ignore file npm strips out of the tarball.
   await restoreIgnoreFile(targetDir);
 
+  // Step 6d: Undo the side effect of the workspace file above for the pnpm versions that
+  // read it as a workspace declaration. Only for pnpm, because npm warns about the setting
+  // on every command — see generateNpmrc.
+  await writeScaffoldNpmrc(targetDir, packageManager);
+
   // Step 7: Create SQLite data directory if needed
   // SQLite stores its database file at ./data/nextly.db and the parent
   // directory must exist before the adapter can create the file.
@@ -1096,8 +1239,9 @@ async function copyPluginTemplate(opts: {
   typeDir: string;
   targetDir: string;
   useYalc: boolean;
+  packageManager: PackageManager;
 }): Promise<void> {
-  const { projectName, typeDir, targetDir, useYalc } = opts;
+  const { projectName, typeDir, targetDir, useYalc, packageManager } = opts;
 
   if (!(await fs.pathExists(typeDir))) {
     throw new Error(
@@ -1131,7 +1275,6 @@ async function copyPluginTemplate(opts: {
   // pnpm 11 ignores the package.json `pnpm` field, and the embedded dev/
   // playground uses better-sqlite3 (native build) — so this file is what lets
   // `pnpm install` build it instead of aborting with ERR_PNPM_IGNORED_BUILDS.
-  // Harmless for npm/yarn/pnpm 9.
   await fs.writeFile(
     path.join(targetDir, "pnpm-workspace.yaml"),
     generatePnpmWorkspaceYaml(),
@@ -1140,6 +1283,10 @@ async function copyPluginTemplate(opts: {
 
   // The plugin scaffold is a git repository too, and npm strips its ignore file the same way.
   await restoreIgnoreFile(targetDir);
+
+  // It installs like any other project too, so it meets the same workspace-root refusal the
+  // pnpm workspace file provokes on pnpm 9 — through the same writer as the app path.
+  await writeScaffoldNpmrc(targetDir, packageManager);
 
   // Fill plugin placeholders across the copied tree (src/ + dev/).
   const nextlyRange = await resolvePluginNextlyRange(useYalc);

@@ -31,7 +31,13 @@ const plugins: PluginMetadata[] = [
         danger: true,
       },
     ],
-    routes: [{ method: "GET", path: "/submissions/export" }],
+    routes: [
+      {
+        method: "GET",
+        path: "/submissions/export",
+        fullPath: "/plugins/@acme/forms/submissions/export",
+      },
+    ],
   },
   {
     name: "@acme/disabled",
@@ -39,6 +45,23 @@ const plugins: PluginMetadata[] = [
     enabled: false,
     placement: "plugins",
     collections: ["retained"],
+    permissions: [
+      {
+        action: "purge",
+        resource: "archive",
+        label: "Purge Archive",
+        danger: true,
+      },
+    ],
+    whenEnabled: {
+      routes: [
+        {
+          method: "DELETE",
+          path: "/archive",
+          fullPath: "/plugins/@acme/disabled/archive",
+        },
+      ],
+    },
   },
 ];
 
@@ -132,7 +155,7 @@ describe("PluginDetailPage", () => {
     expect(screen.getByText("danger")).toBeInTheDocument();
     // Route summary includes the namespaced final URL.
     expect(
-      screen.getByText("GET /api/plugins/acme-forms/submissions/export")
+      screen.getByText("GET /admin/api/plugins/@acme/forms/submissions/export")
     ).toBeInTheDocument();
   });
 
@@ -143,10 +166,14 @@ describe("PluginDetailPage", () => {
     expect(screen.getByText("@acme/core ^1.0.0")).toBeInTheDocument();
   });
 
-  it("marks a disabled plugin and explains that its behavior does not load", () => {
+  it("marks a disabled plugin and names the surfaces that stop", () => {
     render(<PluginDetailPage params={{ slug: "acme-disabled" }} />);
     expect(screen.getByText("Disabled")).toBeInTheDocument();
-    expect(screen.getByText(/its behavior does not load/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /API routes, admin\s+pages, menu items and settings panel are not registered/i
+      )
+    ).toBeInTheDocument();
   });
 
   /**
@@ -165,5 +192,120 @@ describe("PluginDetailPage", () => {
       </QueryClientProvider>
     );
     expect(await screen.findByText("Plugin not found")).toBeInTheDocument();
+  });
+});
+
+/**
+ * A disabled plugin serves no routes, so what it WOULD serve is a different
+ * claim from what it serves. These pin that the two are shown as different
+ * things rather than merged into one list.
+ */
+describe("PluginDetailPage dormant disclosure", () => {
+  it("shows a disabled plugin's routes under their own heading", () => {
+    render(<PluginDetailPage params={{ slug: "acme-disabled" }} />);
+
+    expect(screen.getByText("Would serve when enabled")).toBeInTheDocument();
+    // Enabling in config is necessary and NOT sufficient: config HMR does not
+    // re-run service registration or route mounting, so an operator who stops
+    // at the flag reaches a route that still 404s.
+    expect(
+      screen.getByText(/restart the app to serve these/i)
+    ).toBeInTheDocument();
+    // The RAW package name, which is the namespace the dispatcher registers —
+    // not the admin slug, which is only how this UI addresses the plugin.
+    expect(
+      screen.getByText("DELETE /admin/api/plugins/@acme/disabled/archive")
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * The separating assertion. A merged list would render the same string and
+   * pass a presence-only check.
+   */
+  it("keeps them out of what the plugin currently adds", () => {
+    render(<PluginDetailPage params={{ slug: "acme-disabled" }} />);
+
+    const contributions = screen
+      .getByText("What this plugin adds")
+      .closest("section");
+    expect(contributions).not.toBeNull();
+    expect(within(contributions!).queryByText("API routes")).toBeNull();
+  });
+
+  it("shows no dormant section for an enabled plugin", () => {
+    render(<PluginDetailPage params={{ slug: "acme-forms" }} />);
+
+    // The enabled fixture declares a route, so this asserts the section is
+    // withheld rather than that there was nothing to show.
+    expect(screen.getByText("API routes")).toBeInTheDocument();
+    expect(screen.queryByText("Would serve when enabled")).toBeNull();
+  });
+
+  /**
+   * The active section names the same namespace. A scoped package is served at
+   * its raw name, so a slug-derived path here would be wrong for every plugin
+   * whose name has a scope — which is all three first-party ones.
+   */
+  it("names the dispatcher's namespace for an enabled plugin's routes", () => {
+    render(<PluginDetailPage params={{ slug: "acme-forms" }} />);
+
+    expect(
+      screen.getByText("GET /admin/api/plugins/@acme/forms/submissions/export")
+    ).toBeInTheDocument();
+  });
+});
+
+/**
+ * A disabled plugin's permissions are seeded and granted like any other's, so
+ * the page must show them. Its routes are not mounted, so those must not be
+ * shown as current. These pin both halves of that split on one plugin.
+ */
+describe("PluginDetailPage disabled plugin permissions", () => {
+  it("lists a disabled plugin's permissions as things it has", () => {
+    render(<PluginDetailPage params={{ slug: "acme-disabled" }} />);
+
+    const contributions = screen
+      .getByText("What this plugin adds")
+      .closest("section");
+    expect(
+      within(contributions!).getByText("Purge Archive")
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * The separating assertion. If the enabled flag simply stopped mattering,
+   * routes would show here too — they must not, because they are not mounted.
+   */
+  it("still withholds a disabled plugin's routes from that section", () => {
+    render(<PluginDetailPage params={{ slug: "acme-disabled" }} />);
+
+    const contributions = screen
+      .getByText("What this plugin adds")
+      .closest("section");
+    expect(within(contributions!).queryByText("API routes")).toBeNull();
+    // They are disclosed as pending instead, not dropped.
+    expect(screen.getByText("Would serve when enabled")).toBeInTheDocument();
+  });
+
+  it("says the permissions stay granted while the plugin is off", () => {
+    render(<PluginDetailPage params={{ slug: "acme-disabled" }} />);
+
+    expect(screen.getByText(/permissions stay granted/i)).toBeInTheDocument();
+  });
+
+  /**
+   * A permission is a global slug that any component may test through the
+   * SDK's `useCan`, and a disabled plugin keeps its field editors mounted, so
+   * a grant is not inert just because the plugin is off. The retained-editor
+   * sentence is the positive half: it makes the narrower claim observable, so
+   * this cannot pass by the whole paragraph having gone missing.
+   */
+  it("does not claim everything the permissions protect is unloaded", () => {
+    render(<PluginDetailPage params={{ slug: "acme-disabled" }} />);
+
+    expect(
+      screen.getByText(/field editors it contributes stay available/i)
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/what they protect is not loaded/i)).toBeNull();
   });
 });
