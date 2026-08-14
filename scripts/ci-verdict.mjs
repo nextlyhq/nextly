@@ -72,24 +72,28 @@ export function changesRequested(reviews, head) {
   if (!Array.isArray(reviews) || typeof head !== "string" || head === "") {
     return [];
   }
-  const latest = new Map();
-  for (const review of reviews) {
-    const login = review?.user?.login;
-    if (typeof login !== "string") continue;
-    if (review?.commit_id !== head || !SUBMITTED.has(review?.state)) continue;
-    const previous = latest.get(login);
-    // Ties fall to the later element, which is the order the API returns.
-    if (
-      !previous ||
-      `${review.submitted_at ?? ""}` >= `${previous.submitted_at ?? ""}`
-    ) {
-      latest.set(login, review);
+  // Ordered oldest first, so each account's later reviews decide what survives.
+  const ordered = reviews
+    .filter(review => review?.commit_id === head)
+    .filter(review => typeof review?.user?.login === "string")
+    .slice()
+    .sort((a, b) =>
+      `${a.submitted_at ?? ""}`.localeCompare(`${b.submitted_at ?? ""}`)
+    );
+
+  const outstanding = new Set();
+  for (const review of ordered) {
+    const login = review.user.login;
+    // A COMMENTED review publishes feedback without withdrawing an objection,
+    // so only an approval or an explicit dismissal clears one. Treating any
+    // later review as clearance lets a follow-up remark retire a request for
+    // changes nobody answered.
+    if (review.state === "CHANGES_REQUESTED") outstanding.add(login);
+    else if (review.state === "APPROVED" || review.state === "DISMISSED") {
+      outstanding.delete(login);
     }
   }
-  return [...latest.entries()]
-    .filter(([, review]) => review.state === "CHANGES_REQUESTED")
-    .map(([login]) => login)
-    .sort();
+  return [...outstanding].sort();
 }
 
 /** Required reviewers with no review at `head`, in the order they were required. */
@@ -267,25 +271,34 @@ async function main(argv) {
   // `headRefOid` lags a push — measured a full commit behind while `ls-remote`
   // was already correct — so a gate reading it can certify a revision that is
   // no longer the head, which is the exact class of defect it exists to stop.
-  const branch = gh([
+  const meta = gh([
     "pr",
     "view",
     pr,
     "--repo",
     repo,
     "--json",
-    "headRefName",
-  ]).headRefName;
+    "headRefName,isCrossRepository,headRepositoryOwner,headRepository",
+  ]);
+  // A fork's branch is not on `origin`, so the ref is read from the repository
+  // that HAS it. `refs/pull/<pr>/head` is not a substitute: it is the same
+  // snapshot `headRefOid` reports and lags a push identically — measured, a
+  // full commit behind the branch while the branch ref was current.
+  const headRemote = meta.isCrossRepository
+    ? `https://github.com/${meta.headRepositoryOwner.login}/${meta.headRepository.name}.git`
+    : "origin";
   const headOf = () => {
     const line = execFileSync(
       "git",
-      ["ls-remote", "origin", `refs/heads/${branch}`],
-      {
-        encoding: "utf8",
-      }
+      ["ls-remote", headRemote, `refs/heads/${meta.headRefName}`],
+      { encoding: "utf8" }
     ).trim();
     const sha = line.split(/\s+/)[0];
-    if (!sha) throw new Error(`no such ref on origin: refs/heads/${branch}`);
+    if (!sha) {
+      throw new Error(
+        `no such ref on ${headRemote}: refs/heads/${meta.headRefName}`
+      );
+    }
     return sha;
   };
   const head = headOf();
