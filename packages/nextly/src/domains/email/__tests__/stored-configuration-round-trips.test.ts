@@ -425,6 +425,24 @@ describe("a configuration whose parse is not a fixed point", () => {
     );
   });
 
+  // An ARRAY can empty itself the same way an object can. The walk asks every
+  // position the one question, so nothing has to remember that arrays are a
+  // separate branch — which is exactly what the earlier shape of this check
+  // did forget.
+  it("refuses an array whose own toJSON discards its entries", async () => {
+    register("self-emptying-array", input => {
+      const value = input as { apiKey: unknown; scopes?: unknown };
+      return {
+        apiKey: String(value.apiKey),
+        scopes: value.scopes ?? Object.assign(["send"], { toJSON: () => ({}) }),
+      };
+    });
+
+    await expect(write("self-emptying-array", { apiKey: "k" })).rejects.toThrow(
+      /at scopes that keeps nothing when written as JSON/
+    );
+  });
+
   // The boundary case that stops the rule above from over-reaching: a plain
   // empty object also serialises to `{}` and has lost nothing, because there
   // was nothing to lose. Refusing it would reject an ordinary configuration

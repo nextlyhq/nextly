@@ -363,7 +363,16 @@ export class EmailProviderService extends BaseService {
     // some of itself -- a string, a number, a populated object -- is a
     // coercion and is stored. Anything that keeps none of itself is refused,
     // whatever it was.
-    const emptied = this.emptiedBySerialisation(stored);
+    const roundTripped: unknown = JSON.parse(serialized);
+    const unchanged: unknown = JSON.parse(serialized);
+
+    // Read against the projection ALREADY COMPUTED above rather than by
+    // serialising each node again. One serialisation happened, its result is
+    // in hand, and asking it is both cheaper and the only way to be sure the
+    // answer describes what will actually be written -- a `toJSON` that
+    // returns something different on its second call would otherwise be
+    // judged on a value nothing stores.
+    const emptied = this.emptiedBySerialisation(stored, roundTripped);
     if (emptied) {
       throw new NextlyError({
         code: "BUSINESS_RULE_VIOLATION",
@@ -375,9 +384,6 @@ export class EmailProviderService extends BaseService {
         },
       });
     }
-
-    const roundTripped: unknown = JSON.parse(serialized);
-    const unchanged: unknown = JSON.parse(serialized);
 
     // Checked again after the round trip, not only before it. A `toJSON` -- on
     // the object itself or on a `Date` inside it -- can turn a record into a
@@ -489,15 +495,30 @@ export class EmailProviderService extends BaseService {
 
   private emptiedBySerialisation(
     value: unknown,
+    projection: unknown,
     path: string[] = []
   ): string | undefined {
     if (value === null || typeof value !== "object") return undefined;
 
-    const label = path.length === 0 ? "the configuration" : path.join(".");
+    // What the column would hold at this position. Anything other than an
+    // empty object kept something -- a string, a number, an array, a populated
+    // object -- and is a coercion.
+    const keptNothing =
+      projection !== null &&
+      typeof projection === "object" &&
+      !Array.isArray(projection) &&
+      Object.keys(projection).length === 0;
 
-    if (Array.isArray(value)) {
+    if (keptNothing && this.heldSomething(value)) {
+      return path.length === 0 ? "the configuration" : path.join(".");
+    }
+
+    // Only positions that SURVIVED are worth descending into. A node whose
+    // projection kept nothing has already been answered, and one that changed
+    // shape -- a `Date` to a string -- has no children to walk.
+    if (Array.isArray(value) && Array.isArray(projection)) {
       for (const [index, entry] of value.entries()) {
-        const emptied = this.emptiedBySerialisation(entry, [
+        const emptied = this.emptiedBySerialisation(entry, projection[index], [
           ...path,
           `[${index}]`,
         ]);
@@ -506,38 +527,41 @@ export class EmailProviderService extends BaseService {
       return undefined;
     }
 
-    // `undefined` means the key is dropped from its parent entirely, which is
-    // the ordinary meaning of an absent optional; the root case is covered by
-    // the caller's own guard.
-    const projection: string | undefined = JSON.stringify(value);
-    if (projection !== undefined) {
-      const asJson: unknown = JSON.parse(projection);
-      const keptNothing =
-        asJson !== null &&
-        typeof asJson === "object" &&
-        !Array.isArray(asJson) &&
-        Object.keys(asJson).length === 0;
-
-      // Whether there was anything to lose. Read from the OWN ENUMERABLE
-      // properties, because those are the only ones `JSON.stringify` would
-      // have written -- so a value carrying state anywhere else (a `Map`'s
-      // entries, a `Set`'s members) reports nothing here and is a loss by
-      // construction. A function is not JSON either way, and a key holding
-      // `undefined` is the absent-optional spelling rather than a value.
-      const heldSomething = Object.values(value).some(
-        entry => entry !== undefined && typeof entry !== "function"
-      );
-
-      if (keptNothing && (heldSomething || !this.isOrdinaryObject(value))) {
-        return label;
+    if (
+      projection !== null &&
+      typeof projection === "object" &&
+      !Array.isArray(projection)
+    ) {
+      const held: Record<string, unknown> = projection as Record<
+        string,
+        unknown
+      >;
+      for (const [key, entry] of Object.entries(value)) {
+        const emptied = this.emptiedBySerialisation(entry, held[key], [
+          ...path,
+          key,
+        ]);
+        if (emptied) return emptied;
       }
     }
-
-    for (const [key, entry] of Object.entries(value)) {
-      const emptied = this.emptiedBySerialisation(entry, [...path, key]);
-      if (emptied) return emptied;
-    }
     return undefined;
+  }
+
+  /**
+   * Whether a value carried anything the column was supposed to receive.
+   *
+   * An array is judged by its length and an object by its own enumerable
+   * values, because those are what `JSON.stringify` would have written. A
+   * value keeping its state anywhere else -- a `Map`'s entries, a `Set`'s
+   * members -- reports nothing here, so the ordinary-object test is what
+   * catches it: a `{}` that really is empty is ordinary, and a `Map` is not.
+   */
+  private heldSomething(value: object): boolean {
+    if (Array.isArray(value)) return value.length > 0;
+    const hasValues = Object.values(value).some(
+      entry => entry !== undefined && typeof entry !== "function"
+    );
+    return hasValues || !this.isOrdinaryObject(value);
   }
 
   /**
