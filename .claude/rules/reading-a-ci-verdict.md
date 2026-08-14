@@ -169,7 +169,15 @@ because three different things produce it and only one is a defect:
   trigger still being dropped.
 
 Settle it by reading that workflow's `on:` block against this commit's diff, not
-by looking harder at the run list. All three return the same nothing.
+by looking harder at the run list. All four return the same nothing.
+
+**Reading the diff LOCALLY is not the same comparison GitHub made**, and on a
+large change it disagrees. Path filters are evaluated against the first 300
+files of the generated diff, so a matching path beyond that boundary does not
+trigger the workflow — while a local `git diff` sees it and says the run should
+exist. That reads as a dropped trigger and invites a push that changes nothing.
+Above 300 files, treat the discriminator as INDETERMINATE and say so, rather
+than reporting a defect the evidence cannot support.
 
 **Measured on this very PR**, which is the cheapest available demonstration:
 `integration.yml` declares `paths-ignore: ["docs/**", "**/*.md"]`, the diff is
@@ -232,7 +240,18 @@ workflows declares `types:`, so none subscribes to `edited`. Retargeting makes
 the branch filter eligible and emits an event nothing is listening for, leaving
 a PR that now LOOKS main-targeting with still no substantive run against it.
 
-Follow it with a push or a REBASE, which emits `synchronize`. Close-and-reopen
+Follow it with an operation that DEMONSTRABLY moves the head, then confirm a
+new run exists. A plain `git rebase main` is not that: when the branch is
+already a descendant of `main` it reports the branch up to date and changes
+nothing, so the push that follows emits no `synchronize` and the four
+main-filtered workflows stay absent — having done exactly what the instruction
+said. `git rebase --force-rebase` (or `--no-ff`) replays regardless, and an
+empty commit or a close-and-reopen also start CI.
+
+Whichever you pick, the check is the same and it is not optional: the head SHA
+must differ afterwards, and `gh run list --commit <new head> --workflow ci.yml`
+must return a run. A remedy that is believed to have worked is how a stacked PR
+sits for a day looking retargeted. Close-and-reopen
 also starts CI and is the worse remedy, because it leaves the head SHA
 unchanged: the diff expands to include the parent stack while every existing
 review still points at that same SHA, so a coverage check keyed on the head
