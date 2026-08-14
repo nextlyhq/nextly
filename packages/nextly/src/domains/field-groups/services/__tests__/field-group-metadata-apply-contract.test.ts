@@ -27,7 +27,10 @@ vi.mock("../field-group-table-provisioning", () => ({
   registerComponentRuntimeSchema: vi.fn((_a, _d, tableName: string) => {
     bound.push(tableName);
   }),
-  reconcileComponentCompanion: vi.fn(async () => {}),
+  // Returns whether DDL actually ran. Defaulted to `true` — "a transition happened" — because that
+  // is the state the partial-failure tests below are about; the test that cares about the other
+  // answer sets it explicitly rather than letting this double decide.
+  reconcileComponentCompanion: vi.fn(async () => true),
   // The update path probes which discriminator column the existing table carries before it moves
   // anything. Stubbed to the current spelling: an unstubbed export throws on call, and the update
   // tests below would then be describing a companion transition that never started.
@@ -426,6 +429,41 @@ describe("an update whose row write fails after the tables moved", () => {
     expect(registry.updateComponent.mock.calls[1]?.[1]).toEqual({
       migrationStatus: "failed",
     });
+    // The optimistic lock is invalidated with it: the tables moved, so every editor loaded before
+    // this moment is describing a shape that no longer exists.
+    expect(registry.updateComponent.mock.calls[1]?.[2]).toMatchObject({
+      invalidateSchemaVersion: true,
+    });
+  });
+
+  // 🔴 THE case the request shape cannot answer. A field-set change on a group that was and remains
+  // non-localized reaches the reconciler and moves nothing — this path emits no main-table DDL — so
+  // a failed write there has changed nothing and must not be reported as a committed transition.
+  it("raises the original error when the reconciler reports nothing moved", async () => {
+    const failure = new Error("row write rejected");
+    const registry = registryWhoseWriteFails({ failure });
+    const adapter = adapterDouble(async () => true);
+    const { reconcileComponentCompanion } = await import(
+      "../field-group-table-provisioning"
+    );
+    vi.mocked(reconcileComponentCompanion).mockResolvedValueOnce(false);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    const refusal = await service
+      .updateFieldGroup({
+        slug: "hero",
+        fields: [{ name: "heading", type: "text" }] as never,
+      })
+      .catch((error: unknown) => error);
+
+    // The registry's own error, verbatim. Wrapping it would tell a caller their edit half-happened
+    // when it did not happen at all.
+    expect(refusal).toBe(failure);
+    // And no mark: a row that still describes the database correctly needs no repair recorded.
+    expect(registry.updateComponent).toHaveBeenCalledTimes(1);
   });
 
   it("raises the original error, unmarked, when nothing physical moved", async () => {
@@ -478,6 +516,15 @@ describe("an update whose row write fails after the tables moved", () => {
 
     expect((refusal as NextlyError).publicMessage).toContain(
       "Do not retry the same edit"
+    );
+    // 🔴 And it must NOT claim a durable record it does not have. The mark failed too, so the only
+    // trace is the server log — telling an operator the row is marked sends them to a row that
+    // reads entirely normal.
+    expect((refusal as NextlyError).publicMessage).toContain(
+      "the only trace is the server log"
+    );
+    expect((refusal as NextlyError).publicMessage).not.toContain(
+      "is marked as a failed migration"
     );
     // The mark was attempted and refused, which is the state this describes. Asserting only the
     // raise would pass on an implementation that never tried.

@@ -33,7 +33,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { readRequestLocalized } from "../../../dispatcher/helpers/request-localized";
-import { NextlyError } from "../../../errors";
+import { NEXTLY_ERROR_STATUS, NextlyError } from "../../../errors";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type {
   DynamicFieldGroupInsert,
@@ -320,16 +320,18 @@ export class FieldGroupMetadataService {
     // enabling seeds the companion from the main table and drops those columns, disabling restores
     // and archives them. A save that skipped that would persist the flag while the content stayed
     // where the runtime no longer looks for it.
+    // 🔴 What the reconciler DID, not what the request implied. A field-set change on a group that
+    // was and remains non-localized reaches the reconciler and moves nothing — this path emits no
+    // main-table DDL at all — so inferring a physical transition from the request shape would mark a
+    // row diverged and tell a caller not to retry an edit that changed nothing.
     const movedSchema =
-      input.fields !== undefined || localized !== wasLocalized;
-    if (movedSchema) {
-      await this.reconcileCompanion({
+      (input.fields !== undefined || localized !== wasLocalized) &&
+      (await this.reconcileCompanion({
         existing,
         fields,
         localized,
         wasLocalized,
-      });
-    }
+      }));
 
     // 2. RECORD, after the physical change succeeded.
     try {
@@ -402,12 +404,18 @@ export class FieldGroupMetadataService {
       }
     );
 
+    let marked = false;
     try {
       await this.registry.updateComponent(
         slug,
         { migrationStatus: "failed" },
-        { source: "code" }
+        // The version advances even though this write carries no new field set: the TABLES moved,
+        // and an editor loaded before that is now describing a shape that is gone. Leaving the
+        // version alone would let such a preview pass `assertSchemaVersionMatch` and apply its
+        // stale resolutions against the tables this transition already changed.
+        { source: "code", invalidateSchemaVersion: true }
       );
+      marked = true;
     } catch (markError) {
       this.logger.error(
         "[FieldGroups] Could not mark the field group's migration as failed either.",
@@ -421,11 +429,18 @@ export class FieldGroupMetadataService {
 
     // Constructed rather than `NextlyError.internal`, which fixes the public message to "An
     // unexpected error occurred." That is the one thing this caller must NOT be told: the whole
-    // point is that the edit half-happened and repeating it is harmful.
+    // point is that the edit half-happened and repeating it is harmful. The status still comes from
+    // the central mapping rather than a literal, so this cannot drift from the code it carries.
+    //
+    // 🔴 The message distinguishes whether the mark was PERSISTED. Claiming a durable record that
+    // does not exist is worse than admitting the log is the only trace: the first sends an operator
+    // looking at a row that reads normal, the second tells them where to look.
     throw new NextlyError({
       code: "INTERNAL_ERROR",
-      statusCode: 500,
-      publicMessage: `The field group's tables were changed, but recording the change failed. "${slug}" is marked as a failed migration and its stored definition still describes the previous shape. Do not retry the same edit: check the server logs and reconcile the field group before editing it again.`,
+      statusCode: NEXTLY_ERROR_STATUS.INTERNAL_ERROR,
+      publicMessage: marked
+        ? `The field group's tables were changed, but recording the change failed. "${slug}" is marked as a failed migration and its stored definition still describes the previous shape. Do not retry the same edit: check the server logs and reconcile the field group before editing it again.`
+        : `The field group's tables were changed, but neither the change nor the failure could be recorded. "${slug}" still reads as though nothing happened, and the only trace is the server log. Do not retry the same edit: reconcile the field group against its tables before editing it again.`,
       cause: cause instanceof Error ? cause : undefined,
       logContext: {
         reason: "registry write failed after committed schema transition",
@@ -461,9 +476,11 @@ export class FieldGroupMetadataService {
     fields: FieldDefinition[];
     localized: boolean;
     wasLocalized: boolean;
-  }): Promise<void> {
+    // Whether DDL actually ran, carried up from the reconciler rather than re-derived. With no
+    // adapter registered nothing runs at all, which is a supported configuration and reports false.
+  }): Promise<boolean> {
     const adapter = this.adapter;
-    if (!adapter) return;
+    if (!adapter) return false;
 
     const {
       reconcileComponentCompanion,
@@ -481,7 +498,7 @@ export class FieldGroupMetadataService {
       args.existing.tableName
     );
 
-    await reconcileComponentCompanion({
+    const moved = await reconcileComponentCompanion({
       slug: args.existing.slug,
       tableName: args.existing.tableName,
       oldFields: args.existing.fields as unknown as FieldDefinition[],
@@ -502,6 +519,8 @@ export class FieldGroupMetadataService {
       typeColumn,
       args.localized
     );
+
+    return moved;
   }
 
   /**

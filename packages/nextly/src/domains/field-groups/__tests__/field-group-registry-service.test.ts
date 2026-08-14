@@ -397,6 +397,27 @@ describe("FieldGroupRegistryService", () => {
       expect(updateData.migration_status).toBeUndefined();
     });
 
+    // 🔴 The optimistic lock has to move when the TABLES did, even though this write carries no new
+    // field set. `assertSchemaVersionMatch` is all that stands between an editor loaded before a
+    // partial transition and an apply against the tables that transition already moved.
+    it("advances schema_version when the caller says the shape diverged", async () => {
+      ctx.adapter.selectOne.mockResolvedValue(dbRow({ locked: 0 }));
+      ctx.adapter.update.mockResolvedValue([dbRow({ schema_version: 2 })]);
+
+      await ctx.service.updateComponent(
+        "seo",
+        { migrationStatus: "failed" },
+        { source: "code", invalidateSchemaVersion: true }
+      );
+
+      const updateData = ctx.adapter.update.mock.calls[0][1] as Record<
+        string,
+        unknown
+      >;
+      expect(updateData.schema_version).toBe(2);
+      expect(updateData.migration_status).toBe("failed");
+    });
+
     it("throws FORBIDDEN when locked and source is not 'code'", async () => {
       ctx.adapter.selectOne.mockResolvedValue(dbRow({ locked: 1 }));
 

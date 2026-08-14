@@ -43,6 +43,19 @@ export interface ComponentReference {
 
 export interface UpdateComponentOptions {
   source?: FieldGroupSource;
+  /**
+   * Advance `schema_version` even though this write carries no new shape.
+   *
+   * For the caller whose DDL already landed and whose row write then failed: the tables moved, so
+   * every editor loaded before that moment is now describing a shape that no longer exists.
+   * `assertSchemaVersionMatch` is the only thing standing between such an editor and an apply
+   * against the moved tables, and it compares versions — so a divergence that leaves the version
+   * untouched lets a stale preview pass the optimistic lock.
+   *
+   * The caller states the INTENT and the registry still owns the arithmetic; letting a caller
+   * supply the number would let one regress it.
+   */
+  invalidateSchemaVersion?: boolean;
 }
 
 /**
@@ -364,8 +377,12 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       updateData.migration_status = data.migrationStatus;
     }
 
-    if (data.fields || localizationChanged) {
-      // One increment even when both changed: the row moved to the next version, once.
+    if (
+      data.fields ||
+      localizationChanged ||
+      options?.invalidateSchemaVersion
+    ) {
+      // One increment however many reasons applied: the row moved to the next version, once.
       updateData.schema_version = existing.schemaVersion + 1;
     }
 
