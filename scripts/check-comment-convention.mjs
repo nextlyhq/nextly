@@ -71,8 +71,10 @@ export const FORBIDDEN = [
     // A numbered change, with or without a roadmap-item prefix: "PR 4 migration", "F11 PR 3".
     // Mechanically distinct from the deictic form below and far more common, because it survives
     // being copied between files - the number keeps naming a change nobody can now look up.
-    pattern: /\b(?:[A-Z]\d+\s+)?PR\s+\d+/,
+    pattern: /\b(?:[a-z]\d+\s+)?PR\s+\d+/i,
     why: "names a numbered change rather than the code",
+    // Suppressed in review tooling, where a pull-request number is the subject matter.
+    domainVocabulary: true,
   },
   {
     // Deliberately broad, and only safe because of REVIEW_DOMAIN_PATHS below. In code that does
@@ -83,6 +85,7 @@ export const FORBIDDEN = [
     // the file's role differs. The role is declared by path instead of guessed at by pattern.
     pattern: /\b(this|the)\s+(PR|pull request)\b/i,
     why: "refers to the change rather than the code",
+    domainVocabulary: true,
   },
   {
     // The ACTOR carries the verdict, not the verb. "the operator asked", "the caller asked" and
@@ -139,7 +142,10 @@ export const SOURCE_EXTENSIONS = [
  * whatever the rest of that URL happens to spell.
  */
 export function readOptionsFor(path) {
-  return { lineComments: !path.endsWith(".css") };
+  return {
+    lineComments: !path.endsWith(".css"),
+    domainVocabularyAllowed: isReviewDomain(path),
+  };
 }
 
 /** Directories that hold generated or vendored code rather than authored source. */
@@ -441,9 +447,16 @@ function blankSpan(match) {
 
 /** Every forbidden shape found in `source`, as `{ why, comment }`. */
 export function offencesIn(source, options) {
+  // A review-domain file is exempt from the pull-request VOCABULARY and from nothing else.
+  // Naming a review tool or quoting a reviewer is narration wherever it appears, including in
+  // the tooling that reads pull requests, so skipping the whole pattern set there left a hole
+  // exactly the size of the rule.
+  const patterns = options?.domainVocabularyAllowed
+    ? FORBIDDEN.filter(entry => entry.domainVocabulary !== true)
+    : FORBIDDEN;
   const found = [];
   for (const comment of commentText(source, options)) {
-    for (const { pattern, why } of FORBIDDEN) {
+    for (const { pattern, why } of patterns) {
       if (pattern.test(comment)) {
         found.push({ why, comment: comment.trim().slice(0, 100) });
       }
@@ -525,10 +538,9 @@ function main() {
   const byFile = new Map();
   let skipped = 0;
   for (const file of files) {
-    if (isReviewDomain(file)) {
-      skipped += 1;
-      continue;
-    }
+    // Review tooling is READ, not skipped. It is exempt from the pull-request vocabulary only,
+    // which readOptionsFor carries; every other pattern still applies to it.
+    if (isReviewDomain(file)) skipped += 1;
     for (const { why, comment } of offencesIn(readFileSync(file, "utf8"), readOptionsFor(file))) {
       // Stored WHOLE, and shortened only where it is printed.
       //
@@ -615,7 +627,7 @@ function main() {
   console.log(
     `${files.length - skipped} of ${files.length} source files across ${roots.join(", ")}: ` +
       "no new comment names a review, tool or change" +
-      (skipped > 0 ? `; ${skipped} skipped as review-process tooling` : "") +
+      (skipped > 0 ? `; ${skipped} read with the pull-request vocabulary allowed` : "") +
       (exempt > 0 ? `; ${exempt} pre-existing offence(s) still allowlisted` : "") +
       "."
   );
