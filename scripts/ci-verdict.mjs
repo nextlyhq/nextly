@@ -453,11 +453,41 @@ async function main(argv) {
   // ref first turned a conclusive answer into `exit 2` for a missing ref.
   // Emitted directly rather than through `report`, which exists to weigh
   // reviews and threads that cannot change this outcome.
+  // Trimmed: a list written with spaces after the commas yields entries that
+  // match no login, and an unmatched blocking reviewer is silently dropped —
+  // the gate then reports clean without that reviewer's coverage.
+  const logins = value =>
+    value
+      .split(",")
+      .map(entry => entry.trim())
+      .filter(Boolean);
+  const blocking = logins(
+    process.env.CI_VERDICT_BLOCKING ?? "chatgpt-codex-connector[bot]"
+  );
+  const advisory = logins(
+    process.env.CI_VERDICT_ADVISORY ?? "coderabbitai[bot]"
+  );
+  if (blocking.length === 0) {
+    process.stderr.write("ci-verdict: no blocking reviewer configured\n");
+    return 2;
+  }
+
   if (meta.state !== "OPEN" && meta.state !== "MERGED") {
-    const closed = verdictFor({ state: meta.state, stranded: 0 });
-    process.stdout.write(
-      `${JSON.stringify({ state: meta.state, ...closed }, null, 2)}\n`
-    );
+    // Through the SHARED serializer, so every lifecycle emits one schema. A
+    // second output shape for one state means a consumer reading `head` or
+    // `missing_reviews` gets a different object exactly where it is least
+    // expecting one.
+    const closed = report({
+      head: meta.headRefOid ?? "",
+      reviews: [],
+      threads: [],
+      issueComments: [],
+      blocking,
+      advisory,
+      state: meta.state,
+      stranded: 0,
+    });
+    process.stdout.write(`${JSON.stringify(closed, null, 2)}\n`);
     return closed.exitCode;
   }
 
@@ -584,25 +614,6 @@ async function main(argv) {
   // verdict would otherwise describe a revision that is no longer current.
   if (headOf() !== head) {
     process.stderr.write("ci-verdict: head moved during the recheck; re-run\n");
-    return 2;
-  }
-
-  // Trimmed: a list written with spaces after the commas yields entries that
-  // match no login, and an unmatched blocking reviewer is silently dropped —
-  // the gate then reports clean without that reviewer's coverage.
-  const logins = value =>
-    value
-      .split(",")
-      .map(entry => entry.trim())
-      .filter(Boolean);
-  const blocking = logins(
-    process.env.CI_VERDICT_BLOCKING ?? "chatgpt-codex-connector[bot]"
-  );
-  const advisory = logins(
-    process.env.CI_VERDICT_ADVISORY ?? "coderabbitai[bot]"
-  );
-  if (blocking.length === 0) {
-    process.stderr.write("ci-verdict: no blocking reviewer configured\n");
     return 2;
   }
 

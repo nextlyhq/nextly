@@ -140,9 +140,8 @@ describe("changesRequested", () => {
   });
 
   /**
-   * A dismissal is the other way an objection ends. It is excluded from
-   * coverage, so this also pins that clearing and covering are separate
-   * questions about the same review object.
+   * Dismissal and coverage are separate questions about the same review
+   * object: a dismissed row grants no coverage, and it clears nothing either.
    */
   /**
    * Dismissal invalidates the review it names. A dismissed APPROVAL therefore
