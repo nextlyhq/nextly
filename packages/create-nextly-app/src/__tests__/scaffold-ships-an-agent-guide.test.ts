@@ -500,6 +500,50 @@ describe("scaffolding over a project that already has these files", () => {
     expect(await readFile(shared, "utf-8")).toBe("coverage/\n");
   }, 30_000);
 
+  it("does not create a self-pointer through a DANGLING guide symlink", async () => {
+    workdir = await mkdtemp(path.join(tmpdir(), "nextly-dangling-"));
+    const target = path.join(workdir, "project");
+    await mkdir(target, { recursive: true });
+
+    // `AGENTS.md -> CLAUDE.md` where CLAUDE.md does not exist YET. The guide entry is skipped as
+    // a link; the pointer entry then finds no destination and takes the move path — which makes
+    // the dangling link live, pointing at the file just written. Without the check, that file
+    // contains `@AGENTS.md` and imports itself.
+    await symlink("CLAUDE.md", path.join(target, "AGENTS.md"));
+
+    await copyTemplate({
+      projectName: "my-app",
+      projectType: "blank",
+      targetDir: target,
+      database: sqlite,
+      templateSource: {
+        basePath: path.join(templatesRoot, "base"),
+        templatePath: path.join(templatesRoot, "blank"),
+      },
+      allowExistingTarget: true,
+    });
+
+    const claude = await readFile(
+      path.join(target, "CLAUDE.md"),
+      "utf-8"
+    ).catch(() => "");
+    expect(claude.split("\n").filter(l => l.trim() === "@AGENTS.md")).toEqual(
+      []
+    );
+  }, 30_000);
+
+  it("leaves a developer's own {{runCommand}} text alone", async () => {
+    // The recursive placeholder pass walks every file in the target. When scaffolding over an
+    // existing project that includes the developer's files, and one may legitimately contain a
+    // literal command token — in its own template, or in documentation about this scaffolder.
+    const after = await scaffoldOver({
+      "TEAM-NOTES.md":
+        "Our generator emits {{runCommand}} for the chosen manager.\n",
+    });
+
+    expect(after["TEAM-NOTES.md"]).toContain("{{runCommand}}");
+  }, 30_000);
+
   it("does not write through a hard-linked guide", async () => {
     workdir = await mkdtemp(path.join(tmpdir(), "nextly-hardlink-"));
     const target = path.join(workdir, "project");

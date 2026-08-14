@@ -420,6 +420,32 @@ function appendMissingLines(existing: string, incoming: string): string {
 }
 
 /**
+ * The command tokens, which belong to the GUIDES rather than to the scaffold as a whole.
+ *
+ * Kept out of the map the recursive pass uses. That pass walks every file in the target, and when
+ * scaffolding over an existing project the target contains the developer's files — one of which
+ * may legitimately hold a literal `{{runCommand}}`, in its own template or its documentation.
+ * Rendering these globally would rewrite that text.
+ *
+ * Only the two AGENTS.md templates use them, and those files are rendered during the
+ * restore, so scoping costs nothing.
+ *
+ * Always set, never conditional: `packageManager` is optional on the copy options, and a guide
+ * shipping a literal `{{runCommand}}` in its command list would be worse than one naming the
+ * wrong manager. npm is the default because it is what a project has when nothing said
+ * otherwise, and `npm run x` is the explicit form the others also accept.
+ */
+function guidePlaceholders(
+  packageManager: PackageManager | undefined
+): Record<string, string> {
+  const pm = packageManager ?? "npm";
+  return {
+    "{{runCommand}}": scriptRunner(pm),
+    "{{execCommand}}": binaryRunner(pm),
+  };
+}
+
+/**
  * Whether `incoming` is a pointer whose target resolves to `destination` itself.
  *
  * `@name` in an instruction file is an include. If the named file resolves to the file the
@@ -471,9 +497,13 @@ async function pointsAtItself(
  */
 async function restoreShippedNames(
   targetDir: string,
-  placeholders: Record<string, string>
+  placeholders: Record<string, string>,
+  packageManager: PackageManager | undefined
 ): Promise<Set<string>> {
   const merged = new Set<string>();
+  // The restored files are the only ones that may contain command tokens, so they are the only
+  // ones rendered with them.
+  const forGuides = { ...placeholders, ...guidePlaceholders(packageManager) };
 
   for (const { shipped, inProject, merge, onLink } of RENAMED_ON_COPY) {
     const from = path.join(targetDir, shipped);
@@ -487,7 +517,30 @@ async function restoreShippedNames(
     const destination = await fs.lstat(to).catch(() => null);
 
     if (!destination) {
+      // The same self-pointer check the merge path makes. A DANGLING `AGENTS.md -> CLAUDE.md`
+      // leaves this branch reachable — `lstat` on `CLAUDE.md` finds nothing, so there is no
+      // destination — and moving the pointer in makes that link live, pointing at the file just
+      // written. The result imports itself.
+      if (
+        await pointsAtItself(
+          targetDir,
+          to,
+          applyPlaceholders(await fs.readFile(from, "utf-8"), forGuides)
+        )
+      ) {
+        await fs.remove(from);
+        merged.add(inProject);
+        continue;
+      }
       await fs.move(from, to);
+      // Rendered here rather than left to the recursive pass, which no longer carries the
+      // command tokens. Recorded as done so that pass does not read it again.
+      await fs.writeFile(
+        to,
+        applyPlaceholders(await fs.readFile(to, "utf-8"), forGuides),
+        "utf-8"
+      );
+      merged.add(inProject);
       continue;
     }
 
@@ -542,7 +595,7 @@ async function restoreShippedNames(
       fs.readFile(to, "utf-8"),
       fs.readFile(from, "utf-8"),
     ]);
-    const rendered = applyPlaceholders(incoming, placeholders);
+    const rendered = applyPlaceholders(incoming, forGuides);
     const combined =
       merge === "managed-block"
         ? mergeManagedBlock(existing, rendered)
@@ -620,8 +673,6 @@ export function resolveTemplatePath(localTemplatePath?: string): string {
  * Build the placeholder map from user selections.
  */
 function buildPlaceholderMap(options: {
-  /** Renders `{{runCommand}}` / `{{execCommand}}` so a guide's commands match the manager in use. */
-  packageManager?: PackageManager;
   database?: DatabaseConfig;
   databaseUrl?: string;
   /** Plugin package name → fills `{{pluginName}}` (plugin template, D44). */
@@ -629,21 +680,13 @@ function buildPlaceholderMap(options: {
   /** Plugin's `nextly` compat range → fills `{{nextlyRange}}` (D44). */
   nextlyRange?: string;
 }): Record<string, string> {
-  const { database, databaseUrl, pluginName, nextlyRange, packageManager } =
-    options;
+  const { database, databaseUrl, pluginName, nextlyRange } = options;
 
   const map: Record<string, string> = {};
   if (database) {
     map["{{databaseDialect}}"] = database.type;
     map["{{databaseUrl}}"] = databaseUrl || database.envExample;
   }
-  // Always set, never conditional. `packageManager` is optional on the copy options, and a guide
-  // that shipped with a literal `{{runCommand}}` in its command list would be worse than one
-  // naming the wrong manager. npm is the safe default: it is what a project has when nothing
-  // said otherwise, and its spelling (`npm run x`) is the explicit form the others also accept.
-  const pm = packageManager ?? "npm";
-  map["{{runCommand}}"] = scriptRunner(pm);
-  map["{{execCommand}}"] = binaryRunner(pm);
   if (pluginName) map["{{pluginName}}"] = pluginName;
   if (nextlyRange) map["{{nextlyRange}}"] = nextlyRange;
   return map;
@@ -1578,15 +1621,15 @@ export async function copyTemplate(
   // The placeholder map is built here rather than at step 9 because a merge into a file the
   // developer already had must render the incoming text itself; step 9 then skips what it
   // merged, so their prose is never rewritten.
-  const placeholders = buildPlaceholderMap({
-    database,
-    databaseUrl,
-    packageManager,
-  });
+  const placeholders = buildPlaceholderMap({ database, databaseUrl });
   if (approach) {
     placeholders["{{approach}}"] = approach;
   }
-  const alreadyRendered = await restoreShippedNames(targetDir, placeholders);
+  const alreadyRendered = await restoreShippedNames(
+    targetDir,
+    placeholders,
+    packageManager
+  );
 
   // Step 6d: Undo the side effect of the workspace file above for the pnpm versions that
   // read it as a workspace declaration. Only for pnpm, because npm warns about the setting
@@ -1672,9 +1715,12 @@ async function copyPluginTemplate(opts: {
   const placeholders = buildPlaceholderMap({
     pluginName: projectName,
     nextlyRange,
-    packageManager,
   });
-  const alreadyRendered = await restoreShippedNames(targetDir, placeholders);
+  const alreadyRendered = await restoreShippedNames(
+    targetDir,
+    placeholders,
+    packageManager
+  );
 
   // It installs like any other project too, so it meets the same workspace-root refusal the
   // pnpm workspace file provokes on pnpm 9 — through the same writer as the app path.
