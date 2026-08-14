@@ -28,17 +28,34 @@ function migrateNode(node: BlockNode, registry: BlockRegistry): BlockNode {
   // Unknown blocks (def === undefined): preserved untouched.
 
   if (!next.slots) return next;
+  // Rebuilt only when a descendant actually moved. Returning the SAME object for
+  // an unchanged subtree is what lets a caller ask "did this document need
+  // migrating" by identity — and a caller that cannot ask has to either push a
+  // fresh object on every mount or never push at all, and both are wrong.
   const slots: Record<string, BlockNode[]> = {};
+  let childMoved = false;
   for (const [name, children] of Object.entries(next.slots)) {
-    slots[name] = children.map(c => migrateNode(c, registry));
+    slots[name] = children.map(child => {
+      const migrated = migrateNode(child, registry);
+      if (migrated !== child) childMoved = true;
+      return migrated;
+    });
   }
-  return { ...next, slots };
+  return childMoved || next !== node ? { ...next, slots } : node;
 }
 
-/** Upgrade a stored document to current block versions. */
+/**
+ * Upgrade a stored document to current block versions.
+ *
+ * Returns the SAME document when nothing needed upgrading, so a caller can tell
+ * the two apart by identity. The editor's field mount depends on it: it has to
+ * push a migrated document to the host form and must not push an unmigrated one,
+ * because a push it makes on every mount loops through the form's own onChange.
+ */
 export function migrateDocument(
   doc: BlockDocument,
   registry: BlockRegistry
 ): BlockDocument {
-  return { ...doc, root: migrateNode(doc.root, registry) };
+  const root = migrateNode(doc.root, registry);
+  return root === doc.root ? doc : { ...doc, root };
 }

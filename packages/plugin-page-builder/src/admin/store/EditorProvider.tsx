@@ -129,14 +129,23 @@ export function EditorProvider({
   const onDocumentChangeRef = useRef(onDocumentChange);
   onDocumentChangeRef.current = onDocumentChange;
 
-  // Push document changes to a host form (field mount), not on the initial mount.
+  // Push document changes to a host form (field mount). The initial mount is
+  // skipped, EXCEPT when loading migrated the document: the editor draws and
+  // edits the migrated tree, so a host form still holding the stored one would
+  // submit a document that is not the one on screen — and the upgrade, having
+  // been applied where the author can see it, would never persist.
+  //
+  // Identity is what separates the two. `migrateDocument` returns the same
+  // object when nothing needed upgrading, so this fires only for a document that
+  // really changed; pushing unconditionally would loop through the form's own
+  // onChange, which is what the guard exists for.
   useEffect(() => {
     if (firstRender.current) {
       firstRender.current = false;
-      return;
+      if (state.document === doc) return;
     }
     onDocumentChangeRef.current?.(state.document);
-  }, [state.document]);
+  }, [state.document, doc]);
 
   // Same for the page custom CSS (its own first-render guard: CSS edits must sync
   // even before any document edit, and vice versa).
