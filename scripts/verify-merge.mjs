@@ -301,6 +301,11 @@ export function missingRequired(checkRuns, required = REQUIRED_CHECKS) {
  */
 export const REQUIRED_CHECKS = Object.freeze([
   "Lint / Typecheck / Test / Build",
+  // Its own workflow, on every pull request, and the repository calls it the
+  // enforcement gate. Listing only the CI job meant a run where `secret-scan`
+  // created no check-run passed on the strength of an unrelated workflow being
+  // green — the same absence-is-invisible defect, one workflow along.
+  "gitleaks",
 ]);
 
 /**
@@ -319,6 +324,30 @@ export function reviewsCoveringTip(reviews, tip, login) {
   return reviews.filter(r => r?.user?.login === login && r?.commit_id === tip);
 }
 
+/**
+ * Whether the merge took everything the branch had.
+ *
+ * Takes the candidate commits rather than running git, so the interesting
+ * cases can be handed to it. `checkable` comes from {@link checkability}: a
+ * branch whose history was rewritten, or whose ref does not resolve, cannot
+ * answer this at all — and an empty candidate list from an unanswerable branch
+ * is not evidence of anything.
+ */
+export function landedWhole({ checkable, reason, candidates }) {
+  if (!checkable) return { verdict: "not-checkable", reason, candidates: [] };
+  if (!Array.isArray(candidates)) {
+    throw new TypeError("landedWhole needs an array of candidate commits");
+  }
+  if (candidates.length === 0) {
+    return { verdict: "no-candidates", reason: "ok", candidates: [] };
+  }
+  // Deliberately NOT "lost". The range says only "absent from the merged
+  // head", and a surviving branch also collects force-pushes, rebases and
+  // follow-up work. Each named commit is worth confirming by content against
+  // the merge commit; the screen produces the list, never the verdict.
+  return { verdict: "candidates", reason: "absent-from-merge", candidates };
+}
+
 // ---------------------------------------------------------------------------
 // The I/O shell.
 //
@@ -333,6 +362,9 @@ import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
 const REPO = "nextlyhq/nextly";
+
+/** Set by `main` once the head repository is known; a fork keeps its own. */
+let REMOTE_FOR_FETCH = "origin";
 
 /**
  * `gh api`, raw. Throws on failure rather than degrading to an empty result.
@@ -385,6 +417,19 @@ function timelinePages(pr) {
   );
 }
 
+/** `git`, for the two places this shell needs it. */
+function run(args) {
+  return execFileSync("git", args, { encoding: "utf8" }).trim();
+}
+
+/** Commits the ref has that the merged head does not. */
+function ghLog(merged, tip) {
+  const out = execFileSync("git", ["log", "--oneline", `${merged}..${tip}`], {
+    encoding: "utf8",
+  }).trim();
+  return out ? out.split("\n") : [];
+}
+
 /** The branch's real tip, from the ref rather than from the API's cached head. */
 function lsRemoteTip(remote, branch) {
   const out = execFileSync(
@@ -411,11 +456,33 @@ export function main(argv) {
     "--jq",
     "{cross:.head.repo.full_name!=.base.repo.full_name,repo:.head.repo.full_name,branch:.head.ref}",
   ]);
-  const remote = meta.cross ? `https://github.com/${meta.repo}.git` : "origin";
-  const tip = lsRemoteTip(remote, meta.branch);
+  REMOTE_FOR_FETCH = meta.cross
+    ? `https://github.com/${meta.repo}.git`
+    : "origin";
+  const tip = lsRemoteTip(REMOTE_FOR_FETCH, meta.branch);
 
   const rewrites = countRewriteEvents(timelinePages(pr));
   const reach = checkability({ tip, rewriteEvents: rewrites });
+
+  // Perform the check rather than only reporting whether it could be done.
+  // The previous version computed reachability, printed "available", and never
+  // compared anything — a module named for a check that did not run it. The
+  // merged head is `headRefOid`; anything the ref has beyond it never reached
+  // `main`.
+  let candidates = [];
+  if (reach.checkable) {
+    const merged = ghText([
+      "api",
+      `repos/${REPO}/pulls/${pr}`,
+      "--jq",
+      ".head.sha",
+    ]);
+    if (merged && merged !== tip) {
+      run(["fetch", REMOTE_FOR_FETCH, tip, "--quiet"]);
+      candidates = ghLog(merged, tip);
+    }
+  }
+  const landed = landedWhole({ ...reach, candidates });
 
   const checkRuns = tip
     ? ghJson([
@@ -474,12 +541,18 @@ export function main(argv) {
 
   // Commit STATUSES are a separate surface from check-runs, and this
   // repository's title check and CodeRabbit both report through it.
-  const statuses = ghJson([
-    "api",
-    `repos/${REPO}/commits/${tip}/status`,
-    "--jq",
-    ".statuses",
-  ]);
+  // Guarded like the check-runs lookup above. Unguarded, an empty `tip`
+  // produced `commits//status`, which throws before the script can print
+  // NOT CHECKABLE or return its exit code — so the documented refusal became
+  // a stack trace.
+  const statuses = tip
+    ? ghJson([
+        "api",
+        `repos/${REPO}/commits/${tip}/status`,
+        "--jq",
+        ".statuses",
+      ])
+    : [];
   const allChecks = [...checkRuns, ...statuses.map(statusAsRun)];
 
   const verdict = gateVerdict({
@@ -492,8 +565,11 @@ export function main(argv) {
 
   process.stdout.write(`PR #${pr} @ ${tip.slice(0, 9) || "(no ref)"}\n`);
   process.stdout.write(
-    `  landed-whole check: ${reach.checkable ? "available" : `NOT CHECKABLE (${reach.reason})`}\n`
+    `  landed-whole: ${landed.verdict} (${landed.reason})\n`
   );
+  for (const line of landed.candidates) {
+    process.stdout.write(`    candidate, confirm by content: ${line}\n`);
+  }
   process.stdout.write(`${formatVerdict(verdict)}\n`);
   // Not checkable is not clean. Returning 0 here would let automation treat
   // the history-rewrite case as a pass — the one state this file exists to

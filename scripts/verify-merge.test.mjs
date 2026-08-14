@@ -18,6 +18,7 @@ import {
   formatVerdict,
   gateVerdict,
   jobPasses,
+  landedWhole,
   missingRequired,
   reviewCoverage,
   reviewsCoveringTip,
@@ -300,7 +301,7 @@ describe("gateVerdict", () => {
     const verdict = gateVerdict({
       ...passing,
       unresolvedThreads: 2,
-      checkRuns: [queued(CI)],
+      checkRuns: [queued(CI), green("gitleaks")],
       codexReviewedSha: "0dbcb9470",
     });
 
@@ -318,7 +319,7 @@ describe("formatVerdict", () => {
       gateVerdict({
         tip: FULL_TIP,
         unresolvedThreads: 1,
-        checkRuns: [green(CI)],
+        checkRuns: [green(CI), green("gitleaks")],
         codexReviewedSha: FULL_TIP.slice(0, 10),
         coderabbitReviewCount: 1,
       })
@@ -333,7 +334,7 @@ describe("formatVerdict", () => {
       gateVerdict({
         tip: FULL_TIP,
         unresolvedThreads: 0,
-        checkRuns: [green(CI)],
+        checkRuns: [green(CI), green("gitleaks")],
         codexReviewedSha: FULL_TIP.slice(0, 10),
         coderabbitReviewCount: 0,
       })
@@ -384,12 +385,20 @@ describe("missingRequired", () => {
     // Presence, not success — `blockingJobs` judges the outcome. Conflating
     // them would report a failing required job twice and an absent one never.
     expect(
-      missingRequired([queued("Lint / Typecheck / Test / Build")])
+      missingRequired([
+        queued("Lint / Typecheck / Test / Build"),
+        green("gitleaks"),
+      ])
     ).toEqual([]);
   });
 
-  it("names exactly one required check, so its absence is decisive", () => {
-    expect(REQUIRED_CHECKS).toEqual(["Lint / Typecheck / Test / Build"]);
+  it("names the checks whose ABSENCE means no coverage", () => {
+    // Both run on every pull request from independent workflows, so either
+    // failing to report leaves a green-looking set with a gate missing.
+    expect(REQUIRED_CHECKS).toEqual([
+      "Lint / Typecheck / Test / Build",
+      "gitleaks",
+    ]);
   });
 });
 
@@ -453,6 +462,77 @@ describe("gateVerdict + required checks", () => {
     expect(verdict.mergeable).toBe(false);
     expect(verdict.blockers.map(b => b.kind)).toContain(
       "required-check-absent"
+    );
+  });
+});
+
+describe("landedWhole", () => {
+  it("refuses to answer for a branch whose history was rewritten", () => {
+    // An empty candidate list from an unanswerable branch is not evidence.
+    // A force-push resetting a stranded commit away leaves the range empty and
+    // indistinguishable from a branch that never had one.
+    expect(
+      landedWhole({
+        checkable: false,
+        reason: "history-rewritten",
+        candidates: [],
+      })
+    ).toEqual({
+      verdict: "not-checkable",
+      reason: "history-rewritten",
+      candidates: [],
+    });
+  });
+
+  it("refuses for a ref that does not resolve, rather than reporting clean", () => {
+    expect(
+      landedWhole({ checkable: false, reason: "no-ref", candidates: [] })
+        .verdict
+    ).toBe("not-checkable");
+  });
+
+  it("reports CANDIDATES, never a loss", () => {
+    // The range says only "absent from the merged head". A surviving branch
+    // also collects force-pushes, rebases and follow-up work, so naming this
+    // "lost" would raise a false alarm in a procedure whose whole value is
+    // that its alarms mean something.
+    const result = landedWhole({
+      checkable: true,
+      reason: "ok",
+      candidates: [
+        "f4d798078 test(blocks-react): pair the oversized array again",
+      ],
+    });
+
+    expect(result.verdict).toBe("candidates");
+    expect(result.candidates).toHaveLength(1);
+  });
+
+  it("distinguishes an empty answer from no answer", () => {
+    // The positive control for the two refusals above: without it they pass on
+    // a function that refuses unconditionally, and the whole point is that
+    // "checked, found nothing" and "could not check" are different results.
+    expect(
+      landedWhole({ checkable: true, reason: "ok", candidates: [] }).verdict
+    ).toBe("no-candidates");
+  });
+
+  it("refuses a non-array rather than treating it as empty", () => {
+    expect(() =>
+      landedWhole({ checkable: true, reason: "ok", candidates: null })
+    ).toThrow(TypeError);
+  });
+});
+
+describe("REQUIRED_CHECKS", () => {
+  it("includes the secret scan, which is its own workflow", () => {
+    // `secret-scan.yml` runs on every pull request and the repository calls it
+    // the enforcement gate. With only the CI job listed, a run where that
+    // workflow created no check-run passed on an unrelated workflow being
+    // green — absence being invisible, one workflow along.
+    expect(REQUIRED_CHECKS).toContain("gitleaks");
+    expect(missingRequired([green("Lint / Typecheck / Test / Build")])).toEqual(
+      ["gitleaks"]
     );
   });
 });
