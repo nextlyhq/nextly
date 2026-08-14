@@ -1,6 +1,10 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { NextlyError } from "../../errors";
-import { _resetBootMigrationsGateForTest } from "../boot-migrations-gate";
+import {
+  _resetBootMigrationsGateForTest,
+  awaitBootMigrations,
+  openBootMigrationsGate,
+} from "../boot-migrations-gate";
 
 const shutdownServices = vi.fn();
 vi.mock("../../di", () => ({ shutdownServices: () => shutdownServices() }));
@@ -167,6 +171,23 @@ describe("runProdMigrationsIfEnabled", () => {
     const err = await runProdMigrationsIfEnabled(my as never).catch(e => e);
     expect(err.publicMessage).not.toContain("--force-unlock");
     expect(err.publicMessage).toContain("released when that connection ends");
+  });
+
+  /**
+   * `registerServices` opens the gate; this helper settles it. If the two ever
+   * disagree about the conditions, a gate opened and never settled hangs every
+   * consumer forever — a worse outage than the one being guarded against. So
+   * the helper closes it on the early exits too, where it was never opened.
+   */
+  it("settles the gate even when it returns early", async () => {
+    process.env.NODE_ENV = "production";
+    const a = args();
+    a.config.db.runMigrationsOnBoot = false;
+
+    openBootMigrationsGate(true);
+    await runProdMigrationsIfEnabled(a as never);
+
+    await expect(awaitBootMigrations()).resolves.toBeUndefined();
   });
 
   it("refuses to start when the migrations did not run", async () => {

@@ -201,6 +201,13 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
     return globalForInit.__nextly_initPromise;
   }
 
+  // The public factory's own gate. When services are ALREADY registered, the
+  // block below skips the migration branch entirely — so without this, a
+  // concurrent `getNextly()` builds and returns the API while another surface
+  // is still waiting on the migrate lock. `getCachedNextly()` was gated and
+  // this was not, which is a difference nothing but memory enforced.
+  await awaitBootMigrations();
+
   // Begin first-time initialisation and store the Promise so concurrent calls
   // above return it rather than spawning duplicate DB connections.
   const initPromise = (async (): Promise<Nextly> => {

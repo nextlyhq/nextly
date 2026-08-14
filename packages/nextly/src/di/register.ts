@@ -97,6 +97,7 @@ import {
 import { registerCollectionHooks } from "../hooks/register-collection-hooks";
 import { registerSingleHooks } from "../hooks/register-single-hooks";
 import { createSanitizationHook } from "../hooks/sanitization-hooks";
+import { openBootMigrationsGate } from "../init/boot-migrations-gate";
 import type { PluginPermission, PluginRole } from "../plugins/contributions";
 import { getCoreVersion } from "../plugins/core-version";
 import { warnUndescribedPlugins } from "../plugins/describe-check";
@@ -235,6 +236,15 @@ export interface NextlyServiceConfig {
 
   /** Optional directory for dynamic collection schemas. */
   schemasDir?: string;
+  /**
+   * Whether this boot will run migrations, so registration can open the
+   * boot-migrations gate before it publishes the container.
+   *
+   * Carried on the SERVICE config rather than read from `db` — which this shape
+   * flattens away — because `buildServiceConfig` is the one builder both boot
+   * paths use, so threading it there reaches both without either remembering.
+   */
+  runMigrationsOnBoot?: boolean;
 
   /** Optional directory for dynamic collection migrations. */
   migrationsDir?: string;
@@ -542,6 +552,15 @@ export async function registerServices(
   // would newly refuse pre-existing declarations that boot fine today, whereas a
   // rule that can fire here has to have been written against a field type in
   // this same process.
+  // Opened HERE, before anything publishes the container, because this is the
+  // only boundary both boot paths cross. The request path publishes services
+  // and calls the migration helper afterwards, so opening it there left a
+  // window in which registration was visible and the gate was not yet closed —
+  // a concurrent `getNextly()` served inside it. No-op unless production boot
+  // migrations are configured, so the CLI and the test harness never open a
+  // gate nothing would settle.
+  openBootMigrationsGate(transformedConfig.runMigrationsOnBoot === true);
+
   assertPluginFieldDeclarations(transformedConfig);
 
   const {
