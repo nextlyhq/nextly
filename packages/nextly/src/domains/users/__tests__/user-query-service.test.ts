@@ -60,6 +60,14 @@ vi.mock("../../../services/index", () => ({
 /** Stored resolve data per query — tests set this before calling the service */
 let selectResolveData: Record<string, unknown>[] = [];
 let countResolveData: { value: number }[] = [{ value: 0 }];
+/**
+ * Rows the role lookup returns, as `{ userId, roleId, roleName }`.
+ *
+ * Separate from `selectResolveData` because roles are no longer joined into the
+ * page query: LIMIT/OFFSET apply to that query, so one row per user is what
+ * makes a page of `limit` contain `limit` users.
+ */
+let roleResolveData: Record<string, unknown>[] = [];
 
 /** Creates a chainable mock that mimics Drizzle's fluent API (select/from/where/...) */
 function createChainableMock(resolveData: () => Record<string, unknown>[]) {
@@ -74,6 +82,7 @@ function createChainableMock(resolveData: () => Record<string, unknown>[]) {
     "select",
     "from",
     "leftJoin",
+    "innerJoin",
     "where",
     "orderBy",
     "limit",
@@ -146,19 +155,25 @@ function createMockDb() {
   const countChain = createChainableMock(
     () => countResolveData as unknown as Record<string, unknown>[]
   );
+  const roleChain = createChainableMock(() => roleResolveData);
 
-  // db.select() either returns the count chain or the main chain
-  // We detect by inspecting the select argument
-  let callCount = 0;
-  const selectFn = vi.fn().mockImplementation(() => {
-    callCount++;
-    // In listUsers, the first select() is the count query, the second is the main query
-    // We detect the count chain by checking the call order
-    if (callCount % 2 === 1) {
-      return countChain;
-    }
-    return mainChain;
-  });
+  /**
+   * Route each `select()` by WHAT it projects, not by when it is called.
+   *
+   * The previous version alternated on call parity, which encoded the exact
+   * number and order of queries the implementation happened to make — so
+   * splitting one query into two silently handed a later query the count
+   * chain's rows. Projection is a property of the query itself, so this keeps
+   * answering correctly however many statements the service issues.
+   */
+  const selectFn = vi
+    .fn()
+    .mockImplementation((columns?: Record<string, unknown>) => {
+      const keys = Object.keys(columns ?? {});
+      if (keys.includes("value")) return countChain;
+      if (keys.includes("roleId")) return roleChain;
+      return mainChain;
+    });
 
   return {
     select: selectFn,
@@ -174,9 +189,7 @@ function createMockDb() {
     },
     _mainChain: mainChain,
     _countChain: countChain,
-    _resetCallCount: () => {
-      callCount = 0;
-    },
+    _roleChain: roleChain,
   };
 }
 
@@ -221,6 +234,7 @@ describe("UserQueryService", () => {
     vi.clearAllMocks();
     selectResolveData = [];
     countResolveData = [{ value: 0 }];
+    roleResolveData = [];
     mockAdapter = createMockAdapter();
     service = new UserQueryService(mockAdapter as never, silentLogger as never);
   });
@@ -231,7 +245,6 @@ describe("UserQueryService", () => {
     it("should return paginated result with default pagination", async () => {
       countResolveData = [{ value: 0 }];
       selectResolveData = [];
-      mockDb._resetCallCount();
 
       // Post-migration (PR 4): no `success`/`statusCode`/`message` envelope.
       const result = await service.listUsers();
@@ -247,6 +260,8 @@ describe("UserQueryService", () => {
 
     it("should return users with roles grouped correctly", async () => {
       countResolveData = [{ value: 2 }];
+      // ONE row per user. The page query no longer joins roles, so a
+      // multi-role user occupies a single row of the page.
       selectResolveData = [
         {
           userId: "user-1",
@@ -257,20 +272,6 @@ describe("UserQueryService", () => {
           isActive: true,
           createdAt: new Date("2026-01-01"),
           updatedAt: new Date("2026-01-01"),
-          roleId: "role-1",
-          roleName: "admin",
-        },
-        {
-          userId: "user-1",
-          email: "alice@example.com",
-          emailVerified: new Date("2026-01-01"),
-          name: "Alice",
-          image: null,
-          isActive: true,
-          createdAt: new Date("2026-01-01"),
-          updatedAt: new Date("2026-01-01"),
-          roleId: "role-2",
-          roleName: "editor",
         },
         {
           userId: "user-2",
@@ -281,11 +282,14 @@ describe("UserQueryService", () => {
           isActive: true,
           createdAt: new Date("2026-01-02"),
           updatedAt: new Date("2026-01-02"),
-          roleId: null,
-          roleName: null,
         },
       ];
-      mockDb._resetCallCount();
+      // Alice holds two roles; Bob holds none, so he contributes no row at all
+      // (the lookup inner-joins, rather than left-joining from users).
+      roleResolveData = [
+        { userId: "user-1", roleId: "role-1", roleName: "admin" },
+        { userId: "user-1", roleId: "role-2", roleName: "editor" },
+      ];
 
       const result = await service.listUsers({ page: 1, limit: 10 });
 
@@ -309,7 +313,6 @@ describe("UserQueryService", () => {
     it("should use custom page and limit", async () => {
       countResolveData = [{ value: 25 }];
       selectResolveData = [];
-      mockDb._resetCallCount();
 
       const options: ListUsersOptions = { page: 3, limit: 5 };
       const result = await service.listUsers(options);
@@ -323,7 +326,6 @@ describe("UserQueryService", () => {
     it("should handle page beyond total pages gracefully", async () => {
       countResolveData = [{ value: 5 }];
       selectResolveData = [];
-      mockDb._resetCallCount();
 
       const result = await service.listUsers({ page: 100, limit: 10 });
 
@@ -348,7 +350,6 @@ describe("UserQueryService", () => {
           roleName: null,
         },
       ];
-      mockDb._resetCallCount();
 
       const result = await service.listUsers({ search: "alice" });
 
@@ -372,7 +373,6 @@ describe("UserQueryService", () => {
           roleName: null,
         },
       ];
-      mockDb._resetCallCount();
 
       const result = await service.listUsers({ emailVerified: true });
 
@@ -395,7 +395,6 @@ describe("UserQueryService", () => {
           roleName: null,
         },
       ];
-      mockDb._resetCallCount();
 
       const result = await service.listUsers({ hasPassword: true });
 
@@ -430,7 +429,6 @@ describe("UserQueryService", () => {
           roleName: null,
         },
       ];
-      mockDb._resetCallCount();
 
       const result = await service.listUsers({
         sortBy: "name",
@@ -447,7 +445,6 @@ describe("UserQueryService", () => {
     it("should default sortBy to email and sortOrder to asc", async () => {
       countResolveData = [{ value: 0 }];
       selectResolveData = [];
-      mockDb._resetCallCount();
 
       const result = await service.listUsers({});
 
@@ -471,7 +468,6 @@ describe("UserQueryService", () => {
           roleName: null,
         },
       ];
-      mockDb._resetCallCount();
 
       const result = await service.listUsers({
         sortBy: "createdAt",
@@ -484,7 +480,6 @@ describe("UserQueryService", () => {
     it("should calculate totalPages correctly", async () => {
       countResolveData = [{ value: 23 }];
       selectResolveData = [];
-      mockDb._resetCallCount();
 
       const result = await service.listUsers({ page: 1, limit: 5 });
 
@@ -509,7 +504,6 @@ describe("UserQueryService", () => {
           roleName: null,
         },
       ];
-      mockDb._resetCallCount();
 
       const result = await service.listUsers({
         search: "alice",
@@ -535,7 +529,6 @@ describe("UserQueryService", () => {
           roleName: null,
         },
       ];
-      mockDb._resetCallCount();
 
       const result = await service.listUsers();
 
