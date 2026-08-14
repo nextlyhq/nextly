@@ -9,6 +9,9 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
+import { clearBlocks, registerBlocks } from "@nextlyhq/blocks-engine";
+import { defineBlock } from "@nextlyhq/plugin-sdk/blocks";
+
 import { normalizeLegacySlots } from "../normalize-legacy";
 import { defaultBlockRegistry } from "../registry";
 import { makeNode } from "../tree";
@@ -163,6 +166,30 @@ describe("a legacy columns row", () => {
     expect(validateDocument(docOf(normalized), defaultBlockRegistry)).toBe(
       true
     );
+  });
+
+  it("does not wrap where the WRAPPER itself may not sit there", () => {
+    // The eligibility decision is shared with the repair banner, so read-time normalization
+    // cannot wrap a child in a container the outer slot would refuse. Before it was shared, this
+    // transform checked only the wrapper's inner slot and produced a page the write path rejects
+    // while the banner declined the identical wrap.
+    const inColumn = defineBlock({
+      name: "acme/incolumn",
+      version: 1,
+      description: "Belongs in a column.",
+      example: { props: {} },
+      parent: ["core/column"],
+      render: () => null,
+    });
+    registerBlocks([inColumn], { source: "@acme/blocks" });
+    try {
+      // `core/column` may only sit in `core/columns`; this is a `core/cover`.
+      const root = node("core/cover", { default: [makeNode("acme/incolumn")] });
+      const out = normalizeLegacySlots(root, defaultBlockRegistry);
+      expect(out).toBe(root);
+    } finally {
+      clearBlocks();
+    }
   });
 
   it("leaves a refused child alone where the slot names no single wrapper", () => {

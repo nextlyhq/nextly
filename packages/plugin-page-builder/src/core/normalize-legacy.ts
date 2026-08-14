@@ -33,6 +33,7 @@
  * @module core/normalize-legacy
  */
 import { slotsOf } from "./block-structure";
+import { wrapperIfItHolds } from "./invalid-slots";
 import { createNode, type BlockRegistry } from "./registry";
 import { slotAdmits } from "./slot-allow";
 import { DEFAULT_SLOT, type BlockNode, type SlotSpec } from "./types";
@@ -82,32 +83,36 @@ function freeId(base: string, taken: Set<string>): string {
 /**
  * The one type a slot would accept in place of a child it refuses, if there is exactly one.
  *
- * Deliberately narrow, and every clause removes a way of guessing wrong:
+ * Delegates the whole eligibility decision to {@link wrapperIfItHolds}, which the repair banner
+ * already uses. A second copy here answered a SMALLER question — it checked the wrapper's inner
+ * slot and neither parent rule — so read-time normalization could wrap a child in a container the
+ * outer slot refuses, or in one the child's own `parent` list excludes, producing a page the write
+ * path rejects while the repair banner declined the identical wrap.
  *
- * - the slot must name exactly ONE permitted type, so nothing is chosen on the reader's behalf;
- * - that type must be REGISTERED here, because this wraps by constructing a node and drawing it —
- *   a type known only to the engine registry would render as an unknown-block placeholder and
- *   hide the very child it was preserving;
- * - it must be a container whose own default slot admits the child, or the wrapper cannot hold
- *   what it is being asked to hold.
- *
- * A wildcard entry is not a wrapper. `core/*` names a namespace rather than a block, so there is
- * nothing to construct, and `slotAdmits` would already have accepted any core child.
+ * Depth and node limits are passed as satisfied. They bound what may be SAVED, and this transform
+ * writes nothing: it decides what a stored page displays, and refusing to draw a legacy row
+ * because the document is near a limit would hide content rather than protect anything.
  */
 function wrapperForRefusedChild(
   spec: SlotSpec,
   child: BlockNode,
-  registry: BlockRegistry
+  registry: BlockRegistry,
+  outerParentType: string
 ): string | undefined {
-  const permitted = spec.allowedBlocks;
+  const permitted = spec.allowedBlocks && [...new Set(spec.allowedBlocks)];
   if (!permitted || permitted.length !== 1) return undefined;
   const wrapperType = permitted[0];
+  // A namespace is not a block: `core/*` names no type to construct, and `slotAdmits` would
+  // already have accepted any child under it.
   if (wrapperType.endsWith("/*")) return undefined;
-  const def = registry.get(wrapperType);
-  if (!def?.isContainer) return undefined;
-  const inner = (def.slots ?? []).find(s => s.name === DEFAULT_SLOT);
-  if (!inner || !slotAdmits(inner, child.type)) return undefined;
-  return wrapperType;
+  return wrapperIfItHolds(
+    wrapperType,
+    child.type,
+    registry,
+    0,
+    true,
+    outerParentType
+  );
 }
 
 /**
@@ -149,7 +154,12 @@ export function normalizeLegacySlots(
         if (deeper !== child) changed = true;
         return deeper;
       }
-      const wrapperType = wrapperForRefusedChild(spec, child, registry);
+      const wrapperType = wrapperForRefusedChild(
+        spec,
+        child,
+        registry,
+        node.type
+      );
       // No single answer, or none this build can draw: the child is left in place. It renders as
       // it did before rather than being hidden or discarded, and the repair banner still reports
       // the document as unsaveable — which is the honest state, since nothing here repairs it.

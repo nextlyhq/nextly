@@ -163,6 +163,17 @@ describe("a wrapper this build cannot construct", () => {
  * than of the code.
  */
 
+describe("a slot naming one type more than once", () => {
+  it("is still unambiguous, so the wrap is offered", () => {
+    // `["core/column", "core/column"]` describes exactly one possible wrapper and every
+    // registration path accepts it. Counting ENTRIES rather than distinct types called it
+    // ambiguous and offered removal where the answer was fully determined.
+    const root = node("core/columns", { default: [node("core/heading")] });
+    const [baseline] = findInvalidSlotEntries(root, registry);
+    expect(baseline).toMatchObject({ wrapWith: "core/column" });
+  });
+});
+
 describe("a wrapper that is itself restricted", () => {
   /**
    * `acme/incolumn` may only sit in `core/column`, and `core/column` may only sit in

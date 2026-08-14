@@ -200,7 +200,10 @@ function soleWrapperFor(
   // Accepts an absent spec so the caller does not have to prove one is present. A slot with no
   // declaration has no allowlist, so it refuses nothing and needs no wrapper — the same answer
   // this returns for a slot whose allowlist names several types.
-  const permitted = spec?.allowedBlocks;
+  // DISTINCT types, not entries. `["acme/wrapper", "acme/wrapper"]` names one possible wrapper and
+  // every registration path accepts it, so counting entries calls an unambiguous slot ambiguous
+  // and offers removal where a wrap was fully determined.
+  const permitted = spec?.allowedBlocks && [...new Set(spec.allowedBlocks)];
   if (!permitted || permitted.length !== 1) return undefined;
   return wrapperIfItHolds(
     permitted[0],
@@ -258,7 +261,7 @@ function soleParentWrapperFor(
  * do not include the wrapper. Each would produce a document that is still refused, while the
  * banner reported the repair as done.
  */
-function wrapperIfItHolds(
+export function wrapperIfItHolds(
   wrapperType: string,
   childType: string,
   registry: BlockRegistry,
