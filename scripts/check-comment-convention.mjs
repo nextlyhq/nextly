@@ -127,7 +127,20 @@ export const SOURCE_EXTENSIONS = [
   ".jsx",
   ".mjs",
   ".cjs",
+  // CSS is authored source that ships to users, and its block comments reach the same extractor.
+  ".css",
 ];
+
+/**
+ * Options for reading one path, by dialect.
+ *
+ * CSS has block comments and no line comments. Reading `//` as one there would take an unquoted
+ * `url(https://...)` - legal CSS - as a comment running to the end of the line, and report
+ * whatever the rest of that URL happens to spell.
+ */
+export function readOptionsFor(path) {
+  return { lineComments: !path.endsWith(".css") };
+}
 
 /** Directories that hold generated or vendored code rather than authored source. */
 const EXCLUDED_DIRS = new Set(["node_modules", "dist", ".next", ".turbo", "coverage"]);
@@ -274,39 +287,151 @@ export function sourceFiles(root) {
  * escapes it. It is a floor rather than a boundary, and worth having because the failure it
  * catches is one nothing else in the repository can see.
  */
-export function commentText(source) {
-  // String, template and regex literals are blanked FIRST, preserving length and newlines. Their
-  // contents can be comment-shaped — a fixture, an error message quoting one — and extracting
-  // that reports on DATA rather than on prose. Blanking rather than removing keeps the following
-  // patterns matching at the right offsets.
-  const withoutLiterals = source
-    .replace(/"(?:[^"\\\n]|\\.)*"/g, blankSpan)
-    .replace(/'(?:[^'\\\n]|\\.)*'/g, blankSpan)
-    .replace(/`(?:[^`\\]|\\.)*`/g, blankSpan);
-
-  // Comments are LOCATED in the blanked copy and READ from the original. Blanking preserves
-  // length and newlines, so an offset means the same thing in both.
+export function commentText(source, { lineComments = true } = {}) {
+  // A single left-to-right pass rather than a chain of replacements, because what a character
+  // MEANS depends on what preceded it and a regular expression cannot carry that.
   //
-  // Reading the blanked copy instead would erase quoted text inside a genuine comment, and the
-  // erased span is exactly where narration hides: `// "Codex flagged this"` and
-  // `// \`Codex\` flagged this` are both offences, and both come back empty when the quotes are
-  // blanked before the comment is extracted. Locating in the blanked copy is still what stops a
-  // string literal holding comment syntax from being read as a comment.
+  // Three cases forced it, each of which a replacement chain gets wrong in a different direction:
+  //
+  //   - a template's `${...}` holds executable code, so blanking the template whole hides any
+  //     comment written inside the interpolation;
+  //   - a template inside that interpolation nests, so no fixed pattern closes at the right
+  //     backtick;
+  //   - `/` opens a regular expression in some positions and divides in others, and only the
+  //     preceding token separates them. Blanking none reads `/[//] x/` as a comment; blanking
+  //     every `/.../` eats division.
+  //
+  // Comment TEXT is returned from the original source, so quoted narration inside a genuine
+  // comment survives — `// "Codex flagged this"` is an offence and reads as one.
   const comments = [];
-  for (const match of withoutLiterals.matchAll(/\/\*[\s\S]*?\*\//g)) {
-    comments.push(source.slice(match.index, match.index + match[0].length));
+  const n = source.length;
+  // Brace depth per open template, so an interpolation ends at ITS matching `}` and not at the
+  // first one. An empty stack means no template is open.
+  const templates = [];
+  let previous = ""; // last significant character, for the regex-or-division decision
+  let i = 0;
+
+  while (i < n) {
+    const c = source[i];
+    const next = source[i + 1];
+
+    if (c === "/" && next === "*") {
+      const end = source.indexOf("*/", i + 2);
+      const stop = end === -1 ? n : end + 2;
+      comments.push(source.slice(i, stop));
+      i = stop;
+      previous = "";
+      continue;
+    }
+
+    if (c === "/" && next === "/" && lineComments) {
+      let stop = source.indexOf("\n", i);
+      if (stop === -1) stop = n;
+      comments.push(source.slice(i + 2, stop));
+      i = stop;
+      previous = "";
+      continue;
+    }
+
+    if (c === '"' || c === "'") {
+      i = skipQuoted(source, i, c);
+      previous = c;
+      continue;
+    }
+
+    if (c === "`") {
+      templates.push(0);
+      i += 1;
+      previous = "";
+      continue;
+    }
+
+    if (templates.length > 0 && c === "$" && next === "{") {
+      templates[templates.length - 1] += 1;
+      i += 2;
+      previous = "";
+      continue;
+    }
+
+    if (templates.length > 0 && templates[templates.length - 1] === 0) {
+      // Raw template text: skip it, honouring escapes, and close on the backtick.
+      if (c === "\\") {
+        i += 2;
+        continue;
+      }
+      if (c === "`") templates.pop();
+      i += 1;
+      continue;
+    }
+
+    if (templates.length > 0 && c === "}") {
+      templates[templates.length - 1] -= 1;
+      i += 1;
+      previous = "}";
+      continue;
+    }
+
+    if (c === "/" && startsRegex(previous)) {
+      i = skipRegex(source, i);
+      previous = "/";
+      continue;
+    }
+
+    if (!/\s/.test(c)) previous = c;
+    i += 1;
   }
-  // The preceding character may be a colon: `case 1:// ...` and `retry:// ...` are both valid
-  // JavaScript, and excluding the colon would leave those comments unread.
-  //
-  // A URL's `//` is not a risk here, because a URL lives inside a string and the blanking above
-  // has already emptied it. Quotes and the backslash stay excluded: those mark text this pass
-  // cannot see into.
-  for (const match of withoutLiterals.matchAll(/(^|[^"'`\\])\/\/(.*)$/gm)) {
-    const start = match.index + match[1].length + 2;
-    comments.push(source.slice(start, start + match[2].length));
-  }
+
   return comments;
+}
+
+/** Index just past a `'`/`"` literal opened at `start`, honouring escapes and unterminated input. */
+function skipQuoted(source, start, quote) {
+  let i = start + 1;
+  while (i < source.length) {
+    const c = source[i];
+    if (c === "\\") {
+      i += 2;
+      continue;
+    }
+    // A newline ends an unterminated quote rather than consuming the rest of the file, so one
+    // stray apostrophe in prose cannot swallow every comment below it.
+    if (c === quote || c === "\n") return i + 1;
+    i += 1;
+  }
+  return i;
+}
+
+/** Index just past a regular-expression literal opened at `start`, including its character class. */
+function skipRegex(source, start) {
+  let i = start + 1;
+  let inClass = false;
+  while (i < source.length) {
+    const c = source[i];
+    if (c === "\\") {
+      i += 2;
+      continue;
+    }
+    if (c === "\n") return i;
+    if (c === "[") inClass = true;
+    else if (c === "]") inClass = false;
+    // A `/` inside `[...]` is data, which is what makes `/[//] Codex/` a literal and not a comment.
+    else if (c === "/" && !inClass) return i + 1;
+    i += 1;
+  }
+  return i;
+}
+
+/**
+ * Whether a `/` in this position opens a regular expression rather than dividing.
+ *
+ * Decided by the preceding significant character: division follows a VALUE — an identifier, a
+ * number, or a closing bracket — and everything else is a position where a value is expected.
+ * Being wrong towards "regex" would consume code as literal text, so the value set is the one
+ * enumerated and the default is division.
+ */
+function startsRegex(previous) {
+  if (previous === "") return true;
+  return !/[\w$)\]]/.test(previous);
 }
 
 /** Blank a span, preserving its length and any newlines so later offsets still line up. */
@@ -315,9 +440,9 @@ function blankSpan(match) {
 }
 
 /** Every forbidden shape found in `source`, as `{ why, comment }`. */
-export function offencesIn(source) {
+export function offencesIn(source, options) {
   const found = [];
-  for (const comment of commentText(source)) {
+  for (const comment of commentText(source, options)) {
     for (const { pattern, why } of FORBIDDEN) {
       if (pattern.test(comment)) {
         found.push({ why, comment: comment.trim().slice(0, 100) });
@@ -404,7 +529,7 @@ function main() {
       skipped += 1;
       continue;
     }
-    for (const { why, comment } of offencesIn(readFileSync(file, "utf8"))) {
+    for (const { why, comment } of offencesIn(readFileSync(file, "utf8"), readOptionsFor(file))) {
       // Stored WHOLE, and shortened only where it is printed.
       //
       // The digest is taken over these strings, so anything dropped here is text the identity
