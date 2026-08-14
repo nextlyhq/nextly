@@ -705,20 +705,23 @@ describe("exitCode", () => {
     // content. Printing that list while exiting 0 lets automation read a
     // possibly-lost tail as verified — the candidates were computed and never
     // reached the decision.
-    expect(
-      exitCode({ checkable: true, landedVerdict: "candidates", mergeable: true })
-    ).toBe(2);
+    expect(exitCode({ landedVerdict: "candidates", mergeable: true })).toBe(2);
+  });
+
+  it("does not let an open branch's rewritten history mask its verdict", () => {
+    // Before a merge there is nothing to have landed, so reachability answers a
+    // question that has not been asked. Taking it directly made every open pull
+    // request with a force-push in its history exit 2 — reporting "could not
+    // answer" over a gate that had answered, in both directions.
+    expect(exitCode({ landedVerdict: "n/a", mergeable: false })).toBe(1);
+    expect(exitCode({ landedVerdict: "n/a", mergeable: true })).toBe(0);
   });
 
   it("passes when the branch had nothing the merge did not take", () => {
     // The positive control for the case above: without it, an implementation
     // that never returns 0 satisfies it.
     expect(
-      exitCode({
-        checkable: true,
-        landedVerdict: "no-candidates",
-        mergeable: true,
-      })
+      exitCode({ landedVerdict: "no-candidates", mergeable: true })
     ).toBe(0);
   });
 
@@ -726,17 +729,13 @@ describe("exitCode", () => {
     // 2 rather than 1, so a caller can tell "the gate says no" from "the gate
     // did not get to answer" and escalate the second rather than retrying it.
     expect(
-      exitCode({
-        checkable: false,
-        landedVerdict: "not-checkable",
-        mergeable: true,
-      })
+      exitCode({ landedVerdict: "not-checkable", mergeable: true })
     ).toBe(2);
   });
 
   it("blocks on the ordinary gate when everything else is settled", () => {
     expect(
-      exitCode({ checkable: true, landedVerdict: "n/a", mergeable: false })
+      exitCode({ landedVerdict: "no-candidates", mergeable: false })
     ).toBe(1);
   });
 });

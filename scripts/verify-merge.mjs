@@ -266,8 +266,14 @@ export function formatVerdict(verdict) {
  * second: a caller may reasonably retry or escalate an unsettled result, and
  * must never treat it as a pass.
  */
-export function exitCode({ checkable, landedVerdict, mergeable }) {
-  if (!checkable) return 2;
+export function exitCode({ landedVerdict, mergeable }) {
+  // Read from the landed-whole verdict alone rather than from reachability as
+  // well. Reachability answers whether a BRANCH could be compared against a
+  // merge, which is not a question an open pull request has: taking it directly
+  // made every open branch with a force-push in its history exit 2, hiding a
+  // perfectly good BLOCKED verdict behind "could not answer". `landedWhole`
+  // already folds reachability in, and reports `n/a` before there is a merge.
+  if (landedVerdict === "not-checkable") return 2;
   if (landedVerdict === "candidates") return 2;
   return mergeable ? 0 : 1;
 }
@@ -701,7 +707,6 @@ export function main(argv) {
   }
   process.stdout.write(`${formatVerdict(verdict)}\n`);
   return exitCode({
-    checkable: reach.checkable,
     landedVerdict: landed.verdict,
     mergeable: verdict.mergeable,
   });
