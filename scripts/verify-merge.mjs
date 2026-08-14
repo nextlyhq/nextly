@@ -254,7 +254,7 @@ export function gateVerdict({
     for (const name of missingRequired(checkRuns, changedPaths, required)) {
       blockers.push({
         kind: "required-check-absent",
-        detail: `${name} never reported — no build or test coverage for this revision`,
+        detail: `${name} has no check-run AS OF this reading — either it never triggered, or it has not registered yet`,
       });
     }
     for (const job of blockingJobs(checkRuns)) {
@@ -481,17 +481,22 @@ export function pageWrapping(key) {
  * become a blocker through the other surface.
  */
 /**
- * Author associations that carry write access, and so can approve on the
- * project's behalf.
+ * Repository permissions that carry write access.
  *
- * Any account can submit an APPROVED review, including a contributor's own and
- * a bot's, so the state alone does not say the project accepted the change.
+ * Read from the collaborator permission rather than inferred from an author
+ * association: in an ORGANISATION repository `MEMBER` means membership of the
+ * org, which says nothing about access to this repository, so a read-only
+ * member's approval would be counted as the project accepting the change. The
+ * association is a label GitHub applies to the author; the permission is the
+ * fact about what they may do here.
+ *
+ * Named rather than excluded, so a permission this code has not met refuses.
  */
-export const MAINTAINER_ASSOCIATIONS = Object.freeze([
-  "OWNER",
-  "MEMBER",
-  "COLLABORATOR",
-]);
+export const WRITE_PERMISSIONS = Object.freeze(["admin", "maintain", "write"]);
+
+export function hasWriteAccess(permission) {
+  return WRITE_PERMISSIONS.includes(permission);
+}
 
 export const OPTIONAL_STATUS_CONTEXTS = Object.freeze(["CodeRabbit"]);
 
@@ -587,6 +592,27 @@ export const PATH_FILTER_WINDOW = 300;
 
 /** Past this many commits GitHub runs the workflow without evaluating filters. */
 export const PATH_FILTER_COMMIT_LIMIT = 1000;
+
+/**
+ * The paths a workflow's filters are actually evaluated against.
+ *
+ * Two platform limits, and only one of them applies in both modes.
+ *
+ * The 300-file window is a property of filter evaluation itself, so it holds
+ * whichever event produced the run.
+ *
+ * The 1000-commit bypass is a property of the PULL REQUEST's diff. After a
+ * merge the checks come from a `push` of the squash commit — one commit,
+ * whatever the pull request contained — so applying the pull request's count
+ * there answers with a number belonging to an event that is over. It would
+ * empty the path list on any large pull request and require every workflow
+ * regardless of what the push actually triggered.
+ */
+export function pathsForFiltering({ changedPaths, commits, merged }) {
+  if (!Array.isArray(changedPaths)) return [];
+  if (!merged && commits > PATH_FILTER_COMMIT_LIMIT) return [];
+  return changedPaths.slice(0, PATH_FILTER_WINDOW);
+}
 
 export function workflowApplies(pathsIgnore, changedPaths) {
   if (!Array.isArray(pathsIgnore) || pathsIgnore.length === 0) return true;
@@ -848,6 +874,42 @@ function workflowAt(revision, path) {
   });
 }
 
+/**
+ * Approvals from accounts that actually hold write access here.
+ *
+ * One request per distinct approver, cached, because a pull request with many
+ * reviews would otherwise ask about the same account repeatedly. A lookup that
+ * fails is treated as NOT write access: an approval this code could not verify
+ * is not one it may count, and the only consequence is the advisory line
+ * reporting `none`, which is the direction that understates rather than
+ * invents.
+ */
+function countWriteAccessApprovals(reviews) {
+  const seen = new Map();
+  let count = 0;
+  for (const review of reviews) {
+    if (review?.state !== "APPROVED") continue;
+    const login = review?.user?.login;
+    if (typeof login !== "string" || login === "") continue;
+    if (!seen.has(login)) {
+      let permission = null;
+      try {
+        permission = ghText([
+          "api",
+          `repos/${REPO}/collaborators/${login}/permission`,
+          "--jq",
+          ".permission",
+        ]);
+      } catch {
+        permission = null;
+      }
+      seen.set(login, hasWriteAccess(permission));
+    }
+    if (seen.get(login)) count += 1;
+  }
+  return count;
+}
+
 /** Every configured remote as `[name, url]`, for matching against the head repository. */
 function configuredRemotes() {
   const out = execFileSync("git", ["remote", "-v"], { encoding: "utf8" });
@@ -974,10 +1036,11 @@ export function main(argv) {
   // workflow regardless, so deciding from paths there would excuse a check that
   // did run. An empty list makes every workflow applicable, which is the
   // direction that requires evidence.
-  const filterPaths =
-    meta.commits > PATH_FILTER_COMMIT_LIMIT
-      ? []
-      : changedPaths.slice(0, PATH_FILTER_WINDOW);
+  const filterPaths = pathsForFiltering({
+    changedPaths,
+    commits: meta.commits,
+    merged,
+  });
 
   // Read from the workflow, for the trigger whose run produced the checks being
   // judged: `pull_request` before a merge, `push` to the base branch after one.
@@ -1109,9 +1172,7 @@ export function main(argv) {
     eligibility: { state: meta.state, draft: meta.draft, merged },
     codexReviewedSha: reviewedSha,
     coderabbitReviewCount: coderabbit,
-    approvalCount: reviews.filter(
-      r => r?.state === "APPROVED" && MAINTAINER_ASSOCIATIONS.includes(r?.author_association)
-    ).length,
+    approvalCount: countWriteAccessApprovals(reviews),
   });
 
   // Nothing is printed until the freshness read below has decided. Emitting the
@@ -1167,20 +1228,33 @@ export function main(argv) {
  * returns; that is the only reason it is a parameter.
  */
 /**
- * `process.argv[1]` as the URL `import.meta.url` would report for it.
+ * Every URL form `import.meta.url` might report for `process.argv[1]`.
  *
- * `import.meta.url` is percent-encoded AND resolved through symlinks, while
- * `argv[1]` is neither, so comparing them directly fails whenever the path
- * contains a character needing encoding or sits under a symlinked prefix — on
- * macOS `/tmp` resolves to `/private/tmp`, so an ordinary invocation there
- * silently declines to run and exits reporting nothing.
+ * BOTH forms, because symlink resolution is a runtime option rather than a
+ * fixed behaviour. By default `import.meta.url` is resolved through symlinks
+ * while `argv[1]` is not — on macOS `/tmp` is `/private/tmp`, so comparing the
+ * unresolved form there never matches. Under `--preserve-symlinks-main`, which
+ * `NODE_OPTIONS` can set from outside the command line, it is the opposite: the
+ * resolved form never matches.
+ *
+ * Committing to either one makes the guard depend on a flag this code cannot
+ * see, and its failure is silent in the worst way — the module declines to run
+ * and the process exits 0 having verified nothing, which is indistinguishable
+ * from a clean pass.
  */
-function entryHref(argvPath) {
+function entryHrefs(argvPath) {
+  const forms = [];
   try {
-    return pathToFileURL(realpathSync(argvPath)).href;
+    forms.push(pathToFileURL(argvPath).href);
   } catch {
-    return "";
+    // An unconvertible path contributes nothing rather than failing the guard.
   }
+  try {
+    forms.push(pathToFileURL(realpathSync(argvPath)).href);
+  } catch {
+    // Unresolvable is not fatal either: the plain form above may still match.
+  }
+  return forms;
 }
 
 export function runCli(argv, run = main) {
@@ -1197,7 +1271,7 @@ export function runCli(argv, run = main) {
 
 if (
   process.argv[1] &&
-  import.meta.url === entryHref(process.argv[1])
+  entryHrefs(process.argv[1]).includes(import.meta.url)
 ) {
   // `process.exitCode`, not `process.exit()`. Exiting terminates Node before a
   // redirected stdout finishes flushing, truncating exactly the blocker names a
