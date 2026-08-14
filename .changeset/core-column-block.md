@@ -31,7 +31,7 @@ A block whose slot refuses it is now reported by the repair banner and repaired 
 
 A block can declare the parents it may sit under (`parent`, matching the field of the same name in Gutenberg's block metadata), enforced on both the editor and the write path, with the repair banner offering to wrap a stray block in the parent it names. This is the half a slot's `allowedBlocks` cannot express — `core/column` uses it so inserting a Column while one is selected produces a sibling in the row rather than a column nested inside a column.
 
-The block library's Insert button now reaches a container's NAMED slot, not only `default`, so a container the drag path accepts is no longer refused by the click path. A document migrated when the editor loads it is carried into a host form, so a field-mounted builder saves the document it is showing.
+The block library's Insert button now reaches a container's NAMED slot, not only `default`, so a container the drag path accepts is no longer refused by the click path. Documents are migrated when the editor loads them, which is what makes any block's `migrate` reachable at all — and migration only ever moves a document forward, never stamping an older definition version onto data written by a newer one.
 
 The slot rules are now enforced in the editor's reducer, so paste, keyboard reorder and anything added later cannot write a document the save path refuses — previously only drag-and-drop consulted them. Documents are migrated when the editor loads them, which is what makes any block's `migrate` reachable at all.
 
