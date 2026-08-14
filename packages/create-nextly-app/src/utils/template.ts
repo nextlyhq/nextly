@@ -430,18 +430,16 @@ function appendMissingLines(existing: string, incoming: string): string {
  * Only the two AGENTS.md templates use them, and those files are rendered during the
  * restore, so scoping costs nothing.
  *
- * Always set, never conditional: `packageManager` is optional on the copy options, and a guide
- * shipping a literal `{{runCommand}}` in its command list would be worse than one naming the
- * wrong manager. npm is the default because it is what a project has when nothing said
- * otherwise, and `npm run x` is the explicit form the others also accept.
+ * `packageManager` is REQUIRED on the copy options, so there is no default to fall back to and
+ * no path on which a guide can ship a literal `{{runCommand}}` in its command list. Widening it
+ * here would reintroduce exactly that, silently, by emitting npm commands into a Yarn project.
  */
 function guidePlaceholders(
-  packageManager: PackageManager | undefined
+  packageManager: PackageManager
 ): Record<string, string> {
-  const pm = packageManager ?? "npm";
   return {
-    "{{runCommand}}": scriptRunner(pm),
-    "{{execCommand}}": binaryRunner(pm),
+    "{{runCommand}}": scriptRunner(packageManager),
+    "{{execCommand}}": binaryRunner(packageManager),
   };
 }
 
@@ -498,7 +496,7 @@ async function pointsAtItself(
 async function restoreShippedNames(
   targetDir: string,
   placeholders: Record<string, string>,
-  packageManager: PackageManager | undefined
+  packageManager: PackageManager
 ): Promise<Set<string>> {
   const merged = new Set<string>();
   // The restored files are the only ones that may contain command tokens, so they are the only
@@ -565,7 +563,12 @@ async function restoreShippedNames(
         // Read THROUGH the link for its content, then unlink and write a regular file in its
         // place. The referent keeps whatever it held; only this project's entry stops being a
         // link, which is what git requires for the patterns to apply at all.
-        const existing = await fs.readFile(to, "utf-8").catch(() => "");
+        // Read through the link for its content. NOT `.catch(() => "")`: a target that exists
+        // and cannot be read — permissions, an unexpected type, a transient I/O error — would
+        // then be treated as empty, and materializing over it would DISCARD the developer's
+        // rules while reporting success. Failing here leaves the link untouched, which is the
+        // outcome the merge strategies all share.
+        const existing = await fs.readFile(to, "utf-8");
         const incoming = await fs.readFile(from, "utf-8");
         await fs.remove(to);
         await fs.writeFile(

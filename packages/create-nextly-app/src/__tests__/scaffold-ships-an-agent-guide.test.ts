@@ -39,6 +39,7 @@ import {
 } from "vitest";
 
 import type { DatabaseConfig } from "../types";
+import { scriptRunner } from "../utils/package-manager-commands";
 import { copyTemplate } from "../utils/template";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -139,6 +140,7 @@ describe("a scaffolded project arrives with the guide", () => {
         projectType,
         targetDir: target,
         database: sqlite,
+        packageManager: "npm",
         templateSource: {
           basePath: path.join(templatesRoot, "base"),
           templatePath: path.join(templatesRoot, projectType),
@@ -157,6 +159,11 @@ describe("a scaffolded project arrives with the guide", () => {
       // `{{databaseDialect}}` to the reader as though it were the answer.
       const guide = await readFile(path.join(target, "AGENTS.md"), "utf-8");
       expect(guide).not.toMatch(/\{\{\s*\w+\s*\}\}/);
+      // Asserted POSITIVELY. A token rendered from a missing value leaves no braces behind, so
+      // the check above cannot see it — `undefined dev` reads as successfully substituted. A
+      // negative match on "undefined" is no good either: the guide legitimately explains that a
+      // missing field yields `undefined`. Naming the expected command separates the cases.
+      expect(guide).toContain(`${scriptRunner("npm")} dev`);
 
       // CLAUDE.md is the pointer that makes the guide reachable; an empty or mismatched one
       // reads as present while sending the agent nowhere.
@@ -201,6 +208,7 @@ describe("scaffolding over a project that already has these files", () => {
       projectType: "blank",
       targetDir: target,
       database: sqlite,
+      packageManager: "npm",
       templateSource: {
         basePath: path.join(templatesRoot, "base"),
         templatePath: path.join(templatesRoot, "blank"),
@@ -413,6 +421,7 @@ describe("scaffolding over a project that already has these files", () => {
       projectType: "blank",
       targetDir: target,
       database: sqlite,
+      packageManager: "npm",
       templateSource: {
         basePath: path.join(templatesRoot, "base"),
         templatePath: path.join(templatesRoot, "blank"),
@@ -443,6 +452,7 @@ describe("scaffolding over a project that already has these files", () => {
       projectType: "blank",
       targetDir: target,
       database: sqlite,
+      packageManager: "npm",
       templateSource: {
         basePath: path.join(templatesRoot, "base"),
         templatePath: path.join(templatesRoot, "blank"),
@@ -481,6 +491,7 @@ describe("scaffolding over a project that already has these files", () => {
       projectType: "blank",
       targetDir: target,
       database: sqlite,
+      packageManager: "npm",
       templateSource: {
         basePath: path.join(templatesRoot, "base"),
         templatePath: path.join(templatesRoot, "blank"),
@@ -516,6 +527,7 @@ describe("scaffolding over a project that already has these files", () => {
       projectType: "blank",
       targetDir: target,
       database: sqlite,
+      packageManager: "npm",
       templateSource: {
         basePath: path.join(templatesRoot, "base"),
         templatePath: path.join(templatesRoot, "blank"),
@@ -566,6 +578,7 @@ describe("scaffolding over a project that already has these files", () => {
       projectType: "blank",
       targetDir: target,
       database: sqlite,
+      packageManager: "npm",
       templateSource: {
         basePath: path.join(templatesRoot, "base"),
         templatePath: path.join(templatesRoot, "blank"),
