@@ -9,7 +9,12 @@ export type PaginationProps = {
   /** Current page size (items per page) */
   pageSize: number;
   /** Available page size options for the selector */
-  pageSizeOptions?: number[];
+  /**
+   * Readonly because this component only maps over it. A mutable array type
+   * would reject the shared `as const` options tuple for no reason the caller
+   * could act on, which pushes every call site back to its own literal.
+   */
+  pageSizeOptions?: readonly number[];
   /** Whether to show the page size selector */
   showPageSizeSelector?: boolean;
   /** Maximum number of visible page number buttons */

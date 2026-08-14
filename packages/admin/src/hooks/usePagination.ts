@@ -2,6 +2,8 @@
 
 import { useCallback, useState } from "react";
 
+import { PAGINATION } from "@admin/constants/pagination";
+
 /**
  * The page/size state a paginated list runs on, with the resets built in.
  *
@@ -80,18 +82,25 @@ export interface UsePaginationOptions {
 export function usePagination(
   options: UsePaginationOptions = {}
 ): PaginationState {
-  const { initialPage = 0, initialPageSize = 10 } = options;
+  // Defaults come from the pagination constants rather than being written out
+  // again here. Two copies of "a table starts on page 0 showing 10 rows" agree
+  // until one is changed, and the one that gets changed is whichever the next
+  // reader finds first.
+  const {
+    initialPage = PAGINATION.DEFAULT_PAGE,
+    initialPageSize = PAGINATION.TABLE_DEFAULT_PAGE_SIZE,
+  } = options;
 
   const [page, setPage] = useState(initialPage);
   const [pageSize, setPageSizeState] = useState(initialPageSize);
 
   const setPageSize = useCallback((next: number) => {
     setPageSizeState(next);
-    setPage(0);
+    setPage(PAGINATION.DEFAULT_PAGE);
   }, []);
 
   const resetPage = useCallback(() => {
-    setPage(0);
+    setPage(PAGINATION.DEFAULT_PAGE);
   }, []);
 
   return { page, pageSize, setPage, setPageSize, resetPage };

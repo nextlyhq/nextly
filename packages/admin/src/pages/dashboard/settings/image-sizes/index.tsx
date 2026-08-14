@@ -36,6 +36,7 @@ import type {
   RowAction,
 } from "@admin/components/ui/table/data-table";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
+import { usePagination } from "@admin/hooks/usePagination";
 import { navigateTo } from "@admin/lib/navigation";
 import {
   deleteImageSize,
@@ -75,8 +76,7 @@ function ImageSizesContent({
 }) {
   const [sizes, setSizes] = React.useState<ImageSize[]>([]);
   const [isLoading, setIsLoading] = React.useState(true);
-  const [page, setPage] = React.useState(0);
-  const [pageSize, setPageSize] = React.useState(10);
+  const { page, pageSize, setPage, setPageSize, resetPage } = usePagination();
   const [hiddenColumns, setHiddenColumns] = React.useState<Set<string>>(
     new Set()
   );
@@ -130,20 +130,8 @@ function ImageSizesContent({
 
   // Handle pagination (reset to first page on search)
   React.useEffect(() => {
-    setPage(0);
-  }, [search]);
-
-  // Changing the page size makes the current page number point somewhere the
-  // list may not reach -- at a larger size the slice below starts past the end
-  // and returns nothing, leaving the empty message on a list that has rows.
-  // Returning to the first page is always in range, and it is what every other
-  // list in the admin does, so the two behave alike. It does NOT keep the rows
-  // that were on screen: row 31 is on page 2 at twenty-five per page, and the
-  // reset moves away from it.
-  const handlePageSizeChange = React.useCallback((size: number) => {
-    setPageSize(size);
-    setPage(0);
-  }, []);
+    resetPage();
+  }, [search, resetPage]);
 
   // Filtered sizes based on search
   const filteredSizes = React.useMemo(() => {
@@ -331,7 +319,7 @@ function ImageSizesContent({
                 totalItems: filteredSizes.length,
                 pageSize,
                 onPageChange: setPage,
-                onPageSizeChange: handlePageSizeChange,
+                onPageSizeChange: setPageSize,
                 isLoading,
               }
             : undefined

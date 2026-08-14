@@ -77,6 +77,7 @@ import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundar
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { toast } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
+import { PAGINATION } from "@admin/constants/pagination";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
 import {
   useDeleteUserField,
@@ -84,6 +85,7 @@ import {
   useUserFields,
 } from "@admin/hooks/queries/useUserFields";
 import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
+import { usePagination } from "@admin/hooks/usePagination";
 import { navigateTo } from "@admin/lib/navigation";
 import { cn } from "@admin/lib/utils";
 import type {
@@ -491,8 +493,7 @@ function SortableFieldRow({
 
 function UserFieldsTable() {
   // Pagination state
-  const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState(10);
+  const { page, pageSize, setPage, setPageSize, resetPage } = usePagination();
 
   // Search state
   const [search, setSearch] = useState("");
@@ -571,8 +572,8 @@ function UserFieldsTable() {
 
   // Reset page when search changes
   useEffect(() => {
-    setPage(0);
-  }, [search]);
+    resetPage();
+  }, [search, resetPage]);
 
   // Action handlers
   const handleEdit = useCallback((field: UserFieldDefinitionRecord) => {
@@ -640,11 +641,6 @@ function UserFieldsTable() {
     },
     [localFields, doReorder, data]
   );
-
-  const handlePageSizeChange = useCallback((newPageSize: number) => {
-    setPageSize(newPageSize);
-    setPage(0);
-  }, []);
 
   // Error state
   if (isError) {
@@ -810,9 +806,9 @@ function UserFieldsTable() {
             currentPage={page}
             totalPages={Math.max(1, totalPages)}
             pageSize={pageSize}
-            pageSizeOptions={[10, 25, 50]}
+            pageSizeOptions={PAGINATION.TABLE_PAGE_SIZE_OPTIONS}
             onPageChange={setPage}
-            onPageSizeChange={handlePageSizeChange}
+            onPageSizeChange={setPageSize}
             totalItems={totalItems + filteredStaticFields.length}
             // Named rather than left as the default "Pagination". A screen
             // reader announces this control by that name, and the admin renders
