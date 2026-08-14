@@ -6,6 +6,10 @@
  * lights up with a blue insertion line, and an empty container shows a "Drop here"
  * placeholder. Zones only claim space while a drag is in progress, so the canvas stays
  * clean at rest.
+ *
+ * A zone occupies no layout space at any point, including mid-drag: the target
+ * the pointer is tested against is taken out of flow, so it has a real
+ * rectangle while contributing nothing to the document's geometry.
  */
 import { useDragDropMonitor, useDroppable } from "@dnd-kit/react";
 import { useState, type ReactNode } from "react";
@@ -52,12 +56,19 @@ export function DropZone({
     );
   }
 
+  // Two elements, because they answer different questions. The slot holds the
+  // zone's place in the document and is zero-height for its whole life, so a
+  // drag starting never reflows anything. The inner element is the DROPPABLE —
+  // dnd-kit measures the node it is given a ref to — and is out of flow, so it
+  // can be big enough to hit without occupying any space.
   return (
-    <div
-      ref={ref}
-      className="nx-pb-dropzone"
-      data-drag={dragging || undefined}
-      data-active={isDropTarget || undefined}
-    />
+    <div className="nx-pb-dropzone-slot">
+      <div
+        ref={ref}
+        className="nx-pb-dropzone"
+        data-drag={dragging || undefined}
+        data-active={isDropTarget || undefined}
+      />
+    </div>
   );
 }
