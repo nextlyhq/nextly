@@ -127,6 +127,21 @@ for (const [name, command] of wholeWorkspace) {
 // A check that inspects nothing passes, and this one selects scripts by
 // pattern, so an edit that renames or restructures them would leave it
 // examining an empty set and reporting success.
+// The other half of the same question, and it was missing while the launcher
+// half was present. An enumeration that returns nothing — a workspace glob that
+// stopped matching, a directory that moved — makes every limit trivially
+// sufficient, so the gate certifies a `pnpm dev` that starts nothing. A count
+// this check DERIVES has to have a positive control, or it is only ever
+// comparing a number against zero.
+if (tasks.length === 0) {
+  console.error(
+    "check-dev-concurrency: found no package declaring a `dev` script. Either " +
+      "the workspace layout changed and this check needs teaching, or the " +
+      "enumeration is returning nothing and every limit passes against zero."
+  );
+  process.exit(2);
+}
+
 if (wholeWorkspace.length === 0) {
   console.error(
     "check-dev-concurrency: no root script runs every package's `dev` task. " +
