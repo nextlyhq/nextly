@@ -234,6 +234,13 @@ The second shape is the commoner one, so do not reach for the first tell alone:
 entirely, which would tell someone their `default`-arm bug is not an instance of
 this rule when it is the cleanest kind.
 
+**A rule is itself a generalisation from instances, so it is subject to the
+failure it describes.** The paragraph above was first written with the narrower
+tell, by someone holding only the flag case — the rule's own failure mode,
+committed while writing the rule. So before shipping a tell, test it against an
+instance you did NOT derive it from; one that fits every case you had in mind is
+evidence of nothing, because those are the cases it was fitted to.
+
 ## A gate's OUTPUT is an interface, with no compiler enforcing its use
 
 A return type has a checker; a printed verdict has a person under time pressure
