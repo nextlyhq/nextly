@@ -238,9 +238,16 @@ export function report({
 }) {
   // De-duplicated: a login named in both lists would otherwise be reported
   // missing twice, which reads as two reviewers rather than one.
-  const required = [...new Set([...(blocking ?? []), ...advisory])];
+  // Blocking wins wherever the two lists overlap, derived once here rather
+  // than at each use: a login left in both would be exempted from thread
+  // blocking by the advisory list while being required for coverage.
+  const blockingList = blocking ?? [];
+  const effectiveAdvisory = advisory.filter(
+    login => !blockingList.includes(login)
+  );
+  const required = [...new Set([...blockingList, ...effectiveAdvisory])];
   const missing = missingReviewers(reviews, head, required);
-  const unresolved = unresolvedThreads(threads, advisory);
+  const unresolved = unresolvedThreads(threads, effectiveAdvisory);
   const limited = rateLimited(issueComments);
   // Coverage is asked at the head; a standing objection is asked of the whole
   // pull request. Two questions with two scopes, from the same rows.
@@ -268,7 +275,7 @@ export function report({
       : "unavailable",
     rate_limited: limited,
     changes_requested: refused,
-    advisory,
+    advisory: effectiveAdvisory,
     verdict,
     detail,
     exitCode,
@@ -301,6 +308,7 @@ async function main(argv) {
   }
   const [name] = segments.slice(-1);
   const [owner] = segments.slice(-2, -1);
+  const host = segments.length === 3 ? segments[0] : "github.com";
   const repo = `${owner}/${name}`;
   const { execFileSync } = await import("node:child_process");
   // `ls-remote` needs the ref to be current, and a stale local view of origin
@@ -328,8 +336,12 @@ async function main(argv) {
   // that HAS it. `refs/pull/<pr>/head` is not a substitute: it is the same
   // snapshot `headRefOid` reports and lags a push identically — measured, a
   // full commit behind the branch while the branch ref was current.
+  // The host comes from GH_REPO when it carries one. Hard-coding github.com
+  // sends an Enterprise fork lookup to the public host, where it either fails
+  // or finds an unrelated repository of the same name and evaluates reviews
+  // against its SHA.
   const headRemote = meta.isCrossRepository
-    ? `https://github.com/${meta.headRepositoryOwner.login}/${meta.headRepository.name}.git`
+    ? `https://${host}/${meta.headRepositoryOwner.login}/${meta.headRepository.name}.git`
     : "origin";
   const headOf = () => {
     const line = execFileSync(
@@ -407,10 +419,26 @@ async function main(argv) {
   // cannot see a thread opened or unresolved mid-run. The verdict below is
   // computed from the first snapshot, and a snapshot known to be stale must not
   // be reported as clean.
-  if (readThreads().length !== threads.length) {
-    process.stderr.write(
-      "ci-verdict: review threads changed mid-run; re-run\n"
-    );
+  // Compared by CONTENT, not by count. A body-only CHANGES_REQUESTED arriving
+  // after the reviews query, or an existing thread being unresolved, leaves the
+  // number of rows unchanged — so a length check accepts a snapshot that has
+  // already gone stale, and only ever catches the shape of change it was
+  // written for.
+  const fingerprint = (rv, th) =>
+    JSON.stringify([
+      rv.map(r => [r?.id, r?.user?.login, r?.commit_id, r?.state]),
+      th.map(t => [t?.isResolved, t?.comments?.nodes?.[0]?.author?.login]),
+    ]);
+  const reviewsNow = gh([
+    "api",
+    `repos/${repo}/pulls/${pr}/reviews`,
+    "--paginate",
+    "--slurp",
+  ]).flat();
+  if (
+    fingerprint(reviews, threads) !== fingerprint(reviewsNow, readThreads())
+  ) {
+    process.stderr.write("ci-verdict: review state changed mid-run; re-run\n");
     return 2;
   }
 
