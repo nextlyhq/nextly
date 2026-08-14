@@ -125,6 +125,40 @@ describe("the three things the writer can do", () => {
     expect(() => JSON.stringify(doc)).toThrow();
   });
 
+  it("does not call a survey complete when bytes are not the writer's", () => {
+    // A node hook returning a replacement is walked as the ORIGINAL, so a
+    // shallower replacement cannot present a smaller forest than the document
+    // holds. The cost is that `bytes` is then the original's size while the
+    // writer emits the replacement's, and the gap runs in the dangerous
+    // direction: measured, 97 surveyed against 2,046 written, so a caller
+    // trusting the number accepts a document past a cap it has broken.
+    const node = {
+      id: "n1",
+      type: "core/text",
+      version: 1,
+      props: {},
+      toJSON() {
+        return "x".repeat(2000);
+      },
+    };
+    const doc = { formatVersion: 1, kind: "page", nodes: [node] };
+
+    const survey = surveyDocument(doc, LIMITS);
+    expect(survey.complete).toBe(false);
+    expect(survey.bytes).toBeLessThan(JSON.stringify(doc)!.length);
+
+    // The other direction, so this cannot pass by reporting every document
+    // incomplete: an ordinary node is complete and its bytes are exact.
+    const plain = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "n1", type: "core/text", version: 1, props: {} }],
+    };
+    const exact = surveyDocument(plain, LIMITS);
+    expect(exact.complete).toBe(true);
+    expect(exact.bytes).toBe(JSON.stringify(plain)!.length);
+  });
+
   it("separates a document JSON rewrites from one it refuses", () => {
     // The distinction the whole split exists for, asserted against the writer
     // rather than against an expectation of it.

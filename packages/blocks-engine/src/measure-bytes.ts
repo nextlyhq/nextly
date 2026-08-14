@@ -572,6 +572,12 @@ export function surveyDocument(
   // caller that must bound its own traversal needs to know the measurement
   // stopped short, and cannot learn that from a value being unwritable.
   let unreadable = false;
+  // The walk counted a value the WRITER will not emit, so `bytes` describes a
+  // different document from the one that gets stored. Distinct from the three
+  // above: nothing was refused and nothing is missing, the number simply is not
+  // the writer's. It feeds `complete`, because the guarantee that field makes is
+  // about the numbers rather than about the document.
+  let approximate = false;
   let nodes = 0;
   let deepest = 0;
 
@@ -607,6 +613,7 @@ export function surveyDocument(
     // totals?" must not have to re-list the reasons they might not be.
     complete:
       !unreadable &&
+      !approximate &&
       bytes <= maxBytes &&
       deepest <= maxDepth &&
       nodes <= maxNodes,
@@ -821,6 +828,10 @@ export function surveyDocument(
               // would have its hook invoked.
               structuralOnly: true,
             });
+            // Structure is what this subtree is walked for; its bytes are the
+            // hidden value's rather than anything the writer emits, so the
+            // total stops describing the stored document.
+            approximate = true;
           }
         }
 
@@ -876,6 +887,13 @@ export function surveyDocument(
         reached.kind === "nodeList" ||
         reached.kind === "slotMap";
       const descend = structural && substituted ? member.value : held;
+      // Bytes then describe the ORIGINAL while the writer emits the
+      // replacement, and the two can differ by any amount in either direction —
+      // measured, a node whose hook returns a 2 KB string surveys at 97 bytes
+      // against 2,046 written. The document is refused either way, but `bytes`
+      // is published and `complete` is a claim ABOUT it, so the claim has to be
+      // withdrawn rather than resting on the refusal.
+      if (structural && substituted) approximate = true;
 
       if (typeof descend === "object" && descend !== null) {
         stack.push({
@@ -890,12 +908,12 @@ export function surveyDocument(
           // discard the replacement anyway. A node hook ran twice and a
           // document serializing to 3,105 bytes surveyed as 96.
           //
-          // So a substituted structural member is walked as the ORIGINAL, once,
-          // and its bytes are the original's rather than the replacement's.
-          // That is a deliberate inexactness confined to a document already
-          // refused: a substitution sets `unserializable`, which `validate()`
-          // reports as `document-unwritable`, so no accepted document is ever
-          // measured this way.
+          // So a substituted structural member is walked as the ORIGINAL,
+          // once, and its bytes are the original's rather than the
+          // replacement's. The substitution sets `lossy`, so the document is
+          // refused; the size it was refused with is not the size it would
+          // have been stored at, which is why the survey stops calling itself
+          // complete.
           normalized: true,
         });
       } else if (typeof held === "object" && held !== null) {
@@ -950,6 +968,13 @@ export function surveyDocument(
       // and pass a 5,000 cap.
       if (value !== frame.value) {
         lossy = true;
+        // Counted from the ORIGINAL, deliberately, so a hook returning
+        // something shallower cannot present a smaller forest than the document
+        // holds. The cost is that `bytes` is then the original's size and the
+        // writer emits the replacement's, and the two can differ by any amount
+        // in either direction — so the number stops being a measurement of what
+        // gets stored, and must not be reported as one.
+        approximate = true;
         value = frame.value;
       }
       if (!serializesAs(value)) {
