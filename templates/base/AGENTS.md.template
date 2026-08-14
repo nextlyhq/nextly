@@ -25,13 +25,13 @@ service to start.
 ## Commands
 
 ```bash
-npm run dev                  # start Next.js; schema changes apply in-process
-npm run build                # migrate, then build
-npm run db:setup             # first run: create the schema
-npm run db:migrate           # apply pending migrations
-npm run db:migrate:status    # what has and has not been applied
-npm run db:migrate:fresh     # drop everything and re-run (destructive)
-npm run types:generate       # regenerate types after a schema change
+{{runCommand}} dev                  # start Next.js; schema changes apply in-process
+{{runCommand}} build                # migrate, then build
+{{runCommand}} db:setup             # first run: create the schema
+{{runCommand}} db:migrate           # apply pending migrations
+{{runCommand}} db:migrate:status    # what has and has not been applied
+{{runCommand}} db:migrate:fresh     # drop everything and re-run (destructive)
+{{runCommand}} types:generate       # regenerate types after a schema change
 ```
 
 This project uses **{{databaseDialect}}**.
@@ -49,7 +49,7 @@ const posts = await nextly.find({ collection: "posts", limit: 10 });
 ```
 
 **`find()` returns loosely-typed documents until types are generated.** Without
-`npm run types:generate`, `posts.items` is `Record<string, unknown>[]` and a
+`{{runCommand}} types:generate`, `posts.items` is `Record<string, unknown>[]` and a
 field access is `unknown`. Generating types makes the slug and the return type
 infer, so `posts.items` becomes `Post[]`.
 
@@ -67,7 +67,7 @@ const slug = typeof doc.slug === "string" ? doc.slug : undefined;
   `find({ collection: "users" })`. The users namespace supports pagination and
   `search`; it does not support a `where` filter.
 - **A migration you generate is one file, in THIS project's dialect.**
-  `npx nextly migrate:create <name>` (there is no npm script for it) writes a
+  `{{execCommand}} nextly migrate:create <name>` (no package.json script exists for it) writes a
   single `migrations/<timestamp>_<slug>.sql` containing **{{databaseDialect}}**
   SQL — no `.mysql.sql` or `.sqlite.sql` beside it. Edit that file.
 - **A suffixed set means the migration was shipped, not generated.** A template
@@ -76,7 +76,7 @@ const slug = typeof doc.slug === "string" ? doc.slug : undefined;
   the configured dialect. Those are prebuilt. Adding companion variants to a
   migration you generated is not part of the normal workflow, and nothing will
   run them unless this project is itself meant to support several dialects.
-- **The admin needs a first user.** Visit `/admin` after `npm run dev` and
+- **The admin needs a first user.** Visit `/admin` after `{{runCommand}} dev` and
   complete the setup screen.
 - **Cache tags come from `nextly/runtime`.** Wrap PUBLIC reads in `cachedFind`
   and tag them with `nextlyTags(collection)` so a write invalidates the right

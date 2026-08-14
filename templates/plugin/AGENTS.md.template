@@ -25,14 +25,14 @@ only so you can exercise the plugin in a real admin.
 ## Commands
 
 ```bash
-npm run dev            # the embedded playground → http://localhost:3000/admin
-npm run test           # vitest, against a real Nextly on in-memory SQLite
-npm run build          # tsup → dist/
-npm run check-types    # tsc --noEmit
-npm run lint           # eslint
+{{runCommand}} dev            # the embedded playground → http://localhost:3000/admin
+{{runCommand}} test           # vitest, against a real Nextly on in-memory SQLite
+{{runCommand}} build          # tsup → dist/
+{{runCommand}} check-types    # tsc --noEmit
+{{runCommand}} lint           # eslint
 ```
 
-`npm run dev` runs `next dev dev` — Next.js with `dev/` as the project root.
+`{{runCommand}} dev` runs `next dev dev` — Next.js with `dev/` as the project root.
 Editing anything under `src/` reloads the playground, so the loop is the same as
 working on an app.
 

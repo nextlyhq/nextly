@@ -369,6 +369,64 @@ describe("scaffolding over a project that already has these files", () => {
     expect(negation).toBeGreaterThan(shipped);
   }, 30_000);
 
+  it("updates the existing block when a stray START follows it", async () => {
+    // The layout the previous two fixes both missed: a VALID block, then a stray start later.
+    // Selecting the last start finds the stray, the end lookup fails, and a SECOND block is
+    // appended — leaving the stale generated instructions in place forever.
+    const after = await scaffoldOver({
+      "AGENTS.md": [
+        "<!-- nextly:managed:start -->",
+        "stale generated content",
+        "<!-- nextly:managed:end -->",
+        "",
+        "My notes.",
+        "",
+        "<!-- nextly:managed:start -->",
+      ].join("\n"),
+    });
+
+    expect(after["AGENTS.md"]).toContain("My notes.");
+    expect(after["AGENTS.md"]).not.toContain("stale generated content");
+    // Exactly one generated block, not two.
+    expect(
+      after["AGENTS.md"].split("Agent guide for this Nextly project").length - 1
+    ).toBe(1);
+  }, 30_000);
+
+  it("does not add a pointer that resolves back to the file it is written into", async () => {
+    workdir = await mkdtemp(path.join(tmpdir(), "nextly-reverse-"));
+    const target = path.join(workdir, "project");
+    await mkdir(target, { recursive: true });
+
+    // The REVERSE arrangement: the guide name points at the pointer name.
+    const claude = path.join(target, "CLAUDE.md");
+    await writeFile(
+      claude,
+      "# House rules\n\nBe careful with billing.\n",
+      "utf-8"
+    );
+    await symlink("CLAUDE.md", path.join(target, "AGENTS.md"));
+
+    await copyTemplate({
+      projectName: "my-app",
+      projectType: "blank",
+      targetDir: target,
+      database: sqlite,
+      templateSource: {
+        basePath: path.join(templatesRoot, "base"),
+        templatePath: path.join(templatesRoot, "blank"),
+      },
+      allowExistingTarget: true,
+    });
+
+    // Adding `@AGENTS.md` here would make the file import itself, since AGENTS.md IS this file.
+    const after = await readFile(claude, "utf-8");
+    expect(after).toContain("Be careful with billing.");
+    expect(after.split("\n").filter(l => l.trim() === "@AGENTS.md")).toEqual(
+      []
+    );
+  }, 30_000);
+
   it("does not write through a CLAUDE.md symlink", async () => {
     workdir = await mkdtemp(path.join(tmpdir(), "nextly-symlink-"));
     const target = path.join(workdir, "project");
@@ -452,4 +510,56 @@ describe("scaffolding over a project that already has these files", () => {
       after["CLAUDE.md"].split("\n").filter(l => l.trim() === "@AGENTS.md")
     ).toHaveLength(1);
   }, 30_000);
+});
+
+describe("guide commands match the package manager in use", () => {
+  let workdir: string;
+
+  beforeAll(() => {
+    vi.stubGlobal("fetch", () => Promise.reject(new Error("offline test")));
+  });
+  afterAll(() => {
+    vi.unstubAllGlobals();
+  });
+  afterEach(async () => {
+    if (workdir) await rm(workdir, { recursive: true, force: true });
+  });
+
+  // Under Yarn's default PnP linker there is no `node_modules/.bin`, so an `npm run dev` printed
+  // into a Yarn project cannot resolve `next` and simply fails. The guide has to speak the
+  // manager the project was scaffolded with.
+  it.each([
+    { packageManager: "npm" as const, run: "npm run dev", exec: "npx nextly" },
+    { packageManager: "yarn" as const, run: "yarn dev", exec: "yarn nextly" },
+    {
+      packageManager: "pnpm" as const,
+      run: "pnpm dev",
+      exec: "pnpm exec nextly",
+    },
+    { packageManager: "bun" as const, run: "bun run dev", exec: "bunx nextly" },
+  ])(
+    "$packageManager",
+    async ({ packageManager, run, exec }) => {
+      workdir = await mkdtemp(path.join(tmpdir(), "nextly-pm-"));
+      const target = path.join(workdir, "project");
+
+      await copyTemplate({
+        projectName: "my-app",
+        projectType: "blank",
+        targetDir: target,
+        database: sqlite,
+        packageManager,
+        templateSource: {
+          basePath: path.join(templatesRoot, "base"),
+          templatePath: path.join(templatesRoot, "blank"),
+        },
+      });
+
+      const guide = await readFile(path.join(target, "AGENTS.md"), "utf-8");
+      expect(guide).toContain(run);
+      expect(guide).toContain(exec);
+      expect(guide).not.toMatch(/\{\{\s*\w+\s*\}\}/);
+    },
+    30_000
+  );
 });
