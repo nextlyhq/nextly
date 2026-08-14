@@ -191,7 +191,14 @@ const REVIEW_DOMAIN_PATHS = [
 /** True when `file` sits in tooling whose subject matter is the review or release process. */
 export function isReviewDomain(file) {
   const path = relative(process.cwd(), file).split(sep).join("/");
-  return REVIEW_DOMAIN_PATHS.some(prefix => path.startsWith(prefix));
+  // Matched at a path BOUNDARY, not as a bare prefix. "scripts/verify-merge" as a raw prefix also
+  // covers "scripts/verify-merge-anything.ts", which is a different file nobody exempted; an
+  // entry ending in "/" is a directory and covers what is under it.
+  return REVIEW_DOMAIN_PATHS.some(entry =>
+    entry.endsWith("/")
+      ? path.startsWith(entry)
+      : path === entry || path.startsWith(`${entry}.`) || path.startsWith(`${entry}/`)
+  );
 }
 
 /** The comments that predate this check, as a path to per-file count. */
