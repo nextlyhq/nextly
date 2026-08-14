@@ -254,7 +254,7 @@ export function gateVerdict({
     for (const name of missingRequired(checkRuns, changedPaths, required)) {
       blockers.push({
         kind: "required-check-absent",
-        detail: `${name} never reported — no build or test coverage for this revision`,
+        detail: `${name} has no check-run AS OF this reading — either it never triggered, or it has not registered yet`,
       });
     }
     for (const job of blockingJobs(checkRuns)) {
@@ -1167,20 +1167,33 @@ export function main(argv) {
  * returns; that is the only reason it is a parameter.
  */
 /**
- * `process.argv[1]` as the URL `import.meta.url` would report for it.
+ * Every URL form `import.meta.url` might report for `process.argv[1]`.
  *
- * `import.meta.url` is percent-encoded AND resolved through symlinks, while
- * `argv[1]` is neither, so comparing them directly fails whenever the path
- * contains a character needing encoding or sits under a symlinked prefix — on
- * macOS `/tmp` resolves to `/private/tmp`, so an ordinary invocation there
- * silently declines to run and exits reporting nothing.
+ * BOTH forms, because symlink resolution is a runtime option rather than a
+ * fixed behaviour. By default `import.meta.url` is resolved through symlinks
+ * while `argv[1]` is not — on macOS `/tmp` is `/private/tmp`, so comparing the
+ * unresolved form there never matches. Under `--preserve-symlinks-main`, which
+ * `NODE_OPTIONS` can set from outside the command line, it is the opposite: the
+ * resolved form never matches.
+ *
+ * Committing to either one makes the guard depend on a flag this code cannot
+ * see, and its failure is silent in the worst way — the module declines to run
+ * and the process exits 0 having verified nothing, which is indistinguishable
+ * from a clean pass.
  */
-function entryHref(argvPath) {
+function entryHrefs(argvPath) {
+  const forms = [];
   try {
-    return pathToFileURL(realpathSync(argvPath)).href;
+    forms.push(pathToFileURL(argvPath).href);
   } catch {
-    return "";
+    // An unconvertible path contributes nothing rather than failing the guard.
   }
+  try {
+    forms.push(pathToFileURL(realpathSync(argvPath)).href);
+  } catch {
+    // Unresolvable is not fatal either: the plain form above may still match.
+  }
+  return forms;
 }
 
 export function runCli(argv, run = main) {
@@ -1197,7 +1210,7 @@ export function runCli(argv, run = main) {
 
 if (
   process.argv[1] &&
-  import.meta.url === entryHref(process.argv[1])
+  entryHrefs(process.argv[1]).includes(import.meta.url)
 ) {
   // `process.exitCode`, not `process.exit()`. Exiting terminates Node before a
   // redirected stdout finishes flushing, truncating exactly the blocker names a
