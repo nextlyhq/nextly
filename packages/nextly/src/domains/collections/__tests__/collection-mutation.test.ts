@@ -94,7 +94,7 @@ vi.mock("../../../services/collections/geo-utils", () => ({
   sortByDistance: vi.fn(),
 }));
 
-vi.mock("@nextly/hooks/context-builder", () => ({
+vi.mock("../../../hooks/context-builder", () => ({
   buildContext: vi.fn((opts: Record<string, unknown>) => opts),
 }));
 
@@ -115,14 +115,20 @@ vi.mock("../../../shared/lib/field-level-registry", async importActual => {
   return { ...actual, runFieldHooks: runFieldHooksSpy };
 });
 
-vi.mock("@nextly/hooks/stored-hook-executor", () => {
+// Mocked by relative path, not by the `@nextly/hooks/stored-hook-executor` alias the source
+// imports: `vi.mock` does not resolve the tsconfig-path aliases that `vite-tsconfig-paths`
+// applies to real imports, so the alias form registers a mock against a specifier nothing
+// resolves to and the real class is constructed instead. That failure is silent — the factory
+// simply never runs — so the spy stays untouched and every `not.toHaveBeenCalled()` assertion
+// against it passes without observing anything.
+vi.mock("../../../hooks/stored-hook-executor", () => {
   class MockStoredHookExecutor {
     execute = storedHookExecute;
   }
   return { StoredHookExecutor: MockStoredHookExecutor };
 });
 
-vi.mock("@nextly/lib/field-transform", () => ({
+vi.mock("../../../lib/field-transform", () => ({
   transformRichTextFields: vi.fn((entry: unknown) => entry),
 }));
 
@@ -509,12 +515,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       expect(mockHookRegistry.executeBeforeOperation).not.toHaveBeenCalled();
       expect(mockHookRegistry.execute).not.toHaveBeenCalled();
       expect(runFieldHooksSpy).not.toHaveBeenCalled();
-      // The stored-hook executor is NOT asserted here, and the reason is a WIRING gap rather than
-      // an unreachable seam: updateEntry calls it unconditionally, but through
-      // `this.hookService.storedHookExecutor` - an injected instance - while the mock above
-      // replaces the exported CLASS. The spy therefore observes nothing the service actually
-      // calls, so an assertion either way would report on the mock rather than on the ordering.
-      // Covering it means giving the fixture a hookService whose storedHookExecutor IS the spy.
+      expect(storedHookExecute).not.toHaveBeenCalled();
     });
 
     it("runs those same hooks for a caller it allows", async () => {
@@ -532,6 +533,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       expect(mockHookRegistry.executeBeforeOperation).toHaveBeenCalled();
       expect(mockHookRegistry.execute).toHaveBeenCalled();
       expect(runFieldHooksSpy).toHaveBeenCalled();
+      expect(storedHookExecute).toHaveBeenCalled();
     });
 
     it("should execute beforeOperation hooks", async () => {
