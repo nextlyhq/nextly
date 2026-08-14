@@ -478,6 +478,14 @@ export class UserQueryService extends BaseService {
     // Build select columns — custom field columns are intentionally excluded
     // here; they are fetched via a dedicated query below to avoid Drizzle ORM
     // issues when a runtime-generated table is combined with multiple JOINs.
+    //
+    // Role columns are excluded for a different reason: this query is what LIMIT
+    // and OFFSET apply to, so it must produce exactly one row per user. Joining
+    // roles here would make a user with three roles consume three rows of the
+    // page, so a page of `limit` returns fewer than `limit` users and OFFSET
+    // advances over joined rows rather than users — which skips users entirely
+    // rather than merely short-filling the page. Roles are fetched below, for
+    // the users this page actually selected.
     const selectColumns: Record<string, unknown> = {
       userId: users.id,
       email: users.email,
@@ -487,8 +495,6 @@ export class UserQueryService extends BaseService {
       isActive: users.isActive,
       createdAt: users.createdAt,
       updatedAt: users.updatedAt,
-      roleId: roles.id,
-      roleName: roles.name,
     };
 
     // Required by Drizzle ORM — runtime-generated tables need untyped db access
@@ -496,20 +502,19 @@ export class UserQueryService extends BaseService {
       .select(selectColumns)
       .from(users);
 
+    // `user_ext` is one row per user, so joining it cannot inflate the page the
+    // way the role tables would.
     if (needsExtJoinForSort && userExtTable) {
       query = query.leftJoin(userExtTable, eq(users.id, userExtTable.user_id));
     }
 
-    // LEFT JOIN roles
     query = query
-      .leftJoin(userRoles, eq(users.id, userRoles.userId))
-      .leftJoin(roles, eq(userRoles.roleId, roles.id))
       .where(whereClause)
       .orderBy(orderByClause)
       .limit(limit)
       .offset(offset);
 
-    const userListWithRoles: Record<string, unknown>[] = await query;
+    const pageOfUsers: Record<string, unknown>[] = await query;
 
     const totalPages = Math.ceil(total / limit);
 
@@ -530,23 +535,47 @@ export class UserQueryService extends BaseService {
       }
     >();
 
-    for (const row of userListWithRoles) {
+    // Insertion order is the page's order, and `Map` preserves it — so the
+    // result keeps whatever `orderByClause` asked for without a second sort.
+    for (const row of pageOfUsers) {
       const userId = row.userId as string;
-      if (!usersMap.has(userId)) {
-        usersMap.set(userId, {
-          id: userId,
-          email: row.email as string,
-          emailVerified: (row.emailVerified as Date | null) ?? null,
-          name: (row.name as string | null) ?? null,
-          image: (row.image as string | null) ?? null,
-          isActive: (row.isActive as boolean | undefined) ?? undefined,
-          createdAt: (row.createdAt as Date | null | undefined) ?? undefined,
-          updatedAt: (row.updatedAt as Date | null | undefined) ?? undefined,
-          roles: [],
-        });
-      }
-      // Add role if it exists (LEFT JOIN may return null for users without roles)
-      if (row.roleId && row.roleName) {
+      usersMap.set(userId, {
+        id: userId,
+        email: row.email as string,
+        emailVerified: (row.emailVerified as Date | null) ?? null,
+        name: (row.name as string | null) ?? null,
+        image: (row.image as string | null) ?? null,
+        isActive: (row.isActive as boolean | undefined) ?? undefined,
+        createdAt: (row.createdAt as Date | null | undefined) ?? undefined,
+        updatedAt: (row.updatedAt as Date | null | undefined) ?? undefined,
+        roles: [],
+      });
+    }
+
+    // Roles for exactly the users on this page. One query rather than one per
+    // user, and scoped by id rather than by re-running the filter — re-running
+    // it could select a different set if a concurrent write changed a user's
+    // filterable state between the two statements.
+    if (usersMap.size > 0) {
+      const pageUserIds = Array.from(usersMap.keys());
+      const roleRows: Record<string, unknown>[] = await (
+        this.db as unknown as DrizzleChain
+      )
+        .select({
+          userId: userRoles.userId,
+          roleId: roles.id,
+          roleName: roles.name,
+        })
+        .from(userRoles)
+        .innerJoin(roles, eq(userRoles.roleId, roles.id))
+        .where(inArray(userRoles.userId, pageUserIds))
+        // Deterministic role order per user. The previous join left it to the
+        // planner, so two identical requests could differ.
+        .orderBy(asc(roles.name));
+
+      for (const row of roleRows) {
+        const entry = usersMap.get(String(row.userId));
+        if (!entry || !row.roleId || !row.roleName) continue;
         // Type-narrow row.roleId before stringification — avoids
         // Object#toString fallthrough on unknown driver values.
         const rawRoleId = row.roleId;
@@ -554,10 +583,7 @@ export class UserQueryService extends BaseService {
           typeof rawRoleId === "string" || typeof rawRoleId === "number"
             ? String(rawRoleId)
             : "";
-        usersMap.get(userId)!.roles.push({
-          id: roleId,
-          name: row.roleName as string,
-        });
+        entry.roles.push({ id: roleId, name: row.roleName as string });
       }
     }
 
