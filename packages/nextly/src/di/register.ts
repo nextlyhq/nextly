@@ -97,6 +97,7 @@ import {
 import { registerCollectionHooks } from "../hooks/register-collection-hooks";
 import { registerSingleHooks } from "../hooks/register-single-hooks";
 import { createSanitizationHook } from "../hooks/sanitization-hooks";
+import { openBootMigrationsGate } from "../init/boot-migrations-gate";
 import type { PluginPermission, PluginRole } from "../plugins/contributions";
 import { getCoreVersion } from "../plugins/core-version";
 import { warnUndescribedPlugins } from "../plugins/describe-check";
@@ -235,6 +236,15 @@ export interface NextlyServiceConfig {
 
   /** Optional directory for dynamic collection schemas. */
   schemasDir?: string;
+  /**
+   * Whether this boot will run migrations, so registration can open the
+   * boot-migrations gate before it publishes the container.
+   *
+   * Carried on the SERVICE config rather than read from `db` — which this shape
+   * flattens away — because `buildServiceConfig` is the one builder both boot
+   * paths use, so threading it there reaches both without either remembering.
+   */
+  runMigrationsOnBoot?: boolean;
 
   /** Optional directory for dynamic collection migrations. */
   migrationsDir?: string;
@@ -542,6 +552,7 @@ export async function registerServices(
   // would newly refuse pre-existing declarations that boot fine today, whereas a
   // rule that can fire here has to have been written against a field type in
   // this same process.
+
   assertPluginFieldDeclarations(transformedConfig);
 
   const {
@@ -1095,6 +1106,30 @@ export async function registerServices(
   if (!container.has("nextlyDirectAPI")) {
     container.register("nextlyDirectAPI", () => getNextly());
   }
+
+  // Opened immediately BEFORE registration publishes, which is the last point
+  // that is both late enough and early enough.
+  //
+  // Early enough: the window this closes is "registered but schema unverified",
+  // and the flag below is what opens that window — so a consumer can never see
+  // registration without also seeing the gate.
+  //
+  // Late enough: everything that can abort a registration — adapter connection,
+  // schema synchronisation, plugin init — has already run. An abort therefore
+  // never leaves a gate open with nobody left to settle it, which would block
+  // every later retry forever on a gate whose owner died.
+  //
+  // No-op unless production boot migrations are configured, so the CLI and the
+  // test harness never open a gate nothing would close.
+  // The UNTRANSFORMED flag, matching what `runProdMigrationsIfEnabled` reads.
+  // `transformedConfig` is the config after plugin `setup` transformers have
+  // run, and that side decides from the nested `db` block, so reading the
+  // transformed value here lets a transformer make the two disagree — opening
+  // no gate while migrations run, or a gate nothing settles. No first-party
+  // transformer touches it today, which is a property of the current plugin set
+  // rather than of the code, and this PR exists because of a window nobody
+  // thought reachable.
+  openBootMigrationsGate(config.runMigrationsOnBoot === true);
 
   globalForReg.__nextly_isRegistered = true;
 

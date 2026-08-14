@@ -125,12 +125,26 @@ export async function forceUnlock(
  * `undefined` if wait mode settled without running `fn` (another process applied
  * the migrations while we waited).
  */
+/**
+ * Whether the guarded body RAN, and its value if it did.
+ *
+ * A discriminated result rather than `T | undefined`, because `undefined` was
+ * doing double duty: "your function returned undefined" and "your function
+ * never ran". Only one caller ever distinguished them, by convention, and the
+ * one that did not was production boot — which logged
+ * `Boot migrations complete (0 applied)` for migrations that never started.
+ * The compiler now makes every call site decide.
+ */
+export type MigrateLockOutcome<T> =
+  | { ran: true; value: T }
+  | { ran: false; reason: "lock-held" };
+
 export async function withMigrateLock<T>(
   db: unknown,
   dialect: SupportedDialect,
   fn: () => Promise<T>,
   opts?: MigrateLockOptions
-): Promise<T | undefined> {
+): Promise<MigrateLockOutcome<T>> {
   switch (dialect) {
     case "postgresql": {
       const pg = db as PgLike;
@@ -143,40 +157,70 @@ export async function withMigrateLock<T>(
         const deadline = Date.now() + (opts.maxWaitMs ?? ttl * 1000);
         const pollMs = opts.pollMs ?? POLL_MS;
         while (!acquired && Date.now() < deadline) {
-          if (opts.isSettled && (await opts.isSettled())) return undefined;
+          if (opts.isSettled && (await opts.isSettled()))
+            return { ran: false, reason: "lock-held" };
           await new Promise(r => setTimeout(r, pollMs));
           acquired = await tryAcquirePg(pg, ttl);
         }
         if (!acquired) {
+          // Says SKIPPED, because that is what happens. The previous wording,
+          // "proceeding without it", described running the migrations anyway —
+          // the opposite of the `return` beneath it — and a caller reading the
+          // log had no way to tell the difference from "already up to date".
           opts.logger?.warn?.(
-            "[Nextly] migrate lock still held after waiting; proceeding without it."
+            "[Nextly] migrate lock still held after waiting; migrations SKIPPED."
           );
-          return undefined;
+          return { ran: false, reason: "lock-held" };
         }
       }
 
       if (!acquired) lockBusy();
       try {
-        return await fn();
+        return { ran: true, value: await fn() };
       } finally {
         await releasePg(pg);
       }
     }
     case "mysql": {
       const my = db as PgLike;
+      // `GET_LOCK`'s second argument IS the wait: 0 returns immediately, a
+      // positive number blocks for that many seconds. Passing 0 unconditionally
+      // meant `mode: "wait"` was silently fail-fast on MySQL — it threw
+      // `NEXTLY_MIGRATE_LOCK_BUSY` where Postgres reports `ran: false`, so the
+      // two dialects disagreed about what a busy lock even IS, and a caller
+      // handling one outcome was unprotected on the other.
+      const waitSeconds =
+        opts?.mode === "wait"
+          ? Math.ceil(
+              (opts.maxWaitMs ??
+                (opts.ttlSeconds ?? DEFAULT_TTL_SECONDS) * 1000) / 1000
+            )
+          : 0;
       const acquired = toRows(
-        await my.execute(sql`SELECT GET_LOCK(${MYSQL_LOCK_NAME}, 0) AS locked`)
+        await my.execute(
+          sql`SELECT GET_LOCK(${MYSQL_LOCK_NAME}, ${waitSeconds}) AS locked`
+        )
       );
       const v = acquired[0]?.locked;
-      if (!(v === 1 || v === true)) lockBusy();
+      if (!(v === 1 || v === true)) {
+        // Same split as Postgres: waiting and still not getting it is an
+        // OUTCOME the caller decides on; fail-fast is an error.
+        if (opts?.mode === "wait") {
+          opts.logger?.warn?.(
+            "[Nextly] migrate lock still held after waiting; migrations SKIPPED."
+          );
+          return { ran: false, reason: "lock-held" };
+        }
+        lockBusy();
+      }
       try {
-        return await fn();
+        return { ran: true, value: await fn() };
       } finally {
         await my.execute(sql`SELECT RELEASE_LOCK(${MYSQL_LOCK_NAME})`);
       }
     }
     case "sqlite":
-      return fn();
+      return { ran: true, value: await fn() };
     default: {
       const _exhaustive: never = dialect;
       throw new Error(`Unsupported dialect: ${String(_exhaustive)}`);

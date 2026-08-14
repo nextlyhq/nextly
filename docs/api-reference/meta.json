@@ -1,4 +1,4 @@
 {
   "title": "API Reference",
-  "pages": ["direct-api", "rest-api"]
+  "pages": ["direct-api", "rest-api", "block-document-format"]
 }

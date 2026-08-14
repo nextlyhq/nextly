@@ -253,7 +253,7 @@ describe("plugin email providers + templates", () => {
 
     let caught: unknown;
     try {
-      provider.validateConfig({});
+      provider.parseConfiguration({});
     } catch (error) {
       caught = error;
     }
@@ -275,7 +275,7 @@ describe("plugin email providers + templates", () => {
           type: "y".repeat(51),
           label: "Hand Built",
           configFields: [],
-          validateConfig: () => undefined,
+          parseConfiguration: (input: unknown) => input,
           createAdapterFrom: () => ({
             send: async () => ({ success: true }),
           }),
@@ -320,7 +320,7 @@ describe("plugin email providers + templates", () => {
       type: "no-metadata",
       label: "No Metadata",
       configFields: [],
-      validateConfig: () => undefined,
+      parseConfiguration: (input: unknown) => input,
       createAdapterFrom: () => ({ send: async () => ({ success: true }) }),
       hasConnectionTest: false,
     });

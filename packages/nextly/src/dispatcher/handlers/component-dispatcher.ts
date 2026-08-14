@@ -11,8 +11,6 @@
  * through unchanged. See spec §5.1 for the canonical shape contract.
  */
 
-import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-
 import {
   assertValidFieldsPayload,
   assertValidPluginFieldOptions,
@@ -25,15 +23,12 @@ import {
   respondMutation,
 } from "../../api/response-shapes";
 import type { FieldConfig } from "../../collections/fields/types";
-import { container } from "../../di/container";
 import {
   reconcileComponentCompanion,
   registerComponentRuntimeSchema,
+  resolveComponentTypeColumn,
 } from "../../domains/field-groups/services/field-group-table-provisioning";
-import {
-  resolveFieldGroupRegistryName,
-  resolveTypeColumns,
-} from "../../domains/field-groups/storage/resolve-storage-names";
+import { resolveFieldGroupRegistryName } from "../../domains/field-groups/storage/resolve-storage-names";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
@@ -59,7 +54,6 @@ import { resolveComponentTableName } from "../../domains/schema/utils/resolve-ta
 import { NextlyError } from "../../errors";
 import { getProductionNotifier } from "../../runtime/notifications/index";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
-import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import type { FieldGroupRegistryService } from "../../services/field-groups/field-group-registry-service";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
@@ -68,6 +62,7 @@ import {
   getFieldGroupMetadataServiceFromDI,
   getMigrationJournalFromDI,
 } from "../helpers/di";
+import { readRequestLocalized } from "../helpers/request-localized";
 import { requireParam, toNumber } from "../helpers/validation";
 import type { MethodHandler, Params } from "../types";
 
@@ -107,32 +102,9 @@ function offsetPaginationToMeta(args: {
   };
 }
 
-// Refresh the cached Drizzle table so the next entry query joining this
-// component uses the new column layout without a server restart.
-/**
- * The discriminator a component table carries, resolved BEFORE its DDL runs.
- *
- * 🔴 Deliberately not inside `registerComponentRuntimeSchema`. That function's
- * `catch` is a cache-refresh failsafe — it suppresses so a refresh problem does
- * not fail a request whose schema change already committed — and a catalog
- * probe inside it inherits that policy, letting a handler report success while
- * leaving the runtime table unregistered or holding obsolete columns.
- *
- * Resolving first is equivalent and safer: the schema change only ever alters
- * user columns, so the discriminator is the same before and after, and a probe
- * that cannot answer now fails the request before anything is committed.
- */
-async function resolveComponentTypeColumn(
-  adapter: DrizzleAdapter,
-  tableName: string
-): Promise<string> {
-  const typeColumns = await resolveTypeColumns(adapter, [tableName]);
-  return typeColumns.get(tableName) ?? STORAGE_FORMAT.columns.type;
-}
-
-// Both helpers now live beside the field-group schema service, so every transport that creates a
-// field group reaches the same table provisioning rather than only the one that happened to hold
-// them privately.
+// Every helper these handlers use to provision or rebind a table now lives beside the field-group
+// schema service, so each transport reaches the same provisioning rather than only the one that
+// happened to hold it privately.
 
 const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
   listComponents: {
@@ -258,98 +230,35 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
           }
         | undefined;
 
-      const isLocked = await svc.registry.isLocked(slug);
-      if (isLocked) {
-        // Throw a NextlyError so the dispatcher's error path emits the
-        // canonical singular `{ error: ... }` shape with a 403 status.
-        // Slug stays in logContext per §13.8 (never on the wire).
-        throw NextlyError.forbidden({
+      // 🔴 A transport, and nothing more. The lock check, the localization gate, the plugin-option
+      // validation, the companion transition and the registry write all live in the metadata
+      // service, so this path and the two that never ran DDL now perform the SAME operation. What
+      // used to be here could not be shared, which is exactly why they diverged.
+      const metadataService = getFieldGroupMetadataServiceFromDI();
+      if (!metadataService) {
+        throw NextlyError.internal({
           logContext: {
-            reason: "component-locked",
+            reason: "field-group-metadata-service-unavailable",
             slug,
           },
         });
       }
+      const { record } = await metadataService.updateFieldGroup({
+        slug,
+        label: b?.label,
+        description: b?.description,
+        admin: b?.admin,
+        fields: b?.fields as unknown as FieldDefinition[] | undefined,
+        // 🔴 Read through the shared helper, never off the cast body. `b` is a type assertion over
+        // whatever JSON arrived, so `localized: "false"` survives it as a truthy string: the
+        // transition would take the ENABLED branch and drop the main table's translatable columns
+        // while the registry, which stores `data.localized === true`, recorded the group disabled.
+        // The collection and single dispatchers already read it this way.
+        localized: readRequestLocalized(b),
+        source: "ui",
+      });
 
-      const existing = await svc.registry.getComponent(slug);
-      if (!existing) {
-        throw new Error(`Component "${slug}" not found`);
-      }
-
-      const updateData: Record<string, unknown> = {};
-      if (b?.label) updateData.label = b.label;
-      if (b?.admin) updateData.admin = b.admin;
-      if (b?.description) updateData.description = b.description;
-      // i18n: persist the Internationalization toggle. `isLocalized` drives the companion
-      // provisioning below (create when newly localized, ADD/DROP as translatable fields change).
-      if (b?.localized !== undefined) updateData.localized = b.localized;
-      const wasLocalized =
-        (existing as { localized?: boolean }).localized === true;
-      const isLocalized =
-        b?.localized !== undefined ? b.localized === true : wasLocalized;
-      // i18n: gate the Internationalization enable on the app-level
-      // `localization` config (false→true transition only).
-      if (!wasLocalized && isLocalized) {
-        assertLocalizationConfigured("component", slug);
-      }
-
-      if (b?.fields) {
-        assertValidPluginFieldOptions(b.fields);
-        updateData.fields = b.fields;
-        updateData.schemaHash = calculateSchemaHash(b.fields);
-      }
-
-      // Run the companion reconcile when fields changed OR the Internationalization flag toggled
-      // (a flag-only save still needs the enable/disable data move: enabling seeds + drops main
-      // columns, disabling restores + archives them). Without the transition on a flag-only
-      // toggle, `localized` was persisted while the physical schema stayed put and content
-      // stranded in the wrong table.
-      if (b?.fields || isLocalized !== wasLocalized) {
-        // Schema changes (rename, drop, add required column) must go through
-        // applyComponentSchemaChanges which runs PushSchemaPipeline. Here we
-        // only store the updated fields JSON — this path is reached when
-        // previewComponentSchemaChanges returned hasChanges: false (labels,
-        // descriptions, or field reordering changed but no DDL is needed).
-        if (container.has("adapter")) {
-          const adapter = container.get<DrizzleAdapter>("adapter");
-          const newFields = b?.fields ?? existing.fields;
-          registerComponentRuntimeSchema(
-            adapter,
-            adapter.getCapabilities().dialect,
-            existing.tableName,
-            newFields,
-            await resolveComponentTypeColumn(adapter, existing.tableName),
-            // i18n: main runtime table omits translatable columns when localized.
-            isLocalized
-          );
-          // i18n: provision/alter the companion comp_<slug>_locales table for the new localized
-          // field set: enabling seeds the default locale from main then drops those columns,
-          // disabling restores + archives them, a field change ADDs/DROPs columns.
-          try {
-            await reconcileComponentCompanion({
-              slug,
-              tableName: existing.tableName,
-              oldFields: existing.fields as unknown as FieldDefinition[],
-              newFields: newFields as unknown as FieldDefinition[],
-              localized: isLocalized,
-              wasLocalized,
-              adapter,
-            });
-          } catch (companionErr) {
-            const m =
-              companionErr instanceof Error
-                ? companionErr.message
-                : String(companionErr);
-            console.error(
-              `[Components] Companion reconcile failed for "${existing.tableName}": ${m}`
-            );
-          }
-        }
-      }
-
-      const updated = await svc.registry.updateComponent(slug, updateData);
-
-      return respondMutation(`Component "${slug}" updated.`, updated);
+      return respondMutation(`Component "${slug}" updated.`, record);
     },
   },
 

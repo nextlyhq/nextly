@@ -142,6 +142,22 @@ export interface CanvasDriver {
   keyboardInsert(direction: "up" | "down"): Promise<void>;
 
   /**
+   * The longest this canvas may keep showing a previous reading after the
+   * pointer has moved, in milliseconds.
+   *
+   * Declared per driver because the requirement permits a dwell of MORE than
+   * 100ms and sets no upper bound, so no global constant is correct for every
+   * canvas. A canvas with a distance margin rather than a timer declares 0.
+   *
+   * Optional: a driver that omits it gets {@link DEFAULT_DWELL_ALLOWANCE_MS}.
+   * Understating it is self-punishing rather than self-serving — readings come
+   * back stale and this suite fails — which is why the settling helpers trust
+   * it while the jitter probe, which grades whether hysteresis exists at all,
+   * deliberately does not.
+   */
+  dwellAllowanceMs?: number;
+
+  /**
    * Ordinal of the active drop zone among ALL drop zones in document order, or
    * -1 when none is active. Ordinal rather than id because the droppable id is
    * not present in the DOM.
@@ -199,12 +215,34 @@ export interface CanvasDriver {
   /**
    * Ordinal of the drop zone geometrically nearest the current pointer.
    *
-   * The exact form of "the indicator is where the pointer is": comparing the
-   * ACTIVE ordinal against this one needs no tolerance, and both the stale-rect
-   * (#1705) and unscaled-transform (#1706) failures select a zone that is not
-   * the nearest, so it catches them without a magic number.
+   * The APPROXIMATE reading, and the weaker of the two. Proximity is not a rule
+   * this canvas follows: `@dnd-kit/collision` resolves to a zone CONTAINING the
+   * pointer first and only ranks by the dragged shape's overlap when none does,
+   * so next to a boundary the nearest zone by centre distance and the resolved
+   * zone legitimately differ. Measured, one sample of 28 resolved one ordinal
+   * away with the pointer inside neither.
+   *
+   * So an equality assertion against this is a latent flake wherever the pointer
+   * may sit outside every zone. Use {@link zoneContainingPointer} for the exact
+   * claim, and bound this one to a single ordinal where only an approximation is
+   * available.
    */
   nearestZoneToPointer(): Promise<number>;
+
+  /**
+   * Carry an already-pressed pointer past THIS canvas's activation threshold.
+   *
+   * The distance is the driver's to know. `startDragAt` is contractually
+   * allowed to move by whatever its canvas requires, so a suite that hard-codes
+   * a displacement is asserting one canvas's threshold on every other: a
+   * replacement whose activation distance is larger leaves the press below
+   * threshold, and a positive control built on it fails while reporting a
+   * property that is perfectly satisfied.
+   *
+   * Used to prove a press is LIVE. A sub-threshold test reads "not dragging",
+   * which absence satisfies just as well as correct hysteresis does.
+   */
+  crossActivationThreshold(): Promise<void>;
 
   /** `data-nx-id` of the container owning the active zone, or null. */
   readActiveZoneOwner(): Promise<string | null>;
@@ -298,15 +336,497 @@ export interface CanvasChromeReader {
  * the measurement this prevents.
  */
 export async function dragUntilTarget(
-  driver: CanvasDriver,
+  driver: EdgeSearchDriver,
   maxSteps = 90
 ): Promise<number> {
   for (let step = 0; step < maxSteps; step += 1) {
     await driver.moveBy(0, 8);
-    const active = await driver.readActiveTarget();
+    // Given the dwell, not sampled. A resolver whose hysteresis is a timer
+    // starting from no target at all can have that timer RESET by each move,
+    // so a fixture of narrow candidates is traversed for every step without a
+    // target ever becoming active — and both hysteresis suites then fail their
+    // precondition before reaching the dwell-aware search they exist to run.
+    const active = await departureFrom(
+      () => driver.readActiveTarget(),
+      -1,
+      dwellAllowanceOf(driver)
+    );
     if (active >= 0) return active;
   }
   return -1;
+}
+
+/**
+ * The longest dwell a canvas may use INSTEAD of a distance margin.
+ *
+ * The requirement permits hysteresis expressed either way, so a compliant
+ * canvas is allowed to keep showing the previous target for this long after the
+ * pointer has moved. Every reader that asks "which target is active" therefore
+ * has to decide whether it is reading a settled answer or a permitted lag.
+ */
+export const PERMITTED_DWELL_FLOOR_MS = 100;
+
+/**
+ * The longest dwell this suite will WAIT for before calling a reading settled.
+ *
+ * Separate from {@link PERMITTED_DWELL_FLOOR_MS} because the two answer
+ * opposite questions, and one number cannot serve both:
+ *
+ * - Settling asks "has the canvas committed yet?", so it must wait at least as
+ *   long as the longest dwell a compliant canvas may use. Too SMALL and a
+ *   compliant slow canvas is read while still lagging.
+ * - The jitter probe asks "was that move fast enough that a compliant timer
+ *   could NOT have committed?", so its bound must be no larger than the
+ *   SHORTEST permitted dwell. Too LARGE and it accepts a sweep during which a
+ *   compliant canvas legitimately switched, then reads that switch as missing
+ *   hysteresis.
+ *
+ * One constant cannot serve both: any value large enough for the first is too
+ * large for the second, and any value small enough for the second is too small
+ * for the first.
+ *
+ * The requirement states a dwell of MORE than 100ms and gives no upper bound,
+ * so no finite wait is provably sufficient and no global constant can be
+ * correct for every canvas. This is the DEFAULT for a driver that does not say
+ * otherwise; a canvas that dwells longer declares it on the driver, the way the
+ * activation threshold already is.
+ *
+ * Which number each question uses is the load-bearing part. Settling takes the
+ * DRIVER's figure, because that is harness-side knowledge about the
+ * implementation and getting it wrong is self-punishing — understate it and
+ * readings come back stale and the suite fails. The jitter probe takes the
+ * REQUIREMENT's floor instead, never the driver's, because it grades whether
+ * hysteresis exists at all: feeding it the canvas's own claim would let an
+ * implementation set the bar it is measured against.
+ */
+export const DEFAULT_DWELL_ALLOWANCE_MS = 3 * PERMITTED_DWELL_FLOOR_MS;
+
+/**
+ * How many times a stationary pointer may see the reading change before it is
+ * called unsettled.
+ *
+ * A canvas is entitled to one change, and to another if the first expiry moved
+ * the target somewhere that starts a second; past a few it is changing its mind
+ * with no input to justify it, which is a defect rather than permitted lag and
+ * must not be reported as a settled reading.
+ */
+const SETTLE_TRANSITIONS = 4;
+
+/** The capability these readers need, so a test can supply exactly it. */
+type TargetReader = Pick<CanvasDriver, "readActiveTarget"> &
+  Partial<Pick<CanvasDriver, "dwellAllowanceMs">>;
+
+/**
+ * What an edge search needs, which is less than a whole canvas.
+ *
+ * Declared as the capability rather than the whole interface so these searches
+ * can run against a simulated resolver as well as a real canvas. Their waiting
+ * behaviour is only observable against a canvas that declares a dwell, and the
+ * canvas this suite drives declares none.
+ */
+type EdgeSearchDriver = Pick<CanvasDriver, "moveBy" | "readActiveTarget"> &
+  Partial<Pick<CanvasDriver, "dwellAllowanceMs">>;
+
+/** {@link EdgeSearchDriver} plus the in-page recorder the jitter probe needs. */
+type JitterDriver = EdgeSearchDriver &
+  Pick<CanvasDriver, "recordActiveTargetTransitions">;
+
+/**
+ * Wait for `read` to return something other than `from`, or for the permitted
+ * dwell to pass.
+ *
+ * The one waiting loop in this file, because the two questions callers ask —
+ * "has it moved off X yet" and "what is it once it stops moving" — differ only
+ * in what they do with the answer, and two loops would drift.
+ *
+ * Returns the departed value, or `from` when the whole allowance passed without
+ * one. A caller can therefore distinguish the two by comparing with what it
+ * passed in, and "unchanged" now MEANS unchanged for the full permitted dwell
+ * rather than unchanged between two adjacent reads.
+ *
+ * Generic over the reading, because the dwell is a property of the CANVAS
+ * rather than of any one probe: the active target, the owning zone and anything
+ * else read straight after a move are all entitled to the same lag, and a
+ * version that only knew about target ordinals would leave the other readers to
+ * grow their own copy of this.
+ */
+async function departureFrom<T>(
+  read: () => Promise<T>,
+  from: T,
+  allowanceMs: number
+): Promise<T> {
+  const deadline = Date.now() + allowanceMs;
+  let current = await read();
+  while (current === from && Date.now() < deadline) {
+    current = await read();
+  }
+  // One reading taken strictly AFTER the deadline before concluding it never
+  // departed. Every read above may have SAMPLED the value before the deadline
+  // and resolved after it — a cross-frame read easily spans that boundary — so
+  // the loop can exit holding a value that was already stale when it was taken,
+  // and report a canvas that committed exactly on time as never having moved.
+  if (current === from) current = await read();
+  return current;
+}
+
+/**
+ * Read what a canvas has COMMITTED to, rather than what it is still entitled to
+ * be showing.
+ *
+ * A canvas whose hysteresis is a TIMER rather than a distance margin is allowed
+ * to lag: the pointer is over a new zone and the old reading stays correct for
+ * up to the dwell its driver declares. So "settled" cannot mean "two reads agreed"
+ * — during that lag EVERY read agrees, and they all return the pre-move value.
+ * Stability is only evidence once it has been observed across the whole interval
+ * the canvas was permitted to lag for, which is why this waits the allowance out
+ * rather than stopping at the first identical pair.
+ *
+ * Throws rather than returning when the reading never holds still: a value from
+ * a canvas that is still changing its mind is one no assertion downstream can
+ * qualify, and handing it back silently would let an unstable canvas produce an
+ * ordinary-looking green.
+ */
+export async function settledValue<T>(
+  read: () => Promise<T>,
+  allowanceMs: number,
+  subject = "reading"
+): Promise<T> {
+  let value = await read();
+  // Bounded by TRANSITIONS, never by a clock. What is being tolerated is a
+  // canvas changing its mind a bounded number of times, and each observation
+  // already bounds its own wait by the allowance — so a wall-clock budget adds
+  // nothing and collapses to zero for a canvas that declares no dwell, where it
+  // would turn a single asynchronous re-render between two reads into a harness
+  // error instead of a settled reading.
+  //
+  // The count is of CHANGES, so the permitted number of them is followed by one
+  // more observation rather than ending on one. Ending on a transition would
+  // reject a reader that changed exactly the permitted number of times and then
+  // held perfectly still — asynchronous relayout does precisely that — and the
+  // refusal would land on the reading that finally settled.
+  for (let transition = 0; transition <= SETTLE_TRANSITIONS; transition += 1) {
+    const next = await departureFrom(read, value, allowanceMs);
+    if (next === value) return value;
+    value = next;
+  }
+  throw new Error(
+    `the ${subject} changed more than ${String(SETTLE_TRANSITIONS)} times with ` +
+      `a stationary pointer (last seen ${String(value)}), so nothing read here ` +
+      `is settled`
+  );
+}
+
+/** {@link settledValue} over the active drop target, at the driver's own dwell. */
+export async function settledTarget(driver: TargetReader): Promise<number> {
+  return settledValue(
+    () => driver.readActiveTarget(),
+    dwellAllowanceOf(driver),
+    "active target"
+  );
+}
+
+/**
+ * The dwell a driver declares, or the default when it declares none.
+ *
+ * The field is optional, so a driver that declares nothing still has an
+ * allowance; read through one helper so that fallback is stated once rather
+ * than at each call, where the several copies would drift.
+ */
+export function dwellAllowanceOf(driver: Partial<CanvasDriver>): number {
+  return driver.dwellAllowanceMs ?? DEFAULT_DWELL_ALLOWANCE_MS;
+}
+
+/**
+ * Carry the drag until the pointer is INSIDE a zone, not merely until one is
+ * active.
+ *
+ * `dragUntilTarget` stops as soon as a target resolves, and
+ * `@dnd-kit/collision` resolves one by the dragged shape's OVERLAP when no zone
+ * contains the pointer. So "a target is active" and "the pointer is inside that
+ * target" are different states, and every exact claim about mapping — is the
+ * indicator where the pointer is, do two drags resolve the same way — is only
+ * decidable in the second.
+ *
+ * The distinction is not academic: it is where a stale-scroll or unscaled
+ * transform hides. Those implementations select a NEIGHBOURING zone, which any
+ * assertion tolerant of the overlap case accepts.
+ *
+ * Returns the containing zone's ordinal, or -1 if none was reached — a value the
+ * CALLER must assert on, for the same reason `dragUntilTarget` says so.
+ */
+export async function dragUntilInsideZone(
+  driver: CanvasDriver,
+  maxSteps = 40
+): Promise<number> {
+  let containing = await driver.zoneContainingPointer();
+  for (let step = 0; step < maxSteps && containing < 0; step += 1) {
+    await driver.moveBy(0, 4);
+    containing = await driver.zoneContainingPointer();
+  }
+  return containing;
+}
+
+/** The two readings that together say "the shell survived the gesture". */
+export interface ShellState {
+  readonly url: string;
+  readonly hasEditor: boolean;
+}
+
+/**
+ * Read the shell state a cancelled gesture must not have changed.
+ *
+ * Both readings, because either alone passes while the other has already gone
+ * wrong: the editor can still be in the DOM one tick after navigation began,
+ * and a stable URL says nothing about the canvas having unmounted for some
+ * other reason.
+ *
+ * Offered as one reader so a correction reaches every caller. It does not yet
+ * have every caller: `checklist.spec.ts` builds the same two readings inline,
+ * so a fix made here does not reach it and the two can answer the same named
+ * question differently. Routing that one through here is the remaining half.
+ */
+export async function readShellState(
+  page: { url: () => string },
+  driver: CanvasDriver
+): Promise<ShellState> {
+  return { url: page.url(), hasEditor: await driver.isEditorPresent() };
+}
+
+/** Where a boundary search left the pointer. */
+export interface ZoneEdge {
+  /** Active target the pointer rests on, or -1 when no zone was reached. */
+  readonly target: number;
+  /**
+   * Whether the forward walk ever saw the target CHANGE.
+   *
+   * Separate from {@link bracketed} because the two failures mean opposite
+   * things. A canvas whose collision resolution is stuck on one target forever
+   * never crosses a boundary, and every jitter afterwards is stable — which
+   * reads exactly like a compliant switch margin. Callers must assert this, or
+   * an unusable implementation produces the same green as a correct one.
+   */
+  readonly crossed: boolean;
+  /**
+   * Whether the reverse search then located the edge to within a pixel.
+   *
+   * `false` makes any jitter INCONCLUSIVE, not weaker. A resolver that is
+   * sticky in one direction only — it advances once and never retreats —
+   * satisfies {@link crossed}, leaves this false, and then produces a perfectly
+   * stable jitter from the middle of its catchment. That is indistinguishable
+   * from a compliant switch margin, so the moment an expected-failure marker
+   * comes off, the broken resolver reads as correct.
+   *
+   * Callers must therefore treat `false` as "this run could not ask the
+   * question" rather than as evidence in either direction.
+   */
+  readonly bracketed: boolean;
+}
+
+/**
+ * Carries the drag to a zone BOUNDARY and leaves the pointer one pixel inside it.
+ *
+ * A jitter is only a test of hysteresis when it straddles an edge. Oscillating
+ * in the middle of a zone's catchment reports a stable target on a canvas with
+ * no hysteresis at all, because nothing there was ever close to switching — the
+ * assertion is satisfied by the pointer being far from any decision.
+ *
+ * Three steps, and each one is load-bearing:
+ *
+ * 1. Reach a zone, so the walk starts from a live target rather than dead
+ *    space, where the indicator appearing and vanishing counts as a change.
+ * 2. Walk until the target CHANGES, which is the only way to know an edge was
+ *    passed rather than assumed.
+ * 3. Step back a pixel at a time until it changes again, then one step in. The
+ *    pointer is now within a pixel of the edge, so +/-2px lands on opposite
+ *    sides of it.
+ *
+ * The search distance is deliberately past the largest margin the requirement
+ * allows, so failing to find the edge means the target is sticky rather than
+ * that the search was too short.
+ *
+ * Shared rather than repeated because the acceptance suite and the scenario
+ * suite ask the same question, and a per-suite copy is invisible when it is
+ * wrong: the drag still runs and still reports a number.
+ */
+export async function dragToZoneEdge(
+  driver: EdgeSearchDriver,
+  marginPx = 24
+): Promise<ZoneEdge> {
+  const first = await dragUntilTarget(driver);
+  if (first < 0) return { target: -1, crossed: false, bracketed: false };
+
+  const FORWARD_STEP_PX = 4;
+  let crossed = -1;
+  let previous = first;
+  let seen = first;
+  for (let step = 0; step < 120; step += 1) {
+    await driver.moveBy(0, FORWARD_STEP_PX);
+    // Given the dwell to depart, not sampled. A canvas using the permitted dwell
+    // instead of a distance margin can be traversed across a narrow candidate
+    // region faster than its timer expires, so an immediate read keeps returning
+    // the previous target and the walk concludes the resolver never crosses
+    // anything. Both suites assert `crossed` before their marker, so that
+    // compliant implementation would fail the harness rather than the
+    // requirement.
+    //
+    // Departure rather than full settling: this loop only asks whether the
+    // target left `previous`, and returning the moment it does keeps the
+    // overshoot the reverse budget below has to carry down to one step.
+    //
+    // Two baselines, because the walk asks two different questions. `seen` is
+    // the last value OBSERVED, `-1` included, and departure is measured from
+    // it: leaving the baseline at the last real zone while the pointer sits in
+    // dead space makes every later read differ from it immediately, so the
+    // wait expires at once and the walk races through the next narrow zone
+    // before a compliant timer can activate it. `previous` is the last ZONE,
+    // which is what a crossing is measured against — arriving in dead space is
+    // not a crossing.
+    const current = await departureFrom(
+      () => driver.readActiveTarget(),
+      seen,
+      dwellAllowanceOf(driver)
+    );
+    seen = current;
+    if (current >= 0 && current !== previous) {
+      crossed = current;
+      break;
+    }
+    if (current >= 0) previous = current;
+  }
+  if (crossed < 0) {
+    return { target: previous, crossed: false, bracketed: false };
+  }
+
+  // The reverse budget carries the FORWARD step's overshoot. A 4px scan first
+  // observes the new target up to 3px past the point where it switched, so
+  // walking back the margin alone falls short by that much and reports a
+  // compliant canvas as unbracketed. The distance to search is the margin the
+  // requirement allows plus however far the coarse step could have overshot it.
+  const reverseBudget = marginPx + FORWARD_STEP_PX - 1;
+  for (let step = 0; step < reverseBudget; step += 1) {
+    await driver.moveBy(0, -1);
+    // The dwell applies walking back too. These are one-pixel commands, so a
+    // compliant timer-based canvas can be carried through the whole reverse
+    // budget in less time than one dwell — every immediate read then still says
+    // `crossed`, the edge is never bracketed, and both hysteresis tests skip
+    // without having tested the implementation.
+    const stepped = await departureFrom(
+      () => driver.readActiveTarget(),
+      crossed,
+      dwellAllowanceOf(driver)
+    );
+    if (stepped !== crossed) {
+      await driver.moveBy(0, 1);
+      return { target: crossed, crossed: true, bracketed: true };
+    }
+  }
+  return { target: crossed, crossed: true, bracketed: false };
+}
+
+/** What a dwell-aware jitter observed, and whether it could observe anything. */
+export interface JitterProbe {
+  /** Target transitions recorded inside the page, or undefined if inconclusive. */
+  readonly transitions: ActiveTargetTransition[] | undefined;
+  /** The slowest single move across the sweeps that ran, in milliseconds. */
+  readonly slowestMoveMs: number;
+  /** The allowance a move had to stay under for the sweep to count. */
+  readonly dwellAllowanceMs: number;
+  /** How many sweeps were attempted. */
+  readonly sweeps: number;
+}
+
+/**
+ * Oscillate across a bracketed edge, and report whether the probe was VALID.
+ *
+ * The requirement permits hysteresis expressed as a dwell of more than 100ms
+ * instead of a distance margin, and every `moveBy` is a CDP round trip whose
+ * duration belongs to the machine rather than to the canvas. On a loaded runner
+ * a single move can outlast that dwell, which means the pointer rested at an
+ * endpoint long enough for a COMPLIANT timer to commit — and any flip observed
+ * afterwards says nothing about hysteresis.
+ *
+ * So the sweep is timed and repeated, and only a sweep whose slowest move stayed
+ * inside the allowance is returned. Each sweep is balanced (ten moves of +4
+ * against ten of -4) so it ends where it began and a repeat re-probes the same
+ * edge.
+ *
+ * Shared rather than reimplemented. An acceptance probe that jitters without
+ * timing reports a compliant dwell-based canvas as the known missing-hysteresis
+ * failure, on a machine property, and nothing in its output says so.
+ */
+export async function jitterAcrossEdge(
+  driver: JitterDriver,
+  { sweeps = 3, dwellAllowanceMs = PERMITTED_DWELL_FLOOR_MS } = {}
+): Promise<JitterProbe> {
+  // To P-2 first, then alternating by 4, so the samples are P-2 and P+2 —
+  // genuinely opposite sides. Alternating +/-2 from P samples P+2 and P, both
+  // on the same side, which a canvas that switches the instant the pointer
+  // crosses would still pass.
+  await driver.moveBy(0, -2);
+  // Settled BEFORE the recorder exists, so no dwell started by the positioning
+  // move is still pending when observation begins. The interval between that
+  // move and the first timing mark is not covered by the sweep's own
+  // measurement, so a slow round trip there could let a compliant timer commit
+  // while the observer was active — putting a transition in the log that the
+  // jitter never provoked, inside a sweep whose measured moves all look fast
+  // enough to trust. That is the one thing this probe exists to distinguish.
+  await settledTarget(driver);
+
+  let slowestMoveMs = Number.POSITIVE_INFINITY;
+  for (let sweep = 0; sweep < sweeps; sweep += 1) {
+    const readTransitions = await driver.recordActiveTargetTransitions();
+    // CONTINUOUS marks, not per-command durations. A stopwatch around each
+    // `moveBy` measures only the time inside the command and misses the gap
+    // between them — and if the test process is descheduled in that gap, two
+    // fast commands still leave their browser events far apart.
+    //
+    // Marking the clock at every boundary makes the elapsed time cover the gaps
+    // too: `marks[i]` is the instant before move `i`, and the last mark is
+    // after the final one, so no wall-clock time between the first and last
+    // move is unaccounted for.
+    const marks: number[] = [Date.now()];
+    for (let step = 0; step < 20; step += 1) {
+      await driver.moveBy(0, step % 2 === 0 ? 4 : -4);
+      marks.push(Date.now());
+    }
+    const log = await readTransitions();
+    // The TEARDOWN tail counts too. The recorder is still observing between the
+    // final move and the moment it disconnects, so a stall there lets a
+    // compliant dwell timer commit — and that commit lands in the log while
+    // every measured move window stays under the allowance. The probe would
+    // then read a terminal dwell as a jitter-induced transition, which is the
+    // one thing it exists to distinguish.
+    marks.push(Date.now());
+    // The widest window that can hold two consecutive pointer EVENTS. Each
+    // event fires somewhere inside its own command, so the pair from move `i`
+    // and move `i+1` is contained by the span from BEFORE move `i` to AFTER
+    // move `i+1` — `marks[i+2] - marks[i]`. Because the marks are continuous,
+    // that span includes any time the process spent descheduled between the
+    // two commands, which a per-command stopwatch cannot see.
+    //
+    // It over-estimates, so some runs are skipped that could have been
+    // measured. That is the safe direction: the alternative is classifying a
+    // canvas with a permitted dwell as having no hysteresis at all.
+    slowestMoveMs = 0;
+    for (let index = 0; index + 2 < marks.length; index += 1) {
+      const window = (marks[index + 2] ?? 0) - (marks[index] ?? 0);
+      if (window > slowestMoveMs) slowestMoveMs = window;
+    }
+    if (slowestMoveMs < dwellAllowanceMs) {
+      return {
+        transitions: log,
+        slowestMoveMs,
+        dwellAllowanceMs,
+        sweeps: sweep + 1,
+      };
+    }
+  }
+  return {
+    transitions: undefined,
+    slowestMoveMs,
+    dwellAllowanceMs,
+    sweeps,
+  };
 }
 
 /**

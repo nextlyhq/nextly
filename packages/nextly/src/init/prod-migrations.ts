@@ -9,7 +9,15 @@
 
 import { resolve } from "node:path";
 
+import { shutdownServices } from "../di";
 import { resolveDeclaredSchema } from "../domains/schema/migrate/resolved-schema";
+import { NextlyError } from "../errors";
+
+import {
+  allowBootMigrations,
+  assertBootMigrationsNotRefused,
+  refuseBootMigrations,
+} from "./boot-migrations-gate";
 
 interface AdapterLike {
   dialect: "postgresql" | "mysql" | "sqlite";
@@ -37,7 +45,7 @@ interface MigrateCoreLike {
     isSettled?: () => Promise<boolean>;
     ensureLedger?: () => Promise<void>;
     knownJunctions?: ReadonlySet<string>;
-  }): Promise<{ applied: number; coreChanged: boolean }>;
+  }): Promise<{ applied: number; coreChanged: boolean; ran: boolean }>;
 }
 
 export interface RunProdMigrationsArgs {
@@ -71,11 +79,55 @@ export interface RunProdMigrationsArgs {
   migrateCore?: MigrateCoreLike;
 }
 
+/** The refusal, built in one place so its code and wording cannot drift. */
+function bootMigrationsNotRun(dialect: string): NextlyError {
+  // Dialect-specific, because the recovery differs and the wrong advice is
+  // worse than none. `forceUnlock` deletes the Postgres lock ROW; it returns
+  // immediately for every other dialect. MySQL's lock is a session-scoped
+  // `GET_LOCK`, so there IS no stale row to clear — it is held by a live
+  // connection and dies with it, which makes "restart the holder" the only
+  // recovery and `--force-unlock` a no-op that would waste an operator's time
+  // during an incident.
+  const recovery =
+    dialect === "postgresql"
+      ? "This usually resolves on restart once the other instance finishes; " +
+        "if the lock is stale, clear it with `nextly migrate --force-unlock`."
+      : "The lock is held by another live connection and is released when that " +
+        "connection ends, so this usually resolves on restart once the other " +
+        "instance finishes or is stopped.";
+
+  return new NextlyError({
+    code: "NEXTLY_BOOT_MIGRATIONS_NOT_RUN",
+    publicMessage:
+      "Boot migrations did not run: the migrate lock was still held after " +
+      "waiting. Refusing to start rather than serve against a schema that may " +
+      "not match this build. " +
+      recovery,
+  });
+}
+
 export async function runProdMigrationsIfEnabled(
   args: RunProdMigrationsArgs
 ): Promise<void> {
-  if (process.env.NODE_ENV !== "production") return;
-  if (args.config.db.runMigrationsOnBoot !== true) return;
+  // Before the environment checks, because a process that has already refused
+  // must keep refusing regardless of how the next caller reaches this.
+  //
+  // The REFUSAL only, not the pending gate: this function is what settles that
+  // gate, so awaiting it here would deadlock the very boot it was called to
+  // perform. Found by a test that hung for ten seconds, not by reading it.
+  assertBootMigrationsNotRefused();
+
+  // Settled on the early exits too: `registerServices` only opens the gate
+  // under exactly these conditions, but a mismatch here would hang every
+  // consumer, so this closes it rather than assuming it was never opened.
+  if (process.env.NODE_ENV !== "production") {
+    allowBootMigrations();
+    return;
+  }
+  if (args.config.db.runMigrationsOnBoot !== true) {
+    allowBootMigrations();
+    return;
+  }
 
   const { adapter, logger } = args;
   const migrationsDir = resolve(process.cwd(), args.config.db.migrationsDir);
@@ -132,7 +184,7 @@ export async function runProdMigrationsIfEnabled(
       config: args.config,
       deferredExtends: args.deferredExtends,
     });
-    const { applied } = await core({
+    const { applied, ran } = await core({
       dialect: adapter.dialect,
       db: adapter.getDrizzle(),
       adapter,
@@ -143,12 +195,79 @@ export async function runProdMigrationsIfEnabled(
       knownJunctions: resolvedSchema.knownJunctions,
       ensureLedger,
     });
+    // REFUSES rather than serving. `ran: false` means the migrate lock stayed
+    // held past the wait deadline, so this process never learned whether the
+    // schema it is about to serve matches the code. The tempting reading — "the
+    // holder did the work, carry on" — is an assumption: the holder may have
+    // died, been killed, or still be mid-flight, and a lock timing out says
+    // nothing about whether migrations ran.
+    //
+    // `applied` is 0 here and 0 on an up-to-date database, which is why this
+    // previously logged `complete (0 applied)` and started anyway. On a rolling
+    // deploy that is the second replica serving traffic against a schema it
+    // never migrated.
+    //
+    // Failing startup is recoverable and quiet in an orchestrator: the process
+    // exits, the platform restarts it, and by then the holder has usually
+    // finished. A genuinely stuck lock needs `nextly migrate --force-unlock`,
+    // which is the intervention the situation actually calls for.
+    if (!ran) {
+      throw bootMigrationsNotRun(adapter.dialect);
+    }
     logger.info(`[Nextly] Boot migrations complete (${applied} applied).`);
+    allowBootMigrations();
   } catch (err) {
+    // A refusal is not a failure to swallow. Every other error here is
+    // recoverable by running `nextly migrate` against a database the app can
+    // still usefully serve; this one means the app does not know what it is
+    // serving, which is the case the refusal exists for.
+    // Two fatal shapes, and MySQL is why the second is here: `withMigrateLock`
+    // reports a busy lock as `ran: false` on Postgres but THROWS
+    // `NEXTLY_MIGRATE_LOCK_BUSY` on MySQL when the wait expires mid-flight.
+    // Rethrowing only the first would have left MySQL serving the unmigrated
+    // schema this whole change exists to prevent.
+    if (
+      err instanceof NextlyError &&
+      (err.code === "NEXTLY_BOOT_MIGRATIONS_NOT_RUN" ||
+        err.code === "NEXTLY_MIGRATE_LOCK_BUSY")
+    ) {
+      const fatal =
+        err.code === "NEXTLY_BOOT_MIGRATIONS_NOT_RUN"
+          ? err
+          : bootMigrationsNotRun(args.adapter.dialect);
+      // Recorded BEFORE rethrowing, so the next request through either entry
+      // point refuses too rather than finding services already registered.
+      refuseBootMigrations(fatal);
+      // Reopen the registration gate, or the sticky flag above is unreachable.
+      // Both entry points call this helper only inside
+      // `if (!isServicesRegistered())`, and `registerServices()` has already
+      // made that false by the time we get here — so a second request would
+      // skip this helper entirely, build the dispatcher, and serve. Clearing
+      // registration is ONE edit at the point of refusal; adding the check to
+      // both caller gates would be the same fix wired into two places, which is
+      // how the original defect survived in the first place.
+      //
+      // It costs a re-registration per request on a process that now fails
+      // every request. That is the right trade: the process is refusing to
+      // serve and wants restarting, and a wasted registration is cheaper than a
+      // request served against a schema nobody verified.
+      // `shutdownServices`, not `clearServices`: the latter empties the
+      // container WITHOUT disconnecting the adapter, so re-registering on the
+      // next request would build a second connected pool and leak one per
+      // retry — exhausting connections that healthy replicas need. Tearing
+      // down releases what this boot took before reopening the gate.
+      await shutdownServices();
+      logger.error(`[Nextly] ${fatal.publicMessage}`);
+      throw fatal;
+    }
     logger.error(
       `[Nextly] Boot migrations failed: ${
         err instanceof Error ? err.message : String(err)
       }. The app will continue; run \`nextly migrate\` to resolve.`
     );
+    // The app continues on this path, so the gate must open — a swallowed
+    // failure that left it pending would hang every consumer forever, turning a
+    // recoverable error into a worse outage than the one being tolerated.
+    allowBootMigrations();
   }
 }
