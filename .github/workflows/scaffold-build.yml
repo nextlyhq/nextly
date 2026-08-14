@@ -31,6 +31,10 @@ on:
       - "templates/blank/**"
       - "templates/blog/**"
       - "packages/create-nextly-app/**"
+      # The blog legs run this script to replace the registry packages with the workspace
+      # builds. A change to it alters what those legs actually test, so a pull request
+      # touching only the script must still run them.
+      - "scripts/pin-workspace-packages.mjs"
       - ".github/workflows/scaffold-build.yml"
 
 permissions:

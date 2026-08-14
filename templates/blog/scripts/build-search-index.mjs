@@ -20,8 +20,15 @@
  */
 
 import { execSync } from "node:child_process";
-import { mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
-import { join, resolve } from "node:path";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join, resolve } from "node:path";
 
 // Next.js 16 app-router builds emit server HTML under .next/server/app, named by
 // route with any route group stripped, so a post at /blog/[slug] lands at
@@ -87,6 +94,68 @@ function assertSiteDirUsable(dir) {
   }
 }
 
+/**
+ * Pagefind's own marker file. Its presence is what identifies a directory as
+ * Pagefind output, and it is written by every successful index build.
+ */
+const PAGEFIND_MARKER = "pagefind-entry.json";
+
+/**
+ * Remove a previous index, and ONLY if this directory is one.
+ *
+ * `outputDir` comes from the environment, and the removal is recursive — so a
+ * plausible override is a destructive command. `PAGEFIND_OUTPUT_DIR=public`
+ * would take every static asset with it and `=.` would take the project.
+ *
+ * Ownership is established structurally rather than by inspecting the path:
+ * the directory must contain Pagefind's own entry file. A path that Pagefind
+ * did not write does not have one, so it is left alone and reported. That also
+ * covers the paths no denylist would think to name.
+ */
+function removePreviousIndex(dir) {
+  const marker = join(dir, PAGEFIND_MARKER);
+  if (!existsSync(marker)) {
+    if (existsSync(dir) && readdirSync(dir).length > 0) {
+      console.log(
+        `\n• ${dir} holds no ${PAGEFIND_MARKER}, so it was not written by ` +
+          "Pagefind — leaving it untouched rather than deleting it."
+      );
+    }
+    return false;
+  }
+  rmSync(dir, { recursive: true, force: true });
+  return true;
+}
+
+/**
+ * Where the search page looks to tell an EXPECTED empty index from a missing
+ * build. Without it the two are indistinguishable at runtime — both leave
+ * `/pagefind/pagefind.js` absent — and the page tells a user who just ran a
+ * successful build to run the build, which can never produce an index until a
+ * post exists.
+ *
+ * Written outside the Pagefind output directory, because that directory is
+ * removed when the index is empty.
+ */
+const STATUS_PATH = process.env.PAGEFIND_STATUS_FILE ?? "public/search-status.json";
+
+function writeStatus(state) {
+  try {
+    mkdirSync(dirname(resolve(STATUS_PATH)), { recursive: true });
+    writeFileSync(
+      resolve(STATUS_PATH),
+      `${JSON.stringify({ state }, null, 2)}\n`,
+      "utf-8"
+    );
+  } catch (err) {
+    // The status file is a nicety for the empty state, not part of the build's
+    // contract, so a failure to write it must not fail an otherwise good build.
+    console.warn(
+      `  (could not write ${STATUS_PATH}: ${err instanceof Error ? err.message : String(err)})`
+    );
+  }
+}
+
 assertSiteDirUsable(resolve(siteDir));
 mkdirSync(resolve(outputDir), { recursive: true });
 
@@ -96,17 +165,16 @@ mkdirSync(resolve(outputDir), { recursive: true });
 // is reported and skipped while a genuine Pagefind failure below still stops the
 // build.
 if (!containsHtml(resolve(siteDir, globRoot))) {
-  // The previous build's index is removed rather than left in place. Keeping it
-  // would serve results for content that no longer exists — unpublishing the
-  // last post would leave the deployed /search still listing it, with excerpts.
-  rmSync(resolve(outputDir), { recursive: true, force: true });
+  // A previous build's index is removed rather than left in place: keeping it
+  // would serve results for content that no longer exists, so unpublishing the
+  // last post would leave the deployed /search still listing it with excerpts.
+  const removed = removePreviousIndex(resolve(outputDir));
+  writeStatus("empty");
   console.log(
-    `\n• No pages matched ${glob} under ${siteDir} — removed any previous index.`
+    `\n• No pages matched ${glob} under ${siteDir} — nothing to index.` +
+      (removed ? " Removed the previous index." : "")
   );
-  console.log(
-    "  Publish a post and build again to generate it; /search reports that the"
-  );
-  console.log("  index is missing until then.");
+  console.log("  Publish a post and build again to generate one.");
   process.exit(0);
 }
 
@@ -115,6 +183,7 @@ try {
     `npx -y pagefind --site ${siteDir} --output-path ${outputDir} --glob "${glob}"`,
     { stdio: "inherit" }
   );
+  writeStatus("built");
   console.log(`\n✓ Search index written to ${outputDir}`);
 } catch (err) {
   console.error("\n✗ Pagefind build failed.");

@@ -51,8 +51,20 @@ export function SearchInput() {
         setPagefind(mod);
       } catch (err) {
         if (cancelled) return;
+        // Two different situations leave the bundle absent, and telling them
+        // apart matters: a project with no published posts has nothing to
+        // index, so repeating "run the build" is advice that can never work.
+        // The build writes which case it was; if that file is missing too,
+        // the build genuinely has not run.
+        const state = await fetch("/search-status.json")
+          .then(r => (r.ok ? r.json() : null))
+          .then(body => (body as { state?: string } | null)?.state)
+          .catch(() => undefined);
+        if (cancelled) return;
         setLoadError(
-          "Search index not found. Run `pnpm build` (or `npm run build`) to generate it, then reload."
+          state === "empty"
+            ? "No posts have been published yet, so there is nothing to search. The index is generated at build time once the first post is live."
+            : "Search index not found. Run `pnpm build` (or `npm run build`) to generate it, then reload."
         );
         console.debug("[search] failed to load pagefind:", err);
       }
