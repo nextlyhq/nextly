@@ -313,6 +313,39 @@ describe("scaffolding over a project that already has these files", () => {
     expect(lines.some(l => l === ".env" || l === ".env*")).toBe(true);
   }, 30_000);
 
+  it("does not swallow notes under an unmatched start marker", async () => {
+    // A stray start marker with no end — a hand-edit, or a previous run that appended a block
+    // below one. Pairing the FIRST start with the FIRST end would treat everything between the
+    // stray marker and the appended block's end as managed, and replace it.
+    const after = await scaffoldOver({
+      "AGENTS.md": [
+        "<!-- nextly:managed:start -->",
+        "",
+        "I pasted a marker here by accident.",
+        "Ask Dedan before touching the payments module.",
+      ].join("\n"),
+    });
+
+    expect(after["AGENTS.md"]).toContain(
+      "Ask Dedan before touching the payments module."
+    );
+    expect(after["AGENTS.md"]).toContain("Agent guide for this Nextly project");
+  }, 30_000);
+
+  it("puts scaffold ignore rules ABOVE the developer's, so theirs still win", async () => {
+    // git applies the LAST matching pattern, so appending `.env*` after a deliberate `!/.env`
+    // would silently re-ignore a file the developer had un-ignored.
+    const after = await scaffoldOver({ ".gitignore": "!/.env\n" });
+
+    const lines = after[".gitignore"].split("\n");
+    const negation = lines.indexOf("!/.env");
+    const shipped = lines.findIndex(l => l.startsWith(".env"));
+    expect(negation).toBeGreaterThan(-1);
+    expect(shipped).toBeGreaterThan(-1);
+    // Theirs comes after, so it is the last match and it decides.
+    expect(negation).toBeGreaterThan(shipped);
+  }, 30_000);
+
   it("does not write through a CLAUDE.md symlink", async () => {
     workdir = await mkdtemp(path.join(tmpdir(), "nextly-symlink-"));
     const target = path.join(workdir, "project");

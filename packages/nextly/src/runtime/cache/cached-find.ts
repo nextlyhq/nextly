@@ -72,17 +72,27 @@ export interface CachedFindOptions {
  * @example
  * // Public entry detail — cached and busted when any post changes. Tag with the
  * // collection tag; a slug-routed read has no entry id until the fetch resolves.
+ * //
+ * // `status: "published"` is not decoration. `find()` defaults to
+ * // `overrideAccess: true`, so a slug filter alone can return a draft and cache
+ * // it for every visitor; that scope is enforced even on a trusted read.
  * const post = await cachedFind(
- *   () => nextly.find({ collection: "posts", where: { slug: { equals: slug } } }),
+ *   () =>
+ *     nextly.find({
+ *       collection: "posts",
+ *       where: { slug: { equals: slug } },
+ *       status: "published",
+ *     }),
  *   { tags: nextlyTags("posts"), keyParts: ["posts", slug] }
  * );
  *
  * @example
- * // Per-user list — the caller's id is in the key so it never leaks.
- * const mine = await cachedFind(() => nextly.find({ collection: "orders", user }), {
- *   tags: nextlyTags("orders"),
- *   keyParts: ["orders", "list", user.id],
- * });
+ * // Per-user list — access rules evaluated AS the caller, and the caller's id in
+ * // the key so the entry never leaks to another reader.
+ * const mine = await cachedFind(
+ *   () => nextly.find({ collection: "orders", user, overrideAccess: false }),
+ *   { tags: nextlyTags("orders"), keyParts: ["orders", "list", user.id] }
+ * );
  */
 export function cachedFind<T>(
   reader: () => Promise<T>,
