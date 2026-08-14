@@ -235,7 +235,13 @@ export function EntryList({ collectionSlug }: EntryListProps) {
   // State
   // ---------------------------------------------------------------------------
 
-  const [page, setPage] = useState(1); // 1-indexed for API
+  // Held here rather than in `usePagination`, and the reason is the index base
+  // rather than preference: this page number goes to the entries API, which is
+  // 1-indexed, while the hook is 0-indexed like every table surface that reads
+  // its value straight into a slice. Moving this onto the hook would mean
+  // converting at every read and every write, and one missed conversion is an
+  // off-by-one page of content with nothing to catch it.
+  const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(25);
   const [sort, setSort] = useState<string | undefined>("-createdAt"); // Default: newest entries first
   const [search, setSearch] = useState("");

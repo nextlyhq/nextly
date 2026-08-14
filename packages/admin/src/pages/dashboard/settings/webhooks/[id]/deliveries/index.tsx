@@ -18,9 +18,11 @@ import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { toast } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
+import { PAGINATION } from "@admin/constants/pagination";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useDeliveries, useRunDrain, useWebhook } from "@admin/hooks/queries";
 import { useCan } from "@admin/hooks/useCan";
+import { usePagination } from "@admin/hooks/usePagination";
 import { useRouter } from "@admin/hooks/useRouter";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { navigateTo } from "@admin/lib/navigation";
@@ -42,8 +44,9 @@ const DeliveriesContent: React.FC<{ id: string }> = ({ id }) => {
   const canManage = useCan("update-webhooks");
   const canRead = canReadWebhooks || canManage;
 
-  const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState(20);
+  const { page, pageSize, setPage, setPageSize, resetPage } = usePagination({
+    initialPageSize: PAGINATION.DEFAULT_PAGE_SIZE,
+  });
   const [status, setStatus] = useState<WebhookDeliveryStatus | undefined>();
   const [eventType, setEventType] = useState<WebhookEventType | undefined>();
 
@@ -71,23 +74,24 @@ const DeliveriesContent: React.FC<{ id: string }> = ({ id }) => {
     if (!data || isPlaceholderData) return;
     const lastPage = Math.max(0, data.meta.totalPages - 1);
     if (page > lastPage) setPage(lastPage);
-  }, [data, isPlaceholderData, page]);
+  }, [data, isPlaceholderData, page, setPage]);
 
   // Filters and page-size changes reset to the first page so the new query
   // never lands past the end of a shorter result set.
-  const handleStatusChange = useCallback((next?: WebhookDeliveryStatus) => {
-    setStatus(next);
-    setPage(0);
-  }, []);
-  const handleEventTypeChange = useCallback((next?: WebhookEventType) => {
-    setEventType(next);
-    setPage(0);
-  }, []);
-  const handlePageSizeChange = useCallback((next: number) => {
-    setPageSize(next);
-    setPage(0);
-  }, []);
-
+  const handleStatusChange = useCallback(
+    (next?: WebhookDeliveryStatus) => {
+      setStatus(next);
+      resetPage();
+    },
+    [resetPage]
+  );
+  const handleEventTypeChange = useCallback(
+    (next?: WebhookEventType) => {
+      setEventType(next);
+      resetPage();
+    },
+    [resetPage]
+  );
   const handleRowClick = useCallback(
     (delivery: WebhookDeliverySummary) => {
       navigateTo(
@@ -198,7 +202,7 @@ const DeliveriesContent: React.FC<{ id: string }> = ({ id }) => {
           status={status}
           eventType={eventType}
           onPageChange={setPage}
-          onPageSizeChange={handlePageSizeChange}
+          onPageSizeChange={setPageSize}
           onStatusChange={handleStatusChange}
           onEventTypeChange={handleEventTypeChange}
           onRowClick={handleRowClick}

@@ -53,6 +53,7 @@ import type {
   NextlyColumn,
   RowAction,
 } from "@admin/components/ui/table/data-table";
+import { PAGINATION } from "@admin/constants/pagination";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import {
   useEmailProviders,
@@ -62,6 +63,7 @@ import {
   useTestProvider,
 } from "@admin/hooks/queries/useEmailProviders";
 import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
+import { usePagination } from "@admin/hooks/usePagination";
 import { navigateTo } from "@admin/lib/navigation";
 import type {
   EmailProviderDescriptor,
@@ -308,8 +310,7 @@ function ProviderTestDialog({
 const ALWAYS_VISIBLE = new Set(["name"]);
 
 function EmailProviderTable() {
-  const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState(10);
+  const { page, pageSize, setPage, setPageSize, resetPage } = usePagination();
   const [search, setSearch] = useState("");
   // `undefined` is "no filter". A hardcoded sentinel would have to be a string
   // no provider may register, and no such string exists -- a plugin is entitled
@@ -499,17 +500,12 @@ function EmailProviderTable() {
     [providerToTest, doTest]
   );
 
-  const handlePageSizeChange = useCallback((newPageSize: number) => {
-    setPageSize(newPageSize);
-    setPage(0);
-  }, []);
-
   const handleTypeChange = useCallback(
     (newType: string) => {
       setType(newType === allTypesValue ? undefined : newType);
-      setPage(0);
+      resetPage();
     },
-    [allTypesValue]
+    [allTypesValue, resetPage]
   );
 
   const allColumns = useMemo<NextlyColumn<EmailProviderRecord>[]>(
@@ -826,9 +822,9 @@ function EmailProviderTable() {
                     currentPage: page,
                     totalPages: data.meta.totalPages,
                     pageSize,
-                    pageSizeOptions: [10, 25, 50],
+                    pageSizeOptions: PAGINATION.TABLE_PAGE_SIZE_OPTIONS,
                     onPageChange: setPage,
-                    onPageSizeChange: handlePageSizeChange,
+                    onPageSizeChange: setPageSize,
                     isLoading,
                     totalItems,
                   }
