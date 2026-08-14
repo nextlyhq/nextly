@@ -800,82 +800,96 @@ async function main(argv) {
   // retry forever. Exhausting the attempts is a refusal to answer rather than a
   // verdict: the state genuinely would not hold still.
   const STABILITY_ATTEMPTS = 3;
-  let observed = snapshot();
-  let settled = false;
-  for (let attempt = 0; attempt < STABILITY_ATTEMPTS; attempt += 1) {
-    const again = snapshot();
-    if (stamp(observed) === stamp(again)) {
-      settled = true;
-      break;
-    }
-    observed = again;
-  }
-  if (!settled) {
-    process.stderr.write(
-      `ci-verdict: state changed on every one of ${STABILITY_ATTEMPTS} reads; re-run\n`
-    );
-    return 2;
-  }
 
-  if (observed.head !== head || observed.state !== meta.state) {
-    process.stderr.write(
-      "ci-verdict: head or lifecycle moved since the first read; re-run\n"
-    );
-    return 2;
-  }
-  // Any rewrite event at all disqualifies the tail check, so the count is
-  // compared against ZERO rather than against a baseline taken earlier in the
-  // same run. A baseline could only ever say "it did not move WHILE I looked",
-  // which is the weaker claim and the one the empty-range trap already defeats.
-  if (meta.state === "MERGED" && observed.rewrites > 0) {
-    process.stderr.write(
-      `ci-verdict: ${observed.rewrites} history-rewrite event(s); tail NOT CHECKABLE\n`
-    );
-    return 2;
-  }
-
-  // Counted from the SETTLED snapshot rather than from the first read, so the
-  // range is taken between two values the run has confirmed did not move.
-  // A merged pull request keeps a branch that can still be pushed to while
-  // GitHub freezes its `headRefOid` at the revision that merged, so commits
-  // after that point are in neither and would otherwise go unnoticed.
-  let stranded = 0;
-  if (
-    meta.state === "MERGED" &&
-    observed.mergedHead &&
-    observed.mergedHead !== head
+  // The verdict is computed INSIDE the window, not after it.
+  //
+  // Settling a snapshot and then continuing is not a bracket: every request
+  // made between the agreement and `report()` is a gap the agreement does not
+  // cover, and a reviewer submitting `CHANGES_REQUESTED` or unresolving a
+  // thread in it produces a CLEAN verdict from arrays already known to be old.
+  // That is the same defect three rounds of re-ordering produced, so ordering
+  // is not what fixes it.
+  //
+  // Each attempt therefore observes, judges from THAT observation, and observes
+  // again. The candidate is emitted only when the second observation matches
+  // the first, so the whole computation — the lifecycle checks, the stranded
+  // count and `report()` — sits between two identical readings of everything
+  // it consumed.
+  let accepted;
+  for (
+    let attempt = 0;
+    attempt < STABILITY_ATTEMPTS && !accepted;
+    attempt += 1
   ) {
-    // Both ends fetched, from the remote that HAS them: the workflow checks out
-    // shallow and after a squash the merged head is commonly absent locally.
-    execFileSync("git", ["fetch", headRemote, head, observed.mergedHead], {
-      stdio: "ignore",
+    const observed = snapshot();
+
+    if (observed.head !== head || observed.state !== meta.state) {
+      process.stderr.write(
+        "ci-verdict: head or lifecycle moved since the first read; re-run\n"
+      );
+      return 2;
+    }
+    // ANY rewrite event disqualifies the tail check, so this compares against
+    // zero rather than against a baseline taken earlier in the same run — a
+    // baseline could only say "it did not move while I looked", which is the
+    // weaker claim and the one an empty range already defeats.
+    if (meta.state === "MERGED" && observed.rewrites > 0) {
+      process.stderr.write(
+        `ci-verdict: ${observed.rewrites} history-rewrite event(s); tail NOT CHECKABLE\n`
+      );
+      return 2;
+    }
+
+    // A merged pull request keeps a branch that can still be pushed to while
+    // GitHub freezes `headRefOid` at the revision that merged, so commits after
+    // that point are in neither and would otherwise go unnoticed.
+    let stranded = 0;
+    if (
+      meta.state === "MERGED" &&
+      observed.mergedHead &&
+      observed.mergedHead !== head
+    ) {
+      // Both ends fetched from the remote that HAS them: the workflow checks
+      // out shallow, and after a squash the merged head is commonly absent.
+      execFileSync("git", ["fetch", headRemote, head, observed.mergedHead], {
+        stdio: "ignore",
+      });
+      stranded =
+        Number(
+          execFileSync(
+            "git",
+            ["rev-list", "--count", `${observed.mergedHead}..${head}`],
+            { encoding: "utf8" }
+          ).trim()
+        ) || 0;
+    }
+
+    const candidate = report({
+      head,
+      revisionOrder,
+      revisionOrderComplete,
+      reviews: observed.reviews,
+      threads: observed.threads,
+      issueComments: observed.issueComments,
+      blocking,
+      advisory,
+      state: meta.state,
+      stranded,
     });
-    stranded =
-      Number(
-        execFileSync(
-          "git",
-          ["rev-list", "--count", `${observed.mergedHead}..${head}`],
-          { encoding: "utf8" }
-        ).trim()
-      ) || 0;
+
+    // The closing observation. Only an unchanged world licenses the candidate.
+    if (stamp(observed) === stamp(snapshot())) accepted = candidate;
   }
 
-  const result = report({
-    head,
-    revisionOrder,
-    revisionOrderComplete,
-    // From the SETTLED snapshot: the values judged are the ones two
-    // consecutive observations agreed on.
-    reviews: observed.reviews,
-    threads: observed.threads,
-    issueComments: observed.issueComments,
-    blocking,
-    advisory,
-    state: meta.state,
-    stranded,
-  });
-  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-  return result.exitCode;
+  if (!accepted) {
+    process.stderr.write(
+      `ci-verdict: state moved during every one of ${STABILITY_ATTEMPTS} attempts; re-run\n`
+    );
+    return 2;
+  }
+
+  process.stdout.write(`${JSON.stringify(accepted, null, 2)}\n`);
+  return accepted.exitCode;
 }
 
 // `import.meta.url` is percent-encoded AND realpath-resolved, so the comparison
