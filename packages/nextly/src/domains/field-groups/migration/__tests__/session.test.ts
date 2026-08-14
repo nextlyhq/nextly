@@ -806,21 +806,23 @@ describe("field-group migration session", () => {
     }
   });
 
-  // "Not yet expired" is not "safe to start work on". The claim UPDATE and its read-back are two
-  // statements, and a process descheduled between them can spend most of the TTL there — coming back
-  // to a lease that is genuinely live and has less left than the interval before anything renews it.
-  // Starting a migration on that is starting it unprotected: the row lapses while `fn` is running
-  // and a contender takes it.
-  it("refuses a claim whose lease cannot survive to its first renewal", async () => {
+  // "Not yet expired" is not "safe to start work on", and neither is "lasts past the next renewal".
+  // The claim UPDATE and its read-back are two statements, and a process descheduled between them
+  // comes back to a lease that is live, outlives the first renewal, and still cannot cover the
+  // window in which this session will not ask again — so the row lapses mid-run and a contender
+  // takes it while `fn` is still writing.
+  it("refuses a claim whose lease cannot cover the loss window", async () => {
+    // One second past the first renewal, and far short of the loss deadline. Chosen to sit in the
+    // gap BETWEEN the two thresholds, which is the only region where this test can fail for the
+    // reason it is about.
+    const REMAINING = LOCK_RENEW_INTERVAL_MS / 1000 + 1;
     let paused = false;
     const h = createAdapter({
       heldBy: null,
       onStatement: kind => {
         if (kind === "claim" && !paused) {
           paused = true;
-          // Long enough to eat most of the lease, short enough to leave it LIVE — which is the
-          // whole point: the previous check passes here and the work still ends up unprotected.
-          h.clock.advance(LOCK_TTL_SECONDS - LOCK_RENEW_MARGIN_SECONDS + 5);
+          h.clock.advance(LOCK_TTL_SECONDS - REMAINING);
         }
       },
     });
@@ -836,11 +838,15 @@ describe("field-group migration session", () => {
     // The migration never started, which is the outcome that matters.
     expect(ran).not.toHaveBeenCalled();
 
-    // 🔴 The controls that make this about the MARGIN rather than about expiry. The pause happened,
-    // and the lease was still live when it was judged — so a plain liveness test would have accepted
-    // this claim and let the run proceed.
+    // 🔴 Three controls, each ruling out a WEAKER check that would also have gone green here. The
+    // pause happened at all; the lease was still LIVE when judged, so a plain liveness test would
+    // have accepted it; and it outlived the first renewal, so a one-interval margin would have
+    // accepted it too. Without the third this test passes on the previous implementation and proves
+    // nothing about the change it exists for.
     expect(paused).toBe(true);
-    expect(h.expiresAt() as number).toBeGreaterThan(h.clock.now());
+    const remaining = (h.expiresAt() as number) - h.clock.now();
+    expect(remaining).toBeGreaterThan(0);
+    expect(remaining).toBeGreaterThan(LOCK_RENEW_INTERVAL_MS / 1000);
   });
 
   // Being told you lost the lock AFTER the lease already expired is not a warning, it is a report:

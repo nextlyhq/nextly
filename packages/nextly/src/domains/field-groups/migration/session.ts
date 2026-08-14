@@ -147,18 +147,21 @@ export const LOCK_LOSS_AFTER_MS =
   LOCK_TTL_SECONDS * 1000 - 2 * LOCK_RENEW_INTERVAL_MS;
 
 /**
- * How much lease a claim must still have for its holder to rely on it.
+ * How much lease a confirmation must actually grant for the holder to rely on it.
  *
- * 🔴 "Not yet expired" is not the same as "safe to start work on". A claim is renewed on a timer, so
- * the first renewal is a whole interval away; a lease with less than that left is live at the
- * instant it is read and gone before anything renews it. That gap is not hypothetical — the write
- * and the read-back are separate statements, and a process descheduled between them can spend most
- * of the TTL there, coming back to a claim that passes a liveness test and cannot survive to its
- * own first renewal.
+ * 🔴 "Not yet expired" is not the same as "safe to work on", and neither is "lasts until the next
+ * renewal". The write and the read-back are separate statements, so a process descheduled between
+ * them comes back to a claim that passes a liveness test with almost nothing left.
  *
- * One interval, so the requirement is exactly "this will still be here when I next touch it".
+ * 🔴 DERIVED from the loss deadline, not chosen alongside it. Confirming a lease is what STARTS the
+ * window in which this session will not ask again, so a confirmation granting less than that window
+ * is a promise the row cannot keep: the session sits for the whole window believing it is protected
+ * while the row expires partway through, and a contender takes it. Two independently chosen numbers
+ * would only have to differ for that gap to open — with a one-interval margin the confirmed lease
+ * could be 16 seconds while the session went 90 without checking, leaving 74 seconds unprotected.
+ * Tying the requirement to the window makes them agree by construction instead.
  */
-export const LOCK_RENEW_MARGIN_SECONDS = LOCK_RENEW_INTERVAL_MS / 1000;
+export const LOCK_RENEW_MARGIN_SECONDS = LOCK_LOSS_AFTER_MS / 1000;
 
 /**
  * The database's own clock, and an expiry computed from it, per dialect.
