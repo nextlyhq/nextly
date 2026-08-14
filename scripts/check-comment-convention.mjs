@@ -23,7 +23,7 @@
  */
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, relative, sep } from "node:path";
 
 /**
  * The forbidden shapes, deliberately narrow.
@@ -62,11 +62,22 @@ export const FORBIDDEN = [
     why: "names a review tool",
   },
   {
+    // Deliberately broad, and only safe because of REVIEW_DOMAIN_PATHS below. In code that does
+    // not work on pull requests, naming one describes the change rather than the code. In code
+    // that DOES, the same words are the subject matter: "the head comes from the REF, not from
+    // the pull request object" and "has nothing to do with this pull request" are both correct
+    // descriptions, and no expression over the words separates them from narration because only
+    // the file's role differs. The role is declared by path instead of guessed at by pattern.
     pattern: /\b(this|the)\s+(PR|pull request)\b/i,
     why: "refers to the change rather than the code",
   },
   {
-    pattern: /\breviewer\s+(said|asked|found|flagged)\b/i,
+    // The ACTOR carries the verdict, not the verb. "the operator asked", "the caller asked" and
+    // "the probe asked" are ordinary descriptions of a query; the same verb after a review actor
+    // is a conversation. Anchoring on the verb alone would reject the first three, and anchoring
+    // on neither would miss "the control Codex asked for".
+    pattern:
+      /\b(?:reviewer|reviewers|founder|maintainer)\s+(?:said|asked|requested|wanted|suggested|flagged|found)\b/i,
     why: "quotes a conversation",
   },
 ];
@@ -98,6 +109,36 @@ const SOURCE_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
 
 /** Directories that hold generated or vendored code rather than authored source. */
 const EXCLUDED_DIRS = new Set(["node_modules", "dist", ".next", ".turbo", "coverage"]);
+
+/**
+ * Paths whose SUBJECT is the review and release process, where this convention does not apply.
+ *
+ * The patterns match a name the code cannot own — a review tool, a pull request, a reviewer.
+ * That reasoning holds for code that does something else, and inverts for code that works ON
+ * pull requests: there the same words are the domain vocabulary, and "the head comes from the
+ * REF, not from the pull request object" is a correct description of a value's origin. The text
+ * is identical in both cases and only the file's role differs, so no expression over the words
+ * can separate them.
+ *
+ * Declaring the role by path is therefore the honest form. The alternative is a pattern that
+ * rejects correct prose in this tooling, and a check that rejects correct prose gets silenced -
+ * which costs more detection than the narrower scope does.
+ *
+ * Matched as a path PREFIX against the repository-relative path, so a directory entry covers
+ * everything beneath it.
+ */
+const REVIEW_DOMAIN_PATHS = [
+  "scripts/ci-verdict",
+  "scripts/verify-merge",
+  "scripts/release/",
+  ".claude/rules/",
+];
+
+/** True when `file` sits in tooling whose subject matter is the review or release process. */
+export function isReviewDomain(file) {
+  const path = relative(process.cwd(), file).split(sep).join("/");
+  return REVIEW_DOMAIN_PATHS.some(prefix => path.startsWith(prefix));
+}
 
 /** Every TypeScript source file under `root`. */
 export function sourceFiles(root) {
@@ -211,9 +252,18 @@ function main() {
   }
 
   const offences = [];
+  let skipped = 0;
   for (const file of files) {
+    if (isReviewDomain(file)) {
+      skipped += 1;
+      continue;
+    }
     for (const { why, comment } of offencesIn(readFileSync(file, "utf8"))) {
-      offences.push(`${relative(process.cwd(), file)}\n    ${why} — ${comment}`);
+      // Collapsed to one line and truncated. The extractor blanks string literals before
+      // matching, so the stored text carries runs of spaces where data used to be; printing it
+      // raw spreads a single finding over several ragged lines and buries which comment it is.
+      const excerpt = comment.replace(/\s+/g, " ").trim().slice(0, 120);
+      offences.push(`${relative(process.cwd(), file)}\n    ${why} — ${excerpt}`);
     }
   }
 
@@ -229,8 +279,13 @@ function main() {
     process.exit(1);
   }
 
+  // The skipped count is reported rather than left implicit: a file the scan declined to read
+  // produces the same silence as a file it read and cleared, so a growing allowlist would shrink
+  // what is actually checked while the summary line kept saying the same thing.
   console.log(
-    `${files.length} source files across ${roots.join(", ")}: no comment names a review, tool or change.`
+    `${files.length - skipped} of ${files.length} source files across ${roots.join(", ")}: ` +
+      `no comment names a review, tool or change` +
+      (skipped > 0 ? ` (${skipped} skipped as review-process tooling).` : ".")
   );
 }
 
