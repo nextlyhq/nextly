@@ -16,6 +16,7 @@
  *
  * The root container renders via `CanvasNode`; descendants render via `DraggableNode`.
  */
+import { defaultCollisionDetection } from "@dnd-kit/collision";
 import { useDraggable, useDroppable } from "@dnd-kit/react";
 import {
   cloneElement,
@@ -34,8 +35,13 @@ import { useEditor } from "../store/EditorProvider";
 
 import { QueryLoopSamplePreview } from "./CanvasQueryLoop";
 import { DropZone } from "./DropZone";
+import { withTargetHysteresis } from "./hysteresis";
 
 const BLOCK_TYPE = "nx-block";
+
+// Shared by both of this node's drop targets, and built once for the reason the
+// zone module gives: a per-render identity would be reassigned mid-drag.
+const STICKY_COLLISION = withTargetHysteresis(defaultCollisionDetection);
 
 /** Visual stand-in shown on the canvas for a block whose render() is empty (e.g. an
  *  Image with no source), so it stays visible and selectable at author time. */
@@ -222,6 +228,7 @@ function DraggableNode({
     accept: BLOCK_TYPE,
     disabled: dropBeforeIndex == null,
     data: { kind: "dropzone", parentId, slot, index: dropBeforeIndex ?? 0 },
+    collisionDetector: STICKY_COLLISION,
   });
 
   // Grid itself: "append" target for its own default slot.
@@ -238,6 +245,7 @@ function DraggableNode({
       slot: "default",
       index: appendIndex,
     },
+    collisionDetector: STICKY_COLLISION,
   });
 
   const className = classFor(

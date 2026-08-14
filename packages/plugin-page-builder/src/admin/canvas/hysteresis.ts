@@ -13,6 +13,7 @@
  * resists only near a boundary. It is also deterministic, which is what lets a
  * test assert the width instead of waiting for it to settle.
  */
+import type { CollisionDetector } from "@dnd-kit/abstract";
 
 /**
  * How far a challenger must beat the incumbent by, as a difference of distances
@@ -79,4 +80,48 @@ export function centreDistance(
   pointer: { x: number; y: number }
 ): number {
   return Math.hypot(centre.x - pointer.x, centre.y - pointer.y);
+}
+
+/**
+ * A collision detector that makes the current target harder to displace.
+ *
+ * Wraps a base detector rather than replacing it, so the ranking stays whatever
+ * the library computed and this only weakens ONE candidate: the one already
+ * holding the drag. Everything else is passed through untouched, which keeps the
+ * band the single difference between this and the stock behaviour.
+ *
+ * The scope is narrower than it may look, and deliberately so.
+ * `sortCollisions` orders by priority, then by collision TYPE, and only then by
+ * value — so weakening a value damps a switch between candidates of the same
+ * priority and type, and cannot damp a move from shape overlap to pointer
+ * containment. That is the correct scope: entering a zone outright should take
+ * effect at once, while drifting between two comparable neighbours should not.
+ */
+export function withTargetHysteresis(
+  base: CollisionDetector,
+  band: number = TARGET_SWITCH_BAND_CENTRE_DELTA_PX
+): CollisionDetector {
+  return input => {
+    const collision = base(input);
+    if (!collision) return null;
+
+    const { droppable, dragOperation } = input;
+    // Only the incumbent is weakened. Reading the current target from the drag
+    // operation rather than tracking it here means there is no state to seed,
+    // invalidate, or clear when a drag ends.
+    if (dragOperation.target?.id !== droppable.id) return collision;
+
+    const centre = droppable.shape?.center;
+    const pointer = dragOperation.position?.current;
+    if (!centre || !pointer) return collision;
+
+    return {
+      ...collision,
+      value: bandedValue(
+        collision.value,
+        centreDistance(centre, pointer),
+        band
+      ),
+    };
+  };
 }

@@ -7,10 +7,17 @@
  * placeholder. Zones only claim space while a drag is in progress, so the canvas stays
  * clean at rest.
  */
+import { defaultCollisionDetection } from "@dnd-kit/collision";
 import { useDragDropMonitor, useDroppable } from "@dnd-kit/react";
 import { useState, type ReactNode } from "react";
 
+import { withTargetHysteresis } from "./hysteresis";
+
 const BLOCK_TYPE = "nx-block";
+
+// Built once. A detector identity that changed per render would be reassigned on
+// the droppable during a drag, which is churn for a value that never varies.
+const STICKY_COLLISION = withTargetHysteresis(defaultCollisionDetection);
 
 export function DropZone({
   parentId,
@@ -38,6 +45,7 @@ export function DropZone({
     type: BLOCK_TYPE,
     accept: BLOCK_TYPE,
     data: { kind: "dropzone", parentId, slot, index },
+    collisionDetector: STICKY_COLLISION,
   });
 
   if (empty) {
