@@ -817,12 +817,18 @@ describe("field-group migration session", () => {
     // reason it is about.
     const REMAINING = LOCK_RENEW_INTERVAL_MS / 1000 + 1;
     let paused = false;
+    // 🔴 Captured AT the moment the claim is judged, not after the run. A refused acquisition now
+    // clears its own row, so reading the lease afterwards observes the rollback rather than the
+    // state the decision was made on — and the controls below would be asserting about the wrong
+    // instant entirely.
+    let remainingWhenJudged: number | null = null;
     const h = createAdapter({
       heldBy: null,
       onStatement: kind => {
         if (kind === "claim" && !paused) {
           paused = true;
           h.clock.advance(LOCK_TTL_SECONDS - REMAINING);
+          remainingWhenJudged = (h.expiresAt() as number) - h.clock.now();
         }
       },
     });
@@ -844,9 +850,16 @@ describe("field-group migration session", () => {
     // accepted it too. Without the third this test passes on the previous implementation and proves
     // nothing about the change it exists for.
     expect(paused).toBe(true);
-    const remaining = (h.expiresAt() as number) - h.clock.now();
-    expect(remaining).toBeGreaterThan(0);
-    expect(remaining).toBeGreaterThan(LOCK_RENEW_INTERVAL_MS / 1000);
+    expect(remainingWhenJudged as unknown as number).toBeGreaterThan(0);
+    expect(remainingWhenJudged as unknown as number).toBeGreaterThan(
+      LOCK_RENEW_INTERVAL_MS / 1000
+    );
+
+    // 🔴 And the refusal must not leave OUR name on the row. The claim UPDATE has already committed
+    // by this point, so a refusal that simply returned would block every contender for the residual
+    // lease with nothing renewing it and no callback ever starting.
+    expect(h.owner()).toBeNull();
+    expect(h.expiresAt()).toBeNull();
   });
 
   // Being told you lost the lock AFTER the lease already expired is not a warning, it is a report:

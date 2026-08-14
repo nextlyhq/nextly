@@ -607,6 +607,11 @@ export async function withMigrationSession<T>(
     await ensureLockRow(adapter, dialect);
   }
 
+  // Stamped before the attempt for the same reason the renewal is: the lease this claim grants
+  // begins when the database runs the statement, so dating it from here can only understate what is
+  // left. Reading the clock after `acquire` resolves would credit the claim with time it spent
+  // waiting for a connection or for this process to be scheduled again.
+  const claimStartedAt = performance.now();
   const acquired = await acquire(adapter, dialect, claim);
   if (!acquired.ok) {
     // Raised outside the transaction on purpose: the adapters route every error
@@ -701,7 +706,7 @@ export async function withMigrationSession<T>(
   // its own progress, and asks only "how long have I been unable to confirm my lease" — a question
   // no other machine participates in. `performance.now()` rather than `Date.now()` because it does
   // not step: an NTP correction mid-migration would otherwise expire or extend a claim by accident.
-  let leaseConfirmedAt = performance.now();
+  let leaseConfirmedAt = claimStartedAt;
 
   // Only ever one attempt in flight. `setInterval` fires on a schedule, not on completion, so a
   // renewal slower than the interval would otherwise have a second started underneath it — and with
@@ -717,6 +722,14 @@ export async function withMigrationSession<T>(
     }
     if (renewing) return;
     renewing = true;
+    // 🔴 Stamped BEFORE the attempt, and used as the confirmation time if it succeeds. The lease
+    // this renewal grants starts when the database runs the statement, which is at or after this
+    // instant — so dating the confirmation from here can only UNDERSTATE how much lease is left,
+    // which is the safe direction. Reading the clock in the success handler instead dates it from
+    // whenever this process next got scheduled, and a pause between the database's read-back and
+    // that callback would start a fresh full-length window over a lease that had been ageing
+    // throughout it.
+    const attemptStartedAt = performance.now();
     void renew(adapter, dialect, claim).then(
       held => {
         renewing = false;
@@ -726,10 +739,7 @@ export async function withMigrationSession<T>(
           onLost();
           return;
         }
-        // The lease is confirmed as of NOW rather than as of when this attempt started: the
-        // database extended it when the statement ran, and dating it earlier would only ever
-        // shorten the margin.
-        leaseConfirmedAt = performance.now();
+        leaseConfirmedAt = attemptStartedAt;
       },
       () => {
         // An error is not proof the claim is gone — only proof this attempt could not ask. It moves
@@ -925,10 +935,39 @@ async function acquire(
     // was empty.
     const after = await readLockState(ctx, dialect);
     if (after?.owner !== claim || !after.usable) {
+      // 🔴 A refused acquisition must not leave OUR name on the row. The claim UPDATE above has
+      // already happened, and returning a result rather than throwing commits it — so without this
+      // a run that declined its own claim would still block every contender until the residual
+      // lease expired, with nothing renewing it and no callback ever starting. Nobody would even be
+      // able to attribute the block: the owner is a UUID belonging to a process that gave up.
+      //
+      // Cleared rather than rolled back because the adapters reclassify anything thrown out of a
+      // transaction callback, which would turn a precise refusal into an opaque database error.
+      // Owner-filtered, so a row a contender legitimately took in the meantime is left alone.
+      if (after?.owner === claim) {
+        await ctx.runStatement(clearClaimStatement(claim));
+        return { ok: false, heldBy: null };
+      }
       return { ok: false, heldBy: after?.owner ?? null };
     }
     return { ok: true };
   });
+}
+
+/**
+ * Free the row, but only while we still hold it.
+ *
+ * Naming the owner as well makes this affect only a row this claim owns, so a late finaliser cannot
+ * free a run that has since taken over. Shared by the ordinary release and by the rollback of an
+ * acquisition that turned out unusable: those are the same act on the row, and two spellings of it
+ * could disagree about the owner filter — which is the half that makes it safe.
+ */
+function clearClaimStatement(claim: string): SQL {
+  return sql`UPDATE ${sql.identifier(MIGRATION_LOCK_TABLE)}
+      SET ${sql.identifier("owner")} = NULL,
+          ${sql.identifier("expires_at")} = NULL
+      WHERE ${sql.identifier("id")} = ${LOCK_ROW_ID}
+        AND ${sql.identifier("owner")} = ${claim}`;
 }
 
 /** Release only what we hold, so a late finaliser cannot free someone else's run. */
@@ -947,14 +986,7 @@ async function release(
     // callback's value as though the work had been protected. This is the last observable moment.
     const before = await readLockState(ctx, dialect);
     const heldToTheEnd = before?.owner === claim && before.live;
-    // Naming the owner as well makes a release affect only a row we still hold.
-    await ctx.runStatement(
-      sql`UPDATE ${sql.identifier(MIGRATION_LOCK_TABLE)}
-          SET ${sql.identifier("owner")} = NULL,
-              ${sql.identifier("expires_at")} = NULL
-          WHERE ${sql.identifier("id")} = ${LOCK_ROW_ID}
-            AND ${sql.identifier("owner")} = ${claim}`
-    );
+    await ctx.runStatement(clearClaimStatement(claim));
     return heldToTheEnd;
   });
 }
