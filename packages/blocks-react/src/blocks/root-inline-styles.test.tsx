@@ -411,23 +411,52 @@ function outOfRangeValuesFor(entry: Record<string, unknown>): unknown[] {
  * a member of the wrong type is a different state, and the one `core/list`
  * coerces per item — `stored.slice(...).map(item => text(item))` exists for it.
  *
- * The renderer's own `MAX_ITEMS` truncation is a branch of the same kind, and
- * the oversized array below reaches it at the smallest input that does.
+ * A member of the wrong TYPE is a value alternative like any other, so these
+ * belong in the cross product. An oversized array is not — see
+ * `oversizedArrayVariants`.
  */
 function malformedMemberArraysFor(entry: Record<string, unknown>): unknown[] {
   if (entry.type !== "array") return [];
-  return [
-    [42],
-    [null],
-    [{}],
-    ["ok", 42],
-    // Past the renderer's own truncation. `core/list` slices at a thousand
-    // before it maps, and that slice is a branch like any other: a stored array
-    // can be any length, and nothing in the schema says otherwise. Sized just
-    // over the cap rather than far past it, so the branch is reached at the
-    // smallest input that reaches it.
-    Array.from({ length: 1001 }, (_, index) => `i${index}`),
-  ];
+  return [[42], [null], [{}], ["ok", 42]];
+}
+
+/**
+ * One prop set per array prop, sized past the renderer's own truncation.
+ *
+ * `core/list` slices at a thousand before it maps, and that slice is a branch
+ * like any other: a stored array can be any length, and nothing in the schema
+ * says otherwise. Sized just over the cap rather than far past it, so the branch
+ * is reached at the smallest input that reaches it.
+ *
+ * Held OUTSIDE `alternativesFor`, which is what keeps this affordable, and the
+ * distinction is about what the value probes rather than about its cost. The
+ * alternatives are crossed with each other — layered into conjunctions, then
+ * fanned out through the omitted and sole passes — because a branch can be
+ * keyed on two props at once. Length is not a value another prop can be keyed
+ * on: the truncation runs before any other prop is read, so pairing an
+ * oversized array with each `kind` and `start` alternative re-renders a thousand
+ * items to reach a branch the first render already reached.
+ *
+ * The clamp in `layeredVariants` is what turns that from a duplicate into many:
+ * a prop with fewer alternatives than the widest one repeats its LAST value into
+ * every later layer, so an oversized array sitting at the end of the list is
+ * pinned into each of them and then fanned out again. One prop set per array
+ * prop reaches the same branch.
+ *
+ * Still crossed with every host state and policy, which is the part that must
+ * not be traded away: a block whose truncated output branches on the host is a
+ * block this file would otherwise pass over.
+ */
+function oversizedArrayVariants(
+  base: Record<string, unknown>,
+  schema: Record<string, unknown>
+): unknown[] {
+  return Object.entries(schema)
+    .filter(([, entry]) => (entry as { type?: unknown }).type === "array")
+    .map(([name]) => ({
+      ...base,
+      [name]: Array.from({ length: 1001 }, (_, index) => `i${index}`),
+    }));
 }
 
 function alternativesFor(
@@ -544,6 +573,7 @@ function propVariants(block: AnyBlockDefinition): unknown[] {
     ...soleVariants(base, schema),
     ...layered.flatMap(layer => soleVariants(layer, schema)),
     ...malformedVariants(base, schema),
+    ...oversizedArrayVariants(base, schema),
   ];
 }
 
