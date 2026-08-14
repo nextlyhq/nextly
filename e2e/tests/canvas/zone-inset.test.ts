@@ -195,7 +195,12 @@ test("a depth of zero puts the pointer on the first row inside the band", async 
  * measured across that transition is measured from a boundary that has since
  * moved.
  */
-function shiftingEdgeCanvas(band: Band, shifts: number, startY = 0) {
+function shiftingEdgeCanvas(
+  band: Band,
+  shifts: number,
+  startY = 0,
+  direction: -1 | 1 = -1
+) {
   let y = startY;
   let from = band.from;
   let entries = 0;
@@ -213,7 +218,7 @@ function shiftingEdgeCanvas(band: Band, shifts: number, startY = 0) {
       // (`boundary-not-found`) and would not exercise this one.
       if (inside && !wasInside && entries < shifts) {
         entries += 1;
-        from -= 1;
+        from += direction;
       }
       wasInside = inside;
       return inside ? band.zone : -1;
@@ -281,4 +286,20 @@ test("refuses a step budget it cannot honour, rather than running forever", asyn
   await expect(dragToInsetInZone(outside(), 4, Number.NaN)).rejects.toThrow(
     /whole, non-negative step budget/
   );
+});
+
+test("re-enters a zone whose edge moved DOWN out from under the pointer", async () => {
+  // The direction the real canvas produces: a drop zone swaps its 3px drag margin for a 4px
+  // active one, so the top edge travels DOWN and a pointer resting on the old boundary is left
+  // just above the new one. A bracket that only ever retreats moves further away, and reports an
+  // edge it is standing one pixel short of as unfindable.
+  const canvas = shiftingEdgeCanvas({ zone: 5, from: 50, to: 90 }, 1, 0, 1);
+
+  const result = await dragToInsetInZone(canvas, 6);
+
+  expect(result.refused).toBeUndefined();
+  expect(result.zone).toBe(5);
+  expect(result.insetPx).toBe(6);
+  // Measured from the edge where it SETTLED, not where it started.
+  expect(canvas.pointer().y).toBe(57);
 });

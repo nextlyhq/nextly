@@ -677,47 +677,73 @@ const EDGE_SETTLE_ATTEMPTS = 3;
  */
 const EDGE_SETTLE_MS = 120;
 
-/**
- * The first pointer position INSIDE `zone`, found by retreating out and stepping back in.
- *
- * Returns `null` when the zone's edge is not within `retreatLimit` — the pointer
- * is inside a zone whose boundary this walk never crossed, which is a different
- * fact from there being no zone.
- *
- * Leaves the pointer where it found the boundary, and reports how far it
- * retreated so a caller that must abandon the measurement can put the drag back.
- */
 /** One wait, named for what it is, so no caller invents its own. */
 function settleMs(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+/**
+ * The first pointer position INSIDE `zone`, and the NET distance this moved to find it.
+ *
+ * Two directions, because a zone edge moves both ways. The pointer may start
+ * inside — the ordinary case, where the edge is somewhere above — or OUTSIDE,
+ * which is what the canvas produces when a drop zone takes its 4px active margin
+ * in place of the 3px drag one: the top edge travels DOWN, and a pointer resting
+ * on the old boundary is left above the new one. Retreating from there only ever
+ * moves further away, so a walk that assumed "inside" would report an edge it
+ * was standing a pixel short of as unfindable.
+ *
+ * Returns `null` when no edge is within `limitPx` in either direction, and
+ * restores the pointer before doing so: a measurement that could not be taken
+ * must not also move the drag.
+ *
+ * `movedPx` is signed and NET — positive is downward — so one caller can undo
+ * the whole excursion without tracking its parts.
+ */
 async function bracketZoneEdge(
   driver: ZoneInsetDriver,
   zone: number,
-  retreatLimit: number
-): Promise<{ boundaryY: number; retreatedPx: number } | null> {
+  limitPx: number
+): Promise<{ boundaryY: number; movedPx: number } | null> {
+  let moved = 0;
+  const restore = async (): Promise<null> => {
+    await driver.moveBy(0, -moved);
+    return null;
+  };
+
+  // Forward until the zone is re-entered, for the case where its edge moved out
+  // from under the pointer.
+  let advanced = 0;
+  while (
+    (await driver.zoneContainingPointer()) !== zone &&
+    advanced < limitPx
+  ) {
+    await driver.moveBy(0, INSET_PROBE_PX);
+    moved += INSET_PROBE_PX;
+    advanced += INSET_PROBE_PX;
+  }
+  if ((await driver.zoneContainingPointer()) !== zone) return restore();
+
+  // Back out a pixel at a time until the zone is left.
   let retreated = 0;
   let left = false;
-  while (retreated < retreatLimit) {
+  while (retreated < limitPx) {
     await driver.moveBy(0, -INSET_PROBE_PX);
+    moved -= INSET_PROBE_PX;
     retreated += INSET_PROBE_PX;
     if ((await driver.zoneContainingPointer()) !== zone) {
       left = true;
       break;
     }
   }
-  if (!left) {
-    await driver.moveBy(0, retreated);
-    return null;
-  }
+  if (!left) return restore();
 
+  // One step back in: the pointer is within a step of the boundary, and this
+  // position — not a step count — is what the depth is measured from.
   await driver.moveBy(0, INSET_PROBE_PX);
-  if ((await driver.zoneContainingPointer()) !== zone) {
-    await driver.moveBy(0, retreated - INSET_PROBE_PX);
-    return null;
-  }
-  return { boundaryY: driver.pointer().y, retreatedPx: retreated };
+  moved += INSET_PROBE_PX;
+  if ((await driver.zoneContainingPointer()) !== zone) return restore();
+  return { boundaryY: driver.pointer().y, movedPx: moved };
 }
 
 /**
@@ -807,16 +833,16 @@ export async function dragToInsetInZone(
   // would put wall-clock dependence into the one control a band assertion
   // rests on, and would still be a guess about a duration the canvas owns.
   let boundaryY: number | null = null;
-  let settledRetreat = 0;
+  let settledMoved = 0;
   for (let attempt = 0; attempt < EDGE_SETTLE_ATTEMPTS; attempt += 1) {
     const found = await bracketZoneEdge(driver, zone, retreatLimit);
     if (!found) return refuse(zone, "boundary-not-found");
     if (boundaryY === found.boundaryY) {
-      settledRetreat = found.retreatedPx;
+      settledMoved = found.movedPx;
       break;
     }
     boundaryY = found.boundaryY;
-    settledRetreat = found.retreatedPx;
+    settledMoved = found.movedPx;
     // Across the transition rather than adjacent to it. Two brackets taken back
     // to back land inside the same animation frame and can agree on a whole
     // pixel the edge is still travelling through.
@@ -824,7 +850,7 @@ export async function dragToInsetInZone(
     if (attempt === EDGE_SETTLE_ATTEMPTS - 1) {
       // Still moving. Reported rather than measured through: a depth taken from
       // an edge that is in motion is a number with no referent.
-      await driver.moveBy(0, settledRetreat);
+      await driver.moveBy(0, -settledMoved);
       return refuse(zone, "edge-moving");
     }
   }
