@@ -105,6 +105,24 @@ describe("email provider activity", () => {
       })
     );
 
+    // A parser that rebuilds its output field by field, reversing the
+    // insertion order on the way back out. Ordinary to write, and the write
+    // path treats the two orders as the same configuration.
+    getEmailProviderRegistry().register(
+      defineEmailProvider({
+        type: "reordering",
+        label: "Reordering",
+        configFields: [],
+        parseConfig: input =>
+          Object.fromEntries(
+            Object.entries((input ?? {}) as Record<string, unknown>).reverse()
+          ) as Record<string, unknown>,
+        createAdapter: () => ({
+          send: () => Promise.resolve({ success: true, messageId: "x" }),
+        }),
+      })
+    );
+
     sqlite = new Database(":memory:");
     createEmailProvidersTable(sqlite);
     service = new EmailProviderService(
@@ -228,6 +246,37 @@ describe("email provider activity", () => {
 
     expect(logged[0]?.metadata).toEqual({
       providerType: "smtp",
+      changedFields: ["name"],
+    });
+  });
+
+  // The write path treats two field orders as the same configuration, so the
+  // audit trail has to agree. Deciding this by comparing serialised text
+  // reports a change whenever a parser rebuilds its output field by field —
+  // a false alarm on the one signal the trail exists for, raised by a save
+  // that altered nothing.
+  it("does not report a change when only the field order moved", async () => {
+    const created = await service.createProvider(
+      {
+        ...INPUT,
+        type: "reordering" as never,
+        configuration: { host: "smtp.example.com", user: "postmaster" },
+      },
+      ACTOR
+    );
+    logged.length = 0;
+
+    await service.updateProvider(
+      created.id,
+      {
+        name: "Renamed",
+        configuration: { user: "postmaster", host: "smtp.example.com" },
+      },
+      ACTOR
+    );
+
+    expect(logged[0]?.metadata).toEqual({
+      providerType: "reordering",
       changedFields: ["name"],
     });
   });

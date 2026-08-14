@@ -111,6 +111,35 @@ describe("DataTableView footer", () => {
     );
   });
 
+  it("keeps the footer when a page fails with no rows", () => {
+    // The pager lives in the footer, and a request that fails for ONE page
+    // leaves the user on that page with nothing. Dropping the footer with the
+    // rows takes away the only way back to a page that works, which turns a
+    // recoverable error into a dead end. The rows are gone; the navigation out
+    // of the failure is not part of the failure.
+    render(
+      <DataTableView<Row>
+        columns={[{ name: "name", header: "Name" }]}
+        rows={[]}
+        error="Request failed"
+        footer={<div data-testid="footer">pager</div>}
+      />
+    );
+
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    const footer = screen.getByTestId("footer");
+    expect(footer).toBeInTheDocument();
+
+    // Presence is not placement, and asserting only presence is what let the
+    // footer render outside the card here while every assertion stayed green.
+    // The pager has to sit in the SAME surface it occupies when the request
+    // succeeds, or a failed page moves it out of the card it normally lives in.
+    expect(tokensOf(footer.parentElement)).toContain("@md/table:border");
+    expect(tokensOf(footer.parentElement)).toContain(
+      "@md/table:overflow-hidden"
+    );
+  });
+
   it("renders nothing extra when no footer is given", () => {
     render(
       <DataTableView<Row>
@@ -118,6 +147,73 @@ describe("DataTableView footer", () => {
         rows={ROWS}
       />
     );
+    expect(screen.queryByTestId("footer")).toBeNull();
+  });
+
+  // `pagination` is the supported way to paginate a table, so the placement
+  // guarantee the two tests above make for `footer` has to hold for it as well.
+  // Asserting it only for `footer` would leave the path every list actually
+  // uses uncovered, which is the arrangement this file exists to prevent.
+  const PAGER = {
+    currentPage: 0,
+    totalPages: 3,
+    pageSize: 10,
+    onPageChange: () => {},
+    ariaLabel: "Test pagination",
+  };
+
+  it("places a pager given as data inside the table's surface", () => {
+    render(
+      <DataTableView<Row>
+        columns={[{ name: "name", header: "Name" }]}
+        rows={ROWS}
+        pagination={PAGER}
+      />
+    );
+
+    const pager = screen.getByRole("navigation", { name: "Test pagination" });
+    expect(pager).toBeInTheDocument();
+    // Presence is not placement. The pager must be INSIDE the bordered surface
+    // that holds both views, which is what a caller could get wrong while the
+    // pager was passed as markup.
+    expect(tokensOf(pager.parentElement)).toContain("@md/table:border");
+    expect(tokensOf(pager.parentElement)).toContain(
+      "@md/table:overflow-hidden"
+    );
+  });
+
+  it("keeps a data pager in the same surface when a page fails", () => {
+    render(
+      <DataTableView<Row>
+        columns={[{ name: "name", header: "Name" }]}
+        rows={[]}
+        error="Request failed"
+        pagination={PAGER}
+      />
+    );
+
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    const pager = screen.getByRole("navigation", { name: "Test pagination" });
+    expect(tokensOf(pager.parentElement)).toContain("@md/table:border");
+  });
+
+  it("prefers pagination over a footer rather than rendering both", () => {
+    // Two pagers in one slot is not a composition anyone wants, and stacking
+    // them would answer a caller's mistake with a layout instead of letting it
+    // be seen. Asserted so the precedence is a decision rather than whichever
+    // order the JSX happened to be written in.
+    render(
+      <DataTableView<Row>
+        columns={[{ name: "name", header: "Name" }]}
+        rows={ROWS}
+        footer={<div data-testid="footer">custom</div>}
+        pagination={PAGER}
+      />
+    );
+
+    expect(
+      screen.getByRole("navigation", { name: "Test pagination" })
+    ).toBeInTheDocument();
     expect(screen.queryByTestId("footer")).toBeNull();
   });
 });

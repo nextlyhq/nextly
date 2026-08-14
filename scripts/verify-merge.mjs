@@ -679,8 +679,33 @@ export function reviewsCoveringTip(reviews, tip, login) {
     throw new TypeError("reviewsCoveringTip needs an array of reviews");
   }
   if (typeof tip !== "string" || tip.length < FULL_SHA_LENGTH) return [];
-  return reviews.filter(r => r?.user?.login === login && r?.commit_id === tip);
+  return reviews.filter(
+    r =>
+      r?.user?.login === login &&
+      r?.commit_id === tip &&
+      SUBMITTED_REVIEW_STATES.includes(r?.state)
+  );
 }
+
+/**
+ * Review states that constitute coverage, named rather than excluded.
+ *
+ * A NAMED set is the direction that fails closed. Excluding one state — say
+ * `PENDING` — grants coverage to every other, including `DISMISSED`, which is a
+ * review GitHub explicitly invalidated and which opens no thread, so a gate
+ * counting it reads clean on a revision whose only review was withdrawn. It
+ * also grants coverage to any state added later, which nobody here has met.
+ *
+ * The filter lives INSIDE this function rather than at its callers because two
+ * callers each applying their own left them disagreeing: one excluded drafts
+ * and the other filtered nothing, four lines apart, so the same review was
+ * coverage for one reviewer and not the other.
+ */
+export const SUBMITTED_REVIEW_STATES = Object.freeze([
+  "APPROVED",
+  "CHANGES_REQUESTED",
+  "COMMENTED",
+]);
 
 /**
  * Whether the merge took everything the branch had.
@@ -1021,8 +1046,10 @@ export function main(argv) {
   // instead assumes reviews complete in the order they were requested, and an
   // older-head review finishing after a current-head one then hides a verdict
   // that does cover this revision behind one that does not.
-  const submitted = reviews.filter(r => r?.state !== "PENDING");
-  const reviewedSha = reviewsCoveringTip(submitted, tip, CODEX).length
+  const submitted = reviews.filter(r =>
+    SUBMITTED_REVIEW_STATES.includes(r?.state)
+  );
+  const reviewedSha = reviewsCoveringTip(reviews, tip, CODEX).length
     ? tip
     : submitted
         .filter(r => r?.user?.login === CODEX && r?.commit_id)

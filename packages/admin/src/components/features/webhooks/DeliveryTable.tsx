@@ -18,7 +18,6 @@ import {
 import type React from "react";
 import { useMemo } from "react";
 
-import { Pagination } from "@admin/components/shared/pagination";
 import { DataTableView } from "@admin/components/ui/table/data-table";
 import type { NextlyColumn } from "@admin/components/ui/table/data-table";
 import {
@@ -200,18 +199,22 @@ export const DeliveryTable: React.FC<DeliveryTableProps> = ({
         registryKey="webhook-deliveries"
         ariaLabel="Webhook deliveries table"
         emptyMessage="No deliveries match these filters yet."
-      />
-
-      <Pagination
-        currentPage={page}
-        totalPages={Math.max(1, totalPages)}
-        pageSize={pageSize}
-        pageSizeOptions={[20, 50, 100]}
-        onPageChange={onPageChange}
-        onPageSizeChange={onPageSizeChange}
-        totalItems={totalItems}
-        itemLabel="deliveries"
-        isLoading={isLoading}
+        // Passed to the table rather than rendered beside it, so it is placed
+        // by the component that knows which of the two views is
+        // showing. This list is the one most often read on a narrow screen
+        // while chasing a failed delivery, which is the layout a detached pager
+        // gets wrong.
+        pagination={{
+          currentPage: page,
+          totalPages: Math.max(1, totalPages),
+          pageSize,
+          pageSizeOptions: [20, 50, 100],
+          onPageChange,
+          onPageSizeChange,
+          totalItems,
+          itemLabel: "deliveries",
+          isLoading,
+        }}
       />
     </div>
   );
