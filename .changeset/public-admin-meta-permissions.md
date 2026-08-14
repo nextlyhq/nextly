@@ -25,8 +25,11 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-Stop serving the declared permission vocabulary on the public `/api/admin-meta`
-payload. That endpoint answers without authentication, so every plugin action
-and resource name was readable by anyone who could reach the app. The admin
-plugin page now takes permissions from the authenticated permissions endpoint,
-which reports the rows that actually exist rather than the declarations.
+Stop serving plugins' declared custom permissions on the public
+`/api/admin-meta` payload. That endpoint answers without authentication, so
+every plugin action and resource name it carried was readable by anyone who
+could reach the app.
+
+The plugin detail page no longer lists a plugin's permissions. Reading them
+from an authenticated endpoint is a separate change and is not in this
+release.

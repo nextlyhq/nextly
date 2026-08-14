@@ -92,9 +92,7 @@ describe("PluginDetailPage layout", () => {
 
     // NOT in the rail: what the plugin contributes. The separating assertion —
     // without it, moving the whole page inside the aside would pass.
-    expect(within(aside).queryByText("Permissions")).toBeNull();
     expect(within(aside).queryByText("API routes")).toBeNull();
-    expect(screen.getByText("Permissions")).toBeInTheDocument();
     expect(screen.getByText("API routes")).toBeInTheDocument();
   });
 
@@ -150,9 +148,9 @@ describe("PluginDetailPage", () => {
     );
     expect(screen.getByText("form-submissions")).toBeInTheDocument();
     expect(screen.getByText("form-settings")).toBeInTheDocument();
-    // Permission shows its label and danger marker.
-    expect(screen.getByText("Export Submissions")).toBeInTheDocument();
-    expect(screen.getByText("danger")).toBeInTheDocument();
+    // Permissions are deliberately absent: the public payload no longer
+    // carries them, so nothing here can render one.
+    expect(screen.queryByText("Export Submissions")).toBeNull();
     // Route summary includes the namespaced final URL.
     expect(
       screen.getByText("GET /admin/api/plugins/@acme/forms/submissions/export")
@@ -256,22 +254,15 @@ describe("PluginDetailPage dormant disclosure", () => {
 });
 
 /**
- * A disabled plugin's permissions are seeded and granted like any other's, so
- * the page must show them. Its routes are not mounted, so those must not be
- * shown as current. These pin both halves of that split on one plugin.
+ * A disabled plugin keeps its schema and its grants; only its routes stop
+ * being mounted. These pin that split.
+ *
+ * The rendering half of the permissions case is gone with the public
+ * payload's permission fields: the page receives none, so there is nothing
+ * left to assert renders. What the page still SAYS about grants surviving a
+ * disable is covered below, and that sentence is what the split needs.
  */
 describe("PluginDetailPage disabled plugin permissions", () => {
-  it("lists a disabled plugin's permissions as things it has", () => {
-    render(<PluginDetailPage params={{ slug: "acme-disabled" }} />);
-
-    const contributions = screen
-      .getByText("What this plugin adds")
-      .closest("section");
-    expect(
-      within(contributions!).getByText("Purge Archive")
-    ).toBeInTheDocument();
-  });
-
   /**
    * The separating assertion. If the enabled flag simply stopped mattering,
    * routes would show here too — they must not, because they are not mounted.
