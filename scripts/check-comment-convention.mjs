@@ -156,6 +156,7 @@ export const SOURCE_EXTENSIONS = [
  */
 export function readOptionsFor(path) {
   return {
+    jsx: path.endsWith(".tsx") || path.endsWith(".jsx"),
     lineComments: !path.endsWith(".css"),
     domainVocabularyAllowed: isReviewDomain(path),
   };
@@ -314,9 +315,19 @@ export function sourceFiles(root) {
  * escapes it. It is a floor rather than a boundary, and worth having because the failure it
  * catches is one nothing else in the repository can see.
  */
-export function commentText(source, { lineComments = true } = {}) {
+export function commentText(source, { lineComments = true, jsx = false } = {}) {
   // CSS is not JavaScript, so TypeScript cannot lex it. It has block comments and nothing else.
   if (!lineComments) return cssBlockComments(source);
+
+  // Rendered JSX text is data, not code, and `scanner.scan()` does not enter JSX child text
+  // mode - the parser transitions with `scanJsxToken`. So `<span>https://x</span>` reaches the
+  // scanner as a slash pair and reads as a comment. The parser knows exactly which spans are
+  // JsxText, so its answer is used to reject them rather than reimplementing the transition.
+  // Only for files that ARE JSX. Parsing a plain .ts file as TSX turns ordinary generic syntax
+  // into phantom JsxText spans, and comments falling inside them would be dropped - a false
+  // NEGATIVE, which is the worse direction for a gate.
+  const jsxText = jsx ? jsxTextRanges(source) : [];
+  const insideJsxText = start => jsxText.some(r => start >= r.pos && start < r.end);
 
   const comments = [];
   const scanner = ts.createScanner(
@@ -324,7 +335,9 @@ export function commentText(source, { lineComments = true } = {}) {
     // Keep trivia: comments ARE trivia, and skipping it would discard the only tokens wanted.
     false,
     // JSX so `{/* ... */}` inside markup is lexed rather than read as an operator soup.
-    ts.LanguageVariant.JSX,
+    // JSX only where the file is JSX. `scan()` never enters JSX child-text mode by itself, so the
+    // variant buys nothing on a plain `.ts` file and would only change how `<` is treated.
+    jsx ? ts.LanguageVariant.JSX : ts.LanguageVariant.Standard,
     source
   );
 
@@ -350,7 +363,7 @@ export function commentText(source, { lineComments = true } = {}) {
       token === ts.SyntaxKind.SingleLineCommentTrivia ||
       token === ts.SyntaxKind.MultiLineCommentTrivia
     ) {
-      comments.push(scanner.getTokenText());
+      if (!insideJsxText(scanner.getTokenStart())) comments.push(scanner.getTokenText());
     } else if (token === ts.SyntaxKind.TemplateHead) {
       interpolations.push(0);
     } else if (token === ts.SyntaxKind.OpenBraceToken && interpolations.length > 0) {
@@ -375,6 +388,18 @@ export function commentText(source, { lineComments = true } = {}) {
   return comments;
 }
 
+/** The spans the parser classifies as rendered JSX text, which no comment can begin inside. */
+function jsxTextRanges(source) {
+  const ranges = [];
+  const sf = ts.createSourceFile("x.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const visit = node => {
+    if (node.kind === ts.SyntaxKind.JsxText) ranges.push({ pos: node.pos, end: node.end });
+    node.forEachChild(visit);
+  };
+  visit(sf);
+  return ranges;
+}
+
 /** Trivia carries no meaning for the regex-or-division decision, so it must not become `previous`. */
 const TRIVIA = new Set([
   ts.SyntaxKind.SingleLineCommentTrivia,
@@ -395,6 +420,9 @@ const TRIVIA = new Set([
  */
 const ENDS_A_VALUE = new Set([
   ts.SyntaxKind.Identifier,
+  // `this.#count / 2` divides. Without this the slash is re-scanned as a regex and swallows
+  // the comment that follows it.
+  ts.SyntaxKind.PrivateIdentifier,
   ts.SyntaxKind.NumericLiteral,
   ts.SyntaxKind.BigIntLiteral,
   ts.SyntaxKind.StringLiteral,
@@ -564,8 +592,17 @@ function main() {
     // the count falls - and once it accepts one, deleting two offences and adding a third passes
     // with every number moving downward. Per-offence hashes make removal expressible and
     // substitution unrepresentable, at any count.
-    const recorded = new Set(entry.digests);
-    const unrecorded = digestOffences(found).filter(hash => !recorded.has(hash));
+    // A MULTISET, because the same comment written twice is two offences. Membership in a Set
+    // would let a copy of an already-recorded comment pass unrecorded, and the shrink check below
+    // accepts `found >= allowed`, so nothing else would notice it either.
+    const remaining = new Map();
+    for (const hash of entry.digests) remaining.set(hash, (remaining.get(hash) ?? 0) + 1);
+    const unrecorded = digestOffences(found).filter(hash => {
+      const left = remaining.get(hash) ?? 0;
+      if (left === 0) return true;
+      remaining.set(hash, left - 1);
+      return false;
+    });
     if (unrecorded.length > 0) {
       failures.push(
         `${path} — ${unrecorded.length} offence(s) the record does not contain:\n` +
