@@ -2,16 +2,15 @@
  * Decides whether a pull request may merge, and whether a merged one landed
  * whole.
  *
- * `.claude/rules/verifying-merged-work.md` describes this procedure in prose
- * with runnable shell in it. Prose does not run, so nothing checked the shell
- * and it was wrong in three separate ways that all looked like a pass: a count
- * computed and never read, an exit status swallowed by the pipeline that
- * consumed it, and a comparison against a base that moves. Each was found by a
- * reader executing the snippet mentally, one at a time.
+ * `.claude/rules/verifying-merged-work.md` describes the same procedure in
+ * prose with runnable shell in it. Shell embedded in a document has nothing
+ * executing it, and every way it can be wrong here looks like a pass: a count
+ * computed and never read, an exit status swallowed by a pipeline, a comparison
+ * against a base that moves. A gate whose failure mode is a false clean has to
+ * be the kind of thing a test can hold inputs against.
  *
- * The decisions live here as pure functions so they can be given inputs whose
- * answers are known. Every I/O call stays in the caller: a function that
- * fetches cannot be handed the case it must get right.
+ * So the decisions live here as pure functions, and every I/O call stays in the
+ * caller: a function that fetches cannot be handed the case it must get right.
  */
 
 /**
@@ -176,6 +175,7 @@ export function gateVerdict({
   tip,
   unresolvedThreads,
   checkRuns,
+  changedPaths,
   codexReviewedSha,
   coderabbitReviewCount,
 }) {
@@ -211,7 +211,7 @@ export function gateVerdict({
       detail: "no check-runs reported for this revision",
     });
   } else {
-    for (const name of missingRequired(checkRuns)) {
+    for (const name of missingRequired(checkRuns, changedPaths)) {
       blockers.push({
         kind: "required-check-absent",
         detail: `${name} never reported — no build or test coverage for this revision`,
@@ -256,6 +256,23 @@ export function formatVerdict(verdict) {
 }
 
 /**
+ * The process exit status, as a decision rather than as control flow.
+ *
+ * Kept here with the other decisions because the caller's `return` statements
+ * are the one part of a gate nothing can hand inputs to, and this gate's
+ * failures are all false cleans — the exact thing an untested branch produces.
+ *
+ * 0 passed, 1 blocked, 2 unsettled. The third is not a softer version of the
+ * second: a caller may reasonably retry or escalate an unsettled result, and
+ * must never treat it as a pass.
+ */
+export function exitCode({ checkable, landedVerdict, mergeable }) {
+  if (!checkable) return 2;
+  if (landedVerdict === "candidates") return 2;
+  return mergeable ? 0 : 1;
+}
+
+/**
  * A commit STATUS, expressed as a check-run so one rule judges both.
  *
  * GitHub has two independent surfaces and a gate that reads one sees a partial
@@ -284,28 +301,107 @@ export function statusAsRun(status) {
  * and no tests. Absence of the expected name is the only thing that separates
  * them, and absence is invisible to any filter over what IS present.
  */
-export function missingRequired(checkRuns, required = REQUIRED_CHECKS) {
+export function missingRequired(
+  checkRuns,
+  changedPaths,
+  required = REQUIRED_CHECKS
+) {
   if (!Array.isArray(checkRuns)) {
     throw new TypeError("missingRequired needs an array of check-runs");
   }
   const present = new Set(checkRuns.map(run => run?.name));
-  return required.filter(name => !present.has(name));
+  return required
+    .filter(check => workflowApplies(check.pathsIgnore, changedPaths))
+    .map(check => check.name)
+    .filter(name => !present.has(name));
 }
 
 /**
- * The job every other job in `ci.yml` depends on through `needs: [ci]`.
+ * One segment of a workflow path filter, as a regular expression source.
  *
- * If it never reported, the browser, scaffold and dev-script jobs did not run
- * either — so its absence means the revision has no build or test coverage at
- * all, however many unrelated workflows went green.
+ * `**` spans directory separators and `*` stops at one, which is what makes
+ * `**​/*.md` and `*.md` different patterns rather than spellings of each other.
+ */
+function globSegmentSource(glob) {
+  let source = "";
+  for (let i = 0; i < glob.length; i += 1) {
+    const char = glob[i];
+    if (char === "*") {
+      if (glob[i + 1] === "*") {
+        source += ".*";
+        i += 1;
+      } else {
+        source += "[^/]*";
+      }
+    } else if (char === "?") {
+      source += "[^/]";
+    } else {
+      source += char.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+    }
+  }
+  return source;
+}
+
+/** Whether one changed file is covered by one workflow path filter. */
+export function pathMatches(glob, path) {
+  if (typeof glob !== "string" || typeof path !== "string") return false;
+  return new RegExp(`^${globSegmentSource(glob)}$`).test(path);
+}
+
+/**
+ * Whether a workflow filtered by `paths-ignore` runs for this change set.
+ *
+ * GitHub skips such a workflow only when EVERY changed file matches a pattern,
+ * so one unmatched file is enough to make it run — and therefore enough to make
+ * its absence from the check-runs a finding rather than an expected quiet.
+ *
+ * Unreadable input answers `true`. The whole purpose of the caller is to notice
+ * a check that never reported, so an unknown change set must require the check
+ * and be argued with, rather than excuse it and be believed.
+ */
+export function workflowApplies(pathsIgnore, changedPaths) {
+  if (!Array.isArray(pathsIgnore) || pathsIgnore.length === 0) return true;
+  if (!Array.isArray(changedPaths) || changedPaths.length === 0) return true;
+  return changedPaths.some(
+    path => !pathsIgnore.some(glob => pathMatches(glob, path))
+  );
+}
+
+/**
+ * `integration.yml`'s `paths-ignore`, which decides whether it runs at all.
+ *
+ * It filters at the TRIGGER, so on a change set it ignores the workflow creates
+ * no check-runs whatsoever. That is the opposite of `ci.yml`, which runs always
+ * and decides inertness in a job — leaving a `skipped` check-run behind, which
+ * is a report. Absence and skipped look the same to a reader and only one of
+ * them is evidence.
+ *
+ * Mirrored rather than parsed, and pinned by a test that reads the workflow, so
+ * that editing the workflow fails CI here instead of silently widening what
+ * this gate will pass.
+ */
+export const INTEGRATION_PATHS_IGNORE = Object.freeze(["docs/**", "**/*.md"]);
+
+/**
+ * Checks whose absence means the revision has no coverage, not that it is
+ * clean, each with the filter deciding whether it was due to report.
  */
 export const REQUIRED_CHECKS = Object.freeze([
-  "Lint / Typecheck / Test / Build",
-  // Its own workflow, on every pull request, and the repository calls it the
-  // enforcement gate. Listing only the CI job meant a run where `secret-scan`
-  // created no check-run passed on the strength of an unrelated workflow being
-  // green — the same absence-is-invisible defect, one workflow along.
-  "gitleaks",
+  // Every other job in `ci.yml` hangs off this one through `needs: [ci]`, so if
+  // it never reported then the browser, scaffold and dev-script jobs did not
+  // run either, however many unrelated workflows went green.
+  { name: "Lint / Typecheck / Test / Build", pathsIgnore: [] },
+  // Its own workflow, unfiltered, on every pull request, and the repository
+  // calls it the enforcement gate.
+  { name: "gitleaks", pathsIgnore: [] },
+  // The only coverage any dialect-specific behaviour has: the unit suites mock
+  // the drivers and the browser tests run on sqlite alone. Listing the CI job
+  // and gitleaks while omitting these meant a run where `integration.yml`
+  // created no check-runs passed on the strength of the other two being green,
+  // which is the same absence-is-invisible defect one workflow along.
+  { name: "Integration (postgres)", pathsIgnore: INTEGRATION_PATHS_IGNORE },
+  { name: "Integration (mysql)", pathsIgnore: INTEGRATION_PATHS_IGNORE },
+  { name: "Integration (sqlite)", pathsIgnore: INTEGRATION_PATHS_IGNORE },
 ]);
 
 /**
@@ -454,44 +550,65 @@ export function main(argv) {
     "api",
     `repos/${REPO}/pulls/${pr}`,
     "--jq",
-    "{cross:.head.repo.full_name!=.base.repo.full_name,repo:.head.repo.full_name,branch:.head.ref}",
+    "{cross:.head.repo.full_name!=.base.repo.full_name,repo:.head.repo.full_name,branch:.head.ref,merged:.merged,mergeSha:.merge_commit_sha,head:.head.sha}",
   ]);
   REMOTE_FOR_FETCH = meta.cross
     ? `https://github.com/${meta.repo}.git`
     : "origin";
   const tip = lsRemoteTip(REMOTE_FOR_FETCH, meta.branch);
 
+  // `.merged`, never the presence of `.merge_commit_sha`. GitHub populates that
+  // field on OPEN pull requests too, with the throwaway commit from its
+  // mergeability test — so keying off it would send every open PR down the
+  // post-merge path and judge it on a commit that is not in anyone's history.
+  const merged = meta.merged === true;
+
+  // Which revision the checks belong to is the whole difference between the two
+  // questions this script answers.
+  //
+  // Before merging, the branch tip is the thing being proposed and the thing CI
+  // ran on. After merging, the squash commit is a DIFFERENT TREE — `main` plus
+  // this change — and it is the one that decides whether `main` is green. A
+  // head can be green while the merge commit is red, so reading the head after
+  // the merge reports on a tree nobody has.
+  const subject = merged ? meta.mergeSha : tip;
+
   const rewrites = countRewriteEvents(timelinePages(pr));
   const reach = checkability({ tip, rewriteEvents: rewrites });
 
-  // Perform the check rather than only reporting whether it could be done.
-  // The previous version computed reachability, printed "available", and never
-  // compared anything — a module named for a check that did not run it. The
-  // merged head is `headRefOid`; anything the ref has beyond it never reached
-  // `main`.
+  // Only after a merge is there a merge to have lost anything. Run before one,
+  // this compares the API's cached head against the ref and reports ordinary
+  // in-flight pushes as candidates.
   let candidates = [];
-  if (reach.checkable) {
-    const merged = ghText([
-      "api",
-      `repos/${REPO}/pulls/${pr}`,
-      "--jq",
-      ".head.sha",
-    ]);
-    if (merged && merged !== tip) {
-      run(["fetch", REMOTE_FOR_FETCH, tip, "--quiet"]);
-      candidates = ghLog(merged, tip);
-    }
+  if (merged && reach.checkable && meta.head && meta.head !== tip) {
+    run(["fetch", REMOTE_FOR_FETCH, tip, "--quiet"]);
+    candidates = ghLog(meta.head, tip);
   }
-  const landed = landedWhole({ ...reach, candidates });
+  const landed = merged
+    ? landedWhole({ ...reach, candidates })
+    : { verdict: "n/a", reason: "not merged", candidates: [] };
 
-  const checkRuns = tip
+  const checkRuns = subject
     ? ghJson([
         "api",
-        `repos/${REPO}/commits/${tip}/check-runs?per_page=100`,
+        `repos/${REPO}/commits/${subject}/check-runs?per_page=100`,
         "--jq",
         ".check_runs",
       ])
     : [];
+
+  // Every file the pull request touches, so a check that was never due to run
+  // is not reported as one that failed to. Paginated: a change set larger than
+  // one page would otherwise look small enough to have skipped a workflow.
+  const changedPaths = ghJson([
+    "api",
+    "--paginate",
+    "--slurp",
+    `repos/${REPO}/pulls/${pr}/files?per_page=100`,
+  ])
+    .flat()
+    .map(file => file?.filename)
+    .filter(name => typeof name === "string");
   // Paginated. A pull request with more than 100 review threads would
   // otherwise have everything past the first page counted as resolved, which
   // is the reassuring direction.
@@ -545,10 +662,14 @@ export function main(argv) {
   // produced `commits//status`, which throws before the script can print
   // NOT CHECKABLE or return its exit code — so the documented refusal became
   // a stack trace.
-  const statuses = tip
+  // Keyed off `subject` for the same reason the check-runs are: statuses are
+  // per-commit exactly as check-runs are, so leaving this one on the tip would
+  // judge a merged pull request half on the merge commit and half on the branch
+  // — and the half still reading the branch is the half that reports green.
+  const statuses = subject
     ? ghJson([
         "api",
-        `repos/${REPO}/commits/${tip}/status`,
+        `repos/${REPO}/commits/${subject}/status`,
         "--jq",
         ".statuses",
       ])
@@ -556,14 +677,22 @@ export function main(argv) {
   const allChecks = [...checkRuns, ...statuses.map(statusAsRun)];
 
   const verdict = gateVerdict({
+    // Deliberately the TIP even after a merge, unlike the checks above. A review
+    // is written against the branch revision the reviewer read; no bot ever
+    // reviews a squash commit, so comparing a verdict to `subject` post-merge
+    // would report every merged pull request as unreviewed.
     tip,
     unresolvedThreads: threads,
     checkRuns: allChecks,
+    changedPaths,
     codexReviewedSha: reviewedSha,
     coderabbitReviewCount: coderabbit,
   });
 
-  process.stdout.write(`PR #${pr} @ ${tip.slice(0, 9) || "(no ref)"}\n`);
+  process.stdout.write(
+    `PR #${pr} @ ${(subject || "").slice(0, 9) || "(no ref)"}` +
+      `${merged ? ` (merge commit; branch ${tip.slice(0, 9)})` : ""}\n`
+  );
   process.stdout.write(
     `  landed-whole: ${landed.verdict} (${landed.reason})\n`
   );
@@ -571,11 +700,11 @@ export function main(argv) {
     process.stdout.write(`    candidate, confirm by content: ${line}\n`);
   }
   process.stdout.write(`${formatVerdict(verdict)}\n`);
-  // Not checkable is not clean. Returning 0 here would let automation treat
-  // the history-rewrite case as a pass — the one state this file exists to
-  // distinguish from a pass.
-  if (!reach.checkable) return 2;
-  return verdict.mergeable ? 0 : 1;
+  return exitCode({
+    checkable: reach.checkable,
+    landedVerdict: landed.verdict,
+    mergeable: verdict.mergeable,
+  });
 }
 
 if (

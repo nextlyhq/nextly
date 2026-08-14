@@ -1,29 +1,36 @@
 /**
- * Every case here is a defect this repository actually shipped, written as the
- * input that produced it.
+ * Every case here is a false clean this gate can produce, written as the input
+ * that produces it.
  *
- * The procedure these functions replace lived as shell inside a Markdown rule.
- * It was wrong in several ways at once and each one was found by a reviewer
- * executing it mentally rather than by anything running it — so the tests are
- * organised by the WRONG ANSWER each function used to give, not by its
- * signature.
+ * The cases are grouped by the WRONG ANSWER rather than by function signature,
+ * because the answers are what overlap: several unrelated functions here fail
+ * by reporting "nothing to see" for an input they could not read, and grouping
+ * by that shape keeps the next instance next to its siblings instead of filed
+ * under whichever function happened to grow it.
  */
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it } from "vitest";
 
 import {
+  INTEGRATION_PATHS_IGNORE,
   REQUIRED_CHECKS,
   blockingJobs,
   checkability,
   countRewriteEvents,
+  exitCode,
   formatVerdict,
   gateVerdict,
   jobPasses,
   landedWhole,
   missingRequired,
+  pathMatches,
   reviewCoverage,
   reviewsCoveringTip,
   statusAsRun,
   verdictCoversTip,
+  workflowApplies,
 } from "./verify-merge.mjs";
 
 const forcePush = { event: "head_ref_force_pushed" };
@@ -34,6 +41,18 @@ const queued = name => ({ name, status: "queued", conclusion: null });
 const CI = "Lint / Typecheck / Test / Build";
 /** A real 40-character object name; the gate refuses anything shorter as a tip. */
 const FULL_TIP = "91fd9500285dcf264e3609a916b7518b591b51f3";
+/** A change set every workflow in the repository runs for. */
+const CODE_CHANGE = ["packages/nextly/src/index.ts"];
+/** A change set `integration.yml` ignores at the trigger, so it never runs. */
+const DOCS_CHANGE = ["docs/guide.md", "docs/api/reference.md"];
+/** Every required check present and green, which is what a pass needs. */
+const allGreen = () => [
+  green(CI),
+  green("gitleaks"),
+  green("Integration (postgres)"),
+  green("Integration (mysql)"),
+  green("Integration (sqlite)"),
+];
 
 describe("countRewriteEvents", () => {
   it("counts events beyond the FIRST page", () => {
@@ -231,9 +250,10 @@ describe("reviewCoverage", () => {
 
 describe("gateVerdict", () => {
   const passing = {
-    tip: "91fd9500285dcf264e3609a916b7518b591b51f3",
+    tip: FULL_TIP,
     unresolvedThreads: 0,
-    checkRuns: [green(CI), green("gitleaks")],
+    checkRuns: allGreen(),
+    changedPaths: CODE_CHANGE,
     codexReviewedSha: "91fd950028",
     coderabbitReviewCount: 3,
   };
@@ -301,7 +321,7 @@ describe("gateVerdict", () => {
     const verdict = gateVerdict({
       ...passing,
       unresolvedThreads: 2,
-      checkRuns: [queued(CI), green("gitleaks")],
+      checkRuns: allGreen().map(run => (run.name === CI ? queued(CI) : run)),
       codexReviewedSha: "0dbcb9470",
     });
 
@@ -319,7 +339,8 @@ describe("formatVerdict", () => {
       gateVerdict({
         tip: FULL_TIP,
         unresolvedThreads: 1,
-        checkRuns: [green(CI), green("gitleaks")],
+        checkRuns: allGreen(),
+        changedPaths: CODE_CHANGE,
         codexReviewedSha: FULL_TIP.slice(0, 10),
         coderabbitReviewCount: 1,
       })
@@ -334,7 +355,8 @@ describe("formatVerdict", () => {
       gateVerdict({
         tip: FULL_TIP,
         unresolvedThreads: 0,
-        checkRuns: [green(CI), green("gitleaks")],
+        checkRuns: allGreen(),
+        changedPaths: CODE_CHANGE,
         codexReviewedSha: FULL_TIP.slice(0, 10),
         coderabbitReviewCount: 0,
       })
@@ -376,29 +398,121 @@ describe("missingRequired", () => {
     // its jobs while `secret-scan.yml` succeeded yields a non-empty,
     // all-green set containing no build and no tests. Absence is invisible to
     // any filter over what is present.
-    expect(missingRequired([green("gitleaks")])).toEqual([
-      "Lint / Typecheck / Test / Build",
-    ]);
+    expect(missingRequired([green("gitleaks")], CODE_CHANGE)).toContain(
+      "Lint / Typecheck / Test / Build"
+    );
   });
 
   it("reports nothing when the required check reported, even failing", () => {
     // Presence, not success — `blockingJobs` judges the outcome. Conflating
     // them would report a failing required job twice and an absent one never.
+    const runs = allGreen();
+    runs[0] = queued("Lint / Typecheck / Test / Build");
+
+    expect(missingRequired(runs, CODE_CHANGE)).toEqual([]);
+  });
+
+  it("reports the integration legs a code change was due to run", () => {
+    // The unit suites mock the drivers and the browser tests run on sqlite
+    // alone, so these are the only coverage a Postgres- or MySQL-specific
+    // regression has. Listing the CI job and gitleaks while omitting them let a
+    // run where `integration.yml` created no check-runs pass on the other two
+    // being green.
     expect(
-      missingRequired([
-        queued("Lint / Typecheck / Test / Build"),
-        green("gitleaks"),
-      ])
+      missingRequired(
+        [green("Lint / Typecheck / Test / Build"), green("gitleaks")],
+        CODE_CHANGE
+      )
+    ).toEqual([
+      "Integration (postgres)",
+      "Integration (mysql)",
+      "Integration (sqlite)",
+    ]);
+  });
+
+  it("does NOT report the integration legs the workflow filtered out", () => {
+    // The positive control for the case above. Without it, requiring the
+    // integration checks unconditionally would block every documentation pull
+    // request forever, and the test above would pass on that implementation.
+    expect(
+      missingRequired(
+        [green("Lint / Typecheck / Test / Build"), green("gitleaks")],
+        DOCS_CHANGE
+      )
     ).toEqual([]);
   });
 
+  it("requires every check when the change set could not be read", () => {
+    // An unknown change set must not excuse a check. The failure this whole
+    // file guards is a gate reporting clean because it could not see, so the
+    // unreadable case resolves toward demanding evidence.
+    expect(missingRequired([green("gitleaks")], undefined)).toEqual([
+      "Lint / Typecheck / Test / Build",
+      "Integration (postgres)",
+      "Integration (mysql)",
+      "Integration (sqlite)",
+    ]);
+  });
+
   it("names the checks whose ABSENCE means no coverage", () => {
-    // Both run on every pull request from independent workflows, so either
-    // failing to report leaves a green-looking set with a gate missing.
-    expect(REQUIRED_CHECKS).toEqual([
+    expect(REQUIRED_CHECKS.map(c => c.name)).toEqual([
       "Lint / Typecheck / Test / Build",
       "gitleaks",
+      "Integration (postgres)",
+      "Integration (mysql)",
+      "Integration (sqlite)",
     ]);
+  });
+});
+
+describe("pathMatches", () => {
+  it("lets ** span directory separators and * stop at one", () => {
+    expect(pathMatches("docs/**", "docs/api/reference.md")).toBe(true);
+    expect(pathMatches("*.md", "docs/guide.md")).toBe(false);
+  });
+
+  it("does not treat a dot in the pattern as a wildcard", () => {
+    // `.` unescaped matches any character, so `**/*.md` would accept
+    // `srcXmd` — a filter admitting source files as documentation.
+    expect(pathMatches("**/*.md", "packages/nextly/srcXmd")).toBe(false);
+  });
+
+  it("reads **/ as requiring a directory, which errs toward requiring", () => {
+    // A root-level `README.md` does not match `**/*.md` on the literal reading
+    // of the filter, so a pull request touching only that file is treated as
+    // one `integration.yml` runs for. That direction is deliberate: over-
+    // requiring a check produces an argument, under-requiring one produces a
+    // silent gap, which is the failure this file exists to refuse.
+    expect(pathMatches("**/*.md", "README.md")).toBe(false);
+    expect(pathMatches("**/*.md", "docs/guide.md")).toBe(true);
+  });
+});
+
+describe("workflowApplies", () => {
+  it("runs the workflow when ONE file escapes the filter", () => {
+    // GitHub skips only when every changed file matches, so a pull request
+    // that edits documentation and one source file still runs it. Treating
+    // "mostly documentation" as ignored is how a code change loses its
+    // database coverage.
+    expect(
+      workflowApplies(INTEGRATION_PATHS_IGNORE, [
+        "docs/guide.md",
+        "packages/nextly/src/index.ts",
+      ])
+    ).toBe(true);
+  });
+
+  it("skips the workflow when every file matches", () => {
+    expect(workflowApplies(INTEGRATION_PATHS_IGNORE, DOCS_CHANGE)).toBe(false);
+  });
+
+  it("applies when the change set is unknown or empty", () => {
+    expect(workflowApplies(INTEGRATION_PATHS_IGNORE, undefined)).toBe(true);
+    expect(workflowApplies(INTEGRATION_PATHS_IGNORE, [])).toBe(true);
+  });
+
+  it("applies when the workflow declares no filter at all", () => {
+    expect(workflowApplies([], DOCS_CHANGE)).toBe(true);
   });
 });
 
@@ -530,9 +644,99 @@ describe("REQUIRED_CHECKS", () => {
     // the enforcement gate. With only the CI job listed, a run where that
     // workflow created no check-run passed on an unrelated workflow being
     // green — absence being invisible, one workflow along.
-    expect(REQUIRED_CHECKS).toContain("gitleaks");
-    expect(missingRequired([green("Lint / Typecheck / Test / Build")])).toEqual(
-      ["gitleaks"]
-    );
+    expect(REQUIRED_CHECKS.map(c => c.name)).toContain("gitleaks");
+
+    const withoutScan = allGreen().filter(run => run.name !== "gitleaks");
+    expect(missingRequired(withoutScan, CODE_CHANGE)).toEqual(["gitleaks"]);
+  });
+});
+
+describe("INTEGRATION_PATHS_IGNORE against the workflow it mirrors", () => {
+  // The constant is a copy of a filter that lives in `integration.yml`, and two
+  // spellings of one rule drift silently — the copy keeps looking correct while
+  // the workflow moves underneath it, and the gate then excuses a check the
+  // workflow was due to create.
+  const workflow = readFileSync(
+    fileURLToPath(new URL("../.github/workflows/integration.yml", import.meta.url)),
+    "utf8"
+  );
+
+  /** The `paths-ignore` globs declared under one trigger in a workflow file. */
+  const declaredIgnores = trigger => {
+    const lines = workflow.split("\n");
+    const start = lines.findIndex(l => l.trimEnd() === `  ${trigger}:`);
+    if (start === -1) return [];
+    const globs = [];
+    let collecting = false;
+    for (const line of lines.slice(start + 1)) {
+      // Any line at the trigger's own indent or shallower ends the block, so a
+      // filter belonging to the NEXT trigger is never read as this one's.
+      if (/^ {0,2}\S/.test(line)) break;
+      if (line.trim() === "paths-ignore:") {
+        collecting = true;
+        continue;
+      }
+      if (!collecting) continue;
+      const entry = /^\s*-\s*["']?([^"'\s]+)["']?\s*$/.exec(line);
+      if (!entry) break;
+      globs.push(entry[1]);
+    }
+    return globs;
+  };
+
+  it("finds a filter at all, so a failed parse cannot read as agreement", () => {
+    // Without this, restructuring the workflow makes the extractor return
+    // nothing, and an empty list compares equal to an empty list — the parse
+    // failing would certify the mirror rather than fail the build.
+    expect(declaredIgnores("pull_request").length).toBeGreaterThan(0);
+  });
+
+  it("matches what the workflow actually declares", () => {
+    expect(declaredIgnores("pull_request")).toEqual([
+      ...INTEGRATION_PATHS_IGNORE,
+    ]);
+  });
+});
+
+describe("exitCode", () => {
+  it("refuses success while landed-whole candidates are unsettled", () => {
+    // `landedWhole` names commits the merge does not contain and stops short of
+    // calling them lost, because the verdict comes from confirming each by
+    // content. Printing that list while exiting 0 lets automation read a
+    // possibly-lost tail as verified — the candidates were computed and never
+    // reached the decision.
+    expect(
+      exitCode({ checkable: true, landedVerdict: "candidates", mergeable: true })
+    ).toBe(2);
+  });
+
+  it("passes when the branch had nothing the merge did not take", () => {
+    // The positive control for the case above: without it, an implementation
+    // that never returns 0 satisfies it.
+    expect(
+      exitCode({
+        checkable: true,
+        landedVerdict: "no-candidates",
+        mergeable: true,
+      })
+    ).toBe(0);
+  });
+
+  it("reports an unanswerable branch as unsettled, not as blocked", () => {
+    // 2 rather than 1, so a caller can tell "the gate says no" from "the gate
+    // did not get to answer" and escalate the second rather than retrying it.
+    expect(
+      exitCode({
+        checkable: false,
+        landedVerdict: "not-checkable",
+        mergeable: true,
+      })
+    ).toBe(2);
+  });
+
+  it("blocks on the ordinary gate when everything else is settled", () => {
+    expect(
+      exitCode({ checkable: true, landedVerdict: "n/a", mergeable: false })
+    ).toBe(1);
   });
 });
