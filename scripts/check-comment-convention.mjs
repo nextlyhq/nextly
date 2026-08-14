@@ -458,7 +458,10 @@ export function offencesIn(source, options) {
   for (const comment of commentText(source, options)) {
     for (const { pattern, why } of patterns) {
       if (pattern.test(comment)) {
-        found.push({ why, comment: comment.trim().slice(0, 100) });
+        // Whole. Truncating here would cap what every caller sees, including the digest, so a long
+      // comment could be rewritten past the cut and keep its identity. Shortening is the print
+      // sites' job.
+      found.push({ why, comment: comment.trim() });
       }
     }
   }

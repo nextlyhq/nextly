@@ -9,15 +9,15 @@
   },
   "packages/admin/src/components/features/notifications/NotificationBell.tsx": {
     "count": 1,
-    "digest": "247d9600070fdad4"
+    "digest": "9bba27ae8536242e"
   },
   "packages/admin/src/components/features/notifications/NotificationDropdown.tsx": {
     "count": 1,
-    "digest": "cb1155511d7b629a"
+    "digest": "6176c25076c794af"
   },
   "packages/admin/src/components/features/notifications/NotificationRow.tsx": {
     "count": 1,
-    "digest": "e9e77d3624987eb1"
+    "digest": "2bb3c0ce711e3fab"
   },
   "packages/admin/src/components/features/notifications/__tests__/NotificationBell.test.tsx": {
     "count": 1,
@@ -57,7 +57,7 @@
   },
   "packages/admin/src/components/features/notifications/useUnreadCount.ts": {
     "count": 1,
-    "digest": "241c176b3073729f"
+    "digest": "3da526173ad1dce4"
   },
   "packages/admin/src/components/features/schema-builder/BuilderFieldList.tsx": {
     "count": 2,
@@ -93,11 +93,11 @@
   },
   "packages/admin/src/components/shared/search-bar/call-site-classes.test.ts": {
     "count": 1,
-    "digest": "9d4a678892f5b280"
+    "digest": "4318635d225f9114"
   },
   "packages/admin/src/hooks/queries/useJournal.ts": {
     "count": 1,
-    "digest": "98ad6e2f593d78f9"
+    "digest": "e99895f14e82a844"
   },
   "packages/admin/src/services/journalApi.ts": {
     "count": 1,
@@ -109,7 +109,7 @@
   },
   "packages/admin/src/types/entities.ts": {
     "count": 1,
-    "digest": "e352cdb76de70299"
+    "digest": "0cc084b6fcbed7e1"
   },
   "packages/nextly/eslint.config.js": {
     "count": 2,
@@ -133,11 +133,11 @@
   },
   "packages/nextly/src/cli/commands/migrate-check.ts": {
     "count": 6,
-    "digest": "ac9f6eef917746ca"
+    "digest": "aa709baf6a8fabaf"
   },
   "packages/nextly/src/cli/commands/migrate-create.ts": {
     "count": 7,
-    "digest": "d4ad898949745d24"
+    "digest": "f32aeca5af2c1d1b"
   },
   "packages/nextly/src/cli/commands/migrate-fresh.ts": {
     "count": 1,
@@ -173,7 +173,7 @@
   },
   "packages/nextly/src/direct-api/namespaces/auth.ts": {
     "count": 5,
-    "digest": "f0df02b3e5caf4bd"
+    "digest": "bb6b90e318791f6e"
   },
   "packages/nextly/src/direct-api/namespaces/rbac.ts": {
     "count": 11,
@@ -189,7 +189,7 @@
   },
   "packages/nextly/src/domains/auth/services/auth-service.ts": {
     "count": 5,
-    "digest": "b2d1b61714e0d27a"
+    "digest": "f599d3e22b062ef6"
   },
   "packages/nextly/src/domains/auth/services/permission-seed-service.ts": {
     "count": 4,
@@ -257,7 +257,7 @@
   },
   "packages/nextly/src/domains/schema/legacy-preview/translate.ts": {
     "count": 2,
-    "digest": "11ddb275a29d5c5a"
+    "digest": "4a785cbaffeb7482"
   },
   "packages/nextly/src/domains/schema/migrate-create/__tests__/format-file.test.ts": {
     "count": 1,
@@ -277,15 +277,15 @@
   },
   "packages/nextly/src/domains/schema/migrate-create/generate.ts": {
     "count": 4,
-    "digest": "1ad3ae582402606a"
+    "digest": "6788fd80e5b4dfb6"
   },
   "packages/nextly/src/domains/schema/migrate-create/prompt-renames.ts": {
     "count": 2,
-    "digest": "abd380fa7201b38e"
+    "digest": "bf9050cb17d21c40"
   },
   "packages/nextly/src/domains/schema/migrate-create/snapshot-io.ts": {
     "count": 4,
-    "digest": "e44f0b028e64019f"
+    "digest": "d316d6b23316b0b9"
   },
   "packages/nextly/src/domains/schema/pipeline/__tests__/f8-matrix.integration.test.ts": {
     "count": 2,
@@ -473,11 +473,11 @@
   },
   "packages/nextly/src/domains/users/services/user-mutation-service.ts": {
     "count": 2,
-    "digest": "3eb222301bc4dd07"
+    "digest": "f0ec5f7a728fbf4c"
   },
   "packages/nextly/src/domains/users/services/user-query-service.ts": {
     "count": 3,
-    "digest": "70c3008f90fd6d05"
+    "digest": "cf7d94c9cf916eee"
   },
   "packages/nextly/src/domains/users/services/user-service.ts": {
     "count": 2,
@@ -521,7 +521,7 @@
   },
   "packages/nextly/src/route-handler/route-parser.ts": {
     "count": 2,
-    "digest": "92b78dcce8541d31"
+    "digest": "c2a9aeef82c77e70"
   },
   "packages/nextly/src/routeHandler.ts": {
     "count": 3,
@@ -589,7 +589,7 @@
   },
   "packages/nextly/src/services/users.ts": {
     "count": 10,
-    "digest": "6125f90c633165b5"
+    "digest": "ab12ab32c9867c94"
   },
   "packages/nextly/src/shared/base-registry-service.ts": {
     "count": 2,
@@ -597,7 +597,7 @@
   },
   "packages/nextly/src/shared/types/config.ts": {
     "count": 3,
-    "digest": "95a464f004db1aa9"
+    "digest": "59ebd0301fcf8dc6"
   },
   "packages/nextly/src/singles/config/validate-single.ts": {
     "count": 1,
@@ -609,6 +609,6 @@
   },
   "packages/ui/src/components/__tests__/tabs-contract.test.ts": {
     "count": 1,
-    "digest": "752f293a029d2183"
+    "digest": "14a03e4440a2cda4"
   }
 }
