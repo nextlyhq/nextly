@@ -80,6 +80,59 @@ const TEMPLATE_ROLES = [
 ] as const;
 
 /**
+ * How many candidates to consider for one address. `search` matches the email
+ * column with LIKE, so a full address narrows to a handful of rows; this bound
+ * exists so a pathological match set cannot turn the lookup into a table scan.
+ */
+const EMAIL_MATCH_LIMIT = 200;
+
+/**
+ * The user with exactly this email, or null.
+ *
+ * Narrowed with `search` and then compared exactly, rather than paged. Two
+ * separate reasons, and the second is not obvious:
+ *
+ * 1. The users namespace does not filter. It forwards pagination, `search` and
+ *    the verification/password flags to its service and drops anything else, so
+ *    a `where` clause type-checks and returns the first arbitrary user. The
+ *    caller treats a result as "this account exists" and rewrites its roles, so
+ *    a wrong row here rewrites the wrong account.
+ * 2. Paging cannot be relied on to visit every user. `listUsers` applies LIMIT
+ *    and OFFSET after LEFT JOINing the role tables and then groups the rows by
+ *    user, while its total counts base users — so one user holding three roles
+ *    consumes three rows of the page, and a scan driven by `hasNext` can end
+ *    before reaching a later account.
+ *
+ * `search` is not sufficient on its own either: it also spans name and custom
+ * text fields, so a user whose display name contains someone else's address
+ * would match. The exact comparison below is what identifies the account;
+ * `search` only makes the candidate set small enough to read in one page.
+ *
+ * Comparison is case-insensitive because addresses are stored as entered while
+ * mail routing is not case-sensitive on the domain, so a re-run differing only
+ * in case must find the same account rather than create a second.
+ */
+async function findUserByEmail(
+  nextly: Nextly,
+  email: string
+): Promise<Record<string, unknown> | null> {
+  const target = email.toLowerCase();
+
+  const result = await nextly.users.find({
+    search: email,
+    limit: EMAIL_MATCH_LIMIT,
+  });
+
+  return (
+    result.items.find(
+      candidate =>
+        typeof candidate.email === "string" &&
+        candidate.email.toLowerCase() === target
+    ) ?? null
+  );
+}
+
+/**
  * Pick permission IDs appropriate for each role. Fetches the catalog of
  * auto-generated collection/single permissions (registered by Nextly
  * during collection sync) and slices it per role scope.
@@ -94,51 +147,6 @@ const TEMPLATE_ROLES = [
  * get a "at least one permission required" error from the core service
  * in that case and the role will be skipped with a warning.
  */
-/** Page size for the user scan below. */
-const USER_SCAN_PAGE_SIZE = 100;
-
-/**
- * The user with exactly this email, or null.
- *
- * Pages through `users.find()` and compares addresses here, because the users
- * namespace does not filter: it forwards pagination, `search` and the
- * verification/password flags to its service and drops anything else, so a
- * `where` clause type-checks and silently returns the first arbitrary user.
- * Getting that wrong is not a missed lookup — the caller treats the result as
- * "this account already exists" and rewrites its roles.
- *
- * Comparison is case-insensitive because addresses are stored as entered while
- * mail routing is not case-sensitive on the domain, so a seed re-run that
- * differs only in case must find the same account rather than create a second.
- */
-async function findUserByEmail(
-  nextly: Nextly,
-  email: string
-): Promise<Record<string, unknown> | null> {
-  const target = email.toLowerCase();
-  let page = 1;
-
-  for (;;) {
-    const result = await nextly.users.find({
-      limit: USER_SCAN_PAGE_SIZE,
-      page,
-    });
-
-    const match = result.items.find(
-      candidate =>
-        typeof candidate.email === "string" &&
-        candidate.email.toLowerCase() === target
-    );
-    if (match) return match;
-
-    // Driven by the response's own pagination rather than by a full-page
-    // heuristic: a final page that happens to be exactly full would otherwise
-    // stop the scan one page early.
-    if (!result.meta.hasNext) return null;
-    page += 1;
-  }
-}
-
 async function pickPermissionIdsForRoles(
   nextly: Nextly
 ): Promise<Record<string, string[]>> {

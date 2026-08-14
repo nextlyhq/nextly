@@ -130,6 +130,7 @@ jobs:
             approach: code-first
             pm: npm
             source: local
+            core: workspace
 
           # The SAME template through the schema-builder approach, which is a different config
           # (`collections: []`, so the schema lives in the database) reaching the same query
@@ -144,6 +145,7 @@ jobs:
             approach: visual
             pm: pnpm
             source: local
+            core: workspace
 
     steps:
       - name: Checkout
@@ -211,6 +213,38 @@ jobs:
             "${{ matrix.pnpmVersion }}".*) ;;
             *) echo "expected pnpm ${{ matrix.pnpmVersion }}.x, got $actual"; exit 1 ;;
           esac
+
+      # The other legs install `nextly` and its siblings from npm, which is the right
+      # question for them: does a project a user scaffolds TODAY install and build. It is the
+      # wrong question for a template change, because a template is merged together with the
+      # core changes it depends on and the published packages do not have them yet.
+      #
+      # Measured on the pull request that added these legs: the blog template sets
+      # `admin.defaultColumns`, which that branch adds to `CollectionAdminOptions`, and the
+      # published `nextly` rejects it. Against the registry the leg fails for a reason that is
+      # not a defect; after release it would pass while a core regression went untested.
+      #
+      # `pnpm pack` rather than a workspace link, because packing is what rewrites `workspace:*`
+      # to a concrete version — a linked source directory would carry the protocol into a
+      # project that is not a workspace and fail to install.
+      - name: Pack the workspace packages a scaffold installs
+        if: matrix.core == 'workspace'
+        shell: bash
+        run: |
+          mkdir -p /tmp/nextly-workspace-packs
+          for dir in packages/nextly packages/admin packages/ui \
+                     packages/adapter-drizzle packages/adapter-sqlite \
+                     packages/adapter-postgres packages/adapter-mysql \
+                     packages/plugin-form-builder packages/plugin-sdk; do
+            (cd "$dir" && pnpm pack --pack-destination /tmp/nextly-workspace-packs)
+          done
+
+          # A control on that loop: `pnpm pack` exiting 0 for each package is not the same as
+          # the directory holding them, and an empty directory would make the pin below a
+          # no-op that silently falls through to the registry.
+          count=$(ls /tmp/nextly-workspace-packs/*.tgz 2>/dev/null | wc -l)
+          echo "packed tarballs: $count"
+          [ "$count" -ge 9 ] || { echo "expected at least 9 tarballs, got $count"; exit 1; }
 
       - name: Scaffold with a real install
         shell: bash
@@ -311,6 +345,36 @@ jobs:
           found=$(grep -rhoE '@fontsource(-variable)?/[a-z0-9-]+' src/ | sort -u | wc -l)
           echo "font packages imported by the scaffold: $found"
           [ "$found" -gt 0 ] || { echo "scanned no font imports at all"; exit 1; }
+
+      # After the scaffold's own install, so the lockfile and package-manager assertions above
+      # still describe what the CLI did. This repoints the workspace packages and installs
+      # again; everything else stays on the registry copies the first install resolved.
+      - name: Install the workspace packages under review
+        if: matrix.core == 'workspace'
+        shell: bash
+        run: |
+          cd /tmp/scaffold-build/scaffolded-app
+          node "$GITHUB_WORKSPACE/scripts/pin-workspace-packages.mjs" \
+            /tmp/nextly-workspace-packs "${{ matrix.pm }}"
+          ${{ matrix.pm }} install
+
+          # The assertion this whole step exists for, and it has to compare CONTENT: the
+          # install exits 0 either way, and a registry copy carries the same name and version
+          # as the packed one, so nothing about the manifest distinguishes them.
+          #
+          # The packed tarball's entry file is diffed against the installed one. Identical
+          # means the build is about to run the code under review; different means the pin
+          # silently fell through to the registry and every later assertion is about the last
+          # release instead.
+          rm -rf /tmp/pack-check && mkdir -p /tmp/pack-check
+          tar -xzf /tmp/nextly-workspace-packs/nextly-*.tgz -C /tmp/pack-check
+          if ! diff -q /tmp/pack-check/package/dist/index.mjs \
+                       node_modules/nextly/dist/index.mjs > /dev/null; then
+            echo "installed nextly does NOT match the packed workspace build"
+            echo "the pin fell through to the registry; this leg would test the last release"
+            exit 1
+          fi
+          echo "installed nextly matches the packed workspace build"
 
       - name: Build the scaffolded project
         shell: bash

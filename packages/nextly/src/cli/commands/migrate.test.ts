@@ -65,4 +65,47 @@ describe("splitSqlStatements", () => {
 
     expect(splitSqlStatements(sql)).toHaveLength(1);
   });
+  // MySQL starts a `--` comment only when the next character is whitespace or a
+  // control character, so `n--1` is arithmetic. Treating it as a comment would
+  // swallow the line's semicolon and merge the next statement into this one,
+  // which the driver rejects as a multi-statement query.
+  it("does not treat `--` as a comment on mysql when no whitespace follows", () => {
+    const sql = [
+      `UPDATE "t" SET "n" = 5--1;`,
+      `CREATE TABLE "a" ("id" TEXT);`,
+    ].join("\n");
+
+    const statements = splitSqlStatements(sql, "mysql");
+
+    expect(statements).toHaveLength(2);
+    expect(statements[0]).toContain("5--1");
+    expect(statements[1]).toContain('CREATE TABLE "a"');
+  });
+
+  // The same text on postgres IS a comment, so the two dialects must disagree
+  // here. Asserted in both directions, because a predicate that always returned
+  // one answer would satisfy either test on its own.
+  it("treats the same `--` as a comment on postgres", () => {
+    const sql = [
+      `UPDATE "t" SET "n" = 5--1;`,
+      `CREATE TABLE "a" ("id" TEXT);`,
+    ].join("\n");
+
+    // The comment runs to end of line and takes the semicolon with it, so the
+    // UPDATE and the CREATE arrive as one chunk.
+    expect(splitSqlStatements(sql, "postgresql")).toHaveLength(1);
+  });
+
+  it("still comments on mysql when whitespace follows the dashes", () => {
+    const sql = [
+      `CREATE TABLE "a" ("id" TEXT);`,
+      `-- MySQL doesn't mind an apostrophe here; it is still a comment`,
+      `CREATE TABLE "b" ("id" TEXT);`,
+    ].join("\n");
+
+    const statements = splitSqlStatements(sql, "mysql");
+
+    expect(statements).toHaveLength(2);
+    expect(statements[1]).toContain('CREATE TABLE "b"');
+  });
 });
