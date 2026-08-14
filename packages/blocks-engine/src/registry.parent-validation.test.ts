@@ -49,6 +49,17 @@ describe("parent validation at registration", () => {
     ).toThrow(/parent must be an array/);
   });
 
+  it("refuses an EMPTY list, which permits no placement at all", () => {
+    // Easier to write by accident than a malformed one — a list built by filtering, or by a config
+    // lookup that matched nothing. Omitting `parent` already expresses "anywhere", so nothing is
+    // lost by refusing it.
+    expect(() =>
+      registerBlocks([{ ...base, name: "acme/empty", parent: [] }] as never, {
+        source: "acme",
+      })
+    ).toThrow(/empty parent list/);
+  });
+
   it("refuses an entry that is not a namespaced block name", () => {
     expect(() =>
       registerBlocks(

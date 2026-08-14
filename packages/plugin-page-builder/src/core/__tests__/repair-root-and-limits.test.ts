@@ -151,30 +151,17 @@ describe("a wrapper this build cannot construct", () => {
   });
 });
 
-describe("a block permitted under NO parent", () => {
-  const nowhere = defineBlock({
-    name: "acme/nowhere",
-    version: 1,
-    description: "Declares an empty parent list.",
-    example: { props: {} },
-    parent: [],
-    render: () => null,
-  });
-
-  afterEach(() => {
-    clearBlocks();
-  });
-
-  it("is reported at the root, matching what validation refuses", () => {
-    registerBlocks([nowhere], { source: "@acme/blocks" });
-    const root = node("acme/nowhere", { default: [] });
-    // Validation refuses it because the array is DEFINED. A finder testing the length instead
-    // suppressed the entry and left an unsaveable page with an empty banner.
-    const [entry] = findInvalidSlotEntries(root, registry);
-    expect(entry).toMatchObject({ kind: "root-parent", type: "acme/nowhere" });
-    expect((entry as { wrapWith?: string }).wrapWith).toBeUndefined();
-  });
-});
+/*
+ * A block declaring `parent: []` no longer reaches this finder: `registerBlocks` refuses an empty
+ * list outright, because it permits no placement at all and omitting `parent` already means
+ * "anywhere". That refusal is pinned in
+ * `packages/blocks-engine/src/registry.parent-validation.test.ts`.
+ *
+ * The finder still tests `parent` as DEFINED rather than non-empty, matching what `validate` asks.
+ * The state is unreachable through registration today and the guard costs nothing — an assertion
+ * over a value already in hand — and reachability is a property of the current call graph rather
+ * than of the code.
+ */
 
 describe("a wrapper that is itself restricted", () => {
   /**

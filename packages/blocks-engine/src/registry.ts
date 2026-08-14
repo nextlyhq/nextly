@@ -199,6 +199,21 @@ function assertValidDefinition(def: AnyBlockDefinition): void {
         `block "${def.name}" parent must be an array of namespaced block names like "core/columns".`
       );
     }
+    // An EMPTY list is refused for the same reason a malformed one is, and it is the easier of the
+    // two to write by accident — a list built by filtering or by a config lookup that matched
+    // nothing. Every reader treats a DEFINED array as a restriction, so an empty one permits no
+    // placement at all: the block cannot be a root and cannot be a child, so no document holding
+    // it can ever save, and nothing in that failure names this declaration.
+    //
+    // Omitting `parent` is how a block says it may sit anywhere. There is no arrangement an empty
+    // list expresses that omission does not, so refusing it removes an unusable state rather than
+    // a capability.
+    if (def.parent.length === 0) {
+      fail(
+        "NEXTLY_BLOCK_INVALID",
+        `block "${def.name}" declares an empty parent list, which permits no placement at all. Omit parent to allow the block anywhere.`
+      );
+    }
   }
   if (typeof def.render !== "function") {
     fail(
