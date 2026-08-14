@@ -90,8 +90,8 @@ function lockStateQuery(dialect: MigrationDialect): SQL {
  * Two answers rather than one, because two callers ask genuinely different questions and collapsing
  * them would make one of them wrong. `live` is "would this claim still exclude a contender right
  * now", which is what an OBSERVER reports to an operator. `usable` is the stricter "will this claim
- * still be here when its next renewal is due", which is what a claimant needs before it starts
- * work: a lease with less than one renewal interval left is live and is about to lapse unrenewed.
+ * outlast the window in which its holder will not ask again", which is what a claimant needs before
+ * it starts work: a lease shorter than that window is live and gone before anything re-checks it.
  *
  * Both are computed in the same statement, on the database's own clock, so no part of either
  * depends on this process's idea of the time.
