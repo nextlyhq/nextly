@@ -28,6 +28,10 @@ vi.mock("../field-group-table-provisioning", () => ({
     bound.push(tableName);
   }),
   reconcileComponentCompanion: vi.fn(async () => {}),
+  // The update path probes which discriminator column the existing table carries before it moves
+  // anything. Stubbed to the current spelling: these tests are about which field CHANGES are
+  // accepted, and a real probe would make every one of them a test of the catalog instead.
+  resolveComponentTypeColumn: vi.fn(async () => "type"),
 }));
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
@@ -327,5 +331,126 @@ describe("a create whose generated names would not fit is refused", () => {
     });
 
     expect(migrationStatus).toBe("applied");
+  });
+});
+
+/**
+ * A registry that returns a stored field group, so an UPDATE can be driven through the service.
+ *
+ * `getComponent` is what the update re-reads inside the exclusion to re-establish its preconditions,
+ * so it decides both the old field set the diff is taken against and whether the group is localized.
+ */
+function registryWithGroup(args: {
+  fields: { name: string; type: string; localized?: boolean }[];
+  localized?: boolean;
+}) {
+  const record = {
+    slug: "hero",
+    tableName: "comp_hero",
+    fields: args.fields,
+    localized: args.localized ?? false,
+    locked: false,
+    schemaVersion: 1,
+  };
+  return {
+    getAllComponents: vi.fn().mockResolvedValue([]),
+    registerComponent: vi.fn(async (row: unknown) => row),
+    getComponent: vi.fn().mockResolvedValue(record),
+    updateComponent: vi.fn(async () => record),
+  };
+}
+
+describe("a field-group update refuses what it cannot deliver", () => {
+  // 🔴 THE defect this guards. This path alters the COMPANION table only, so a field whose column
+  // lives on the main table needs DDL it never emits — and before the guard the request answered
+  // SUCCESS while writing a schema hash for columns that were never created.
+  it("refuses a field that needs a column on the main table", async () => {
+    const registry = registryWithGroup({
+      fields: [{ name: "heading", type: "text" }],
+    });
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    const refusal = await service
+      .updateFieldGroup({
+        slug: "hero",
+        fields: [
+          { name: "heading", type: "text" },
+          { name: "subheading", type: "text" },
+        ] as never,
+      })
+      .catch((error: unknown) => error);
+
+    // Asserted on the REASON, not the code: this method raises VALIDATION_ERROR for a malformed
+    // plugin option too, so the code alone cannot tell the two apart.
+    expect(refusal).toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: [
+          expect.objectContaining({
+            path: "fields.subheading",
+            code: "requires_schema_change",
+          }),
+        ],
+      },
+    });
+    // Nothing was written: a refusal has to happen before the row moves, not after.
+    expect(registry.updateComponent).not.toHaveBeenCalled();
+  });
+
+  // 🔴 THE control that stops the guard from breaking the one path that works. A translatable field
+  // on a LOCALIZED group lives in `comp_<slug>_locales`, which `reconcileCompanion` does apply — so
+  // refusing it would take away working behaviour in the name of fixing a defect.
+  it("allows a translatable field on a localized group, which the companion applies", async () => {
+    const registry = registryWithGroup({
+      localized: true,
+      fields: [{ name: "heading", type: "text", localized: true }],
+    });
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    await expect(
+      service.updateFieldGroup({
+        slug: "hero",
+        fields: [
+          { name: "heading", type: "text", localized: true },
+          { name: "subheading", type: "text", localized: true },
+        ] as never,
+      })
+    ).resolves.toMatchObject({
+      record: expect.objectContaining({ slug: "hero" }),
+    });
+
+    expect(registry.updateComponent).toHaveBeenCalled();
+  });
+
+  // A layout-only field has no column anywhere, so adding one cannot need DDL on any table.
+  it("allows a field that produces no column at all", async () => {
+    const registry = registryWithGroup({
+      fields: [{ name: "heading", type: "text" }],
+    });
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    await expect(
+      service.updateFieldGroup({
+        slug: "hero",
+        fields: [
+          { name: "heading", type: "text" },
+          { name: "layout", type: "component" },
+        ] as never,
+      })
+    ).resolves.toMatchObject({
+      record: expect.objectContaining({ slug: "hero" }),
+    });
   });
 });

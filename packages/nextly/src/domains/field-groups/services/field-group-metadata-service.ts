@@ -316,7 +316,24 @@ export class FieldGroupMetadataService {
       assertLocalizationConfigured("component", input.slug);
     }
 
-    // 1. MOVE the physical schema, when this edit implies one. A `localized` toggle alone does:
+    // 1. REFUSE a field set this path cannot deliver.
+    //
+    // 🔴 This method changes the COMPANION table and nothing else. A field whose column lives on the
+    // main table therefore needs DDL that only `applySchemaChanges` emits — and without this guard
+    // the request SUCCEEDED, wrote the new fields and a matching `schema_hash`, and left the table
+    // without the columns the registry now claims it has. The registry marks
+    // `migration_status: "pending"` and a preview still introspects the truth, so the drift is
+    // recorded rather than silent; it is still a success answered to a caller whose change did not
+    // happen.
+    //
+    // Refusing rather than applying the pipeline here is deliberate. `applySchemaChanges` carries a
+    // version guard, rename detection and an interactive resolution step — a rename is ambiguous
+    // (rename versus drop-and-add) and a PATCH has no way to ask. Duplicating that inside a metadata
+    // edit would be a second implementation of "apply a schema change"; refusing keeps one, and
+    // turns a silent wrong result into an actionable error.
+    await this.assertNoMainTableSchemaChange({ existing, fields, localized });
+
+    // 2. MOVE the physical schema, when this edit implies one. A `localized` toggle alone does:
     // enabling seeds the companion from the main table and drops those columns, disabling restores
     // and archives them. A save that skipped that would persist the flag while the content stayed
     // where the runtime no longer looks for it.
@@ -329,7 +346,7 @@ export class FieldGroupMetadataService {
       });
     }
 
-    // 2. RECORD, after the physical change succeeded.
+    // 3. RECORD, after the physical change succeeded.
     const record = await this.registry.updateComponent(
       input.slug,
       {
@@ -353,6 +370,71 @@ export class FieldGroupMetadataService {
     );
 
     return { record };
+  }
+
+  /**
+   * Refuse a field change that would need a column on the MAIN table.
+   *
+   * 🔴 Every question here is answered by the code that already owns it, so this guard cannot
+   * disagree with what actually emits DDL:
+   *
+   * - `computeFieldDiff` is the diff the PREVIEW endpoint itself computes;
+   * - `fieldProducesColumn` is documented at its definition as "the single answer" to whether a
+   *   field has a column, with the DDL generator and the field classifier both deferring to it —
+   *   it already excludes layout-only types, components (own `comp_` table) and many-to-many
+   *   (junction table);
+   * - `isFieldLocalized` is the predicate `reconcileCompanion` itself filters on to decide what the
+   *   companion carries, and it folds in the entity flag, so it is uniformly false for a
+   *   non-localized field group and no separate branch is needed for that case.
+   *
+   * A fourth opinion about where a column lives is exactly how the three transports came to disagree
+   * in the first place.
+   */
+  private async assertNoMainTableSchemaChange(args: {
+    existing: DynamicFieldGroupRecord;
+    fields: FieldDefinition[];
+    localized: boolean;
+  }): Promise<void> {
+    const { computeFieldDiff } = await import(
+      "../../schema/services/field-diff"
+    );
+    const { fieldProducesColumn } = await import(
+      "../../schema/services/field-column-descriptor"
+    );
+    const { isFieldLocalized } = await import("../../i18n/classify-fields");
+
+    const diff = computeFieldDiff(
+      args.existing.fields as unknown as FieldDefinition[],
+      args.fields
+    );
+    // A CHANGED entry carries only the field's name, so the definition is taken from whichever side
+    // still has it — the new one for added and changed, the old one for removed.
+    const touched: FieldDefinition[] = [
+      ...diff.added,
+      ...diff.removed,
+      ...diff.changed
+        .map(c => args.fields.find(f => f.name === c.name))
+        .filter((f): f is FieldDefinition => f !== undefined),
+    ];
+
+    const needsMainTable = touched.filter(
+      field =>
+        fieldProducesColumn(field) && !isFieldLocalized(field, args.localized)
+    );
+    if (needsMainTable.length === 0) return;
+
+    throw NextlyError.validation({
+      errors: needsMainTable.map(field => ({
+        path: `fields.${field.name}`,
+        code: "requires_schema_change",
+        message: `Changing "${field.name}" alters the field group's table. Use the schema preview and apply flow, which reviews the change and resolves renames, rather than updating the field group directly.`,
+      })),
+      logContext: {
+        reason: "field update requires main-table ddl",
+        slug: args.existing.slug,
+        fields: needsMainTable.map(f => f.name),
+      },
+    });
   }
 
   /** The stored hash for a field set, from the one implementation the whole pipeline uses. */
