@@ -113,14 +113,43 @@ describe("changesRequested", () => {
     expect(r.exitCode).toBe(1);
   });
 
-  /** A later submitted review from the same account settles that account's position. */
-  it("clears once the same reviewer submits a later review", () => {
+  /**
+   * A COMMENTED review publishes feedback without withdrawing an objection, so
+   * the request for changes survives it. Only the account that made the request
+   * can retire it, by approving or having the review dismissed.
+   */
+  it("does not clear when the later review only comments", () => {
     const reviews = [
       at("CHANGES_REQUESTED", "2026-08-14T10:00:00Z", 1),
       at("COMMENTED", "2026-08-14T11:00:00Z", 2),
     ];
+    expect(changesRequested(reviews, HEAD)).toEqual([CODEX]);
+    expect(report({ ...BASE, reviews, threads: [] }).verdict).toBe(
+      "CHANGES REQUESTED"
+    );
+  });
+
+  it("clears on a later approval", () => {
+    const reviews = [
+      at("CHANGES_REQUESTED", "2026-08-14T10:00:00Z", 1),
+      at("APPROVED", "2026-08-14T11:00:00Z", 2),
+    ];
     expect(changesRequested(reviews, HEAD)).toEqual([]);
     expect(report({ ...BASE, reviews, threads: [] }).verdict).toBe("CLEAN");
+  });
+
+  /**
+   * A dismissal is the other way an objection ends. It is excluded from
+   * coverage, so this also pins that clearing and covering are separate
+   * questions about the same review object.
+   */
+  it("clears on a dismissal, which still grants no coverage", () => {
+    const reviews = [
+      at("CHANGES_REQUESTED", "2026-08-14T10:00:00Z", 1),
+      at("DISMISSED", "2026-08-14T11:00:00Z", 2),
+    ];
+    expect(changesRequested(reviews, HEAD)).toEqual([]);
+    expect(reviewersAtHead(reviews, HEAD)).toEqual([CODEX]);
   });
 
   /**
