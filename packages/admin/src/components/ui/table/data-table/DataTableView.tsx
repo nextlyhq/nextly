@@ -330,10 +330,20 @@ export function DataTableView<Row extends object>({
   // it separately per branch is how the error path lost the surface: two
   // answers to one question, agreeing until one of them was edited.
   //
-  // `pagination` wins over `footer` rather than rendering beside it. Two pagers
-  // in one slot is not a composition anyone wants, and silently stacking them
-  // would answer a mistake with a layout instead of a type error.
-  const footerContent = pagination ? <Pagination {...pagination} /> : footer;
+  // Both render, footer first. An earlier version let `pagination` win and
+  // dropped `footer`, on the reasoning that two pagers in one slot is not a
+  // composition anyone wants -- but `footer` is an arbitrary node, not a pager.
+  // A caller using it for a selection summary or bulk actions and then adopting
+  // `pagination` lost that content silently, with both props public, both
+  // permitted by the type, and nothing reporting the loss. A summary above its
+  // pager is a real arrangement, so it is the one this renders.
+  const footerContent =
+    footer || pagination ? (
+      <>
+        {footer}
+        {pagination && <Pagination {...pagination} />}
+      </>
+    ) : undefined;
 
   const surfaceClassName = cn(
     // Clipping is NOT part of the card. The table view rounds its own

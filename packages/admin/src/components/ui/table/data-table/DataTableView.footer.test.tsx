@@ -197,23 +197,34 @@ describe("DataTableView footer", () => {
     expect(tokensOf(pager.parentElement)).toContain("@md/table:border");
   });
 
-  it("prefers pagination over a footer rather than rendering both", () => {
-    // Two pagers in one slot is not a composition anyone wants, and stacking
-    // them would answer a caller's mistake with a layout instead of letting it
-    // be seen. Asserted so the precedence is a decision rather than whichever
-    // order the JSX happened to be written in.
+  it("renders a custom footer alongside the pager, not instead of it", () => {
+    // `footer` is an arbitrary node rather than a pager, so a caller using it
+    // for a selection summary or bulk actions and then adopting `pagination`
+    // must not lose it. Both props are public and both are permitted by the
+    // type, so dropping one silently is content loss with nothing reporting it.
     render(
       <DataTableView<Row>
         columns={[{ name: "name", header: "Name" }]}
         rows={ROWS}
-        footer={<div data-testid="footer">custom</div>}
+        footer={<div data-testid="footer">3 selected</div>}
         pagination={PAGER}
       />
     );
 
-    expect(
-      screen.getByRole("navigation", { name: "Test pagination" })
-    ).toBeInTheDocument();
-    expect(screen.queryByTestId("footer")).toBeNull();
+    const custom = screen.getByTestId("footer");
+    const pager = screen.getByRole("navigation", { name: "Test pagination" });
+    expect(custom).toBeInTheDocument();
+    expect(pager).toBeInTheDocument();
+
+    // Both inside the one surface, since the placement guarantee is what this
+    // file exists for and it has to hold for the composed case too.
+    expect(tokensOf(custom.parentElement)).toContain("@md/table:border");
+    expect(custom.parentElement).toBe(pager.parentElement);
+
+    // Footer first: a summary describes the rows above it, and the pager moves
+    // between pages, so the reading order is summary then controls.
+    expect(custom.compareDocumentPosition(pager)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    );
   });
 });
