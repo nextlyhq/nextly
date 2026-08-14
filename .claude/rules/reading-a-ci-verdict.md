@@ -327,9 +327,15 @@ false negative announces itself as "no verdict" and the spoof announces itself
 as approval:
 
 ```sh
+# The review objects, newest last. `state` is NOT a verdict — see below.
 gh api "repos/nextlyhq/nextly/pulls/$PR/reviews" --paginate \
   --jq '.[]|select(.user.login=="chatgpt-codex-connector[bot]")
-        |"\(.submitted_at)\t\(.state)\t\(.commit_id)"'
+        |"\(.id)\t\(.commit_id)"'
+
+# The findings attached to each review. A review absent here carried none.
+gh api "repos/nextlyhq/nextly/pulls/$PR/comments" --paginate \
+  --jq '.[]|select(.user.login=="chatgpt-codex-connector[bot]")
+        |.pull_request_review_id' | sort | uniq -c
 ```
 
 **Ask the `reviews` endpoint, not `comments`, and this is the half that decides
@@ -343,6 +349,32 @@ one it cannot report.
 carried findings, and its `commit_id` is what binds the verdict to a revision.
 Paginate it: a PR with many rounds runs past one page, and an unpaginated read
 answers from page one.
+
+**But the review object does not say whether the review was CLEAN, and `state`
+is the field that looks like it does.** It records the GitHub review event, not
+whether the bot found anything. Measured across four consecutive rounds on this
+PR:
+
+```
+review=4934719144  sha=6ddf99bd4  state=COMMENTED  findings=6
+review=4934879982  sha=750063e00  state=COMMENTED  findings=3
+review=4934934820  sha=8653d09ce  state=COMMENTED  findings=4
+review=4935023499  sha=435af806a  state=COMMENTED  findings=1
+```
+
+Same `state` at six findings and at one. This bot never emits `APPROVED`, so a
+gate reading `state` treats a finding-bearing review as a pass — and it does so
+at the correct SHA, which is what makes it survive the freshness check.
+
+**Derive cleanliness from the findings, not from a field.** A review is clean
+when NO inline comment carries its `pull_request_review_id`. Join the two
+queries above and require a count of zero at the head SHA before binding
+`REVIEWED_SHA`.
+
+The table is also the instrument's positive control, and it is worth keeping one
+to hand: four known non-clean reviews, and the join reports 6, 3, 4 and 1 rather
+than zero. A cleanliness check that has only ever been run against clean input
+cannot distinguish itself from one that always answers "clean".
 
 Compare against the whole login, or against the App identity. If a filter must
 be pattern-based, anchor it — `test("^chatgpt-codex-connector\\[bot\\]$")` —
