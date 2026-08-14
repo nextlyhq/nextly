@@ -149,17 +149,43 @@ describe("a configuration whose parse is not a fixed point", () => {
     );
   });
 
-  // JSON carries no `Date`, so the column holds a string and the adapter is
-  // handed a shape this provider's own parser just rejected.
-  it("refuses a parser returning a value JSON cannot carry", async () => {
+  // JSON carries no `Date`, so the column holds its ISO string. That coercion
+  // is the accepted cost of defining the stored configuration AS its
+  // serialisation: the adapter is handed the string. Asserted on the value
+  // READ BACK, because "the write succeeded" is true of a refusal-free
+  // implementation that stored anything at all.
+  it("stores a value JSON cannot carry as the form the column holds", async () => {
     register("dated", input => ({
       apiKey: String((input as { apiKey: unknown }).apiKey),
       issuedAt: new Date(0),
     }));
 
-    await expect(write("dated", { apiKey: "k" })).rejects.toThrow(
-      /parsing what would be saved does not return what was saved/
-    );
+    const provider = await write("dated", { apiKey: "k" });
+
+    const stored = await service.getProviderDecrypted(provider.id);
+    expect(stored.configuration).toEqual({
+      apiKey: "k",
+      issuedAt: "1970-01-01T00:00:00.000Z",
+    });
+  });
+
+  // The comparison is made in the JSON domain, and the naive way to do that is
+  // to compare the two serialisations as TEXT. Insertion order changes the
+  // text and changes nothing about the value, and a parser that rebuilds its
+  // output field by field is an ordinary thing to write — so a text
+  // comparison would refuse this while a structural one accepts it.
+  it("stores a configuration whose parser reorders its own fields", async () => {
+    register("reordering", input => {
+      const value = input as { apiKey: unknown; region?: unknown };
+      return value.region === undefined
+        ? { apiKey: String(value.apiKey), region: "eu" }
+        : { region: String(value.region), apiKey: String(value.apiKey) };
+    });
+
+    const provider = await write("reordering", { apiKey: "k" });
+
+    const stored = await service.getProviderDecrypted(provider.id);
+    expect(stored.configuration).toEqual({ apiKey: "k", region: "eu" });
   });
 
   // The same property reached by throwing rather than by returning something
@@ -176,18 +202,20 @@ describe("a configuration whose parse is not a fixed point", () => {
     );
   });
 
-  // `undefined` is a third value JSON cannot carry, not an exception to the
-  // rule: the column drops the key and the parser puts it back, so what is
-  // held and what is stored are different objects on every read.
-  it("refuses a parser that returns an undefined-valued key", async () => {
+  // `undefined` is another value JSON cannot carry: the column drops the key.
+  // Under the same rule as the `Date` above the write is accepted and the key
+  // is simply absent, which is what an optional field means anyway.
+  it("stores a parser's undefined-valued key as an absent one", async () => {
     register("optional", input => ({
       apiKey: String((input as { apiKey: unknown }).apiKey),
       label: undefined,
     }));
 
-    await expect(write("optional", { apiKey: "k" })).rejects.toThrow(
-      /parsing what would be saved does not return what was saved/
-    );
+    const provider = await write("optional", { apiKey: "k" });
+
+    const stored = await service.getProviderDecrypted(provider.id);
+    expect(stored.configuration).toEqual({ apiKey: "k" });
+    expect(Object.keys(stored.configuration as object)).not.toContain("label");
   });
 
   // A parser that OMITS the key instead round-trips cleanly, which is the
@@ -245,10 +273,13 @@ describe("a configuration whose parse is not a fixed point", () => {
     );
   });
 
-  // A PASS-THROUGH parser: it accepts both the typed value and its JSON form,
-  // so re-parsing agrees with itself while the value actually stored lost its
-  // type. The Date test above recreates the Date and cannot see this.
-  it("refuses a pass-through parser whose value loses type in the column", async () => {
+  // A PASS-THROUGH parser: it accepts both the typed value and its JSON form.
+  // Under the previous contract this was the case the round-trip comparison
+  // existed to catch, because re-parsing agrees with itself while the stored
+  // value lost its type. Losing the type is now the defined outcome rather
+  // than a fault, so the assertion is on WHAT IS STORED — which is the only
+  // thing that separates this from a check that stopped looking.
+  it("stores the coerced value a pass-through parser accepts back", async () => {
     register("passthrough-date", input => {
       const value = input as { apiKey: unknown; issuedAt?: unknown };
       return value.issuedAt === undefined
@@ -256,9 +287,13 @@ describe("a configuration whose parse is not a fixed point", () => {
         : (value as object);
     });
 
-    await expect(write("passthrough-date", { apiKey: "k" })).rejects.toThrow(
-      /parsing what would be saved does not return what was saved|cannot be written as JSON/
-    );
+    const provider = await write("passthrough-date", { apiKey: "k" });
+
+    const stored = await service.getProviderDecrypted(provider.id);
+    expect(stored.configuration).toEqual({
+      apiKey: "k",
+      issuedAt: "1970-01-01T00:00:00.000Z",
+    });
   });
 
   // A root `toJSON` returning undefined makes JSON.stringify return undefined

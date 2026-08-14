@@ -284,26 +284,27 @@ export class EmailProviderService extends BaseService {
     // hold is that parsing the stored form returns the stored form, and it is
     // checked here rather than left as an assumption about how parsers behave.
     //
-    // Two ways a parser breaks it, neither visible at the call site:
+    // The configuration IS its serialisation, and that is the whole rule the
+    // rest of this method follows. A type the column cannot hold is COERCED
+    // into the form it can — a `Date` becomes its ISO string, an
+    // `undefined`-valued key becomes an absent one — and the coerced form is
+    // what everything downstream sees, because it is what the column holds.
     //
-    // It may DERIVE a value rather than reshape one. `Buffer.from(key)
-    // .toString("base64")` encodes on the way in and encodes the encoding on
-    // the way out, so the adapter authenticates with a doubly-encoded
-    // credential and the provider answers "bad key" about a key the operator
-    // entered correctly.
+    // Defined this way rather than as a list of rejected types on purpose.
+    // Checking the parser's output for shapes JSON loses means finding one
+    // more shape every time somebody writes a new parser — proxies, hidden
+    // keys, shared references, prototypes — and each is a separate rule
+    // arriving as a separate defect. Serialising first makes all of them
+    // unreachable at once, and the cost is stated rather than hidden: an
+    // adapter that expected a `Date` is handed a string.
     //
-    // Or it may return something JSON cannot carry — a `Date`, a `Map`, a
-    // `Set` — which reads back as a string or as an empty object, so the
-    // adapter receives a shape its own parser just rejected.
-    //
-    // Compared against the ROUND-TRIPPED form rather than the parsed one,
-    // because the round-tripped form is what a reader gets and therefore what
-    // the parser has to be a fixed point OF. That makes `undefined` a third
-    // way to fail rather than an exception to the rule: a parser returning
-    // `{ label: undefined }` has JSON drop the key and then puts it back, so
-    // the value in hand and the value in the column are different objects.
-    // Rejecting it is the same answer as for a `Date`, and for the same
-    // reason — return only what the column can hold.
+    // What is still REFUSED is the parser that DERIVES rather than reshapes.
+    // `Buffer.from(key).toString("base64")` encodes on the way in and encodes
+    // the encoding on the way out, so the adapter authenticates with a
+    // doubly-encoded credential and the provider answers "bad key" about a key
+    // the operator entered correctly. That is not a type JSON cannot carry; it
+    // is a value that changes every time it is read, and no serialisation
+    // makes it stable.
     const stored = parsed as Record<string, unknown>;
 
     // Serialised ONCE and parsed TWICE. `roundTripped` is what a reader gets
@@ -374,33 +375,42 @@ export class EmailProviderService extends BaseService {
       });
     }
 
-    let reparsed: unknown;
+    // The stored configuration IS its serialisation, so the comparison is made
+    // in that domain rather than against the object the parser returned.
+    //
+    // A type JSON cannot carry is COERCED, not refused: a `Date` is written as
+    // its ISO string, and a parser that reads that string back into a `Date`
+    // agrees with the column even though the two values are not deep-equal.
+    // The cost is real and is taken deliberately -- an adapter is handed the
+    // string -- and the alternative is a surface that refuses a new shape every
+    // time one is found. Anything the column cannot hold at all is still
+    // refused above, where serialisation fails or produces a non-object.
+    //
+    // What survives is the property this check exists for: re-parsing the
+    // stored form must MEAN the stored form. A parser that derives -- base64
+    // on the way in, base64 of the base64 on the way out -- still differs
+    // after its own round trip, and is still refused.
+    let reparsedJson: unknown;
     try {
-      reparsed = provider.parseConfiguration(roundTripped);
+      const reparsed = provider.parseConfiguration(roundTripped);
+      // Compared through a round trip rather than as a string. Two objects
+      // holding the same fields in a different insertion order serialise to
+      // different text, and a parser that rebuilds its output field by field
+      // is an ordinary thing to write.
+      const reserialized = JSON.stringify(reparsed);
+      reparsedJson =
+        reserialized === undefined ? undefined : JSON.parse(reserialized);
     } catch {
       // A parser that REJECTS its own stored output fails the same property,
       // and reaches it by throwing rather than by returning something else.
-      // Left as one outcome: both mean the row could not be read back.
-      reparsed = undefined;
+      // A re-parse that cannot itself be serialised lands here too, and means
+      // the same thing: the row could not be read back.
+      reparsedJson = undefined;
     }
-    // TWO properties, and each misses what the other catches.
-    //
-    // The parsed value must SURVIVE the round trip: a `Date`, a `Map`, an
-    // `Infinity` or a class instance is written as something else, and a
-    // pass-through parser that accepts both forms then agrees with itself
-    // while the adapter receives an ISO string where a `Date` was returned.
-    // Re-parsing alone cannot see that, because both sides of it are already
-    // past the column.
-    //
-    // And re-parsing the stored form must RETURN it, which is what catches a
-    // parser that derives rather than one that loses a type.
-    if (
-      !isDeepStrictEqual(stored, unchanged) ||
-      !isDeepStrictEqual(reparsed, unchanged)
-    ) {
+    if (!isDeepStrictEqual(reparsedJson, unchanged)) {
       throw new NextlyError({
         code: "BUSINESS_RULE_VIOLATION",
-        publicMessage: `Email provider "${type}" cannot store this configuration, because parsing what would be saved does not return what was saved. Its \`parseConfig\` must accept its own output unchanged -- derive values in \`createAdapter\` instead, and return only what JSON can carry.`,
+        publicMessage: `Email provider "${type}" cannot store this configuration, because parsing what would be saved does not return what was saved. Its \`parseConfig\` must accept its own output unchanged -- derive values in \`createAdapter\` instead.`,
         logContext: { reason: "email-provider-parse-not-a-fixed-point", type },
       });
     }
