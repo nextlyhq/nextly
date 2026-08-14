@@ -412,10 +412,11 @@ export function report({
   const limited = rateLimited(issueComments);
   // Coverage is asked at the head; a standing objection is asked of the whole
   // pull request. Two questions with two scopes, from the same rows.
-  // `head` is passed for the CLEARING rule only. An objection itself spans
-  // revisions — pushing a commit does not answer it — while whether a given
-  // approval supersedes one is a question about which revision that approval
-  // spoke to.
+  // Clearance is decided from the REVISION ORDER, never from the head. An
+  // objection spans revisions — pushing a commit does not answer it — while
+  // whether an approval supersedes one is a question about which revision that
+  // approval spoke to. The head appears only inside `orderReachesHead`, which
+  // withholds the order entirely unless it reaches the revision being judged.
   // Completeness is re-established HERE rather than taken on the caller's word,
   // because a count cannot establish it. A branch force-pushed to a different
   // history of the same length and restored before the later ref reads leaves a
@@ -641,6 +642,26 @@ async function main(argv) {
   }
 
   if (meta.state !== "OPEN" && meta.state !== "MERGED") {
+    // Re-read immediately before emitting. This path takes no other remote
+    // observation, so without it the verdict rests on a lifecycle sampled
+    // earlier in the run — and reopening is precisely the transition that makes
+    // "closed without merging" wrong. Read from the pull request rather than
+    // the ref, because a closed branch is commonly deleted.
+    const stillClosed = gh([
+      "pr",
+      "view",
+      pr,
+      "--repo",
+      repoArg,
+      "--json",
+      "state",
+    ]).state;
+    if (stillClosed !== meta.state) {
+      process.stderr.write(
+        `ci-verdict: lifecycle changed ${meta.state} -> ${stillClosed}; re-run\n`
+      );
+      return 2;
+    }
     // Through the SHARED serializer, so every lifecycle emits one schema. A
     // second output shape for one state means a consumer reading `head` or
     // `missing_reviews` gets a different object exactly where it is least
@@ -890,8 +911,9 @@ async function main(argv) {
   // made between the agreement and `report()` is a gap the agreement does not
   // cover, and a reviewer submitting `CHANGES_REQUESTED` or unresolving a
   // thread in it produces a CLEAN verdict from arrays already known to be old.
-  // That is the same defect three rounds of re-ordering produced, so ordering
-  // is not what fixes it.
+  // Ordering cannot fix it: independently mutable reads do not become atomic
+  // by being sequenced, so whichever is placed last simply moves which of the
+  // others is stale when the verdict is formed.
   //
   // Each attempt therefore observes, judges from THAT observation, and observes
   // again. The candidate is emitted only when the second observation matches
@@ -934,9 +956,29 @@ async function main(argv) {
     ) {
       // Both ends fetched from the remote that HAS them: the workflow checks
       // out shallow, and after a squash the merged head is commonly absent.
-      execFileSync("git", ["fetch", headRemote, head, observed.mergedHead], {
-        stdio: "ignore",
-      });
+      // A shallow checkout keeps its boundary in `.git/shallow`, and fetching
+      // two more objects does not remove it — so `rev-list` stops at the
+      // boundary and reports a SHORT count rather than failing. That is the
+      // reassuring direction: a truncated range reads as a clean tail, which is
+      // exactly what this count exists to disprove.
+      //
+      // Deepened only when the repository is actually shallow, because
+      // `--unshallow` errors on a complete one.
+      const isShallow =
+        execFileSync("git", ["rev-parse", "--is-shallow-repository"], {
+          encoding: "utf8",
+        }).trim() === "true";
+      execFileSync(
+        "git",
+        [
+          "fetch",
+          ...(isShallow ? ["--unshallow"] : []),
+          headRemote,
+          head,
+          observed.mergedHead,
+        ],
+        { stdio: "ignore" }
+      );
       stranded =
         Number(
           execFileSync(
