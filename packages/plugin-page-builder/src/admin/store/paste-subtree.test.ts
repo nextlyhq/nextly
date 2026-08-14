@@ -13,6 +13,7 @@ import "../../render/blocks";
 import { defaultBlockRegistry } from "../../core/registry";
 import { makeNode } from "../../core/tree";
 import { validateDocument } from "../../core/validate";
+import { MAX_DEPTH } from "../../core/types";
 import type { BlockDocument, BlockNode } from "../../core/types";
 import { editorReducer, initialState } from "./editorStore";
 
@@ -36,6 +37,31 @@ function paste(document: BlockDocument, pasted: BlockNode) {
 }
 
 describe("pasting a subtree", () => {
+  it("refuses one that breaks a LIMIT even on a page that already has a fault", () => {
+    // The one fault the repair banner cannot offer an action for. A slot violation is listed with
+    // a Remove or a Wrap; "this document holds too many nodes" is listed by nothing — so letting
+    // it through on an already-faulty page leaves the author repairing what the banner shows and
+    // finding the page still unsaveable, with nothing left pointing at why.
+    const document: BlockDocument = {
+      version: 1,
+      root: node("core/container", {
+        default: [node("core/columns", { default: [node("core/heading")] })],
+      }),
+    };
+    // The precondition: the page is ALREADY unsaveable, which is what previously waived every
+    // other check on the pasted tree.
+    expect(
+      validateDocument(document, defaultBlockRegistry, { allowUnknown: true })
+    ).not.toBe(true);
+
+    let deep = node("core/container", { default: [] });
+    for (let i = 0; i < MAX_DEPTH + 2; i += 1) {
+      deep = node("core/container", { default: [deep] });
+    }
+    const next = paste(document, deep);
+    expect(next.document.root.slots?.default).toHaveLength(1);
+  });
+
   it("still inserts into a page that ALREADY has a fault elsewhere", () => {
     // This PR creates exactly this page: a stored `core/columns` row holding an ordinary block
     // stays that way until its author takes the repair. Judging only the result would refuse every

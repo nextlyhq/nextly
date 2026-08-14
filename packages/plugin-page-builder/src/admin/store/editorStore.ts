@@ -20,6 +20,8 @@ import {
   updateNode,
 } from "../../core/tree";
 import {
+  MAX_DEPTH,
+  MAX_NODES,
   type BlockDocument,
   type BlockNode,
   type Binding,
@@ -160,6 +162,25 @@ export type EditorAction =
   | { type: "MARK_SAVED" }
   | { type: "UNDO" }
   | { type: "REDO" };
+
+/** Blocks in this tree, counting the node itself. */
+function nodeCount(node: BlockNode): number {
+  let total = 1;
+  for (const children of Object.values(node.slots ?? {})) {
+    for (const child of children) total += nodeCount(child);
+  }
+  return total;
+}
+
+/** Levels this tree occupies, counting the node itself as one. */
+function depthOf(node: BlockNode): number {
+  let deepest = 1;
+  for (const children of Object.values(node.slots ?? {})) {
+    for (const child of children)
+      deepest = Math.max(deepest, 1 + depthOf(child));
+  }
+  return deepest;
+}
 
 /** Keep a selection only if the id still resolves in the given document. */
 function keepValidSelection(
@@ -360,6 +381,17 @@ export function editorReducer(
         { allowUnknown: true }
       );
       if (before === true && after !== true) return state;
+      // The LIMITS are enforced whatever the page's prior state, because they are the one fault
+      // the repair banner cannot offer an action for: a slot violation is listed with a Remove or
+      // a Wrap, and "this document holds too many nodes" is listed by nothing. Letting a paste
+      // past them on an already-faulty page means that after the author repairs what the banner
+      // DOES show, the page is still unsaveable with nothing left pointing at why.
+      //
+      // Checked directly rather than by reading `after`, which reports only the FIRST fault — on a
+      // page that already had one, a limit the paste just broke is never the fault it names.
+      if (nodeCount(pasted) > MAX_NODES || depthOf(pasted) > MAX_DEPTH) {
+        return state;
+      }
       return commit(state, pasted, fresh.id);
     }
 
