@@ -925,6 +925,26 @@ describe("list pagination", () => {
       "unshadowed use inside a block"
     ).toHaveLength(1);
 
+    // The use that SEPARATES the two ways a block can be handled. Above, a
+    // block wrongly treated as always shadowing reports too -- the uses fall to
+    // zero, the pager is judged at its declaration, and the count is 1 either
+    // way. Here the only use is a correct one, so reaching it is the difference
+    // between silence and a finding against valid code.
+    const blockFooter = parse(
+      "block-footer.tsx",
+      "function List() {\n" +
+        "  const pager = <Pagination page={1} />;\n" +
+        "  if (compact) {\n" +
+        "    return <DataTableView columns={c} rows={r} footer={pager} />;\n" +
+        "  }\n" +
+        "  return <DataTableView columns={c} rows={r} />;\n" +
+        "}"
+    );
+    expect(
+      detachedPagers(blockFooter),
+      "footer use reached through a block"
+    ).toHaveLength(0);
+
     // An ALIASED table import. The pager is matched by binding, so the owner of
     // its footer must be too -- otherwise an import refactor makes a correctly
     // placed pager look detached.
