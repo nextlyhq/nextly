@@ -26,10 +26,17 @@ verdict — `queued`, `in_progress`, `skipped` and _never triggered_ all satisfy
 it.
 
 ```sh
+set -o pipefail
 gh api "repos/nextlyhq/nextly/commits/$SHA/check-runs?per_page=100" --paginate \
   --jq '.check_runs[]|"\(.status)/\(.conclusion // "none")\t\(.name)"' \
-  | sort
+  | sort || { echo "check-runs query FAILED — not clean" >&2; exit 2; }
 ```
+
+**`set -o pipefail` is load-bearing, not tidiness.** Without it the exit status
+is `sort`'s, so an authentication failure, a rate limit or a transient 5xx from
+`gh` yields an empty list AND a success status — the precise false-clean this
+file exists to prevent, reproduced by the command recommending against it. An
+unavailable answer must never read as a passing one.
 
 **Requiring `success` from a FIXED list is the obvious form and it is wrong
 here**, because some skips are the pipeline working. `ci.yml`'s first job
@@ -164,13 +171,26 @@ is another FEATURE BRANCH never triggers them. Measured across
 **This is the most dangerous entry in the file, and the last two rows are why.**
 A stacked PR is not visibly empty of CI. It carries the two
 `pull_request_target` checks and, whenever it happens to touch `templates/`,
-`packages/ui/**` or the lockfile, a path-filtered build as well — so it can
-present three to five green checks, including one that genuinely compiled
-something. There is no red to notice and no obviously missing count.
+`packages/ui/**` or the lockfile, path-filtered builds as well — and those carry
+matrices, so `scaffold-build.yml` alone contributes six legs. A stacked PR can
+therefore present a comfortably populated list of green checks, several of them
+having genuinely compiled something. **No bound is given here deliberately**:
+the count comes from whichever matrices the diff triggered, and quoting a
+ceiling would reintroduce exactly the fixed number this file argues against.
+There is no red to notice and nothing conspicuously missing.
 
 **A stacked PR's CI verdict is therefore UNOBTAINABLE, not pending.** Local runs
-are the only evidence until the base is `main`. Retargeting is what starts CI
-rather than a formality afterwards, so retarget before gating, not after.
+are the only evidence until the base is `main`.
+
+**Retargeting alone does not start CI**, which is the trap on the way out.
+Changing a PR's base emits the `pull_request` activity `edited`, and the default
+activity set is `opened`, `synchronize` and `reopened` — none of these four
+workflows declares `types:`, so none subscribes to `edited`. Retargeting makes
+the branch filter eligible and emits an event nothing is listening for, leaving
+a PR that now LOOKS main-targeting with still no substantive run against it.
+
+Follow it with a push or a rebase, which emits `synchronize`, or close and
+reopen. Then gate on the run, never on the base having been changed.
 
 ## A failed job takes its dependents with it, silently
 
@@ -210,45 +230,46 @@ broken `main` is fixed, every PR that went red because of it **stays red**. No
 one's checks clear themselves, and a stale red is indistinguishable from a real
 one on inspection.
 
-**Whether `gh run rerun` picks the repair up is a property of the WORKFLOW, not
-of the re-run.** Two authorities appear to disagree here and both are right,
-which is worth setting out because the wrong reading is actionable at 3am.
+**A re-run re-fetches the ORIGINAL merge commit, so it does not pick the repair
+up.** Two phases decide this and reading only the second one inverts the answer.
 
 GitHub's documentation says a re-run "will also use the same `GITHUB_SHA`
 (commit SHA) and `GITHUB_REF` (git ref) of the original event that triggered the
-workflow run". That is true, and it is about the ENVIRONMENT.
-
-It does not decide what lands in the working tree. `actions/checkout` given no
-`ref:` input takes its `refs/pull/` branch, which resolves the REF and discards
-the pinned commit:
+workflow run". `actions/checkout` then FETCHES using that pinned commit —
+`getRefSpec` in the pinned action, with `commit` non-empty:
 
 ```ts
 else if (upperRef.startsWith('REFS/PULL/')) {
   const branch = ref.substring('refs/pull/'.length)
-  result.ref = `refs/remotes/pull/${branch}`
+  result.push(`+${commit}:refs/remotes/pull/${branch}`)
 }
 ```
 
-GitHub recomputes `refs/pull/N/merge` when the base moves, so the checkout
-fetches a merge commit built against the REPAIRED `main` while `$GITHUB_SHA`
-still names the old one.
+Only afterwards does `getCheckoutInfo` name `refs/remotes/pull/N/merge` — a
+LOCAL ref the fetch above just populated from the pinned commit. Reading that
+second phase alone suggests the ref is resolved fresh from the server. It is
+not: the name is reused, the content is pinned.
 
-**Measured on this repository**, run `31755967442` on #777: attempt 1 failed at
-`Bare-Error guard controls (unit)`, the allowlist ratchet broken on `main` at
-the time. After the repair merged, attempt 3 of the same run PASSED that step
-and failed later elsewhere. That step runs a vitest file which reads only the
-working tree — it shells out to no git command — so the repaired allowlist can
-only have arrived in the checkout.
+So a re-run of `ci.yml`, `integration.yml` or `preview.yml` evaluates the same
+synthetic merge of your branch with the OLD, broken `main`, and goes red again
+for the original reason — which reads as the failure being real and yours.
 
-All four gating workflows here (`ci.yml`, `integration.yml`, `secret-scan.yml`,
-`preview.yml`) use the default checkout with no `ref:`, so on THIS repository a
-re-run does pick up a moved base.
+**A full-history job is a partial exception, and only in what it can SEE.**
+`getRefSpecForAllHistory`, used at `fetch-depth: 0`, additionally fetches
+`+refs/heads/*:refs/remotes/origin/*`, so `origin/main` there is current. The
+checked-out tree is still the original merge, so this changes what a script
+querying `origin/main` observes, not what gets built or tested.
 
-**Do not carry that conclusion to a workflow you have not read.** A step pinning
-`ref: ${{ github.sha }}`, or any script consuming `$GITHUB_SHA` directly, gets
-the original merge commit and will re-run identically forever — red for a reason
-that was fixed hours ago. Check what the workflow checks out before deciding
-which case you are in.
+**One measurement here does not fit this and is recorded rather than
+explained.** Run `31755967442` on #777: attempt 1 failed at
+`Bare-Error guard controls (unit)` — believed to be the allowlist ratchet broken
+on `main` at the time — and after the repair merged, attempt 3 of the same run
+passed that step. The code path above says the checkout could not have carried
+the repair, and the step consults no git command, so the likeliest reading is
+that attempt 1 failed for a different reason than the one attributed to it.
+Noted because a single uncontrolled observation should not be quietly dropped
+for disagreeing with the source, and because whoever resolves it should know
+both existed.
 
 **Rebase or push is correct under either reading**, and needs no determination
 first: it creates a new event, a new merge commit, and a run nobody has to
@@ -262,9 +283,17 @@ gh run rerun "$RUN_ID"            # whole run
 gh run rerun "$RUN_ID" --failed   # only the failed jobs
 ```
 
-`--failed` selects nothing on a run that was CANCELLED rather than failed, and
-reports success having re-run zero jobs. Check `conclusion` before choosing the
-flag.
+`--failed` re-runs failed jobs and their dependencies, so on a run with no
+failed job it re-runs nothing and reports success having done nothing. **Decide
+that from the JOB conclusions, not the run's.** A cancelled run can still
+contain a failed job — one matrix leg fails, someone cancels while another is
+still executing — so the run-level `cancelled` neither implies nor excludes work
+for `--failed` to do:
+
+```sh
+gh run view "$RUN_ID" --json jobs \
+  --jq '.jobs[]|select(.conclusion=="failure")|.name'
+```
 
 This cuts the other way too, and that is the more common error: a red inherited
 from `main` is not evidence about the branch. Before working a failure, confirm
@@ -298,9 +327,22 @@ false negative announces itself as "no verdict" and the spoof announces itself
 as approval:
 
 ```sh
-gh api "repos/nextlyhq/nextly/pulls/$PR/comments" \
-  --jq '.[]|select(.user.login=="chatgpt-codex-connector[bot]")'
+gh api "repos/nextlyhq/nextly/pulls/$PR/reviews" --paginate \
+  --jq '.[]|select(.user.login=="chatgpt-codex-connector[bot]")
+        |"\(.submitted_at)\t\(.state)\t\(.commit_id)"'
 ```
+
+**Ask the `reviews` endpoint, not `comments`, and this is the half that decides
+whether a CLEAN verdict is visible at all.** `pulls/$PR/comments` lists review
+comments — the inline ones attached to lines. A clean review has no findings and
+therefore no inline comments, so that endpoint returns zero rows for it,
+byte-identically to "never reviewed". The very outcome being waited for is the
+one it cannot report.
+
+`pulls/$PR/reviews` returns the review OBJECT, which exists whether or not it
+carried findings, and its `commit_id` is what binds the verdict to a revision.
+Paginate it: a PR with many rounds runs past one page, and an unpaginated read
+answers from page one.
 
 Compare against the whole login, or against the App identity. If a filter must
 be pattern-based, anchor it — `test("^chatgpt-codex-connector\\[bot\\]$")` —
@@ -316,8 +358,15 @@ Some PRs here have never received a CodeRabbit review at all.
 the reviewed sha to EQUAL the head you are about to merge:
 
 ```sh
-[ "$REVIEWED_SHA" = "$HEAD_SHA" ] || echo "verdict is stale; re-request review"
+[ "$REVIEWED_SHA" = "$HEAD_SHA" ] || {
+  echo "verdict is stale for $HEAD_SHA; re-request review" >&2; exit 2
+}
 ```
+
+**The mismatch branch has to EXIT.** Written as `|| echo ...` the compound
+command succeeds, so a script using it as the review gate prints its warning and
+walks straight on to the merge — a gate that reports the problem and permits it
+anyway.
 
 **Ancestry is the tempting check and it is too weak.** After any ordinary push
 the reviewed sha REMAINS an ancestor of the new head, so
