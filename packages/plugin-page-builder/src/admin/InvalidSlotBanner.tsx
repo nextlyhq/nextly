@@ -8,12 +8,17 @@
  * that works by SELECTING a block is therefore useless here, which is why this is a banner over
  * the document rather than an inspector panel or a marker on the canvas.
  *
- * What it offers to remove is not always a block. Validation refuses a slot's NAME rather than its
+ * What it offers to act on is not always a block. Validation refuses a slot's NAME rather than its
  * contents, and refuses a slots map on a non-container before it reads a key, so a page can be
  * unsaveable with no block in it to remove. Each of those states gets its own row and its own
  * repair, or the banner would report a problem with no action against it.
  *
- * Nothing is removed without a person choosing it, one row at a time. The alternative, repairing
+ * One kind of row IS on the canvas: a block whose slot refuses its type. It appears here anyway
+ * because seeing the block tells the author nothing about why the page will not save, and because
+ * its repair is the one that keeps the block — a slot admitting a single container type says
+ * exactly what to put around it.
+ *
+ * Nothing is changed without a person choosing it, one row at a time. The alternative, repairing
  * the document on load, would silently discard content whose only remaining copy is the row in the
  * database.
  */
@@ -27,10 +32,23 @@ import { defaultBlockRegistry } from "../core/registry";
 import { useEditor } from "./store/EditorProvider";
 import type { EditorAction } from "./store/editorStore";
 
-/** What a row calls the thing it offers to remove. */
+/**
+ * What the row's button will do, since not every repair discards the block.
+ *
+ * Exported because the rows only exist once the banner is expanded, so nothing about the collapsed
+ * surface can show that a wrap is offered where a wrap is right.
+ */
+export function actionLabelFor(entry: InvalidSlotEntry): string {
+  if (entry.kind !== "not-allowed" || !entry.wrapWith) return "Remove";
+  const label = defaultBlockRegistry.get(entry.wrapWith)?.label;
+  return label ? `Wrap in ${label}` : "Wrap";
+}
+
+/** What a row calls the thing it acts on. */
 function labelFor(entry: InvalidSlotEntry): string {
   switch (entry.kind) {
     case "block":
+    case "not-allowed":
       return entry.node.name?.trim() || entry.type;
     case "empty-slot":
       return `Empty slot "${entry.slotName}"`;
@@ -56,6 +74,8 @@ function whereFor(entry: InvalidSlotEntry): string {
       return `${on}, holding nothing`;
     case "stray-slots":
       return `${on}, which holds no slots at all`;
+    case "not-allowed":
+      return `in slot "${entry.slotName}" ${on}, which does not accept ${entry.type}`;
   }
 }
 
@@ -71,15 +91,16 @@ function signatureOf(entries: InvalidSlotEntry[]): string {
 }
 
 /**
- * The action one Remove button dispatches.
+ * The action one row's button dispatches.
  *
  * Separate from the button so the step between "what the finder reported" and "what the reducer is
  * asked to do" can be exercised without a browser. A row that named the right thing while
  * dispatching the wrong repair would look correct in every screenshot.
  *
- * Three kinds, three repairs: removing the block inside is only ever one of the three answers.
+ * Each kind has its own repair, and removing a block is only one of them — a block the slot merely
+ * refuses can be kept.
  */
-export function removalFor(entry: InvalidSlotEntry): EditorAction {
+export function repairFor(entry: InvalidSlotEntry): EditorAction {
   switch (entry.kind) {
     case "block":
       return {
@@ -96,6 +117,23 @@ export function removalFor(entry: InvalidSlotEntry): EditorAction {
       };
     case "stray-slots":
       return { type: "DROP_SLOTS", parentId: entry.parentId };
+    case "not-allowed":
+      // Wrapping is preferred because this block is on the canvas and the author can see it;
+      // removal is what remains when the slot names no single type that could hold it.
+      return entry.wrapWith
+        ? {
+            type: "WRAP_IN_SLOT",
+            parentId: entry.parentId,
+            slot: entry.slotName,
+            id: entry.node.id,
+            wrapperType: entry.wrapWith,
+          }
+        : {
+            type: "REMOVE_FROM_SLOT",
+            parentId: entry.parentId,
+            slot: entry.slotName,
+            id: entry.node.id,
+          };
   }
 }
 
@@ -113,19 +151,32 @@ export function InvalidSlotBanner() {
   if (entries.length === 0 || signature === dismissed) return null;
 
   const count = entries.length;
-  // An empty stale slot and a leftover slots map are faults with no block in them, so the
-  // block-counting sentence would be false whenever the list is not all blocks.
-  const headline = entries.every(e => e.kind === "block")
-    ? `This page has ${count} ${count === 1 ? "block" : "blocks"} in a slot that no longer exists.`
-    : `This page has ${count} ${count === 1 ? "leftover" : "leftovers"} from a slot that no longer exists.`;
+  const misplaced = entries.filter(e => e.kind === "not-allowed").length;
+  const hidden = count - misplaced;
+
+  // Three sentences rather than one with a clause, because the two families of fault differ in
+  // the fact that matters most to the reader: whether the thing is on the canvas at all.
+  const headline =
+    misplaced === count
+      ? `This page has ${count} ${count === 1 ? "block" : "blocks"} somewhere ${count === 1 ? "it is" : "they are"} no longer allowed.`
+      : hidden === count && entries.every(e => e.kind === "block")
+        ? `This page has ${count} ${count === 1 ? "block" : "blocks"} in a slot that no longer exists.`
+        : hidden === count
+          ? `This page has ${count} ${count === 1 ? "leftover" : "leftovers"} from a slot that no longer exists.`
+          : `This page has ${count} things that stop it saving.`;
+
+  const detail =
+    misplaced === count
+      ? "Each one is drawn on the canvas, so nothing looks wrong, but the page will not save while it sits where it does."
+      : misplaced === 0
+        ? "None of it is drawn on the canvas, so there is nothing to select, and the page will not save until it is cleared."
+        : "Some of it is not drawn on the canvas at all, so there is nothing to select. The page will not save until each one is dealt with.";
 
   return (
     <div className="nx-pb-repair" role="status" aria-live="polite">
       <div className="nx-pb-repair-bar">
         <div className="nx-pb-repair-text">
-          <strong>{headline}</strong> None of it is drawn on the canvas, so
-          there is nothing to select, and the page will not save until it is
-          cleared.
+          <strong>{headline}</strong> {detail}
         </div>
         <div className="nx-pb-repair-actions">
           <Button
@@ -164,9 +215,9 @@ export function InvalidSlotBanner() {
                 type="button"
                 variant="outline"
                 size="sm"
-                onClick={() => dispatch(removalFor(entry))}
+                onClick={() => dispatch(repairFor(entry))}
               >
-                Remove
+                {actionLabelFor(entry)}
               </Button>
             </li>
           ))}

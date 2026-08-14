@@ -266,7 +266,11 @@ function DraggableNode({
     nodeClasses
   );
 
-  const ref = mergeRefs(dragRef, before.ref, grid ? append.ref : undefined);
+  const ref = mergeRefs(
+    dragRef,
+    before.ref,
+    formatted ? append.ref : undefined
+  );
 
   if (!def) {
     return (

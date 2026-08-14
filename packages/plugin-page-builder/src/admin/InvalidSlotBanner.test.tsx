@@ -22,7 +22,11 @@ import { makeNode } from "../core/tree";
 import { validateDocument } from "../core/validate";
 import "../render/blocks";
 
-import { InvalidSlotBanner, removalFor } from "./InvalidSlotBanner";
+import {
+  actionLabelFor,
+  InvalidSlotBanner,
+  repairFor,
+} from "./InvalidSlotBanner";
 import { EditorProvider } from "./store/EditorProvider";
 import { editorReducer, initialState } from "./store/editorStore";
 
@@ -103,7 +107,7 @@ describe("the repair banner", () => {
     expect(entries.map(e => e.kind).sort()).toEqual(["block", "empty-slot"]);
 
     for (const entry of entries) {
-      const viaEditor = editorReducer(initialState(broken), removalFor(entry));
+      const viaEditor = editorReducer(initialState(broken), repairFor(entry));
       const viaCore = repairInvalidSlot(
         broken.root,
         entry,
@@ -132,7 +136,7 @@ describe("the repair banner", () => {
     expect(entries.length).toBeGreaterThan(0);
 
     const repaired = entries.reduce(
-      (s, entry) => editorReducer(s, removalFor(entry)),
+      (s, entry) => editorReducer(s, repairFor(entry)),
       initialState(broken)
     );
 
@@ -143,5 +147,83 @@ describe("the repair banner", () => {
     ).toBe(true);
     // And the banner stops showing, which is the author's signal that they are done.
     expect(markupFor(repaired.document)).toBe("");
+  });
+
+  it("keeps a block a slot refuses, by putting it in the one thing that may hold it", () => {
+    // The shape a document stored before `core/columns` restricted its slot carries: headings
+    // sitting directly in the row. The write path refuses it, and the author can SEE the
+    // headings — so a repair that deleted them would take away work in front of them.
+    const legacy = docWith({
+      default: [
+        makeNode("core/columns", {}, undefined, {
+          default: [heading("Left half"), heading("Right half")],
+        }),
+      ],
+    });
+
+    // Precondition: this really is refused, and for the allowlist rather than for a slot name.
+    expect(
+      validateDocument(legacy, defaultBlockRegistry, { allowUnknown: true })
+    ).toContain("is not allowed in slot");
+
+    const entries = findInvalidSlotEntries(legacy.root, defaultBlockRegistry);
+    expect(entries.map(e => e.kind)).toEqual(["not-allowed", "not-allowed"]);
+
+    expect(markupFor(legacy)).toContain("no longer allowed");
+    // The rows are behind Review, so the button's own answer is read directly rather than from
+    // the collapsed markup, where its absence would prove nothing.
+    expect(entries.map(actionLabelFor)).toEqual([
+      "Wrap in Column",
+      "Wrap in Column",
+    ]);
+    expect(entries.map(e => repairFor(e).type)).toEqual([
+      "WRAP_IN_SLOT",
+      "WRAP_IN_SLOT",
+    ]);
+
+    const repaired = entries.reduce(
+      (s, entry) => editorReducer(s, repairFor(entry)),
+      initialState(legacy)
+    );
+
+    expect(
+      validateDocument(repaired.document, defaultBlockRegistry, {
+        allowUnknown: true,
+      })
+    ).toBe(true);
+    // Both headings survive, each inside a column of its own — the arrangement the row drew
+    // before a column was a block, rather than one column holding both.
+    const row = repaired.document.root.slots?.default?.[0];
+    expect(row?.slots?.default?.map(c => c.type)).toEqual([
+      "core/column",
+      "core/column",
+    ]);
+    expect(
+      row?.slots?.default?.map(c => c.slots?.default?.[0]?.props?.text)
+    ).toEqual(["Left half", "Right half"]);
+    expect(markupFor(repaired.document)).toBe("");
+  });
+
+  it("still offers removal where no single type could hold the block", () => {
+    // A slot naming several permitted types leaves a genuine choice, and choosing for the author
+    // is worse than telling them the block has to go.
+    const entry = {
+      key: "not-allowed:x",
+      parentId: "p",
+      parentType: "test/row",
+      path: "test/row",
+      kind: "not-allowed" as const,
+      slotName: "default",
+      node: heading("Stranded"),
+      type: "core/heading",
+      descendantCount: 0,
+    };
+    expect(actionLabelFor(entry)).toBe("Remove");
+    expect(repairFor(entry)).toEqual({
+      type: "REMOVE_FROM_SLOT",
+      parentId: "p",
+      slot: "default",
+      id: entry.node.id,
+    });
   });
 });

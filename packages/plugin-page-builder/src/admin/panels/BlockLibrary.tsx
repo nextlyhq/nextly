@@ -40,7 +40,7 @@ function LibraryItem({ def }: { def: BlockDefinition }) {
   // go looking for. `null` is the same verdict a refused drag reaches, from the same rule.
   const target = planInsert(
     state.document.root,
-    state.selectedId,
+    state.selectedId ?? undefined,
     def.type,
     defaultBlockRegistry
   );

@@ -18,6 +18,7 @@ import {
   removeNode,
   removeSlot,
   updateNode,
+  wrapInSlot,
 } from "../../core/tree";
 import type {
   BlockDocument,
@@ -89,6 +90,21 @@ export type EditorAction =
    * key, so once the keys are gone the empty map is still the fault and has no narrower repair.
    */
   | { type: "DROP_SLOTS"; parentId: string }
+  /**
+   * Put a block inside a new one of `wrapperType`, where it already sits.
+   *
+   * The repair for a child a slot refuses when the slot admits a single type that can hold it.
+   * Unlike every other repair here it discards nothing: the block is on the canvas and the author
+   * can see it, so removing it to satisfy a rule would take away work they did not know was at
+   * risk.
+   */
+  | {
+      type: "WRAP_IN_SLOT";
+      parentId: string;
+      slot: string;
+      id: string;
+      wrapperType: string;
+    }
   | { type: "DUPLICATE"; id: string }
   | { type: "UPDATE_PROPS"; id: string; props: Record<string, unknown> }
   | {
@@ -232,6 +248,20 @@ export function editorReducer(
         state.selectedId
       );
       return commit(state, next, selectedId);
+    }
+
+    case "WRAP_IN_SLOT": {
+      // The block stays, so the selection stays with it: the author is looking at the thing being
+      // repaired, and clearing what they had selected would make a non-destructive repair feel
+      // like a destructive one.
+      const next = wrapInSlot(
+        root,
+        action.parentId,
+        action.slot,
+        action.id,
+        action.wrapperType
+      );
+      return commit(state, next);
     }
 
     case "DUPLICATE":

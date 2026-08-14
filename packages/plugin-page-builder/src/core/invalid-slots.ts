@@ -18,12 +18,24 @@
  * before it reads a single key, so a page can be unsaveable with nothing in it to remove. Each of
  * those states needs its own repair or the banner reports a problem the author cannot act on.
  *
+ * One reported fault is NOT invisible, and it is included anyway: a child of a type its slot's
+ * allowlist refuses. That block draws on the canvas and can be selected, so the author can see it
+ * — what they cannot see is why the page will not save, and there is nothing on the block to tell
+ * them. Its repair is also the only one that need not destroy anything, since a slot admitting a
+ * single container type says exactly what to put around the block instead.
+ *
  * @module core/invalid-slots
  */
 import { declaredSlotsOf } from "./block-structure";
 import type { BlockRegistry } from "./registry";
-import { dropSlots, findNode, removeFromSlot, removeSlot } from "./tree";
-import type { BlockNode } from "./types";
+import {
+  dropSlots,
+  findNode,
+  removeFromSlot,
+  removeSlot,
+  wrapInSlot,
+} from "./tree";
+import { DEFAULT_SLOT, type BlockNode, type SlotSpec } from "./types";
 
 /** Where a fault sits, and how to say so to someone who cannot click on it. */
 interface InvalidSlotLocation {
@@ -45,8 +57,8 @@ interface InvalidSlotLocation {
 /**
  * One thing standing between the document and a successful save.
  *
- * A union rather than one shape with optional fields: the three cases need three different
- * repairs, and a `node` that is sometimes absent would let a caller forget which case it holds.
+ * A union rather than one shape with optional fields: each case needs its own repair, and a `node`
+ * that is sometimes absent would let a caller forget which case it holds.
  */
 export type InvalidSlotEntry =
   | (InvalidSlotLocation & {
@@ -82,6 +94,28 @@ export type InvalidSlotEntry =
        * looks at the keys, so with no keys left there is no narrower thing to remove.
        */
       kind: "stray-slots";
+    })
+  | (InvalidSlotLocation & {
+      /**
+       * A block sitting in a slot its parent DOES declare, of a type that slot does not admit.
+       *
+       * The odd one out, and the difference matters to what the author is told: the slot exists,
+       * so the canvas draws this block and they can point at it. What they cannot do is save,
+       * and nothing on the block says why.
+       */
+      kind: "not-allowed";
+      slotName: string;
+      node: BlockNode;
+      type: string;
+      descendantCount: number;
+      /**
+       * The type to put around it instead of deleting it, when the slot leaves no ambiguity.
+       *
+       * Set only where the allowlist names exactly ONE type, that type can hold children, and its
+       * own default slot admits this block — so there is a single correct answer rather than a
+       * choice being made on the author's behalf. `undefined` means removal is the only repair.
+       */
+      wrapWith?: string;
     });
 
 /**
@@ -98,9 +132,38 @@ export type InvalidSlotEntry =
 function declaredFor(
   node: BlockNode,
   registry: BlockRegistry
-): readonly { name: string }[] | undefined {
+): readonly SlotSpec[] | undefined {
   const def = registry.get(node.type);
   return def ? (def.slots ?? []) : declaredSlotsOf(node.type);
+}
+
+/**
+ * The one type that could hold this child inside a restricted slot, if there is exactly one.
+ *
+ * Three conditions, and each removes a way of guessing wrong: one permitted type, so nothing is
+ * being chosen for the author; that type holds children at all; and its own default slot admits
+ * this block, so wrapping produces a document that saves rather than a differently invalid one.
+ */
+function soleWrapperFor(
+  spec: SlotSpec,
+  childType: string,
+  registry: BlockRegistry
+): string | undefined {
+  const permitted = spec.allowedBlocks;
+  if (!permitted || permitted.length !== 1) return undefined;
+  const wrapperType = permitted[0];
+
+  const def = registry.get(wrapperType);
+  const slots = def ? (def.slots ?? []) : declaredSlotsOf(wrapperType);
+  if (!slots) return undefined;
+  if (def && !def.isContainer) return undefined;
+
+  const inner = slots.find(s => s.name === DEFAULT_SLOT);
+  if (!inner) return undefined;
+  if (inner.allowedBlocks && !inner.allowedBlocks.includes(childType)) {
+    return undefined;
+  }
+  return wrapperType;
 }
 
 /**
@@ -166,11 +229,32 @@ export function findInvalidSlotEntries(
     const declared = declaredFor(node, registry);
 
     for (const [slotName, children] of slotNames) {
-      const isDeclared =
-        declared === undefined || declared.some(spec => spec.name === slotName);
+      const spec = declared?.find(s => s.name === slotName);
+      const isDeclared = declared === undefined || spec !== undefined;
 
       if (isDeclared) {
-        for (const child of children) walk(child, here);
+        for (const child of children) {
+          // A DECLARED slot can still hold a child its allowlist refuses, and the write path
+          // refuses the document for it exactly as it does for an undeclared slot name. Reported
+          // here rather than only enforced, because this is the one fault the author can see and
+          // still cannot act on: the block draws, so nothing about it says why saving fails.
+          if (spec?.allowedBlocks && !spec.allowedBlocks.includes(child.type)) {
+            found.push({
+              ...at,
+              key: `not-allowed:${child.id}`,
+              kind: "not-allowed",
+              slotName,
+              node: child,
+              type: child.type,
+              descendantCount: countDescendants(child),
+              wrapWith: soleWrapperFor(spec, child.type, registry),
+            });
+            // Not descended into, for the same reason an undeclared block is not: this entry is
+            // the repair target, and anything beneath it is settled by whichever repair is taken.
+            continue;
+          }
+          walk(child, here);
+        }
         continue;
       }
 
@@ -229,6 +313,24 @@ export function repairInvalidSlot(
       return removeSlot(root, entry.parentId, entry.slotName, declared);
     case "stray-slots":
       return dropSlots(root, entry.parentId);
+    case "not-allowed":
+      // Wrapping keeps the block and its subtree; removal is the fallback for a slot whose
+      // allowlist offers no single type that could hold it.
+      return entry.wrapWith
+        ? wrapInSlot(
+            root,
+            entry.parentId,
+            entry.slotName,
+            entry.node.id,
+            entry.wrapWith
+          )
+        : removeFromSlot(
+            root,
+            entry.parentId,
+            entry.slotName,
+            entry.node.id,
+            declared
+          );
   }
 }
 

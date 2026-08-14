@@ -93,6 +93,100 @@ describe("finding blocks in a slot nothing declares", () => {
     ).toBe(true);
   });
 
+  it("reports a child a DECLARED slot refuses, which is also unsaveable", () => {
+    // The finder's claim is what the write path refuses, and an allowlist refusal is refused
+    // exactly as an undeclared slot name is. Run with the empty registry the config and server
+    // paths have, so it is structure answering rather than a loaded renderer.
+    const root = withSlots("core/container", {
+      default: [
+        withSlots("core/columns", {
+          default: [heading("Left"), heading("Right")],
+        }),
+      ],
+    });
+
+    expect(
+      validateDocument(doc(root), defaultBlockRegistry, { allowUnknown: true })
+    ).toContain("is not allowed in slot");
+
+    const entries = findInvalidSlotEntries(root, defaultBlockRegistry);
+    expect(entries.map(e => e.kind)).toEqual(["not-allowed", "not-allowed"]);
+
+    const repaired = entries.reduce(
+      (tree, entry) => repairInvalidSlot(tree, entry, defaultBlockRegistry),
+      root
+    );
+
+    expect(
+      validateDocument(doc(repaired), defaultBlockRegistry, {
+        allowUnknown: true,
+      })
+    ).toBe(true);
+
+    // The repair KEPT both blocks. Every other entry kind removes, so a repair that quietly
+    // deleted here would still satisfy the validator above and lose the author's content.
+    const row = repaired.slots?.default?.[0];
+    expect(row?.slots?.default).toHaveLength(2);
+    expect(
+      row?.slots?.default?.map(c => c.slots?.default?.[0]?.props?.text)
+    ).toEqual(["Left", "Right"]);
+  });
+
+  it("does not offer a wrapper the inner slot would refuse in turn", () => {
+    // Wrapping is only correct when it produces a SAVEABLE document. A permitted container whose
+    // own default slot excludes the child would move the refusal one level down and leave the
+    // page exactly as unsaveable, while the banner reported the repair as done.
+    const own = createBlockRegistry();
+    own.register({
+      type: "test/row",
+      version: 1,
+      label: "Row",
+      icon: "Square",
+      category: "layout",
+      defaultProps: {},
+      isContainer: true,
+      slots: [{ name: "default", allowedBlocks: ["test/cell"] }],
+      render: () => null,
+    });
+    own.register({
+      type: "test/cell",
+      version: 1,
+      label: "Cell",
+      icon: "Square",
+      category: "layout",
+      defaultProps: {},
+      isContainer: true,
+      slots: [{ name: "default", allowedBlocks: ["test/only"] }],
+      render: () => null,
+    });
+
+    const root = withSlots("test/row", { default: [heading("Refused")] });
+    const [entry] = findInvalidSlotEntries(root, own);
+    expect(entry.kind).toBe("not-allowed");
+    expect(entry.kind === "not-allowed" && entry.wrapWith).toBeUndefined();
+
+    // The control that makes that absence mean something. `undefined` is what every other way of
+    // failing this lookup returns too — an unregistered wrapper, a non-container, a missing
+    // default slot — so the SAME shape with only the inner allowlist widened has to offer it.
+    const permissive = createBlockRegistry();
+    for (const d of own.all()) {
+      permissive.register(
+        d.type === "test/cell" ? { ...d, slots: [{ name: "default" }] } : d
+      );
+    }
+    const [offered] = findInvalidSlotEntries(root, permissive);
+    expect(offered.kind === "not-allowed" && offered.wrapWith).toBe(
+      "test/cell"
+    );
+
+    // And the repair it does prescribe still makes the document save.
+    expect(
+      validateDocument(doc(repairInvalidSlot(root, entry, own)), own, {
+        allowUnknown: true,
+      })
+    ).toBe(true);
+  });
+
   it("drops the emptied slot, because the NAME is what validation refuses", () => {
     // The repair has to remove the slot and not just its contents. Taking the last child out with
     // an ordinary delete leaves the key behind, and the key alone is refused — so an author who
