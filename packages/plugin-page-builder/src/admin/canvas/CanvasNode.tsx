@@ -33,7 +33,12 @@ import { dragSensors } from "../logic/dragSensors";
 import { useEditor } from "../store/EditorProvider";
 
 import { QueryLoopSamplePreview } from "./CanvasQueryLoop";
-import { CanvasDepth, DropZone, useCanvasDepth } from "./DropZone";
+import {
+  CanvasDepth,
+  DropZone,
+  canvasPriority,
+  useCanvasDepth,
+} from "./DropZone";
 
 const BLOCK_TYPE = "nx-block";
 
@@ -236,6 +241,9 @@ function DraggableNode({
     accept: BLOCK_TYPE,
     disabled: dropBeforeIndex == null,
     data: { kind: "dropzone", parentId, slot, index: dropBeforeIndex ?? 0 },
+    // This node's OWN depth: it marks a position among its siblings, so it
+    // competes with the gap zones beside it and must rank alongside them.
+    collisionPriority: canvasPriority(depth),
   });
 
   // Grid itself: "append" target for its own default slot.
@@ -252,6 +260,11 @@ function DraggableNode({
       slot: "default",
       index: appendIndex,
     },
+    // One level IN, unlike `before:` above: this targets a position among the
+    // grid's own children rather than among its siblings, so it ranks with the
+    // zones inside it. Without that a drag over a grid nested in a container
+    // would be claimed by the container holding the grid.
+    collisionPriority: canvasPriority(depth + 1),
   });
 
   const className = classFor(
