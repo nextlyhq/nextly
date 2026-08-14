@@ -5,13 +5,34 @@ import type { ListResponse } from "../lib/api/response-types";
  * Real permission entry shape from the backend.
  * Distinct from the mock `Permission` type in `entities.ts` which is UI-specific.
  */
-export interface ApiPermissionEntry {
+/**
+ * The fields EVERY permission response carries.
+ *
+ * `getPermissionById` selects exactly these plus `category`, so a consumer of
+ * a single permission may rely on them and on nothing else. The list rows carry
+ * more, and {@link ApiPermissionEntry} derives from this rather than restating
+ * it — one shape declared once, widened where the wire is actually wider.
+ */
+export interface ApiPermissionBase {
   id: string;
   name: string;
   slug: string;
   action: string;
   resource: string;
   description: string | null;
+  /** Grouping label the settings page reads; absent unless the row sets one. */
+  category?: string;
+}
+
+/**
+ * A row from the permission LIST endpoint.
+ *
+ * The extra members are list-only: `PermissionService.listPermissions` joins
+ * and maps them, while `getPermissionById` selects the base columns alone. A
+ * single type covering both would promise these on a response that never
+ * carries them — `undefined` at runtime behind a type that says otherwise.
+ */
+export interface ApiPermissionEntry extends ApiPermissionBase {
   /**
    * The plugin that owns this permission, or null for one the seeder owns.
    *
@@ -36,8 +57,6 @@ export interface ApiPermissionEntry {
   orphaned: boolean;
   /** True for a permission the admin should warn before granting. */
   danger: boolean;
-  /** Grouping label the settings page reads; absent unless the row sets one. */
-  category?: string;
 }
 
 // Canonical pagination meta is { total, page, limit, totalPages, hasNext,
