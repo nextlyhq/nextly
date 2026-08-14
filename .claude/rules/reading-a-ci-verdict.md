@@ -120,13 +120,31 @@ looks populated whatever happened to the one you care about. Pin `--commit` to
 the head you are gating, and ask per required workflow rather than eyeballing a
 mixed list.
 
-A genuine dropped trigger returns NO run for that workflow at that commit. A
-busy queue returns one, `queued`.
+A busy queue returns a run, `queued`. **An empty result is not yet a finding**,
+because three different things produce it and only one is a defect:
+
+- **a dropped trigger** — the event should have started this workflow and did
+  not. A push re-triggers it.
+- **a path filter excluded the commit** — `paths` or `paths-ignore` in the
+  workflow's own `on:` block. Legitimate, and nothing is wrong.
+- **a base filter excluded the PR** — `branches: [main]` against a stacked base,
+  which is the section below.
+
+Settle it by reading that workflow's `on:` block against this commit's diff, not
+by looking harder at the run list. All three return the same nothing.
+
+**Measured on this very PR**, which is the cheapest available demonstration:
+`integration.yml` declares `paths-ignore: ["docs/**", "**/*.md"]`, the diff is
+one `.md` file, and the workflow correctly produces no run at all. Reading that
+absence as a dropped trigger would mean pushing to "fix" a filter doing its job —
+and, because `ci.yml` was `queued` at that moment, the push would have cancelled
+the one run that mattered.
 
 **The remedies are opposite, which is why guessing is expensive.** Any push
 re-triggers a genuinely dropped run. Pushing at a queued one CANCELS the
 in-flight run and re-queues it at the back, so the fix for one is the way to
-lose another hour on the other.
+lose another hour on the other — and the fix for a path-filtered absence is to
+do nothing at all.
 
 ## A stacked base runs none of the jobs that gate a merge
 
