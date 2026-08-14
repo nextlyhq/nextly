@@ -86,9 +86,13 @@ jobs:
           node scripts/ci-verdict.mjs "$PR_NUMBER"
           code=$?
           set -e
+          # 10 is the script's own "this pull request is not ready". Node exits
+          # 1 for any uncaught exception, so 1 must NOT be read as a verdict:
+          # treating it as one reported a considered answer for a run that
+          # died on `Cannot find module` and never reached any code.
           case "$code" in
-            0) echo "::notice title=Review verdict::CLEAN" ;;
-            1) echo "::notice title=Review verdict::not clean — see the JSON above" ;;
-            *) echo "::error title=Review verdict::the gate could not run (exit $code)"
-               exit "$code" ;;
+            0)  echo "::notice title=Review verdict::CLEAN" ;;
+            10) echo "::notice title=Review verdict::not clean — see the JSON above" ;;
+            *)  echo "::error title=Review verdict::the gate could not run (exit $code)"
+                exit "$code" ;;
           esac

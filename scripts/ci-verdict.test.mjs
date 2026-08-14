@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  EXIT_NOT_CLEAN,
   changesRequested,
   missingReviewers,
   rateLimited,
@@ -110,7 +111,7 @@ describe("changesRequested", () => {
     expect(r.unresolved_threads).toBe(0);
     expect(r.missing_reviews).not.toContain(CODEX);
     expect(r.verdict).toBe("CHANGES REQUESTED");
-    expect(r.exitCode).toBe(1);
+    expect(r.exitCode).toBe(EXIT_NOT_CLEAN);
   });
 
   /**
@@ -364,13 +365,13 @@ describe("verdictFor", () => {
   it("refuses with a nonzero code when a blocking reviewer has not seen the head", () => {
     const v = verdictFor({ missing: [CODEX], blocking: [CODEX] });
     expect(v.verdict).toBe("MISSING REVIEW AT HEAD");
-    expect(v.exitCode).toBe(1);
+    expect(v.exitCode).toBe(EXIT_NOT_CLEAN);
   });
 
   it("refuses while any thread is open", () => {
     const v = verdictFor({ unresolved: 1, blocking: [CODEX] });
     expect(v.verdict).toBe("UNRESOLVED THREADS");
-    expect(v.exitCode).toBe(1);
+    expect(v.exitCode).toBe(EXIT_NOT_CLEAN);
   });
 
   /**
@@ -389,7 +390,7 @@ describe("verdictFor", () => {
     });
     expect(r.missing_reviews).toContain(CODEX);
     expect(r.verdict).toBe("REVIEWER RATE LIMITED");
-    expect(r.exitCode).toBe(1);
+    expect(r.exitCode).toBe(EXIT_NOT_CLEAN);
   });
 
   /**
@@ -448,7 +449,7 @@ describe("a pull request that is no longer open", () => {
     });
     expect(v.verdict).toBe("MERGED WITH UNMERGED CANDIDATES");
     expect(v.detail).toEqual({ state: "MERGED", unmergedCandidates: 4 });
-    expect(v.exitCode).toBe(1);
+    expect(v.exitCode).toBe(EXIT_NOT_CLEAN);
   });
 
   /** A merged pull request whose branch did not move afterwards is done. */
@@ -466,7 +467,7 @@ describe("a pull request that is no longer open", () => {
   it("refuses a closed pull request rather than calling it merged", () => {
     const v = verdictFor({ blocking: [CODEX], state: "CLOSED", stranded: 0 });
     expect(v.verdict).toBe("CLOSED WITHOUT MERGING");
-    expect(v.exitCode).toBe(1);
+    expect(v.exitCode).toBe(EXIT_NOT_CLEAN);
   });
 
   /**
@@ -513,6 +514,6 @@ describe("report", () => {
   it("refuses when the blocking reviewer only reviewed an earlier commit", () => {
     const r = report({ ...base, reviews: [review(CODEX, OLD)] });
     expect(r.verdict).toBe("MISSING REVIEW AT HEAD");
-    expect(r.exitCode).toBe(1);
+    expect(r.exitCode).toBe(EXIT_NOT_CLEAN);
   });
 });

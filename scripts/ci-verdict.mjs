@@ -31,6 +31,16 @@ export const RATE_LIMIT_MARKER = /Review limit reached/;
 const SUBMITTED = new Set(["APPROVED", "CHANGES_REQUESTED", "COMMENTED"]);
 
 /**
+ * Exit code for a verdict that REFUSES, as distinct from a failure to answer.
+ *
+ * Deliberately not 1. Node exits 1 for any uncaught exception — a missing
+ * module, a bad import, a crash — so a caller reading 1 as "the pull request is
+ * not ready" cannot tell that apart from "this program did not run", and
+ * reports a considered verdict for a process that reached no code at all.
+ */
+export const EXIT_NOT_CLEAN = 10;
+
+/**
  * The reviewer logins that submitted any review at `head`.
  *
  * Matched on the COMPLETE login. GitHub app logins carry a `[bot]` suffix, so
@@ -206,7 +216,7 @@ export function verdictFor({
         stranded > 0 ? "MERGED WITH UNMERGED CANDIDATES" : "ALREADY MERGED",
 
       detail: { state, unmergedCandidates: stranded },
-      exitCode: stranded > 0 ? 1 : 0,
+      exitCode: stranded > 0 ? EXIT_NOT_CLEAN : 0,
     };
   }
   // Closed without merging is a refusal, not a completion. Sharing the merged
@@ -215,7 +225,7 @@ export function verdictFor({
     return {
       verdict: "CLOSED WITHOUT MERGING",
       detail: { state, unmergedCandidates: stranded },
-      exitCode: 1,
+      exitCode: EXIT_NOT_CLEAN,
     };
   }
 
@@ -231,14 +241,14 @@ export function verdictFor({
     return {
       verdict: "REVIEWER RATE LIMITED",
       detail: blockingLimited,
-      exitCode: 1,
+      exitCode: EXIT_NOT_CLEAN,
     };
   }
   if (blockingMissing.length > 0) {
     return {
       verdict: "MISSING REVIEW AT HEAD",
       detail: blockingMissing,
-      exitCode: 1,
+      exitCode: EXIT_NOT_CLEAN,
     };
   }
   // Checked alongside open threads rather than after them, because a review
@@ -247,11 +257,15 @@ export function verdictFor({
     return {
       verdict: "CHANGES REQUESTED",
       detail: blockingRefused,
-      exitCode: 1,
+      exitCode: EXIT_NOT_CLEAN,
     };
   }
   if (unresolved > 0) {
-    return { verdict: "UNRESOLVED THREADS", detail: unresolved, exitCode: 1 };
+    return {
+      verdict: "UNRESOLVED THREADS",
+      detail: unresolved,
+      exitCode: EXIT_NOT_CLEAN,
+    };
   }
   return { verdict: "CLEAN", detail: null, exitCode: 0 };
 }
