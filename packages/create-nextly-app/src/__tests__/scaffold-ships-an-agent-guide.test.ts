@@ -437,6 +437,74 @@ describe("scaffolding over a project that already has these files", () => {
     );
   }, 30_000);
 
+  it("treats managed markers inside a fenced example as text, not a region", async () => {
+    // A guide can legitimately DOCUMENT the markers. Read literally, that example is a region a
+    // regeneration owns — so the generated block lands inside the code fence, where it is not
+    // active instruction, and the developer's example is destroyed.
+    const after = await scaffoldOver({
+      "AGENTS.md": [
+        "# Our guide",
+        "",
+        "Scaffolded projects carry a managed block that looks like this:",
+        "",
+        "```markdown",
+        "<!-- nextly:managed:start -->",
+        "generated content goes here",
+        "<!-- nextly:managed:end -->",
+        "```",
+        "",
+        "Do not edit inside it.",
+      ].join("\n"),
+    });
+
+    expect(after["AGENTS.md"]).toContain("generated content goes here");
+    expect(after["AGENTS.md"]).toContain("Do not edit inside it.");
+    // Appended below their file, because it holds no real managed region.
+    expect(after["AGENTS.md"]).toContain("Agent guide for this Nextly project");
+  }, 30_000);
+
+  it("adds a real pointer when the matching line is only an example", async () => {
+    const after = await scaffoldOver({
+      "CLAUDE.md": [
+        "# Notes",
+        "",
+        "A Nextly scaffold writes a pointer that reads:",
+        "",
+        "```",
+        "@AGENTS.md",
+        "```",
+      ].join("\n"),
+    });
+
+    // The fenced occurrence is text about the file. Without a real include line, Claude Code
+    // never reads the guide — so the pointer must still be added.
+    const lines = after["CLAUDE.md"].split("\n").map(l => l.trim());
+    const firstFence = lines.indexOf("```");
+    expect(firstFence).toBeGreaterThan(-1);
+    // Scaffold lines are written ABOVE the developer's content, so an active include sits
+    // before the fenced example rather than after it. Their example survives either way.
+    const active = lines.findIndex(l => l === "@AGENTS.md");
+    expect(active).toBeGreaterThan(-1);
+    expect(active).toBeLessThan(firstFence);
+  }, 30_000);
+
+  it("does not close an indirect pointer cycle", async () => {
+    // `AGENTS.md` already includes `@CLAUDE.md`. That is inert while CLAUDE.md is absent —
+    // writing the pointer is what makes the pair include each other.
+    const after = await scaffoldOver({
+      "AGENTS.md": "# Ours\n\n@CLAUDE.md\n\nHouse rules live in CLAUDE.md.\n",
+    });
+
+    expect(after["AGENTS.md"]).toContain("House rules live in CLAUDE.md.");
+    const claude = await readFile(
+      path.join(workdir, "project", "CLAUDE.md"),
+      "utf-8"
+    ).catch(() => "");
+    expect(claude.split("\n").filter(l => l.trim() === "@AGENTS.md")).toEqual(
+      []
+    );
+  }, 30_000);
+
   it("does not write through a CLAUDE.md symlink", async () => {
     workdir = await mkdtemp(path.join(tmpdir(), "nextly-symlink-"));
     const target = path.join(workdir, "project");
