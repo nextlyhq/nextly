@@ -67,7 +67,7 @@ export const EXIT_NOT_CLEAN = 10;
  * login containing the name, letting any account that can comment present
  * itself as a trusted reviewer.
  */
-export function reviewersAtHead(reviews, head) {
+export function reviewersAtHead(reviews, head, since = undefined) {
   if (!Array.isArray(reviews) || typeof head !== "string" || head === "") {
     return [];
   }
@@ -77,10 +77,19 @@ export function reviewersAtHead(reviews, head) {
     // Only a SUBMITTED opinion is coverage. Allowing every state that is not
     // `PENDING` would count a withdrawn review, and a state this code has not
     // seen before would default to counting rather than to refusing.
+    // A review submitted BEFORE the base last moved is evidence about a diff
+    // that no longer exists. Its `commit_id` still names the current head, so
+    // nothing about the revision gives it away — the base moved underneath it.
+    // A review with no timestamp cannot be shown to postdate the change, and
+    // unknown is not the same as covered.
+    const withinScope =
+      since === undefined ||
+      (typeof review?.submitted_at === "string" && review.submitted_at > since);
     if (
       typeof login === "string" &&
       review?.commit_id === head &&
-      SUBMITTED.has(review?.state)
+      SUBMITTED.has(review?.state) &&
+      withinScope
     ) {
       seen.add(login);
     }
@@ -236,8 +245,8 @@ function approvalCovers(
 }
 
 /** Required reviewers with no review at `head`, in the order they were required. */
-export function missingReviewers(reviews, head, required) {
-  const seen = new Set(reviewersAtHead(reviews, head));
+export function missingReviewers(reviews, head, required, since = undefined) {
+  const seen = new Set(reviewersAtHead(reviews, head, since));
   return (required ?? []).filter(login => !seen.has(login));
 }
 
@@ -389,6 +398,7 @@ export function verdictFor({
  */
 export function report({
   head,
+  coverageSince = undefined,
   revisionOrder,
   revisionOrderComplete = false,
   reviews,
@@ -409,7 +419,7 @@ export function report({
     login => !blockingList.includes(login)
   );
   const required = [...new Set([...blockingList, ...effectiveAdvisory])];
-  const missing = missingReviewers(reviews, head, required);
+  const missing = missingReviewers(reviews, head, required, coverageSince);
   const unresolved = unresolvedThreads(threads, effectiveAdvisory);
   const limited = rateLimited(issueComments);
   // Coverage is asked at the head; a standing objection is asked of the whole
@@ -464,7 +474,7 @@ export function report({
     // Named for what the range establishes — absence from the merge — rather
     // than for the conclusion only a content comparison can reach.
     unmerged_candidates: stranded,
-    reviewed_head: reviewersAtHead(reviews, head),
+    reviewed_head: reviewersAtHead(reviews, head, coverageSince),
     missing_reviews: missing,
     // JSON has no infinity, so an unavailable count would serialise as `null`
     // and read like a zero to anything consuming the report as data.
@@ -840,6 +850,24 @@ async function main(argv) {
   // resetting it back to the merged head leaves an empty range indistinguishable
   // from a branch that never advanced. Counted rather than inspected, because
   // the timeline records that the ref moved and not what it moved away from.
+  // The moment the base last moved, or `undefined` when it never has.
+  // `base_ref_changed` is GitHub's own name for the event; there is no
+  // structural alternative, because a review record carries no base of its own.
+  const baseChangedAt = () => {
+    const at = gh([
+      "api",
+      "--paginate",
+      "--slurp",
+      `repos/${repo}/issues/${pr}/timeline?per_page=100`,
+    ])
+      .flat()
+      .filter(event => event?.event === "base_ref_changed")
+      .map(event => event?.created_at)
+      .filter(value => typeof value === "string")
+      .sort();
+    return at.length > 0 ? at[at.length - 1] : undefined;
+  };
+
   const rewriteEvents = () =>
     gh([
       "api",
@@ -888,6 +916,9 @@ async function main(argv) {
       // stays put, so head equality alone would reuse reviews taken when the
       // parent stack was not in scope.
       base: live.baseRefOid,
+      // Read inside the snapshot so a retarget landing mid-run moves the stamp
+      // rather than silently widening the diff the verdict describes.
+      baseChangedAt: baseChangedAt(),
       reviews: rv,
       threads: th,
       issueComments: ic,
@@ -904,6 +935,7 @@ async function main(argv) {
       s.state,
       s.mergedHead,
       s.base,
+      s.baseChangedAt,
       s.rewrites,
       fingerprint(s.reviews, s.threads, s.issueComments),
     ]);
@@ -1003,6 +1035,7 @@ async function main(argv) {
 
     const candidate = report({
       head,
+      coverageSince: observed.baseChangedAt,
       revisionOrder,
       revisionOrderComplete,
       reviews: observed.reviews,
