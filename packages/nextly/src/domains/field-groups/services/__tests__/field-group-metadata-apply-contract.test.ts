@@ -471,6 +471,73 @@ describe("an update whose row write fails after the tables moved", () => {
     expect(registry.updateComponent).toHaveBeenCalledTimes(1);
   });
 
+  // 🔴 MySQL has no `RETURNING`, so `DrizzleAdapter.update` UPDATEs and then SELECTs the row back
+  // (`adapter.ts:1339-1345`). A failure in that second query raises out of a write that already
+  // committed — and marking a synchronized row as diverged, bumping its version again and telling
+  // the caller its definition is stale would all be false.
+  it("returns the row when the write landed and only the read-back failed", async () => {
+    const registry = registryWhoseWriteFails({});
+    // The row the re-read finds: already carrying this edit's field set, which is what a committed
+    // UPDATE followed by a failed SELECT leaves behind.
+    const settledHash = await (async () => {
+      const { calculateSchemaHash } = await import(
+        "../../../schema/services/schema-hash"
+      );
+      return calculateSchemaHash([
+        { name: "heading", type: "text" },
+        { name: "subheading", type: "text" },
+      ] as never);
+    })();
+    registry.getComponent = vi.fn().mockResolvedValue({
+      ...registry.record,
+      schemaHash: settledHash,
+    });
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    const result = await service.updateFieldGroup({
+      slug: "hero",
+      fields: [
+        { name: "heading", type: "text" },
+        { name: "subheading", type: "text" },
+      ] as never,
+    });
+
+    expect(result.record).toMatchObject({ slug: "hero" });
+    // 🔴 And NOTHING was marked. Asserting only that it resolved would pass on an implementation
+    // that recorded a divergence and then returned anyway.
+    expect(registry.updateComponent).toHaveBeenCalledTimes(1);
+  });
+
+  // The control that keeps the re-read from swallowing a real divergence: a row that does NOT
+  // carry the edit still takes the diverged path.
+  it("still records the divergence when the re-read shows the old shape", async () => {
+    const registry = registryWhoseWriteFails({});
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    const refusal = await service
+      .updateFieldGroup({
+        slug: "hero",
+        fields: [
+          { name: "heading", type: "text" },
+          { name: "subheading", type: "text" },
+        ] as never,
+      })
+      .catch((error: unknown) => error);
+
+    expect((refusal as NextlyError).publicMessage).toContain(
+      "Do not retry the same edit"
+    );
+    expect(registry.updateComponent).toHaveBeenCalledTimes(2);
+  });
+
   it("raises the original error, unmarked, when nothing physical moved", async () => {
     // 🔴 The control that stops this becoming a blanket rewrite of every failed update. A label-only
     // edit issues no DDL, so a failed write leaves the row describing the database correctly. There

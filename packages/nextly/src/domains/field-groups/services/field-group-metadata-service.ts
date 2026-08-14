@@ -370,9 +370,58 @@ export class FieldGroupMetadataService {
       // nothing, so the row still describes the database correctly and there is no divergence to
       // record — marking it `failed` there would invent a repair for a state that is fine.
       if (!movedSchema) throw error;
+      // 🔴 A throw from the registry does NOT mean the row went unwritten.
+      //
+      // MySQL has no `RETURNING`, so `DrizzleAdapter.update` runs the UPDATE and then SELECTs the
+      // row back on the same executor. A failure in that second query raises out of a write that
+      // already committed — and marking a fully synchronized row as diverged, bumping its version
+      // again and telling the caller its definition is stale would all be false.
+      //
+      // Asked of the DATABASE rather than inferred from the error, because no error shape
+      // distinguishes the two: the read-back and the write raise through the same path.
+      const settled = await this.readBackSettledRow(input, requestedLocalized);
+      if (settled) {
+        this.logger.warn(
+          "[FieldGroups] The registry write raised but the row already carries the change; the error was in reading it back.",
+          { slug: input.slug }
+        );
+        return { record: settled };
+      }
       // Returns `never`, so this is a raise rather than a value — written as a return so the
       // compiler, not a comment, is what establishes that nothing falls out of this method.
       return await this.recordUnrecordedTransition(input.slug, existing, error);
+    }
+  }
+
+  /**
+   * Re-read the row and answer whether it ALREADY carries this edit.
+   *
+   * Only the properties this edit actually sent are compared, and only the ones that decide the
+   * physical shape: this is reached exclusively when the tables moved, which means `fields`,
+   * `localized`, or both were present. Comparing anything else would let a concurrent label edit
+   * decide whether a schema transition was recorded.
+   *
+   * `null` on any doubt — including a re-read that itself fails, which is the likely case when the
+   * database is the reason the first write raised. Doubt has to resolve to "not settled": treating
+   * an unreadable row as written would swallow a real divergence, which is the failure this whole
+   * path exists to surface.
+   */
+  private async readBackSettledRow(
+    input: UpdateFieldGroupInput,
+    requestedLocalized: boolean | undefined
+  ): Promise<DynamicFieldGroupRecord | null> {
+    try {
+      const current = await this.registry.getComponent(input.slug);
+      if (input.fields !== undefined) {
+        if (current.schemaHash !== (await this.hashFields(input.fields)))
+          return null;
+      }
+      if (requestedLocalized !== undefined) {
+        if ((current.localized === true) !== requestedLocalized) return null;
+      }
+      return current;
+    } catch {
+      return null;
     }
   }
 
