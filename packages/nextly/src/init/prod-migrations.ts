@@ -9,6 +9,7 @@
 
 import { resolve } from "node:path";
 
+import { clearServices } from "../di";
 import { resolveDeclaredSchema } from "../domains/schema/migrate/resolved-schema";
 import { NextlyError } from "../errors";
 
@@ -225,6 +226,20 @@ export async function runProdMigrationsIfEnabled(
       // Recorded BEFORE rethrowing, so the next request through either entry
       // point refuses too rather than finding services already registered.
       globalForBootMigrations.__nextly_bootMigrationsRefused = fatal;
+      // Reopen the registration gate, or the sticky flag above is unreachable.
+      // Both entry points call this helper only inside
+      // `if (!isServicesRegistered())`, and `registerServices()` has already
+      // made that false by the time we get here — so a second request would
+      // skip this helper entirely, build the dispatcher, and serve. Clearing
+      // registration is ONE edit at the point of refusal; adding the check to
+      // both caller gates would be the same fix wired into two places, which is
+      // how the original defect survived in the first place.
+      //
+      // It costs a re-registration per request on a process that now fails
+      // every request. That is the right trade: the process is refusing to
+      // serve and wants restarting, and a wasted registration is cheaper than a
+      // request served against a schema nobody verified.
+      clearServices();
       logger.error(`[Nextly] ${fatal.publicMessage}`);
       throw fatal;
     }

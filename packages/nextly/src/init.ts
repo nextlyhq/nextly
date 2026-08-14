@@ -259,7 +259,12 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
 
         // Production sibling of boot-apply: when `db.runMigrationsOnBoot` is on,
         // apply committed migration files (prod only; no-op in dev). Wired at
-        // both init entry points. Failure-safe — it logs but never throws.
+        // both init entry points.
+        //
+        // NOT failure-safe, deliberately, and it used to say it was. Ordinary
+        // failures are still logged and swallowed, but a boot that could not
+        // establish whether migrations ran THROWS: serving a schema nobody
+        // verified is worse than not starting.
         const { runProdMigrationsIfEnabled } = await import(
           "./init/prod-migrations"
         );
