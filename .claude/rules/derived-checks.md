@@ -239,15 +239,31 @@ checked, rather than leaving it under suspicion. If any fails, the check is the
 problem, and only then is it worth asking which of three things is unreliable —
 the remedies differ, and applying the wrong one looks like diligence:
 
-- **The READ** — the check cannot see what it is looking at. Replace the
-  instrument, do not extend it. A regex over source becomes a walk over the
-  compiler's AST; an AST prediction of a runtime value becomes the runtime value
-  itself. Worked example: a source check for a component's class names took
-  thirteen rounds finding spellings it read wrongly — aliases, namespace
-  imports, `{...{ className }}`, `+` concatenation, template interpolation,
-  character references. Each fix was right. The surface it was covering was the
-  whole language, so the only end was to stop predicting the string and read it
-  where it already exists.
+- **The READ** — the check cannot see what it is looking at. Before reaching
+  for a rewrite, separate two cases a failed control cannot tell apart, because
+  it proves only that the reader did not see the value, never that its
+  instrument could not represent it:
+  - a **repairable omission** — the instrument represents the thing fine and
+    the reader forgot a case. An AST visitor that misses default imports, or a
+    node kind it never listed, is this. Extend it; a rewrite here throws away a
+    correct approach and starts the same list of cases over.
+  - an **abstraction mismatch** — the instrument cannot represent the thing at
+    all, so every fix buys one spelling and the list has no end. A regex over
+    source cannot represent nesting; an AST cannot represent a value that only
+    exists at runtime. Replace it: a regex becomes a walk over the compiler's
+    own AST, an AST prediction of a runtime value becomes the runtime value.
+
+  The tell is whether the fixes CONVERGE. Worked example of the second: a source
+  check for a component's class names took thirteen rounds finding spellings it
+  read wrongly — aliases, namespace imports, `{...{ className }}`, `+`
+  concatenation, template interpolation, character references. Each fix was
+  right and each was followed by another, because the surface was the whole
+  language. The end was to stop predicting the string and read it where it
+  already exists. Worked example of the first: a JSX visitor that missed
+  fragments, and later an identifier wrapped in a conditional. Two gaps, both
+  closed by asking what ENCLOSES a node rather than matching one relationship —
+  and the AST was the right instrument throughout.
+
 - **The CLASSIFICATION or the POPULATION** — the check sees correctly and
   decides wrongly, or looks at the wrong set. Identify by structure rather than
   by a proxy, or enumerate the members instead of counting them. Worked example:
