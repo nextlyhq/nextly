@@ -32,6 +32,7 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { readRequestLocalized } from "../../../dispatcher/helpers/request-localized";
 import { NextlyError } from "../../../errors";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type {
@@ -73,6 +74,34 @@ export type CreateFieldGroupInput = Omit<
 export interface CreateFieldGroupResult {
   record: DynamicFieldGroupRecord;
   migrationStatus: FieldGroupMigrationStatus;
+}
+
+/**
+ * A field group's metadata edit, with the physical change it implies.
+ *
+ * Every property is optional and `undefined` means UNTOUCHED rather than cleared, which is the
+ * shape all three transports already spoke — a PATCH that omits `label` must not erase it. The
+ * distinction matters most for `localized`: absent leaves the persisted value alone, while `false`
+ * is a request to disable and moves data back out of the companion table.
+ */
+export interface UpdateFieldGroupInput {
+  slug: string;
+  label?: string;
+  description?: string;
+  admin?: Record<string, unknown>;
+  fields?: FieldDefinition[];
+  localized?: boolean;
+  /**
+   * Who is asking, which decides whether a LOCKED field group may be written.
+   *
+   * A locked field group is owned by code, so only the code-first sync may change it. Defaulting to
+   * `"ui"` means a transport that forgets to say gets the restrictive answer.
+   */
+  source?: "ui" | "code";
+}
+
+export interface UpdateFieldGroupResult {
+  record: DynamicFieldGroupRecord;
 }
 
 export class FieldGroupMetadataService {
@@ -192,6 +221,207 @@ export class FieldGroupMetadataService {
     }
 
     return { record, migrationStatus };
+  }
+
+  /**
+   * Change a field group's schema and its registry row, as one operation.
+   *
+   * 🔴 The founding defect of this service, still live on the UPDATE path until now. Three
+   * transports edit a field group and only the dispatcher moved the physical schema: the mounted
+   * route and the Direct API wrote new `fields` and a new `schema_hash` to the registry and ran no
+   * DDL at all, because the provisioning was private to the dispatcher. The row then described
+   * columns the table did not have. Bounded rather than silent — the registry marks
+   * `migration_status: "pending"` and a preview introspects the live database — but two transports
+   * performing different halves of one operation is not a difference any caller can be expected to
+   * know about.
+   *
+   * Inside the exclusion for the same reasons the create is, and one more. Rendering the companion
+   * transition consults the process-global field-type registry, which an HMR reload replaces
+   * wholesale from inside this same exclusion; and the OLD fields this diffs against are read here
+   * rather than passed in, so a concurrent writer cannot make the transition describe a shape that
+   * is no longer current.
+   */
+  async updateFieldGroup(
+    input: UpdateFieldGroupInput
+  ): Promise<UpdateFieldGroupResult> {
+    // 🔴 Validated BEFORE the exclusion, because it is a PRECONDITION and preconditions run first.
+    // Inside, the flag below has already given this request permission to create the lock table, so
+    // a deployment whose role holds DML but not DDL answers an invalid `localized` with a database
+    // permission error instead of the validation error that actually describes it — a caller told
+    // the wrong thing about their own mistake. Nothing here reads the database, so there is no
+    // reason for it to wait behind a lock.
+    const requestedLocalized = readRequestLocalized(input);
+
+    return withSchemaChangeExcluded(
+      {
+        adapter: this.adapter,
+        logger: this.logger,
+        label: `update field group "${input.slug}"`,
+        // 🔴 Derived from the request, CONSERVATIVELY, because claiming DDL is not free: the
+        // exclusion may create and seed its lock table, and a deployment whose role holds DML but
+        // not DDL then fails an otherwise valid metadata edit on that `CREATE TABLE`.
+        //
+        // `fields` or `localized` being PRESENT is the conservative test, not whether they turn out
+        // to differ from what is stored. A `localized` toggle carries no fields while moving every
+        // translatable column, so reading the request for "does this touch schema" has to treat the
+        // key's presence as a yes — the comparison that would say otherwise needs the stored row,
+        // which cannot be read before deciding whether to take the lock that protects reading it.
+        issuesDdl: input.fields !== undefined || input.localized !== undefined,
+      },
+      () => this.updateFieldGroupExcluded(input, requestedLocalized)
+    );
+  }
+
+  private async updateFieldGroupExcluded(
+    input: UpdateFieldGroupInput,
+    /** Already validated by the caller, which runs outside the lock. */
+    requestedLocalized: boolean | undefined
+  ): Promise<UpdateFieldGroupResult> {
+    // 0. RE-ESTABLISH every precondition, against the state as it is NOW.
+    //
+    // Read inside the exclusion rather than accepted from the caller: whether the field group
+    // exists, whether it is locked, and what its current fields are all decide what this does, and
+    // all three can change while a request waits for the lock.
+    // Raises NOT_FOUND itself when the slug is gone, so there is no absence branch here. One that
+    // existed would be a guard that can never fire, and a guard that cannot fire reads as coverage
+    // while proving nothing.
+    const existing = await this.registry.getComponent(input.slug);
+    if (existing.locked && input.source !== "code") {
+      throw NextlyError.forbidden({
+        logContext: {
+          reason: "component-locked",
+          slug: input.slug,
+          source: input.source ?? "ui",
+        },
+      });
+    }
+    if (input.fields !== undefined) {
+      const { assertValidPluginFieldOptions } = await import(
+        "../../../api/fields-payload"
+      );
+      assertValidPluginFieldOptions(input.fields);
+    }
+
+    const wasLocalized = existing.localized === true;
+    const localized = requestedLocalized ?? wasLocalized;
+    const fields = (input.fields ??
+      existing.fields) as unknown as FieldDefinition[];
+
+    // Gated only on the false -> true transition: a field group that is ALREADY localized must stay
+    // editable after the app's localization config is removed, or its content becomes unreachable.
+    if (!wasLocalized && localized) {
+      const { assertLocalizationConfigured } = await import(
+        "../../i18n/config/require-app-config"
+      );
+      assertLocalizationConfigured("component", input.slug);
+    }
+
+    // 1. MOVE the physical schema, when this edit implies one. A `localized` toggle alone does:
+    // enabling seeds the companion from the main table and drops those columns, disabling restores
+    // and archives them. A save that skipped that would persist the flag while the content stayed
+    // where the runtime no longer looks for it.
+    if (input.fields !== undefined || localized !== wasLocalized) {
+      await this.reconcileCompanion({
+        existing,
+        fields,
+        localized,
+        wasLocalized,
+      });
+    }
+
+    // 2. RECORD, after the physical change succeeded.
+    const record = await this.registry.updateComponent(
+      input.slug,
+      {
+        ...(input.label !== undefined ? { label: input.label } : {}),
+        ...(input.description !== undefined
+          ? { description: input.description }
+          : {}),
+        ...(input.admin !== undefined ? { admin: input.admin } : {}),
+        ...(requestedLocalized !== undefined
+          ? { localized: requestedLocalized }
+          : {}),
+        ...(input.fields !== undefined
+          ? {
+              fields:
+                input.fields as unknown as DynamicFieldGroupInsert["fields"],
+              schemaHash: await this.hashFields(input.fields),
+            }
+          : {}),
+      },
+      { source: input.source ?? "ui" }
+    );
+
+    return { record };
+  }
+
+  /** The stored hash for a field set, from the one implementation the whole pipeline uses. */
+  private async hashFields(fields: FieldDefinition[]): Promise<string> {
+    const { calculateSchemaHash } = await import(
+      "../../schema/services/schema-hash"
+    );
+    return calculateSchemaHash(fields as never);
+  }
+
+  /**
+   * Apply the companion-table transition this edit implies, and let a failure be a failure.
+   *
+   * 🔴 NOT swallowed, and that is a deliberate change from the dispatcher this replaces. It logged
+   * the error and fell through to the registry write, so a transition that failed still committed a
+   * row saying the field group was localized with the new field set — the exact state whose
+   * consequence the code above it describes as content stranded in the wrong table. Refusing leaves
+   * the registry describing the old shape, which is the shape the table still has.
+   *
+   * The runtime rebinding happens only after the move succeeds, for the reason the create path
+   * gives: the binding DESCRIBES the table, so describing a change that did not happen points the
+   * running process at columns nothing created.
+   */
+  private async reconcileCompanion(args: {
+    existing: DynamicFieldGroupRecord;
+    fields: FieldDefinition[];
+    localized: boolean;
+    wasLocalized: boolean;
+  }): Promise<void> {
+    const adapter = this.adapter;
+    if (!adapter) return;
+
+    const {
+      reconcileComponentCompanion,
+      registerComponentRuntimeSchema,
+      resolveComponentTypeColumn,
+    } = await import("./field-group-table-provisioning");
+
+    // 🔴 Probed BEFORE the transition, which is the helper's own documented contract. Resolving it
+    // afterwards means a probe that cannot answer rejects the request with the physical move
+    // already committed — an enable that dropped the main table's columns while the registry still
+    // records the group as non-localized. The discriminator is unaffected by the transition, so
+    // asking first is equivalent and fails while nothing has moved.
+    const typeColumn = await resolveComponentTypeColumn(
+      adapter,
+      args.existing.tableName
+    );
+
+    await reconcileComponentCompanion({
+      slug: args.existing.slug,
+      tableName: args.existing.tableName,
+      oldFields: args.existing.fields as unknown as FieldDefinition[],
+      newFields: args.fields,
+      localized: args.localized,
+      wasLocalized: args.wasLocalized,
+      adapter,
+    });
+
+    registerComponentRuntimeSchema(
+      adapter,
+      this.dialect,
+      args.existing.tableName,
+      args.fields as never,
+      // PROBED, not the constant: unlike the create path this table already exists and the storage
+      // migration may have moved it, so which discriminator column it carries is a fact about the
+      // database rather than something this code can infer from its own version.
+      typeColumn,
+      args.localized
+    );
   }
 
   /**

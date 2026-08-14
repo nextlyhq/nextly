@@ -26,3 +26,18 @@ export function permissionCollisionError(
     logContext: { reason, action, resource, owners },
   });
 }
+
+/**
+ * Whether an error is the boot-time rejection of a custom-permission
+ * declaration, as opposed to any other failure the collector might surface.
+ *
+ * Exported so a caller that must DEGRADE on an invalid declaration — the public
+ * admin-meta payload, which is served before any transformer has run — can
+ * absorb exactly that and let a real defect through. Matched on the code rather
+ * than by catching everything, for the same reason the codes exist.
+ */
+export function isPermissionCollision(error: unknown): boolean {
+  return (
+    error instanceof NextlyError && error.code === "NEXTLY_PERMISSION_COLLISION"
+  );
+}
