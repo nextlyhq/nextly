@@ -407,6 +407,24 @@ describe("a configuration whose parse is not a fixed point", () => {
     );
   });
 
+  // An ORDINARY object can empty itself too, by defining a `toJSON` that
+  // returns nothing while the object holds real values. Deciding this by
+  // prototype would exempt it — the prototype is `Object.prototype` — so
+  // emptiness has to be judged by whether the value genuinely held nothing.
+  it("refuses a plain object whose own toJSON discards its fields", async () => {
+    register("self-emptying", input => {
+      const value = input as { apiKey: unknown; headers?: unknown };
+      return {
+        apiKey: String(value.apiKey),
+        headers: value.headers ?? { token: "ops", toJSON: () => ({}) },
+      };
+    });
+
+    await expect(write("self-emptying", { apiKey: "k" })).rejects.toThrow(
+      /at headers that keeps nothing when written as JSON/
+    );
+  });
+
   // The boundary case that stops the rule above from over-reaching: a plain
   // empty object also serialises to `{}` and has lost nothing, because there
   // was nothing to lose. Refusing it would reject an ordinary configuration

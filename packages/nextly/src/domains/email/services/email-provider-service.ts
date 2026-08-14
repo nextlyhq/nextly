@@ -460,14 +460,33 @@ export class EmailProviderService extends BaseService {
    * `Set` becomes `{}` and keeps nothing, because its entries are not own
    * enumerable properties and `JSON.stringify` reads nothing else.
    *
-   * Only NON-ORDINARY objects are asked. A plain `{}` also projects to `{}`
-   * and has lost nothing -- it was empty -- and the same is true of an object
-   * whose only keys held `undefined`, which is how an absent optional field is
-   * ordinarily written.
+   * EVERY object is asked, including ordinary ones. An empty projection is
+   * honest only when the value genuinely held nothing JSON could carry, and
+   * the prototype does not decide that: `{ token: "ops", toJSON: () => ({}) }`
+   * is as ordinary as an object gets and still discards its token. What
+   * separates the cases is whether anything was there to lose.
+   *
+   * So a plain `{}` passes because it was empty, and `{ label: undefined }`
+   * passes because `undefined` is how an absent optional field is ordinarily
+   * written. A `Map`, a `Set`, and the self-emptying object above all fail,
+   * for the one reason: they held something and the column would not.
    *
    * @param value - a node of the parsed configuration
    * @param path - the keys walked to reach it, for the message
    */
+  /**
+   * Whether a value is an ordinary object rather than an instance of anything.
+   *
+   * Used only to decide whether an EMPTY projection is believable: an ordinary
+   * object with no fields really is empty, while a `Map` or a `Set` reports no
+   * own enumerable properties because its contents live somewhere
+   * `JSON.stringify` cannot read.
+   */
+  private isOrdinaryObject(value: object): boolean {
+    const prototype: unknown = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
+  }
+
   private emptiedBySerialisation(
     value: unknown,
     path: string[] = []
@@ -487,25 +506,30 @@ export class EmailProviderService extends BaseService {
       return undefined;
     }
 
-    const prototype: unknown = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null) {
-      // Its own serialisation decides this, which is the point: a class that
-      // defines `toJSON` and returns something useful is a coercion, and one
-      // that defines nothing reachable is a loss. `undefined` here means the
-      // key is dropped from its parent entirely, which the caller's own
-      // guards already cover for the root and which is the ordinary meaning
-      // of an absent optional anywhere else.
-      const projection: string | undefined = JSON.stringify(value);
-      if (projection !== undefined) {
-        const asJson: unknown = JSON.parse(projection);
-        if (
-          asJson !== null &&
-          typeof asJson === "object" &&
-          !Array.isArray(asJson) &&
-          Object.keys(asJson).length === 0
-        ) {
-          return label;
-        }
+    // `undefined` means the key is dropped from its parent entirely, which is
+    // the ordinary meaning of an absent optional; the root case is covered by
+    // the caller's own guard.
+    const projection: string | undefined = JSON.stringify(value);
+    if (projection !== undefined) {
+      const asJson: unknown = JSON.parse(projection);
+      const keptNothing =
+        asJson !== null &&
+        typeof asJson === "object" &&
+        !Array.isArray(asJson) &&
+        Object.keys(asJson).length === 0;
+
+      // Whether there was anything to lose. Read from the OWN ENUMERABLE
+      // properties, because those are the only ones `JSON.stringify` would
+      // have written -- so a value carrying state anywhere else (a `Map`'s
+      // entries, a `Set`'s members) reports nothing here and is a loss by
+      // construction. A function is not JSON either way, and a key holding
+      // `undefined` is the absent-optional spelling rather than a value.
+      const heldSomething = Object.values(value).some(
+        entry => entry !== undefined && typeof entry !== "function"
+      );
+
+      if (keptNothing && (heldSomething || !this.isOrdinaryObject(value))) {
+        return label;
       }
     }
 
@@ -1332,9 +1356,14 @@ export class EmailProviderService extends BaseService {
       // the merged input against a stored parsed value reported a change on
       // every save whose parser normalises anything — a trimmed credential
       // differs from its own stored form on the way in, and never after.
+      // Structurally, matching how `storableConfiguration` decides two
+      // configurations are the same value. `JSON.stringify` orders keys by
+      // insertion, so a parser that rebuilds its output field by field
+      // produces different text for an identical configuration -- and a
+      // no-op save would then file a configuration-change audit event
+      // against a credential nobody touched.
       configurationChanged =
-        !existing.readable ||
-        JSON.stringify(existingConfig) !== JSON.stringify(parsedMerged);
+        !existing.readable || !isDeepStrictEqual(existingConfig, parsedMerged);
 
       updateData.configuration = this.encryptConfiguration(parsedMerged);
     }
