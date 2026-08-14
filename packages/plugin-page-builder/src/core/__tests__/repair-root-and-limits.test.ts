@@ -177,32 +177,22 @@ describe("a block permitted under NO parent", () => {
 });
 
 describe("a wrapper that is itself restricted", () => {
-  // `acme/child` may only sit in `acme/wrapper`, which may only sit in `acme/shell`. Offering the
-  // wrapper without asking where IT may sit moves the violation up a level: the banner clears and
-  // `validate` refuses the result, naming the block the repair just inserted.
-  const shell = defineBlock({
-    name: "acme/shell",
+  /**
+   * `acme/incolumn` may only sit in `core/column`, and `core/column` may only sit in
+   * `core/columns`. Restrictions chain, so offering the wrapper without asking where IT may sit
+   * moves the violation up a level: the banner clears and `validate` refuses the result, naming
+   * the block the repair just inserted.
+   *
+   * The wrapper is a CORE block deliberately. A contributed one is refused earlier, by the guard
+   * that declines wrappers this build cannot construct — so a test using one would pass without
+   * ever reaching the restriction being checked here.
+   */
+  const inColumn = defineBlock({
+    name: "acme/incolumn",
     version: 1,
-    description: "The only place a wrapper may sit.",
+    description: "Belongs in a column.",
     example: { props: {} },
-    slots: { default: {} },
-    render: () => null,
-  });
-  const wrapper = defineBlock({
-    name: "acme/wrapper",
-    version: 1,
-    description: "Restricted itself.",
-    example: { props: {} },
-    slots: { default: {} },
-    parent: ["acme/shell"],
-    render: () => null,
-  });
-  const child = defineBlock({
-    name: "acme/child",
-    version: 1,
-    description: "Belongs in the wrapper.",
-    example: { props: {} },
-    parent: ["acme/wrapper"],
+    parent: ["core/column"],
     render: () => null,
   });
 
@@ -211,19 +201,35 @@ describe("a wrapper that is itself restricted", () => {
   });
 
   it("is not offered where it could not sit", () => {
-    registerBlocks([shell, wrapper, child], { source: "@acme/blocks" });
-    // `core/container` is not `acme/shell`, so the wrapper may not sit here either.
-    const root = node("core/container", { default: [node("acme/child")] });
+    registerBlocks([inColumn], { source: "@acme/blocks" });
+    // A `core/column` may only sit in `core/columns`, and this is a `core/container`.
+    const root = node("core/container", { default: [node("acme/incolumn")] });
     const [entry] = findInvalidSlotEntries(root, registry);
-    expect(entry).toMatchObject({ kind: "not-allowed", type: "acme/child" });
+    expect(entry).toMatchObject({ kind: "not-allowed", type: "acme/incolumn" });
     expect((entry as { wrapWith?: string }).wrapWith).toBeUndefined();
   });
 
-  it("is not offered as a ROOT, because a root sits inside nothing", () => {
-    registerBlocks([shell, wrapper, child], { source: "@acme/blocks" });
-    const root = node("acme/child");
+  it("IS offered where it could sit, so the refusal above is about placement", () => {
+    // The separating control. Inside a `core/columns`, wrapping in `core/column` is legal and is
+    // exactly the repair to offer — without this, a guard that refused every restricted wrapper
+    // would pass the case above for the wrong reason.
+    registerBlocks([inColumn], { source: "@acme/blocks" });
+    const root = node("core/columns", { default: [node("acme/incolumn")] });
     const [entry] = findInvalidSlotEntries(root, registry);
-    expect(entry).toMatchObject({ kind: "root-parent", type: "acme/child" });
+    expect(entry).toMatchObject({
+      kind: "not-allowed",
+      type: "acme/incolumn",
+      wrapWith: "core/column",
+    });
+  });
+
+  it("is not offered as a ROOT, because a root sits inside nothing", () => {
+    registerBlocks([inColumn], { source: "@acme/blocks" });
+    const root = node("acme/incolumn");
+    const [entry] = findInvalidSlotEntries(root, registry);
+    expect(entry).toMatchObject({ kind: "root-parent", type: "acme/incolumn" });
+    // `core/column` would satisfy the child and is itself restricted, so promoting it to root
+    // reproduces the very fault being repaired.
     expect((entry as { wrapWith?: string }).wrapWith).toBeUndefined();
   });
 });
