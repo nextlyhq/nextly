@@ -25,6 +25,7 @@
 import { Button } from "@nextlyhq/ui";
 import { useState } from "react";
 
+import { parentsOf } from "../core/block-structure";
 import { findInvalidSlotEntries } from "../core/invalid-slots";
 import type { InvalidSlotEntry } from "../core/invalid-slots";
 import { defaultBlockRegistry } from "../core/registry";
@@ -105,8 +106,14 @@ function labelFor(entry: InvalidSlotEntry): string {
   }
 }
 
-/** Where it sits, for someone who cannot click on it. */
-function whereFor(entry: InvalidSlotEntry): string {
+/**
+ * Where it sits, for someone who cannot click on it.
+ *
+ * Exported for the same reason `actionLabelFor` is: the rows only exist once the banner is
+ * expanded, so nothing about the collapsed surface can show what a row SAYS — and what it says is
+ * the whole of what an author has to act on.
+ */
+export function whereFor(entry: InvalidSlotEntry): string {
   const on = `on ${entry.parentType}${entry.path ? ` (${entry.path})` : ""}`;
   switch (entry.kind) {
     case "block": {
@@ -123,7 +130,15 @@ function whereFor(entry: InvalidSlotEntry): string {
     case "stray-slots":
       return `${on}, which holds no slots at all`;
     case "not-allowed":
-      return `in slot "${entry.slotName}" ${on}, which does not accept ${entry.type}`;
+      // Two different faults wear one entry kind, and they have opposite explanations. Saying the
+      // container refuses the block when the block requires a different container sends the reader
+      // to the wrong declaration entirely.
+      return entry.cause === "parent-requires"
+        ? `in slot "${entry.slotName}" ${on}, but ${entry.type} may only sit inside ${
+            parentsOf(entry.type, defaultBlockRegistry)?.join(" or ") ??
+            "another block"
+          }`
+        : `in slot "${entry.slotName}" ${on}, which does not accept ${entry.type}`;
     case "root-parent":
       return "as the top-level block, which it may not be";
   }

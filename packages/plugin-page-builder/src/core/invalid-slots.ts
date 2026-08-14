@@ -116,6 +116,19 @@ export type InvalidSlotEntry =
       type: string;
       descendantCount: number;
       /**
+       * WHICH half of the nesting rule refused this block.
+       *
+       * The two directions are independent and a reader has to be told them apart: `slot-refuses`
+       * means the container declines this type, `parent-requires` means the container would have
+       * taken it and the BLOCK requires a different one. Saying the first when it is the second
+       * tells an author the opposite of the cause, and sends a plugin developer to the wrong
+       * declaration.
+       *
+       * Carried rather than re-derived at the surface, because `canDrop` already distinguishes
+       * them and a second derivation is free to disagree with the first.
+       */
+      cause: "slot-refuses" | "parent-requires";
+      /**
        * The type to put around it instead of deleting it, when the slot leaves no ambiguity.
        *
        * Set only where the allowlist names exactly ONE type, that type can hold children, and its
@@ -439,6 +452,7 @@ export function findInvalidSlotEntries(
               ...at,
               key: `not-allowed:${child.id}`,
               kind: "not-allowed",
+              cause: "parent-requires",
               slotName,
               node: child,
               type: child.type,
@@ -459,6 +473,7 @@ export function findInvalidSlotEntries(
               ...at,
               key: `not-allowed:${child.id}`,
               kind: "not-allowed",
+              cause: "slot-refuses",
               slotName,
               node: child,
               type: child.type,

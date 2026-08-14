@@ -26,6 +26,7 @@ import {
   actionLabelFor,
   InvalidSlotBanner,
   repairFor,
+  whereFor,
 } from "./InvalidSlotBanner";
 import { EditorProvider } from "./store/EditorProvider";
 import { editorReducer, initialState } from "./store/editorStore";
@@ -45,6 +46,44 @@ function markupFor(document: BlockDocument): string {
     </EditorProvider>
   );
 }
+
+describe("which half of the nesting rule a row blames", () => {
+  it("says the BLOCK needs another parent when the container would have taken it", () => {
+    // `core/container` accepts anything; `core/column` requires `core/columns`. Reporting this as
+    // "the container does not accept it" is the opposite of the cause, and sends a plugin author
+    // to the container's declaration instead of the block's.
+    const document: BlockDocument = {
+      version: 1,
+      root: makeNode("core/container", {}, undefined, {
+        default: [makeNode("core/column", {}, undefined, { default: [] })],
+      }),
+    };
+    expect(validateDocument(document, defaultBlockRegistry)).not.toBe(true);
+    const [entry] = findInvalidSlotEntries(document.root, defaultBlockRegistry);
+    expect(entry).toMatchObject({
+      kind: "not-allowed",
+      cause: "parent-requires",
+    });
+    const said = whereFor(entry);
+    expect(said).toContain("may only sit inside core/columns");
+    expect(said).not.toContain("does not accept");
+  });
+
+  it("still says the SLOT refuses it where that is what happened", () => {
+    // The separating control. A heading in a columns row is refused by the row's allowlist, not by
+    // any rule the heading carries — so the other message is the correct one and must survive.
+    const document: BlockDocument = {
+      version: 1,
+      root: makeNode("core/columns", {}, undefined, {
+        default: [heading("hi")],
+      }),
+    };
+    expect(validateDocument(document, defaultBlockRegistry)).not.toBe(true);
+    const [entry] = findInvalidSlotEntries(document.root, defaultBlockRegistry);
+    expect(entry).toMatchObject({ kind: "not-allowed", cause: "slot-refuses" });
+    expect(whereFor(entry)).toContain("does not accept core/heading");
+  });
+});
 
 describe("what the banner says about a parent-restricted ROOT", () => {
   /** A `core/column` root: visible on the canvas, and unsaveable because of where it sits. */
