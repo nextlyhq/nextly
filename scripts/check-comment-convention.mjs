@@ -152,6 +152,11 @@ export const SOURCE_EXTENSIONS = [
   ".cjs",
   // CSS is authored source that ships to users, and its block comments reach the same extractor.
   ".css",
+  // YAML and shell are authored too, and a workflow or a dev script is exactly where a note about
+  // why a step exists gets written.
+  ".yml",
+  ".yaml",
+  ".sh",
 ];
 
 /**
@@ -161,8 +166,11 @@ export const SOURCE_EXTENSIONS = [
  * `url(https://...)` - legal CSS - as a comment running to the end of the line, and report
  * whatever the rest of that URL happens to spell.
  */
+const HASH_COMMENT_EXTENSIONS = [".yml", ".yaml", ".sh"];
+
 export function readOptionsFor(path) {
   return {
+    hashComments: HASH_COMMENT_EXTENSIONS.some(ext => path.endsWith(ext)),
     jsx: path.endsWith(".tsx") || path.endsWith(".jsx"),
     lineComments: !path.endsWith(".css"),
     domainVocabularyAllowed: isReviewDomain(path),
@@ -322,7 +330,10 @@ export function sourceFiles(root) {
  * escapes it. It is a floor rather than a boundary, and worth having because the failure it
  * catches is one nothing else in the repository can see.
  */
-export function commentText(source, { lineComments = true, jsx = false } = {}) {
+export function commentText(source, { lineComments = true, jsx = false, hashComments = false } = {}) {
+  // YAML and shell are not JavaScript. Their comments start at `#`, which TypeScript cannot lex.
+  if (hashComments) return hashLineComments(source);
+
   // CSS is not JavaScript, so TypeScript cannot lex it. It has block comments and nothing else.
   if (!lineComments) return cssBlockComments(source);
 
@@ -416,6 +427,43 @@ function jsxTextRanges(source) {
   };
   visit(sf);
   return ranges;
+}
+
+/**
+ * Comments in a `#` dialect: YAML and shell.
+ *
+ * A `#` only opens one at the start of a line or after whitespace. Mid-token it is data, and both
+ * dialects rely on that - `color: #fff` is a YAML scalar and `${#name}` is a shell expansion, so
+ * a naive split on the character reports both as comments.
+ *
+ * Quotes are tracked because a `#` inside them is literal in both dialects. A shebang is skipped:
+ * `#!/usr/bin/env bash` is an interpreter directive rather than prose.
+ */
+function hashLineComments(source) {
+  const comments = [];
+  const lines = source.split("\n");
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (i === 0 && line.startsWith("#!")) continue;
+    let quote = "";
+    for (let at = 0; at < line.length; at += 1) {
+      const c = line[at];
+      if (quote) {
+        if (c === "\\") at += 1;
+        else if (c === quote) quote = "";
+        continue;
+      }
+      if (c === '"' || c === "'") {
+        quote = c;
+        continue;
+      }
+      if (c === "#" && (at === 0 || /\s/.test(line[at - 1]))) {
+        comments.push(line.slice(at + 1));
+        break;
+      }
+    }
+  }
+  return comments;
 }
 
 /** Keywords whose parenthesised header is followed by a statement, not by an operator. */

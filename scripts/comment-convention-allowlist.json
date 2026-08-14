@@ -1,4 +1,61 @@
 {
+  ".coderabbit.yaml": {
+    "count": 2,
+    "digests": ["05c09a571697ee95", "52f2d463194d1c18"]
+  },
+  ".github/scripts/review-bot-gh.sh": {
+    "count": 2,
+    "digests": ["3cd09c48248600d7", "d4423203d14275ee"]
+  },
+  ".github/workflows/ci.yml": {
+    "count": 6,
+    "digests": [
+      "7eca9f6b80f85daa",
+      "84381fd424963009",
+      "84381fd424963009",
+      "a409947c830b980d",
+      "baee72557fb1d870",
+      "e02630891b827e51"
+    ]
+  },
+  ".github/workflows/integration.yml": {
+    "count": 2,
+    "digests": ["84381fd424963009", "84381fd424963009"]
+  },
+  ".github/workflows/nextly-bot-mention.yml": {
+    "count": 2,
+    "digests": ["8ee6ff2c43e6467f", "a906ea64831f2e75"]
+  },
+  ".github/workflows/nextly-review-bot.yml": {
+    "count": 3,
+    "digests": ["29b9a53b7a82e140", "37bb0b25f03980c3", "70397ee950c6a764"]
+  },
+  ".github/workflows/package-smoke.yml": {
+    "count": 2,
+    "digests": ["4a52eb35ec67f7ec", "c8af348842e7280a"]
+  },
+  ".github/workflows/preview.yml": {
+    "count": 5,
+    "digests": [
+      "2d6e72a7717a6764",
+      "84381fd424963009",
+      "bb32dd7ce75b6efe",
+      "e8eb4d88bf282454",
+      "fce341b343f71810"
+    ]
+  },
+  ".github/workflows/release.yml": {
+    "count": 1,
+    "digests": ["84381fd424963009"]
+  },
+  ".github/workflows/scaffold-build.yml": {
+    "count": 1,
+    "digests": ["4466be5c8d0ef87e"]
+  },
+  ".github/workflows/secret-scan.yml": {
+    "count": 2,
+    "digests": ["7aab1e73e1bbee0b", "abe25d9f5bce2423"]
+  },
   "packages/admin/src/components/features/entries/EntryForm/EntryForm.tsx": {
     "count": 2,
     "digests": ["69eafeb47e136856", "92043ca6e49d929a"]
@@ -135,6 +192,10 @@
   "packages/nextly/eslint.config.js": {
     "count": 2,
     "digests": ["bb3c9d25cf31add3", "e33b7f20fdbfeb37"]
+  },
+  "packages/nextly/scripts/phase-gate.sh": {
+    "count": 1,
+    "digests": ["7bd26145a3c95304"]
   },
   "packages/nextly/src/__tests__/database/_fixture-schema/generator.ts": {
     "count": 1,
