@@ -363,214 +363,48 @@ CONTAINING the word, so any account that can comment on the PR can present
 itself as the trusted reviewer and supply a clean-looking verdict. Trading a
 false negative for a spoofable one is a worse trade than it looks, because the
 false negative announces itself as "no verdict" and the spoof announces itself
-as approval:
+as approval.
 
-```bash
-#!/usr/bin/env bash
-# Merge gate: has every required reviewer seen THIS head, and is anything still open?
-set -euo pipefail
-REPO=${REPO:-nextlyhq/nextly}; PR=${1:?pr}
-BOTS=${BOTS:-'chatgpt-codex-connector[bot],coderabbitai[bot]'}
-d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
+The properties a verdict gate has to hold are below. **They are implemented in
+`scripts/ci-verdict.mjs` with a `.test.mjs` neighbour**, run by
+`pnpm test:scripts` in CI, rather than written out here as shell.
 
-HEAD=$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq .headRefOid)
+That placement is the finding, not a filing preference. This section originally
+carried the gate as a runnable snippet, and it was wrong in eight successive
+ways that each read as working code — `gh api --jq --arg`, which that endpoint
+does not accept and which sent both queries down their failure branch; a
+`printf` on an empty variable that made a clean review count as one finding;
+review IDs computed and never joined, so every earlier round's findings counted
+against the current head forever; a `jq` invocation that printed `NOT CLEAN` and
+exited 0. Every one was caught by a reviewer executing it mentally, one per
+round. **Shell inside Markdown cannot be run, so review is its only control**,
+and that is the same defect this file describes: an instrument nothing exercises
+reporting a pass.
 
-# Every query fails closed: an unavailable answer is not a clean one.
-gh api "repos/$REPO/pulls/$PR/reviews"   --paginate --slurp > "$d/rv.json"
-gh api "repos/$REPO/issues/$PR/comments" --paginate --slurp > "$d/ic.json"
-gh api graphql -F pr="$PR" -f query='
-  query($pr:Int!){ repository(owner:"nextlyhq",name:"nextly"){ pullRequest(number:$pr){
-    reviewThreads(first:100){ nodes { isResolved } } } } }' > "$d/th.json"
+The properties, each earned by a version that got it wrong:
 
-OUT=$(jq -n --slurpfile rv "$d/rv.json" --slurpfile ic "$d/ic.json" \
-            --slurpfile th "$d/th.json" --arg bots "$BOTS" --arg s "$HEAD" '
-  ($bots | split(",")) as $need
-  # COVERAGE only: did each bot submit any review at this head? Counting a
-  # bot every review object as "a round" is wrong -- CodeRabbit posts one
-  # object per finding, so "the latest review" is its LAST finding alone.
-  | ($rv | flatten | map(select(.commit_id == $s) | .user.login) | unique) as $seen
-  | ($need - $seen) as $missing
-  # OUTSTANDING findings are the unresolved threads. GitHub already tracks
-  # this, it is bot-agnostic, and it survives re-reviews at one SHA.
-  | ($th[0].data.repository.pullRequest.reviewThreads.nodes
-       | map(select(.isResolved == false)) | length) as $open
-  | ($ic | flatten | map(select(.user.login == "coderabbitai[bot]"
-        and (.body | test("Review limit reached")))) | length) as $rl
-  | { head: $s, reviewed_head: $seen, missing_reviews: $missing,
-      unresolved_threads: $open, coderabbit_rate_limited: $rl,
-      verdict: (if   ($missing|length) > 0 then "MISSING REVIEW AT HEAD"
-                elif $open > 0            then "UNRESOLVED THREADS"
-                elif $rl   > 0            then "CODERABBIT RATE-LIMITED"
-                else "CLEAN" end) }')
-printf '%s\n' "$OUT"
-[ "$(printf '%s' "$OUT" | jq -r .verdict)" = "CLEAN" ] || exit 1
-```
-
-Run against this PR at `b56de97f4`:
-
-```json
-{
-  "head": "b56de97f4f49dc99dcf2ab9b4df822b62f922ed6",
-  "reviewed_head": ["chatgpt-codex-connector[bot]", "mobeenabdullah"],
-  "missing_reviews": ["coderabbitai[bot]"],
-  "unresolved_threads": 2,
-  "coderabbit_rate_limited": 1,
-  "verdict": "MISSING REVIEW AT HEAD"
-}
-```
-
-`EXIT=1`. **That last line is the difference between a gate and a report** — `jq`
-exits 0 for every verdict it prints, `NOT CLEAN` included, so without it `set -e`
-does nothing and the caller walks on.
-
-**The shape of this script is the lesson, and it took six wrong versions.** The
-first five tried to reconstruct "was the latest review clean" from review
-objects, and each fix exposed the next assumption:
-
-- the login must be the complete `...[bot]`, but a substring match is spoofable;
-- `pulls/$PR/comments` cannot see a clean review, because a clean review has no
-  inline comments;
-- `state` is `COMMENTED` at six findings and at one, so it is not a verdict;
-- the review IDs must actually be JOINED to the comments, or every earlier
-  round's findings count against the current head forever;
-- and re-requesting a review without pushing leaves several review objects on
-  one SHA, so the join has to pick a round rather than all of them.
-
-**Then the round model broke outright.** Measured here: Codex posts ONE review
-object carrying many comments, while CodeRabbit posts one object PER FINDING —
-six objects at `cbc848bfc`, one comment each. "The latest review" is a whole
-round for one bot and a single finding for the other, so no per-object rule is
-correct for both.
-
-So the script stopped reconstructing rounds. It asks the two questions that are
-actually being gated on, each from the source that owns it:
-
-- **Coverage** — did each required bot submit ANY review at this head? A review
-  object exists whether or not it carried findings, which is the property the
-  earlier versions kept failing to observe.
-- **Outstanding work** — how many review threads are UNRESOLVED? GitHub already
-  tracks this, it is bot-agnostic, it survives several reviews at one SHA, and
-  it is the thing "are there open findings" actually means.
-
-Counting findings was always a proxy for the second question. Asking the second
-question directly deletes the entire class of defect above.
-
-**Four things in that script are there because the shorter version was wrong**,
-each found only by running it:
-
-- **`--slurp`, and standalone `jq` rather than `gh api --jq`.** `gh api` takes
-  `--jq` as a single filter string and has no `--arg`; the invocation
-  `gh api --jq --arg b "$BOT" '...'` exits with `accepts 1 arg(s), received 4`.
-  Written that way, BOTH queries take their failure branch and the gate can
-  never return clean — a fail-closed so complete it never fails at all.
-  `--slurp` cannot combine with `--jq`, which is what forces the pipe.
-- **The join is real.** An earlier version computed review IDs and then counted
-  every bot comment on the PR, never consuming the review list — so historical
-  findings from previous rounds counted against the current head forever, and a
-  genuinely clean review could not be observed.
-- **`NO REVIEW AT HEAD` is its own outcome.** Zero findings because no review
-  exists and zero findings because the review was clean are the same number.
-- **No `printf` on a possibly-empty variable.** `printf '%s\n' "$EMPTY"` emits
-  one blank record, so `uniq -c` reported `1` for a clean review — the count
-  rejecting precisely the case it was written to detect.
-
-**Each query is captured and its status checked BEFORE the count is read**, and
-that is not belt-and-braces. Left as a pipeline, the status is `uniq`'s: an
-auth failure, a rate limit or a transient 5xx returns no review IDs, the join
-finds nothing attached to the head's review, and it reports CLEAN. A verdict
-gate that answers "approved" when the API is unreachable is worse than no gate,
-because the failure is invisible at exactly the moment it matters.
-
-`--arg` rather than interpolating the login into the filter: `[bot]` is a
-character class in a jq pattern and a literal in a string comparison, and the
-two are easy to confuse when the value is pasted inline.
-
-**Ask the `reviews` endpoint, not `comments`, and this is the half that decides
-whether a CLEAN verdict is visible at all.** `pulls/$PR/comments` lists review
-comments — the inline ones attached to lines. A clean review has no findings and
-therefore no inline comments, so that endpoint returns zero rows for it,
-byte-identically to "never reviewed". The very outcome being waited for is the
-one it cannot report.
-
-`pulls/$PR/reviews` returns the review OBJECT, which exists whether or not it
-carried findings, and its `commit_id` is what binds the verdict to a revision.
-Paginate it: a PR with many rounds runs past one page, and an unpaginated read
-answers from page one.
-
-**But the review object does not say whether the review was CLEAN, and `state`
-is the field that looks like it does.** It records the GitHub review event, not
-whether the bot found anything. Measured across four consecutive rounds on this
-PR:
-
-```text
-review=4934719144  sha=6ddf99bd4  state=COMMENTED  findings=6
-review=4934879982  sha=750063e00  state=COMMENTED  findings=3
-review=4934934820  sha=8653d09ce  state=COMMENTED  findings=4
-review=4935023499  sha=435af806a  state=COMMENTED  findings=1
-```
-
-Same `state` at six findings and at one. This bot never emits `APPROVED`, so a
-gate reading `state` treats a finding-bearing review as a pass — and it does so
-at the correct SHA, which is what makes it survive the freshness check.
-
-**Derive cleanliness from the findings, not from a field.** A review is clean
-when NO inline comment carries its `pull_request_review_id`. Join the two
-queries above and require a count of zero at the head SHA before binding
-`REVIEWED_SHA`.
-
-The table is also the instrument's positive control, and it is worth keeping one
-to hand: four known non-clean reviews, and the join reports 6, 3, 4 and 1 rather
-than zero. A cleanliness check that has only ever been run against clean input
-cannot distinguish itself from one that always answers "clean".
-
-Compare against the whole login, or against the App identity. If a filter must
-be pattern-based, anchor it — `test("^chatgpt-codex-connector\\[bot\\]$")` —
-rather than leaving it open at both ends.
-
-**CodeRabbit's review limit is per-ACCOUNT and shared across every lane on this
-machine.** When it is reached it posts a "Review limit reached" comment and
-zero review objects, and its check goes green — so a rate-limited non-review and
-a clean review render the same. Read the comment BODY, not the check colour.
-The marker lives in `issues/$PR/comments`, which is a different endpoint from
-`pulls/$PR/comments`: the latter returns only inline review comments and never
-shows it.
-
-**Finding the marker rejects a verdict. NOT finding it proves nothing**, and
-this one is measured rather than reasoned. CodeRabbit EDITS THAT SAME COMMENT
-IN PLACE when the review eventually runs: on this PR, comment `5290377552` has
-`created_at` 06:47:36 carrying "Review limit reached" and `updated_at` 08:10:08
-carrying the review summary, with the marker gone. The evidence that nothing was
-reviewed is destroyed by the thing that reviews it, so a later reader finds a
-normal summary and no trace of the hours the PR spent uncovered.
-
-Treat the marker as a one-way rejection, and derive COVERAGE the same way as for
-any other bot — a review object at the head sha, with findings joined to it.
-Absence of a complaint is not presence of a review.
-
-**A verdict names a commit, and it is evidence about THAT commit only.** Require
-the reviewed sha to EQUAL the head you are about to merge:
-
-```sh
-[ "$REVIEWED_SHA" = "$HEAD_SHA" ] || {
-  echo "verdict is stale for $HEAD_SHA; re-request review" >&2; exit 2
-}
-```
-
-**The mismatch branch has to EXIT.** Written as `|| echo ...` the compound
-command succeeds, so a script using it as the review gate prints its warning and
-walks straight on to the merge — a gate that reports the problem and permits it
-anyway.
-
-**Ancestry is the tempting check and it is too weak.** After any ordinary push
-the reviewed sha REMAINS an ancestor of the new head, so
-`git merge-base --is-ancestor` succeeds while the commits added since were never
-looked at — which is precisely the window a review gate exists to close. It
-detects only history rewrites, and a rewrite is not the common case; pushing a
-fix after a clean verdict is.
-
-Where the intervening delta genuinely does not need re-review — a rebase with no
-content change — say so and record which commits were exempted, rather than
-letting an ancestry check make that judgement silently.
+- **Identify the reviewer by its COMPLETE login**, `...[bot]` suffix included.
+  Equality on the un-suffixed name returns zero, byte-identically to "not yet
+  reviewed"; a substring match accepts any login containing the word, so anyone
+  able to comment can present a clean-looking verdict.
+- **Read `pulls/$PR/reviews`, not `pulls/$PR/comments`.** The latter returns
+  only inline comments, and a clean review has none — so the outcome being
+  waited for is the one that endpoint cannot report.
+- **`state` is not a verdict.** Measured across four rounds here it read
+  `COMMENTED` at six findings and at one, and this connector never emits
+  `APPROVED`.
+- **Do not reconstruct rounds from review objects.** Codex posts ONE object per
+  round carrying many comments; CodeRabbit posts one object PER FINDING — six
+  at a single commit. "The latest review" is a whole round for one and a single
+  finding for the other, so no per-object rule is right for both.
+- **Ask the two questions directly instead.** COVERAGE: did each required
+  reviewer submit any review at this head? OUTSTANDING WORK: how many review
+  threads are UNRESOLVED? GitHub already tracks the second, it is bot-agnostic,
+  and it survives several reviews at one SHA. Counting findings was always a
+  proxy for it.
+- **Fail closed, and REFUSE rather than report.** Every query failing means the
+  answer is unavailable, which is not a clean one; and a verdict that is printed
+  but not connected to an exit status lets the caller walk on.
 
 ## Where this stops and the other file starts
 
