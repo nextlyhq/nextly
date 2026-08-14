@@ -197,7 +197,7 @@ describe("the allowlist", () => {
   // the comment it exempts, which turns the allowlist into a way of silencing the check rather
   // than a record of what predates it. Lower this as entries are removed; never raise it.
   const EXPECTED_ENTRIES = 244;
-  const EXPECTED_TOTAL = 459;
+  const EXPECTED_TOTAL = 458;
 
   it("matches its pinned size exactly", () => {
     expect(readAllowlist().size).toBe(EXPECTED_ENTRIES);

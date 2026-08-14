@@ -8,9 +8,8 @@
     "digests": ["3cd09c48248600d7", "d4423203d14275ee"]
   },
   ".github/workflows/ci.yml": {
-    "count": 6,
+    "count": 5,
     "digests": [
-      "7eca9f6b80f85daa",
       "84381fd424963009",
       "84381fd424963009",
       "a409947c830b980d",

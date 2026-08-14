@@ -457,16 +457,33 @@ function jsxTextRanges(source) {
 function hashLineComments(source, { shell = false } = {}) {
   const comments = [];
   const lines = source.split("\n");
+  // Carried ACROSS lines: a double-quoted string may span them in shell, and resetting per line
+  // reads the closing quote as an opening one, which hides the comment that follows it.
+  let quote = "";
+  // While inside a YAML block scalar (`key: |`, `key: >`), every line indented past the key is
+  // DATA. A # there is content — a prompt, a generated payload, an embedded shell snippet — and
+  // reporting it fails CI on a legal document, which is the failure that gets a check switched off.
+  let blockIndent = null;
+
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i];
     if (i === 0 && line.startsWith("#!")) continue;
-    let quote = "";
+
+    const indent = line.search(/\S/);
+    if (blockIndent !== null) {
+      // A blank line stays inside the scalar; anything indented less ends it.
+      if (indent === -1 || indent >= blockIndent) continue;
+      blockIndent = null;
+    }
+    if (!shell && quote === "" && /:\s*[|>][+-]?\d*\s*$/.test(line)) {
+      blockIndent = (indent === -1 ? 0 : indent) + 1;
+      continue;
+    }
+
+    let found = -1;
     for (let at = 0; at < line.length; at += 1) {
       const c = line[at];
       if (quote) {
-        // A backslash escapes inside double quotes, and is LITERAL inside shell single quotes -
-        // `echo 'a\\' # x` closes at the quote. YAML single quotes escape only by doubling, so
-        // the same rule holds there.
         if (c === "\\" && quote === '"') at += 1;
         else if (c === quote) quote = "";
         continue;
@@ -475,17 +492,20 @@ function hashLineComments(source, { shell = false } = {}) {
         quote = c;
         continue;
       }
-      // A control operator ends a word, so a # directly after one opens a comment: `x && #c`,
-      // `x; #c`, `x | #c`. Only whitespace would miss those.
       // In shell a control operator ends a word, so `x && #c` is a comment. YAML has no such
-      // operators: there a `#` needs whitespace before it, and applying the shell rule would read
-      // `key: a;#b` - a legal scalar - as one.
+      // operators: there a # needs whitespace before it, and applying the shell rule would read
+      // `key: a;#b` — a legal scalar — as one.
       const boundary = shell ? /[\s;&|()]/ : /\s/;
       if (c === "#" && (at === 0 || boundary.test(line[at - 1]))) {
-        comments.push(line.slice(at + 1));
+        found = at;
         break;
       }
     }
+    if (found !== -1) comments.push(line.slice(found + 1));
+    // A YAML single-quoted scalar does not continue across lines the way a shell double-quoted
+    // string does, so an unclosed one is a malformed document rather than a continuation — and
+    // carrying it would swallow every line below it.
+    if (!shell && quote === "'") quote = "";
   }
   return comments;
 }
