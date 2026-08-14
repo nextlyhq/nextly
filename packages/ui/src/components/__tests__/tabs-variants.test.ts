@@ -73,45 +73,62 @@ describe("tab variants", () => {
   });
 });
 
+/** Every class in one set and not the other, in both directions. */
+const differenceBetween = (left: string, right: string): string[] => {
+  const a = classesOf(left);
+  const b = classesOf(right);
+  return [
+    ...[...a].filter(entry => !b.has(entry)),
+    ...[...b].filter(entry => !a.has(entry)),
+  ].sort();
+};
+
 /**
- * Every class in `value` that draws the tab's edge, whatever modifier it hides
- * behind.
+ * What each variant is allowed to change, stated COMPLETELY.
  *
- * Matched with `(^|:)` rather than an anchor, because a Tailwind utility can
- * sit behind any number of variant modifiers — `hover:border-b-4`,
- * `data-[state=active]:border-b-destructive!` — and an anchored pattern reads
- * those as unrelated classes. The base itself carries three of them, so the
- * modifier form is the normal case here rather than an exotic one.
+ * Earlier versions of this file classified classes — "does this look like an
+ * edge utility" — and were wrong three times running: an anchored pattern
+ * missed `hover:border-b-4`, and the modifier-aware one still missed
+ * `!rounded-md`, bare `rounded` and `[border-radius:8px]`. Every fix bought one
+ * spelling, because Tailwind's surface is the whole language and a classifier
+ * has to keep up with it.
+ *
+ * So nothing is classified. The FULL difference between a variant and its base
+ * is pinned, which means any class a variant adds — whatever it is called,
+ * however it is spelled, whatever modifier or important marker it carries —
+ * appears in the difference and fails. There is no pattern to be short of.
  */
-const edgeClassesOf = (value: string): string[] =>
-  [...classesOf(value)]
-    .filter(entry => /(^|:)(border-b-|border-|rounded-)/.test(entry))
-    .sort();
-
-describe("the tab edge", () => {
-  // `tabs-contract.test.ts` watches CALL SITES and deliberately excludes
-  // `tabs.tsx`, so nothing but this covers the variants themselves. Stated as
-  // an equality rather than as a list of forbidden patterns: whatever the base
-  // declares is the edge, and a variant that ADDS, REMOVES or CHANGES any of it
-  // is a second way to restyle a tab regardless of how the class is spelled.
+describe("what a variant is allowed to change", () => {
   it.each([
-    ["list", tabsListVariants(), tabsListVariants({ variant: "ghost" })],
-    ["trigger", tabsTriggerVariants(), tabsTriggerVariants({ size: "sm" })],
-  ])("is identical across every %s variant", (_name, base, variant) => {
-    expect(edgeClassesOf(variant)).toEqual(edgeClassesOf(base));
-  });
+    [
+      "TabsList ghost",
+      tabsListVariants(),
+      tabsListVariants({ variant: "ghost" }),
+      // The compact surface-less list: shorter, and drawing no background.
+      ["bg-transparent", "h-10", "h-8"],
+    ],
+    [
+      "TabsTrigger sm",
+      tabsTriggerVariants(),
+      tabsTriggerVariants({ size: "sm" }),
+      // The type scale, and nothing else.
+      ["text-sm", "text-xs"],
+    ],
+  ])(
+    "changes exactly the declared classes for %s",
+    (_n, base, variant, only) => {
+      expect(differenceBetween(base, variant)).toEqual(only);
+    }
+  );
 
-  it("is drawn by the trigger base and left alone by the list", () => {
-    // A positive control on the helper itself. An equality assertion is
-    // satisfied by two empty sets, so without this the trigger case would pass
-    // if `edgeClassesOf` silently matched nothing at all.
-    expect(edgeClassesOf(tabsTriggerVariants())).toContain("border-b-2");
-    // Behind a modifier, which is the form the anchored version of this helper
-    // could not see at all.
-    expect(edgeClassesOf(tabsTriggerVariants())).toContain(
-      "data-[state=active]:border-b-primary!"
-    );
-    // The list draws no underline; its square corners are the edge it does own.
-    expect(edgeClassesOf(tabsListVariants())).toEqual(["rounded-none"]);
+  it("keeps the square edge and the underline in the base", () => {
+    // A positive control on the assertion above, which is satisfied by two
+    // IDENTICAL sets and so proves nothing on its own about what the base
+    // actually declares.
+    const trigger = classesOf(tabsTriggerVariants());
+    expect(trigger).toContain("rounded-none");
+    expect(trigger).toContain("border-b-2");
+    expect(trigger).toContain("data-[state=active]:border-b-primary!");
+    expect(classesOf(tabsListVariants())).toContain("rounded-none");
   });
 });
