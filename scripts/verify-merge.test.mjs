@@ -25,6 +25,8 @@ const forcePush = { event: "head_ref_force_pushed" };
 const commented = { event: "commented" };
 const green = name => ({ name, status: "completed", conclusion: "success" });
 const queued = name => ({ name, status: "queued", conclusion: null });
+/** A real 40-character object name; the gate refuses anything shorter as a tip. */
+const FULL_TIP = "91fd9500285dcf264e3609a916b7518b591b51f3";
 
 describe("countRewriteEvents", () => {
   it("counts events beyond the FIRST page", () => {
@@ -58,6 +60,17 @@ describe("countRewriteEvents", () => {
 
   it("refuses a non-array rather than treating it as empty", () => {
     expect(() => countRewriteEvents(undefined)).toThrow(TypeError);
+  });
+
+  it("refuses a page that is not an array, rather than counting it as zero", () => {
+    // A failed or unparsed page arrives as `null` or an error object. The
+    // outer check passes it, `flat()` carries it through, and optional access
+    // ignores it — so a partly unread timeline would report no rewrites and
+    // the branch as checkable.
+    expect(() => countRewriteEvents([[commented], null])).toThrow(TypeError);
+    expect(() =>
+      countRewriteEvents([[commented], { message: "Bad credentials" }])
+    ).toThrow(TypeError);
   });
 });
 
@@ -126,6 +139,19 @@ describe("jobPasses", () => {
     ).toBe(true);
   });
 
+  it("passes a NEUTRAL job", () => {
+    // GitHub accepts `neutral` for a required status check alongside `success`
+    // and `skipped`. Refusing it would make this gate stricter than the
+    // protection it models and block a revision the platform calls mergeable.
+    expect(
+      jobPasses({
+        name: "advisory",
+        status: "completed",
+        conclusion: "neutral",
+      })
+    ).toBe(true);
+  });
+
   it("passes a successful job", () => {
     expect(jobPasses(green("CI"))).toBe(true);
   });
@@ -164,15 +190,22 @@ describe("verdictCoversTip", () => {
     ).toBe(true);
   });
 
-  it("rejects a prefix too short to identify a commit", () => {
+  it("rejects a verdict too short to identify a commit", () => {
     // "a" prefixes an enormous number of commits. Accepting it would make the
     // comparison pass on almost anything.
-    expect(verdictCoversTip("a", "abc1234def")).toBe(false);
+    expect(verdictCoversTip("a", FULL_TIP)).toBe(false);
+  });
+
+  it("rejects a TRUNCATED tip even when the verdict agrees with it", () => {
+    // The comparison is asymmetric on purpose: the bot abbreviates, the ref
+    // does not. Symmetric, this returns true — and the gate would then pass
+    // without ever identifying the head revision it exists to pin.
+    expect(verdictCoversTip(FULL_TIP, FULL_TIP.slice(0, 7))).toBe(false);
   });
 
   it("rejects a missing verdict rather than treating absence as agreement", () => {
-    expect(verdictCoversTip("", "abc1234def")).toBe(false);
-    expect(verdictCoversTip(undefined, "abc1234def")).toBe(false);
+    expect(verdictCoversTip("", FULL_TIP)).toBe(false);
+    expect(verdictCoversTip(undefined, FULL_TIP)).toBe(false);
   });
 });
 
@@ -231,6 +264,15 @@ describe("gateVerdict", () => {
     expect(verdict.blockers.map(b => b.kind)).toContain("threads-unknown");
   });
 
+  it("blocks on a NEGATIVE thread count, which is a sentinel and not a count", () => {
+    // An I/O wrapper that reports -1 for "could not read" would otherwise pass
+    // the integer check and add no blocker — unknown becoming zero by another
+    // route, which the neighbouring validators already refuse.
+    const verdict = gateVerdict({ ...passing, unresolvedThreads: -1 });
+
+    expect(verdict.blockers.map(b => b.kind)).toContain("threads-unknown");
+  });
+
   it("blocks when the review verdict belongs to an earlier revision", () => {
     const verdict = gateVerdict({ ...passing, codexReviewedSha: "0dbcb9470" });
 
@@ -268,10 +310,10 @@ describe("formatVerdict", () => {
   it("says BLOCKED and names each reason", () => {
     const text = formatVerdict(
       gateVerdict({
-        tip: "abc1234def",
+        tip: FULL_TIP,
         unresolvedThreads: 1,
         checkRuns: [green("CI")],
-        codexReviewedSha: "abc1234def",
+        codexReviewedSha: FULL_TIP.slice(0, 10),
         coderabbitReviewCount: 1,
       })
     );
@@ -283,10 +325,10 @@ describe("formatVerdict", () => {
   it("flags an unreviewed second reviewer on an otherwise passing gate", () => {
     const text = formatVerdict(
       gateVerdict({
-        tip: "abc1234def",
+        tip: FULL_TIP,
         unresolvedThreads: 0,
         checkRuns: [green("CI")],
-        codexReviewedSha: "abc1234def",
+        codexReviewedSha: FULL_TIP.slice(0, 10),
         coderabbitReviewCount: 0,
       })
     );

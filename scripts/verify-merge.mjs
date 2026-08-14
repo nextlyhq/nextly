@@ -27,6 +27,9 @@
  * merge", so this exists to disqualify the cases we know of, not to certify the
  * rest.
  */
+/** A git object name in full. Anything shorter is an abbreviation. */
+export const FULL_SHA_LENGTH = 40;
+
 export const HISTORY_REWRITE_EVENTS = Object.freeze([
   "head_ref_force_pushed",
   "head_ref_deleted",
@@ -44,6 +47,16 @@ export const HISTORY_REWRITE_EVENTS = Object.freeze([
 export function countRewriteEvents(pages) {
   if (!Array.isArray(pages)) {
     throw new TypeError("countRewriteEvents needs an array of timeline pages");
+  }
+  // A page that is not an array is a page that was not read. `[events, null]`
+  // survives the check above, `flat()` carries the bad value through, and the
+  // optional access then ignores it — so a partly unreadable timeline counts
+  // zero rewrites and reports the branch as checkable. That is the exact
+  // direction this module exists to refuse.
+  for (const page of pages) {
+    if (!Array.isArray(page)) {
+      throw new TypeError("countRewriteEvents needs every page to be an array");
+    }
   }
   return pages
     .flat()
@@ -81,15 +94,20 @@ export function checkability({ tip, rewriteEvents }) {
  * A check-run's conclusion, reduced to whether it may be counted as passing.
  *
  * `skipped` passes because a job skipped by a condition is how this repository
- * expresses "this commit cannot affect me", and branch protection accepts it.
+ * expresses "this commit cannot affect me". `neutral` passes for the same
+ * reason: GitHub accepts both for a required status check, so refusing them
+ * would make this gate stricter than the protection it claims to model and
+ * block a revision the platform considers mergeable.
  * Everything else that is not `success` does NOT pass — including `queued` and
  * `in_progress`, which are the ones that get miscounted: filtering for
  * `conclusion === "failure"` and finding none reads as green while nothing has
  * run. One merge commit here had four required jobs queued for hours and two
  * unrelated ones completed, and answered zero failures throughout.
  */
+const PASSING_CONCLUSIONS = Object.freeze(["success", "skipped", "neutral"]);
+
 export function jobPasses(run) {
-  return run?.conclusion === "success" || run?.conclusion === "skipped";
+  return PASSING_CONCLUSIONS.includes(run?.conclusion);
 }
 
 /**
@@ -123,11 +141,15 @@ export function blockingJobs(checkRuns) {
 export function verdictCoversTip(reviewedSha, tip) {
   if (typeof reviewedSha !== "string" || reviewedSha.length === 0) return false;
   if (typeof tip !== "string" || tip.length === 0) return false;
-  const shorter = Math.min(reviewedSha.length, tip.length);
-  // A prefix comparison is only meaningful at a length that can identify a
-  // commit. Seven is git's own floor for an abbreviated sha.
-  if (shorter < 7) return false;
-  return reviewedSha.slice(0, shorter) === tip.slice(0, shorter);
+  // Deliberately ASYMMETRIC. The bot reports an abbreviated sha and the ref
+  // reports a full one, so only the VERDICT may be short. A symmetric
+  // comparison accepts a TRUNCATED tip whenever it prefixes a full reviewed
+  // sha, which would let the gate pass without ever identifying the head
+  // revision — the one thing it exists to pin.
+  if (tip.length < FULL_SHA_LENGTH) return false;
+  // Seven is git's own floor for an abbreviation that identifies a commit.
+  if (reviewedSha.length < 7 || reviewedSha.length > tip.length) return false;
+  return tip.startsWith(reviewedSha);
 }
 
 /**
@@ -163,7 +185,7 @@ export function gateVerdict({
     blockers.push({ kind: "no-tip", detail: "no head revision to merge" });
   }
 
-  if (!Number.isInteger(unresolvedThreads)) {
+  if (!Number.isInteger(unresolvedThreads) || unresolvedThreads < 0) {
     // Unknown is not zero, for the same reason everywhere else in this file.
     blockers.push({
       kind: "threads-unknown",
@@ -225,4 +247,167 @@ export function formatVerdict(verdict) {
     );
   }
   return lines.join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// The I/O shell.
+//
+// Everything above is pure so it can be handed the inputs whose answers are
+// known. This part does the fetching, and is deliberately thin: it reads, it
+// hands the values to the functions above, and it prints. No decision is taken
+// here, because a decision taken here is one no test can reach — which is the
+// arrangement this whole file exists to end.
+// ---------------------------------------------------------------------------
+
+import { execFileSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
+
+const REPO = "nextlyhq/nextly";
+
+/**
+ * `gh api`, raw. Throws on failure rather than degrading to an empty result.
+ *
+ * `--jq` prints the filter's output verbatim, NOT as JSON: a string comes back
+ * unquoted and an absent value comes back as an empty line. Parsing everything
+ * as JSON therefore fails on exactly the case that matters — a pull request
+ * with no review verdict yet.
+ */
+function ghText(args) {
+  return execFileSync("gh", args, {
+    encoding: "utf8",
+    maxBuffer: 32 * 1024 * 1024,
+  }).trim();
+}
+
+/** `gh api` where the result really is JSON. Empty output is a failure, not an empty value. */
+function ghJson(args) {
+  const text = ghText(args);
+  if (text === "")
+    throw new Error(`gh returned nothing for: ${args.join(" ")}`);
+  return JSON.parse(text);
+}
+
+/**
+ * Every page of the timeline, each page kept SEPARATE.
+ *
+ * `--paginate` concatenates the pages' arrays into one stream of JSON values,
+ * so they are split back apart here: `countRewriteEvents` refuses a page it
+ * cannot read, and flattening first would throw that distinction away.
+ */
+function timelinePages(pr) {
+  const raw = execFileSync(
+    "gh",
+    ["api", "--paginate", `repos/${REPO}/issues/${pr}/timeline?per_page=100`],
+    { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 }
+  );
+  // `gh --paginate` emits one JSON array per page, concatenated. A single
+  // `JSON.parse` sees only the first.
+  const pages = [];
+  let depth = 0;
+  let start = -1;
+  for (let i = 0; i < raw.length; i += 1) {
+    const ch = raw[i];
+    if (ch === "[") {
+      if (depth === 0) start = i;
+      depth += 1;
+    } else if (ch === "]") {
+      depth -= 1;
+      if (depth === 0 && start >= 0) {
+        pages.push(JSON.parse(raw.slice(start, i + 1)));
+        start = -1;
+      }
+    }
+  }
+  return pages;
+}
+
+/** The branch's real tip, from the ref rather than from the API's cached head. */
+function lsRemoteTip(remote, branch) {
+  const out = execFileSync(
+    "git",
+    ["ls-remote", remote, `refs/heads/${branch}`],
+    {
+      encoding: "utf8",
+    }
+  );
+  return out.split("\t")[0] ?? "";
+}
+
+/** Runs the gate for one pull request and prints why, exiting non-zero when blocked. */
+export function main(argv) {
+  const pr = argv[0];
+  if (!pr || !/^\d+$/.test(pr)) {
+    process.stderr.write("usage: node scripts/verify-merge.mjs <pr-number>\n");
+    return 2;
+  }
+
+  const meta = ghJson([
+    "api",
+    `repos/${REPO}/pulls/${pr}`,
+    "--jq",
+    "{cross:.head.repo.full_name!=.base.repo.full_name,repo:.head.repo.full_name,branch:.head.ref}",
+  ]);
+  const remote = meta.cross ? `https://github.com/${meta.repo}.git` : "origin";
+  const tip = lsRemoteTip(remote, meta.branch);
+
+  const rewrites = countRewriteEvents(timelinePages(pr));
+  const reach = checkability({ tip, rewriteEvents: rewrites });
+
+  const checkRuns = tip
+    ? ghJson([
+        "api",
+        `repos/${REPO}/commits/${tip}/check-runs?per_page=100`,
+        "--jq",
+        ".check_runs",
+      ])
+    : [];
+  const threads = Number(
+    ghText([
+      "api",
+      "graphql",
+      "-f",
+      `query=query { repository(owner:"nextlyhq",name:"nextly"){ pullRequest(number:${pr}){ reviewThreads(first:100){ nodes { isResolved } } } } }`,
+      "--jq",
+      "[.data.repository.pullRequest.reviewThreads.nodes[]|select(.isResolved==false)]|length",
+    ])
+  );
+  const codexBody = ghText([
+    "api",
+    `repos/${REPO}/issues/${pr}/comments?per_page=100`,
+    "--jq",
+    '[.[]|select(.user.login=="chatgpt-codex-connector[bot]")|.body]|last // ""',
+  ]);
+  const reviewedSha = (String(codexBody).match(/`([0-9a-f]{7,40})`/g) ?? [])
+    .map(match => match.replaceAll("`", ""))
+    .pop();
+  const coderabbit = Number(
+    ghText([
+      "api",
+      `repos/${REPO}/pulls/${pr}/reviews?per_page=100`,
+      "--jq",
+      '[.[]|select(.user.login=="coderabbitai[bot]")]|length',
+    ])
+  );
+
+  const verdict = gateVerdict({
+    tip,
+    unresolvedThreads: threads,
+    checkRuns,
+    codexReviewedSha: reviewedSha,
+    coderabbitReviewCount: coderabbit,
+  });
+
+  process.stdout.write(`PR #${pr} @ ${tip.slice(0, 9) || "(no ref)"}\n`);
+  process.stdout.write(
+    `  landed-whole check: ${reach.checkable ? "available" : `NOT CHECKABLE (${reach.reason})`}\n`
+  );
+  process.stdout.write(`${formatVerdict(verdict)}\n`);
+  return verdict.mergeable ? 0 : 1;
+}
+
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
+  process.exit(main(process.argv.slice(2)));
 }

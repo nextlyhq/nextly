@@ -8,6 +8,19 @@ of the merged work has been opened.
 
 ## The decisions in this file are also code
 
+**Run it, do not retype it:**
+
+```sh
+node scripts/verify-merge.mjs <pr-number>
+```
+
+It reads the tip from `git ls-remote` rather than the API's cached head, refuses
+when the branch cannot answer, names every blocking job rather than counting
+them, and reports a second reviewer that never ran as distinct from one that
+found nothing. Exit status is the verdict. A gate typed out again by hand is a
+second implementation of the same question, which this repository has a rule
+about.
+
 `scripts/verify-merge.mjs` implements the judgements below as pure functions —
 whether a branch can answer the question at all, whether a job counts as
 passing, whether a review verdict belongs to the revision being merged, and
