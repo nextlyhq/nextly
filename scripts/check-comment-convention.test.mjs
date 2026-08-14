@@ -184,8 +184,8 @@ describe("the allowlist", () => {
   // than a record of what predates it. Lower this as entries are removed; never raise it.
   const EXPECTED_ENTRIES = 153;
 
-  it("has not grown", () => {
-    expect(readAllowlist().size).toBeLessThanOrEqual(EXPECTED_ENTRIES);
+  it("matches its pinned size exactly", () => {
+    expect(readAllowlist().size).toBe(EXPECTED_ENTRIES);
   });
 
   it("names files that exist", () => {
@@ -197,9 +197,10 @@ describe("the allowlist", () => {
   });
 
   it("maps every entry to a positive whole number", () => {
-    for (const [path, count] of readAllowlist()) {
-      expect(Number.isInteger(count), `${path} must map to an integer`).toBe(true);
-      expect(count, `${path} must map to a positive count`).toBeGreaterThan(0);
+    for (const [path, entry] of readAllowlist()) {
+      expect(Number.isInteger(entry.count), `${path} must record an integer count`).toBe(true);
+      expect(entry.count, `${path} must record a positive count`).toBeGreaterThan(0);
+      expect(typeof entry.digest, `${path} must record a digest`).toBe("string");
     }
   });
 

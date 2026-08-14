@@ -27,6 +27,7 @@
  */
 
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 
@@ -180,16 +181,44 @@ export const ALLOWLIST_FILE = "scripts/comment-convention-allowlist.json";
 export function readAllowlist(root = process.cwd()) {
   const raw = JSON.parse(readFileSync(join(root, ALLOWLIST_FILE), "utf8"));
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new Error(`${ALLOWLIST_FILE} must be an object mapping each path to its offence count`);
+    throw new Error(`${ALLOWLIST_FILE} must be an object mapping each path to its entry`);
   }
-  for (const [path, count] of Object.entries(raw)) {
-    if (!Number.isInteger(count) || count < 1) {
+  for (const [path, entry] of Object.entries(raw)) {
+    const shaped =
+      entry !== null &&
+      typeof entry === "object" &&
+      Number.isInteger(entry.count) &&
+      entry.count >= 1 &&
+      typeof entry.digest === "string" &&
+      entry.digest.length > 0;
+    if (!shaped) {
       throw new Error(
-        `${ALLOWLIST_FILE}: ${path} must map to a positive integer, got ${String(count)}`
+        `${ALLOWLIST_FILE}: ${path} must be { count: positive integer, digest: string }`
       );
     }
   }
   return new Map(Object.entries(raw));
+}
+
+/**
+ * A stable identity for the offences recorded against one file.
+ *
+ * A count alone cannot tell a recorded comment from a different one that replaced it: deleting the
+ * exempted comment and adding a new offence in the same change leaves the total unchanged, so a
+ * count comparison accepts it and the shrink check sees no reduction either. Hashing the offences
+ * themselves closes that, because the substitution changes the digest even when the number is
+ * identical.
+ *
+ * Sorted so a reordering is not a change, and whitespace-collapsed so reflowing a comment across
+ * lines is not either. Both would otherwise fail as new offences and teach people to regenerate
+ * the file, which is the habit that turns a record into a rubber stamp.
+ */
+export function digestOffences(offences) {
+  const normalised = offences
+    .map(one => one.replace(/\s+/g, " ").trim())
+    .sort()
+    .join(" ");
+  return createHash("sha256").update(normalised).digest("hex").slice(0, 16);
 }
 
 /**
@@ -259,7 +288,12 @@ export function commentText(source) {
   for (const match of withoutLiterals.matchAll(/\/\*[\s\S]*?\*\//g)) {
     comments.push(source.slice(match.index, match.index + match[0].length));
   }
-  for (const match of withoutLiterals.matchAll(/(^|[^:"'`\\])\/\/(.*)$/gm)) {
+  // A colon may precede a line comment in valid JavaScript — `case 1:// ...`, `retry:// ...` —
+  // so it is NOT excluded here. It once was, as a way of not reading `https://` as a comment, and
+  // that job now belongs to the literal blanking above: a URL lives in a string, and the string is
+  // already blank by the time this runs. Keeping the colon exclusion as well cost both switch-case
+  // forms, which pass CI carrying any narration at all.
+  for (const match of withoutLiterals.matchAll(/(^|[^"'`\\])\/\/(.*)$/gm)) {
     const start = match.index + match[1].length + 2;
     comments.push(source.slice(start, start + match[2].length));
   }
@@ -375,12 +409,30 @@ function main() {
   const failures = [];
 
   for (const [path, found] of byFile) {
-    const allowed = allowlist.get(path) ?? 0;
-    if (found.length <= allowed) continue;
-    failures.push(
-      `${path} — ${found.length} offence(s), ${allowed} allowed:\n` +
-        found.map(one => `      ${one}`).join("\n")
-    );
+    const entry = allowlist.get(path);
+    if (!entry) {
+      failures.push(
+        `${path} — ${found.length} offence(s), 0 allowed:\n` +
+          found.map(one => `      ${one}`).join("\n")
+      );
+      continue;
+    }
+    if (found.length > entry.count) {
+      failures.push(
+        `${path} — ${found.length} offence(s), ${entry.count} allowed:\n` +
+          found.map(one => `      ${one}`).join("\n")
+      );
+      continue;
+    }
+    // Same count, different comments. Without this a file may trade its exempted comment for a
+    // new one and the totals still agree, which is the one substitution a counted baseline cannot
+    // see.
+    if (found.length === entry.count && digestOffences(found) !== entry.digest) {
+      failures.push(
+        `${path} — ${found.length} offence(s) as recorded, but not the same ones:\n` +
+          found.map(one => `      ${one}`).join("\n")
+      );
+    }
   }
 
   // Entries whose file now holds fewer offences than recorded, which is what makes the allowlist
@@ -391,7 +443,8 @@ function main() {
   // treating those as fixed would walk the allowlist to nothing on the strength of files nobody
   // opened.
   if (!explicit) {
-    for (const [path, allowed] of allowlist) {
+    for (const [path, entry] of allowlist) {
+      const allowed = entry.count;
       const found = byFile.get(path)?.length ?? 0;
       if (found >= allowed) continue;
       failures.push(
@@ -418,7 +471,7 @@ function main() {
   // file it read and cleared produce the same silence, so without these a growing allowlist or a
   // widening path exemption would shrink what is actually checked while this line kept saying the
   // same thing.
-  const exempt = [...allowlist.values()].reduce((sum, count) => sum + count, 0);
+  const exempt = [...allowlist.values()].reduce((sum, entry) => sum + entry.count, 0);
   console.log(
     `${files.length - skipped} of ${files.length} source files across ${roots.join(", ")}: ` +
       "no new comment names a review, tool or change" +

@@ -1,155 +1,614 @@
 {
-  "packages/admin/src/components/features/entries/EntryForm/EntryForm.tsx": 2,
-  "packages/admin/src/components/features/entries/fields/structured/__tests__/RepeaterRowLabel.test.tsx": 1,
-  "packages/admin/src/components/features/notifications/NotificationBell.tsx": 1,
-  "packages/admin/src/components/features/notifications/NotificationDropdown.tsx": 1,
-  "packages/admin/src/components/features/notifications/NotificationRow.tsx": 1,
-  "packages/admin/src/components/features/notifications/__tests__/NotificationBell.test.tsx": 1,
-  "packages/admin/src/components/features/notifications/__tests__/NotificationDropdown.test.tsx": 1,
-  "packages/admin/src/components/features/notifications/__tests__/NotificationRow.test.tsx": 1,
-  "packages/admin/src/components/features/notifications/__tests__/formatters.test.ts": 1,
-  "packages/admin/src/components/features/notifications/__tests__/relative-time.test.ts": 1,
-  "packages/admin/src/components/features/notifications/__tests__/useUnreadCount.test.ts": 1,
-  "packages/admin/src/components/features/notifications/formatters.ts": 1,
-  "packages/admin/src/components/features/notifications/index.ts": 1,
-  "packages/admin/src/components/features/notifications/relative-time.ts": 1,
-  "packages/admin/src/components/features/notifications/useUnreadCount.ts": 1,
-  "packages/admin/src/components/features/schema-builder/BuilderFieldList.tsx": 2,
-  "packages/admin/src/components/features/schema-builder/SchemaChangeDialog.tsx": 2,
-  "packages/admin/src/components/features/schema-builder/builder-settings-modal/IconPicker.tsx": 1,
-  "packages/admin/src/components/features/schema-builder/field-editor-sheet/GeneralTab.tsx": 1,
-  "packages/admin/src/components/features/schema-builder/field-editor-sheet/TypeSpecificEditor.tsx": 3,
-  "packages/admin/src/components/features/schema-builder/field-editor-sheet/__tests__/GeneralTab.test.tsx": 1,
-  "packages/admin/src/components/features/schema-builder/index.ts": 1,
-  "packages/admin/src/components/features/schema-builder/types.ts": 1,
-  "packages/admin/src/components/shared/search-bar/call-site-classes.test.ts": 1,
-  "packages/admin/src/hooks/queries/useJournal.ts": 1,
-  "packages/admin/src/services/journalApi.ts": 1,
-  "packages/admin/src/services/schemaApi.ts": 4,
-  "packages/admin/src/types/entities.ts": 1,
-  "packages/nextly/eslint.config.js": 2,
-  "packages/nextly/src/cli/commands/db-sync-demote.ts": 1,
-  "packages/nextly/src/cli/commands/dev-server.ts": 13,
-  "packages/nextly/src/cli/commands/index.ts": 1,
-  "packages/nextly/src/cli/commands/migrate-check.test.ts": 1,
-  "packages/nextly/src/cli/commands/migrate-check.ts": 6,
-  "packages/nextly/src/cli/commands/migrate-create.ts": 7,
-  "packages/nextly/src/cli/commands/migrate-fresh.ts": 1,
-  "packages/nextly/src/cli/commands/migrate.ts": 1,
-  "packages/nextly/src/cli/program.ts": 5,
-  "packages/nextly/src/database/__tests__/integration/schema-push.integration.test.ts": 2,
-  "packages/nextly/src/database/seeders/permissions.ts": 1,
-  "packages/nextly/src/database/seeders/super-admin.ts": 3,
-  "packages/nextly/src/di/register.ts": 6,
-  "packages/nextly/src/direct-api/__tests__/auth.test.ts": 10,
-  "packages/nextly/src/direct-api/namespaces/auth.ts": 5,
-  "packages/nextly/src/direct-api/namespaces/rbac.ts": 11,
-  "packages/nextly/src/domains/auth/__tests__/role-service.test.ts": 1,
-  "packages/nextly/src/domains/auth/services/api-key-service.ts": 1,
-  "packages/nextly/src/domains/auth/services/auth-service.ts": 5,
-  "packages/nextly/src/domains/auth/services/permission-seed-service.ts": 4,
-  "packages/nextly/src/domains/auth/services/permission-service.ts": 1,
-  "packages/nextly/src/domains/auth/services/role-service.ts": 1,
-  "packages/nextly/src/domains/auth/services/role/role-mutation-service.ts": 1,
-  "packages/nextly/src/domains/auth/services/role/role-query-service.ts": 1,
-  "packages/nextly/src/domains/collections/__tests__/collection-registry-service.status-persist.test.ts": 1,
-  "packages/nextly/src/domains/collections/services/collection-metadata-service.ts": 1,
-  "packages/nextly/src/domains/collections/services/collection-mutation-service.ts": 3,
-  "packages/nextly/src/domains/collections/services/collection-registry-service.ts": 1,
-  "packages/nextly/src/domains/collections/services/collection-service.ts": 1,
-  "packages/nextly/src/domains/dynamic-collections/services/dynamic-collection-validation-service.ts": 1,
-  "packages/nextly/src/domains/email/__tests__/stored-configuration-round-trips.test.ts": 1,
-  "packages/nextly/src/domains/field-groups/migration/__tests__/run.test.ts": 1,
-  "packages/nextly/src/domains/media/services/media-service.ts": 1,
-  "packages/nextly/src/domains/schema/index.ts": 4,
-  "packages/nextly/src/domains/schema/legacy-preview/__tests__/translate.test.ts": 1,
-  "packages/nextly/src/domains/schema/legacy-preview/translate.ts": 2,
-  "packages/nextly/src/domains/schema/migrate-create/__tests__/format-file.test.ts": 1,
-  "packages/nextly/src/domains/schema/migrate-create/__tests__/generate.test.ts": 1,
-  "packages/nextly/src/domains/schema/migrate-create/__tests__/snapshot-io.test.ts": 1,
-  "packages/nextly/src/domains/schema/migrate-create/format-file.ts": 1,
-  "packages/nextly/src/domains/schema/migrate-create/generate.ts": 4,
-  "packages/nextly/src/domains/schema/migrate-create/prompt-renames.ts": 2,
-  "packages/nextly/src/domains/schema/migrate-create/snapshot-io.ts": 4,
-  "packages/nextly/src/domains/schema/pipeline/__tests__/f8-matrix.integration.test.ts": 2,
-  "packages/nextly/src/domains/schema/pipeline/__tests__/journal-summary-and-scope.test.ts": 1,
-  "packages/nextly/src/domains/schema/pipeline/__tests__/preview.test.ts": 1,
-  "packages/nextly/src/domains/schema/pipeline/__tests__/pushschema-pipeline.integration.test.ts": 1,
-  "packages/nextly/src/domains/schema/pipeline/__tests__/wiring.test.ts": 2,
-  "packages/nextly/src/domains/schema/pipeline/_internal/run-statement.ts": 1,
-  "packages/nextly/src/domains/schema/pipeline/apply.ts": 4,
-  "packages/nextly/src/domains/schema/pipeline/classifier/classifier.ts": 1,
-  "packages/nextly/src/domains/schema/pipeline/classifier/type-widening.ts": 1,
-  "packages/nextly/src/domains/schema/pipeline/diff/__tests__/fixtures.test.ts": 1,
-  "packages/nextly/src/domains/schema/pipeline/diff/diff.ts": 1,
-  "packages/nextly/src/domains/schema/pipeline/diff/introspect-live.ts": 2,
-  "packages/nextly/src/domains/schema/pipeline/diff/types.ts": 1,
-  "packages/nextly/src/domains/schema/pipeline/index.ts": 4,
-  "packages/nextly/src/domains/schema/pipeline/pre-cleanup/executor.ts": 1,
-  "packages/nextly/src/domains/schema/pipeline/pre-resolution/executor.ts": 2,
-  "packages/nextly/src/domains/schema/pipeline/preview.ts": 1,
-  "packages/nextly/src/domains/schema/pipeline/prompt-dispatcher/browser.ts": 2,
-  "packages/nextly/src/domains/schema/pipeline/prompt-dispatcher/clack-terminal.ts": 2,
-  "packages/nextly/src/domains/schema/pipeline/pushschema-pipeline-interfaces.ts": 8,
-  "packages/nextly/src/domains/schema/pipeline/pushschema-pipeline-stubs.ts": 5,
-  "packages/nextly/src/domains/schema/pipeline/pushschema-pipeline.ts": 17,
-  "packages/nextly/src/domains/schema/pipeline/rename-detector.ts": 2,
-  "packages/nextly/src/domains/schema/pipeline/resolution/__tests__/types.test.ts": 1,
-  "packages/nextly/src/domains/schema/pipeline/resolution/types.ts": 2,
-  "packages/nextly/src/domains/schema/pipeline/sql-templates/__tests__/identifier-quoting.test.ts": 1,
-  "packages/nextly/src/domains/schema/pipeline/sql-templates/__tests__/mysql.test.ts": 1,
-  "packages/nextly/src/domains/schema/pipeline/sql-templates/__tests__/postgres.test.ts": 1,
-  "packages/nextly/src/domains/schema/pipeline/sql-templates/__tests__/sqlite.test.ts": 1,
-  "packages/nextly/src/domains/schema/pipeline/sql-templates/identifier-quoting.ts": 1,
-  "packages/nextly/src/domains/schema/pipeline/sql-templates/index.ts": 1,
-  "packages/nextly/src/domains/schema/pipeline/sql-templates/mysql.ts": 3,
-  "packages/nextly/src/domains/schema/pipeline/sql-templates/postgres.ts": 1,
-  "packages/nextly/src/domains/schema/pipeline/sql-templates/sqlite.ts": 1,
-  "packages/nextly/src/domains/schema/services/__tests__/schema-change-exclusion.test.ts": 1,
-  "packages/nextly/src/domains/schema/services/schema-change-types.ts": 1,
-  "packages/nextly/src/domains/schema/utils/__tests__/missing-columns.test.ts": 1,
-  "packages/nextly/src/domains/schema/utils/missing-columns.ts": 2,
-  "packages/nextly/src/domains/schema/utils/resolve-table-name.ts": 1,
-  "packages/nextly/src/domains/singles/services/single-registry-service.ts": 1,
-  "packages/nextly/src/domains/users/__tests__/user-account-service.test.ts": 1,
-  "packages/nextly/src/domains/users/__tests__/user-mutation-service.transaction.integration.test.ts": 1,
-  "packages/nextly/src/domains/users/__tests__/user-query-service.test.ts": 2,
-  "packages/nextly/src/domains/users/index.ts": 2,
-  "packages/nextly/src/domains/users/services/user-account-service.ts": 1,
-  "packages/nextly/src/domains/users/services/user-field-definition-service.ts": 1,
-  "packages/nextly/src/domains/users/services/user-mutation-service.ts": 2,
-  "packages/nextly/src/domains/users/services/user-query-service.ts": 3,
-  "packages/nextly/src/domains/users/services/user-service.ts": 2,
-  "packages/nextly/src/domains/users/types.ts": 2,
-  "packages/nextly/src/index.ts": 1,
-  "packages/nextly/src/init.ts": 4,
-  "packages/nextly/src/init/__tests__/drift-check.test.ts": 1,
-  "packages/nextly/src/init/__tests__/first-run.test.ts": 1,
-  "packages/nextly/src/init/__tests__/reload-config.test.ts": 1,
-  "packages/nextly/src/init/drift-check.ts": 4,
-  "packages/nextly/src/init/first-run.ts": 1,
-  "packages/nextly/src/init/reload-config.ts": 5,
-  "packages/nextly/src/route-handler/route-parser.ts": 2,
-  "packages/nextly/src/routeHandler.ts": 3,
-  "packages/nextly/src/runtime/__tests__/hmr-listener.test.ts": 1,
-  "packages/nextly/src/runtime/hmr-listener.ts": 1,
-  "packages/nextly/src/runtime/notifications/__tests__/build-event.test.ts": 1,
-  "packages/nextly/src/runtime/notifications/__tests__/dispatcher.test.ts": 1,
-  "packages/nextly/src/runtime/notifications/__tests__/ndjson.test.ts": 1,
-  "packages/nextly/src/runtime/notifications/__tests__/notifications-pipeline.integration.test.ts": 1,
-  "packages/nextly/src/runtime/notifications/__tests__/terminal.test.ts": 1,
-  "packages/nextly/src/runtime/notifications/build-event.ts": 1,
-  "packages/nextly/src/runtime/notifications/channels/ndjson.ts": 1,
-  "packages/nextly/src/runtime/notifications/channels/terminal.ts": 1,
-  "packages/nextly/src/runtime/notifications/dispatcher.ts": 1,
-  "packages/nextly/src/runtime/notifications/index.ts": 1,
-  "packages/nextly/src/runtime/notifications/production.ts": 1,
-  "packages/nextly/src/runtime/notifications/types.ts": 2,
-  "packages/nextly/src/services/dashboard/activity-log-service.ts": 2,
-  "packages/nextly/src/services/users.ts": 10,
-  "packages/nextly/src/shared/base-registry-service.ts": 2,
-  "packages/nextly/src/shared/types/config.ts": 3,
-  "packages/nextly/src/singles/config/validate-single.ts": 1,
-  "packages/plugin-sdk/src/block-exports.test-d.ts": 1,
-  "packages/ui/src/components/__tests__/tabs-contract.test.ts": 1
+  "packages/admin/src/components/features/entries/EntryForm/EntryForm.tsx": {
+    "count": 2,
+    "digest": "4a214c92a9b1fe7e"
+  },
+  "packages/admin/src/components/features/entries/fields/structured/__tests__/RepeaterRowLabel.test.tsx": {
+    "count": 1,
+    "digest": "7950086eaf8024fc"
+  },
+  "packages/admin/src/components/features/notifications/NotificationBell.tsx": {
+    "count": 1,
+    "digest": "247d9600070fdad4"
+  },
+  "packages/admin/src/components/features/notifications/NotificationDropdown.tsx": {
+    "count": 1,
+    "digest": "cb1155511d7b629a"
+  },
+  "packages/admin/src/components/features/notifications/NotificationRow.tsx": {
+    "count": 1,
+    "digest": "e9e77d3624987eb1"
+  },
+  "packages/admin/src/components/features/notifications/__tests__/NotificationBell.test.tsx": {
+    "count": 1,
+    "digest": "278445232d306cf1"
+  },
+  "packages/admin/src/components/features/notifications/__tests__/NotificationDropdown.test.tsx": {
+    "count": 1,
+    "digest": "8657f60c5ae76ec3"
+  },
+  "packages/admin/src/components/features/notifications/__tests__/NotificationRow.test.tsx": {
+    "count": 1,
+    "digest": "5d3fd1beb35cd4c4"
+  },
+  "packages/admin/src/components/features/notifications/__tests__/formatters.test.ts": {
+    "count": 1,
+    "digest": "6f291d006b0e9880"
+  },
+  "packages/admin/src/components/features/notifications/__tests__/relative-time.test.ts": {
+    "count": 1,
+    "digest": "edc58b7675844ff7"
+  },
+  "packages/admin/src/components/features/notifications/__tests__/useUnreadCount.test.ts": {
+    "count": 1,
+    "digest": "07f1813b5891159e"
+  },
+  "packages/admin/src/components/features/notifications/formatters.ts": {
+    "count": 1,
+    "digest": "0abaa266cc0df723"
+  },
+  "packages/admin/src/components/features/notifications/index.ts": {
+    "count": 1,
+    "digest": "8fbaf3b032e659d3"
+  },
+  "packages/admin/src/components/features/notifications/relative-time.ts": {
+    "count": 1,
+    "digest": "964ee7bc033520c7"
+  },
+  "packages/admin/src/components/features/notifications/useUnreadCount.ts": {
+    "count": 1,
+    "digest": "241c176b3073729f"
+  },
+  "packages/admin/src/components/features/schema-builder/BuilderFieldList.tsx": {
+    "count": 2,
+    "digest": "0767acfb69f62819"
+  },
+  "packages/admin/src/components/features/schema-builder/SchemaChangeDialog.tsx": {
+    "count": 2,
+    "digest": "65fd0a31cacd8803"
+  },
+  "packages/admin/src/components/features/schema-builder/builder-settings-modal/IconPicker.tsx": {
+    "count": 1,
+    "digest": "288c8b1dcc5f622c"
+  },
+  "packages/admin/src/components/features/schema-builder/field-editor-sheet/GeneralTab.tsx": {
+    "count": 1,
+    "digest": "72d6bd4dfab98bb6"
+  },
+  "packages/admin/src/components/features/schema-builder/field-editor-sheet/TypeSpecificEditor.tsx": {
+    "count": 3,
+    "digest": "1169fa29733c5e45"
+  },
+  "packages/admin/src/components/features/schema-builder/field-editor-sheet/__tests__/GeneralTab.test.tsx": {
+    "count": 1,
+    "digest": "1d7acc079706f498"
+  },
+  "packages/admin/src/components/features/schema-builder/index.ts": {
+    "count": 1,
+    "digest": "8a253d6d2ff3ba52"
+  },
+  "packages/admin/src/components/features/schema-builder/types.ts": {
+    "count": 1,
+    "digest": "be661519e32aa8ef"
+  },
+  "packages/admin/src/components/shared/search-bar/call-site-classes.test.ts": {
+    "count": 1,
+    "digest": "9d4a678892f5b280"
+  },
+  "packages/admin/src/hooks/queries/useJournal.ts": {
+    "count": 1,
+    "digest": "98ad6e2f593d78f9"
+  },
+  "packages/admin/src/services/journalApi.ts": {
+    "count": 1,
+    "digest": "5e9940f8b2b8e7e4"
+  },
+  "packages/admin/src/services/schemaApi.ts": {
+    "count": 4,
+    "digest": "fc379bef9417cb88"
+  },
+  "packages/admin/src/types/entities.ts": {
+    "count": 1,
+    "digest": "e352cdb76de70299"
+  },
+  "packages/nextly/eslint.config.js": {
+    "count": 2,
+    "digest": "6dc29cff92190229"
+  },
+  "packages/nextly/src/cli/commands/db-sync-demote.ts": {
+    "count": 1,
+    "digest": "d662dd2337253181"
+  },
+  "packages/nextly/src/cli/commands/dev-server.ts": {
+    "count": 13,
+    "digest": "3002b45cd79d4b1d"
+  },
+  "packages/nextly/src/cli/commands/index.ts": {
+    "count": 1,
+    "digest": "25dbb90893392916"
+  },
+  "packages/nextly/src/cli/commands/migrate-check.test.ts": {
+    "count": 1,
+    "digest": "7dff192461e583a7"
+  },
+  "packages/nextly/src/cli/commands/migrate-check.ts": {
+    "count": 6,
+    "digest": "ac9f6eef917746ca"
+  },
+  "packages/nextly/src/cli/commands/migrate-create.ts": {
+    "count": 7,
+    "digest": "d4ad898949745d24"
+  },
+  "packages/nextly/src/cli/commands/migrate-fresh.ts": {
+    "count": 1,
+    "digest": "d0bab62702f89763"
+  },
+  "packages/nextly/src/cli/commands/migrate.ts": {
+    "count": 1,
+    "digest": "b67e8ffa0512214e"
+  },
+  "packages/nextly/src/cli/program.ts": {
+    "count": 5,
+    "digest": "a38d8d783d4a1535"
+  },
+  "packages/nextly/src/database/__tests__/integration/schema-push.integration.test.ts": {
+    "count": 2,
+    "digest": "ac2354362a21fc82"
+  },
+  "packages/nextly/src/database/seeders/permissions.ts": {
+    "count": 1,
+    "digest": "7a46772394c5b0a4"
+  },
+  "packages/nextly/src/database/seeders/super-admin.ts": {
+    "count": 3,
+    "digest": "9249e3cfa5423f19"
+  },
+  "packages/nextly/src/di/register.ts": {
+    "count": 6,
+    "digest": "09800fa5ef650f02"
+  },
+  "packages/nextly/src/direct-api/__tests__/auth.test.ts": {
+    "count": 10,
+    "digest": "b12140c52aa68c80"
+  },
+  "packages/nextly/src/direct-api/namespaces/auth.ts": {
+    "count": 5,
+    "digest": "f0df02b3e5caf4bd"
+  },
+  "packages/nextly/src/direct-api/namespaces/rbac.ts": {
+    "count": 11,
+    "digest": "b8c4e961bad32348"
+  },
+  "packages/nextly/src/domains/auth/__tests__/role-service.test.ts": {
+    "count": 1,
+    "digest": "5492776b80a0768a"
+  },
+  "packages/nextly/src/domains/auth/services/api-key-service.ts": {
+    "count": 1,
+    "digest": "fb8c491ddbbd1a2f"
+  },
+  "packages/nextly/src/domains/auth/services/auth-service.ts": {
+    "count": 5,
+    "digest": "b2d1b61714e0d27a"
+  },
+  "packages/nextly/src/domains/auth/services/permission-seed-service.ts": {
+    "count": 4,
+    "digest": "edc193dd8d005354"
+  },
+  "packages/nextly/src/domains/auth/services/permission-service.ts": {
+    "count": 1,
+    "digest": "0e04267fde0659cd"
+  },
+  "packages/nextly/src/domains/auth/services/role-service.ts": {
+    "count": 1,
+    "digest": "009677aba82b90ee"
+  },
+  "packages/nextly/src/domains/auth/services/role/role-mutation-service.ts": {
+    "count": 1,
+    "digest": "0e04267fde0659cd"
+  },
+  "packages/nextly/src/domains/auth/services/role/role-query-service.ts": {
+    "count": 1,
+    "digest": "3e75d4d904fb41d7"
+  },
+  "packages/nextly/src/domains/collections/__tests__/collection-registry-service.status-persist.test.ts": {
+    "count": 1,
+    "digest": "a652592be5c16511"
+  },
+  "packages/nextly/src/domains/collections/services/collection-metadata-service.ts": {
+    "count": 1,
+    "digest": "899c4d14e978ae45"
+  },
+  "packages/nextly/src/domains/collections/services/collection-mutation-service.ts": {
+    "count": 3,
+    "digest": "be4a98a4529a6d11"
+  },
+  "packages/nextly/src/domains/collections/services/collection-registry-service.ts": {
+    "count": 1,
+    "digest": "05525f97d7d0fbbe"
+  },
+  "packages/nextly/src/domains/collections/services/collection-service.ts": {
+    "count": 1,
+    "digest": "05525f97d7d0fbbe"
+  },
+  "packages/nextly/src/domains/dynamic-collections/services/dynamic-collection-validation-service.ts": {
+    "count": 1,
+    "digest": "feb6e52c7293bf7d"
+  },
+  "packages/nextly/src/domains/email/__tests__/stored-configuration-round-trips.test.ts": {
+    "count": 1,
+    "digest": "fde5d4d051800112"
+  },
+  "packages/nextly/src/domains/field-groups/migration/__tests__/run.test.ts": {
+    "count": 1,
+    "digest": "d4b197d351b17a5c"
+  },
+  "packages/nextly/src/domains/media/services/media-service.ts": {
+    "count": 1,
+    "digest": "47fc82ec9e52702b"
+  },
+  "packages/nextly/src/domains/schema/index.ts": {
+    "count": 4,
+    "digest": "bdb5d10f2013da7b"
+  },
+  "packages/nextly/src/domains/schema/legacy-preview/__tests__/translate.test.ts": {
+    "count": 1,
+    "digest": "7e63cf63aea865ba"
+  },
+  "packages/nextly/src/domains/schema/legacy-preview/translate.ts": {
+    "count": 2,
+    "digest": "11ddb275a29d5c5a"
+  },
+  "packages/nextly/src/domains/schema/migrate-create/__tests__/format-file.test.ts": {
+    "count": 1,
+    "digest": "1c2e43a3cd4015c8"
+  },
+  "packages/nextly/src/domains/schema/migrate-create/__tests__/generate.test.ts": {
+    "count": 1,
+    "digest": "d520fb8d6ede9a7f"
+  },
+  "packages/nextly/src/domains/schema/migrate-create/__tests__/snapshot-io.test.ts": {
+    "count": 1,
+    "digest": "b18780caa2e66716"
+  },
+  "packages/nextly/src/domains/schema/migrate-create/format-file.ts": {
+    "count": 1,
+    "digest": "e48fdac1d0533907"
+  },
+  "packages/nextly/src/domains/schema/migrate-create/generate.ts": {
+    "count": 4,
+    "digest": "1ad3ae582402606a"
+  },
+  "packages/nextly/src/domains/schema/migrate-create/prompt-renames.ts": {
+    "count": 2,
+    "digest": "abd380fa7201b38e"
+  },
+  "packages/nextly/src/domains/schema/migrate-create/snapshot-io.ts": {
+    "count": 4,
+    "digest": "e44f0b028e64019f"
+  },
+  "packages/nextly/src/domains/schema/pipeline/__tests__/f8-matrix.integration.test.ts": {
+    "count": 2,
+    "digest": "844fd76aec84faac"
+  },
+  "packages/nextly/src/domains/schema/pipeline/__tests__/journal-summary-and-scope.test.ts": {
+    "count": 1,
+    "digest": "a37ceda68e6c0f12"
+  },
+  "packages/nextly/src/domains/schema/pipeline/__tests__/preview.test.ts": {
+    "count": 1,
+    "digest": "4ebed049ff43aa49"
+  },
+  "packages/nextly/src/domains/schema/pipeline/__tests__/pushschema-pipeline.integration.test.ts": {
+    "count": 1,
+    "digest": "cdafa8550dd455b6"
+  },
+  "packages/nextly/src/domains/schema/pipeline/__tests__/wiring.test.ts": {
+    "count": 2,
+    "digest": "a0b4a8f4b274529d"
+  },
+  "packages/nextly/src/domains/schema/pipeline/_internal/run-statement.ts": {
+    "count": 1,
+    "digest": "8f594627a01b38bd"
+  },
+  "packages/nextly/src/domains/schema/pipeline/apply.ts": {
+    "count": 4,
+    "digest": "6de22349f39fa676"
+  },
+  "packages/nextly/src/domains/schema/pipeline/classifier/classifier.ts": {
+    "count": 1,
+    "digest": "021d5fe2357e20f1"
+  },
+  "packages/nextly/src/domains/schema/pipeline/classifier/type-widening.ts": {
+    "count": 1,
+    "digest": "cd4d575465a20fcc"
+  },
+  "packages/nextly/src/domains/schema/pipeline/diff/__tests__/fixtures.test.ts": {
+    "count": 1,
+    "digest": "7981ee9112d840a9"
+  },
+  "packages/nextly/src/domains/schema/pipeline/diff/diff.ts": {
+    "count": 1,
+    "digest": "3fd6f676e5b9288b"
+  },
+  "packages/nextly/src/domains/schema/pipeline/diff/introspect-live.ts": {
+    "count": 2,
+    "digest": "14f14361efe4357b"
+  },
+  "packages/nextly/src/domains/schema/pipeline/diff/types.ts": {
+    "count": 1,
+    "digest": "e31c53db429d0257"
+  },
+  "packages/nextly/src/domains/schema/pipeline/index.ts": {
+    "count": 4,
+    "digest": "7b67f2a35c183baf"
+  },
+  "packages/nextly/src/domains/schema/pipeline/pre-cleanup/executor.ts": {
+    "count": 1,
+    "digest": "aa0479f13dcdc73e"
+  },
+  "packages/nextly/src/domains/schema/pipeline/pre-resolution/executor.ts": {
+    "count": 2,
+    "digest": "ce8d93dd3da603a3"
+  },
+  "packages/nextly/src/domains/schema/pipeline/preview.ts": {
+    "count": 1,
+    "digest": "84cf32c686c86ae7"
+  },
+  "packages/nextly/src/domains/schema/pipeline/prompt-dispatcher/browser.ts": {
+    "count": 2,
+    "digest": "9298109abaa24028"
+  },
+  "packages/nextly/src/domains/schema/pipeline/prompt-dispatcher/clack-terminal.ts": {
+    "count": 2,
+    "digest": "37c5174696a7738e"
+  },
+  "packages/nextly/src/domains/schema/pipeline/pushschema-pipeline-interfaces.ts": {
+    "count": 8,
+    "digest": "75e66c09e1ecfdac"
+  },
+  "packages/nextly/src/domains/schema/pipeline/pushschema-pipeline-stubs.ts": {
+    "count": 5,
+    "digest": "8254f14ab48b9f99"
+  },
+  "packages/nextly/src/domains/schema/pipeline/pushschema-pipeline.ts": {
+    "count": 17,
+    "digest": "1376ebb9283acec7"
+  },
+  "packages/nextly/src/domains/schema/pipeline/rename-detector.ts": {
+    "count": 2,
+    "digest": "6e2b6f8adf01be84"
+  },
+  "packages/nextly/src/domains/schema/pipeline/resolution/__tests__/types.test.ts": {
+    "count": 1,
+    "digest": "361816186725a08e"
+  },
+  "packages/nextly/src/domains/schema/pipeline/resolution/types.ts": {
+    "count": 2,
+    "digest": "41b3d0bfaf7aa692"
+  },
+  "packages/nextly/src/domains/schema/pipeline/sql-templates/__tests__/identifier-quoting.test.ts": {
+    "count": 1,
+    "digest": "41b9211724fe4c37"
+  },
+  "packages/nextly/src/domains/schema/pipeline/sql-templates/__tests__/mysql.test.ts": {
+    "count": 1,
+    "digest": "97120d79b81b1a54"
+  },
+  "packages/nextly/src/domains/schema/pipeline/sql-templates/__tests__/postgres.test.ts": {
+    "count": 1,
+    "digest": "ec9beb5dc4feed50"
+  },
+  "packages/nextly/src/domains/schema/pipeline/sql-templates/__tests__/sqlite.test.ts": {
+    "count": 1,
+    "digest": "3ef0020d7bbd62ad"
+  },
+  "packages/nextly/src/domains/schema/pipeline/sql-templates/identifier-quoting.ts": {
+    "count": 1,
+    "digest": "ada349218bd18301"
+  },
+  "packages/nextly/src/domains/schema/pipeline/sql-templates/index.ts": {
+    "count": 1,
+    "digest": "a461f45ce6d7bb51"
+  },
+  "packages/nextly/src/domains/schema/pipeline/sql-templates/mysql.ts": {
+    "count": 3,
+    "digest": "842f2587ba9988c2"
+  },
+  "packages/nextly/src/domains/schema/pipeline/sql-templates/postgres.ts": {
+    "count": 1,
+    "digest": "327891bba247173d"
+  },
+  "packages/nextly/src/domains/schema/pipeline/sql-templates/sqlite.ts": {
+    "count": 1,
+    "digest": "d787061e4f69308b"
+  },
+  "packages/nextly/src/domains/schema/services/__tests__/schema-change-exclusion.test.ts": {
+    "count": 1,
+    "digest": "e006b94219256969"
+  },
+  "packages/nextly/src/domains/schema/services/schema-change-types.ts": {
+    "count": 1,
+    "digest": "f3bdc691f4bf86da"
+  },
+  "packages/nextly/src/domains/schema/utils/__tests__/missing-columns.test.ts": {
+    "count": 1,
+    "digest": "e6e01446dca7981d"
+  },
+  "packages/nextly/src/domains/schema/utils/missing-columns.ts": {
+    "count": 2,
+    "digest": "e6192c2e08cdc488"
+  },
+  "packages/nextly/src/domains/schema/utils/resolve-table-name.ts": {
+    "count": 1,
+    "digest": "51414531c40b1f0e"
+  },
+  "packages/nextly/src/domains/singles/services/single-registry-service.ts": {
+    "count": 1,
+    "digest": "67b7908cda1e3da4"
+  },
+  "packages/nextly/src/domains/users/__tests__/user-account-service.test.ts": {
+    "count": 1,
+    "digest": "17b95aa03d793036"
+  },
+  "packages/nextly/src/domains/users/__tests__/user-mutation-service.transaction.integration.test.ts": {
+    "count": 1,
+    "digest": "423dfb2576ae1e8f"
+  },
+  "packages/nextly/src/domains/users/__tests__/user-query-service.test.ts": {
+    "count": 2,
+    "digest": "970f3da7c4f321e2"
+  },
+  "packages/nextly/src/domains/users/index.ts": {
+    "count": 2,
+    "digest": "eb9fcd2fb3d5ff03"
+  },
+  "packages/nextly/src/domains/users/services/user-account-service.ts": {
+    "count": 1,
+    "digest": "6857e81ce86a5bfc"
+  },
+  "packages/nextly/src/domains/users/services/user-field-definition-service.ts": {
+    "count": 1,
+    "digest": "9852db26243b753a"
+  },
+  "packages/nextly/src/domains/users/services/user-mutation-service.ts": {
+    "count": 2,
+    "digest": "3eb222301bc4dd07"
+  },
+  "packages/nextly/src/domains/users/services/user-query-service.ts": {
+    "count": 3,
+    "digest": "70c3008f90fd6d05"
+  },
+  "packages/nextly/src/domains/users/services/user-service.ts": {
+    "count": 2,
+    "digest": "ef1e9b5875d183f5"
+  },
+  "packages/nextly/src/domains/users/types.ts": {
+    "count": 2,
+    "digest": "b9367297f53513bb"
+  },
+  "packages/nextly/src/index.ts": {
+    "count": 1,
+    "digest": "2c962ee12deb02af"
+  },
+  "packages/nextly/src/init.ts": {
+    "count": 4,
+    "digest": "62d60b28c0ad76af"
+  },
+  "packages/nextly/src/init/__tests__/drift-check.test.ts": {
+    "count": 1,
+    "digest": "edaa5882ea210734"
+  },
+  "packages/nextly/src/init/__tests__/first-run.test.ts": {
+    "count": 1,
+    "digest": "6b8b34fe809dad0b"
+  },
+  "packages/nextly/src/init/__tests__/reload-config.test.ts": {
+    "count": 1,
+    "digest": "bd0f4483fd0bef85"
+  },
+  "packages/nextly/src/init/drift-check.ts": {
+    "count": 4,
+    "digest": "3cc6f5d16ab13048"
+  },
+  "packages/nextly/src/init/first-run.ts": {
+    "count": 1,
+    "digest": "647880bf5d1a1340"
+  },
+  "packages/nextly/src/init/reload-config.ts": {
+    "count": 5,
+    "digest": "59e4fa848c44afa2"
+  },
+  "packages/nextly/src/route-handler/route-parser.ts": {
+    "count": 2,
+    "digest": "92b78dcce8541d31"
+  },
+  "packages/nextly/src/routeHandler.ts": {
+    "count": 3,
+    "digest": "206db09c83f184a8"
+  },
+  "packages/nextly/src/runtime/__tests__/hmr-listener.test.ts": {
+    "count": 1,
+    "digest": "247bb09b07b6bb8d"
+  },
+  "packages/nextly/src/runtime/hmr-listener.ts": {
+    "count": 1,
+    "digest": "3762be1d95e02f1f"
+  },
+  "packages/nextly/src/runtime/notifications/__tests__/build-event.test.ts": {
+    "count": 1,
+    "digest": "7c739076d0cb4864"
+  },
+  "packages/nextly/src/runtime/notifications/__tests__/dispatcher.test.ts": {
+    "count": 1,
+    "digest": "a5fde5f2b0c07216"
+  },
+  "packages/nextly/src/runtime/notifications/__tests__/ndjson.test.ts": {
+    "count": 1,
+    "digest": "562c4e95c5b3552b"
+  },
+  "packages/nextly/src/runtime/notifications/__tests__/notifications-pipeline.integration.test.ts": {
+    "count": 1,
+    "digest": "d2770fd14160e6e3"
+  },
+  "packages/nextly/src/runtime/notifications/__tests__/terminal.test.ts": {
+    "count": 1,
+    "digest": "70bc7d45eb7e1230"
+  },
+  "packages/nextly/src/runtime/notifications/build-event.ts": {
+    "count": 1,
+    "digest": "42a4279ca10af91a"
+  },
+  "packages/nextly/src/runtime/notifications/channels/ndjson.ts": {
+    "count": 1,
+    "digest": "42dc3a0e889c1c3e"
+  },
+  "packages/nextly/src/runtime/notifications/channels/terminal.ts": {
+    "count": 1,
+    "digest": "c28a78fa956e04c3"
+  },
+  "packages/nextly/src/runtime/notifications/dispatcher.ts": {
+    "count": 1,
+    "digest": "311229dd6855ff1e"
+  },
+  "packages/nextly/src/runtime/notifications/index.ts": {
+    "count": 1,
+    "digest": "4df016a8e07907af"
+  },
+  "packages/nextly/src/runtime/notifications/production.ts": {
+    "count": 1,
+    "digest": "a103596c6121460a"
+  },
+  "packages/nextly/src/runtime/notifications/types.ts": {
+    "count": 2,
+    "digest": "6db32fe8deaccfbd"
+  },
+  "packages/nextly/src/services/dashboard/activity-log-service.ts": {
+    "count": 2,
+    "digest": "0f09d17d03ffcd2d"
+  },
+  "packages/nextly/src/services/users.ts": {
+    "count": 10,
+    "digest": "6125f90c633165b5"
+  },
+  "packages/nextly/src/shared/base-registry-service.ts": {
+    "count": 2,
+    "digest": "a63e3b805d9b688a"
+  },
+  "packages/nextly/src/shared/types/config.ts": {
+    "count": 3,
+    "digest": "95a464f004db1aa9"
+  },
+  "packages/nextly/src/singles/config/validate-single.ts": {
+    "count": 1,
+    "digest": "ec9a3869f9e996e7"
+  },
+  "packages/plugin-sdk/src/block-exports.test-d.ts": {
+    "count": 1,
+    "digest": "247927652935faf7"
+  },
+  "packages/ui/src/components/__tests__/tabs-contract.test.ts": {
+    "count": 1,
+    "digest": "752f293a029d2183"
+  }
 }
