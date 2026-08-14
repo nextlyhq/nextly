@@ -131,7 +131,16 @@ export const LOCK_RENEWALS_BEFORE_LOSS = Math.max(
  */
 function nowExpression(dialect: MigrationDialect): SQL {
   if (dialect === "sqlite") return sql`unixepoch()`;
-  return dialect === "mysql" ? sql`NOW()` : sql`now()`;
+  // 🔴 PostgreSQL uses `clock_timestamp()`, NOT `now()`, and the difference decides correctness
+  // here rather than precision. `now()` is TRANSACTION start time and is frozen for the whole
+  // transaction, so a statement that waits on this row — which is exactly what contention means —
+  // reads the instant it began queueing rather than the instant it was admitted. A claim judged
+  // live by that stale reading can already have expired, and an expiry written from it can be in
+  // the past before the row is even updated.
+  //
+  // MySQL's `NOW()` and SQLite's `unixepoch()` are statement-time, so they already answer the
+  // question this asks and need no equivalent.
+  return dialect === "mysql" ? sql`NOW()` : sql`clock_timestamp()`;
 }
 
 function expiryExpression(dialect: MigrationDialect): SQL {
@@ -141,7 +150,10 @@ function expiryExpression(dialect: MigrationDialect): SQL {
   if (dialect === "mysql") {
     return sql`DATE_ADD(NOW(), INTERVAL ${LOCK_TTL_SECONDS} SECOND)`;
   }
-  return sql`now() + make_interval(secs => ${LOCK_TTL_SECONDS})`;
+  // The same clock as `nowExpression`, deliberately: an expiry written from transaction time and a
+  // liveness test taken at statement time would disagree about when the lease ends, and the pair
+  // has to share one frame of reference to mean anything.
+  return sql`clock_timestamp() + make_interval(secs => ${LOCK_TTL_SECONDS})`;
 }
 
 /** The row, read inside the transaction that is about to decide the claim. */
