@@ -406,7 +406,11 @@ describe("a pull request that is no longer open", () => {
    * A merged pull request whose branch kept receiving pushes. Every other
    * answer here describes an OPEN pull request, so without this case the
    * verdict is "no review at the head" — true, useless, and repeated on every
-   * run while the stranded commits sit outside the merge.
+   * run while commits absent from the merge sit on the branch.
+   *
+   * The verdict names them as CANDIDATES because absence from the merge is not
+   * by itself loss: a branch reused for follow-up work collects such commits
+   * legitimately, and only content against the squash separates the two.
    */
 
   it("names a stranded tail rather than reporting missing coverage", () => {
@@ -416,7 +420,7 @@ describe("a pull request that is no longer open", () => {
       state: "MERGED",
       stranded: 4,
     });
-    expect(v.verdict).toBe("MERGED WITH A STRANDED TAIL");
+    expect(v.verdict).toBe("MERGED WITH UNMERGED CANDIDATES");
     expect(v.detail).toEqual({ state: "MERGED", stranded: 4 });
     expect(v.exitCode).toBe(1);
   });

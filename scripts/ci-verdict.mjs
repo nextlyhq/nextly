@@ -178,7 +178,14 @@ export function verdictFor({
   // repeat that forever while commits pushed since sit outside the merge.
   if (state === "MERGED") {
     return {
-      verdict: stranded > 0 ? "MERGED WITH A STRANDED TAIL" : "ALREADY MERGED",
+      // "CANDIDATES", not "STRANDED": the range says only that these commits
+      // are absent from the merge, and a branch reused for follow-up work
+      // collects such commits legitimately. Confirmation is by content against
+      // the squash, which this function has no inputs for — so it names them
+      // and refuses, rather than claiming work was lost.
+      verdict:
+        stranded > 0 ? "MERGED WITH UNMERGED CANDIDATES" : "ALREADY MERGED",
+
       detail: { state, stranded },
       exitCode: stranded > 0 ? 1 : 0,
     };
@@ -420,8 +427,24 @@ async function main(argv) {
           " pageInfo { hasNextPage endCursor } } } } }",
       ]).data.repository.pullRequest.reviewThreads;
       collected.push(...page.nodes);
-      if (!page.pageInfo?.hasNextPage) break;
-      cursor = page.pageInfo.endCursor;
+      // Pagination metadata is REQUIRED rather than optional. A response
+      // without it would otherwise read as the final page and silently drop
+      // every later thread, and a `hasNextPage` that never advances its cursor
+      // would re-request one page forever.
+      const info = page.pageInfo;
+      if (typeof info?.hasNextPage !== "boolean") {
+        throw new Error("reviewThreads returned no pagination metadata");
+      }
+      if (!info.hasNextPage) break;
+      if (typeof info.endCursor !== "string" || info.endCursor === "") {
+        throw new Error("reviewThreads reported another page with no cursor");
+      }
+      if (info.endCursor === cursor) {
+        throw new Error(
+          "reviewThreads returned a cursor that does not advance"
+        );
+      }
+      cursor = info.endCursor;
     }
     return collected;
   };
@@ -506,14 +529,17 @@ async function main(argv) {
     rewritten = gh([
       "api",
       "--paginate",
+      "--slurp",
       `repos/${repo}/issues/${pr}/timeline?per_page=100`,
-    ]).filter(event =>
-      [
-        "head_ref_force_pushed",
-        "head_ref_deleted",
-        "head_ref_restored",
-      ].includes(event?.event)
-    ).length;
+    ])
+      .flat()
+      .filter(event =>
+        [
+          "head_ref_force_pushed",
+          "head_ref_deleted",
+          "head_ref_restored",
+        ].includes(event?.event)
+      ).length;
     if (rewritten > 0) {
       process.stderr.write(
         `ci-verdict: ${rewritten} history-rewrite event(s); tail NOT CHECKABLE\n`
@@ -534,6 +560,17 @@ async function main(argv) {
       { encoding: "utf8" }
     ).trim();
     stranded = Number(stranded) || 0;
+
+    // The head is re-read after the timeline and count, which are several
+    // requests. A push landing during them leaves `headRefOid === head` from
+    // the earlier read, skipping the range entirely and returning success for a
+    // branch that has since grown a tail.
+    if (headOf() !== head) {
+      process.stderr.write(
+        "ci-verdict: head moved during the tail check; re-run\n"
+      );
+      return 2;
+    }
   }
 
   const result = report({
@@ -555,10 +592,16 @@ if (
   import.meta.url === new URL(`file://${process.argv[1]}`).href
 ) {
   main(process.argv.slice(2)).then(
-    code => process.exit(code),
+    // `process.exitCode` rather than `process.exit`: the latter can terminate
+    // before a piped or redirected stdout has drained, truncating the report
+    // while still returning the intended status.
+    code => {
+      process.exitCode = code;
+    },
+
     error => {
       process.stderr.write(`ci-verdict: ${error.message}\n`);
-      process.exit(2);
+      process.exitCode = 2;
     }
   );
 }
