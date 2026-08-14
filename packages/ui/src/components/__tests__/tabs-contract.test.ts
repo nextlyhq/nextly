@@ -1930,7 +1930,11 @@ function selectedByLiteralCondition(
   return decided ? node.left : node.right;
 }
 
-function literalStrings(node: ts.Node, found: string[] = []): string[] {
+function literalStrings(
+  node: ts.Node,
+  found: string[] = [],
+  resolver?: { declarationOf(i: ts.Identifier): ts.Declaration | undefined }
+): string[] {
   // Asked before any operand is visited, so a concatenation contributes the
   // string it evaluates to rather than its halves. Splitting on whitespace
   // happens downstream, and by then two pieces are indistinguishable from two
@@ -1948,7 +1952,7 @@ function literalStrings(node: ts.Node, found: string[] = []): string[] {
     found.push(node.head.text);
     for (const span of node.templateSpans) {
       found.push(span.literal.text);
-      literalStrings(span.expression, found);
+      literalStrings(span.expression, found, resolver);
     }
     return found;
   }
@@ -1958,7 +1962,7 @@ function literalStrings(node: ts.Node, found: string[] = []): string[] {
   // it does not apply.
   if (ts.isExpression(node)) {
     const selected = selectedByLiteralCondition(node);
-    if (selected) return literalStrings(selected, found);
+    if (selected) return literalStrings(selected, found, resolver);
   }
   // `cn({ "border-b-0": false })` applies nothing. In this form the KEY is the
   // class and the VALUE is the condition, so walking the object as plain text
@@ -1971,12 +1975,12 @@ function literalStrings(node: ts.Node, found: string[] = []): string[] {
       // kind walked past it, and the shorthand is the shorter spelling most
       // callers reach for.
       if (ts.isShorthandPropertyAssignment(property)) {
-        if (staticTruthiness(property.name) !== false)
+        if (staticTruthiness(property.name, resolver) !== false)
           found.push(property.name.text);
         continue;
       }
       if (!ts.isPropertyAssignment(property)) continue;
-      if (staticTruthiness(property.initializer) === false) continue;
+      if (staticTruthiness(property.initializer, resolver) === false) continue;
       // Asked through the one reader that answers "what property is this",
       // rather than restating two of the node kinds it knows about. Restating
       // them meant `cn({ ["border-b-0"]: true })` named no class here while
@@ -1991,7 +1995,7 @@ function literalStrings(node: ts.Node, found: string[] = []): string[] {
   // returns something truthy, so a concise arrow returning the accumulator
   // visits one child and reports the rest as absent.
   ts.forEachChild(node, child => {
-    literalStrings(child, found);
+    literalStrings(child, found, resolver);
   });
   return found;
 }
@@ -2312,7 +2316,12 @@ function staticStringOf(
  * `undefined` for anything whose truthiness depends on what it holds at
  * runtime, which keeps the write it guards in play.
  */
-function staticTruthiness(value: ts.Expression): boolean | undefined {
+function staticTruthiness(
+  value: ts.Expression,
+  // Optional because two callers reach this without one. Absent, a bare
+  // `undefined` stays undecided rather than assumed unshadowed.
+  resolver?: { declarationOf(i: ts.Identifier): ts.Declaration | undefined }
+): boolean | undefined {
   const inner = withoutTypeWrappers(value);
   if (
     ts.isObjectLiteralExpression(inner) ||
@@ -2324,6 +2333,26 @@ function staticTruthiness(value: ts.Expression): boolean | undefined {
     return inner.text.length > 0;
   }
   if (ts.isNumericLiteral(inner)) return Number(inner.text) !== 0;
+  // `undefined` is falsy to clsx exactly as `null` and `false` are, and it is
+  // an ordinary IDENTIFIER rather than a keyword, so the kind tests below walk
+  // past it -- leaving `cn({ "border-b-0": undefined })` reported as displacing
+  // a class clsx never applies, which is the ordinary spelling of an optional
+  // condition. The resolver settles shadowing: a local binding named
+  // `undefined` is a value this cannot decide.
+  //
+  // Only this one case is borrowed from `isDefinitelyNothing`, NOT the whole
+  // predicate. That helper answers "does React paint anything for this style
+  // value", under which `true` paints nothing -- while `true` in a class-map
+  // condition is TRUTHY and applies the class. The two questions overlap and
+  // are not the same, and delegating wholesale inverted this one.
+  if (
+    resolver &&
+    ts.isIdentifier(inner) &&
+    inner.text === "undefined" &&
+    !resolver.declarationOf(inner)
+  ) {
+    return false;
+  }
   if (inner.kind === ts.SyntaxKind.TrueKeyword) return true;
   if (inner.kind === ts.SyntaxKind.FalseKeyword) return false;
   if (inner.kind === ts.SyntaxKind.NullKeyword) return false;
@@ -2733,7 +2762,7 @@ function violationsIn(file: string, source: string): Violation[] {
           if (!classValue) continue;
           const displaced = displacedBy(
             exported,
-            literalStrings(classValue).join(" ")
+            literalStrings(classValue, [], styleResolver(checker)).join(" ")
           );
           if (displaced.length > 0) {
             report(
@@ -3721,6 +3750,13 @@ import { TabsList, TabsTrigger } from "@nextlyhq/ui";\n`;
     [
       "a border image source reset to initial",
       '<TabsTrigger style={{ borderImageSource: "initial" }} />',
+    ],
+    // clsx omits a key whose condition is falsy, and `undefined` is the
+    // ordinary spelling of an optional one. It is an IDENTIFIER rather than a
+    // keyword, so a test on node kind walks past it.
+    [
+      "a class map whose condition is undefined",
+      '<TabsTrigger className={cn({ "border-b-0": undefined })} />',
     ],
   ])("does not report %s", (_label, body) => {
     // The complement, and the reason this is a contract rather than a ban. A
