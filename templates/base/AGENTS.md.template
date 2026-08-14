@@ -114,13 +114,23 @@ const slug = typeof doc.slug === "string" ? doc.slug : undefined;
     { tags: nextlyTags("posts"), keyParts: ["posts", slug] }
   );
 
-  // ACCESS RULES — evaluate them as the caller, and put the caller's identity in
-  // the key. The entry is per-reader; that is the point, not a compromise.
+  // ACCESS RULES — evaluate them as the caller, and key by EVERY dimension the
+  // rules read, not just who the caller is.
   cachedFind(
     () => nextly.find({ collection: "orders", user, overrideAccess: false }),
-    { tags: nextlyTags("orders"), keyParts: ["orders", "list", user.id] }
+    {
+      tags: nextlyTags("orders"),
+      keyParts: ["orders", "list", user.id, roleKey(user)],
+    }
   );
   ```
+
+  **`user.id` alone is not the authorization context.** Roles change, custom
+  claims change, an API key's scope is narrower than its owner's. A key built
+  from identity alone survives all of those, so the same person can fill the
+  entry while privileged and read it back after being downgraded — the tags bust
+  on CONTENT changes, and a permission change is not one. Include whatever the
+  rules actually read: the role set, the claim, the key's scope.
 
   If you are unsure whether a collection has read rules, do not cache it. A
   missing cache is slow; a shared one leaks.

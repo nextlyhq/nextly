@@ -47,8 +47,12 @@ export interface CachedFindOptions {
    * the query itself, **include anything the result varies by**.
    *
    * SECURITY: if the read applies per-caller access rules (owner-only scoping,
-   * role-based visibility, an API-key's narrowed scope), the caller's identity
-   * MUST be in `keyParts` (their user id, role set, or key scope). Two different
+   * role-based visibility, an API-key's narrowed scope), EVERY dimension those
+   * rules read MUST be in `keyParts` — not merely who the caller is. A user id
+   * alone survives a role change, a claim change and a narrower key scope, so
+   * the same person can fill an entry while privileged and read it back after
+   * being downgraded: tags bust on CONTENT changes, and a permission change is
+   * not one. Two different
    * users share one cache entry when their `keyParts` match, so caching an
    * owner-filtered list under a stable key would serve one user's rows to
    * another — a cross-tenant leak, not a stale-cache annoyance. For genuinely
