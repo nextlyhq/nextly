@@ -140,11 +140,9 @@ function declaredFor(
 /**
  * The one type that could hold this child inside a restricted slot, if there is exactly one.
  *
- * Four conditions, and each removes a way of guessing wrong: one permitted type, so nothing is
- * being chosen for the author; that type holds children at all; its own default slot admits this
- * block; and this block states no parent restriction that the wrapper would violate. The last two
- * are independent, and together they are what make the wrap produce a document that saves rather
- * than a differently invalid one.
+ * The slot must permit exactly ONE type, so nothing is being chosen on the author's behalf; the
+ * rest of the question — can that type hold this block at all — is {@link wrapperIfItHolds}, which
+ * the mirror below asks in the same words.
  */
 function soleWrapperFor(
   spec: SlotSpec,
@@ -181,7 +179,14 @@ function soleParentWrapperFor(
   return wrapperIfItHolds(wrapperType, childType, registry);
 }
 
-/** Whether `wrapperType` is a container whose default slot would accept `childType`. */
+/**
+ * `wrapperType` when it is a container whose default slot would take `childType`, else `undefined`.
+ *
+ * Three ways of guessing wrong, removed once for both callers: a type that holds no children at
+ * all; a default slot whose own allowlist excludes this block; and a block whose declared parents
+ * do not include the wrapper. Each would produce a document that is still refused, while the
+ * banner reported the repair as done.
+ */
 function wrapperIfItHolds(
   wrapperType: string,
   childType: string,
