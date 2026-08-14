@@ -36,6 +36,16 @@ function initialSlots(
   return slots;
 }
 
+/** The declared slot map with a caller's own entries laid over it. */
+function mergeSlots(
+  declared: Record<string, BlockNode[]> | undefined,
+  given: Record<string, BlockNode[]> | undefined
+): Record<string, BlockNode[]> | undefined {
+  if (!given) return declared;
+  if (!declared) return given;
+  return { ...declared, ...given };
+}
+
 export interface BlockRegistry {
   register(def: BlockDefinition): void;
   get(type: string): BlockDefinition | undefined;
@@ -51,6 +61,28 @@ export function createBlockRegistry(): BlockRegistry {
         throw new Error(
           `Block type "${def.type}" must be namespaced, e.g. "core/${def.type}".`
         );
+      }
+      // `parent` restricts where instances may sit, so a malformed value does not degrade — it
+      // FORBIDS. A bare string is the shape to fear: it is iterable, so a reader spreading it
+      // produces one-character names and every real placement is refused, and `validate` calls
+      // `.join()` on it and throws instead of returning a message. An empty array permits no
+      // placement at all, so no document holding the block can ever save.
+      //
+      // Checked here as well as in the engine's own gate because this registry is a SEPARATE
+      // door: the package root still exports `defineBlock`, and a JavaScript consumer reaches it
+      // without passing the engine at all.
+      if (def.parent !== undefined) {
+        const named =
+          Array.isArray(def.parent) &&
+          def.parent.length > 0 &&
+          def.parent.every(
+            name => typeof name === "string" && name.includes("/")
+          );
+        if (!named) {
+          throw new Error(
+            `Block type "${def.type}" parent must be a non-empty array of namespaced block names like "core/columns".`
+          );
+        }
       }
       // Defaults are CLONED for every instance, so a value `structuredClone` cannot copy — a
       // function, a class instance, a DOM node — does not fail here, it fails later at
@@ -146,7 +178,11 @@ export function createNode(
     type,
     def ? structuredClone(def.defaultProps) : {},
     def?.defaultStyle ? structuredClone(def.defaultStyle) : undefined,
-    slots ?? initialSlots(type, registry)
+    // MERGED over the declared map, not substituted for it. A caller wrapping a child supplies
+    // only the slot it is placing into, and a wrapper that declares more than one would otherwise
+    // lose the rest — the canvas builds its regions from STORED keys, so a declared region with no
+    // key is one an author cannot see or drag into.
+    mergeSlots(initialSlots(type, registry), slots)
   );
   // Stamped so a later migration can tell what wrote this instance. Without it every node reads
   // as version 1 and a block already past its first version re-runs migrations it never needed.

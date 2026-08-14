@@ -74,6 +74,33 @@ describe("a legacy columns row", () => {
     expect(markup.slice(rowIndex, headingIndex)).toContain("<div");
   });
 
+  it("gives the wrapper the SAME id on every pass, so hydration matches", () => {
+    // This transform runs on the server and again on the client for one stored document, and a
+    // node's id drives its scoped CSS class. A random id differs between the passes, so the markup
+    // and the stylesheet disagree and React reports a mismatch on a page nobody edited.
+    const stored = legacyRow();
+    const a = normalizeLegacySlots(stored, defaultBlockRegistry);
+    const b = normalizeLegacySlots(stored, defaultBlockRegistry);
+    const idOf = (n: BlockNode) => n.slots?.default[0].id;
+    expect(idOf(a)).toBe(idOf(b));
+    // And distinguishable from a stored id, so it is obvious where it came from.
+    expect(idOf(a)).toContain("legacy-wrap:");
+  });
+
+  it("gives two different children two different wrappers", () => {
+    // Derived-but-colliding would be worse than random: two nodes sharing a scoped class means one
+    // block's styles applied to another.
+    const root = node("core/columns", {
+      default: [
+        makeNode("core/heading", { text: "a" }),
+        makeNode("core/heading", { text: "b" }),
+      ],
+    });
+    const out = normalizeLegacySlots(root, defaultBlockRegistry);
+    const [x, y] = out.slots?.default ?? [];
+    expect(x.id).not.toBe(y.id);
+  });
+
   it("leaves a document already in the current shape untouched, by IDENTITY", () => {
     // Identity rather than equality, because every page saved since the change takes this path on
     // every render. Rebuilding a tree that did not need it would cost each of them a full walk's

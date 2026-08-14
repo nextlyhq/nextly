@@ -69,3 +69,28 @@ describe("defaults a block instance is cloned from", () => {
     expect(() => structuredClone(node.defaultProps)).toThrow();
   });
 });
+
+describe("parent metadata on the legacy registry", () => {
+  // The package root still exports `defineBlock`, so this registry is a SEPARATE door from the
+  // engine's gate — a JavaScript consumer reaches it without passing the engine at all.
+  it("accepts a non-empty array of namespaced names", () => {
+    const registry = createBlockRegistry();
+    expect(() =>
+      registry.register(defWith({ parent: ["core/columns"] }))
+    ).not.toThrow();
+  });
+
+  it("refuses a bare string, which validate would call .join() on and throw", () => {
+    const registry = createBlockRegistry();
+    expect(() =>
+      registry.register(defWith({ parent: "core/columns" as never }))
+    ).toThrow(/non-empty array/);
+  });
+
+  it("refuses an empty array, which permits no placement at all", () => {
+    const registry = createBlockRegistry();
+    expect(() => registry.register(defWith({ parent: [] }))).toThrow(
+      /non-empty array/
+    );
+  });
+});

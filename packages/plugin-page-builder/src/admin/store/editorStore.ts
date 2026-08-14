@@ -389,7 +389,11 @@ export function editorReducer(
       //
       // Checked directly rather than by reading `after`, which reports only the FIRST fault — on a
       // page that already had one, a limit the paste just broke is never the fault it names.
-      if (nodeCount(pasted) > MAX_NODES || depthOf(pasted) > MAX_DEPTH) {
+      // `depthOf` counts the root as one level; `validate` counts it as zero and rejects only
+      // `depth > MAX_DEPTH`. Comparing the two conventions directly refuses a paste the save path
+      // would have accepted — a silent no-op on a legal edit, which is the failure this check is
+      // supposed to prevent rather than cause.
+      if (nodeCount(pasted) > MAX_NODES || depthOf(pasted) - 1 > MAX_DEPTH) {
         return state;
       }
       return commit(state, pasted, fresh.id);

@@ -38,6 +38,14 @@ import { slotAdmits } from "./slot-allow";
 import { DEFAULT_SLOT, type BlockNode, type SlotSpec } from "./types";
 
 /**
+ * Marks an id this transform derived rather than one an author's document stored.
+ *
+ * Distinguishable on sight when it appears in a class name or a React key, and namespaced so it
+ * cannot collide with a stored id.
+ */
+const LEGACY_WRAPPER_PREFIX = "legacy-wrap:";
+
+/**
  * The one type a slot would accept in place of a child it refuses, if there is exactly one.
  *
  * Deliberately narrow, and every clause removes a way of guessing wrong:
@@ -109,8 +117,20 @@ export function normalizeLegacySlots(
       }
       changed = true;
       // Through the shared constructor, so the wrapper carries its definition's defaults, style
-      // and version rather than whatever this call remembered to pass.
-      return createNode(wrapperType, registry, { [DEFAULT_SLOT]: [deeper] });
+      // and version rather than whatever this call remembered to pass — but with a DERIVED id.
+      //
+      // `createNode` assigns `crypto.randomUUID()`, which is right for a node an author created
+      // and wrong for one a read produces. This transform runs on the server and again on the
+      // client for the same stored document, and a node's id drives its scoped CSS class: a random
+      // one differs between the two passes, so the markup and the compiled stylesheet disagree and
+      // React reports a hydration mismatch on a page nobody edited.
+      //
+      // Derived from the child it wraps, which is stable across passes and unique because the
+      // child's own id is. The prefix keeps it from colliding with a stored id.
+      const wrapper = createNode(wrapperType, registry, {
+        [DEFAULT_SLOT]: [deeper],
+      });
+      return { ...wrapper, id: `${LEGACY_WRAPPER_PREFIX}${child.id}` };
     });
     slots[slotName] = next;
   }
