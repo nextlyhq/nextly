@@ -627,6 +627,22 @@ jobs:
           # avoids the multi-minute pnpm install during the smoke check.
           npm exec --yes --package="$tarball" -- create-nextly-app smoke-app --template blank --skip-install --yes
           test -f smoke-app/package.json && echo "scaffold ok"
+
+      # The generated scripts and the CLI's command set live in two different
+      # packages, and nothing compared them: every project shipped a
+      # `db:migrate:reset` calling a command `nextly` has never registered, which
+      # failed the first time a user ran it while every build stayed green.
+      #
+      # It runs HERE rather than in `scaffold-build.yml` because this job is
+      # reached by a change to EITHER side. That workflow triggers on the
+      # scaffolder and the templates, so a pull request that removes or renames a
+      # CLI command — the other half of the contract — would never run it.
+      - name: Check the generated scripts name real CLI commands
+        shell: bash
+        run: |
+          node scripts/check-scaffold-cli-scripts.mjs \
+            /tmp/scaffold-test/smoke-app \
+            packages/nextly/dist/cli/nextly.mjs
   # The `dev` script of `packages/ui` starts TWO watchers, and the shape it used
   # before — `a --watch & b --watch & wait` — is POSIX. `cmd.exe` treats `&` as a
   # SEQUENTIAL separator and has no `wait`, so on Windows the first watcher held
