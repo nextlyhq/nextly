@@ -50,9 +50,15 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   fullyParallel: false,
 
+  // `flaky-reporter` rides alongside the others and changes no verdict. CI
+  // retries once, which turns a real failure into a job conclusion of
+  // `success`; nothing downstream can distinguish that from a first-attempt
+  // pass, because `conclusion` is the field the retry overwrote. The reporter
+  // annotates those tests so the outcome is visible without being fatal.
   reporter: process.env.CI
     ? [
         ["github"],
+        ["./flaky-reporter.ts"],
         ["html", { outputFolder: "./.playwright/report", open: "never" }],
       ]
     : [
