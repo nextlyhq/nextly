@@ -33,6 +33,11 @@ export function slotAdmits(
 ): boolean {
   const allow = spec?.allowedBlocks;
   if (!allow) return true;
+  // A stored document is untrusted input, and validation reaches this before it has checked that
+  // every node carries a string `type` — so a hand-authored or corrupted node would reach
+  // `startsWith` on a number and throw a TypeError where a validation MESSAGE was owed. Refusing
+  // is the right answer as well as the safe one: a type that is not a name matches no allowlist.
+  if (typeof childType !== "string") return false;
   return allow.some(pattern => {
     // The wildcard binds to the namespace separator rather than to raw
     // characters: `core/*` matches `core/heading` and never `coreevil/banner`.

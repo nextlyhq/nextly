@@ -241,7 +241,13 @@ function soleParentWrapperFor(
   // holding it admits only one of them — `parent: ["core/column", "core/container"]` sitting in a
   // row leaves `core/column` as the single answer. Counting first and filtering afterwards would
   // decline that and offer removal, discarding a block whose correct repair was fully determined.
-  const admissible = parents.filter(parent => slotAdmits(spec, parent));
+  // DISTINCT parents, for the same reason the slot's permitted types are counted distinctly: a
+  // definition repeating one permitted parent still names one possible wrapper, and every
+  // registration path accepts it. Counting entries calls that ambiguous and offers the
+  // destructive Remove where a wrap was fully determined.
+  const admissible = [...new Set(parents)].filter(parent =>
+    slotAdmits(spec, parent)
+  );
   if (admissible.length !== 1) return undefined;
   return wrapperIfItHolds(
     admissible[0],
