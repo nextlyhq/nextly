@@ -931,6 +931,13 @@ export function main(argv) {
     );
     threads += page.n;
     if (!page.more) break;
+    // A cursor that does not advance would loop for ever, re-reading one page
+    // and adding its count each time. Both failures are silent in opposite
+    // directions — the process hangs, or an inflated count blocks a clean pull
+    // request — so an absent or repeated cursor stops the read instead.
+    if (!page.cur || page.cur === cursor) {
+      throw new Error("review threads: pagination cursor did not advance");
+    }
     cursor = page.cur;
   }
 

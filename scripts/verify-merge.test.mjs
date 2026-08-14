@@ -584,10 +584,9 @@ describe("reviewsCoveringTip", () => {
   it("refuses an abbreviated tip even when a record matches it exactly", () => {
     // Both sides abbreviated is the ONLY shape where the length guard decides
     // anything: against a full `commit_id` the comparison already fails, so a
-    // test using one passes whether or not the guard exists — which is what
-    // the first version of this test did. Coverage must be established against
-    // a full object name; a match obtained by truncating both sides identifies
-    // no particular commit.
+    // case built on one passes whether or not the guard exists. Coverage must be
+    // established against a full object name, because a match obtained by
+    // truncating both sides identifies no particular commit.
     const short = tip.slice(0, 9);
     const reviews = [
       { user: { login: "coderabbitai[bot]" }, commit_id: short },
