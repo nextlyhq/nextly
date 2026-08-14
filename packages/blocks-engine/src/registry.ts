@@ -214,12 +214,16 @@ function assertValidDefinition(def: AnyBlockDefinition): void {
       // `isBlockName`: `core/*` names a set rather than a block.
       const wellFormed =
         Array.isArray(allow) &&
-        allow.every(
-          entry =>
-            typeof entry === "string" &&
-            (isBlockName(entry) ||
-              (entry.endsWith("/*") && isBlockName(`${entry.slice(0, -2)}/x`)))
-        );
+        allow.every(entry => {
+          if (typeof entry !== "string") return false;
+          // A wildcard is checked by substituting a placeholder segment, so the name grammar is
+          // asked ONCE. Testing both forms as alternatives narrows the value to `never` on the
+          // second branch, because the predicate is a type guard.
+          const asName = entry.endsWith("/*")
+            ? `${entry.slice(0, -2)}/x`
+            : entry;
+          return isBlockName(asName);
+        });
       if (!wellFormed) {
         fail(
           "NEXTLY_BLOCK_INVALID",
