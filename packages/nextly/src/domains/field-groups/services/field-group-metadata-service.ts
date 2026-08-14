@@ -587,11 +587,25 @@ export class FieldGroupMetadataService {
     // detector asks which of the two a caller meant, and a PATCH has no way to ask. So this refuses
     // only the PAIR: a pure add is a new translatable field and a pure drop is a removed one, and
     // the reconciler applies both correctly.
+    // 🔴 Only fields that actually RENDER a column, which is narrower than the map's keys.
+    //
+    // The map deliberately records every localized field, sentinel included, so that a field
+    // GAINING or LOSING its column shows up as a change on a common name. That is the right domain
+    // for the value comparison above and the wrong one here: two columnless fields swapped for each
+    // other — a `component` removed and a differently named `component` added — are one add and one
+    // drop by key, which reads as a rename pair, while neither materialises a companion column and
+    // `buildCompanionReconcileStatements` emits nothing for either. Refusing that would reject a
+    // safe metadata-only edit.
+    //
+    // The same narrowing is correct for the enablement rule below: a columnless field removed during
+    // an enable leaves no column behind on the main table, so there is nothing stranded to refuse.
+    const rendersColumn = (map: Map<string, string>, name: string): boolean =>
+      map.get(name) !== NO_COMPANION_COLUMN;
     const companionAdded = [...companionAfter.keys()].filter(
-      name => !companionBefore.has(name)
+      name => !companionBefore.has(name) && rendersColumn(companionAfter, name)
     );
     const companionDropped = [...companionBefore.keys()].filter(
-      name => !companionAfter.has(name)
+      name => !companionAfter.has(name) && rendersColumn(companionBefore, name)
     );
     if (companionAdded.length > 0 && companionDropped.length > 0) {
       for (const name of [...companionAdded, ...companionDropped])

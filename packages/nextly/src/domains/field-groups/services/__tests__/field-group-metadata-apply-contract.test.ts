@@ -866,6 +866,63 @@ describe("a field-group update refuses what it cannot deliver", () => {
     expect(registry.updateComponent).not.toHaveBeenCalled();
   });
 
+  // 🔴 The cost of recording columnless fields in the companion map, corrected. Swapping one
+  // `component` field for a differently named one is one add and one drop BY KEY, which reads as a
+  // rename pair — while neither materialises a companion column and the reconciler emits nothing
+  // for either. Refusing it would reject a safe metadata-only edit.
+  it("allows swapping one columnless localized field for another", async () => {
+    const registry = registryWithGroup({
+      localized: true,
+      fields: [{ name: "body", type: "component", localized: true }] as never,
+    });
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    await expect(
+      service.updateFieldGroup({
+        slug: "hero",
+        fields: [
+          { name: "aside", type: "component", localized: true },
+        ] as never,
+      })
+    ).resolves.toMatchObject({
+      record: expect.objectContaining({ slug: "hero" }),
+    });
+  });
+
+  // The control that keeps the narrowing from swallowing the rename it was carved out of: two
+  // fields that DO render columns, swapped, is still the destructive pair.
+  it("still refuses a rename between two column-backed localized fields", async () => {
+    const registry = registryWithGroup({
+      localized: true,
+      fields: [{ name: "body", type: "text", localized: true }] as never,
+    });
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    const refusal = await service
+      .updateFieldGroup({
+        slug: "hero",
+        fields: [{ name: "aside", type: "text", localized: true }] as never,
+      })
+      .catch((error: unknown) => error);
+
+    expect(refusal).toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: expect.arrayContaining([
+          expect.objectContaining({ code: "requires_schema_change" }),
+        ]),
+      },
+    });
+  });
+
   // A layout-only field has no column anywhere, so adding one cannot need DDL on any table.
   it("allows a field that produces no column at all", async () => {
     const registry = registryWithGroup({
