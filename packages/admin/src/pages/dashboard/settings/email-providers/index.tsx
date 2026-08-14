@@ -44,7 +44,6 @@ import {
 } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
-import { Pagination } from "@admin/components/shared/pagination";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { toast } from "@admin/components/ui";
@@ -816,20 +815,26 @@ function EmailProviderTable() {
             registryKey="email-providers"
             ariaLabel="Email providers table"
             emptyMessage="No email providers configured. Add a provider to start sending emails."
+            // The table owns the pager, so it is placed for whichever view is
+            // showing. The gate hides it only when a response reports no pages
+            // at all -- an empty list. A single-page list still shows it,
+            // deliberately: the page-size selector lives there, and it is the
+            // control that gets a longer list onto one screen.
+            pagination={
+              data && data.meta.totalPages > 0
+                ? {
+                    currentPage: page,
+                    totalPages: data.meta.totalPages,
+                    pageSize,
+                    pageSizeOptions: [10, 25, 50],
+                    onPageChange: setPage,
+                    onPageSizeChange: handlePageSizeChange,
+                    isLoading,
+                    totalItems,
+                  }
+                : undefined
+            }
           />
-
-          {data && data.meta.totalPages > 0 && (
-            <Pagination
-              currentPage={page}
-              totalPages={data.meta.totalPages}
-              pageSize={pageSize}
-              pageSizeOptions={[10, 25, 50]}
-              onPageChange={setPage}
-              onPageSizeChange={handlePageSizeChange}
-              isLoading={isLoading}
-              totalItems={totalItems}
-            />
-          )}
         </>
       )}
 

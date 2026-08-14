@@ -18,7 +18,6 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import { BulkActionBar } from "@admin/components/features/entries/EntryList/BulkActionBar";
 import { RoleDeleteDialog } from "@admin/components/features/role-management/RoleDeleteDialog";
 import { BulkDeleteDialog } from "@admin/components/shared/bulk-action-dialogs";
-import { Pagination } from "@admin/components/shared/pagination";
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { toast } from "@admin/components/ui";
 import { DataTableView } from "@admin/components/ui/table/data-table";
@@ -406,19 +405,19 @@ export default function RoleTable() {
           rowActions={rowActions}
           registryKey="roles"
           ariaLabel="Roles table"
-          footer={
-            data && data.meta.totalPages > 0 ? (
-              <Pagination
-                currentPage={page}
-                totalPages={data.meta.totalPages}
-                pageSize={pageSize}
-                pageSizeOptions={[10, 25, 50]}
-                onPageChange={setPage}
-                onPageSizeChange={handlePageSizeChange}
-                isLoading={isLoading}
-                totalItems={data.meta.total}
-              />
-            ) : undefined
+          pagination={
+            data && data.meta.totalPages > 0
+              ? {
+                  currentPage: page,
+                  totalPages: data.meta.totalPages,
+                  pageSize,
+                  pageSizeOptions: [10, 25, 50],
+                  onPageChange: setPage,
+                  onPageSizeChange: handlePageSizeChange,
+                  isLoading,
+                  totalItems: data.meta.total,
+                }
+              : undefined
           }
           emptyMessage={
             search

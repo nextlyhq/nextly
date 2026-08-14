@@ -36,7 +36,7 @@ import { dragSensors } from "../logic/dragSensors";
 import { useEditor } from "../store/EditorProvider";
 
 import { QueryLoopSamplePreview } from "./CanvasQueryLoop";
-import { DropZone } from "./DropZone";
+import { CanvasDepth, DropZone, useCanvasDepth } from "./DropZone";
 
 const BLOCK_TYPE = "nx-block";
 
@@ -194,11 +194,23 @@ function renderSlot(node: BlockNode, slotName: string): ReactNode {
   return out;
 }
 
-function buildSlots(node: BlockNode): Record<string, ReactNode> {
+/**
+ * A container's slots, rendered one level deeper than the container itself.
+ *
+ * The depth travels with the CONTENT rather than as an argument because each
+ * block's own `render` receives finished slot elements — there is no call path
+ * from here to the zones inside a nested container to thread a number along.
+ */
+function buildSlots(
+  node: BlockNode,
+  childDepth: number
+): Record<string, ReactNode> {
   const slots: Record<string, ReactNode> = {};
   if (node.slots) {
     for (const name of Object.keys(node.slots)) {
-      slots[name] = renderSlot(node, name);
+      slots[name] = (
+        <CanvasDepth depth={childDepth}>{renderSlot(node, name)}</CanvasDepth>
+      );
     }
   }
   return slots;
@@ -207,6 +219,7 @@ function buildSlots(node: BlockNode): Record<string, ReactNode> {
 /** Root renderer — the page container, not itself draggable. */
 export function CanvasNode({ node }: { node: BlockNode }): ReactNode {
   const { state, remotePatterns, nodeClasses } = useEditor();
+  const depth = useCanvasDepth();
   const def = defaultBlockRegistry.get(node.type);
   const selected = state.selectedId === node.id;
 
@@ -249,7 +262,7 @@ export function CanvasNode({ node }: { node: BlockNode }): ReactNode {
   const element = def.render({
     props: node.props,
     node,
-    slots: buildSlots(node),
+    slots: buildSlots(node, depth + 1),
     className,
     // The canvas renders the same blocks the published page does, so it has to
     // hand them the same allowlist. Without it every block falls back to an
@@ -290,6 +303,7 @@ function DraggableNode({
   dropBeforeIndex?: number;
 }): ReactNode {
   const { state, remotePatterns, nodeClasses } = useEditor();
+  const depth = useCanvasDepth();
   const def = defaultBlockRegistry.get(node.type);
   const selected = state.selectedId === node.id;
 
@@ -358,7 +372,7 @@ function DraggableNode({
   const element = def.render({
     props: node.props,
     node,
-    slots: buildSlots(node),
+    slots: buildSlots(node, depth + 1),
     className,
     // The canvas renders the same blocks the published page does, so it has to
     // hand them the same allowlist. Without it every block falls back to an

@@ -317,6 +317,32 @@ function memberPlacement(
  * walk at its first breach, and no branch reads a value it has not guarded.
  */
 export interface DocumentSurvey {
+  /**
+   * The bounds this survey ENFORCED, snapshotted before the walk began.
+   *
+   * Published because a caller that goes on to walk the same document must
+   * bound its own work by the same numbers. Reading them again from the limits
+   * object asks a question that has already been answered, and can be answered
+   * differently the second time: an accessor returning a small bound for the
+   * check and a large one afterwards leaves the caller's walk unbounded while
+   * this survey's verdict says the document was refused.
+   *
+   * `readonly` on the PROPERTY as well as its members. Freezing the inner
+   * object leaves `survey.limits = {...}` legal, and a walk reading the
+   * replacement would be bounded by numbers this survey never enforced — which
+   * is the whole point of publishing the snapshot.
+   *
+   * `Readonly<SurveyLimits>` rather than a second interface of the same three
+   * members: the shape a caller passes IN and the shape it reads back OUT are
+   * the same three bounds, and two names for them would drift and would ask a
+   * reader to work out which is which. `readonly` because the object is frozen,
+   * so a type permitting assignment would describe a runtime `TypeError` as
+   * legal.
+   *
+   * Primitive numbers, because `bounded` rejects anything else — so a consumer
+   * of this field cannot be handed an accessor at one remove.
+   */
+  readonly limits: Readonly<SurveyLimits>;
   /** Serialized size in bytes; a lower bound once `tooLarge` is set. */
   bytes: number;
   /** The byte cap was passed. */
@@ -471,6 +497,14 @@ export function surveyDocument(
   const maxBytes = bounded(limits.maxBytes, "maxBytes");
   const maxDepth = bounded(limits.maxDepth, "maxDepth");
   const maxNodes = bounded(limits.maxNodes, "maxNodes");
+  // Built once and shared by every survey this walk returns, so a caller cannot
+  // be handed two objects that disagree, and frozen because the bound a caller
+  // reads must be the one that was enforced rather than one a later reader set.
+  const enforced: Readonly<SurveyLimits> = Object.freeze<SurveyLimits>({
+    maxBytes,
+    maxDepth,
+    maxNodes,
+  });
 
   let bytes = 0;
   let unserializable = false;
@@ -486,10 +520,23 @@ export function surveyDocument(
   const onPath = new Set<object>();
   const stack: Frame[] = [{ value: root, kind: "value", depth: 0 }];
 
+  // The ONE place a verdict is decided. Every exit below returns this, and none
+  // of them overrides a field.
+  //
+  // Each verdict is a comparison the walk's own counters already answer, so a
+  // return site asserting its own verdict would be a second implementation of
+  // the same question. Two implementations agree on the day they are written
+  // and a break in either leaves the other producing the expected result, so
+  // the pair is untestable one site at a time.
+  //
+  // `deepest` and `nodes` are advanced immediately before the check that ends
+  // the walk, so reading them here reports the same breach the exit detected
+  // rather than a stale one.
   const done = (): DocumentSurvey => ({
+    limits: enforced,
     bytes,
     tooLarge: bytes > maxBytes,
-    tooDeep: false,
+    tooDeep: deepest > maxDepth,
     tooManyNodes: nodes > maxNodes,
     unserializable,
     nodes,
@@ -651,9 +698,9 @@ export function surveyDocument(
           nodes += 1;
           if (hiddenPlacement.depth > deepest) deepest = hiddenPlacement.depth;
           if (hiddenPlacement.depth > maxDepth) {
-            return { ...done(), tooDeep: true };
+            return done();
           }
-          if (nodes > maxNodes) return { ...done(), tooManyNodes: true };
+          if (nodes > maxNodes) return done();
         }
 
         // A hidden value is not readable by the writer but IS readable by the
@@ -683,7 +730,7 @@ export function surveyDocument(
         // writes nothing for it — which is why this is the array branch only.
         if (!keyed) {
           bytes += 4;
-          if (bytes > maxBytes) return { ...done(), tooLarge: true };
+          if (bytes > maxBytes) return done();
         }
         continue;
       }
@@ -691,7 +738,7 @@ export function surveyDocument(
       if (keyed) {
         bytes +=
           utf8ByteLength(key, maxBytes) + 3 + (frame.emitted === true ? 1 : 0);
-        if (bytes > maxBytes) return { ...done(), tooLarge: true };
+        if (bytes > maxBytes) return done();
       }
 
       const placement = memberPlacement(
@@ -771,10 +818,10 @@ export function surveyDocument(
           // wrong depth, and disagree with `treeDepth`.
           nodes += 1;
           if (reached.depth > deepest) deepest = reached.depth;
-          if (reached.depth > maxDepth) return { ...done(), tooDeep: true };
-          if (nodes > maxNodes) return { ...done(), tooManyNodes: true };
+          if (reached.depth > maxDepth) return done();
+          if (nodes > maxNodes) return done();
         }
-        if (takeScalar(held)) return { ...done(), tooLarge: true };
+        if (takeScalar(held)) return done();
       }
       continue;
     }
@@ -811,12 +858,12 @@ export function surveyDocument(
     if (kind === "node") {
       nodes += 1;
       if (depth > deepest) deepest = depth;
-      if (depth > maxDepth) return { ...done(), tooDeep: true };
-      if (nodes > maxNodes) return { ...done(), tooManyNodes: true };
+      if (depth > maxDepth) return done();
+      if (nodes > maxNodes) return done();
     }
 
     if (typeof value !== "object" || value === null) {
-      if (takeScalar(value)) return { ...done(), tooLarge: true };
+      if (takeScalar(value)) return done();
       continue;
     }
 
@@ -889,7 +936,7 @@ export function surveyDocument(
       // writes one element per position whether or not that position is
       // present.
       bytes += 2 + Math.max(0, length - 1);
-      if (bytes > maxBytes) return { ...done(), tooLarge: true };
+      if (bytes > maxBytes) return done();
 
       // Every position costs at least one more byte — the shortest thing JSON
       // can write at one is a single digit, and a hole costs four — so an array
@@ -898,7 +945,7 @@ export function surveyDocument(
       // proportional to `length` for an array it was always going to reject.
       if (bytes + length > maxBytes) {
         bytes += length;
-        return { ...done(), tooLarge: true };
+        return done();
       }
 
       stack.push({
@@ -931,7 +978,7 @@ export function surveyDocument(
     }
 
     bytes += 2; // braces
-    if (bytes > maxBytes) return { ...done(), tooLarge: true };
+    if (bytes > maxBytes) return done();
 
     stack.push({
       value,

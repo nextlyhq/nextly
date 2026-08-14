@@ -27,7 +27,6 @@ import {
 import { Columns, Edit, Info, Plus, Trash2 } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
-import { Pagination } from "@admin/components/shared/pagination";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { Link } from "@admin/components/ui/link";
@@ -133,6 +132,18 @@ function ImageSizesContent({
   React.useEffect(() => {
     setPage(0);
   }, [search]);
+
+  // Changing the page size makes the current page number point somewhere the
+  // list may not reach -- at a larger size the slice below starts past the end
+  // and returns nothing, leaving the empty message on a list that has rows.
+  // Returning to the first page is always in range, and it is what every other
+  // list in the admin does, so the two behave alike. It does NOT keep the rows
+  // that were on screen: row 31 is on page 2 at twenty-five per page, and the
+  // reset moves away from it.
+  const handlePageSizeChange = React.useCallback((size: number) => {
+    setPageSize(size);
+    setPage(0);
+  }, []);
 
   // Filtered sizes based on search
   const filteredSizes = React.useMemo(() => {
@@ -305,18 +316,27 @@ function ImageSizesContent({
             ? "No image sizes found matching your search."
             : "No image sizes configured."
         }
+        // The table owns the pager, so it is placed for whichever view is
+        // showing. This list paginates in memory rather than
+        // over the wire, so the gate counts the filtered rows: a search that
+        // matches nothing should leave no controls behind.
+        pagination={
+          filteredSizes.length > 0
+            ? {
+                currentPage: page,
+                totalPages: Math.max(
+                  1,
+                  Math.ceil(filteredSizes.length / pageSize)
+                ),
+                totalItems: filteredSizes.length,
+                pageSize,
+                onPageChange: setPage,
+                onPageSizeChange: handlePageSizeChange,
+                isLoading,
+              }
+            : undefined
+        }
       />
-      {filteredSizes.length > 0 && (
-        <Pagination
-          currentPage={page}
-          totalPages={Math.max(1, Math.ceil(filteredSizes.length / pageSize))}
-          totalItems={filteredSizes.length}
-          pageSize={pageSize}
-          onPageChange={setPage}
-          onPageSizeChange={setPageSize}
-          isLoading={isLoading}
-        />
-      )}
 
       {/* Info note about code-defined sizes */}
       {!isLoading && sizes.some(s => s.isDefault) && (

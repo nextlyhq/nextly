@@ -22,7 +22,6 @@ import { BulkActionBar } from "@admin/components/features/entries/EntryList/Bulk
 import * as Icons from "@admin/components/icons";
 import { Lock } from "@admin/components/icons";
 import { BulkDeleteDialog } from "@admin/components/shared/bulk-action-dialogs";
-import { Pagination } from "@admin/components/shared/pagination";
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { toast } from "@admin/components/ui";
 import { DataTableView } from "@admin/components/ui/table/data-table";
@@ -604,19 +603,27 @@ export default function FieldGroupTable() {
             registryKey="components"
             ariaLabel="Field Groups table"
             emptyMessage="No field groups found. Try adjusting your search or filters."
+            // The table owns the pager, so it is placed for whichever view is
+            // showing. Gated on `data` rather than on a page
+            // count because this list filters client-side after fetching, so
+            // the server's total is the only reliable signal that a response
+            // has arrived at all.
+            pagination={
+              data
+                ? {
+                    currentPage: page,
+                    totalPages:
+                      data.meta.totalPages > 0 ? data.meta.totalPages : 1,
+                    pageSize,
+                    pageSizeOptions: [10, 25, 50],
+                    onPageChange: setPage,
+                    onPageSizeChange: handlePageSizeChange,
+                    isLoading: isFetching,
+                    totalItems: data.meta.total,
+                  }
+                : undefined
+            }
           />
-          {data && (
-            <Pagination
-              currentPage={page}
-              totalPages={data.meta.totalPages > 0 ? data.meta.totalPages : 1}
-              pageSize={pageSize}
-              pageSizeOptions={[10, 25, 50]}
-              onPageChange={setPage}
-              onPageSizeChange={handlePageSizeChange}
-              isLoading={isFetching}
-              totalItems={data.meta.total}
-            />
-          )}
         </>
       )}
 

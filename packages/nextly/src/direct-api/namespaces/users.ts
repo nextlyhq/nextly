@@ -65,7 +65,10 @@ export function createUsersNamespace(ctx: NextlyContext): UsersNamespace {
         createRequestContext(args)
       );
 
-      return toListResult(result, limit, page);
+      // The limit the service ACTUALLY paginated by, not the one requested. It bounds the page
+      // size it will honour, and deriving `totalPages` from the request instead would report a
+      // page count for a page size that was never used.
+      return toListResult(result, result.pagination.limit, page);
     },
 
     async findOne(args: FindOneUserArgs = {}): Promise<User | null> {

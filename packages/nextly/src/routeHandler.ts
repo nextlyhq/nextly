@@ -92,10 +92,7 @@ import { withTimezoneFormatting } from "./lib/date-formatting";
 import { createCorsMiddleware } from "./middleware/cors";
 import { createRateLimiter } from "./middleware/rate-limit";
 import { createSecurityHeadersMiddleware } from "./middleware/security-headers";
-import {
-  adminMetaPermissions,
-  buildPluginAdminMeta,
-} from "./plugins/admin-meta";
+import { buildPluginAdminMeta } from "./plugins/admin-meta";
 import { runPluginRoute } from "./plugins/routes/dispatch";
 import { getPluginRouteRegistry } from "./plugins/routes/route-registry";
 import { assertClientConfigs } from "./plugins/validate-client-config";
@@ -1279,11 +1276,7 @@ async function handleAdminMetaRequest(): Promise<Response> {
   // Collect plugin metadata from registered plugins with host override
   // resolution + contributes.admin menu/pages/settings folding (D20/D21/D49).
   const pluginOverrides = config?.admin?.pluginOverrides;
-  const plugins = buildPluginAdminMeta(
-    config?.plugins ?? [],
-    pluginOverrides,
-    adminMetaPermissions(config ?? {})
-  );
+  const plugins = buildPluginAdminMeta(config?.plugins ?? [], pluginOverrides);
   if (plugins.length > 0) {
     payload.plugins = plugins;
   }
