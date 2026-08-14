@@ -1,614 +1,1103 @@
 {
   "packages/admin/src/components/features/entries/EntryForm/EntryForm.tsx": {
     "count": 2,
-    "digest": "4a214c92a9b1fe7e"
+    "digests": ["69eafeb47e136856", "92043ca6e49d929a"]
   },
   "packages/admin/src/components/features/entries/fields/structured/__tests__/RepeaterRowLabel.test.tsx": {
     "count": 1,
-    "digest": "7950086eaf8024fc"
+    "digests": ["9fc276c0d3021f58"]
   },
   "packages/admin/src/components/features/notifications/NotificationBell.tsx": {
     "count": 1,
-    "digest": "9bba27ae8536242e"
+    "digests": ["9bba27ae8536242e"]
   },
   "packages/admin/src/components/features/notifications/NotificationDropdown.tsx": {
     "count": 1,
-    "digest": "6176c25076c794af"
+    "digests": ["6176c25076c794af"]
   },
   "packages/admin/src/components/features/notifications/NotificationRow.tsx": {
     "count": 1,
-    "digest": "2bb3c0ce711e3fab"
+    "digests": ["2bb3c0ce711e3fab"]
   },
   "packages/admin/src/components/features/notifications/__tests__/NotificationBell.test.tsx": {
     "count": 1,
-    "digest": "278445232d306cf1"
+    "digests": ["b2ca9803ac6209b7"]
   },
   "packages/admin/src/components/features/notifications/__tests__/NotificationDropdown.test.tsx": {
     "count": 1,
-    "digest": "8657f60c5ae76ec3"
+    "digests": ["75cf4f32ce0734cc"]
   },
   "packages/admin/src/components/features/notifications/__tests__/NotificationRow.test.tsx": {
     "count": 1,
-    "digest": "5d3fd1beb35cd4c4"
+    "digests": ["f46d06b621150851"]
   },
   "packages/admin/src/components/features/notifications/__tests__/formatters.test.ts": {
     "count": 1,
-    "digest": "6f291d006b0e9880"
+    "digests": ["7d410180b33b1f37"]
   },
   "packages/admin/src/components/features/notifications/__tests__/relative-time.test.ts": {
     "count": 1,
-    "digest": "edc58b7675844ff7"
+    "digests": ["40e40b48a7a663ce"]
   },
   "packages/admin/src/components/features/notifications/__tests__/useUnreadCount.test.ts": {
     "count": 1,
-    "digest": "07f1813b5891159e"
+    "digests": ["638a9b7e749ee8b2"]
   },
   "packages/admin/src/components/features/notifications/formatters.ts": {
     "count": 1,
-    "digest": "0abaa266cc0df723"
+    "digests": ["71a920e3115a6caf"]
   },
   "packages/admin/src/components/features/notifications/index.ts": {
     "count": 1,
-    "digest": "8fbaf3b032e659d3"
+    "digests": ["f20897ddd89574e4"]
   },
   "packages/admin/src/components/features/notifications/relative-time.ts": {
     "count": 1,
-    "digest": "964ee7bc033520c7"
+    "digests": ["ea94903affb20e33"]
   },
   "packages/admin/src/components/features/notifications/useUnreadCount.ts": {
     "count": 1,
-    "digest": "3da526173ad1dce4"
+    "digests": ["3da526173ad1dce4"]
   },
   "packages/admin/src/components/features/schema-builder/BuilderFieldList.tsx": {
     "count": 2,
-    "digest": "0767acfb69f62819"
+    "digests": ["17d61c92b33a9638", "89362e16da0f185e"]
   },
   "packages/admin/src/components/features/schema-builder/SchemaChangeDialog.tsx": {
     "count": 2,
-    "digest": "65fd0a31cacd8803"
+    "digests": ["1ad02fe4ea919816", "743c006b5a84b828"]
   },
   "packages/admin/src/components/features/schema-builder/builder-settings-modal/IconPicker.tsx": {
     "count": 1,
-    "digest": "288c8b1dcc5f622c"
+    "digests": ["ed8e1e591593b44d"]
   },
   "packages/admin/src/components/features/schema-builder/field-editor-sheet/GeneralTab.tsx": {
     "count": 1,
-    "digest": "72d6bd4dfab98bb6"
+    "digests": ["435202709028602e"]
   },
   "packages/admin/src/components/features/schema-builder/field-editor-sheet/TypeSpecificEditor.tsx": {
     "count": 3,
-    "digest": "1169fa29733c5e45"
+    "digests": ["0894647024e30cb3", "a625d70befa5a8b8", "ad761c020a630a22"]
   },
   "packages/admin/src/components/features/schema-builder/field-editor-sheet/__tests__/GeneralTab.test.tsx": {
     "count": 1,
-    "digest": "1d7acc079706f498"
+    "digests": ["0d8eb790d66fd949"]
   },
   "packages/admin/src/components/features/schema-builder/index.ts": {
     "count": 1,
-    "digest": "8a253d6d2ff3ba52"
+    "digests": ["b70fc43076d40eb9"]
   },
   "packages/admin/src/components/features/schema-builder/types.ts": {
     "count": 1,
-    "digest": "be661519e32aa8ef"
+    "digests": ["61129b7c21924c28"]
   },
   "packages/admin/src/components/shared/search-bar/call-site-classes.test.ts": {
     "count": 1,
-    "digest": "4318635d225f9114"
+    "digests": ["4318635d225f9114"]
   },
   "packages/admin/src/hooks/queries/useJournal.ts": {
     "count": 1,
-    "digest": "e99895f14e82a844"
+    "digests": ["e99895f14e82a844"]
+  },
+  "packages/admin/src/lib/builder/to-manifest-entity.test.ts": {
+    "count": 1,
+    "digests": ["04738081c17697d7"]
+  },
+  "packages/admin/src/lib/builder/to-manifest-entity.ts": {
+    "count": 1,
+    "digests": ["982e2071ad8c34dc"]
+  },
+  "packages/admin/src/lib/builder/ui-schema-mode.ts": {
+    "count": 1,
+    "digests": ["a235ad3835770acc"]
   },
   "packages/admin/src/services/journalApi.ts": {
     "count": 1,
-    "digest": "5e9940f8b2b8e7e4"
+    "digests": ["2eaefbdc15d3091b"]
   },
   "packages/admin/src/services/schemaApi.ts": {
     "count": 4,
-    "digest": "fc379bef9417cb88"
+    "digests": [
+      "35af098b366277f1",
+      "745836b2578fe3e1",
+      "7ccd6d6fbb622ae9",
+      "9d78fd9200a9a8b9"
+    ]
+  },
+  "packages/admin/src/services/schemaFileApi.ts": {
+    "count": 1,
+    "digests": ["df492ccdc2a38909"]
   },
   "packages/admin/src/types/entities.ts": {
     "count": 1,
-    "digest": "0cc084b6fcbed7e1"
+    "digests": ["0cc084b6fcbed7e1"]
   },
   "packages/nextly/eslint.config.js": {
     "count": 2,
-    "digest": "6dc29cff92190229"
+    "digests": ["bb3c9d25cf31add3", "e33b7f20fdbfeb37"]
+  },
+  "packages/nextly/src/__tests__/database/_fixture-schema/generator.ts": {
+    "count": 1,
+    "digests": ["808f75cdf3262d33"]
+  },
+  "packages/nextly/src/__tests__/database/_fixture-schema/index.ts": {
+    "count": 1,
+    "digests": ["b6e985e45694e523"]
+  },
+  "packages/nextly/src/__tests__/database/_fixture-schema/unified.ts": {
+    "count": 1,
+    "digests": ["d6330a42a09d998a"]
+  },
+  "packages/nextly/src/__tests__/fixtures/sqlite-schema.ts": {
+    "count": 1,
+    "digests": ["1469b1476d6abf73"]
   },
   "packages/nextly/src/cli/commands/db-sync-demote.ts": {
     "count": 1,
-    "digest": "d662dd2337253181"
+    "digests": ["ee90ab86da247792"]
   },
   "packages/nextly/src/cli/commands/dev-server.ts": {
     "count": 13,
-    "digest": "3002b45cd79d4b1d"
+    "digests": [
+      "12563415c9b024ff",
+      "1ad7e8f68a9a05ee",
+      "1ad7e8f68a9a05ee",
+      "413a600b7835a1b5",
+      "4c19204e10a150f0",
+      "61259388e21ddfa9",
+      "70982cda2dadf277",
+      "93021c5733489373",
+      "9b9e40a130108084",
+      "b203ab49c8607061",
+      "e0aac2e7ea355702",
+      "ee638b7243897d9a",
+      "efb4bab56ba352c7"
+    ]
   },
   "packages/nextly/src/cli/commands/index.ts": {
-    "count": 1,
-    "digest": "25dbb90893392916"
+    "count": 2,
+    "digests": ["56c5af3c8ee88673", "edd013aeee7e9883"]
   },
   "packages/nextly/src/cli/commands/migrate-check.test.ts": {
     "count": 1,
-    "digest": "7dff192461e583a7"
+    "digests": ["a532c6cee9e6e280"]
   },
   "packages/nextly/src/cli/commands/migrate-check.ts": {
     "count": 6,
-    "digest": "aa709baf6a8fabaf"
+    "digests": [
+      "19350972f7f0a16b",
+      "1e69da4e9a7faed6",
+      "82e7c5e7420f6c1b",
+      "ac4363b1f74caedb",
+      "c7a32540bd4bec8c",
+      "f373ffe8aadde1d6"
+    ]
   },
   "packages/nextly/src/cli/commands/migrate-create.ts": {
     "count": 7,
-    "digest": "f32aeca5af2c1d1b"
+    "digests": [
+      "0637a0222c2b9e38",
+      "18f2238cc394bca5",
+      "3225700ed3a040a4",
+      "57013c2b13f997f7",
+      "73fba5789fd7e691",
+      "8b4c17691b8fc012",
+      "e32f4b19899564b1"
+    ]
   },
   "packages/nextly/src/cli/commands/migrate-fresh.ts": {
     "count": 1,
-    "digest": "d0bab62702f89763"
+    "digests": ["b0b804313a52a1df"]
+  },
+  "packages/nextly/src/cli/commands/migrate-resolve.test.ts": {
+    "count": 1,
+    "digests": ["250a3499e8108021"]
+  },
+  "packages/nextly/src/cli/commands/migrate-resolve.ts": {
+    "count": 1,
+    "digests": ["d83c47a609eda8d5"]
+  },
+  "packages/nextly/src/cli/commands/migrate-status.ts": {
+    "count": 1,
+    "digests": ["6635bac063cd6e8f"]
+  },
+  "packages/nextly/src/cli/commands/migrate.test.ts": {
+    "count": 1,
+    "digests": ["0c437c660cd38450"]
   },
   "packages/nextly/src/cli/commands/migrate.ts": {
     "count": 1,
-    "digest": "b67e8ffa0512214e"
+    "digests": ["952b3b5c1ea2151e"]
+  },
+  "packages/nextly/src/cli/commands/upgrade.test.ts": {
+    "count": 1,
+    "digests": ["981a8a9dad8726ac"]
   },
   "packages/nextly/src/cli/program.ts": {
-    "count": 5,
-    "digest": "a38d8d783d4a1535"
+    "count": 6,
+    "digests": [
+      "03225c4da212e24a",
+      "288d7a00b0099dab",
+      "8b4c27c63c426d80",
+      "9c1223242e53ce47",
+      "bd797d3c2c715045",
+      "e856be7535bc97a2"
+    ]
+  },
+  "packages/nextly/src/cli/utils/ui-schema-writer.test.ts": {
+    "count": 1,
+    "digests": ["22cc2346eef48080"]
+  },
+  "packages/nextly/src/cli/utils/ui-schema-writer.ts": {
+    "count": 1,
+    "digests": ["c5b6bb700ab66301"]
   },
   "packages/nextly/src/database/__tests__/integration/schema-push.integration.test.ts": {
     "count": 2,
-    "digest": "ac2354362a21fc82"
+    "digests": ["7080783a5968f070", "f366817c001b80f7"]
+  },
+  "packages/nextly/src/database/index.ts": {
+    "count": 1,
+    "digests": ["9beba523818db498"]
   },
   "packages/nextly/src/database/seeders/permissions.ts": {
     "count": 1,
-    "digest": "7a46772394c5b0a4"
+    "digests": ["faaf34b96fa2f808"]
   },
   "packages/nextly/src/database/seeders/super-admin.ts": {
     "count": 3,
-    "digest": "9249e3cfa5423f19"
+    "digests": ["202fb776bc7235ef", "51498eb452728c01", "d1a527e93e649033"]
   },
   "packages/nextly/src/di/register.ts": {
     "count": 6,
-    "digest": "09800fa5ef650f02"
+    "digests": [
+      "3b36a36d5b6266c4",
+      "691778b66139a8a0",
+      "7e5c57aa1fbd7a0f",
+      "c37909a17b34d363",
+      "c4704b07cd3f3890",
+      "ee95597826b5b80e"
+    ]
   },
   "packages/nextly/src/direct-api/__tests__/auth.test.ts": {
     "count": 10,
-    "digest": "b12140c52aa68c80"
+    "digests": [
+      "05268e3a30c83f33",
+      "072a512bdacac7fb",
+      "1572252e05cc138a",
+      "2f77258d87fe2311",
+      "41feae1cea0304a9",
+      "44519882ef8f5264",
+      "867a92ea0ea57e9a",
+      "8803535024a474f9",
+      "afbf7e697af2008d",
+      "fc9f1737308a2997"
+    ]
   },
   "packages/nextly/src/direct-api/namespaces/auth.ts": {
     "count": 5,
-    "digest": "bb6b90e318791f6e"
+    "digests": [
+      "0d18a0a544680c2f",
+      "9c3377fedfa3ad6a",
+      "cb40cee6788b8f32",
+      "dcf49dbd7b270e57",
+      "e41ecc3699f462ff"
+    ]
   },
   "packages/nextly/src/direct-api/namespaces/rbac.ts": {
     "count": 11,
-    "digest": "b8c4e961bad32348"
+    "digests": [
+      "1b61426b43e91ec0",
+      "51498eb452728c01",
+      "558917c7f971a408",
+      "77e59410123e6eb5",
+      "8684ed4371921742",
+      "8fd5494b29ad35d9",
+      "a64e74badc6c1430",
+      "a8b8eb6af43c3be6",
+      "ae2c9e4eb26e99c9",
+      "b609cab752ed8624",
+      "c024ed5dea05081d"
+    ]
+  },
+  "packages/nextly/src/dispatcher/handlers/__tests__/collection-dispatcher-shapes.test.ts": {
+    "count": 1,
+    "digests": ["8e4a455ef25c74e2"]
   },
   "packages/nextly/src/domains/auth/__tests__/role-service.test.ts": {
     "count": 1,
-    "digest": "5492776b80a0768a"
+    "digests": ["b6ed241c9ccbdc6f"]
   },
   "packages/nextly/src/domains/auth/services/api-key-service.ts": {
     "count": 1,
-    "digest": "fb8c491ddbbd1a2f"
+    "digests": ["3ebf8a8d220b1238"]
   },
   "packages/nextly/src/domains/auth/services/auth-service.ts": {
     "count": 5,
-    "digest": "f599d3e22b062ef6"
+    "digests": [
+      "498d0681437dadc5",
+      "60b3abbf58a73721",
+      "76b8e4c87e3e6ec0",
+      "a872b4a1b09ec8d6",
+      "be5d13815d7095fc"
+    ]
   },
   "packages/nextly/src/domains/auth/services/permission-seed-service.ts": {
     "count": 4,
-    "digest": "edc193dd8d005354"
+    "digests": [
+      "378b13e85babb214",
+      "9a21faca767951a1",
+      "9a21faca767951a1",
+      "b486b6c5af6f71d7"
+    ]
   },
   "packages/nextly/src/domains/auth/services/permission-service.ts": {
     "count": 1,
-    "digest": "0e04267fde0659cd"
+    "digests": ["2980ce907661deeb"]
   },
   "packages/nextly/src/domains/auth/services/role-service.ts": {
     "count": 1,
-    "digest": "009677aba82b90ee"
+    "digests": ["eb5780431a1820ed"]
   },
   "packages/nextly/src/domains/auth/services/role/role-mutation-service.ts": {
     "count": 1,
-    "digest": "0e04267fde0659cd"
+    "digests": ["2980ce907661deeb"]
   },
   "packages/nextly/src/domains/auth/services/role/role-query-service.ts": {
     "count": 1,
-    "digest": "3e75d4d904fb41d7"
+    "digests": ["61664007979ad08e"]
   },
   "packages/nextly/src/domains/collections/__tests__/collection-registry-service.status-persist.test.ts": {
     "count": 1,
-    "digest": "a652592be5c16511"
+    "digests": ["7698623a3310b0bd"]
   },
   "packages/nextly/src/domains/collections/services/collection-metadata-service.ts": {
     "count": 1,
-    "digest": "899c4d14e978ae45"
+    "digests": ["d5997ab8d4023315"]
   },
   "packages/nextly/src/domains/collections/services/collection-mutation-service.ts": {
     "count": 3,
-    "digest": "be4a98a4529a6d11"
+    "digests": ["09e9b38cef55f0e2", "cb715ac79bb0afd0", "d6e13c0d15edf168"]
   },
   "packages/nextly/src/domains/collections/services/collection-registry-service.ts": {
     "count": 1,
-    "digest": "05525f97d7d0fbbe"
+    "digests": ["0be665a130c86d73"]
   },
   "packages/nextly/src/domains/collections/services/collection-service.ts": {
     "count": 1,
-    "digest": "05525f97d7d0fbbe"
+    "digests": ["0be665a130c86d73"]
   },
   "packages/nextly/src/domains/dynamic-collections/services/dynamic-collection-validation-service.ts": {
     "count": 1,
-    "digest": "feb6e52c7293bf7d"
+    "digests": ["007e99db7dc1923d"]
   },
   "packages/nextly/src/domains/email/__tests__/stored-configuration-round-trips.test.ts": {
     "count": 1,
-    "digest": "fde5d4d051800112"
+    "digests": ["6f54fd99320556fb"]
   },
   "packages/nextly/src/domains/field-groups/migration/__tests__/run.test.ts": {
     "count": 1,
-    "digest": "d4b197d351b17a5c"
+    "digests": ["5b3ef26496ee17bf"]
+  },
+  "packages/nextly/src/domains/i18n/companion-join.integration.test.ts": {
+    "count": 1,
+    "digests": ["3aeb04f7ce6d720e"]
+  },
+  "packages/nextly/src/domains/i18n/migration/__tests__/companion-lifecycle.integration.test.ts": {
+    "count": 1,
+    "digests": ["1ecb7b4926538ca9"]
   },
   "packages/nextly/src/domains/media/services/media-service.ts": {
     "count": 1,
-    "digest": "47fc82ec9e52702b"
+    "digests": ["86d58760d7633eec"]
+  },
+  "packages/nextly/src/domains/schema/events/schema-events-repository.test.ts": {
+    "count": 1,
+    "digests": ["a0daecfdf3c6b701"]
   },
   "packages/nextly/src/domains/schema/index.ts": {
     "count": 4,
-    "digest": "bdb5d10f2013da7b"
+    "digests": [
+      "369c1d6ea0e38154",
+      "961769c14cf1ffa9",
+      "d9f7b42a88b2a6fc",
+      "f69e097f064025ab"
+    ]
+  },
+  "packages/nextly/src/domains/schema/journal/__tests__/migration-journal-roundtrip.integration.test.ts": {
+    "count": 1,
+    "digests": ["864810750c77764a"]
+  },
+  "packages/nextly/src/domains/schema/journal/__tests__/migration-journal.test.ts": {
+    "count": 1,
+    "digests": ["f3b18985afd17908"]
+  },
+  "packages/nextly/src/domains/schema/journal/__tests__/read-journal.integration.test.ts": {
+    "count": 1,
+    "digests": ["21318fd0f60f379c"]
+  },
+  "packages/nextly/src/domains/schema/journal/__tests__/read-journal.test.ts": {
+    "count": 1,
+    "digests": ["17c1b7b7030011eb"]
+  },
+  "packages/nextly/src/domains/schema/journal/migration-journal.ts": {
+    "count": 1,
+    "digests": ["26b1dedf25e76332"]
+  },
+  "packages/nextly/src/domains/schema/journal/read-journal.ts": {
+    "count": 2,
+    "digests": ["22b437111b31d8a8", "8f16428c75b4bce6"]
   },
   "packages/nextly/src/domains/schema/legacy-preview/__tests__/translate.test.ts": {
     "count": 1,
-    "digest": "7e63cf63aea865ba"
+    "digests": ["6c1a54197305e411"]
   },
   "packages/nextly/src/domains/schema/legacy-preview/translate.ts": {
     "count": 2,
-    "digest": "4a785cbaffeb7482"
+    "digests": ["0978648f64091f91", "7e669149b9f532c7"]
   },
   "packages/nextly/src/domains/schema/migrate-create/__tests__/format-file.test.ts": {
     "count": 1,
-    "digest": "1c2e43a3cd4015c8"
+    "digests": ["2af35d0fbf0e41ef"]
+  },
+  "packages/nextly/src/domains/schema/migrate-create/__tests__/generate.localized-companion.test.ts": {
+    "count": 1,
+    "digests": ["0807c0923902d7fc"]
   },
   "packages/nextly/src/domains/schema/migrate-create/__tests__/generate.test.ts": {
     "count": 1,
-    "digest": "d520fb8d6ede9a7f"
+    "digests": ["c313b100375dae38"]
   },
   "packages/nextly/src/domains/schema/migrate-create/__tests__/snapshot-io.test.ts": {
     "count": 1,
-    "digest": "b18780caa2e66716"
+    "digests": ["7741f48f95cf157c"]
   },
   "packages/nextly/src/domains/schema/migrate-create/format-file.ts": {
     "count": 1,
-    "digest": "e48fdac1d0533907"
+    "digests": ["e8838f11906c806e"]
   },
   "packages/nextly/src/domains/schema/migrate-create/generate.ts": {
     "count": 4,
-    "digest": "6788fd80e5b4dfb6"
+    "digests": [
+      "17f0655986bf0777",
+      "22bdeef8b108fa89",
+      "49a238dd7e9aecb9",
+      "f4097c1e9019bcf6"
+    ]
   },
   "packages/nextly/src/domains/schema/migrate-create/prompt-renames.ts": {
     "count": 2,
-    "digest": "bf9050cb17d21c40"
+    "digests": ["66a20c74d618008b", "f119f5f1b50b086c"]
   },
   "packages/nextly/src/domains/schema/migrate-create/snapshot-io.ts": {
     "count": 4,
-    "digest": "d316d6b23316b0b9"
+    "digests": [
+      "068cfabaec5326cb",
+      "6554d7afacf900de",
+      "8a5e7bbe26fd9ddf",
+      "977229bab05f0cab"
+    ]
+  },
+  "packages/nextly/src/domains/schema/migrate/core-reconcile.test.ts": {
+    "count": 1,
+    "digests": ["a430a990852d6531"]
+  },
+  "packages/nextly/src/domains/schema/migrate/core-reconcile.ts": {
+    "count": 1,
+    "digests": ["80e4334e79b123f3"]
+  },
+  "packages/nextly/src/domains/schema/migrate/drift-error.test.ts": {
+    "count": 1,
+    "digests": ["60350f6564dbba53"]
+  },
+  "packages/nextly/src/domains/schema/migrate/drift-error.ts": {
+    "count": 1,
+    "digests": ["31d7c39c40d63406"]
+  },
+  "packages/nextly/src/domains/schema/migrate/drift-reconcile.test.ts": {
+    "count": 1,
+    "digests": ["62b272a044394306"]
+  },
+  "packages/nextly/src/domains/schema/migrate/drift-reconcile.ts": {
+    "count": 1,
+    "digests": ["0b2c2e16f17699f1"]
+  },
+  "packages/nextly/src/domains/schema/migrate/resolve.test.ts": {
+    "count": 1,
+    "digests": ["bcead4d454d3c2a1"]
+  },
+  "packages/nextly/src/domains/schema/migrate/resolve.ts": {
+    "count": 1,
+    "digests": ["2d3e15f914b981dd"]
   },
   "packages/nextly/src/domains/schema/pipeline/__tests__/f8-matrix.integration.test.ts": {
     "count": 2,
-    "digest": "844fd76aec84faac"
+    "digests": ["892da76a2e84e1c9", "b71e3b17c7bf8978"]
   },
   "packages/nextly/src/domains/schema/pipeline/__tests__/journal-summary-and-scope.test.ts": {
     "count": 1,
-    "digest": "a37ceda68e6c0f12"
+    "digests": ["305dc16ed7a1c5b0"]
   },
   "packages/nextly/src/domains/schema/pipeline/__tests__/preview.test.ts": {
     "count": 1,
-    "digest": "4ebed049ff43aa49"
+    "digests": ["b1912c2039fd0fe1"]
   },
   "packages/nextly/src/domains/schema/pipeline/__tests__/pushschema-pipeline.integration.test.ts": {
     "count": 1,
-    "digest": "cdafa8550dd455b6"
+    "digests": ["035e9d902b81adc3"]
+  },
+  "packages/nextly/src/domains/schema/pipeline/__tests__/pushschema-pipeline.test.ts": {
+    "count": 17,
+    "digests": [
+      "0481fc6f2800e927",
+      "274352b3e2eac8a2",
+      "274352b3e2eac8a2",
+      "6078767e4760cd44",
+      "6369365885bce6b2",
+      "6891feafbd12203f",
+      "6febfa511c0c22bb",
+      "76fe5716aebd53e2",
+      "8b2f6cb2f4297999",
+      "ca0a54fa1a778e93",
+      "ca0a54fa1a778e93",
+      "ca0a54fa1a778e93",
+      "ca0a54fa1a778e93",
+      "ca0a54fa1a778e93",
+      "cc57ecb0b8e09c14",
+      "d63e0fe46a8a82ac",
+      "ea53bcfc9c6fae95"
+    ]
+  },
+  "packages/nextly/src/domains/schema/pipeline/__tests__/v1-golden/golden-harness.ts": {
+    "count": 1,
+    "digests": ["d54793e75ae8a5fa"]
+  },
+  "packages/nextly/src/domains/schema/pipeline/__tests__/v1-golden/pg-mysql.golden.integration.test.ts": {
+    "count": 1,
+    "digests": ["012b2adcf0e84fc2"]
+  },
+  "packages/nextly/src/domains/schema/pipeline/__tests__/v1-golden/phantom-diff.integration.test.ts": {
+    "count": 1,
+    "digests": ["272fcfed7dae2d01"]
+  },
+  "packages/nextly/src/domains/schema/pipeline/__tests__/v1-golden/sqlite.golden.test.ts": {
+    "count": 1,
+    "digests": ["7690e0da8c14c6c0"]
+  },
+  "packages/nextly/src/domains/schema/pipeline/__tests__/v1-golden/upgrade-sim-045.integration.test.ts": {
+    "count": 1,
+    "digests": ["618a778966946099"]
   },
   "packages/nextly/src/domains/schema/pipeline/__tests__/wiring.test.ts": {
     "count": 2,
-    "digest": "a0b4a8f4b274529d"
+    "digests": ["7255a9639c61e1e9", "e8fb3334580748d6"]
   },
   "packages/nextly/src/domains/schema/pipeline/_internal/run-statement.ts": {
     "count": 1,
-    "digest": "8f594627a01b38bd"
+    "digests": ["5bb7af3fb2c41de4"]
   },
   "packages/nextly/src/domains/schema/pipeline/apply.ts": {
     "count": 4,
-    "digest": "6de22349f39fa676"
+    "digests": [
+      "0b0ed022df71c084",
+      "4fb4341953ac8793",
+      "8b1ad346150a21a7",
+      "b707afd1e687a0a2"
+    ]
+  },
+  "packages/nextly/src/domains/schema/pipeline/classifier/__tests__/modes.test.ts": {
+    "count": 1,
+    "digests": ["f192dcffeba6d5c1"]
   },
   "packages/nextly/src/domains/schema/pipeline/classifier/classifier.ts": {
     "count": 1,
-    "digest": "021d5fe2357e20f1"
+    "digests": ["a0fefef08f027ac5"]
+  },
+  "packages/nextly/src/domains/schema/pipeline/classifier/modes.ts": {
+    "count": 1,
+    "digests": ["3e45adc97460f478"]
   },
   "packages/nextly/src/domains/schema/pipeline/classifier/type-widening.ts": {
     "count": 1,
-    "digest": "cd4d575465a20fcc"
+    "digests": ["30f09dfa7d772835"]
+  },
+  "packages/nextly/src/domains/schema/pipeline/ddl-emitter/__tests__/oracle.integration.test.ts": {
+    "count": 1,
+    "digests": ["806fe8676f46309d"]
+  },
+  "packages/nextly/src/domains/schema/pipeline/ddl-emitter/__tests__/postgres.test.ts": {
+    "count": 1,
+    "digests": ["2f5802fcc6038c17"]
+  },
+  "packages/nextly/src/domains/schema/pipeline/ddl-emitter/postgres.ts": {
+    "count": 1,
+    "digests": ["bd3b2d6bd6fcc124"]
   },
   "packages/nextly/src/domains/schema/pipeline/diff/__tests__/fixtures.test.ts": {
     "count": 1,
-    "digest": "7981ee9112d840a9"
+    "digests": ["0645b0e4f9c104b8"]
   },
   "packages/nextly/src/domains/schema/pipeline/diff/diff.ts": {
     "count": 1,
-    "digest": "3fd6f676e5b9288b"
+    "digests": ["63527447cf5a2eeb"]
   },
   "packages/nextly/src/domains/schema/pipeline/diff/introspect-live.ts": {
     "count": 2,
-    "digest": "14f14361efe4357b"
+    "digests": ["3685ea60f4db11e3", "f258ac80346a9e2e"]
   },
   "packages/nextly/src/domains/schema/pipeline/diff/types.ts": {
     "count": 1,
-    "digest": "e31c53db429d0257"
+    "digests": ["4536046719505a44"]
   },
   "packages/nextly/src/domains/schema/pipeline/index.ts": {
     "count": 4,
-    "digest": "7b67f2a35c183baf"
+    "digests": [
+      "20521fdde97e8192",
+      "2f537bb231ed8bf2",
+      "d441cdb91647542d",
+      "f79b33933ee0a3d0"
+    ]
+  },
+  "packages/nextly/src/domains/schema/pipeline/locks.ts": {
+    "count": 1,
+    "digests": ["c320068bf9f78a62"]
   },
   "packages/nextly/src/domains/schema/pipeline/pre-cleanup/executor.ts": {
     "count": 1,
-    "digest": "aa0479f13dcdc73e"
+    "digests": ["5e2afe465ea9dae4"]
   },
   "packages/nextly/src/domains/schema/pipeline/pre-resolution/executor.ts": {
     "count": 2,
-    "digest": "ce8d93dd3da603a3"
+    "digests": ["74d08e7ca7b929de", "e86ddaf86b4ed7ae"]
   },
   "packages/nextly/src/domains/schema/pipeline/preview.ts": {
     "count": 1,
-    "digest": "84cf32c686c86ae7"
+    "digests": ["ff20c927408382b3"]
   },
   "packages/nextly/src/domains/schema/pipeline/prompt-dispatcher/browser.ts": {
     "count": 2,
-    "digest": "9298109abaa24028"
+    "digests": ["9633a9ff265d1807", "baa40beac929816b"]
   },
   "packages/nextly/src/domains/schema/pipeline/prompt-dispatcher/clack-terminal.ts": {
     "count": 2,
-    "digest": "37c5174696a7738e"
+    "digests": ["49116782aad1e877", "557e8bada7458d04"]
   },
   "packages/nextly/src/domains/schema/pipeline/pushschema-pipeline-interfaces.ts": {
-    "count": 8,
-    "digest": "75e66c09e1ecfdac"
+    "count": 9,
+    "digests": [
+      "0450cbb2ab162389",
+      "0cf9f424d9a3396e",
+      "1121d49b1aa94920",
+      "1a87d96df5e26d74",
+      "3aac08e075bf8be8",
+      "7f72a928dc32fb47",
+      "7fcc2a69d474e46d",
+      "91633e46f8762ac5",
+      "f58eacd60184feba"
+    ]
   },
   "packages/nextly/src/domains/schema/pipeline/pushschema-pipeline-stubs.ts": {
     "count": 5,
-    "digest": "8254f14ab48b9f99"
+    "digests": [
+      "18b7cca5f36de505",
+      "1e321d582b3e261b",
+      "43afd721fe736c9c",
+      "df02da5ee52e8ad7",
+      "eb2f08e1746ba91c"
+    ]
   },
   "packages/nextly/src/domains/schema/pipeline/pushschema-pipeline.ts": {
     "count": 17,
-    "digest": "1376ebb9283acec7"
+    "digests": [
+      "00a5cefac278b0fd",
+      "077f00e0bdcbe8ad",
+      "085251152ec8ad68",
+      "1e2abbc0ec891be7",
+      "24e7853e8474c77e",
+      "34b7e425726096a9",
+      "3d1ae40991937a9e",
+      "619d412ced2d9900",
+      "6e8d0bbb38970bfc",
+      "7b097fd3267e95e8",
+      "7b4af6bc0c93c87e",
+      "987a5e8de215a15c",
+      "a014b0b8b9b13040",
+      "a94e6317e1fa7335",
+      "b911efe66658433c",
+      "baa932afd2bce748",
+      "d2064dc0004d630f"
+    ]
   },
   "packages/nextly/src/domains/schema/pipeline/rename-detector.ts": {
     "count": 2,
-    "digest": "6e2b6f8adf01be84"
+    "digests": ["6fb9515ecc23053a", "d15d462078f8f9c6"]
   },
   "packages/nextly/src/domains/schema/pipeline/resolution/__tests__/types.test.ts": {
     "count": 1,
-    "digest": "361816186725a08e"
+    "digests": ["8ea516c6f783ec8b"]
   },
   "packages/nextly/src/domains/schema/pipeline/resolution/types.ts": {
     "count": 2,
-    "digest": "41b3d0bfaf7aa692"
+    "digests": ["257f99e849dd7da1", "afff73bd0c6bdc92"]
   },
   "packages/nextly/src/domains/schema/pipeline/sql-templates/__tests__/identifier-quoting.test.ts": {
     "count": 1,
-    "digest": "41b9211724fe4c37"
+    "digests": ["432c72ad364e1839"]
   },
   "packages/nextly/src/domains/schema/pipeline/sql-templates/__tests__/mysql.test.ts": {
     "count": 1,
-    "digest": "97120d79b81b1a54"
+    "digests": ["ee1e29dab0315fa9"]
   },
   "packages/nextly/src/domains/schema/pipeline/sql-templates/__tests__/postgres.test.ts": {
     "count": 1,
-    "digest": "ec9beb5dc4feed50"
+    "digests": ["f5a304a9f46de498"]
   },
   "packages/nextly/src/domains/schema/pipeline/sql-templates/__tests__/sqlite.test.ts": {
     "count": 1,
-    "digest": "3ef0020d7bbd62ad"
+    "digests": ["7209ba43bd3ee407"]
   },
   "packages/nextly/src/domains/schema/pipeline/sql-templates/identifier-quoting.ts": {
     "count": 1,
-    "digest": "ada349218bd18301"
+    "digests": ["4b091578444642d1"]
   },
   "packages/nextly/src/domains/schema/pipeline/sql-templates/index.ts": {
     "count": 1,
-    "digest": "a461f45ce6d7bb51"
+    "digests": ["25002c3ba120fba9"]
   },
   "packages/nextly/src/domains/schema/pipeline/sql-templates/mysql.ts": {
     "count": 3,
-    "digest": "842f2587ba9988c2"
+    "digests": ["19c12265a710aea5", "cac57e68d5fd3ea1", "d0a2921b02b12c00"]
   },
   "packages/nextly/src/domains/schema/pipeline/sql-templates/postgres.ts": {
     "count": 1,
-    "digest": "327891bba247173d"
+    "digests": ["0d325483d17b897b"]
   },
   "packages/nextly/src/domains/schema/pipeline/sql-templates/sqlite.ts": {
     "count": 1,
-    "digest": "d787061e4f69308b"
+    "digests": ["b80e5adbaec7abce"]
   },
   "packages/nextly/src/domains/schema/services/__tests__/schema-change-exclusion.test.ts": {
     "count": 1,
-    "digest": "e006b94219256969"
+    "digests": ["1a0f99fe3d15ad57"]
   },
   "packages/nextly/src/domains/schema/services/schema-change-types.ts": {
     "count": 1,
-    "digest": "f3bdc691f4bf86da"
+    "digests": ["1d665b4f2993f5ca"]
+  },
+  "packages/nextly/src/domains/schema/ui-schema/cross-file.test.ts": {
+    "count": 1,
+    "digests": ["f3b3d02ae7baa6d1"]
+  },
+  "packages/nextly/src/domains/schema/ui-schema/cross-file.ts": {
+    "count": 1,
+    "digests": ["cadec6b7a117215a"]
+  },
+  "packages/nextly/src/domains/schema/ui-schema/loader.test.ts": {
+    "count": 1,
+    "digests": ["1895608a1d6454a0"]
+  },
+  "packages/nextly/src/domains/schema/ui-schema/loader.ts": {
+    "count": 1,
+    "digests": ["a3571e39a645cdc6"]
+  },
+  "packages/nextly/src/domains/schema/ui-schema/merge.test.ts": {
+    "count": 1,
+    "digests": ["b1c06455b1c3ed1e"]
+  },
+  "packages/nextly/src/domains/schema/ui-schema/merge.ts": {
+    "count": 1,
+    "digests": ["31b04d59e97ad335"]
+  },
+  "packages/nextly/src/domains/schema/ui-schema/metadata-sql.test.ts": {
+    "count": 1,
+    "digests": ["d8c3d07bca82c3cb"]
+  },
+  "packages/nextly/src/domains/schema/ui-schema/metadata-sql.ts": {
+    "count": 1,
+    "digests": ["57aad0de3d3600dc"]
+  },
+  "packages/nextly/src/domains/schema/ui-schema/mutate.test.ts": {
+    "count": 1,
+    "digests": ["0646415d81afb4d8"]
+  },
+  "packages/nextly/src/domains/schema/ui-schema/mutate.ts": {
+    "count": 1,
+    "digests": ["a0d5b6dc1b42b805"]
+  },
+  "packages/nextly/src/domains/schema/ui-schema/to-snapshot.test.ts": {
+    "count": 1,
+    "digests": ["fc9c2d61da03c261"]
+  },
+  "packages/nextly/src/domains/schema/ui-schema/to-snapshot.ts": {
+    "count": 1,
+    "digests": ["f353afd3033e899e"]
   },
   "packages/nextly/src/domains/schema/utils/__tests__/missing-columns.test.ts": {
     "count": 1,
-    "digest": "e6e01446dca7981d"
+    "digests": ["f6bbd8d3d9ccef20"]
   },
   "packages/nextly/src/domains/schema/utils/missing-columns.ts": {
     "count": 2,
-    "digest": "e6192c2e08cdc488"
+    "digests": ["dbbfcea2ed1153fe", "edfca15de43647eb"]
   },
   "packages/nextly/src/domains/schema/utils/resolve-table-name.ts": {
     "count": 1,
-    "digest": "51414531c40b1f0e"
+    "digests": ["a65bf2b9922315d5"]
   },
   "packages/nextly/src/domains/singles/services/single-registry-service.ts": {
     "count": 1,
-    "digest": "67b7908cda1e3da4"
+    "digests": ["b7985ff3fa413e68"]
   },
   "packages/nextly/src/domains/users/__tests__/user-account-service.test.ts": {
     "count": 1,
-    "digest": "17b95aa03d793036"
+    "digests": ["e8186f72572f1d03"]
   },
   "packages/nextly/src/domains/users/__tests__/user-mutation-service.transaction.integration.test.ts": {
     "count": 1,
-    "digest": "423dfb2576ae1e8f"
+    "digests": ["c57a4ce3d5155886"]
   },
   "packages/nextly/src/domains/users/__tests__/user-query-service.test.ts": {
     "count": 2,
-    "digest": "970f3da7c4f321e2"
+    "digests": ["13bc44bce999cb7a", "56699e933aa510fd"]
   },
   "packages/nextly/src/domains/users/index.ts": {
     "count": 2,
-    "digest": "eb9fcd2fb3d5ff03"
+    "digests": ["77c95c975dc54c26", "e0bc57d896269aab"]
   },
   "packages/nextly/src/domains/users/services/user-account-service.ts": {
     "count": 1,
-    "digest": "6857e81ce86a5bfc"
+    "digests": ["3c9e5c01eef319b2"]
   },
   "packages/nextly/src/domains/users/services/user-field-definition-service.ts": {
     "count": 1,
-    "digest": "9852db26243b753a"
+    "digests": ["607d53b54502eea9"]
   },
   "packages/nextly/src/domains/users/services/user-mutation-service.ts": {
     "count": 2,
-    "digest": "f0ec5f7a728fbf4c"
+    "digests": ["0d66a3c6817b6801", "3c9e5c01eef319b2"]
   },
   "packages/nextly/src/domains/users/services/user-query-service.ts": {
     "count": 3,
-    "digest": "cf7d94c9cf916eee"
+    "digests": ["26abaad11db6921c", "3c9e5c01eef319b2", "ab937e549c6001f9"]
   },
   "packages/nextly/src/domains/users/services/user-service.ts": {
     "count": 2,
-    "digest": "ef1e9b5875d183f5"
+    "digests": ["a43b9d1985522ed4", "ffe729f044021282"]
   },
   "packages/nextly/src/domains/users/types.ts": {
     "count": 2,
-    "digest": "b9367297f53513bb"
+    "digests": ["77c95c975dc54c26", "8e84cd814927078a"]
+  },
+  "packages/nextly/src/errors/__tests__/error-codes.c2.test.ts": {
+    "count": 1,
+    "digests": ["c9c613482e729945"]
+  },
+  "packages/nextly/src/errors/error-codes.ts": {
+    "count": 2,
+    "digests": ["815a00253c3eebcc", "efab23fdf8b93fd0"]
   },
   "packages/nextly/src/index.ts": {
     "count": 1,
-    "digest": "2c962ee12deb02af"
+    "digests": ["6dc3c9fa99a95657"]
   },
   "packages/nextly/src/init.ts": {
     "count": 4,
-    "digest": "62d60b28c0ad76af"
+    "digests": [
+      "05b49cb181d380dd",
+      "48dcc79a1634abd7",
+      "581f713057345e77",
+      "f44def8bb8099406"
+    ]
   },
   "packages/nextly/src/init/__tests__/drift-check.test.ts": {
     "count": 1,
-    "digest": "edaa5882ea210734"
+    "digests": ["b74215e1d1259c19"]
   },
   "packages/nextly/src/init/__tests__/first-run.test.ts": {
     "count": 1,
-    "digest": "6b8b34fe809dad0b"
+    "digests": ["e238ab6c02d080ef"]
   },
   "packages/nextly/src/init/__tests__/reload-config.test.ts": {
     "count": 1,
-    "digest": "bd0f4483fd0bef85"
+    "digests": ["6a0954923a9c8109"]
   },
   "packages/nextly/src/init/drift-check.ts": {
     "count": 4,
-    "digest": "3cc6f5d16ab13048"
+    "digests": [
+      "6c06b4b9ee58f7b6",
+      "c400f7aab45a38cc",
+      "d006ea0743f28222",
+      "d78ce4c7699f22a1"
+    ]
   },
   "packages/nextly/src/init/first-run.ts": {
-    "count": 1,
-    "digest": "647880bf5d1a1340"
+    "count": 2,
+    "digests": ["c29530eb35de7967", "fcc4de5e43338ab4"]
   },
   "packages/nextly/src/init/reload-config.ts": {
     "count": 5,
-    "digest": "59e4fa848c44afa2"
+    "digests": [
+      "16e40f5c4402dae9",
+      "2b5865a0badfa47a",
+      "2feaf3d7c6dcf306",
+      "6c86503df244a581",
+      "e1c0ea5953e19fa4"
+    ]
+  },
+  "packages/nextly/src/plugins/codegen/typed-slugs.test-d.ts": {
+    "count": 1,
+    "digests": ["de5c75485cc7fcb3"]
+  },
+  "packages/nextly/src/route-handler/dev-schema-handler.test.ts": {
+    "count": 1,
+    "digests": ["8e999e81968ad2b8"]
+  },
+  "packages/nextly/src/route-handler/dev-schema-handler.ts": {
+    "count": 1,
+    "digests": ["740764e575479b5f"]
   },
   "packages/nextly/src/route-handler/route-parser.ts": {
     "count": 2,
-    "digest": "c2a9aeef82c77e70"
+    "digests": ["618413b00a8fa802", "abdbc134ada75bfc"]
   },
   "packages/nextly/src/routeHandler.ts": {
     "count": 3,
-    "digest": "206db09c83f184a8"
+    "digests": ["4b8a85bc737116f6", "88cc9af4e10532f7", "c2df31454df025bd"]
   },
   "packages/nextly/src/runtime/__tests__/hmr-listener.test.ts": {
     "count": 1,
-    "digest": "247bb09b07b6bb8d"
+    "digests": ["fca8604933acb121"]
   },
   "packages/nextly/src/runtime/hmr-listener.ts": {
     "count": 1,
-    "digest": "3762be1d95e02f1f"
+    "digests": ["7711896dcaa838e7"]
   },
   "packages/nextly/src/runtime/notifications/__tests__/build-event.test.ts": {
     "count": 1,
-    "digest": "7c739076d0cb4864"
+    "digests": ["fae09c6df2b1ab48"]
   },
   "packages/nextly/src/runtime/notifications/__tests__/dispatcher.test.ts": {
     "count": 1,
-    "digest": "a5fde5f2b0c07216"
+    "digests": ["10dd4978397141d6"]
   },
   "packages/nextly/src/runtime/notifications/__tests__/ndjson.test.ts": {
     "count": 1,
-    "digest": "562c4e95c5b3552b"
+    "digests": ["0eb1a7070d99f024"]
   },
   "packages/nextly/src/runtime/notifications/__tests__/notifications-pipeline.integration.test.ts": {
     "count": 1,
-    "digest": "d2770fd14160e6e3"
+    "digests": ["e39356e546c1d88e"]
   },
   "packages/nextly/src/runtime/notifications/__tests__/terminal.test.ts": {
     "count": 1,
-    "digest": "70bc7d45eb7e1230"
+    "digests": ["b9dd376b84895aa5"]
   },
   "packages/nextly/src/runtime/notifications/build-event.ts": {
     "count": 1,
-    "digest": "42a4279ca10af91a"
+    "digests": ["5a3f74dbff9a4fba"]
   },
   "packages/nextly/src/runtime/notifications/channels/ndjson.ts": {
     "count": 1,
-    "digest": "42dc3a0e889c1c3e"
+    "digests": ["f79106072fc96302"]
   },
   "packages/nextly/src/runtime/notifications/channels/terminal.ts": {
     "count": 1,
-    "digest": "c28a78fa956e04c3"
+    "digests": ["0a43a7bd69914c27"]
   },
   "packages/nextly/src/runtime/notifications/dispatcher.ts": {
     "count": 1,
-    "digest": "311229dd6855ff1e"
+    "digests": ["db8086c2e860340d"]
   },
   "packages/nextly/src/runtime/notifications/index.ts": {
     "count": 1,
-    "digest": "4df016a8e07907af"
+    "digests": ["6d698e529ed63ee0"]
   },
   "packages/nextly/src/runtime/notifications/production.ts": {
     "count": 1,
-    "digest": "a103596c6121460a"
+    "digests": ["675669e2876838cf"]
   },
   "packages/nextly/src/runtime/notifications/types.ts": {
     "count": 2,
-    "digest": "6db32fe8deaccfbd"
+    "digests": ["666a96f798818991", "caea56fe939092cf"]
+  },
+  "packages/nextly/src/schemas/_dialect-bundles/mysql.ts": {
+    "count": 1,
+    "digests": ["67f013c9226c3e9d"]
+  },
+  "packages/nextly/src/schemas/_dialect-bundles/postgres.ts": {
+    "count": 1,
+    "digests": ["92796c4b126193f9"]
+  },
+  "packages/nextly/src/schemas/_dialect-bundles/sqlite.ts": {
+    "count": 1,
+    "digests": ["abe6ce397e7c6c54"]
+  },
+  "packages/nextly/src/schemas/_zod/ui-schema.test.ts": {
+    "count": 1,
+    "digests": ["1fc0758dad416487"]
+  },
+  "packages/nextly/src/schemas/_zod/ui-schema.ts": {
+    "count": 1,
+    "digests": ["598d766d6114b214"]
+  },
+  "packages/nextly/src/schemas/dynamic-collections/index.ts": {
+    "count": 1,
+    "digests": ["2f135d9e46aa53c2"]
+  },
+  "packages/nextly/src/schemas/index.ts": {
+    "count": 8,
+    "digests": [
+      "2c11d4e6d8d5e1f4",
+      "567408c85aab333f",
+      "83dd6e722ca53454",
+      "a64ed21ef6477082",
+      "a6feb4af28bba687",
+      "ce3ff3a908b5fede",
+      "dd9e9ebe920d7296",
+      "f64b6cf736014679"
+    ]
+  },
+  "packages/nextly/src/schemas/users/postgres.ts": {
+    "count": 1,
+    "digests": ["0db7228f053f3ac2"]
   },
   "packages/nextly/src/services/dashboard/activity-log-service.ts": {
     "count": 2,
-    "digest": "0f09d17d03ffcd2d"
+    "digests": ["3dbce00600c3785d", "c643dd986b9518e4"]
   },
   "packages/nextly/src/services/users.ts": {
     "count": 10,
-    "digest": "ab12ab32c9867c94"
+    "digests": [
+      "1070bdbfcd4d89a8",
+      "1dbac1f22c946a46",
+      "310816963ce492f9",
+      "43c387a5e5232672",
+      "4f5c5ab47694b099",
+      "5bc464b6838cdc92",
+      "8b59d8775f55598b",
+      "9b67d4d8aa4a6346",
+      "f21583a86dd0cfb4",
+      "f53d108090130b7b"
+    ]
   },
   "packages/nextly/src/shared/base-registry-service.ts": {
     "count": 2,
-    "digest": "a63e3b805d9b688a"
+    "digests": ["607d53b54502eea9", "dea34fdfb21a1851"]
   },
   "packages/nextly/src/shared/types/config.ts": {
     "count": 3,
-    "digest": "59ebd0301fcf8dc6"
+    "digests": ["a1930728b53da198", "b1d738515c522c67", "b4e560a8a15eaa80"]
   },
   "packages/nextly/src/singles/config/validate-single.ts": {
     "count": 1,
-    "digest": "ec9a3869f9e996e7"
+    "digests": ["6229e98b309d2978"]
   },
   "packages/plugin-sdk/src/block-exports.test-d.ts": {
     "count": 1,
-    "digest": "247927652935faf7"
+    "digests": ["60e14a2b22612b00"]
   },
   "packages/ui/src/components/__tests__/tabs-contract.test.ts": {
     "count": 1,
-    "digest": "14a03e4440a2cda4"
+    "digests": ["14a03e4440a2cda4"]
   }
 }

@@ -30,6 +30,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
+import ts from "typescript";
 
 /**
  * The forbidden shapes, deliberately narrow.
@@ -66,6 +67,11 @@ export const FORBIDDEN = [
   {
     pattern: /\b(codex|coderabbit|greptile)\b/i,
     why: "names a review tool",
+    // Domain vocabulary in review tooling, which dispatches on these bots by login and must be
+    // able to say so. The line is what the code OPERATES on versus what happened to it: naming a
+    // tool the code matches against describes the code, while quoting what a reviewer said is
+    // narration wherever it appears, including here.
+    domainVocabulary: true,
   },
   {
     // A numbered change, with or without a roadmap-item prefix: "PR 4 migration", "F11 PR 3".
@@ -86,6 +92,13 @@ export const FORBIDDEN = [
     pattern: /\b(this|the)\s+(PR|pull request)\b/i,
     why: "refers to the change rather than the code",
     domainVocabulary: true,
+  },
+  {
+    // A numbered task or plan: "Task 17:", "Plan C2". The convention names tasks and plans
+    // alongside reviews, and this is the shape they arrive in - a reference to a document the
+    // reader has no way to open, describing why the code was written rather than what it does.
+    pattern: /\b(?:task|plan)\s+[a-z]?\d+/i,
+    why: "names a task or plan rather than the code",
   },
   {
     // The ACTOR carries the verdict, not the verb. "the operator asked", "the caller asked" and
@@ -208,11 +221,12 @@ export function readAllowlist(root = process.cwd()) {
       typeof entry === "object" &&
       Number.isInteger(entry.count) &&
       entry.count >= 1 &&
-      typeof entry.digest === "string" &&
-      entry.digest.length > 0;
+      Array.isArray(entry.digests) &&
+      entry.digests.length === entry.count &&
+      entry.digests.every(d => typeof d === "string" && d.length > 0);
     if (!shaped) {
       throw new Error(
-        `${ALLOWLIST_FILE}: ${path} must be { count: positive integer, digest: string }`
+        `${ALLOWLIST_FILE}: ${path} must be { count: positive integer, digests: string[] of that length }`
       );
     }
   }
@@ -238,11 +252,11 @@ function shorten(text) {
 }
 
 export function digestOffences(offences) {
-  const normalised = offences
-    .map(one => one.replace(/\s+/g, " ").trim())
-    .sort()
-    .join("\u0000");
-  return createHash("sha256").update(normalised).digest("hex").slice(0, 16);
+  return offences
+    .map(one =>
+      createHash("sha256").update(one.replace(/\s+/g, " ").trim()).digest("hex").slice(0, 16)
+    )
+    .sort();
 }
 
 /**
@@ -294,155 +308,120 @@ export function sourceFiles(root) {
  * catches is one nothing else in the repository can see.
  */
 export function commentText(source, { lineComments = true } = {}) {
-  // A single left-to-right pass rather than a chain of replacements, because what a character
-  // MEANS depends on what preceded it and a regular expression cannot carry that.
-  //
-  // Three cases forced it, each of which a replacement chain gets wrong in a different direction:
-  //
-  //   - a template's `${...}` holds executable code, so blanking the template whole hides any
-  //     comment written inside the interpolation;
-  //   - a template inside that interpolation nests, so no fixed pattern closes at the right
-  //     backtick;
-  //   - `/` opens a regular expression in some positions and divides in others, and only the
-  //     preceding token separates them. Blanking none reads `/[//] x/` as a comment; blanking
-  //     every `/.../` eats division.
-  //
-  // Comment TEXT is returned from the original source, so quoted narration inside a genuine
-  // comment survives — `// "Codex flagged this"` is an offence and reads as one.
+  // CSS is not JavaScript, so TypeScript cannot lex it. It has block comments and nothing else.
+  if (!lineComments) return cssBlockComments(source);
+
   const comments = [];
-  const n = source.length;
-  // Brace depth per open template, so an interpolation ends at ITS matching `}` and not at the
-  // first one. An empty stack means no template is open.
-  const templates = [];
-  let previous = ""; // last significant character, for the regex-or-division decision
-  let i = 0;
+  const scanner = ts.createScanner(
+    ts.ScriptTarget.Latest,
+    // Keep trivia: comments ARE trivia, and skipping it would discard the only tokens wanted.
+    false,
+    // JSX so `{/* ... */}` inside markup is lexed rather than read as an operator soup.
+    ts.LanguageVariant.JSX,
+    source
+  );
 
-  while (i < n) {
-    const c = source[i];
-    const next = source[i + 1];
+  // Depth of `{` since each open template interpolation, so a `}` closes the interpolation only
+  // when it is the matching one. A template can open inside an interpolation, hence a stack.
+  const interpolations = [];
+  let previous = ts.SyntaxKind.Unknown;
+  let token = scanner.scan();
 
-    if (c === "/" && next === "*") {
-      const end = source.indexOf("*/", i + 2);
-      const stop = end === -1 ? n : end + 2;
-      comments.push(source.slice(i, stop));
-      i = stop;
-      previous = "";
-      continue;
+  while (token !== ts.SyntaxKind.EndOfFileToken) {
+    // The one decision a lexer cannot make alone: `/` opens a regular expression in some
+    // positions and divides in others, and only what precedes it separates them. TypeScript
+    // exposes the re-scan for exactly this, so the DECISION is made here and the SCANNING stays
+    // TypeScript's - which is what keeps character classes and escapes correct.
+    if (
+      (token === ts.SyntaxKind.SlashToken || token === ts.SyntaxKind.SlashEqualsToken) &&
+      !ENDS_A_VALUE.has(previous)
+    ) {
+      token = scanner.reScanSlashToken();
     }
 
-    if (c === "/" && next === "/" && lineComments) {
-      let stop = source.indexOf("\n", i);
-      if (stop === -1) stop = n;
-      comments.push(source.slice(i + 2, stop));
-      i = stop;
-      previous = "";
-      continue;
-    }
-
-    if (c === '"' || c === "'") {
-      i = skipQuoted(source, i, c);
-      previous = c;
-      continue;
-    }
-
-    if (c === "`") {
-      templates.push(0);
-      i += 1;
-      previous = "";
-      continue;
-    }
-
-    if (templates.length > 0 && c === "$" && next === "{") {
-      templates[templates.length - 1] += 1;
-      i += 2;
-      previous = "";
-      continue;
-    }
-
-    if (templates.length > 0 && templates[templates.length - 1] === 0) {
-      // Raw template text: skip it, honouring escapes, and close on the backtick.
-      if (c === "\\") {
-        i += 2;
+    if (
+      token === ts.SyntaxKind.SingleLineCommentTrivia ||
+      token === ts.SyntaxKind.MultiLineCommentTrivia
+    ) {
+      comments.push(scanner.getTokenText());
+    } else if (token === ts.SyntaxKind.TemplateHead) {
+      interpolations.push(0);
+    } else if (token === ts.SyntaxKind.OpenBraceToken && interpolations.length > 0) {
+      interpolations[interpolations.length - 1] += 1;
+    } else if (token === ts.SyntaxKind.CloseBraceToken && interpolations.length > 0) {
+      if (interpolations[interpolations.length - 1] === 0) {
+        // Back into template TEXT. Without this the scanner keeps lexing the rest of the
+        // template as code, and a `//` in that text reads as a comment.
+        const resumed = scanner.reScanTemplateToken(false);
+        if (resumed === ts.SyntaxKind.TemplateTail) interpolations.pop();
+        previous = resumed;
+        token = scanner.scan();
         continue;
       }
-      if (c === "`") templates.pop();
-      i += 1;
-      continue;
+      interpolations[interpolations.length - 1] -= 1;
     }
 
-    if (templates.length > 0 && c === "}") {
-      templates[templates.length - 1] -= 1;
-      i += 1;
-      previous = "}";
-      continue;
-    }
-
-    if (c === "/" && startsRegex(previous)) {
-      i = skipRegex(source, i);
-      previous = "/";
-      continue;
-    }
-
-    if (!/\s/.test(c)) previous = c;
-    i += 1;
+    if (!TRIVIA.has(token)) previous = token;
+    token = scanner.scan();
   }
 
   return comments;
 }
 
-/** Index just past a `'`/`"` literal opened at `start`, honouring escapes and unterminated input. */
-function skipQuoted(source, start, quote) {
-  let i = start + 1;
-  while (i < source.length) {
-    const c = source[i];
-    if (c === "\\") {
-      i += 2;
-      continue;
-    }
-    // A newline ends an unterminated quote rather than consuming the rest of the file, so one
-    // stray apostrophe in prose cannot swallow every comment below it.
-    if (c === quote || c === "\n") return i + 1;
-    i += 1;
-  }
-  return i;
-}
-
-/** Index just past a regular-expression literal opened at `start`, including its character class. */
-function skipRegex(source, start) {
-  let i = start + 1;
-  let inClass = false;
-  while (i < source.length) {
-    const c = source[i];
-    if (c === "\\") {
-      i += 2;
-      continue;
-    }
-    if (c === "\n") return i;
-    if (c === "[") inClass = true;
-    else if (c === "]") inClass = false;
-    // A `/` inside `[...]` is data, which is what makes `/[//] Codex/` a literal and not a comment.
-    else if (c === "/" && !inClass) return i + 1;
-    i += 1;
-  }
-  return i;
-}
+/** Trivia carries no meaning for the regex-or-division decision, so it must not become `previous`. */
+const TRIVIA = new Set([
+  ts.SyntaxKind.SingleLineCommentTrivia,
+  ts.SyntaxKind.MultiLineCommentTrivia,
+  ts.SyntaxKind.WhitespaceTrivia,
+  ts.SyntaxKind.NewLineTrivia,
+  ts.SyntaxKind.ShebangTrivia,
+  ts.SyntaxKind.ConflictMarkerTrivia,
+]);
 
 /**
- * Whether a `/` in this position opens a regular expression rather than dividing.
+ * Tokens after which a `/` DIVIDES, because each ends a value.
  *
- * Decided by the preceding significant character: division follows a VALUE — an identifier, a
- * number, or a closing bracket — and everything else is a position where a value is expected.
- * Being wrong towards "regex" would consume code as literal text, so the value set is the one
- * enumerated and the default is division.
+ * Enumerated in this direction on purpose: being wrong towards "regular expression" would consume
+ * code as literal text and hide whatever comments it contained, while being wrong towards
+ * "division" at worst reports a comment that was really regex data. The first failure is silent
+ * and the second is visible.
  */
-function startsRegex(previous) {
-  if (previous === "") return true;
-  return !/[\w$)\]]/.test(previous);
-}
+const ENDS_A_VALUE = new Set([
+  ts.SyntaxKind.Identifier,
+  ts.SyntaxKind.NumericLiteral,
+  ts.SyntaxKind.BigIntLiteral,
+  ts.SyntaxKind.StringLiteral,
+  ts.SyntaxKind.NoSubstitutionTemplateLiteral,
+  ts.SyntaxKind.TemplateTail,
+  ts.SyntaxKind.CloseParenToken,
+  ts.SyntaxKind.CloseBracketToken,
+  ts.SyntaxKind.ThisKeyword,
+  ts.SyntaxKind.SuperKeyword,
+  ts.SyntaxKind.TrueKeyword,
+  ts.SyntaxKind.FalseKeyword,
+  ts.SyntaxKind.NullKeyword,
+  ts.SyntaxKind.PlusPlusToken,
+  ts.SyntaxKind.MinusMinusToken,
+]);
 
-/** Blank a span, preserving its length and any newlines so later offsets still line up. */
-function blankSpan(match) {
-  return match.replace(/[^\n]/g, " ");
+/**
+ * CSS comments, which are only ever `/* ... *\/`.
+ *
+ * A quoted `/*` inside a CSS string would be read as opening one. That is accepted rather than
+ * parsed around: it can only ever cause a comment to be reported that was really string data,
+ * which is visible and correctable, and CSS strings holding comment syntax are vanishingly rare
+ * next to the cost of a second parser.
+ */
+function cssBlockComments(source) {
+  const comments = [];
+  let at = source.indexOf("/*");
+  while (at !== -1) {
+    const end = source.indexOf("*/", at + 2);
+    const stop = end === -1 ? source.length : end + 2;
+    comments.push(source.slice(at, stop));
+    at = source.indexOf("/*", stop);
+  }
+  return comments;
 }
 
 /** Every forbidden shape found in `source`, as `{ why, comment }`. */
@@ -572,19 +551,17 @@ function main() {
       );
       continue;
     }
-    if (found.length > entry.count) {
+    // A SUBSET rule rather than count-plus-combined-hash, because only a subset can express
+    // "offences may be removed and never replaced". A combined digest cannot: shrinking
+    // legitimately changes it, so a rule keyed on that value must accept some new hash whenever
+    // the count falls - and once it accepts one, deleting two offences and adding a third passes
+    // with every number moving downward. Per-offence hashes make removal expressible and
+    // substitution unrepresentable, at any count.
+    const recorded = new Set(entry.digests);
+    const unrecorded = digestOffences(found).filter(hash => !recorded.has(hash));
+    if (unrecorded.length > 0) {
       failures.push(
-        `${path} — ${found.length} offence(s), ${entry.count} allowed:\n` +
-          found.map(one => `      ${shorten(one)}`).join("\n")
-      );
-      continue;
-    }
-    // Same count, different comments. Without this a file may trade its exempted comment for a
-    // new one and the totals still agree, which is the one substitution a counted baseline cannot
-    // see.
-    if (found.length === entry.count && digestOffences(found) !== entry.digest) {
-      failures.push(
-        `${path} — ${found.length} offence(s) as recorded, but not the same ones:\n` +
+        `${path} — ${unrecorded.length} offence(s) the record does not contain:\n` +
           found.map(one => `      ${shorten(one)}`).join("\n")
       );
     }
