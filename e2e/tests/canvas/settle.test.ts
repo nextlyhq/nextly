@@ -39,10 +39,10 @@ function dwellingReader(
 }
 
 test("returns the value the reader commits to, not the one it is still lagging on", async () => {
-  // The defect this replaced: "settled" meant "two consecutive reads agreed".
-  // During a permitted dwell every read agrees, and they all return the
-  // PRE-move value — so the old reader returned 1 here and each caller compared
-  // a stale target against where the pointer actually was.
+  // Two consecutive identical reads do not establish settlement: during a
+  // permitted dwell every read agrees, and all of them return the PRE-move
+  // value. Only stability observed across the whole allowance separates a
+  // canvas that has committed from one still entitled to lag.
   expect(
     await settledValue(
       dwellingReader(1, 2, DEFAULT_DWELL_ALLOWANCE_MS / 2),
