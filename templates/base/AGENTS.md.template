@@ -104,13 +104,18 @@ const slug = typeof doc.slug === "string" ? doc.slug : undefined;
   ```ts
   // NO access rules — the result is identical for every reader, so one shared
   // entry is correct and gets the full ISR benefit.
+  // `find()` always returns the list envelope `{ items, meta }`, so a detail route takes the
+  // first item — and caches THAT, not the envelope around it.
   cachedFind(
-    () =>
-      nextly.find({
-        collection: "posts",
-        where: { slug: { equals: slug } },
-        status: "published",
-      }),
+    async () =>
+      (
+        await nextly.find({
+          collection: "posts",
+          where: { slug: { equals: slug } },
+          status: "published",
+          limit: 1,
+        })
+      ).items[0] ?? null,
     { tags: nextlyTags("posts"), keyParts: ["posts", slug] }
   );
 
