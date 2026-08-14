@@ -93,47 +93,70 @@ export function changesRequested(reviews, revisionOrder = undefined) {
       `${a.submitted_at ?? ""}`.localeCompare(`${b.submitted_at ?? ""}`)
     );
 
+  // Each account's objections are kept as a SET of revisions rather than as
+  // one, because a second request for changes does not retire the first.
+  // Reviews arrive out of order, so an objection against the head can be
+  // followed by a delayed one naming an earlier commit; keeping only the most
+  // recently written lets that delayed row displace the live objection, and an
+  // approval of the earlier revision then clears an account still objecting to
+  // what is being merged.
   const outstanding = new Map();
   for (const review of ordered) {
     const login = review.user.login;
     // A COMMENTED review publishes feedback without withdrawing an objection,
-    // so only an approval or an explicit dismissal clears one. Treating any
-    // later review as clearance lets a follow-up remark retire a request for
-    // changes nobody answered.
+    // so only an approval clears one. Treating any later review as clearance
+    // lets a follow-up remark retire a request for changes nobody answered.
+    //
+    // A DISMISSED row is absent from both branches deliberately. Dismissal
+    // invalidates THAT review, so a dismissed approval withdraws the clearance
+    // rather than the objection — and a dismissed changes-request is already
+    // represented by its own row no longer reading `CHANGES_REQUESTED`.
     if (review.state === "CHANGES_REQUESTED") {
-      outstanding.set(login, review.commit_id);
-    } else if (review.state === "APPROVED" || review.state === "DISMISSED") {
-      // An approval clears an objection only when it was made against the SAME
-      // revision or a later one. Reviews arrive out of order — a delayed
-      // approval pinned to an older commit can be submitted after a newer
-      // objection — and a timestamp-only rule lets that stale approval delete
-      // an opinion about the revision being merged.
-      const objectedAt = outstanding.get(login);
-      if (objectedAt === undefined) continue;
-      // A dismissal is an explicit withdrawal and always clears. An approval
-      // clears only when it speaks to the objected revision or to the one being
-      // merged; ancestry is not available here, so "later" is not inferred from
-      // anything weaker than those two identities.
-      // A DISMISSED row never clears. Dismissal invalidates THAT review, so a
-      // dismissed approval withdraws the clearance rather than the objection —
-      // and a dismissed changes-request is already represented by its own row
-      // no longer reading `CHANGES_REQUESTED`.
-      if (review.state !== "APPROVED") continue;
-      // Cleared when the approval speaks to the objected revision or a LATER
-      // one, decided from the pull request's own commit order rather than from
-      // timestamps. Reviews arrive out of order, so a later-submitted approval
-      // pinned to an earlier revision says nothing about the objected one —
-      // and comparing against the current head instead resurrects a clearance
-      // every time the head moves past the revision that made it.
-      const at = revisionOrder?.get(review.commit_id);
-      const objected = revisionOrder?.get(objectedAt);
-      const clears =
-        review.commit_id === objectedAt ||
-        (at !== undefined && objected !== undefined && at >= objected);
-      if (clears) outstanding.delete(login);
+      const objections = outstanding.get(login) ?? new Set();
+      objections.add(review.commit_id);
+      outstanding.set(login, objections);
+    } else if (review.state === "APPROVED") {
+      const objections = outstanding.get(login);
+      if (objections === undefined) continue;
+      for (const objectedAt of objections) {
+        if (approvalCovers(review.commit_id, objectedAt, revisionOrder)) {
+          objections.delete(objectedAt);
+        }
+      }
+      if (objections.size === 0) outstanding.delete(login);
     }
   }
   return [...outstanding.keys()].sort();
+}
+
+/**
+ * Whether an approval of `approvedAt` answers an objection raised on
+ * `objectedAt`.
+ *
+ * Decided from the pull request's own commit order rather than from
+ * timestamps: reviews arrive out of order, so a later-SUBMITTED approval
+ * pinned to an earlier revision says nothing about the objected one. Comparing
+ * against the current head instead would resurrect a clearance every time the
+ * head moves past the revision that made it.
+ */
+function approvalCovers(approvedAt, objectedAt, revisionOrder) {
+  // An approval naming the objected revision answers it whether or not either
+  // is still in the order, which is what makes this the first question asked.
+  if (approvedAt === objectedAt) return true;
+  const at = revisionOrder?.get(approvedAt);
+  const objected = revisionOrder?.get(objectedAt);
+  // Absence from the order is read in ONE direction only, and the asymmetry is
+  // the whole point. An approval on a revision the pull request no longer has
+  // speaks to code that will not merge, so it answers nothing — while an
+  // objection whose revision was replaced by a force-push or a rebase is
+  // answered by an approval of the history that survived.
+  //
+  // Asked in this order so an order nobody could read stays conservative:
+  // every revision is absent from an empty map, and clearing on the objection's
+  // absence alone would turn a failed commit query into a blanket clearance.
+  if (at === undefined) return false;
+  if (objected === undefined) return true;
+  return at >= objected;
 }
 
 /** Required reviewers with no review at `head`, in the order they were required. */

@@ -15,6 +15,8 @@ const CODEX = "chatgpt-codex-connector[bot]";
 const RABBIT = "coderabbitai[bot]";
 const HEAD = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const OLD = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+/** A revision a force-push removed, so the pull request's order lacks it. */
+const ERASED = "dddddddddddddddddddddddddddddddddddddddd";
 
 /** A submitted review, which is the ordinary case the other fixtures vary from. */
 /** The pull request's commit order, which is what decides "later revision". */
@@ -253,6 +255,73 @@ describe("changesRequested", () => {
       { ...at("APPROVED", "2026-08-14T11:00:00Z", 2), commit_id: OLD },
     ];
     expect(changesRequested(reviews, ORDER)).toEqual([]);
+  });
+
+  /**
+   * Two objections from one account, the second naming an EARLIER revision
+   * because reviews arrive out of order. An approval of that earlier revision
+   * answers only what it named: retaining a single objection per account lets
+   * the delayed one displace the first, and the approval then clears an
+   * account whose position on the revision being merged is still that changes
+   * are required.
+   */
+  it("keeps an objection against the head when a later one names an older revision", () => {
+    const reviews = [
+      at("CHANGES_REQUESTED", "2026-08-14T10:00:00Z", 1),
+      { ...at("CHANGES_REQUESTED", "2026-08-14T11:00:00Z", 2), commit_id: OLD },
+      { ...at("APPROVED", "2026-08-14T12:00:00Z", 3), commit_id: OLD },
+    ];
+    expect(changesRequested(reviews, ORDER)).toEqual([CODEX]);
+    expect(report({ ...BASE, reviews, threads: [] }).verdict).toBe(
+      "CHANGES REQUESTED"
+    );
+  });
+
+  /**
+   * A force-push or rebase replaces the objected revision, and the pull
+   * request's commit list then describes only the current history — so the
+   * objection names a commit the order no longer contains. An approval on
+   * live history supersedes it; refusing to clear leaves an objection
+   * standing that nothing can ever answer.
+   */
+  it("clears when the objected revision is no longer in the pull request", () => {
+    const reviews = [
+      {
+        ...at("CHANGES_REQUESTED", "2026-08-14T10:00:00Z", 1),
+        commit_id: ERASED,
+      },
+      at("APPROVED", "2026-08-14T11:00:00Z", 2),
+    ];
+    expect(changesRequested(reviews, ORDER)).toEqual([]);
+  });
+
+  /**
+   * The control for the case above, in the opposite direction. An approval
+   * naming a revision the pull request no longer has speaks to code that will
+   * not merge, so it cannot answer an objection against live history — and
+   * without this, "absent from the order" would clear in both directions.
+   */
+  it("does not clear when the approval names a revision the pull request no longer has", () => {
+    const reviews = [
+      at("CHANGES_REQUESTED", "2026-08-14T10:00:00Z", 1),
+      { ...at("APPROVED", "2026-08-14T11:00:00Z", 2), commit_id: ERASED },
+    ];
+    expect(changesRequested(reviews, ORDER)).toEqual([CODEX]);
+  });
+
+  /**
+   * An empty order is a commit list nobody read, not a pull request whose
+   * revisions are all gone. Every revision reads as absent there, so a rule
+   * clearing on absence alone would turn a failed query into a blanket
+   * clearance — the reassuring direction.
+   */
+  it("does not clear from an unavailable commit order", () => {
+    const reviews = [
+      { ...at("CHANGES_REQUESTED", "2026-08-14T10:00:00Z", 1), commit_id: OLD },
+      at("APPROVED", "2026-08-14T11:00:00Z", 2),
+    ];
+    expect(changesRequested(reviews, new Map())).toEqual([CODEX]);
+    expect(changesRequested(reviews, undefined)).toEqual([CODEX]);
   });
 });
 
