@@ -741,6 +741,53 @@ describe("validation never throws on adversarial input", () => {
     expect(asked).toBe(0);
   });
 
+  it("enforces the node cap the survey measured, not a later answer", () => {
+    // A limit that GROWS between reads. Nothing obliges a caller to hand over a
+    // plain object, and an accessor is free to answer differently every time —
+    // so a bound read once for the verdict and again to size the walk is two
+    // different bounds, and the second one is the one that decides how much
+    // work a hostile document gets.
+    //
+    // The walk must be sized by the number the verdict was computed from. The
+    // observable form of that is the read COUNT: one read per limit, at the
+    // point the survey snapshots them. Asserting only that the issue is
+    // reported passes on the broken implementation too, because the verdict was
+    // always right — it was the traversal after it that ran unbounded.
+    let reads = 0;
+    const nodes = Array.from({ length: 200 }, (_, i) => ({
+      id: `n${i}`,
+      type: "core/text",
+      version: 1,
+      props: {},
+    }));
+    const doc = invalidDoc({ formatVersion: 1, kind: "page", nodes });
+    const limits = {
+      maxDepth: 12,
+      maxBytes: 2 * 1024 * 1024,
+      get maxNodes() {
+        reads += 1;
+        return reads === 1 ? 10 : 1_000_000_000;
+      },
+    };
+
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+      limits,
+    });
+
+    expect(issues.some(i => i.code === "node-count-exceeded")).toBe(true);
+    // Exactly one, and the message must quote the bound that was ENFORCED
+    // rather than whichever value a later read produced.
+    expect(reads).toBe(1);
+    // The WHOLE message, not a substring of it. `includes("10")` is satisfied
+    // by "100" and by the getter's own 1000000000, so it passes on exactly the
+    // implementation this asserts against.
+    expect(
+      issues.filter(i => i.code === "node-count-exceeded").map(i => i.message)
+    ).toEqual(["Document exceeds the maximum of 10 nodes."]);
+  });
+
   it("bounds the path text unknown class warnings can return", () => {
     // A JSON Pointer repeats every key above it, so a node under a very long
     // slot key copies that key into every warning reported beneath it. Counting
