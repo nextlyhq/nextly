@@ -93,48 +93,13 @@ function signatureOf(entries: InvalidSlotEntry[]): string {
 /**
  * The action one row's button dispatches.
  *
- * Separate from the button so the step between "what the finder reported" and "what the reducer is
- * asked to do" can be exercised without a browser. A row that named the right thing while
- * dispatching the wrong repair would look correct in every screenshot.
- *
- * Each kind has its own repair, and removing a block is only one of them — a block the slot merely
- * refuses can be kept.
+ * A carrier rather than a decision: the entry goes to the reducer, which asks `repairInvalidSlot`
+ * what to do with it. Deciding here as well would be a second switch on the same union, and a row
+ * that named the right block while prescribing the wrong operation looks correct in every
+ * screenshot.
  */
 export function repairFor(entry: InvalidSlotEntry): EditorAction {
-  switch (entry.kind) {
-    case "block":
-      return {
-        type: "REMOVE_FROM_SLOT",
-        parentId: entry.parentId,
-        slot: entry.slotName,
-        id: entry.node.id,
-      };
-    case "empty-slot":
-      return {
-        type: "REMOVE_SLOT",
-        parentId: entry.parentId,
-        slot: entry.slotName,
-      };
-    case "stray-slots":
-      return { type: "DROP_SLOTS", parentId: entry.parentId };
-    case "not-allowed":
-      // Wrapping is preferred because this block is on the canvas and the author can see it;
-      // removal is what remains when the slot names no single type that could hold it.
-      return entry.wrapWith
-        ? {
-            type: "WRAP_IN_SLOT",
-            parentId: entry.parentId,
-            slot: entry.slotName,
-            id: entry.node.id,
-            wrapperType: entry.wrapWith,
-          }
-        : {
-            type: "REMOVE_FROM_SLOT",
-            parentId: entry.parentId,
-            slot: entry.slotName,
-            id: entry.node.id,
-          };
-  }
+  return { type: "REPAIR_INVALID_SLOT", entry };
 }
 
 export function InvalidSlotBanner() {

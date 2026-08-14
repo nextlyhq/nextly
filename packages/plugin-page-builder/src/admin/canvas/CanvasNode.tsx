@@ -209,11 +209,36 @@ export function CanvasNode({ node }: { node: BlockNode }): ReactNode {
   const { state, remotePatterns, nodeClasses } = useEditor();
   const def = defaultBlockRegistry.get(node.type);
   const selected = state.selectedId === node.id;
-  const className = classFor(node, selected, [], nodeClasses);
+
+  // The root gets an append target on the same terms a descendant does. A formatted slot draws no
+  // trailing drop zone, and the root is rendered here rather than by `DraggableNode` — so a
+  // document whose ROOT is a Columns row or a Row had insert-before targets and no way to reach
+  // the end of it. Never a child of anything, so the collision the flag guards cannot arise.
+  const appendSlot = appendTargetSlot(node, false);
+  const append = useDroppable({
+    id: `append:${node.id}`,
+    type: BLOCK_TYPE,
+    accept: BLOCK_TYPE,
+    disabled: appendSlot === null,
+    data: {
+      kind: "dropzone",
+      parentId: node.id,
+      slot: appendSlot ?? DEFAULT_SLOT,
+      index: appendSlot ? (node.slots?.[appendSlot]?.length ?? 0) : 0,
+    },
+  });
+  const rootRef = appendSlot ? append.ref : undefined;
+  const className = classFor(
+    node,
+    selected,
+    [append.isDropTarget && "nx-pb-drop-append"],
+    nodeClasses
+  );
 
   if (!def) {
     return (
       <div
+        ref={rootRef}
         data-nx-id={node.id}
         data-nx-unknown={node.type}
         className={className}
@@ -233,13 +258,19 @@ export function CanvasNode({ node }: { node: BlockNode }): ReactNode {
   });
   if (!isValidElement(element)) {
     return (
-      <div className={className} data-nx-id={node.id} style={placeholderStyle}>
+      <div
+        ref={rootRef}
+        className={className}
+        data-nx-id={node.id}
+        style={placeholderStyle}
+      >
         {def.label} — click to configure
       </div>
     );
   }
   return cloneElement(element as ReactElement<Record<string, unknown>>, {
     "data-nx-id": node.id,
+    ...(rootRef ? { ref: rootRef } : {}),
   });
 }
 

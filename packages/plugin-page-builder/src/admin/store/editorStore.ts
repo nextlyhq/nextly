@@ -3,7 +3,10 @@
  * core tree ops, with bounded undo/redo history. Defaults for new nodes come from the
  * block registry — never a hard-coded list.
  */
-import { declaredSlotNames } from "../../core/invalid-slots";
+import {
+  repairInvalidSlot,
+  type InvalidSlotEntry,
+} from "../../core/invalid-slots";
 import { migrateDocument } from "../../core/migrate";
 import type { MotionConfig } from "../../core/motion";
 import { createNode, defaultBlockRegistry } from "../../core/registry";
@@ -13,15 +16,10 @@ import {
   insertNode,
   moveNode,
   reidSubtree,
-  dropSlots,
-  removeFromSlot,
   removeNode,
-  removeSlot,
   updateNode,
-  wrapInSlot,
 } from "../../core/tree";
 import {
-  DEFAULT_SLOT,
   type BlockDocument,
   type BlockNode,
   type Binding,
@@ -109,43 +107,16 @@ export type EditorAction =
   | { type: "MOVE"; id: string; parentId: string; slot: string; index: number }
   | { type: "REMOVE"; id: string }
   /**
-   * Discard a block from a named slot, dropping the slot once nothing is left in it.
+   * Apply the repair the core prescribes for one invalid-slot fault.
    *
-   * Distinct from `REMOVE` because the block it addresses is one the canvas never drew: it sits
-   * under a slot name its parent does not declare, so there is no element to select and `REMOVE`
-   * — which searches every slot and keeps the emptied key — would leave behind the very thing
-   * that refuses the save.
-   */
-  | { type: "REMOVE_FROM_SLOT"; parentId: string; slot: string; id: string }
-  /**
-   * Discard a whole slot a block does not declare, contents and all.
+   * The action carries the FAULT rather than the operation, because which operation a fault needs
+   * is a property of the fault. `repairInvalidSlot` decides it and builds the tree; an action per
+   * operation would put that same decision in the editor as well — two switches on one union, in
+   * two layers, drifting silently because a wrong pairing still type-checks.
    *
-   * The repair when such a slot is already empty: validation refuses its NAME, so there is no
-   * child to address and nothing to lose by dropping it.
+   * An action rather than a direct call, so a repair joins undo history like any other edit.
    */
-  | { type: "REMOVE_SLOT"; parentId: string; slot: string }
-  /**
-   * Take the slots map off a block that may not hold one.
-   *
-   * Validation refuses any slots object on a definition that is not a container before reading a
-   * key, so once the keys are gone the empty map is still the fault and has no narrower repair.
-   */
-  | { type: "DROP_SLOTS"; parentId: string }
-  /**
-   * Put a block inside a new one of `wrapperType`, where it already sits.
-   *
-   * The repair for a child a slot refuses when the slot admits a single type that can hold it.
-   * Unlike every other repair here it discards nothing: the block is on the canvas and the author
-   * can see it, so removing it to satisfy a rule would take away work they did not know was at
-   * risk.
-   */
-  | {
-      type: "WRAP_IN_SLOT";
-      parentId: string;
-      slot: string;
-      id: string;
-      wrapperType: string;
-    }
+  | { type: "REPAIR_INVALID_SLOT"; entry: InvalidSlotEntry }
   | { type: "DUPLICATE"; id: string }
   | { type: "UPDATE_PROPS"; id: string; props: Record<string, unknown> }
   | {
@@ -264,53 +235,16 @@ export function editorReducer(
       return { ...commit(state, next), selectedId: null };
     }
 
-    case "REMOVE_SLOT":
-    case "DROP_SLOTS":
-    case "REMOVE_FROM_SLOT": {
-      // The same slot names the core settles by, from the same registry: a container has to keep
-      // a home for every slot it declares or the canvas draws no drop zone for it.
-      const declared = declaredSlotNames(
-        root,
-        action.parentId,
-        defaultBlockRegistry
-      );
-      const next =
-        action.type === "REMOVE_FROM_SLOT"
-          ? removeFromSlot(
-              root,
-              action.parentId,
-              action.slot,
-              action.id,
-              declared
-            )
-          : action.type === "REMOVE_SLOT"
-            ? removeSlot(root, action.parentId, action.slot, declared)
-            : dropSlots(root, action.parentId);
-      // The discarded block was never on the canvas, so the author's selection is unrelated to it
-      // and clearing it unconditionally would take away work they can see. It only has to go when
-      // the removed subtree contained it.
+    case "REPAIR_INVALID_SLOT": {
+      const next = repairInvalidSlot(root, action.entry, defaultBlockRegistry);
+      // A repair that REMOVES may take the selection with it; one that WRAPS keeps the block the
+      // author is looking at. Asked of the tree the repair produced, so the reducer never has to
+      // know which one ran.
       const selectedId = keepValidSelection(
         { ...state.document, root: next },
         state.selectedId
       );
       return commit(state, next, selectedId);
-    }
-
-    case "WRAP_IN_SLOT": {
-      // The block stays, so the selection stays with it: the author is looking at the thing being
-      // repaired, and clearing what they had selected would make a non-destructive repair feel
-      // like a destructive one.
-      const next = wrapInSlot(
-        root,
-        action.parentId,
-        action.slot,
-        action.id,
-        child =>
-          createNode(action.wrapperType, defaultBlockRegistry, {
-            [DEFAULT_SLOT]: [child],
-          })
-      );
-      return commit(state, next);
     }
 
     case "DUPLICATE":

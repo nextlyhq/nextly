@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 
+import { findInvalidSlotEntries } from "../../core/invalid-slots";
 import { defaultBlockRegistry } from "../../core/registry";
 import { findNode, makeNode } from "../../core/tree";
 import { validateDocument } from "../../core/validate";
@@ -296,18 +297,19 @@ describe("editorReducer — repairing a slot nothing declares", () => {
       rootId: root.id,
       ghostId: ghost.id,
       keptId: kept.id,
+      // The repair is addressed by the FAULT the finder reports, so these exercise the same
+      // path the banner takes rather than a hand-built action the banner no longer sends.
+      entry: findInvalidSlotEntries(root, defaultBlockRegistry)[0],
     };
   }
 
-  it("REMOVE_FROM_SLOT drops the slot once its last child is gone", () => {
+  it("drops the slot once its last child is gone", () => {
     // The slot NAME is what refuses the save, so leaving an emptied key behind would leave the
     // author with nothing to remove and a page that still will not save.
-    const { doc, rootId, ghostId } = docWithGhost();
+    const { doc, ghostId, entry } = docWithGhost();
     const s = editorReducer(initialState(doc), {
-      type: "REMOVE_FROM_SLOT",
-      parentId: rootId,
-      slot: "legacy",
-      id: ghostId,
+      type: "REPAIR_INVALID_SLOT",
+      entry,
     });
 
     expect(s.document.root.slots?.legacy).toBeUndefined();
@@ -318,39 +320,27 @@ describe("editorReducer — repairing a slot nothing declares", () => {
   it("leaves the canvas selection alone, because the removed block was never on it", () => {
     // `REMOVE` clears the selection unconditionally. Doing that here would take away the block
     // the author is actually working on to discard one they cannot see.
-    const { doc, rootId, ghostId, keptId } = docWithGhost();
+    const { doc, ghostId, keptId, entry } = docWithGhost();
     let s = editorReducer(initialState(doc), { type: "SELECT", id: keptId });
-    s = editorReducer(s, {
-      type: "REMOVE_FROM_SLOT",
-      parentId: rootId,
-      slot: "legacy",
-      id: ghostId,
-    });
+    s = editorReducer(s, { type: "REPAIR_INVALID_SLOT", entry });
 
     expect(s.selectedId).toBe(keptId);
   });
 
   it("clears the selection when the removed subtree contained it", () => {
     // The other direction: a selection pointing at a node that no longer exists.
-    const { doc, rootId, ghostId } = docWithGhost();
+    const { doc, ghostId, entry } = docWithGhost();
     let s = editorReducer(initialState(doc), { type: "SELECT", id: ghostId });
-    s = editorReducer(s, {
-      type: "REMOVE_FROM_SLOT",
-      parentId: rootId,
-      slot: "legacy",
-      id: ghostId,
-    });
+    s = editorReducer(s, { type: "REPAIR_INVALID_SLOT", entry });
 
     expect(s.selectedId).toBeNull();
   });
 
   it("is undoable, so a removal the author regrets is recoverable", () => {
-    const { doc, rootId, ghostId } = docWithGhost();
+    const { doc, ghostId, entry } = docWithGhost();
     let s = editorReducer(initialState(doc), {
-      type: "REMOVE_FROM_SLOT",
-      parentId: rootId,
-      slot: "legacy",
-      id: ghostId,
+      type: "REPAIR_INVALID_SLOT",
+      entry,
     });
     s = editorReducer(s, { type: "UNDO" });
 

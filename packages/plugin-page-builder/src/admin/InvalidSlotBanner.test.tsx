@@ -176,9 +176,11 @@ describe("the repair banner", () => {
       "Wrap in Column",
       "Wrap in Column",
     ]);
+    // The action is a CARRIER now: it names the fault, and the reducer asks the core what to do
+    // with it. Which operation runs is asserted through the resulting tree below.
     expect(entries.map(e => repairFor(e).type)).toEqual([
-      "WRAP_IN_SLOT",
-      "WRAP_IN_SLOT",
+      "REPAIR_INVALID_SLOT",
+      "REPAIR_INVALID_SLOT",
     ]);
 
     const repaired = entries.reduce(
@@ -230,11 +232,6 @@ describe("the repair banner", () => {
       descendantCount: 0,
     };
     expect(actionLabelFor(entry)).toBe("Remove");
-    expect(repairFor(entry)).toEqual({
-      type: "REMOVE_FROM_SLOT",
-      parentId: "p",
-      slot: "default",
-      id: entry.node.id,
-    });
+    expect(repairFor(entry)).toEqual({ type: "REPAIR_INVALID_SLOT", entry });
   });
 });
