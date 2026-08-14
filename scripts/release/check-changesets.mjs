@@ -278,8 +278,8 @@ export function problemsWith(path, fileText, packages) {
 /**
  * Every problem: the group's own integrity first, then each changeset against it.
  *
- * The group is checked even when the pull request touches no changeset at all,
- * because the PR that adds a package is often exactly that one — and a stale
+ * The group is checked even when a change touches no changeset at all,
+ * because a change that adds a package is often exactly that one — and a stale
  * group makes every later changeset wrong while each of them passes.
  */
 export function checkChangesets(paths, readFile, configText, workspace) {
@@ -369,7 +369,7 @@ async function readStdin() {
 async function main(argv) {
   const paths = pathsToCheck(argv, await readStdin());
   // No early return on an empty list. The group's own integrity still has to be
-  // checked, and the pull request that adds a package is often the one that
+  // checked, and a change that adds a package is often the one that
   // touches no changeset at all.
   const problems = checkChangesets(
     paths,

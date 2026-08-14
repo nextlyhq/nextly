@@ -10,15 +10,13 @@
  * other check in the repository — it compiles, it lints, it reads as insight — and it decays
  * into a reference to a conversation nobody can retrieve.
  *
- * WHY THIS IS A SCRIPT RATHER THAN A TEST, since the check began life as one:
- * the rule is repository-wide, and a test enforcing it necessarily roots itself somewhere. The
- * previous home, `packages/blocks-engine/src/comment-convention.test.ts`, rooted at its own
- * directory — so it read as repository coverage while never looking outside one package of
- * twenty-four. Widening it in place would have made a `blocks-engine` test walk the whole
- * repository, which is exactly the coupling that package's `layering.test.ts` exists to prevent.
+ * A SCRIPT rather than a test, because the rule is repository-wide and a test enforcing it
+ * necessarily roots itself somewhere. A test rooted at its own directory covers one package
+ * while reading, from the outside, exactly like repository coverage — and one reaching beyond
+ * its package coupples that package to every other, which is what `layering.test.ts` guards
+ * against elsewhere.
  *
- * A check whose scope is an argument is also a check whose scope is reviewable, which the
- * implicit `dirname(import.meta.url)` root was not.
+ * Here the scope is an argument, so what is covered is visible at the call site.
  *
  * Usage:
  *   node scripts/check-comment-convention.mjs [roots...]      # defaults to packages apps e2e
@@ -81,7 +79,22 @@ export const FORBIDDEN = [
  * name is the honest fix; teaching the extractor about string literals would make it a parser,
  * which is the unbounded surface this deliberately is not.
  */
-const EXCLUDED_FILES = new Set(["check-comment-convention.test.mjs"]);
+const EXCLUDED_FILES = new Set([
+  // This file and its test, both of which necessarily contain what they forbid: the patterns
+  // name the shapes, the prose explains why each was chosen, and the test holds fixtures of
+  // every rejected form. Excluding two files by name is the honest fix; teaching the extractor
+  // to tell a definition from a use would make it a parser, which is the unbounded surface this
+  // deliberately is not.
+  "check-comment-convention.mjs",
+  "check-comment-convention.test.mjs",
+]);
+
+/**
+ * Extensions this reads. The JS family is included because authored source lives there too —
+ * config files, scripts, template sources — and a comment in one is as invisible to every other
+ * check as a comment in a `.ts`.
+ */
+const SOURCE_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
 
 /** Directories that hold generated or vendored code rather than authored source. */
 const EXCLUDED_DIRS = new Set(["node_modules", "dist", ".next", ".turbo", "coverage"]);
@@ -94,7 +107,7 @@ export function sourceFiles(root) {
     const full = join(root, entry);
     if (statSync(full).isDirectory()) {
       found.push(...sourceFiles(full));
-    } else if (entry.endsWith(".ts") || entry.endsWith(".tsx")) {
+    } else if (SOURCE_EXTENSIONS.some(ext => entry.endsWith(ext))) {
       found.push(full);
     }
   }
@@ -111,14 +124,28 @@ export function sourceFiles(root) {
  * catches is one nothing else in the repository can see.
  */
 export function commentText(source) {
+  // String, template and regex literals are blanked FIRST, preserving length and newlines. Their
+  // contents can be comment-shaped — a fixture, an error message quoting one — and extracting
+  // that reports on DATA rather than on prose. Blanking rather than removing keeps the following
+  // patterns matching at the right offsets.
+  const withoutLiterals = source
+    .replace(/"(?:[^"\\\n]|\\.)*"/g, blankSpan)
+    .replace(/'(?:[^'\\\n]|\\.)*'/g, blankSpan)
+    .replace(/`(?:[^`\\]|\\.)*`/g, blankSpan);
+
   const comments = [];
-  for (const match of source.matchAll(/\/\*[\s\S]*?\*\//g)) {
+  for (const match of withoutLiterals.matchAll(/\/\*[\s\S]*?\*\//g)) {
     comments.push(match[0]);
   }
-  for (const match of source.matchAll(/(^|[^:"'`\\])\/\/(.*)$/gm)) {
+  for (const match of withoutLiterals.matchAll(/(^|[^:"'`\\])\/\/(.*)$/gm)) {
     comments.push(match[2]);
   }
   return comments;
+}
+
+/** Blank a span, preserving its length and any newlines so later offsets still line up. */
+function blankSpan(match) {
+  return match.replace(/[^\n]/g, " ");
 }
 
 /** Every forbidden shape found in `source`, as `{ why, comment }`. */
@@ -134,34 +161,51 @@ export function offencesIn(source) {
   return found;
 }
 
-const DEFAULT_ROOTS = ["packages", "apps", "e2e"];
+/**
+ * Scanned when no roots are given, which is how CI invokes it — so this list IS the enforced
+ * scope, and anything missing from it is unchecked rather than checked elsewhere. `templates`
+ * carries authored source that ships to users.
+ */
+export const DEFAULT_ROOTS = ["packages", "apps", "e2e", "templates", "scripts"];
 
 function main() {
-  const roots = process.argv.slice(2);
-  const scanned = (roots.length > 0 ? roots : DEFAULT_ROOTS).filter(root => {
+  const requested = process.argv.slice(2);
+  const explicit = requested.length > 0;
+  const roots = explicit ? requested : DEFAULT_ROOTS;
+
+  const isDirectory = root => {
     try {
       return statSync(root).isDirectory();
     } catch {
       return false;
     }
-  });
+  };
 
-  if (scanned.length === 0) {
+  // EVERY requested root must exist. Filtering the missing ones away lets a typo scan a smaller
+  // scope than asked for and still report success — `packages templats` would check `packages`
+  // and announce a clean result for a scope nobody requested.
+  const missing = roots.filter(root => !isDirectory(root));
+  if (missing.length > 0) {
     console.error(
-      `No directories to scan. Looked for: ${(roots.length > 0 ? roots : DEFAULT_ROOTS).join(", ")}`
+      `Not a directory: ${missing.join(", ")}. Nothing was scanned; a partial scan would report ` +
+        "a clean result for a scope that was never requested."
     );
     process.exit(1);
   }
 
-  const files = scanned.flatMap(root => sourceFiles(root));
+  const files = roots.flatMap(root => sourceFiles(root));
 
-  // A control on the walk, before any verdict is read from it. A broken walk reports every file
-  // clean by reading none — the check below is satisfied by absence, which is exactly what it
-  // must not be satisfied by.
-  if (files.length < 100) {
+  // A control on the walk, before any verdict is read from it: a broken walk reports every file
+  // clean by reading none, and the check below is satisfied by absence.
+  //
+  // Applied only to the DEFAULT scan, whose expected size is a property of this repository. An
+  // explicit root is a scope the caller chose and may legitimately hold a handful of files, so
+  // the floor there is one — enough to catch a path that resolves to an empty directory.
+  const floor = explicit ? 1 : 100;
+  if (files.length < floor) {
     console.error(
-      `Only ${files.length} source files found under ${scanned.join(", ")}. This repository has ` +
-        "thousands, so that is a broken walk rather than a clean result."
+      `Only ${files.length} source file(s) found under ${roots.join(", ")}, expected at least ` +
+        `${floor}. That is a walk reading nothing rather than a clean result.`
     );
     process.exit(1);
   }
@@ -186,7 +230,7 @@ function main() {
   }
 
   console.log(
-    `${files.length} source files across ${scanned.join(", ")}: no comment names a review, tool or change.`
+    `${files.length} source files across ${roots.join(", ")}: no comment names a review, tool or change.`
   );
 }
 

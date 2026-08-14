@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  DEFAULT_ROOTS,
   FORBIDDEN,
   commentText,
   offencesIn,
@@ -39,6 +40,14 @@ describe("the forbidden patterns", () => {
     "// of whether we found a user, which the lookup reports either way",
     "// rounds the measurement down so a sub-pixel shift still reads as movement",
     "// reviewer permissions are a role, not a person",
+    // Ordinal wording paired with technical discovery verbs. Each of these describes runtime
+    // behaviour, and a matcher keyed on that pairing rejects all of them — which is why ordinal
+    // process narration is left unenforced rather than approximated.
+    "// the third instance in the array owns the separator",
+    "// the second attempt misses the cache and refetches",
+    "// the first guard catches a null id before the query runs",
+    "// we found no user, so the lookup returns null",
+    "// a later round of retries reuses the same backoff",
   ])("accepts %j", text => {
     expect(offencesIn(text)).toEqual([]);
   });
@@ -76,6 +85,15 @@ describe("the comment extractor", () => {
     expect(found.join("")).toContain("Codex asked for this.");
   });
 
+  it("does not read comment syntax inside a string literal", () => {
+    // A fixture holding comment syntax is DATA. Reporting it makes the check comment on the
+    // contents of tests rather than on prose, which is how a check like this becomes noise.
+    expect(offencesIn('const fixture = "/* Codex flagged this */";')).toEqual([]);
+    expect(offencesIn("const s = `see the pull request`;")).toEqual([]);
+    // Control: the same text as an actual comment IS reported.
+    expect(offencesIn("/* Codex flagged this */").length).toBeGreaterThan(0);
+  });
+
   it("does not treat a URL as a comment", () => {
     // `https://example.com` contains `//`. Treating it as a comment would let a link's text
     // trigger the patterns, which is the commonest way a scan like this becomes noise.
@@ -86,11 +104,30 @@ describe("the comment extractor", () => {
 });
 
 describe("the file walk", () => {
-  it("finds this repository's sources", () => {
-    // Rooted at `scripts` deliberately: it is small, it is present in every checkout, and the
-    // number is stable enough to assert on. The point is that the walk RETURNS something — a
-    // walk that reads nothing reports every file clean.
-    expect(sourceFiles("scripts").length).toBeGreaterThanOrEqual(0);
+  it("reads the extensions it claims to", () => {
+    // `scripts` holds only `.mjs`, so this is ALSO the control on the extension list — an
+    // earlier version read `.ts`/`.tsx` alone, returned zero here, and satisfied a
+    // `toBeGreaterThanOrEqual(0)` assertion that no possible result could fail.
+    expect(sourceFiles("scripts").length).toBeGreaterThan(3);
     expect(sourceFiles("packages/blocks-engine/src").length).toBeGreaterThan(20);
+  });
+
+  it("reaches every root the default scan names", () => {
+    // Iterated FROM `DEFAULT_ROOTS` rather than from a list repeated here. A restated list
+    // agrees on the day it is written and stops agreeing silently — dropping a root from the
+    // code would leave this passing over the roots it still names.
+    expect(DEFAULT_ROOTS.length).toBeGreaterThan(0);
+    for (const root of DEFAULT_ROOTS) {
+      expect(sourceFiles(root).length, `${root} contributed no files`).toBeGreaterThan(0);
+    }
+  });
+
+  it("covers the directories that hold authored source", () => {
+    // The membership assertion the loop above cannot make: it checks that each NAMED root is
+    // real, not that the roots worth naming are named. `templates` ships to users and was
+    // absent, so 121 files were unchecked while the scan reported clean.
+    for (const required of ["packages", "apps", "e2e", "templates", "scripts"]) {
+      expect(DEFAULT_ROOTS, `${required} is outside the enforced scope`).toContain(required);
+    }
   });
 });

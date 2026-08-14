@@ -265,9 +265,8 @@ jobs:
       # so nothing else in this repository can see it — and it decays into a
       # reference to a conversation nobody can retrieve.
       #
-      # Repository-wide on purpose. The check previously lived inside one package
-      # and rooted itself at its own directory, which read as full coverage while
-      # never looking at the other twenty-three.
+      # Repository-wide on purpose: the scope is passed as an argument rather than
+      # implied by where the check lives, so what it covers is visible here.
       - name: Comment convention (describes code, not process)
         run: pnpm check:comments
 

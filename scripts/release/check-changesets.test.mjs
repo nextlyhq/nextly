@@ -199,7 +199,7 @@ describe("the group against the workspace", () => {
   });
 
   it("is asked even when the pull request touches no changeset", () => {
-    // The PR that adds a package is often exactly the one with no changeset of
+    // A change that adds a package is often exactly the one with no changeset of
     // its own, so an early return on an empty list would skip the check that
     // matters most.
     const problems = checkChangesets([], () => "", CONFIG, {
