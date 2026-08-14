@@ -120,6 +120,31 @@ function localNamesOf(exported: string, file: ts.SourceFile): Set<string> {
   // fixture may have no imports, so the bare name counts unless something has
   // bound that name to a different export.
   if (!rebound) names.add(exported);
+
+  // A LOCAL alias binds the component too. `const Pager = Pagination` renders
+  // `<Pager />`, and a set built only from imports does not contain it — so the
+  // scan walked straight past a detached pager. Resolved transitively, because
+  // `const A = Pagination; const B = A` is the same binding twice removed, and
+  // it terminates: each pass can only add names already reachable, so the set
+  // stops growing.
+  for (let added = true; added; ) {
+    added = false;
+    const visit = (node: ts.Node): void => {
+      if (
+        ts.isVariableDeclaration(node) &&
+        ts.isIdentifier(node.name) &&
+        node.initializer !== undefined &&
+        ts.isIdentifier(node.initializer) &&
+        names.has(node.initializer.text) &&
+        !names.has(node.name.text)
+      ) {
+        names.add(node.name.text);
+        added = true;
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(file);
+  }
   return names;
 }
 
@@ -264,7 +289,7 @@ function extractedName(node: ts.Node, file: ts.SourceFile): string | undefined {
       // judged at that use; `const page = (<><DataTableView /><Pagination />
       // </>)` is a whole page's markup, returned rather than rendered, with no
       // use to judge — so it is judged where it stands.
-      return jsxUsesOf(current.name.text, file).length > 0
+      return jsxUsesOf(current.name.text, file, current).length > 0
         ? current.name.text
         : undefined;
     }
@@ -286,7 +311,22 @@ function extractedName(node: ts.Node, file: ts.SourceFile): string | undefined {
  * local to their page, and resolving across modules is the unbounded surface
  * this repo's earlier source checks lost to.
  */
-function jsxUsesOf(name: string, file: ts.SourceFile): ts.Node[] {
+function jsxUsesOf(
+  name: string,
+  file: ts.SourceFile,
+  declaration?: ts.Node
+): ts.Node[] {
+  // Searched within the declaration's own SCOPE, not the whole file. A name
+  // like `pager` occurs in more than one component in a real page, and a
+  // file-wide text match attributes every occurrence to this declaration — so
+  // a correctly placed `footer={pager}` was reported as detached because some
+  // unrelated child rendered its own `pager` prop as a sibling.
+  //
+  // The enclosing function is the scope that matters here: these are consts
+  // inside a component body, and a name declared in one component body is not
+  // visible in another. A declaration at module level falls back to the file,
+  // which is its scope.
+  const root = declaration ? (enclosingScope(declaration) ?? file) : file;
   const uses: ts.Node[] = [];
   const visit = (node: ts.Node): void => {
     if (ts.isIdentifier(node) && node.text === name && inJsxExpression(node)) {
@@ -294,8 +334,23 @@ function jsxUsesOf(name: string, file: ts.SourceFile): ts.Node[] {
     }
     ts.forEachChild(node, visit);
   };
-  visit(file);
+  visit(root);
   return uses;
+}
+
+/** The function body a node sits in, or undefined at module level. */
+function enclosingScope(node: ts.Node): ts.Node | undefined {
+  for (let current = node.parent; current; current = current.parent) {
+    if (
+      ts.isFunctionDeclaration(current) ||
+      ts.isFunctionExpression(current) ||
+      ts.isArrowFunction(current) ||
+      ts.isMethodDeclaration(current)
+    ) {
+      return current;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -351,7 +406,7 @@ function detachedPagers(file: ts.SourceFile): DetachedPager[] {
         // uses are all inside a table footer is correctly placed however it was
         // spelled; one used as a sibling is detached however it was spelled.
         // An unused declaration renders nowhere and is reported by neither.
-        for (const use of jsxUsesOf(name, file)) {
+        for (const use of jsxUsesOf(name, file, node)) {
           if (!insideTableFooter(use, file)) {
             found.push({ at: use, element: node });
           }
@@ -680,6 +735,44 @@ describe("list pagination", () => {
       extractedLabelled && ariaLabelOf(extractedLabelled.element, labelled),
       "label survives extraction"
     ).toBe("Media grid pagination");
+
+    // A LOCAL alias, not an import one. `const Pager = Pagination` binds the
+    // component just as an aliased import does, and a set built only from
+    // import statements walks straight past it.
+    const localAlias = parse(
+      "local-alias.tsx",
+      'import { Pagination } from "@admin/components/shared/pagination";\n' +
+        "const Pager = Pagination;\n" +
+        "const x = (<><DataTableView columns={c} rows={r} /><Pager page={1} /></>);"
+    );
+    expect(detachedPagers(localAlias), "local alias").toHaveLength(1);
+
+    // Two hops. Resolved transitively so a chain does not need a new case.
+    const chained = parse(
+      "chained-alias.tsx",
+      'import { Pagination } from "@admin/components/shared/pagination";\n' +
+        "const A = Pagination;\nconst B = A;\n" +
+        "const x = (<><DataTableView columns={c} rows={r} /><B page={1} /></>);"
+    );
+    expect(detachedPagers(chained), "chained alias").toHaveLength(1);
+
+    // A name declared in ANOTHER component's scope is a different binding.
+    // Matching uses across the whole file reported this correctly placed pager
+    // because an unrelated child renders its own `pager` beside a table.
+    const twoScopes = parse(
+      "two-scopes.tsx",
+      "function List() {\n" +
+        "  const pager = <Pagination page={1} />;\n" +
+        "  return <DataTableView columns={c} rows={r} footer={pager} />;\n" +
+        "}\n" +
+        "function Other({ pager }) {\n" +
+        "  return (<><DataTableView columns={c} rows={r} />{pager}</>);\n" +
+        "}"
+    );
+    expect(
+      detachedPagers(twoScopes),
+      "name reused in another scope"
+    ).toHaveLength(0);
 
     // An ALIASED table import. The pager is matched by binding, so the owner of
     // its footer must be too -- otherwise an import refactor makes a correctly
