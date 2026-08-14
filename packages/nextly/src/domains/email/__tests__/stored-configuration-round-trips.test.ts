@@ -129,8 +129,8 @@ describe("a configuration whose parse is not a fixed point", () => {
     const provider = await write("reshaping", { apiKey: "  k  " });
 
     // Read BACK, not just "the insert succeeded". A truthy id is true whether
-    // the column holds the trimmed parsed value or the padded input, which is
-    // the one difference this PR exists to make.
+    // the column holds the trimmed parsed value or the padded input, and that
+    // difference is the whole property under test.
     const stored = await service.getProviderDecrypted(provider.id);
     expect(stored.configuration).toEqual({ apiKey: "k" });
   });

@@ -150,9 +150,8 @@ void viaSatisfies;
 // `conditionalSlots` is reserved for core while the Block API freeze decides
 // what a block author should write. It is withheld by NAMING it in the SDK's
 // `Omit`, because an `@internal` tag removes nothing from a published type and
-// that `Omit` inherits every property it does not name — the field was on this
-// surface for a whole review round while a string search of this package
-// reported it absent.
+// that `Omit` inherits every property it does not name — so a field can sit on
+// this surface while a string search of this package reports it absent.
 //
 // So the reservation is asserted at the TYPE level, which is the only place it
 // is true or false. Widening the `Omit` again would make this compile, and the

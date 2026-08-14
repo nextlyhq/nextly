@@ -260,9 +260,8 @@ export function EntryForm({
   ]);
 
   // Get all fields. Title and slug are extracted as system fields rendered in
-  // their own header card (this PR keeps the existing title/slug special-case;
-  // PR 6 of the redesign moves them into the new pinned-headline + rail-slug
-  // layout). Per Q-D1=B in the redesign spec, the rail is system-content only:
+  // their own header card, which is a special case retained until the pinned-headline
+  // and rail-slug layout replaces it. The rail is system-content only:
   // no user-defined fields may use `admin.position: 'sidebar'`, and any
   // legacy `seoField` name match is dropped — components (including ones
   // named "seo") render inline like every other field.

@@ -260,6 +260,17 @@ jobs:
       - name: Dev concurrency gate (persistent task count)
         run: pnpm check:dev-concurrency
 
+      # Comments describe the code, never the process that produced it. A comment
+      # narrating a review or naming a tool compiles, lints and reads as insight,
+      # so nothing else in this repository can see it — and it decays into a
+      # reference to a conversation nobody can retrieve.
+      #
+      # Repository-wide on purpose. The check previously lived inside one package
+      # and rooted itself at its own directory, which read as full coverage while
+      # never looking at the other twenty-three.
+      - name: Comment convention (describes code, not process)
+        run: pnpm check:comments
+
       # The drizzle-v1 migration's own safety net (review-driven: these
       # suites previously executed in NO CI job because the `nextly`
       # package's full test task carries a pre-existing failing baseline).

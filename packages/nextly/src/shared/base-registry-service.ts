@@ -17,11 +17,10 @@ import crypto from "node:crypto";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SqlParam, WhereCondition } from "@nextlyhq/adapter-drizzle/types";
 
-// PR 4 of unified-error-system migration: ServiceError → NextlyError.
-// Subclasses (collection/single/field-group-registry-service) still throw
-// ServiceError directly and check `instanceof ServiceError`; those are out
-// of scope for this PR but inherit the throw-based contract automatically
-// for all `getRecordOrThrow` / `updateRecordMigrationStatus` paths.
+// This base throws NextlyError. Subclasses (collection / single /
+// field-group-registry-service) still throw ServiceError directly and check
+// `instanceof ServiceError`; they inherit the throw-based contract regardless
+// for every `getRecordOrThrow` / `updateRecordMigrationStatus` path.
 import { toDbError } from "../database/errors";
 import { NextlyError } from "../errors";
 

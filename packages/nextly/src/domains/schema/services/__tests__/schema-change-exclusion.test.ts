@@ -375,7 +375,7 @@ describe("a Schema Builder change and the storage migration exclude each other",
   });
 
   it("takes the PRIOR flags from the refreshed record, keeping only what the request set", async () => {
-    // 🔴 Codex's scenario exactly. One save enabled Draft/Published and committed. This save was
+    // One save enabled Draft/Published and committed. This save was
     // composed before that, so it carries `wasStatus: false` and a `hasStatus: false` the CALLER
     // filled in because the request said nothing about status — it asks only for localization.
     // Planning from those builds the companion WITHOUT `_status` while the row says it has one.
