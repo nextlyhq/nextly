@@ -96,7 +96,7 @@ function isElementOccurrence(node: ts.Node): boolean {
  * refactor would have disabled this guard silently, with the file counts
  * unchanged because the other surfaces are still there.
  */
-function localPagerNames(file: ts.SourceFile): Set<string> {
+function localNamesOf(exported: string, file: ts.SourceFile): Set<string> {
   const names = new Set<string>();
   let rebound = false;
   for (const statement of file.statements) {
@@ -104,23 +104,41 @@ function localPagerNames(file: ts.SourceFile): Set<string> {
     const bindings = statement.importClause?.namedBindings;
     if (!bindings) continue;
     if (ts.isNamespaceImport(bindings)) {
-      names.add(`${bindings.name.text}.${PAGER}`);
+      names.add(`${bindings.name.text}.${exported}`);
       continue;
     }
     for (const element of bindings.elements) {
       // `propertyName` is set only when aliased, and then holds the EXPORTED
       // name while `name` holds the local one.
-      if ((element.propertyName ?? element.name).text === PAGER) {
+      if ((element.propertyName ?? element.name).text === exported) {
         names.add(element.name.text);
       }
-      if (element.name.text === PAGER) rebound = true;
+      if (element.name.text === exported) rebound = true;
     }
   }
   // The component's own module declares rather than imports it, and a control
   // fixture may have no imports, so the bare name counts unless something has
   // bound that name to a different export.
-  if (!rebound) names.add(PAGER);
+  if (!rebound) names.add(exported);
   return names;
+}
+
+/**
+ * Whether a tag names a component, resolved through this file's imports.
+ *
+ * Every tag this check reasons about goes through here — the pager, the table,
+ * and the components that forward a footer. Resolving only the pager was an
+ * asymmetry rather than a decision: an aliased `import { DataTableView as
+ * Table }` left a correctly placed pager looking detached, because the owner
+ * of its `footer` was matched by spelling while the pager itself was matched
+ * by binding.
+ */
+function tagIs(
+  tag: string | undefined,
+  exported: string,
+  file: ts.SourceFile
+): boolean {
+  return tag !== undefined && localNamesOf(exported, file).has(tag);
 }
 
 /**
@@ -159,7 +177,10 @@ function insideTableFooter(node: ts.Node, file: ts.SourceFile): boolean {
     const owner = current.parent?.parent;
     if (!owner) continue;
     const tag = tagNameOf(owner, file);
-    if (tag === TABLE || (tag !== undefined && FORWARDS_FOOTER.has(tag))) {
+    const forwards = [...FORWARDS_FOOTER.keys()].some(component =>
+      tagIs(tag, component, file)
+    );
+    if (tagIs(tag, TABLE, file) || forwards) {
       return true;
     }
     // Keep climbing rather than answering on the FIRST footer found. A valid
@@ -225,21 +246,25 @@ function ariaLabelOf(node: ts.Node, file: ts.SourceFile): string | undefined {
  * "unknown" either: the identifier's USES are where the pager actually lands,
  * and within one file they can be found exactly.
  */
-function extractedName(node: ts.Node): string | undefined {
+function extractedName(node: ts.Node, file: ts.SourceFile): string | undefined {
   for (let current = node.parent; current; current = current.parent) {
-    // Reached JSX first: it is written in place, wherever that place is. The
-    // FRAGMENT matters as much as the element — `const x = (<>...</>)` is
-    // markup assigned to a name, not an extracted pager, and treating it as
-    // one silences every call site that returns a fragment.
-    if (
-      ts.isJsxElement(current) ||
-      ts.isJsxFragment(current) ||
-      ts.isJsxAttribute(current)
-    ) {
+    // An enclosing ELEMENT settles it: the pager is written inside other
+    // markup, so wherever that markup goes, it goes.
+    if (ts.isJsxElement(current) || ts.isJsxAttribute(current)) {
       return undefined;
     }
     if (ts.isVariableDeclaration(current) && ts.isIdentifier(current.name)) {
-      return current.name.text;
+      // A FRAGMENT does not settle it, and this is the distinction that took
+      // two attempts. `const footer = <><Pagination /></>` extracts the pager
+      // through a wrapper and `const page = (<><DataTableView /><Pagination />
+      // </>)` is a whole page's markup — identical in shape, opposite in
+      // meaning. What separates them is whether the NAME is rendered somewhere
+      // this file can see: a footer passed as `footer={footer}` is judged at
+      // that use, while page markup that is returned rather than rendered has
+      // no use to judge and is judged where it stands.
+      return jsxUsesOf(current.name.text, file).length > 0
+        ? current.name.text
+        : undefined;
     }
     // A pager assigned into a property rather than a plain variable travels
     // through the object, which this does not follow. Reported at the
@@ -292,12 +317,12 @@ function inJsxExpression(node: ts.Node): boolean {
 
 /** Every pager in a file that is NOT inside a table's `footer`, found by binding. */
 function detachedPagers(file: ts.SourceFile): ts.Node[] {
-  const names = localPagerNames(file);
+  const names = localNamesOf(PAGER, file);
   const found: ts.Node[] = [];
   const visit = (node: ts.Node): void => {
     const tag = isElementOccurrence(node) ? tagNameOf(node, file) : undefined;
     if (tag !== undefined && names.has(tag)) {
-      const name = extractedName(node);
+      const name = extractedName(node, file);
       if (name === undefined) {
         // Written in place: judged where it stands.
         if (!insideTableFooter(node, file)) found.push(node);
@@ -320,7 +345,10 @@ function detachedPagers(file: ts.SourceFile): ts.Node[] {
 function rendersTable(file: ts.SourceFile): boolean {
   let found = false;
   const visit = (node: ts.Node): void => {
-    if (isElementOccurrence(node) && tagNameOf(node, file) === TABLE) {
+    if (
+      isElementOccurrence(node) &&
+      tagIs(tagNameOf(node, file), TABLE, file)
+    ) {
       found = true;
     }
     ts.forEachChild(node, visit);
@@ -578,6 +606,34 @@ describe("list pagination", () => {
     );
     expect(detachedPagers(gatedFooter), "gated footer").toHaveLength(0);
 
+    // Extracted through a FRAGMENT wrapper and passed as the footer. Same
+    // composition refactor as the plain variable, one wrapper deeper.
+    const fragmentFooter = parse(
+      "control.tsx",
+      "const footer = <><Pagination page={1} /></>;\n" +
+        "const x = <DataTableView columns={c} rows={r} footer={footer} />;"
+    );
+    expect(detachedPagers(fragmentFooter), "fragment footer").toHaveLength(0);
+
+    // The same fragment shape rendered as a sibling is still caught, so the
+    // fix is not "anything in a fragment is excused".
+    const fragmentSibling = parse(
+      "control.tsx",
+      "const footer = <><Pagination page={1} /></>;\n" +
+        "const x = (<><DataTableView columns={c} rows={r} />{footer}</>);"
+    );
+    expect(detachedPagers(fragmentSibling), "fragment sibling").toHaveLength(1);
+
+    // An ALIASED table import. The pager is matched by binding, so the owner of
+    // its footer must be too -- otherwise an import refactor makes a correctly
+    // placed pager look detached.
+    const aliasedTable = parse(
+      "aliased-table.tsx",
+      'import { DataTableView as Table } from "@admin/components/ui/table/data-table";\n' +
+        "const x = <Table columns={c} rows={r} footer={<Pagination page={1} />} />;"
+    );
+    expect(detachedPagers(aliasedTable), "aliased table tag").toHaveLength(0);
+
     // A pager nested inside another component's footer, itself inside the
     // table's footer, is correctly placed. Answering on the FIRST footer found
     // would reject it.
@@ -731,7 +787,7 @@ describe("list pagination", () => {
       let forwards = false;
       const visit = (node: ts.Node): void => {
         if (
-          tagNameOf(node, file) === TABLE &&
+          tagIs(tagNameOf(node, file), TABLE, file) &&
           (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node))
         ) {
           for (const property of node.attributes.properties) {
