@@ -577,24 +577,44 @@ export interface ZoneInset {
   /**
    * Pixels of pointer movement PAST the boundary, measured rather than assumed.
    *
-   * Pointer positions and DOM geometry are fractional and the coarse approach
-   * overshoots, so the achieved depth is not the requested one and a caller
-   * asserting on a band width has to know which it got.
+   * The pointer is INSIDE `zone` at this depth in every outcome, including the
+   * refusals — a reported depth the pointer is not standing at would be a
+   * different measurement wearing this one's name.
    */
   readonly insetPx: number;
   /**
+   * How precisely the boundary itself is known, in pixels.
+   *
+   * A zone edge comes from `getBoundingClientRect()` and is fractional; the
+   * pointer is commanded in whole probe steps. So the boundary this measures
+   * from is the first COMMANDED position inside the zone, which can sit up to
+   * one step past the real edge, and `insetPx` carries that error.
+   *
+   * Reported rather than hidden, because a caller comparing a measured band
+   * against a required range has to widen its bounds by exactly this much. The
+   * alternative — resolving the fractional edge — is not available to a probe
+   * that can only command whole pixels.
+   */
+  readonly resolutionPx: number;
+  /**
    * Why a request could not be met, absent when it was.
    *
-   * `too-narrow` is a fact about the FIXTURE rather than about the canvas: a
-   * zone shallower than the requested depth cannot answer the question at all,
-   * and returning the closest depth achieved would silently measure something
-   * the caller did not ask for.
+   * Three distinct facts, because a caller reports them differently:
+   * `never-entered` is about the canvas drawing no zone in reach;
+   * `too-narrow` is about the FIXTURE, and comes with the deepest depth the
+   * zone does hold, so a caller can say what it would need; and
+   * `boundary-not-found` is about this probe, which cannot locate an edge it
+   * did not cross — a drag already deep inside a tall zone has no boundary in
+   * retreat range, and saying "no zone" there would be false.
    */
-  readonly refused?: "never-entered" | "too-narrow";
+  readonly refused?: "never-entered" | "too-narrow" | "boundary-not-found";
 }
 
 /** Pixels per step while closing on the boundary, once the zone has been found. */
 const INSET_PROBE_PX = 1;
+
+/** Pixels per step while approaching, before any zone has been reached. */
+const INSET_APPROACH_PX = 4;
 
 /**
  * Carry the drag to EXACTLY `wantInsetPx` inside the zone it first enters.
@@ -611,13 +631,18 @@ const INSET_PROBE_PX = 1;
  *
  * Three phases, and the middle one is what makes the answer exact:
  *
- * 1. coarse steps until some zone contains the pointer, so the walk starts from
- *    a live zone rather than dead space;
+ * 1. coarse steps until some zone contains the pointer, REMEMBERING how far it
+ *    travelled — that distance bounds where the boundary can be, so the retreat
+ *    below is derived from observed geometry rather than from a fixed budget;
  * 2. one-pixel steps BACK until the zone is left, then one forward — the
- *    boundary is now bracketed to within a pixel and its position is read from
+ *    boundary is now bracketed to within a step and its position is read from
  *    the driver rather than inferred from a step count;
  * 3. forward to the requested depth, re-reading containment so a zone too
- *    shallow to hold it is reported rather than approximated.
+ *    shallow to hold it is reported from the deepest point it does hold.
+ *
+ * The pointer is left INSIDE the reported zone in every outcome but
+ * `never-entered`, and is restored to where it started when no boundary can be
+ * found — a probe that fails is not entitled to leave the drag somewhere else.
  *
  * Vertical, matching the axis every zone boundary in this suite is crossed on.
  */
@@ -626,51 +651,101 @@ export async function dragToInsetInZone(
   wantInsetPx: number,
   maxSteps = 40
 ): Promise<ZoneInset> {
+  const startedAt = driver.pointer().y;
+  const refuse = (
+    zone: number,
+    reason: NonNullable<ZoneInset["refused"]>
+  ): ZoneInset => ({
+    zone,
+    insetPx: 0,
+    resolutionPx: INSET_PROBE_PX,
+    refused: reason,
+  });
+
   let zone = await driver.zoneContainingPointer();
+  const enteredInside = zone >= 0;
   for (let step = 0; step < maxSteps && zone < 0; step += 1) {
-    await driver.moveBy(0, 4);
+    await driver.moveBy(0, INSET_APPROACH_PX);
     zone = await driver.zoneContainingPointer();
   }
-  if (zone < 0) return { zone: -1, insetPx: 0, refused: "never-entered" };
+  if (zone < 0) return refuse(-1, "never-entered");
 
-  // Back out a pixel at a time until the zone is left. Bounded by the coarse
-  // distance already travelled plus a step, because that is the furthest inside
-  // the zone the approach can have put us.
-  const retreatLimit = maxSteps * 4 + 4;
+  // How far back the boundary can possibly be. Having WALKED into the zone, it
+  // is the distance travelled plus the step that crossed it. Having started
+  // inside, nothing observed bounds it, so the approach budget stands in — and
+  // running out is reported as its own fact rather than as "no zone".
+  const travelled = driver.pointer().y - startedAt;
+  const retreatLimit = enteredInside
+    ? maxSteps * INSET_APPROACH_PX
+    : travelled + INSET_APPROACH_PX;
+
   let left = false;
-  for (let step = 0; step < retreatLimit; step += 1) {
+  let retreated = 0;
+  while (retreated < retreatLimit) {
     await driver.moveBy(0, -INSET_PROBE_PX);
+    retreated += INSET_PROBE_PX;
     if ((await driver.zoneContainingPointer()) !== zone) {
       left = true;
       break;
     }
   }
-  if (!left) return { zone, insetPx: 0, refused: "never-entered" };
+  if (!left) {
+    // Put the drag back where it was found. A measurement that could not be
+    // taken must not also move the pointer, or the caller's next reading is
+    // about a position this probe chose.
+    await driver.moveBy(0, retreated);
+    return refuse(zone, "boundary-not-found");
+  }
 
-  // One step back in: the pointer is now within a pixel of the boundary, and
-  // this position — not a step count — is what the depth is measured from.
+  // One step back in: the pointer is within a step of the boundary, and this
+  // position — not a step count — is what the depth is measured from.
   await driver.moveBy(0, INSET_PROBE_PX);
   if ((await driver.zoneContainingPointer()) !== zone) {
-    return { zone, insetPx: 0, refused: "never-entered" };
+    await driver.moveBy(0, retreated - INSET_PROBE_PX);
+    return refuse(zone, "boundary-not-found");
   }
   const boundaryY = driver.pointer().y;
 
   for (let moved = 0; moved < wantInsetPx; moved += INSET_PROBE_PX) {
     await driver.moveBy(0, INSET_PROBE_PX);
     if ((await driver.zoneContainingPointer()) !== zone) {
-      // Reported rather than approximated: the fixture cannot answer at this
-      // depth, and a shallower reading would be a different measurement wearing
-      // the requested one's name.
+      // Back to the last contained point, so the reported depth is one the
+      // pointer is actually standing at. Reporting the overshooting step would
+      // overstate the zone's capacity by exactly the step that left it.
+      await driver.moveBy(0, -INSET_PROBE_PX);
       return {
         zone,
         insetPx: driver.pointer().y - boundaryY,
+        resolutionPx: INSET_PROBE_PX,
         refused: "too-narrow",
       };
     }
   }
-  return { zone, insetPx: driver.pointer().y - boundaryY };
+  return {
+    zone,
+    insetPx: driver.pointer().y - boundaryY,
+    resolutionPx: INSET_PROBE_PX,
+  };
 }
 
+/**
+ * Carry the drag until the pointer is INSIDE a zone, not merely until one is
+ * active.
+ *
+ * `dragUntilTarget` stops as soon as a target resolves, and
+ * `@dnd-kit/collision` resolves one by the dragged shape's OVERLAP when no zone
+ * contains the pointer. So "a target is active" and "the pointer is inside that
+ * target" are different states, and every exact claim about mapping — is the
+ * indicator where the pointer is, do two drags resolve the same way — is only
+ * decidable in the second.
+ *
+ * The distinction is not academic: it is where a stale-scroll or unscaled
+ * transform hides. Those implementations select a NEIGHBOURING zone, which any
+ * assertion tolerant of the overlap case accepts.
+ *
+ * Returns the containing zone's ordinal, or -1 if none was reached — a value the
+ * CALLER must assert on, for the same reason `dragUntilTarget` says so.
+ */
 export async function dragUntilInsideZone(
   driver: CanvasDriver,
   maxSteps = 40

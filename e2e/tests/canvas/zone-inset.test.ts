@@ -101,9 +101,40 @@ test("reports a band too shallow to hold the depth, rather than the depth it man
 
   expect(result.refused).toBe("too-narrow");
   expect(result.zone).toBe(1);
-  // And it still says how far it got, so a caller can report the fixture's real
-  // capacity instead of guessing at it.
-  expect(result.insetPx).toBeLessThan(25);
+  // The EXACT capacity, not merely "less than asked". The band spans y=20..27,
+  // so the deepest contained depth is 7 — and a looser bound would accept a
+  // result that overstated it by the step that left the zone.
+  expect(result.insetPx).toBe(7);
+  // And the pointer is standing at the depth reported, inside the zone it
+  // names. A reported depth the pointer is not at is a different measurement.
+  expect(canvas.pointer().y).toBe(27);
+  expect(await canvas.zoneContainingPointer()).toBe(1);
+});
+
+test("says how precisely it knows the boundary", async () => {
+  // A zone edge is fractional and the pointer is commanded in whole steps, so
+  // the boundary this measures from can sit a step past the real one. A caller
+  // comparing a measured band against a required range has to widen its bounds
+  // by exactly this, which it can only do if the probe says what it is.
+  const canvas = bandedCanvas(ONE_BAND);
+
+  const result = await dragToInsetInZone(canvas, 5);
+
+  expect(result.resolutionPx).toBe(1);
+});
+
+test("reports a boundary it never crossed as its own failure, and puts the pointer back", async () => {
+  // A drag already deep inside a tall zone has no boundary within reach. Saying
+  // "never entered a zone" there would be false — the pointer is in one — and
+  // leaving it moved by the whole retreat would make the caller's next reading
+  // about a position this probe chose rather than the one they set up.
+  const canvas = bandedCanvas([{ zone: 3, from: 0, to: 10_000 }], 5_000);
+
+  const result = await dragToInsetInZone(canvas, 5);
+
+  expect(result.refused).toBe("boundary-not-found");
+  expect(result.zone).toBe(3);
+  expect(canvas.pointer().y).toBe(5_000);
 });
 
 test("reports never reaching a zone as a refusal, not as a depth of zero", async () => {
