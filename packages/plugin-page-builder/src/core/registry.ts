@@ -52,6 +52,27 @@ export function createBlockRegistry(): BlockRegistry {
           `Block type "${def.type}" must be namespaced, e.g. "core/${def.type}".`
         );
       }
+      // Defaults are CLONED for every instance, so a value `structuredClone` cannot copy — a
+      // function, a class instance, a DOM node — does not fail here, it fails later at
+      // `createNode`, as a `DataCloneError` raised while an author was inserting a block or
+      // taking a repair. That error names neither the block nor the prop.
+      //
+      // Cloned once at registration instead, which is where a definition's own promises are
+      // checked and where the failure can name the block making them. The cost is one clone per
+      // block per boot, against a clone per instance either way.
+      for (const [field, value] of [
+        ["defaultProps", def.defaultProps],
+        ["defaultStyle", def.defaultStyle],
+      ] as const) {
+        if (value === undefined) continue;
+        try {
+          structuredClone(value);
+        } catch {
+          throw new Error(
+            `Block type "${def.type}" has a ${field} value that cannot be copied. Every instance is built by cloning it, so it must hold only JSON-like data.`
+          );
+        }
+      }
       map.set(def.type, def);
     },
     get(type) {
