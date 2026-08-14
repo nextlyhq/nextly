@@ -336,11 +336,11 @@ export function remoteForRepo(repoFullName, remotes) {
  * stamp exactly the unverified state this detects.
  */
 export function staleVerification(before, after) {
-  // Compares the WHOLE snapshot rather than naming fields. Enumerating them has
-  // now missed one twice: the merged flag after the tip, and eligibility after
-  // the merged flag — each time the field added last round was the only one
-  // being watched. Anything mutable that reaches a blocker belongs in the
-  // snapshot, and comparing every key means adding one cannot be forgotten here.
+  // Compares every key rather than naming fields. A named comparison covers
+  // exactly the fields someone thought of, so extending the snapshot silently
+  // leaves the new one unwatched; comparing the whole object makes the snapshot
+  // itself the single place that decides what freshness means. Anything mutable
+  // that reaches a blocker belongs in it.
   if (!before || !after) return "eligibility-unreadable";
   const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
   for (const key of keys) {
@@ -657,6 +657,15 @@ const REPO = "nextlyhq/nextly";
 let REMOTE_FOR_FETCH = "origin";
 
 /**
+ * Where the BASE repository's objects live.
+ *
+ * `refs/pull/N/merge` and a squash commit belong to the base repository even
+ * when the branch does not, so they are fetched from here rather than from the
+ * head remote, which for a fork holds neither.
+ */
+const BASE_REMOTE = "origin";
+
+/**
  * `gh api`, raw. Throws on failure rather than degrading to an empty result.
  *
  * `--jq` prints the filter's output verbatim, NOT as JSON: a string comes back
@@ -688,11 +697,11 @@ function ghJson(args) {
  */
 function timelinePages(pr) {
   // `--slurp` returns ONE array of pages, so the pages stay separate without
-  // this code parsing JSON itself. The previous version counted brackets to
-  // split `--paginate`'s concatenated arrays, which a `[` inside any review
-  // body broke: the depth never returned to zero, the function returned no
-  // pages, and a force-push counted as zero — the false clean this verifier
-  // exists to refuse, introduced by the verifier.
+  // this code parsing JSON itself. Splitting `--paginate`'s concatenated arrays
+  // by counting brackets does not work here: a `[` inside any review body
+  // leaves the depth never returning to zero, which yields no pages at all and
+  // therefore counts zero force-pushes — a false clean produced by the check
+  // that exists to refuse them.
   return JSON.parse(
     execFileSync(
       "gh",
@@ -725,12 +734,12 @@ function ghLog(merged, tip) {
  * fall back to whatever the working tree happens to hold.
  */
 function workflowAt(revision, path) {
-  // REMOTE_FOR_FETCH, never a literal "origin". From a fork checkout `origin`
-  // is the fork, so a hardcoded fetch aborts on a revision it does not have and
-  // the gate exits 2 for an entirely healthy pull request. `remoteForRepo` has
-  // already answered this question; asking it again differently is how the two
-  // answers diverge.
-  run(["fetch", REMOTE_FOR_FETCH, revision, "--quiet"]);
+  // Base repository, not the head one. `refs/pull/N/merge` and the squash commit
+  // are objects of the BASE repository; a fork holds neither, so fetching them
+  // from the head remote fails on every cross-repository pull request. The head
+  // remote answers a different question — where the branch lives — and the two
+  // coincide only when the pull request is not from a fork.
+  run(["fetch", BASE_REMOTE, revision, "--quiet"]);
   // Read through FETCH_HEAD rather than by the name fetched. `git fetch <remote>
   // refs/pull/N/merge` does not create a local ref of that name, so naming it in
   // `git show` fails with `invalid object name` — for a plain sha it happens to
@@ -957,39 +966,23 @@ export function main(argv) {
     coderabbitReviewCount: coderabbit,
   });
 
-  process.stdout.write(
+  // Nothing is printed until the freshness read below has decided. Emitting the
+  // verdict first meant a run that turned out to be stale had already written
+  // GATE PASSED to stdout, contradicted only by a later line and the exit code —
+  // which misleads a human and actively misinforms any caller that reads the
+  // documented text rather than the status.
+  const report =
     `PR #${pr} @ ${(subject || "").slice(0, 9) || "(no ref)"}` +
-      `${merged ? ` (merge commit; branch ${tip.slice(0, 9)})` : ""}\n`
-  );
-  process.stdout.write(
-    `  landed-whole: ${landed.verdict} (${landed.reason})\n`
-  );
-  for (const line of landed.candidates) {
-    process.stdout.write(`    candidate, confirm by content: ${line}\n`);
-  }
-  process.stdout.write(`${formatVerdict(verdict)}\n`);
-  // Everything above was read across many round trips, all keyed to the `tip`
-  // read at the start. A push landing during them leaves every answer describing
-  // a revision the branch no longer has, and the gate would report a pass for a
-  // commit nothing checked or reviewed.
-  //
-  // This REFUSES on a difference; it must never re-key the verdict to the new
-  // head. That distinction is the whole point, and the opposite mistake is easy
-  // to make here: adopting the fresh head would rubber-stamp exactly the
-  // unverified revision this is detecting. The verdict stays with the revision
-  // that was actually examined, and the caller is told it is now stale.
-  //
-  // It narrows the window rather than closing it — the read and the merge are
-  // still separate operations. `gh pr merge --match-head-commit <tip>` is what
-  // closes it, because there the server refuses.
-  // The merged STATE is re-read alongside the tip, not only the tip. A pull
-  // request that merges during the intervening calls usually leaves its branch
-  // untouched, so a tip comparison alone passes — while every answer above was
-  // taken in the pre-merge mode, judging the branch head with the landed-whole
-  // question never asked. The mode is as much a part of what was verified as
-  // the revision is.
-  // Every mutable fact a blocker depends on, read once at the start and once at
-  // the end. Anything added to this projection is compared automatically.
+    `${merged ? ` (merge commit; branch ${tip.slice(0, 9)})` : ""}\n` +
+    `  landed-whole: ${landed.verdict} (${landed.reason})\n` +
+    landed.candidates
+      .map(line => `    candidate, confirm by content: ${line}\n`)
+      .join("") +
+    `${formatVerdict(verdict)}\n`;
+
+  // Every mutable fact a blocker depends on, read once at the start and once
+  // here. The whole snapshot is compared, so a fact added to the projection is
+  // covered without editing the comparison.
   const MUTABLE = "{merged:.merged,state:.state,draft:.draft}";
   const after = ghJson(["api", `repos/${REPO}/pulls/${pr}`, "--jq", MUTABLE]);
   const stale = staleVerification(
@@ -998,11 +991,14 @@ export function main(argv) {
   );
   if (stale) {
     process.stdout.write(
-      `  ${stale}: this verdict describes ${tip.slice(0, 9)} as it stood when ` +
-        "the check began, and is no longer current\n"
+      `PR #${pr}: ${stale}\n` +
+        `  no verdict issued: the answers describe ${tip.slice(0, 9)} as it\n` +
+        "  stood when the check began, and that is no longer current\n"
     );
     return 2;
   }
+
+  process.stdout.write(report);
 
   return exitCode({
     landedVerdict: landed.verdict,
