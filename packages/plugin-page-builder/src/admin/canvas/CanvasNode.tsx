@@ -117,7 +117,13 @@ function renderSlot(node: BlockNode, slotName: string): ReactNode {
   const out: ReactNode[] = [];
   children.forEach((child, i) => {
     out.push(
-      <DropZone key={`dz-${i}`} parentId={node.id} slot={slotName} index={i} />
+      <DropZone
+        key={`dz-${i}`}
+        parentId={node.id}
+        slot={slotName}
+        index={i}
+        count={children.length}
+      />
     );
     out.push(
       <DraggableNode
@@ -135,6 +141,7 @@ function renderSlot(node: BlockNode, slotName: string): ReactNode {
       parentId={node.id}
       slot={slotName}
       index={children.length}
+      count={children.length}
     />
   );
   return out;

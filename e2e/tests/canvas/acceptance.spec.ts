@@ -34,6 +34,7 @@ import {
   LARGE_FIXTURE,
   NESTED_FIXTURE,
   TALL_FIXTURE,
+  readSeededBlockBoxes,
   seedPage,
 } from "./fixtures";
 import { mapFramePointToHost } from "./coordinate-mapping";
@@ -567,7 +568,7 @@ test.describe("a canvas any Nextly editor could ship", () => {
     note(PLAN_POINT.zeroLayoutShift, "B-6");
     await driver.mountTree(await seedPage(request, FLAT_LIST_FIXTURE));
 
-    const before = await driver.readBlockBoxes();
+    const before = await readSeededBlockBoxes(driver, FLAT_LIST_FIXTURE);
     await dragFromPanel(driver);
     // Without this the assertion below is satisfied by a drag that never
     // started: no drag means no zones appear, `during` equals `before`, and
@@ -576,7 +577,7 @@ test.describe("a canvas any Nextly editor could ship", () => {
       await driver.isDragging(),
       "the drag must be active for the mid-drag geometry to mean anything"
     ).toBe(true);
-    const during = await driver.readBlockBoxes();
+    const during = await readSeededBlockBoxes(driver, FLAT_LIST_FIXTURE);
     await driver.cancel();
 
     // Unrounded, and every edge. Comparing tops alone passes a canvas that

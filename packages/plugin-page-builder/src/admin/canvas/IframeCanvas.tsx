@@ -105,6 +105,20 @@ const OVERLAY_CSS = [
   // dnd-kit still selects the same rectangle: the drop works and nothing shows
   // where it will land. Editor chrome has to sit above content it annotates.
   ".nx-pb-dropzone{position:absolute;left:0;right:0;top:-3px;height:6px;border-radius:3px;background:transparent;pointer-events:none;z-index:3;transition:background .1s ease}",
+  // A container's first and last gaps sit ON its content edges, where a centred
+  // band would hang half outside: clipped under `overflow: hidden`, and on a
+  // full-height root extending the document's scrollable overflow by 3px, which
+  // is enough to raise a canvas-only scrollbar at rest. Aligning them inward
+  // keeps the same 6px band wholly within the container that owns it.
+  //
+  // It also separates them from the ENCLOSING container's gap at the same edge.
+  // Out of flow those two rectangles are identical, and a detector choosing
+  // between equals falls back to registration order, which favours the outer
+  // one — so the pointer inside a nested container kept targeting its parent.
+  // In flow the zones stacked and were never coincident; this restores that
+  // distinction without restoring the layout cost.
+  ".nx-pb-dropzone[data-edge='start']{top:0}",
+  ".nx-pb-dropzone[data-edge='end']{top:-6px}",
   ".nx-pb-dropzone[data-drag]{pointer-events:auto;background:color-mix(in srgb, var(--nx-pb-ed-primary) 12%, transparent)}",
   ".nx-pb-dropzone[data-active]{background:var(--nx-pb-ed-primary);box-shadow:0 0 0 4px color-mix(in srgb, var(--nx-pb-ed-primary) 15%, transparent)}",
   // Empty-container placeholder.

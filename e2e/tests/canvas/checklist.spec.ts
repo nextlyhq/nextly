@@ -13,6 +13,7 @@ import {
   readStoredBlockIds,
   LARGE_FIXTURE,
   NESTED_FIXTURE,
+  readSeededBlockBoxes,
   seedPage,
 } from "./fixtures";
 import type { CanvasDriver } from "./driver";
@@ -125,14 +126,17 @@ test("[acceptance] point 1: the innermost container owns the drop target", async
 });
 
 /**
- * Marked failing because the requirement genuinely is not met today, and a
- * length-only assertion passed while every node moved.
+ * Zero layout shift, asserted over whole boxes rather than a count.
  *
- * Measured: tops go [0,0,60,120,180,240,300] at rest and [3,12,84,156,230,302,374]
- * mid-drag. All seven nodes shift, the worst by 74px, because each drop zone
- * expands from 0px to 6px when a drag starts and pushes everything below it
- * down. Point 4 asks for zero shift, so the assertion states zero and this is
- * recorded as a known gap rather than a green check.
+ * The requirement was unmet while zones grew from 0px to 6px on dragstart:
+ * measured then, tops went [0,0,60,120,180,240,300] at rest and
+ * [3,12,84,156,230,302,374] mid-drag, all seven nodes moving and the worst by
+ * 74px. A length-only assertion passed throughout that, which is why the
+ * comparison below is over the boxes themselves.
+ *
+ * The slot now holds the zone's place at zero height for the document's whole
+ * life and the droppable is out of flow, so there is no expansion to shift
+ * anything and the assertion states the zero it always should have.
  */
 test("[acceptance] point 4: siblings do not move during a drag", async ({
   page,
@@ -146,7 +150,7 @@ test("[acceptance] point 4: siblings do not move during a drag", async ({
   // resizes a block without moving its top would produce identical arrays and
   // pass a top-only comparison, while point 4 says siblings must not move.
   const read = async () =>
-    (await driver.readBlockBoxes()).map(
+    (await readSeededBlockBoxes(driver, FLAT_LIST_FIXTURE)).map(
       box => `${box.id}:${box.top}:${box.left}:${box.width}:${box.height}`
     );
 
