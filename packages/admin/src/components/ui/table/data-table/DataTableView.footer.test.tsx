@@ -197,9 +197,11 @@ describe("DataTableView footer", () => {
     expect(tokensOf(pager.parentElement)).toContain("@md/table:border");
   });
 
-  // The two directions React and JavaScript disagree about. Kept together
-  // because fixing either one alone reintroduces the other, which is how this
-  // expression collected three rounds of findings.
+  // The two directions React and JavaScript disagree about, asserted together
+  // because they pull opposite ways: a slot that keeps every non-nullish value
+  // draws a surface for these, and a slot that keeps only truthy values drops
+  // the `0` asserted below. Either predicate alone satisfies one case and
+  // breaks the other, so a control for one is not evidence about the other.
   it.each([
     ["false", false],
     ["true", true],

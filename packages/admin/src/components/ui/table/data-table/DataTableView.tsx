@@ -330,13 +330,13 @@ export function DataTableView<Row extends object>({
   // it separately per branch is how the error path lost the surface: two
   // answers to one question, agreeing until one of them was edited.
   //
-  // Both render, footer first. An earlier version let `pagination` win and
-  // dropped `footer`, on the reasoning that two pagers in one slot is not a
-  // composition anyone wants -- but `footer` is an arbitrary node, not a pager.
-  // A caller using it for a selection summary or bulk actions and then adopting
-  // `pagination` lost that content silently, with both props public, both
-  // permitted by the type, and nothing reporting the loss. A summary above its
-  // pager is a real arrangement, so it is the one this renders.
+  // Both render, footer first, rather than one displacing the other. `footer`
+  // takes an arbitrary node and not a pager, so a caller can legitimately hold a
+  // selection summary or bulk actions there while paginating -- a summary above
+  // its pager is a real arrangement. Letting `pagination` win would drop that
+  // content with both props public, both permitted by the type, and nothing
+  // reporting the loss. Footer first because a summary describes the rows above
+  // it and the pager moves between them.
   // Whether the caller's footer will put anything on screen, decided by REACT's
   // rule rather than by JavaScript's. The two disagree in both directions and
   // each disagreement is a real defect:
