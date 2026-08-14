@@ -105,13 +105,22 @@ function asSerialized(value: unknown, key: string): unknown {
   // different function each time: a hook returning a 2 KB serializer on the
   // first read and an empty one on the second measured 101 bytes for a value
   // the writer emits at 2,101, and the cap passed it.
-  // Objects and BigInt ONLY, which is exactly what the writer probes. Looking
-  // the hook up on a primitive BOXES it, so an environment defining
-  // `Number.prototype.toJSON` — or `String`'s, or `Boolean`'s — made every
-  // number in the document run an inherited hook that `JSON.stringify` never
-  // calls. The document was then reported unserializable and refused, while the
-  // writer emitted it unchanged.
-  const probed = typeof value === "object" || typeof value === "bigint";
+  // Functions are probed too. The writer runs the hook BEFORE deciding whether
+  // to omit anything, so a function carrying one is not simply dropped:
+  // measured, `f.toJSON = () => ({kept:1})` writes `{"a":{"kept":1}}`, and
+  // `f.toJSON = () => 1n` makes `JSON.stringify` throw. Treating every function
+  // as dropped therefore both under-counts a value the writer emits and reports
+  // a storable document where the writer refuses.
+  //
+  // Primitives stay out, and the reason is the opposite one: looking a hook up
+  // on a primitive BOXES it, so an environment defining `Number.prototype.toJSON`
+  // — or `String`'s, or `Boolean`'s — would make every number in the document
+  // run an inherited hook that `JSON.stringify` never calls, and the document
+  // was then refused while the writer emitted it unchanged.
+  const probed =
+    typeof value === "object" ||
+    typeof value === "bigint" ||
+    typeof value === "function";
   if (!probed || value === null) return value;
   const hook = (value as { toJSON?: unknown }).toJSON;
   return typeof hook === "function"

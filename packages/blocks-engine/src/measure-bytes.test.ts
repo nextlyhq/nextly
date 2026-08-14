@@ -92,6 +92,30 @@ describe("the three things the writer can do", () => {
     expect(() => JSON.stringify(hostile)).toThrow();
   });
 
+  it("runs a FUNCTION's serialization hook, rather than assuming it is dropped", () => {
+    // `JSON.stringify` calls `toJSON` before deciding whether to omit anything,
+    // so a function carrying one is not simply dropped. Measured, both ways:
+    // a hook returning an object is WRITTEN, and one returning a BigInt makes
+    // the writer throw. Treating every function as dropped under-counts the
+    // first and reports the second as storable.
+    const written = function () {};
+    (written as unknown as { toJSON: () => unknown }).toJSON = () => ({
+      kept: 1,
+    });
+    expect(JSON.stringify({ a: written })).toBe('{"a":{"kept":1}}');
+    expect(surveyDocument({ a: written }, LIMITS).bytes).toBe(
+      realBytes({ a: written })
+    );
+
+    const refused = function () {};
+    (refused as unknown as { toJSON: () => unknown }).toJSON = () => 1n;
+    expect(() => JSON.stringify({ a: refused })).toThrow();
+    expect(surveyDocument({ a: refused }, LIMITS).unwritable).toBe(true);
+
+    // A function with NO hook really is dropped, so the exemption still holds.
+    expect(JSON.stringify({ a: function () {} })).toBe("{}");
+  });
+
   it("does not call an ARRAY unwritable when its key list throws", () => {
     // The counterpart to the record above, and the reason that rule is not
     // "a failed key reflection means unwritable". `JSON.stringify` writes an
