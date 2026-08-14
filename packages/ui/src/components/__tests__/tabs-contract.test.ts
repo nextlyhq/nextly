@@ -1328,8 +1328,12 @@ function expandsTo(property: string, value?: string): string[] {
     // "reset to the initial value", which for this property IS `none`. Matching
     // the one spelling asked how the value was written rather than what it
     // does, and reported a call site that covers nothing.
+    // `initial` and `unset` both name the initial value, which for
+    // `border-image-source` IS `none`. They differ only for INHERITED
+    // properties, where `unset` means `inherit` -- and this one is not
+    // inherited, so both supply no image and cover nothing.
     const drawn = value?.trim().toLowerCase();
-    if (drawn === "none" || drawn === "initial") {
+    if (drawn === "none" || drawn === "initial" || drawn === "unset") {
       return [kebab];
     }
     return BORDER_ASPECTS.map(aspect => `border-bottom-${aspect}`);
@@ -1584,8 +1588,23 @@ function reachesThePrimitive(specifier: string, importer: string): boolean {
   if (OWNING_MODULES.includes(specifier)) return true;
   if (!specifier.startsWith(".")) return false;
   const target = resolve(dirname(resolve(REPO, importer)), specifier);
-  // A module specifier carries no extension; the primitive is a `.tsx` file.
-  return `${target}.tsx` === PRIMITIVE || target === PRIMITIVE;
+  // Three spellings reach the same file and all are in use here.
+  //
+  // Extensionless is the common one. An exact path covers a specifier that
+  // already names the file. And a `.js` specifier resolves to the adjacent
+  // TypeScript SOURCE under NodeNext resolution -- `../tabs.js` IS `tabs.tsx`
+  // -- which is not an exotic spelling: 33 files in the scanned roots import
+  // that way. Appending `.tsx` to an already-suffixed path produced
+  // `tabs.js.tsx`, so every one of those call sites scanned clean.
+  //
+  // The substitution is anchored to the END of the string, so a directory
+  // named `foo.js/` cannot have its interior rewritten.
+  const asSource = target.replace(/\.(js|jsx|mjs|cjs)$/, "");
+  return (
+    target === PRIMITIVE ||
+    `${target}.tsx` === PRIMITIVE ||
+    `${asSource}.tsx` === PRIMITIVE
+  );
 }
 
 interface Ownership {
@@ -2923,6 +2942,26 @@ describe("the tab indicator lint", () => {
     expect(violationsIn("packages/ui/src/components/probe.tsx", real)).toEqual(
       []
     );
+
+    // A `.js` specifier resolves to the adjacent TypeScript SOURCE under
+    // NodeNext, so `../tabs.js` IS `tabs.tsx`. Not an exotic spelling: 33 files
+    // in the scanned roots import that way, and appending `.tsx` to an
+    // already-suffixed path produced `tabs.js.tsx`, so every one scanned clean.
+    //
+    // Asserted HERE rather than in the tables above, because those prepend a
+    // real `@nextlyhq/ui` import to every fixture — which owns the tag on its
+    // own and would have made this pass whether or not the specifier resolved.
+    const runtime = `import { TabsTrigger } from "../tabs.js";\n${body}`;
+    expect(
+      violationsIn("packages/ui/src/components/probe/probe.tsx", runtime)
+    ).not.toEqual([]);
+
+    // And the substitution must not widen the match: a sibling module whose
+    // name merely ENDS in `tabs` is a different file.
+    const sibling = `import { TabsTrigger } from "../other-tabs.js";\n${body}`;
+    expect(
+      violationsIn("packages/ui/src/components/probe/probe.tsx", sibling)
+    ).toEqual([]);
   });
 
   it("finds files to check, so a clean result means conforming and not unscanned", () => {
@@ -3757,6 +3796,12 @@ import { TabsList, TabsTrigger } from "@nextlyhq/ui";\n`;
     [
       "a class map whose condition is undefined",
       '<TabsTrigger className={cn({ "border-b-0": undefined })} />',
+    ],
+    // `unset` on a NON-inherited property is its initial value, which for
+    // `border-image-source` is `none`, so it covers nothing.
+    [
+      "a border image source reset to unset",
+      '<TabsTrigger style={{ borderImageSource: "unset" }} />',
     ],
   ])("does not report %s", (_label, body) => {
     // The complement, and the reason this is a contract rather than a ban. A
