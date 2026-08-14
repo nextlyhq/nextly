@@ -7,17 +7,24 @@ name: Review verdict
 # behind is the one taken before anybody reviewed. Adding review events to
 # `ci.yml` instead would rebuild and retest the whole repository every time a
 # comment is posted.
+#
+# `edited` is included because retargeting a pull request changes its BASE
+# without moving its head, and a review is evidence about a diff — so the same
+# reviews now describe a diff that may contain the whole parent stack.
+#
+# `issue_comment` is deliberately ABSENT even though the rate-limit marker
+# lives there. That event runs against the DEFAULT BRANCH, so its check attaches
+# to the default branch rather than to the pull request head and cannot replace
+# the verdict shown against the head. A trigger whose result is published in the
+# wrong place is worse than no trigger: it burns a run and leaves the visible
+# answer stale anyway. Editing the marker therefore does not refresh the display
+# on its own.
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, edited]
   pull_request_review:
     types: [submitted, edited, dismissed]
   pull_request_review_comment:
-    types: [created, edited, deleted]
-  # The rate-limit marker lives in an ISSUE comment and is edited in place, so a
-  # reviewer can add or remove it without submitting a review. Without this the
-  # displayed verdict stays stale until an unrelated event.
-  issue_comment:
     types: [created, edited, deleted]
 
 # Advisory, deliberately. A REQUIRED check asserting "a bot has reviewed this
@@ -26,8 +33,15 @@ on:
 # with no local remedy, and an outside contributor cannot summon either reviewer
 # at all. Running it visibly first is what produces the false-refusal rate that
 # decision needs.
+#
+# KNOWN LIMIT: resolving or unresolving a conversation changes a thread's state
+# without touching any comment object, so none of these events fires and the
+# displayed verdict can lag until the next review, comment or push. The
+# authoritative check is running the script at merge time; this job is a
+# reporter, and treating a stale green here as the gate is the mistake it exists
+# to make visible.
 concurrency:
-  group: review-verdict-${{ github.event.pull_request.number || github.event.issue.number }}
+  group: review-verdict-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 permissions:
@@ -37,24 +51,25 @@ permissions:
 jobs:
   verdict:
     name: Review verdict (advisory)
-    # `issue_comment` fires for issues as well as pull requests, and only a pull
-    # request has a verdict. The `pull_request` key is present on the issue
-    # payload only when it IS one.
-    if: >-
-      github.event_name != 'issue_comment' ||
-      github.event.issue.pull_request != null
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Checkout
+      # PINNED to the default branch, and sparse. Without an explicit ref a
+      # `pull_request_review` event checks out `refs/pull/N/merge` — the
+      # CANDIDATE's code — so a pull request could edit this script and have its
+      # own version run beside `GH_TOKEN`, forging the advisory result or
+      # persisting itself into later steps through `$GITHUB_ENV`. The same
+      # reasoning and the same remedy are in `nextly-review-bot.yml`.
+      - name: Checkout the verdict script from the default branch
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          ref: ${{ github.event.repository.default_branch }}
+          sparse-checkout: scripts
+          sparse-checkout-cone-mode: false
           persist-credentials: false
 
       - name: Report the verdict
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          node scripts/ci-verdict.mjs \
-            "${{ github.event.pull_request.number || github.event.issue.number }}"
+        run: node scripts/ci-verdict.mjs "${{ github.event.pull_request.number }}"

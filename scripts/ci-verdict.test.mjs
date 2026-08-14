@@ -123,7 +123,7 @@ describe("changesRequested", () => {
       at("CHANGES_REQUESTED", "2026-08-14T10:00:00Z", 1),
       at("COMMENTED", "2026-08-14T11:00:00Z", 2),
     ];
-    expect(changesRequested(reviews)).toEqual([CODEX]);
+    expect(changesRequested(reviews, HEAD)).toEqual([CODEX]);
     expect(report({ ...BASE, reviews, threads: [] }).verdict).toBe(
       "CHANGES REQUESTED"
     );
@@ -134,7 +134,7 @@ describe("changesRequested", () => {
       at("CHANGES_REQUESTED", "2026-08-14T10:00:00Z", 1),
       at("APPROVED", "2026-08-14T11:00:00Z", 2),
     ];
-    expect(changesRequested(reviews)).toEqual([]);
+    expect(changesRequested(reviews, HEAD)).toEqual([]);
     expect(report({ ...BASE, reviews, threads: [] }).verdict).toBe("CLEAN");
   });
 
@@ -148,7 +148,7 @@ describe("changesRequested", () => {
       at("CHANGES_REQUESTED", "2026-08-14T10:00:00Z", 1),
       at("DISMISSED", "2026-08-14T11:00:00Z", 2),
     ];
-    expect(changesRequested(reviews)).toEqual([]);
+    expect(changesRequested(reviews, HEAD)).toEqual([]);
     expect(reviewersAtHead(reviews, HEAD)).toEqual([CODEX]);
   });
 
@@ -162,7 +162,7 @@ describe("changesRequested", () => {
       at("COMMENTED", "2026-08-14T10:00:00Z", 1),
       at("CHANGES_REQUESTED", "2026-08-14T11:00:00Z", 2),
     ];
-    expect(changesRequested(reviews)).toEqual([CODEX]);
+    expect(changesRequested(reviews, HEAD)).toEqual([CODEX]);
   });
 
   /**
@@ -176,21 +176,47 @@ describe("changesRequested", () => {
       { ...at("CHANGES_REQUESTED", "2026-08-14T10:00:00Z", 1), commit_id: OLD },
       at("COMMENTED", "2026-08-14T11:00:00Z", 2),
     ];
-    expect(changesRequested(reviews)).toEqual([CODEX]);
+    expect(changesRequested(reviews, HEAD)).toEqual([CODEX]);
     expect(reviewersAtHead(reviews, HEAD)).toEqual([CODEX]);
     expect(report({ ...BASE, reviews, threads: [] }).verdict).toBe(
       "CHANGES REQUESTED"
     );
   });
 
-  /** An approval on the new head answers an objection raised on the old one. */
-  it("clears when a later approval lands on a newer commit", () => {
+  /** An approval AT THE HEAD answers an objection raised on an older commit. */
+  it("clears when a later approval lands on the head", () => {
     const reviews = [
       { ...at("CHANGES_REQUESTED", "2026-08-14T10:00:00Z", 1), commit_id: OLD },
       at("APPROVED", "2026-08-14T11:00:00Z", 2),
     ];
-    expect(changesRequested(reviews)).toEqual([]);
+    expect(changesRequested(reviews, HEAD)).toEqual([]);
     expect(report({ ...BASE, reviews, threads: [] }).verdict).toBe("CLEAN");
+  });
+
+  /**
+   * Reviews arrive out of order. An approval submitted LATER but pinned to an
+   * OLDER commit says nothing about the revision being merged, so it must not
+   * retire an objection raised against the head — which a timestamp-only rule
+   * would let it do.
+   */
+  it("does not let a stale approval clear an objection against the head", () => {
+    const reviews = [
+      at("CHANGES_REQUESTED", "2026-08-14T10:00:00Z", 1),
+      { ...at("APPROVED", "2026-08-14T11:00:00Z", 2), commit_id: OLD },
+    ];
+    expect(changesRequested(reviews, HEAD)).toEqual([CODEX]);
+    expect(report({ ...BASE, reviews, threads: [] }).verdict).toBe(
+      "CHANGES REQUESTED"
+    );
+  });
+
+  /** An approval on the very revision objected to clears it, head or not. */
+  it("clears when the approval names the objected revision", () => {
+    const reviews = [
+      { ...at("CHANGES_REQUESTED", "2026-08-14T10:00:00Z", 1), commit_id: OLD },
+      { ...at("APPROVED", "2026-08-14T11:00:00Z", 2), commit_id: OLD },
+    ];
+    expect(changesRequested(reviews, HEAD)).toEqual([]);
   });
 });
 
