@@ -491,6 +491,32 @@ function collectBreakpointIds(
  * Kept beside the code that emits them: a new document-level verdict is added
  * in this file, and belongs in this set in the same edit.
  */
+/**
+ * Verdicts meaning the engine did NOT measure the document in full.
+ *
+ * The bounded walk stopped early — at the byte cap, at a structural cap, or at
+ * a member it refused to read — so `bytes`, `nodes` and `depth` are lower
+ * bounds. A consumer that responds by making a second, UNBOUNDED pass over the
+ * same document undoes the bound the engine exists to impose.
+ *
+ * Serializing is the pass that matters, and for an unreadable document it is
+ * worse than expensive. The survey declines to invoke an accessor precisely so
+ * that document-supplied code does not run inside a precondition;
+ * `JSON.stringify` invokes it happily. A caller that reaches for the whole
+ * document after this verdict executes exactly the code the refusal existed to
+ * avoid, and materializes whatever it returns.
+ *
+ * Exported for the same reason as {@link DOCUMENT_VERDICT_CODES}: the consumer
+ * would otherwise name these itself, and a name kept in step by hand is how a
+ * new verdict silently joins the safe list.
+ */
+export const INCOMPLETE_SURVEY_CODES: ReadonlySet<IssueCode> = new Set([
+  "document-too-large",
+  "document-unreadable",
+  "node-count-exceeded",
+  "depth-exceeded",
+]);
+
 export const DOCUMENT_VERDICT_CODES: ReadonlySet<IssueCode> = new Set([
   "document-too-large",
   "document-unwritable",

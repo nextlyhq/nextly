@@ -21,6 +21,7 @@
 import type { BlockDocument, BreakpointSet } from "@nextlyhq/blocks-engine";
 import {
   DOCUMENT_VERDICT_CODES,
+  INCOMPLETE_SURVEY_CODES,
   validate,
   walkNodes,
 } from "@nextlyhq/blocks-engine";
@@ -136,12 +137,19 @@ export function validateBlocksValue(
   // `document-unwritable` is the opposite case and still runs: the counter
   // stopped on a value it could not write while still under the cap, and the
   // engine can only say THAT the document is unwritable, never which key.
-  const tooLarge = documentIssues.some(
-    issue => issue.code === "document-too-large"
+  //
+  // Asked of the engine rather than named here, and it is more than tidiness:
+  // an UNREADABLE document belongs in this gate too, for a sharper reason than
+  // size. The survey declines to invoke an accessor so that document-supplied
+  // code never runs inside a precondition, and `unserializableIssues` calls
+  // `JSON.stringify`, which invokes it. Walking on would execute exactly the
+  // code the refusal existed to avoid and materialize whatever it returns.
+  const unmeasured = documentIssues.some(issue =>
+    INCOMPLETE_SURVEY_CODES.has(issue.code)
   );
 
   const precise: Issue[] = [];
-  if (structuralIssues.length === 0 && !tooLarge) {
+  if (structuralIssues.length === 0 && !unmeasured) {
     precise.push(...disallowedBlockIssues(doc, path, label, options));
     precise.push(...unserializableIssues(doc, path, label));
   }

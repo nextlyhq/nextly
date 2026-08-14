@@ -108,6 +108,23 @@ describe("the three things the writer can do", () => {
     expect(() => JSON.stringify(doc)).toThrow();
   });
 
+  it("treats a ROOT hook that throws as unwritable, not merely unread", () => {
+    // The same situation as a member hook throwing, one level up, and it was
+    // the level that kept reporting the wrong verdict. `JSON.stringify` calls
+    // the hook on the value it is handed first of all, so a throw here has no
+    // stored form for exactly the same reason.
+    const doc = {
+      toJSON() {
+        throw new Error("no");
+      },
+    };
+
+    const survey = surveyDocument(doc, LIMITS);
+    expect(survey.unwritable).toBe(true);
+    expect(survey.complete).toBe(false);
+    expect(() => JSON.stringify(doc)).toThrow();
+  });
+
   it("separates a document JSON rewrites from one it refuses", () => {
     // The distinction the whole split exists for, asserted against the writer
     // rather than against an expectation of it.

@@ -934,6 +934,12 @@ export function surveyDocument(
       try {
         value = asSerialized(value, "");
       } catch {
+        // `JSON.stringify` calls the same hook and propagates the same throw,
+        // so the document has no stored form — the identical situation to a
+        // member hook throwing, which is why both flags are set here as they
+        // are there. `unreadable` too, because the value was abandoned and
+        // whatever it held went uncounted.
+        unwritable = true;
         unreadable = true;
         continue;
       }
