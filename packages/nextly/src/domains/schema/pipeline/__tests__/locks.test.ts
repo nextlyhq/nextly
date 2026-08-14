@@ -54,11 +54,16 @@ describe("withMigrateLock (mysql named lock)", () => {
       maxWaitMs: 30_000,
     });
 
+    // `db.calls` holds `JSON.stringify` of the drizzle `sql` object, so the
+    // timeout arrives as a PARAMETER rather than inside the SQL text. Asserting
+    // on the rendered string `GET_LOCK(?, 0)` matched nothing either way, so it
+    // could not fail — the params are where the value actually is.
     const get = db.calls.find(c => c.includes("GET_LOCK"));
     expect(get).toBeDefined();
-    // 30s, not 0. A 0 here is the fail-fast call wearing wait mode's name.
-    expect(get).toContain("30");
-    expect(get).not.toMatch(/"GET_LOCK\(\?, 0\)"/);
+    const params = JSON.parse(get as string) as { queryChunks?: unknown[] };
+    const serialized = JSON.stringify(params);
+    expect(serialized).toContain("30");
+    expect(serialized).not.toContain('"value":[0]');
   });
 
   it("reports a busy lock as not-run in wait mode, rather than throwing", async () => {

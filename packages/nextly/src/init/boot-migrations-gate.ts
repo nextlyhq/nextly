@@ -47,6 +47,12 @@ export function openBootMigrationsGate(willRunMigrations: boolean): void {
   if (process.env.NODE_ENV !== "production") return;
   if (!willRunMigrations) return;
   if (globalForGate.__nextly_bootMigrationsPending) return;
+  // A refusal is FINAL for the process, so a retry cannot reopen its way past
+  // one. The refusal path calls `shutdownServices()`, which makes the next
+  // request re-register — and re-registration is what opens the gate, so
+  // clearing the refusal here handed every retry a clean slate and let it
+  // proceed to migrate as though nothing had been decided.
+  if (globalForGate.__nextly_bootMigrationsRefused) return;
 
   let settle: (() => void) | undefined;
   let fail: ((error: unknown) => void) | undefined;
@@ -63,7 +69,6 @@ export function openBootMigrationsGate(willRunMigrations: boolean): void {
   globalForGate.__nextly_bootMigrationsPending = pending;
   globalForGate.__nextly_settle = settle;
   globalForGate.__nextly_fail = fail;
-  delete globalForGate.__nextly_bootMigrationsRefused;
 }
 
 /** Migrations ran, were not required, or failed recoverably: serving is allowed. */

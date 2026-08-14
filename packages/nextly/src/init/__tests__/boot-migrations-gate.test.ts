@@ -22,7 +22,14 @@ const refusal = (): NextlyError =>
     publicMessage: "refused",
   });
 
-/** Whether a promise is still pending, without waiting on it. */
+/**
+ * Whether a promise is still pending, without waiting on it.
+ *
+ * Raced against a MACROTASK, not `Promise.resolve`. A resolved microtask can
+ * win against an already-settled promise, so the earlier version reported
+ * "pending" for a gate that had never opened — the assertion below would then
+ * pass whether or not `openBootMigrationsGate` did anything.
+ */
 async function isPending(p: Promise<unknown>): Promise<boolean> {
   const marker = Symbol("pending");
   const winner = await Promise.race([
@@ -30,7 +37,7 @@ async function isPending(p: Promise<unknown>): Promise<boolean> {
       () => "settled",
       () => "settled"
     ),
-    Promise.resolve(marker),
+    new Promise(resolve => setTimeout(() => resolve(marker), 0)),
   ]);
   return winner === marker;
 }
@@ -64,6 +71,10 @@ describe("the boot-migrations gate", () => {
   it("does not open when this boot will not run migrations", async () => {
     openBootMigrationsGate(false);
     await expect(awaitBootMigrations()).resolves.toBeUndefined();
+    // The control for `isPending` itself: an unopened gate must read as NOT
+    // pending, or the pending assertion below cannot distinguish a gate that
+    // opened from one that never did.
+    expect(await isPending(awaitBootMigrations())).toBe(false);
   });
 
   it("does not open outside production", async () => {

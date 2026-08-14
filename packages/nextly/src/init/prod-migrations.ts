@@ -79,24 +79,6 @@ export interface RunProdMigrationsArgs {
   migrateCore?: MigrateCoreLike;
 }
 
-/**
- * Set once this process has refused to serve, and never cleared.
- *
- * The refusal has to OUTLIVE the request that raised it. Both production entry
- * points run migrations inside `if (!isServicesRegistered())`, and by the time
- * this throws, `registerServices()` has already marked DI registered — so the
- * next request skips migrations entirely and serves the schema this process was
- * refusing to serve. Throwing once only fails one request.
- *
- * On `globalThis` for the same reason the boot plugin list is: Next.js and
- * Turbopack can evaluate this module in more than one server graph, and a
- * refusal recorded in one copy has to be seen by the other.
- *
- * Never cleared, deliberately. Nothing in the process can establish the schema
- * is now correct — the migration it would need to observe is the one that did
- * not run. A restart is the recovery, and that is what an orchestrator does.
- */
-
 /** The refusal, built in one place so its code and wording cannot drift. */
 function bootMigrationsNotRun(dialect: string): NextlyError {
   // Dialect-specific, because the recovery differs and the wrong advice is

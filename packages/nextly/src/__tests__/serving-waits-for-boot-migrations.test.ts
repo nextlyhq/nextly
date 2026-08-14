@@ -10,6 +10,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const awaitBootMigrations = vi.fn();
+let cached: { find: unknown };
 
 vi.mock("../init/boot-migrations-gate", () => ({
   awaitBootMigrations: () => awaitBootMigrations(),
@@ -23,9 +24,10 @@ beforeEach(() => {
   awaitBootMigrations.mockResolvedValue(undefined);
   // The cached instance is the FIRST early return in `getCachedNextly`, so it
   // is the hardest case for the gate: the check has to precede it.
+  cached = { find: vi.fn() };
   (
     globalThis as { __nextly_cachedInstance?: unknown }
-  ).__nextly_cachedInstance = { find: vi.fn() };
+  ).__nextly_cachedInstance = cached;
 });
 
 describe("serving surfaces consult the boot-migrations gate", () => {
@@ -47,7 +49,10 @@ describe("serving surfaces consult the boot-migrations gate", () => {
    * at all.
    */
   it("returns the cached instance when the gate allows", async () => {
-    await expect(getCachedNextly()).resolves.toBeDefined();
+    // Identity, not `toBeDefined()`: that also passed when `getCachedNextly`
+    // built a fallback instance or returned something unrelated, so it did not
+    // pin the property it was named for.
+    await expect(getCachedNextly()).resolves.toBe(cached);
     expect(awaitBootMigrations).toHaveBeenCalled();
   });
 });
