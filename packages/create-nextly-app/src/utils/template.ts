@@ -196,35 +196,51 @@ const TEXT_EXTENSIONS = new Set([
 const SKIP_FILES = new Set([".DS_Store", "Thumbs.db", ".gitkeep"]);
 
 /**
- * The template's ignore file, and the name it has to be SHIPPED under.
+ * Files a template stores under one name and a project must receive under another, as
+ * `[shipped, inProject]`.
  *
- * npm removes `.gitignore` from every tarball it packs — always, and with no way to opt out; a
- * `files` entry does not bring it back. So a template that stores the file under its real name
- * loses it the moment the CLI is published, and only there: scaffolding from a checkout with
- * `--local-template` keeps it, which is exactly the arrangement that hides the fault from
- * everyone working on the repository.
+ * Two unrelated reasons converge on the same mechanism, which is why there is one table rather
+ * than a rename per case:
  *
- * The consequence is not cosmetic. A scaffold writes a real `.env`, so the first `git add .` in a
- * new project commits it.
+ * `.gitignore` — npm removes it from every tarball it packs, always, and with no way to opt out;
+ * a `files` entry does not bring it back. A template storing it under its real name therefore
+ * keeps it in a checkout — which is what `--local-template` reads, and what everyone working on
+ * this repository uses — and loses it in the published CLI, which is what every user runs. The
+ * consequence is not cosmetic: a scaffold writes a real `.env`, so the first `git add .` in a new
+ * project commits it.
  *
- * Storing it dotless and restoring the name on copy is what `create-next-app` and `create-vite`
- * do, for this reason.
+ * `AGENTS.md` / `CLAUDE.md` — a coding agent reads these as instructions for whatever directory
+ * it finds them in. Stored under their real names they are live instructions for THIS repository,
+ * so an agent maintaining the template would follow scaffold guidance — an unresolved
+ * `{{databaseDialect}}` and commands meant for a generated standalone app — instead of the
+ * monorepo's own. The suffix keeps the source inert until it reaches a project.
+ *
+ * Storing a file under a name the tool restores on copy is what `create-next-app` and
+ * `create-vite` do, for the first of those reasons.
  */
-const IGNORE_FILE_IN_TEMPLATE = "gitignore";
-const IGNORE_FILE_IN_PROJECT = ".gitignore";
+const RENAMED_ON_COPY: ReadonlyArray<
+  readonly [shipped: string, inProject: string]
+> = [
+  ["gitignore", ".gitignore"],
+  ["AGENTS.md.template", "AGENTS.md"],
+  ["CLAUDE.md.template", "CLAUDE.md"],
+];
 
 /**
- * Restore `.gitignore` from the dotless name the template ships it under.
+ * Give the project the real names for the files the templates ship renamed.
  *
- * A no-op when the template carries no ignore file, so a template without one is not given an
- * empty file it never asked for.
+ * Each entry is a no-op when the template does not carry that file, so a template without an
+ * ignore file or without a guide is not given an empty one it never asked for.
+ *
+ * Runs BEFORE placeholder replacement: the shipped suffix is not a text extension, so a guide
+ * renamed afterwards would keep its `{{databaseDialect}}` unresolved.
  */
-async function restoreIgnoreFile(targetDir: string): Promise<void> {
-  const shipped = path.join(targetDir, IGNORE_FILE_IN_TEMPLATE);
-  if (!(await fs.pathExists(shipped))) return;
-  await fs.move(shipped, path.join(targetDir, IGNORE_FILE_IN_PROJECT), {
-    overwrite: true,
-  });
+async function restoreShippedNames(targetDir: string): Promise<void> {
+  for (const [shipped, inProject] of RENAMED_ON_COPY) {
+    const from = path.join(targetDir, shipped);
+    if (!(await fs.pathExists(from))) continue;
+    await fs.move(from, path.join(targetDir, inProject), { overwrite: true });
+  }
 }
 
 // ============================================================
@@ -1197,8 +1213,9 @@ export async function copyTemplate(
     "utf-8"
   );
 
-  // Step 6c: Give the project back the ignore file npm strips out of the tarball.
-  await restoreIgnoreFile(targetDir);
+  // Step 6c: Give the project the real names for the files the template ships renamed — the
+  // ignore file npm strips out of the tarball, and the agent guide kept inert in the source.
+  await restoreShippedNames(targetDir);
 
   // Step 6d: Undo the side effect of the workspace file above for the pnpm versions that
   // read it as a workspace declaration. Only for pnpm, because npm warns about the setting
@@ -1281,8 +1298,10 @@ async function copyPluginTemplate(opts: {
     "utf-8"
   );
 
-  // The plugin scaffold is a git repository too, and npm strips its ignore file the same way.
-  await restoreIgnoreFile(targetDir);
+  // The plugin scaffold is a git repository too, and npm strips its ignore file the same way. It
+  // carries its own agent guide — a publishable library rather than an app, so the base guide
+  // would describe the wrong project — and that guide is restored by the same table.
+  await restoreShippedNames(targetDir);
 
   // It installs like any other project too, so it meets the same workspace-root refusal the
   // pnpm workspace file provokes on pnpm 9 — through the same writer as the app path.
