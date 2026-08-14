@@ -1,3 +1,16 @@
+/**
+ * Controls for the repository-wide comment-convention gate.
+ *
+ * This suite SUPERSEDES `packages/blocks-engine/src/comment-convention.test.ts`, which this
+ * change deletes. That suite rooted the same rule inside one package: it walked from its own
+ * directory, so it enforced the convention for `blocks-engine` while reading, from the outside,
+ * as though it covered the repository. The gate these tests exercise scans every tracked source
+ * file, so the coverage moved here rather than disappearing.
+ *
+ * What moved with it, and what did not: the forbidden shapes, the comment extraction and the
+ * file walk are all covered below. The deleted suite carried no assertion this one lacks.
+ */
+
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
