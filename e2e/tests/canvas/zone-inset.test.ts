@@ -182,3 +182,81 @@ test("a depth of zero puts the pointer on the first row inside the band", async 
   expect(canvas.pointer().y).toBe(50);
   expect(trueDepth(ONE_BAND[0], canvas.pointer().y)).toBe(result.insetPx);
 });
+
+/**
+ * A canvas whose zone edge MOVES the first `shifts` times it is entered.
+ *
+ * The real one does this: a drop zone is 6px tall with a 3px margin while a
+ * drag is in flight and takes a 4px margin once it is the ACTIVE target, so
+ * arriving in a zone moves its own edge and every edge below it. A depth
+ * measured across that transition is measured from a boundary that has since
+ * moved.
+ */
+function shiftingEdgeCanvas(band: Band, shifts: number, startY = 0) {
+  let y = startY;
+  let from = band.from;
+  let entries = 0;
+  let wasInside = false;
+  return {
+    pointer: () => ({ x: 0, y }),
+    moveBy: async (_dx: number, dy: number) => {
+      y += dy;
+    },
+    zoneContainingPointer: async () => {
+      const inside = y >= from && y < band.to;
+      // Shifted on ENTRY only. The real transition fires when a zone becomes the
+      // active target, not on every read — and an edge that receded on every
+      // read would simply outrun the probe, which is a different fact
+      // (`boundary-not-found`) and would not exercise this one.
+      if (inside && !wasInside && entries < shifts) {
+        entries += 1;
+        from -= 1;
+      }
+      wasInside = inside;
+      return inside ? band.zone : -1;
+    },
+  };
+}
+
+test("settles a moving edge by measuring it twice, not by waiting", async () => {
+  // One shift is what the real transition produces: the zone grows once, when it
+  // becomes the active target. A second agreeing measurement is what proves the
+  // edge has stopped, and it costs no wall-clock time.
+  const canvas = shiftingEdgeCanvas({ zone: 4, from: 50, to: 90 }, 1);
+
+  const result = await dragToInsetInZone(canvas, 6);
+
+  expect(result.refused).toBeUndefined();
+  expect(result.zone).toBe(4);
+  expect(result.insetPx).toBe(6);
+});
+
+test("refuses rather than measuring from an edge that keeps moving", async () => {
+  // A depth taken from an edge in motion is a number with no referent, and
+  // reporting one would be worse than reporting nothing — every band assertion
+  // built on it would be wrong with no symptom pointing here.
+  const canvas = shiftingEdgeCanvas({ zone: 4, from: 50, to: 900 }, 99);
+
+  const result = await dragToInsetInZone(canvas, 6);
+
+  expect(result.refused).toBe("edge-moving");
+  expect(result.zone).toBe(4);
+});
+
+test("refuses a depth it cannot represent, rather than rounding to one it can", async () => {
+  // A caller deriving a depth from fractional or scaled DOM geometry would
+  // otherwise get 13px of movement for a 12.5px request and a success saying 13
+  // — a false measurement rather than a failed one. Negative and NaN are worse:
+  // the walk never runs and depth 0 comes back as a success.
+  const canvas = () => bandedCanvas(ONE_BAND);
+
+  await expect(dragToInsetInZone(canvas(), 12.5)).rejects.toThrow(
+    /whole, non-negative depth/
+  );
+  await expect(dragToInsetInZone(canvas(), -4)).rejects.toThrow(
+    /whole, non-negative depth/
+  );
+  await expect(dragToInsetInZone(canvas(), Number.NaN)).rejects.toThrow(
+    /whole, non-negative depth/
+  );
+});
