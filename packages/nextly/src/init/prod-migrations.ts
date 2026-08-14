@@ -9,7 +9,7 @@
 
 import { resolve } from "node:path";
 
-import { clearServices } from "../di";
+import { shutdownServices } from "../di";
 import { resolveDeclaredSchema } from "../domains/schema/migrate/resolved-schema";
 import { NextlyError } from "../errors";
 
@@ -95,15 +95,29 @@ const globalForBootMigrations = globalThis as unknown as {
 };
 
 /** The refusal, built in one place so its code and wording cannot drift. */
-function bootMigrationsNotRun(): NextlyError {
+function bootMigrationsNotRun(dialect: string): NextlyError {
+  // Dialect-specific, because the recovery differs and the wrong advice is
+  // worse than none. `forceUnlock` deletes the Postgres lock ROW; it returns
+  // immediately for every other dialect. MySQL's lock is a session-scoped
+  // `GET_LOCK`, so there IS no stale row to clear — it is held by a live
+  // connection and dies with it, which makes "restart the holder" the only
+  // recovery and `--force-unlock` a no-op that would waste an operator's time
+  // during an incident.
+  const recovery =
+    dialect === "postgresql"
+      ? "This usually resolves on restart once the other instance finishes; " +
+        "if the lock is stale, clear it with `nextly migrate --force-unlock`."
+      : "The lock is held by another live connection and is released when that " +
+        "connection ends, so this usually resolves on restart once the other " +
+        "instance finishes or is stopped.";
+
   return new NextlyError({
     code: "NEXTLY_BOOT_MIGRATIONS_NOT_RUN",
     publicMessage:
       "Boot migrations did not run: the migrate lock was still held after " +
       "waiting. Refusing to start rather than serve against a schema that may " +
-      "not match this build. This usually resolves on restart once the other " +
-      "instance finishes; if the lock is stale, clear it with " +
-      "`nextly migrate --force-unlock`.",
+      "not match this build. " +
+      recovery,
   });
 }
 
@@ -201,7 +215,7 @@ export async function runProdMigrationsIfEnabled(
     // finished. A genuinely stuck lock needs `nextly migrate --force-unlock`,
     // which is the intervention the situation actually calls for.
     if (!ran) {
-      throw bootMigrationsNotRun();
+      throw bootMigrationsNotRun(adapter.dialect);
     }
     logger.info(`[Nextly] Boot migrations complete (${applied} applied).`);
   } catch (err) {
@@ -222,7 +236,7 @@ export async function runProdMigrationsIfEnabled(
       const fatal =
         err.code === "NEXTLY_BOOT_MIGRATIONS_NOT_RUN"
           ? err
-          : bootMigrationsNotRun();
+          : bootMigrationsNotRun(args.adapter.dialect);
       // Recorded BEFORE rethrowing, so the next request through either entry
       // point refuses too rather than finding services already registered.
       globalForBootMigrations.__nextly_bootMigrationsRefused = fatal;
@@ -239,7 +253,12 @@ export async function runProdMigrationsIfEnabled(
       // every request. That is the right trade: the process is refusing to
       // serve and wants restarting, and a wasted registration is cheaper than a
       // request served against a schema nobody verified.
-      clearServices();
+      // `shutdownServices`, not `clearServices`: the latter empties the
+      // container WITHOUT disconnecting the adapter, so re-registering on the
+      // next request would build a second connected pool and leak one per
+      // retry — exhausting connections that healthy replicas need. Tearing
+      // down releases what this boot took before reopening the gate.
+      await shutdownServices();
       logger.error(`[Nextly] ${fatal.publicMessage}`);
       throw fatal;
     }
