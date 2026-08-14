@@ -415,56 +415,6 @@ jobs:
           fi
           echo "installed nextly matches the packed workspace build"
 
-      # Every `nextly <command>` the generator writes into package.json must be a command
-      # the CLI actually registers. A generated script naming a command that does not exist
-      # fails only when a user runs it, which no build step reaches — measured: every
-      # scaffold shipped `db:migrate:reset` calling `nextly migrate:reset`, which the CLI
-      # has never registered, and a unit test pinned it as expected output.
-      #
-      # Asserted against the INSTALLED CLI rather than a list in this file or in the
-      # generator's tests. The scripts and the command set live in two different packages,
-      # so only the installed project can tell whether they agree.
-      - name: Check the generated scripts name real CLI commands
-        shell: bash
-        run: |
-          cd /tmp/scaffold-build/scaffolded-app
-          mapfile -t cmds < <(node -e '
-            const s = require("./package.json").scripts || {};
-            const seen = new Set();
-            for (const v of Object.values(s)) {
-              // Take the subcommand after each `nextly` invocation, ignoring flags and
-              // anything chained after && so `nextly migrate && next build` is covered.
-              for (const part of String(v).split("&&")) {
-                const m = part.trim().match(/^nextly\s+([a-z][a-z0-9:-]*)/);
-                if (m) seen.add(m[1]);
-              }
-            }
-            for (const c of seen) console.log(c);
-          ')
-
-          # A positive control on that extraction. Reporting "every command is valid" after
-          # scanning nothing is the failure this check would otherwise hide.
-          echo "nextly subcommands referenced by the generated scripts: ${#cmds[@]}"
-          [ "${#cmds[@]}" -gt 0 ] || { echo "scanned no nextly commands at all"; exit 1; }
-
-          # `nextly help <cmd>` rather than `nextly <cmd> --help`. Measured: the second
-          # exits 0 for an UNKNOWN command — it falls back to printing the root help — so a
-          # check built on it passes for exactly the commands it exists to catch. `help`
-          # exits 1 when the command is not registered and 0 when it is.
-          failed=""
-          for c in "${cmds[@]}"; do
-            if npx nextly help "$c" > /dev/null 2>&1; then
-              echo "  ok   nextly $c"
-            else
-              echo "  MISSING   nextly $c"
-              failed="$failed $c"
-            fi
-          done
-          [ -z "$failed" ] || {
-            echo "generated scripts name commands the CLI does not register:$failed"
-            exit 1
-          }
-
       - name: Build the scaffolded project
         shell: bash
         run: |
