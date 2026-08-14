@@ -1,5 +1,8 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { NextlyError } from "../../errors";
+
+const clearServices = vi.fn();
+vi.mock("../../di", () => ({ clearServices: () => clearServices() }));
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -50,6 +53,7 @@ describe("runProdMigrationsIfEnabled", () => {
     // to be cleared between cases or the first refusal fails every test after.
     delete (globalThis as { __nextly_bootMigrationsRefused?: unknown })
       .__nextly_bootMigrationsRefused;
+    clearServices.mockClear();
   });
 
   /**
@@ -67,6 +71,30 @@ describe("runProdMigrationsIfEnabled", () => {
    * Second call passes a migrateCore that would SUCCEED, so this cannot pass by
    * the failure simply repeating.
    */
+  /**
+   * The sticky flag lives inside this helper, and both entry points call it
+   * only inside `if (!isServicesRegistered())` — which `registerServices()` has
+   * already made false by the time the refusal is thrown. Without reopening
+   * that gate the flag is unreachable: the next request skips this helper
+   * entirely, builds the dispatcher, and serves the unverified schema.
+   */
+  it("clears registration so the refusal is reachable on the next request", async () => {
+    process.env.NODE_ENV = "production";
+    const a = args({
+      migrateCore: vi.fn(async () => ({
+        applied: 0,
+        coreChanged: false,
+        ran: false,
+      })),
+    });
+
+    await expect(runProdMigrationsIfEnabled(a as never)).rejects.toMatchObject({
+      code: "NEXTLY_BOOT_MIGRATIONS_NOT_RUN",
+    });
+
+    expect(clearServices).toHaveBeenCalled();
+  });
+
   it("keeps refusing on later calls, even when migrations would now succeed", async () => {
     process.env.NODE_ENV = "production";
     await expect(
