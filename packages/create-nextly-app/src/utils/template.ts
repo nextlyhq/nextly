@@ -330,6 +330,24 @@ function mergeManagedBlock(existing: string, incoming: string): string {
 }
 
 /**
+ * `text` with fenced code blocks and HTML comments blanked out, preserving offsets.
+ *
+ * Both scans below look for markup that a Markdown file can legitimately CONTAIN as an example:
+ * a guide documenting the managed markers, or one showing what a `CLAUDE.md` pointer looks like.
+ * Read literally, an example reads as the real thing — so a documented marker pair becomes a
+ * region a regeneration overwrites, and a documented pointer counts as an installed one.
+ *
+ * Replacement rather than deletion, so every index the callers compute still refers to the same
+ * position in the original string. Newlines are kept for the same reason.
+ */
+function withoutMarkdownExamples(text: string): string {
+  const blank = (match: string): string => match.replace(/[^\n]/g, " ");
+  return text
+    .replace(/^[ \t]*(```|~~~)[\s\S]*?^[ \t]*\1[^\n]*$/gm, blank)
+    .replace(/^[ \t]*(?:`[^`\n]*`[ \t]*)+$/gm, blank);
+}
+
+/**
  * The bounds of the LAST self-contained marker pair in `text`, or null when there is none.
  *
  * Searching from the END, and requiring the end marker to follow the start it is paired with, is
@@ -352,18 +370,19 @@ function findManagedRegion(
   // because a guide can hold an unmatched marker in any position — before the block, after it, or
   // with no partner at all — and each arrangement sends occurrence-based arithmetic to a
   // different wrong region.
+  const scan = withoutMarkdownExamples(text);
   let cursor = 0;
   let found: { start: number; end: number } | null = null;
 
   for (;;) {
-    const startIndex = text.indexOf(MANAGED_START, cursor);
+    const startIndex = scan.indexOf(MANAGED_START, cursor);
     if (startIndex === -1) return found;
 
     const after = startIndex + MANAGED_START.length;
-    const endIndex = text.indexOf(MANAGED_END, after);
+    const endIndex = scan.indexOf(MANAGED_END, after);
     if (endIndex === -1) return found;
 
-    const nextStart = text.indexOf(MANAGED_START, after);
+    const nextStart = scan.indexOf(MANAGED_START, after);
     if (nextStart !== -1 && nextStart < endIndex) {
       // Unterminated: another block opens before this one closes. Leave it to the developer and
       // keep looking from the inner start.
@@ -408,7 +427,9 @@ function extractManagedBlock(incoming: string): string {
  */
 function appendMissingLines(existing: string, incoming: string): string {
   const key = (line: string): string => line.replace(/\s+$/, "");
-  const have = new Set(existing.split("\n").map(key));
+  // Lines inside a fenced example are text ABOUT the file, not lines of it — a guide showing
+  // `@AGENTS.md` in a code block has not installed the pointer.
+  const have = new Set(withoutMarkdownExamples(existing).split("\n").map(key));
   const missing = incoming
     .split("\n")
     .filter(line => line.trim() !== "" && !have.has(key(line)));
@@ -459,21 +480,50 @@ async function pointsAtItself(
   destination: string,
   incoming: string
 ): Promise<boolean> {
-  const names = incoming
-    .split("\n")
-    .map(line => line.trim())
-    .filter(line => line.startsWith("@"))
-    .map(line => line.slice(1));
-  if (names.length === 0) return false;
+  const targets = includeTargets(incoming);
+  if (targets.length === 0) return false;
 
   const self = await fs.realpath(destination).catch(() => destination);
-  for (const name of names) {
-    const resolved = await fs
-      .realpath(path.join(targetDir, name))
-      .catch(() => null);
+
+  for (const name of targets) {
+    const targetPath = path.join(targetDir, name);
+    const resolved = await fs.realpath(targetPath).catch(() => null);
+
+    // Directly circular, or unresolvable. A dangling pointer installs nothing, so writing it has
+    // no upside to weigh against the risk of the target appearing later.
     if (resolved === null || resolved === self) return true;
+
+    // Indirectly circular: the file this would point AT already includes the file being written.
+    // `AGENTS.md` holding `@CLAUDE.md` is inert while `CLAUDE.md` is absent — writing the pointer
+    // is what closes the loop, so the hazard is created by this write rather than found by it.
+    const theirIncludes = await fs
+      .readFile(targetPath, "utf-8")
+      .then(includeTargets)
+      .catch(() => []);
+    for (const back of theirIncludes) {
+      const backResolved = await fs
+        .realpath(path.join(targetDir, back))
+        .catch(() => null);
+      if (backResolved === self || path.join(targetDir, back) === destination) {
+        return true;
+      }
+    }
   }
   return false;
+}
+
+/**
+ * The files an instruction file INCLUDES, from its `@name` lines.
+ *
+ * Fenced examples are excluded for the same reason the pointer scan excludes them: a guide
+ * showing what an include looks like has not made one.
+ */
+function includeTargets(text: string): string[] {
+  return withoutMarkdownExamples(text)
+    .split("\n")
+    .map(line => line.trim())
+    .filter(line => line.startsWith("@") && line.length > 1)
+    .map(line => line.slice(1));
 }
 
 /**
