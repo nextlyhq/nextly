@@ -11,7 +11,12 @@
  * - deleteEntry: 404, hooks, access control, success response.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+import {
+  clearFieldFunctions,
+  registerFieldFunctions,
+} from "../../../shared/lib/field-level-registry";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { CollectionEntryService } from "../../../services/collections/collection-entry-service";
@@ -138,6 +143,12 @@ vi.mock("../../../lib/field-transform", () => ({
 // the documented contract, which keeps this observable without changing any outcome.
 const titleValidate = vi.fn().mockReturnValue(true);
 
+// A field-level `access.update` callback is configuration-supplied code that also resolves the
+// caller's grants, so running it for a caller about to be refused both executes application code
+// and performs a lookup on their behalf. It reaches the service through the function registry
+// rather than through the collection, so it is a separate door from the validator above.
+const titleFieldAccess = vi.fn().mockResolvedValue(true);
+
 // `updateEntry` reads `schemaDefinition.fields` in preference to `fields`, so both lists carry
 // the validator: attaching it to only one leaves the assertion watching a list nothing reads.
 function withTitleValidator<T extends { name: string }>(
@@ -178,6 +189,12 @@ describe("CollectionEntryService — Mutation Contracts", () => {
   let mockComponentDataService: ReturnType<
     typeof createMockComponentDataService
   >;
+
+  afterEach(() => {
+    // The function registry is module-global, so a registration left behind would apply to every
+    // later test in the file.
+    clearFieldFunctions();
+  });
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -530,6 +547,9 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       mockCollectionService.getCollection.mockResolvedValue(
         collectionWithTitleValidator()
       );
+      registerFieldFunctions("collection", "posts", [
+        { name: "title", type: "text", access: { update: titleFieldAccess } },
+      ]);
       mockAccessControlService.evaluateAccess.mockResolvedValueOnce({
         allowed: false,
         reason: "Not authorized to update",
@@ -548,6 +568,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       expect(runFieldHooksSpy).not.toHaveBeenCalled();
       expect(storedHookExecute).not.toHaveBeenCalled();
       expect(titleValidate).not.toHaveBeenCalled();
+      expect(titleFieldAccess).not.toHaveBeenCalled();
     });
 
     it("runs those same hooks for a caller it allows", async () => {
@@ -559,6 +580,9 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       mockCollectionService.getCollection.mockResolvedValue(
         collectionWithTitleValidator()
       );
+      registerFieldFunctions("collection", "posts", [
+        { name: "title", type: "text", access: { update: titleFieldAccess } },
+      ]);
 
       await service.updateEntry(
         { collectionName: "posts", entryId: "entry-1", user: { id: "user-1" } },
@@ -570,6 +594,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       expect(runFieldHooksSpy).toHaveBeenCalled();
       expect(storedHookExecute).toHaveBeenCalled();
       expect(titleValidate).toHaveBeenCalled();
+      expect(titleFieldAccess).toHaveBeenCalled();
     });
 
     it("should execute beforeOperation hooks", async () => {
