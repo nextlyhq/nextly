@@ -12,23 +12,58 @@
  * rectangle while contributing nothing to the document's geometry.
  */
 import { useDragDropMonitor, useDroppable } from "@dnd-kit/react";
-import { useState, type ReactNode } from "react";
+import { createContext, useContext, useState, type ReactNode } from "react";
 
 const BLOCK_TYPE = "nx-block";
+
+/**
+ * How deeply nested the container owning these zones is.
+ *
+ * Read by every zone as its collision priority, so "the innermost container
+ * owns the drop target" is decided by the tree rather than by which rectangle
+ * happens to score better. Two containers can mark the SAME insertion point at
+ * the same y — a nested container's first gap sits exactly where its parent's
+ * gap between children sits — and out of flow those rectangles are identical,
+ * which leaves a geometric detector nothing to choose by.
+ *
+ * A context rather than a prop because the tree recurses through each block's
+ * own `render`, which receives finished slot elements: there is no single call
+ * path to thread a depth argument along.
+ */
+const CanvasDepthContext = createContext(0);
+
+/** Wrap a container's slot content so its zones rank below the ones inside it. */
+export function CanvasDepth({
+  depth,
+  children,
+}: {
+  depth: number;
+  children: ReactNode;
+}): ReactNode {
+  return (
+    <CanvasDepthContext.Provider value={depth}>
+      {children}
+    </CanvasDepthContext.Provider>
+  );
+}
+
+/** The depth the surrounding container renders its children at. */
+export function useCanvasDepth(): number {
+  return useContext(CanvasDepthContext);
+}
 
 export function DropZone({
   parentId,
   slot,
   index,
-  count = 0,
   empty = false,
 }: {
   parentId: string;
   slot: string;
   index: number;
-  count?: number;
   empty?: boolean;
 }): ReactNode {
+  const depth = useCanvasDepth();
   const [dragging, setDragging] = useState(false);
   useDragDropMonitor({
     onDragStart() {
@@ -44,6 +79,13 @@ export function DropZone({
     type: BLOCK_TYPE,
     accept: BLOCK_TYPE,
     data: { kind: "dropzone", parentId, slot, index },
+    // Depth decides which container claims the pointer, and it outranks
+    // geometry: `sortCollisions` compares priority before collision type and
+    // before overlap, so the deepest container that collides at all wins. That
+    // is what "the innermost container owns the drop target" asks for, and it
+    // is the only thing that can settle two IDENTICAL rectangles — which is
+    // exactly what a nested container's edge gap and its parent's gap are.
+    collisionPriority: depth,
   });
 
   if (empty) {
@@ -58,20 +100,6 @@ export function DropZone({
     );
   }
 
-  // A gap at either end of the container sits ON its content edge, so a band
-  // centred there would lie half outside the container. Which end it is decides
-  // which way the band is aligned, and the two consequences are separate:
-  //
-  // - it stays within the container's own box, so `overflow: hidden` cannot
-  //   clip half the target and a full-height root gains no scrollable overflow.
-  // - it stops being COINCIDENT with the enclosing container's gap at the same
-  //   edge. Both mark an insertion point at one y, and out of flow they have
-  //   identical rectangles, so a detector has only tie-breaking to separate
-  //   them and the outer container wins by registration order. Nudging the
-  //   inner one inward makes depth priority a property of the geometry.
-  const edge =
-    index === 0 ? "start" : index === count && count > 0 ? "end" : undefined;
-
   // Two elements, because they answer different questions. The slot holds the
   // zone's place in the document and is zero-height for its whole life, so a
   // drag starting never reflows anything. The inner element is the DROPPABLE —
@@ -82,7 +110,6 @@ export function DropZone({
       <div
         ref={ref}
         className="nx-pb-dropzone"
-        data-edge={edge}
         data-drag={dragging || undefined}
         data-active={isDropTarget || undefined}
       />
