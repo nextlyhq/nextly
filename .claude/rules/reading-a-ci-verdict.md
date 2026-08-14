@@ -48,7 +48,7 @@ workflows check out `refs/pull/N/merge`, so what was BUILT AND TESTED is your
 branch merged with the base, while the resulting check-runs are attached to the
 PR HEAD. So the head is where to look them up, and "the head tree passed" is
 not what a green check means — it means the merge of head and base passed.
- (Inside a workflow the relationship inverts, but only for `pull_request`:
+(Inside a workflow the relationship inverts, but only for `pull_request`:
 there `github.sha` IS the synthetic merge commit. On `pull_request_target` it is
 the tip of the BASE branch — `main` for an ordinary PR, and the PARENT FEATURE
 BRANCH for a stacked one, so `labeler.yml` and `pr-title.yml` see whichever the
@@ -287,13 +287,13 @@ a remedy that worked:
 
 Either way something must be confirmed to have started. A remedy that is
 believed to have worked is how a stacked PR sits for a day looking retargeted.
- Close-and-reopen
-also starts CI and is the worse remedy, because it leaves the head SHA
-unchanged: the diff expands to include the parent stack while every existing
-review still points at that same SHA, so a coverage check keyed on the head
-happily reuses reviews taken when those commits were not in scope. A rebase
-moves the head and invalidates them, which is the outcome you want. Then gate on
-the run, never on the base having been changed.
+
+**Close-and-reopen carries a cost the other remedies do not**, which is the
+caveat promised above: it leaves the head SHA unchanged, so the diff expands to
+include the parent stack while every existing review still points at that same
+SHA — and a coverage check keyed on the head reuses reviews taken when those
+commits were not in scope. Moving the head is what invalidates them. Gate on the
+run, never on the base having been changed.
 
 **Retargeting changes what a review MEANS, not just what CI runs.** A review is
 evidence about a diff, and the diff is `base..head`; moving the base moves the
