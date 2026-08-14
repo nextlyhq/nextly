@@ -1,7 +1,11 @@
 "use client";
 
 import { Badge } from "@nextlyhq/ui";
-import { useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
+import {
+  useQuery,
+  useQueryClient,
+  useSuspenseQuery,
+} from "@tanstack/react-query";
 import { Suspense } from "react";
 
 import {
@@ -35,6 +39,7 @@ import { API_PATH_PREFIX } from "@admin/lib/api/fetcher";
 import { categoryLabel } from "@admin/lib/plugins/plugin-categories";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 import { staticRegistrySource } from "@admin/lib/plugins/registry/static-source";
+import { fetchPermissionsFromApi } from "@admin/services/realPermissionsApi";
 import type { PluginMetadata } from "@admin/types/branding";
 
 import { NotInstalledPlugin } from "./components/NotInstalledPlugin";
@@ -360,6 +365,79 @@ interface ContributionGroup {
  * the serialized metadata the server already computed. Honest by
  * construction — an empty group simply is not rendered.
  */
+/**
+ * A plugin's permissions, read from the SEEDED ROWS rather than folded from the
+ * configuration.
+ *
+ * The rows are what the seeder actually wrote, so Schema Builder entities,
+ * `setup` transformers and orphan repair are all already accounted for — none
+ * of which a fold over the configuration can see, because a Builder collection
+ * exists only in `dynamic_collections`. It also keeps the permission vocabulary
+ * off the public `admin-meta` payload, which served it to anonymous callers.
+ *
+ * `owner` is the DECLARING PLUGIN NAME, and the host's own sentinel is the
+ * literal string `"app"`. A plugin legally named `app` is therefore
+ * indistinguishable here from host-declared permissions, because the row
+ * carries no `source` column to separate them — the collector computes that
+ * distinction in memory and never persists it. Accepted rather than guarded:
+ * the ambiguity needs a schema change to close, and it is recorded here so the
+ * next reader is not surprised by it.
+ *
+ * Its own query rather than a suspending one, so a caller without the roles
+ * read permission degrades THIS card instead of the page.
+ */
+function PluginPermissions({ pluginName }: { pluginName: string }) {
+  const { data, isPending, isError } = useQuery({
+    queryKey: ["plugin-permissions", pluginName],
+    queryFn: () => fetchPermissionsFromApi({ limit: 200 }),
+    // A refusal is an answer about this viewer's access, not a transient
+    // failure, so retrying it only delays the message.
+    retry: false,
+  });
+
+  const owned = (data?.data ?? []).filter(entry => entry.owner === pluginName);
+
+  // Rendered even when empty, unlike the configuration-fed groups beside it.
+  // An absent section reads as "this plugin declares none", which is a claim
+  // this card cannot make while the request is pending or refused.
+  return (
+    <div className="rounded-lg border border-border bg-card p-4">
+      <div className="mb-2 flex items-center gap-2">
+        <Shield className="h-4 w-4 text-muted-foreground" />
+        <h3 className="text-sm font-medium text-foreground">Permissions</h3>
+      </div>
+      {isPending && (
+        <p className="text-xs text-muted-foreground">Loading permissions…</p>
+      )}
+      {isError && (
+        <p className="text-xs text-muted-foreground">
+          Not available. Reading permissions needs the roles read permission, so
+          this list is hidden rather than empty.
+        </p>
+      )}
+      {!isPending && !isError && owned.length === 0 && (
+        <p className="text-xs text-muted-foreground">
+          This plugin declares no permissions.
+        </p>
+      )}
+      {!isPending && !isError && owned.length > 0 && (
+        <ul className="space-y-1.5">
+          {owned.map(entry => (
+            <li key={entry.id} className="text-sm text-foreground">
+              {entry.name || `${entry.action}-${entry.resource}`}
+              {entry.danger === true && (
+                <span className="ml-2 text-xs text-muted-foreground">
+                  danger
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function Contributions({ plugin }: { plugin: PluginMetadata }) {
   const enabled = plugin.enabled !== false;
 
@@ -431,7 +509,9 @@ function Contributions({ plugin }: { plugin: PluginMetadata }) {
     },
   ].filter(group => group.items.length > 0);
 
-  if (groups.length === 0) return null;
+  // NOT `groups.length === 0`: permissions come from their own query now, so a
+  // plugin whose only contribution is a permission would have had the whole
+  // section removed by a check that cannot see them.
 
   return (
     <section className="mb-8">
@@ -504,6 +584,7 @@ function Contributions({ plugin }: { plugin: PluginMetadata }) {
             </ul>
           </div>
         ))}
+        <PluginPermissions pluginName={plugin.name} />
       </div>
     </section>
   );
