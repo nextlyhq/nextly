@@ -323,18 +323,14 @@ function mergeManagedBlock(existing: string, incoming: string): string {
 function findManagedRegion(
   text: string
 ): { start: number; end: number } | null {
-  // Scans for COMPLETE pairs rather than reasoning about first/last occurrences, which is the
-  // third attempt at this and the reason for the change of approach. Each earlier version fixed
-  // one malformed layout and broke on its mirror:
+  // A pair is COMPLETE when an END follows a START with no other START between them; an
+  // intervening START means the first was never terminated. The region a regeneration owns is the
+  // LAST complete pair, and every marker outside it is the developer's own text.
   //
-  //   first start + first end   → a stray START swallowed the block below it
-  //   last end + start before   → a stray END swallowed the prose above it
-  //   last start + first end    → a stray START after a valid block hid that block, so a second
-  //                               one was appended and the stale instructions stayed forever
-  //
-  // A pair is complete when an END follows a START with NO other START in between; an
-  // intervening START means the first one was never terminated. The LAST complete pair is the
-  // block a regeneration owns, and every marker outside it is the developer's text.
+  // Stated structurally rather than as "the first" or "the last" occurrence of either marker,
+  // because a guide can hold an unmatched marker in any position — before the block, after it, or
+  // with no partner at all — and each arrangement sends occurrence-based arithmetic to a
+  // different wrong region.
   let cursor = 0;
   let found: { start: number; end: number } | null = null;
 
