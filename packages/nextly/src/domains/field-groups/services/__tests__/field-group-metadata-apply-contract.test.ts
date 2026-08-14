@@ -426,8 +426,13 @@ describe("an update whose row write fails after the tables moved", () => {
     // The divergence is RECORDED, not merely raised: the raise reaches one caller once, the row is
     // what anyone looking later can see.
     expect(registry.updateComponent).toHaveBeenCalledTimes(2);
+    // 🔴 `diverged`, NOT `failed`. The canonical type documents `failed` as a table-creation
+    // failure whose repair is to retry, which is the exact action that compounds this one: a retry
+    // derives `wasLocalized` from a row that already describes the wrong shape. Once the one-time
+    // error response is gone, this column is the only thing telling a recovery tool which of the
+    // two it is looking at.
     expect(registry.updateComponent.mock.calls[1]?.[1]).toEqual({
-      migrationStatus: "failed",
+      migrationStatus: "diverged",
     });
     // The optimistic lock is invalidated with it: the tables moved, so every editor loaded before
     // this moment is describing a shape that no longer exists.
@@ -524,7 +529,7 @@ describe("an update whose row write fails after the tables moved", () => {
       "the only trace is the server log"
     );
     expect((refusal as NextlyError).publicMessage).not.toContain(
-      "is marked as a failed migration"
+      "is marked as diverged"
     );
     // The mark was attempted and refused, which is the state this describes. Asserting only the
     // raise would pass on an implementation that never tried.

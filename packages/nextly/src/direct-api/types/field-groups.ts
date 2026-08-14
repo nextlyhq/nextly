@@ -118,7 +118,13 @@ export interface FieldGroupDefinition {
   schemaVersion: number;
 
   /** Migration status */
-  migrationStatus: "synced" | "pending" | "generated" | "applied" | "failed";
+  migrationStatus:
+    | "synced"
+    | "pending"
+    | "generated"
+    | "applied"
+    | "failed"
+    | "diverged";
 
   /** Last applied migration ID */
   lastMigrationId?: string;
@@ -154,7 +160,13 @@ export interface FindFieldGroupsArgs extends DirectAPIConfig {
   source?: "code" | "ui";
 
   /** Filter by migration status */
-  migrationStatus?: "synced" | "pending" | "generated" | "applied" | "failed";
+  migrationStatus?:
+    | "synced"
+    | "pending"
+    | "generated"
+    | "applied"
+    | "failed"
+    | "diverged";
 
   /** Include only locked or unlocked field groups */
   locked?: boolean;

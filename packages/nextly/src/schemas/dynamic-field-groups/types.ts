@@ -47,7 +47,14 @@ export type FieldGroupSource = "code" | "ui";
  * - `pending`: Schema has changed but migration not yet created
  * - `generated`: Migration file has been created but not applied
  * - `applied`: Migration has been applied to the database (table verified to exist)
- * - `failed`: Migration was attempted but table creation failed
+ * - `failed`: Migration was attempted but table creation failed. RETRIABLE: the table is not
+ *   there, so making it again is the repair.
+ * - `diverged`: The tables were changed and the row recording it was NOT written. NOT RETRIABLE,
+ *   and that is the whole reason it is its own state rather than a `failed`. The stored definition
+ *   describes the PREVIOUS shape while the tables hold the new one, so repeating the edit derives
+ *   its starting point from a row that is already wrong — a localization enable would seed the
+ *   companion a second time from main-table columns the first attempt already dropped. Reconcile
+ *   the definition against the tables before editing the field group again.
  *
  * @example
  * ```typescript
@@ -57,6 +64,9 @@ export type FieldGroupSource = "code" | "ui";
  * if (component.migrationStatus === 'failed') {
  *   console.log('Table creation failed - check logs and retry');
  * }
+ * if (component.migrationStatus === 'diverged') {
+ *   console.log('Tables moved but the record did not - reconcile, do NOT retry');
+ * }
  * ```
  */
 export type FieldGroupMigrationStatus =
@@ -64,7 +74,8 @@ export type FieldGroupMigrationStatus =
   | "pending"
   | "generated"
   | "applied"
-  | "failed";
+  | "failed"
+  | "diverged";
 
 // ============================================================
 // Dynamic Component Types
@@ -290,4 +301,4 @@ export const FIELD_GROUP_SOURCE_TYPES: readonly FieldGroupSource[] = [
  * ```
  */
 export const FIELD_GROUP_MIGRATION_STATUSES: readonly FieldGroupMigrationStatus[] =
-  ["synced", "pending", "generated", "applied", "failed"] as const;
+  ["synced", "pending", "generated", "applied", "failed", "diverged"] as const;

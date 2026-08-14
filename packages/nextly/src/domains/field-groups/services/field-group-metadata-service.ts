@@ -57,7 +57,14 @@ import type { FieldGroupRegistryService } from "./field-group-registry-service";
  */
 
 /** How far a schema change got. The registry stores this and the admin reads it back. */
-export type FieldGroupMigrationStatus = "pending" | "applied" | "failed";
+export type FieldGroupMigrationStatus =
+  | "pending"
+  | "applied"
+  | "failed"
+  // The tables were changed and the row recording it was not written. Distinct from `failed`
+  // because the two call for opposite actions: `failed` means the change did not happen and
+  // retrying is the repair, `diverged` means half of it did and retrying compounds it.
+  | "diverged";
 
 /**
  * The registry row to create, minus the one field this service owns.
@@ -408,7 +415,7 @@ export class FieldGroupMetadataService {
     try {
       await this.registry.updateComponent(
         slug,
-        { migrationStatus: "failed" },
+        { migrationStatus: "diverged" },
         // The version advances even though this write carries no new field set: the TABLES moved,
         // and an editor loaded before that is now describing a shape that is gone. Leaving the
         // version alone would let such a preview pass `assertSchemaVersionMatch` and apply its
@@ -418,7 +425,7 @@ export class FieldGroupMetadataService {
       marked = true;
     } catch (markError) {
       this.logger.error(
-        "[FieldGroups] Could not mark the field group's migration as failed either.",
+        "[FieldGroups] Could not mark the field group as diverged either.",
         {
           slug,
           error:
@@ -439,7 +446,7 @@ export class FieldGroupMetadataService {
       code: "INTERNAL_ERROR",
       statusCode: NEXTLY_ERROR_STATUS.INTERNAL_ERROR,
       publicMessage: marked
-        ? `The field group's tables were changed, but recording the change failed. "${slug}" is marked as a failed migration and its stored definition still describes the previous shape. Do not retry the same edit: check the server logs and reconcile the field group before editing it again.`
+        ? `The field group's tables were changed, but recording the change failed. "${slug}" is marked as diverged and its stored definition still describes the previous shape. Do not retry the same edit: check the server logs and reconcile the field group before editing it again.`
         : `The field group's tables were changed, but neither the change nor the failure could be recorded. "${slug}" still reads as though nothing happened, and the only trace is the server log. Do not retry the same edit: reconcile the field group against its tables before editing it again.`,
       cause: cause instanceof Error ? cause : undefined,
       logContext: {
