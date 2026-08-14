@@ -195,6 +195,7 @@ describe("a plugin declaring a permission on a Builder entity", () => {
       slug: `${overrides.action}-${overrides.resource}`,
       name: `${overrides.action} ${overrides.resource}`,
       owner: "some-plugin",
+      source: "plugin",
       group: "Plugin",
       danger: false,
       ...overrides,

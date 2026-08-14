@@ -12,10 +12,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { PluginDefinition } from "../../plugins/plugin-context";
 
-const setHandlerPlugins = vi.fn();
+const setBootedConfig = vi.fn();
 
 vi.mock("../../route-handler/auth-handler", () => ({
-  setHandlerPlugins: (plugins: unknown) => setHandlerPlugins(plugins),
+  setBootedConfig: (config: unknown) => setBootedConfig(config),
 }));
 
 const { registerServices } = await import("../register");
@@ -48,6 +48,6 @@ describe("publishing the booted plugin list", () => {
       } as unknown as Parameters<typeof registerServices>[0])
     ).rejects.toThrow();
 
-    expect(setHandlerPlugins).not.toHaveBeenCalled();
+    expect(setBootedConfig).not.toHaveBeenCalled();
   });
 });

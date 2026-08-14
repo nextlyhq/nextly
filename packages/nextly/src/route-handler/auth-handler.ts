@@ -18,7 +18,7 @@ import {
 } from "../di";
 import type { NextlyServiceConfig } from "../di/register";
 import { buildServiceConfig } from "../init/build-service-config";
-import type { PluginDefinition } from "../plugins/plugin-context";
+import { seedAllPermissions } from "../init/seed-permissions";
 import { ensureHmrListener } from "../runtime/hmr-listener";
 import { getImageProcessor } from "../storage/image-processor";
 
@@ -46,7 +46,7 @@ let _storedConfig: SanitizedNextlyConfig | null = null;
  * On `globalThis`, and NOT module-local, for the same reason `register.ts`
  * keeps its registration state there: Next.js and Turbopack can evaluate this
  * module in more than one server module graph, so instrumentation's boot may
- * call `setHandlerPlugins` on one copy while `/admin-meta` reads another. A
+ * call `setBootedConfig` on one copy while `/admin-meta` reads another. A
  * module-local value is `null` in the reading copy, and the endpoint falls back
  * to disclosing the raw, pre-`setup` list — which is the defect this whole seam
  * exists to remove, reappearing only under a bundler that duplicates modules.
@@ -56,8 +56,64 @@ let _storedConfig: SanitizedNextlyConfig | null = null;
  * same copy serves the request, so it has no cross-graph reader.
  */
 const globalForBoot = globalThis as unknown as {
-  __nextly_bootPlugins?: PluginDefinition[];
+  __nextly_bootConfig?: BootedConfigView;
 };
+
+/**
+ * The blocks of the booted config this store republishes, WHOLE.
+ *
+ * An earlier version kept entity SLUGS only, reasoning that the permission fold
+ * was the sole reader. It is not: `getHandlerConfig()` has six readers, and one
+ * hands its result to `runProdMigrationsIfEnabled`, whose `resolveDeclaredSchema`
+ * reads `dbName` and a relationship's `junctionTable`. Projecting those away
+ * made drift verification look for a table that never existed.
+ *
+ * So what is bounded here is WHICH blocks travel, never how much of each. The
+ * bound is type compatibility and the compiler checks it: the transformed
+ * config is a `NextlyServiceConfig`, whose `auth` is the UNSANITIZED
+ * `AuthConfig`, so overlaying that onto a `SanitizedNextlyConfig` would hand
+ * readers a shape they are typed against and do not have. Widening this list
+ * means checking a field's type across the two, not adding a name to it.
+ *
+ * These are also the blocks a `setup` transformer meaningfully rewrites: the
+ * plugin list, the entities plugins contribute, and the app-level permission
+ * declarations that can collide with them.
+ */
+type BootedConfigView = Pick<
+  SanitizedNextlyConfig,
+  "plugins" | "collections" | "singles"
+> &
+  Pick<SanitizedNextlyConfig, "permissions">;
+
+/**
+ * `booted`'s explicitly-set keys laid over `base`.
+ *
+ * Key by key rather than a spread: a present-but-`undefined` key would
+ * otherwise delete a field the stored config legitimately holds.
+ */
+function overlayDefined(
+  base: SanitizedNextlyConfig,
+  booted: BootedConfigView
+): SanitizedNextlyConfig {
+  // Every key of `BootedConfigView` is taken, `undefined` included. These four
+  // are blocks boot OWNS, so its answer is authoritative in both directions: a
+  // transformer that removes the last app-level permission returns
+  // `permissions: undefined`, and skipping that would preserve the raw
+  // declaration — leaving `/admin-meta` folding against a collision the running
+  // config resolved, and degrading to an empty set that hides every seeded
+  // plugin permission.
+  //
+  // Skipping `undefined` was right when this overlaid the WHOLE config, where
+  // it protected `typescript`, `db` and `storage` from a transformed value that
+  // never carries them. Narrowing the type to what boot owns removed the reason.
+  return {
+    ...base,
+    plugins: booted.plugins,
+    collections: booted.collections,
+    singles: booted.singles,
+    permissions: booted.permissions,
+  };
+}
 
 /**
  * The merged view, and the exact inputs it was built from.
@@ -71,7 +127,7 @@ const globalForBoot = globalThis as unknown as {
 let _bootView: SanitizedNextlyConfig | null = null;
 let _bootViewInputs: {
   config: SanitizedNextlyConfig;
-  plugins: PluginDefinition[];
+  booted: BootedConfigView;
 } | null = null;
 
 /**
@@ -100,18 +156,18 @@ function bootView(): SanitizedNextlyConfig | null {
   // remembered-to-clear approach would be one edit away from the stale-read it
   // is meant to prevent. Derived here, a teardown, a failed re-boot, and a
   // process that never booted all fall back to the declared list on their own.
-  const plugins = isServicesRegistered()
-    ? globalForBoot.__nextly_bootPlugins
+  const booted = isServicesRegistered()
+    ? globalForBoot.__nextly_bootConfig
     : undefined;
-  if (!config || !plugins) return config;
+  if (!config || !booted) return config;
 
   if (
     !_bootView ||
     _bootViewInputs?.config !== config ||
-    _bootViewInputs?.plugins !== plugins
+    _bootViewInputs?.booted !== booted
   ) {
-    _bootView = { ...config, plugins };
-    _bootViewInputs = { config, plugins };
+    _bootView = overlayDefined(config, booted);
+    _bootViewInputs = { config, booted };
   }
   return _bootView;
 }
@@ -140,10 +196,28 @@ export function setHandlerConfig(config: SanitizedNextlyConfig): void {
  * advertising the plugins the author declared — and normalizing here rather
  * than at the call site leaves the caller no branch in which to disagree.
  */
-export function setHandlerPlugins(
-  plugins: PluginDefinition[] | undefined
-): void {
-  globalForBoot.__nextly_bootPlugins = plugins ?? [];
+export function setBootedConfig(config: NextlyServiceConfig): void {
+  // Takes the WHOLE transformed config, and narrows here rather than at the
+  // call site. A caller that named the blocks to publish would be one omission
+  // from the endpoint folding against raw values for whatever it forgot.
+  //
+  // `plugins` is normalized because an absent list and an emptied one are the
+  // same fact: a boot whose transformers removed every plugin must stop this
+  // store advertising the ones the author declared.
+  globalForBoot.__nextly_bootConfig = {
+    // Normalized, because the sanitized shape these overlay onto requires them
+    // and an absent list means the same as an empty one: a boot whose
+    // transformers removed every plugin, collection or single must stop the
+    // store advertising the ones the author declared.
+    plugins: config.plugins ?? [],
+    collections: config.collections ?? [],
+    singles: config.singles ?? [],
+    // NOT normalized: `permissions` is genuinely optional on the sanitized
+    // config, so `undefined` is a value here — "boot registered no app-level
+    // permissions" — and the overlay must carry it rather than fall back to the
+    // author's raw declaration.
+    permissions: config.permissions,
+  };
 }
 
 /**
@@ -369,28 +443,14 @@ async function initializeServicesOnce(): Promise<void> {
       // Silently skip — email_templates table may not exist yet
     }
 
-    // Seed system + collection + single permissions (idempotent).
-    // This mirrors init.ts runPostInitTasks() so external apps using
-    // createDynamicHandlers() get permissions auto-seeded on first request.
-    // Without this, permissions like "update-api-keys" won't exist and
-    // the admin UI will block access to protected settings tabs.
+    // The same seeding the instrumentation boot performs, so an app that cold
+    // boots only through `createDynamicHandlers` ends up with the same rows.
+    // Shared rather than mirrored: this path used to seed system, collection
+    // and single permissions and stop there, which left a plugin's declared
+    // permission with no row and no super-admin grant on the one boot path
+    // that never runs post-init tasks.
     try {
-      const permissionSeedService = getService("permissionSeedService");
-      const systemResult = await permissionSeedService.seedSystemPermissions();
-      const collectionResult =
-        await permissionSeedService.seedAllCollectionPermissions();
-      const singleResult =
-        await permissionSeedService.seedAllSinglePermissions();
-
-      const allNewIds = [
-        ...systemResult.newPermissionIds,
-        ...collectionResult.newPermissionIds,
-        ...singleResult.newPermissionIds,
-      ];
-
-      if (allNewIds.length > 0) {
-        await permissionSeedService.assignNewPermissionsToSuperAdmin(allNewIds);
-      }
+      await seedAllPermissions();
     } catch {
       // Silently skip — permissions table may not exist yet (migrations not run),
       // or permissionSeedService may not be registered

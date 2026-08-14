@@ -16,6 +16,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SanitizedNextlyConfig } from "../../collections/config/define-config";
+import type { NextlyServiceConfig } from "../../di/register";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 
 const registerServices = vi.fn();
@@ -37,8 +38,17 @@ vi.mock("../../storage/image-processor", () => ({
   getImageProcessor: () => undefined,
 }));
 
-const { ensureServicesInitialized, setHandlerConfig, setHandlerPlugins } =
+const { ensureServicesInitialized, setHandlerConfig, setBootedConfig } =
   await import("../auth-handler");
+
+/**
+ * A boot result in the shape `registerServices` publishes. Only the blocks the
+ * store republishes matter here; the rest of `NextlyServiceConfig` is adapter
+ * and processor wiring this seam never reads.
+ */
+function booted(config: Partial<NextlyServiceConfig>): NextlyServiceConfig {
+  return config as NextlyServiceConfig;
+}
 
 function plugins(...names: string[]): PluginDefinition[] {
   return names.map(
@@ -60,7 +70,9 @@ describe("the request-path registration input", () => {
     setHandlerConfig(raw);
     // A previous boot in this process reported its transformed list, exactly
     // as `registerServices` does at the end of a successful registration.
-    setHandlerPlugins(plugins("@acme/declared", "@acme/added-by-setup"));
+    setBootedConfig(
+      booted({ plugins: plugins("@acme/declared", "@acme/added-by-setup") })
+    );
 
     await ensureServicesInitialized();
 
@@ -84,7 +96,9 @@ describe("the request-path registration input", () => {
     isServicesRegistered.mockReturnValue(true);
 
     setHandlerConfig(raw);
-    setHandlerPlugins(plugins("@acme/declared", "@acme/added-by-setup"));
+    setBootedConfig(
+      booted({ plugins: plugins("@acme/declared", "@acme/added-by-setup") })
+    );
 
     expect(getHandlerConfig()?.plugins?.map(p => p.name)).toEqual([
       "@acme/declared",
