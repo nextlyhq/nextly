@@ -318,6 +318,15 @@ They are easy to run together and none substitutes for another:
    answers the same way whether or not the commit landed. Match it as a FIXED
    string: a marker containing `.`, `[` or `*` is otherwise a pattern, and can
    match text it was never taken from.
+
+   **The marker must fit on ONE line.** `git grep` matches per line, so a marker
+   spanning a wrapped comment or a formatted call finds nothing in a merge
+   commit that contains it — which reads exactly like a lost tail, in the
+   alarming direction. Measured here while verifying a merge by content: the
+   control is what separated the two, because the same marker was absent from
+   the BRANCH HEAD as well, and content the branch does not have cannot have
+   been lost by the merge. Pick a marker from a single line, and when the search
+   comes back empty run it against the head before believing it.
    - it ADDED content → `git grep -F -e "$marker" <mergeCommit> -- <path>`;
      expect a hit. The `-e` is not optional: a marker beginning with `-`, which
      a Markdown list item usually does, is otherwise parsed as an option and
