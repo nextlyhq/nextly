@@ -41,6 +41,10 @@ import type { ApiKeyService } from "../domains/auth/services/api-key-service";
 import type { AuthService } from "../domains/auth/services/auth-service";
 import type { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
 import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
+import {
+  resolveDescription,
+  toPersistedAdmin,
+} from "../domains/collections/services/collection-sync-service";
 import type { ResolvedEmailRetentionConfig } from "../domains/email/retention-config";
 import { emailRetentionAfterTransform } from "../domains/email/retention-config";
 import type { EmailDeliveryService } from "../domains/email/services/email-delivery-service";
@@ -1781,10 +1785,14 @@ async function syncCodeFirstCollections(
         plural: collection.labels?.plural ?? `${collection.slug}s`,
       },
       fields: collection.fields,
-      description: collection.description,
+      description: resolveDescription(collection),
       tableName: collection.dbName,
       timestamps: collection.timestamps,
-      admin: collection.admin,
+      // Through the SAME projection the CLI path uses. Forwarding the authored object
+      // instead would store whatever it holds — including a `preview.url` function that
+      // JSON.stringify drops silently, leaving a preview config that cannot work — and would
+      // put the primary write path outside the boundary that decides what `admin` may contain.
+      admin: toPersistedAdmin(collection.admin),
       source: sourceBySlug.get(collection.slug) ?? "code",
       // Forward Draft/Published flag from code-first config so the boot-time
       // sync persists it to dynamic_collections.status.
