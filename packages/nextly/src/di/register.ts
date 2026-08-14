@@ -552,14 +552,6 @@ export async function registerServices(
   // would newly refuse pre-existing declarations that boot fine today, whereas a
   // rule that can fire here has to have been written against a field type in
   // this same process.
-  // Opened HERE, before anything publishes the container, because this is the
-  // only boundary both boot paths cross. The request path publishes services
-  // and calls the migration helper afterwards, so opening it there left a
-  // window in which registration was visible and the gate was not yet closed —
-  // a concurrent `getNextly()` served inside it. No-op unless production boot
-  // migrations are configured, so the CLI and the test harness never open a
-  // gate nothing would settle.
-  openBootMigrationsGate(transformedConfig.runMigrationsOnBoot === true);
 
   assertPluginFieldDeclarations(transformedConfig);
 
@@ -1114,6 +1106,22 @@ export async function registerServices(
   if (!container.has("nextlyDirectAPI")) {
     container.register("nextlyDirectAPI", () => getNextly());
   }
+
+  // Opened immediately BEFORE registration publishes, which is the last point
+  // that is both late enough and early enough.
+  //
+  // Early enough: the window this closes is "registered but schema unverified",
+  // and the flag below is what opens that window — so a consumer can never see
+  // registration without also seeing the gate.
+  //
+  // Late enough: everything that can abort a registration — adapter connection,
+  // schema synchronisation, plugin init — has already run. An abort therefore
+  // never leaves a gate open with nobody left to settle it, which would block
+  // every later retry forever on a gate whose owner died.
+  //
+  // No-op unless production boot migrations are configured, so the CLI and the
+  // test harness never open a gate nothing would close.
+  openBootMigrationsGate(transformedConfig.runMigrationsOnBoot === true);
 
   globalForReg.__nextly_isRegistered = true;
 
