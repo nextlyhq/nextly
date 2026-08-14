@@ -16,6 +16,9 @@
 // Every function here is pure. The caller fetches; these decide. A function
 // that performs its own I/O cannot be handed the inputs it must get right.
 
+import { realpathSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
 /** Reviewers whose verdict blocks a merge, and the marker text of a refusal. */
 export const RATE_LIMIT_MARKER = /Review limit reached/;
 
@@ -186,7 +189,7 @@ export function verdictFor({
       verdict:
         stranded > 0 ? "MERGED WITH UNMERGED CANDIDATES" : "ALREADY MERGED",
 
-      detail: { state, stranded },
+      detail: { state, unmergedCandidates: stranded },
       exitCode: stranded > 0 ? 1 : 0,
     };
   }
@@ -195,7 +198,7 @@ export function verdictFor({
   if (state !== "OPEN") {
     return {
       verdict: "CLOSED WITHOUT MERGING",
-      detail: { state, stranded },
+      detail: { state, unmergedCandidates: stranded },
       exitCode: 1,
     };
   }
@@ -282,7 +285,9 @@ export function report({
   return {
     head,
     state,
-    stranded_commits: stranded,
+    // Named for what the range establishes — absence from the merge — rather
+    // than for the conclusion only a content comparison can reach.
+    unmerged_candidates: stranded,
     reviewed_head: reviewersAtHead(reviews, head),
     missing_reviews: missing,
     // JSON has no infinity, so an unavailable count would serialise as `null`
@@ -325,7 +330,12 @@ async function main(argv) {
   }
   const [name] = segments.slice(-1);
   const [owner] = segments.slice(-2, -1);
-  const host = segments.length === 3 ? segments[0] : "github.com";
+  // `GH_HOST` supplies the hostname when GH_REPO does not carry one, which is
+  // the ordinary Enterprise configuration. Defaulting straight to github.com
+  // would override that selection with the explicit `--hostname` below.
+  const host =
+    segments.length === 3 ? segments[0] : (process.env.GH_HOST ?? "github.com");
+
   const repo = `${owner}/${name}`;
   const { execFileSync } = await import("node:child_process");
   // Each query is its own process and its failure is its own exception: a
@@ -600,10 +610,22 @@ async function main(argv) {
   return result.exitCode;
 }
 
-if (
-  process.argv[1] &&
-  import.meta.url === new URL(`file://${process.argv[1]}`).href
-) {
+// `import.meta.url` is percent-encoded AND realpath-resolved, so the comparison
+// value has to be both. Interpolating the path leaves a `#` in a directory name
+// unencoded, and skipping `realpathSync` leaves a symlinked prefix — `/tmp` is
+// `/private/tmp` on macOS — unresolved. Either mismatch makes the gate exit 0
+// having run nothing, which is the worst way for a gate to fail.
+const invokedDirectly = () => {
+  if (!process.argv[1]) return false;
+  try {
+    return (
+      import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href
+    );
+  } catch {
+    return false;
+  }
+};
+if (invokedDirectly()) {
   main(process.argv.slice(2)).then(
     // `process.exitCode` rather than `process.exit`: the latter can terminate
     // before a piped or redirected stdout has drained, truncating the report

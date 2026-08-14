@@ -413,7 +413,7 @@ describe("a pull request that is no longer open", () => {
    * legitimately, and only content against the squash separates the two.
    */
 
-  it("names a stranded tail rather than reporting missing coverage", () => {
+  it("names unmerged candidates rather than reporting missing coverage", () => {
     const v = verdictFor({
       missing: [CODEX],
       blocking: [CODEX],
@@ -421,12 +421,12 @@ describe("a pull request that is no longer open", () => {
       stranded: 4,
     });
     expect(v.verdict).toBe("MERGED WITH UNMERGED CANDIDATES");
-    expect(v.detail).toEqual({ state: "MERGED", stranded: 4 });
+    expect(v.detail).toEqual({ state: "MERGED", unmergedCandidates: 4 });
     expect(v.exitCode).toBe(1);
   });
 
   /** A merged pull request whose branch did not move afterwards is done. */
-  it("is satisfied by a merged pull request with nothing stranded", () => {
+  it("is satisfied by a merged pull request whose branch did not advance", () => {
     const v = verdictFor({ blocking: [CODEX], state: "MERGED", stranded: 0 });
     expect(v.verdict).toBe("ALREADY MERGED");
     expect(v.exitCode).toBe(0);
