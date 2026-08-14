@@ -83,9 +83,8 @@ test("throws rather than returning a value from a reader that never holds still"
 
 test("tolerates a reader that settles only after changing more than once", async () => {
   // A canvas is entitled to a dwell, and to another if the first expiry moves
-  // the target somewhere that starts a second. A harness that accepted only one
-  // transition would fail a compliant canvas, which is the error this suite has
-  // made four times in other probes.
+  // the target somewhere that starts a second. A reader that accepted only one
+  // transition would return the intermediate value and call it settled.
   const movedAt = Date.now();
   const step = DEFAULT_DWELL_ALLOWANCE_MS / 2;
   const value = await settledValue(async () => {
