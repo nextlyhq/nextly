@@ -114,8 +114,12 @@ export function changesRequested(reviews, head = undefined) {
       // clears only when it speaks to the objected revision or to the one being
       // merged; ancestry is not available here, so "later" is not inferred from
       // anything weaker than those two identities.
+      // A DISMISSED row never clears. Dismissal invalidates THAT review, so a
+      // dismissed approval withdraws the clearance rather than the objection —
+      // and a dismissed changes-request is already represented by its own row
+      // no longer reading `CHANGES_REQUESTED`.
+      if (review.state !== "APPROVED") continue;
       const clears =
-        review.state === "DISMISSED" ||
         review.commit_id === objectedAt ||
         (head !== undefined && review.commit_id === head);
       if (clears) outstanding.delete(login);
@@ -444,6 +448,19 @@ async function main(argv) {
     }
     return sha;
   };
+  // A pull request CLOSED WITHOUT MERGING is settled by its lifecycle alone,
+  // and its branch is commonly deleted straight afterwards — so resolving the
+  // ref first turned a conclusive answer into `exit 2` for a missing ref.
+  // Emitted directly rather than through `report`, which exists to weigh
+  // reviews and threads that cannot change this outcome.
+  if (meta.state !== "OPEN" && meta.state !== "MERGED") {
+    const closed = verdictFor({ state: meta.state, stranded: 0 });
+    process.stdout.write(
+      `${JSON.stringify({ state: meta.state, ...closed }, null, 2)}\n`
+    );
+    return closed.exitCode;
+  }
+
   const head = headOf();
   const reviews = gh([
     "api",
@@ -678,6 +695,18 @@ async function main(argv) {
   if (meta.state === "MERGED" && rewriteEvents() !== rewritten) {
     process.stderr.write(
       "ci-verdict: branch history rewritten mid-run; tail NOT CHECKABLE\n"
+    );
+    return 2;
+  }
+
+  // THE LAST READ BEFORE THE VERDICT, and last on purpose. Every earlier
+  // consistency check is followed by more requests, and each is a window in
+  // which the head can move while nothing else changes — a plain fast-forward
+  // push during the timeline request creates no rewrite event, alters no
+  // review, and leaves a stale zero-candidate range reading as ALREADY MERGED.
+  if (headOf() !== head) {
+    process.stderr.write(
+      "ci-verdict: head moved before the verdict was emitted; re-run\n"
     );
     return 2;
   }
