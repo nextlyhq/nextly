@@ -265,8 +265,14 @@ jobs:
       # so nothing else in this repository can see it — and it decays into a
       # reference to a conversation nobody can retrieve.
       #
-      # Repository-wide on purpose: the scope is passed as an argument rather than
-      # implied by where the check lives, so what it covers is visible here.
+      # Run with no arguments, so the scope is DEFAULT_ROOTS in the script rather
+      # than anything visible at this call site. Change what is covered there.
+      #
+      # The comments that predate the check are recorded in
+      # scripts/comment-convention-allowlist.json with a per-file count, which is
+      # what lets this run blocking rather than advisory. That file may only
+      # shrink: adding an entry to silence a new comment is the one use it does
+      # not have.
       - name: Comment convention (describes code, not process)
         run: pnpm check:comments
 

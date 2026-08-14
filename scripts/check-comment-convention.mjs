@@ -16,10 +16,14 @@
  * its package coupples that package to every other, which is what `layering.test.ts` guards
  * against elsewhere.
  *
- * Here the scope is an argument, so what is covered is visible at the call site.
+ * Here the scope is an argument, so a caller can narrow it without moving the check.
  *
  * Usage:
- *   node scripts/check-comment-convention.mjs [roots...]      # defaults to packages apps e2e
+ *   node scripts/check-comment-convention.mjs             # DEFAULT_ROOTS, the repository-wide scan
+ *   node scripts/check-comment-convention.mjs packages    # one root, for a faster local loop
+ *
+ * The allowlist's shrink check is skipped when roots are given explicitly, because a partial scan
+ * cannot tell a fixed file from one it never opened.
  */
 
 import { execFileSync } from "node:child_process";
@@ -63,6 +67,13 @@ export const FORBIDDEN = [
     why: "names a review tool",
   },
   {
+    // A numbered change, with or without a roadmap-item prefix: "PR 4 migration", "F11 PR 3".
+    // Mechanically distinct from the deictic form below and far more common, because it survives
+    // being copied between files - the number keeps naming a change nobody can now look up.
+    pattern: /\b(?:[A-Z]\d+\s+)?PR\s+\d+/,
+    why: "names a numbered change rather than the code",
+  },
+  {
     // Deliberately broad, and only safe because of REVIEW_DOMAIN_PATHS below. In code that does
     // not work on pull requests, naming one describes the change rather than the code. In code
     // that DOES, the same words are the subject matter: "the head comes from the REF, not from
@@ -91,7 +102,7 @@ export const FORBIDDEN = [
  * name is the honest fix; teaching the extractor about string literals would make it a parser,
  * which is the unbounded surface this deliberately is not.
  */
-const EXCLUDED_FILES = new Set([
+export const EXCLUDED_FILES = new Set([
   // This file and its test, both of which necessarily contain what they forbid: the patterns
   // name the shapes, the prose explains why each was chosen, and the test holds fixtures of
   // every rejected form. Excluding two files by name is the honest fix; teaching the extractor
@@ -106,7 +117,16 @@ const EXCLUDED_FILES = new Set([
  * config files, scripts, template sources — and a comment in one is as invisible to every other
  * check as a comment in a `.ts`.
  */
-const SOURCE_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
+export const SOURCE_EXTENSIONS = [
+  ".ts",
+  ".tsx",
+  ".mts",
+  ".cts",
+  ".js",
+  ".jsx",
+  ".mjs",
+  ".cjs",
+];
 
 /** Directories that hold generated or vendored code rather than authored source. */
 const EXCLUDED_DIRS = new Set(["node_modules", "dist", ".next", ".turbo", "coverage"]);
@@ -227,12 +247,21 @@ export function commentText(source) {
     .replace(/'(?:[^'\\\n]|\\.)*'/g, blankSpan)
     .replace(/`(?:[^`\\]|\\.)*`/g, blankSpan);
 
+  // Comments are LOCATED in the blanked copy and READ from the original. Blanking preserves
+  // length and newlines, so an offset means the same thing in both.
+  //
+  // Reading the blanked copy instead would erase quoted text inside a genuine comment, and the
+  // erased span is exactly where narration hides: `// "Codex flagged this"` and
+  // `// \`Codex\` flagged this` are both offences, and both come back empty when the quotes are
+  // blanked before the comment is extracted. Locating in the blanked copy is still what stops a
+  // string literal holding comment syntax from being read as a comment.
   const comments = [];
   for (const match of withoutLiterals.matchAll(/\/\*[\s\S]*?\*\//g)) {
-    comments.push(match[0]);
+    comments.push(source.slice(match.index, match.index + match[0].length));
   }
   for (const match of withoutLiterals.matchAll(/(^|[^:"'`\\])\/\/(.*)$/gm)) {
-    comments.push(match[2]);
+    const start = match.index + match[1].length + 2;
+    comments.push(source.slice(start, start + match[2].length));
   }
   return comments;
 }
@@ -260,7 +289,26 @@ export function offencesIn(source) {
  * scope, and anything missing from it is unchecked rather than checked elsewhere. `templates`
  * carries authored source that ships to users.
  */
-export const DEFAULT_ROOTS = ["packages", "apps", "e2e", "templates", "scripts"];
+/**
+ * The default scan.
+ *
+ * `.` is first and covers the other five, which are kept because they are what the scope MEANS:
+ * a reader checking whether a directory is enforced can see it named, and the accompanying test
+ * asserts each one contributes files. Paths are de-duplicated in `main`, so the overlap costs a
+ * set insertion and nothing else.
+ *
+ * Without `.` the two tracked config files at the repository root - `eslint.config.mjs` and
+ * `lint-staged.config.mjs` - sit outside every named root, so a forbidden comment in either
+ * leaves the repository-wide gate reporting clean.
+ */
+export const DEFAULT_ROOTS = [
+  ".",
+  "packages",
+  "apps",
+  "e2e",
+  "templates",
+  "scripts",
+];
 
 function main() {
   const requested = process.argv.slice(2);
@@ -287,7 +335,9 @@ function main() {
     process.exit(1);
   }
 
-  const files = roots.flatMap(root => sourceFiles(root));
+  // De-duplicated because the default roots overlap deliberately: `.` covers the named ones, and
+  // a file listed twice would be scanned twice and counted twice against its allowlist entry.
+  const files = [...new Set(roots.flatMap(root => sourceFiles(root)))];
 
   // A control on the walk, before any verdict is read from it: a broken walk reports every file
   // clean by reading none, and the check below is satisfied by absence.

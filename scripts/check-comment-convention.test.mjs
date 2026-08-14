@@ -1,14 +1,17 @@
+import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
   ALLOWLIST_FILE,
   DEFAULT_ROOTS,
+  EXCLUDED_FILES,
   FORBIDDEN,
   commentText,
   isReviewDomain,
   offencesIn,
   readAllowlist,
+  SOURCE_EXTENSIONS,
   sourceFiles,
 } from "./check-comment-convention.mjs";
 
@@ -108,12 +111,34 @@ describe("the comment extractor", () => {
 });
 
 describe("the file walk", () => {
-  it("reads the extensions it claims to", () => {
-    // `scripts` holds only `.mjs`, so this is ALSO the control on the extension list — an
-    // earlier version read `.ts`/`.tsx` alone, returned zero here, and satisfied a
-    // `toBeGreaterThanOrEqual(0)` assertion that no possible result could fail.
-    expect(sourceFiles("scripts").length).toBeGreaterThan(3);
-    expect(sourceFiles("packages/blocks-engine/src").length).toBeGreaterThan(20);
+  it("reads every extension it advertises", () => {
+    // Per extension, not per directory. A count over a directory is satisfied by whichever
+    // suffixes happen to dominate it, so dropping `.cjs` or `.jsx` from the list leaves any
+    // threshold intact while tracked files of that type silently stop being checked.
+    //
+    // The expected count per suffix is asked of git rather than written down here, so this
+    // compares the scanner against the repository instead of against a number that was true when
+    // it was typed.
+    //
+    // `.cts` and `.jsx` currently match no tracked file. They stay on the list because they are
+    // valid module suffixes and a future file carrying one should be read from the day it lands,
+    // but their assertion below is vacuous and is not evidence of anything.
+    const scanned = sourceFiles(".");
+    for (const ext of SOURCE_EXTENSIONS) {
+      const tracked = execFileSync("git", ["ls-files", "--", `*${ext}`], {
+        encoding: "utf8",
+      })
+        .split("\n")
+        .filter(path => path.endsWith(ext))
+        // The checker and its test are excluded by name: both necessarily contain what they
+        // forbid. Subtracting them here keeps the comparison against the repository honest
+        // rather than loosening it to an inequality that would hide a real gap.
+        .filter(path => !EXCLUDED_FILES.has(path.split("/").pop()));
+      const seen = scanned.filter(path => path.endsWith(ext));
+      expect(seen.length, `${ext}: scanner saw ${seen.length} of ${tracked.length}`).toBe(
+        tracked.length
+      );
+    }
   });
 
   it("reaches every root the default scan names", () => {
@@ -157,7 +182,7 @@ describe("the allowlist", () => {
   // Pinned so growth appears in the diff. Without it an entry can be added in the same commit as
   // the comment it exempts, which turns the allowlist into a way of silencing the check rather
   // than a record of what predates it. Lower this as entries are removed; never raise it.
-  const EXPECTED_ENTRIES = 12;
+  const EXPECTED_ENTRIES = 153;
 
   it("has not grown", () => {
     expect(readAllowlist().size).toBeLessThanOrEqual(EXPECTED_ENTRIES);
