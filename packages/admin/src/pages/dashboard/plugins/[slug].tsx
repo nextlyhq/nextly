@@ -16,7 +16,6 @@ import {
   Package,
   Route,
   Settings as SettingsIcon,
-  Shield,
 } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { Breadcrumbs } from "@admin/components/shared";
@@ -421,15 +420,6 @@ function Contributions({ plugin }: { plugin: PluginMetadata }) {
       label: "Field types",
       icon: SettingsIcon,
       items: (plugin.fieldTypes ?? []).map(ft => ({ primary: ft.type })),
-    },
-    {
-      key: "permissions",
-      label: "Permissions",
-      icon: Shield,
-      items: (plugin.permissions ?? []).map(p => ({
-        primary: p.label ?? `${p.action}-${p.resource}`,
-        secondary: p.danger ? "danger" : undefined,
-      })),
     },
     {
       key: "routes",
