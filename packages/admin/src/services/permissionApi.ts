@@ -5,11 +5,10 @@ import { fetcher } from "../lib/api/fetcher";
 import type { MutationResponse } from "../lib/api/response-types";
 import type { Permission } from "../types/entities";
 
-// One declaration for one endpoint. A second copy agreed with the first on the
-// day it was written and then diverged: `owner`, `permissionGroup` and `danger`
-// cross the wire, and neither local copy admitted they existed — so a consumer
-// reading the type could not see the field that decides which plugin a
-// permission belongs to.
+// The wire shape is declared once, in the module that performs the request.
+// `owner` is the field that decides which plugin a permission belongs to, and
+// it arrives alongside `group`, `orphaned` and `danger`; a second local copy of
+// the interface would be free to omit any of them while still compiling.
 import type { ApiPermissionEntry } from "./realPermissionsApi";
 
 /**
