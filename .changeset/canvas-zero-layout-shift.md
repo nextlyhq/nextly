@@ -25,4 +25,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-Stop the page-builder canvas reflowing when a drag starts. Drop zones no longer grow from zero to six pixels on dragstart, so blocks stay where they are while you aim; the target the pointer is tested against is now out of flow and larger than the visible insertion hint.
+Stop the page-builder canvas reflowing when a drag starts. Drop zones no longer grow from zero to six pixels on dragstart, so blocks stay where they are while you aim, and the insertion bar now paints above blocks that carry a stacking context of their own.

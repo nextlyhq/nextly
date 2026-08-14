@@ -98,7 +98,13 @@ const OVERLAY_CSS = [
   //
   // `pointer-events` are live only during a drag, so at rest the zone cannot
   // intercept a click meant for the block behind it.
-  ".nx-pb-dropzone{position:absolute;left:0;right:0;top:-3px;height:6px;border-radius:3px;background:transparent;pointer-events:none;transition:background .1s ease}",
+  // `z-index` because the blocks either side of a gap are authored content and
+  // may carry a stacking context of their own — the Position control supports
+  // exactly that. Two opaque, positive-`z-index` neighbours each paint over
+  // their half of the zone, which hides the insertion bar completely while
+  // dnd-kit still selects the same rectangle: the drop works and nothing shows
+  // where it will land. Editor chrome has to sit above content it annotates.
+  ".nx-pb-dropzone{position:absolute;left:0;right:0;top:-3px;height:6px;border-radius:3px;background:transparent;pointer-events:none;z-index:3;transition:background .1s ease}",
   ".nx-pb-dropzone[data-drag]{pointer-events:auto;background:color-mix(in srgb, var(--nx-pb-ed-primary) 12%, transparent)}",
   ".nx-pb-dropzone[data-active]{background:var(--nx-pb-ed-primary);box-shadow:0 0 0 4px color-mix(in srgb, var(--nx-pb-ed-primary) 15%, transparent)}",
   // Empty-container placeholder.

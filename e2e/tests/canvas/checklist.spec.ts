@@ -152,6 +152,13 @@ test("[acceptance] point 4: siblings do not move during a drag", async ({
 
   const before = await read();
   await startLibraryDrag(driver);
+  // Without this the comparison below is satisfied by a drag that never
+  // started: no drag means no zones appear, `during` equals `before`, and zero
+  // reflow is indistinguishable from zero interaction.
+  expect(
+    await driver.isDragging(),
+    "the drag must be active for the mid-drag geometry to mean anything"
+  ).toBe(true);
   for (let step = 0; step < 20; step++) await driver.moveBy(0, 8);
   const during = await read();
   await driver.cancel();

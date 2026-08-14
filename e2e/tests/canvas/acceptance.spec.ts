@@ -569,6 +569,13 @@ test.describe("a canvas any Nextly editor could ship", () => {
 
     const before = await driver.readBlockBoxes();
     await dragFromPanel(driver);
+    // Without this the assertion below is satisfied by a drag that never
+    // started: no drag means no zones appear, `during` equals `before`, and
+    // zero reflow is indistinguishable from zero interaction.
+    expect(
+      await driver.isDragging(),
+      "the drag must be active for the mid-drag geometry to mean anything"
+    ).toBe(true);
     const during = await driver.readBlockBoxes();
     await driver.cancel();
 
