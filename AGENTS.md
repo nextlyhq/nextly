@@ -111,6 +111,22 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
   `.claude/rules/verifying-merged-work.md`, which says to check what `main`
   changed before calling any of this environmental.
 
+  **A stale or missing sibling `dist` does not only produce `no-unresolved`.**
+  Every TYPE-AWARE lint rule reads inferred types, so an unbuilt tree makes it
+  report on types the checker cannot see: measured here, a docs-only commit
+  failed `nextly#lint` with `@typescript-eslint/no-unnecessary-type-assertion`
+  on a load-bearing assertion, and `pnpm --filter nextly... build` cleared it
+  along with the `no-unresolved` error beside it. The `no-unsafe-*` family fails
+  the other way, going quiet where everything degrades to `any`.
+
+  That is the dangerous half, because the two errors read differently. An
+  unresolved import NAMES A PACKAGE and reads as environmental. A type-aware
+  finding names YOUR EXPRESSION and reads as a correctness defect — and its
+  obvious remedy, deleting the assertion, is a real regression that lints clean
+  afterwards on a built tree, because the assertion it was protecting is gone.
+  Build before you believe any lint result, not only one that names a module.
+  There is no tell in the message.
+
   Path mappings cover part of this and are not a general answer.
   `packages/admin` maps the bare `nextly` specifier to `../nextly/src`, which is
   why admin resolves it without a build while `packages/plugin-sdk`, which has
