@@ -250,6 +250,49 @@ test("refuses rather than measuring from an edge that keeps moving", async () =>
   expect(result.refused).toBe("edge-moving");
   expect(result.zone).toBe(4);
   expect(result.insetPx).toBeUndefined();
+  // A refusal still describes WHERE the drag is. `zone` is the one field it
+  // reports, so the pointer has to be in it: a caller that continues the drag
+  // from here would otherwise be starting somewhere the result denies.
+  expect(await canvas.zoneContainingPointer()).toBe(result.zone);
+});
+
+/**
+ * A canvas whose edge moves DOWN between every pair of measurements, never settling.
+ *
+ * Shifted on the SETTLE rather than on entry, which is what separates this from
+ * `shiftingEdgeCanvas`: an edge that moves each time it is entered simply outruns the probe and is
+ * reported as `boundary-not-found`, a different fact. Moving only between brackets lets each
+ * bracket succeed and disagree with the last, which is the state `edge-moving` names.
+ */
+function edgeAlwaysMovingDownCanvas(band: Band, byPx: number) {
+  let y = 0;
+  let from = band.from;
+  return {
+    pointer: () => ({ x: 0, y }),
+    moveBy: async (_dx: number, dy: number) => {
+      y += dy;
+    },
+    zoneContainingPointer: async () =>
+      y >= from && y < band.to ? band.zone : -1,
+    settle: async () => {
+      from += byPx;
+    },
+  };
+}
+
+test("keeps an edge-moving refusal inside the zone it reports, going DOWN", async () => {
+  // The direction the upward control cannot reach, and the one where a rewind is actively wrong.
+  // With the boundary travelling DOWN, each bracket ends by walking FORWARD to catch it, so the
+  // last one's net movement is POSITIVE — and undoing that movement carries the pointer back UP,
+  // above a boundary the edge has already passed. The refusal would then name a zone the pointer
+  // is standing outside of, and a caller continuing the drag would resume from the wrong place.
+  const canvas = edgeAlwaysMovingDownCanvas({ zone: 4, from: 50, to: 900 }, 4);
+
+  const result = await dragToInsetInZone(canvas, 6, 40, canvas.settle);
+
+  expect(result.refused).toBe("edge-moving");
+  expect(result.insetPx).toBeUndefined();
+  expect(await canvas.zoneContainingPointer()).toBe(result.zone);
 });
 
 test("refuses a depth it cannot represent, rather than rounding to one it can", async () => {
@@ -297,18 +340,31 @@ test("refuses a step budget it cannot honour, rather than running forever", asyn
  * first entry, so the edge has already finished moving before any bracket runs, and the test
  * passes with or without the code it exists to check.
  */
-function edgeMovesAtCanvas(band: Band, afterMs: number, byPx: number) {
-  const bornAt = Date.now();
+/**
+ * A canvas whose zone edge moves DOWN once, at the moment the probe waits between measurements.
+ *
+ * The shift is driven by the probe's own settle wait rather than by the clock, and that is the
+ * whole point of the fixture. A time-based version races the runner: pause the process for longer
+ * than the wait and the edge has already moved before the first measurement, so the coarse walk
+ * enters the settled band directly and the test finishes at the same coordinate with the re-entry
+ * logic removed. Keyed to the wait, the first bracket is guaranteed to measure the ORIGINAL edge
+ * and the second to meet the moved one, on a loaded runner and an idle one alike.
+ */
+function edgeMovesOnSettleCanvas(band: Band, byPx: number) {
   let y = 0;
+  let moved = false;
   return {
     pointer: () => ({ x: 0, y }),
     moveBy: async (_dx: number, dy: number) => {
       y += dy;
     },
     zoneContainingPointer: async () => {
-      const from =
-        Date.now() - bornAt >= afterMs ? band.from + byPx : band.from;
+      const from = moved ? band.from + byPx : band.from;
       return y >= from && y < band.to ? band.zone : -1;
+    },
+    /** Stands in for the probe's wait, and is the observable event the shift hangs on. */
+    settle: async () => {
+      moved = true;
     },
   };
 }
@@ -318,12 +374,9 @@ test("re-enters a zone whose edge moved DOWN out from under the pointer", async 
   // active one, so the top edge travels DOWN and a pointer resting on the old boundary is left
   // just above the new one. A bracket that only ever retreats moves further away, and reports an
   // edge it is standing one pixel short of as unfindable.
-  //
-  // 60ms lands inside the probe's settle wait, which is 120ms — so the first bracket succeeds
-  // against the original edge and the second meets the moved one.
-  const canvas = edgeMovesAtCanvas({ zone: 5, from: 50, to: 90 }, 60, 4);
+  const canvas = edgeMovesOnSettleCanvas({ zone: 5, from: 50, to: 90 }, 4);
 
-  const result = await dragToInsetInZone(canvas, 6);
+  const result = await dragToInsetInZone(canvas, 6, 40, canvas.settle);
 
   expect(result.refused).toBeUndefined();
   expect(result.zone).toBe(5);

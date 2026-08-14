@@ -773,13 +773,31 @@ async function bracketZoneEdge(
  * The pointer is left INSIDE the reported zone in every outcome but
  * `never-entered`, and is restored to where it started when no boundary can be
  * found — a probe that fails is not entitled to leave the drag somewhere else.
+ * `edge-moving` is the one refusal that does NOT rewind: the last bracket left
+ * the pointer just inside the zone, and putting it back where that bracket
+ * began would return it to a position the edge has since travelled past. The
+ * zone reported there is read from the pointer's actual containment rather than
+ * assumed, so the result describes where the drag really is.
  *
  * Vertical, matching the axis every zone boundary in this suite is crossed on.
  */
 export async function dragToInsetInZone(
   driver: ZoneInsetDriver,
   wantInsetPx: number,
-  maxSteps = 40
+  maxSteps = 40,
+  /**
+   * How this waits between edge measurements.
+   *
+   * Injected so a FIXTURE can move its edge at the one moment the probe is
+   * known to be between brackets, rather than after a duration it has to guess.
+   * A fixture keyed to the clock races the process it is testing: pause the
+   * runner for longer than the wait and the edge has already moved before the
+   * first measurement, so the walk lands in the settled band and the test
+   * passes without ever exercising the re-entry it exists to cover.
+   *
+   * The default is the real wait, so nothing about a live canvas changes.
+   */
+  settle: (ms: number) => Promise<void> = settleMs
 ): Promise<ZoneInset> {
   const refuse = (
     zone: number,
@@ -833,25 +851,29 @@ export async function dragToInsetInZone(
   // would put wall-clock dependence into the one control a band assertion
   // rests on, and would still be a guess about a duration the canvas owns.
   let boundaryY: number | null = null;
-  let settledMoved = 0;
   for (let attempt = 0; attempt < EDGE_SETTLE_ATTEMPTS; attempt += 1) {
     const found = await bracketZoneEdge(driver, zone, retreatLimit);
     if (!found) return refuse(zone, "boundary-not-found");
-    if (boundaryY === found.boundaryY) {
-      settledMoved = found.movedPx;
-      break;
-    }
+    if (boundaryY === found.boundaryY) break;
     boundaryY = found.boundaryY;
-    settledMoved = found.movedPx;
     // Across the transition rather than adjacent to it. Two brackets taken back
     // to back land inside the same animation frame and can agree on a whole
     // pixel the edge is still travelling through.
-    await settleMs(EDGE_SETTLE_MS);
+    await settle(EDGE_SETTLE_MS);
     if (attempt === EDGE_SETTLE_ATTEMPTS - 1) {
       // Still moving. Reported rather than measured through: a depth taken from
       // an edge that is in motion is a number with no referent.
-      await driver.moveBy(0, -settledMoved);
-      return refuse(zone, "edge-moving");
+      //
+      // The pointer is LEFT where the last bracket put it, which that bracket
+      // confirmed was inside the zone as its final act. Undoing its movement
+      // would return the pointer to where this attempt began — a position the
+      // edge has since travelled past, and outside the very zone the result
+      // names. A refusal is still a description of where the pointer is, so it
+      // may not put the pointer somewhere its own `zone` does not cover.
+      //
+      // Read back rather than assumed, because "the bracket said so a moment
+      // ago" is exactly the claim a moving edge invalidates.
+      return refuse(await driver.zoneContainingPointer(), "edge-moving");
     }
   }
   if (boundaryY === null) return refuse(zone, "boundary-not-found");
