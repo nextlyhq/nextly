@@ -14,8 +14,9 @@ import { resolveDeclaredSchema } from "../domains/schema/migrate/resolved-schema
 import { NextlyError } from "../errors";
 
 import {
-  awaitBootMigrations,
-  beginBootMigrations,
+  allowBootMigrations,
+  assertBootMigrationsNotRefused,
+  refuseBootMigrations,
 } from "./boot-migrations-gate";
 
 interface AdapterLike {
@@ -128,10 +129,23 @@ export async function runProdMigrationsIfEnabled(
 ): Promise<void> {
   // Before the environment checks, because a process that has already refused
   // must keep refusing regardless of how the next caller reaches this.
-  await awaitBootMigrations();
+  //
+  // The REFUSAL only, not the pending gate: this function is what settles that
+  // gate, so awaiting it here would deadlock the very boot it was called to
+  // perform. Found by a test that hung for ten seconds, not by reading it.
+  assertBootMigrationsNotRefused();
 
-  if (process.env.NODE_ENV !== "production") return;
-  if (args.config.db.runMigrationsOnBoot !== true) return;
+  // Settled on the early exits too: `registerServices` only opens the gate
+  // under exactly these conditions, but a mismatch here would hang every
+  // consumer, so this closes it rather than assuming it was never opened.
+  if (process.env.NODE_ENV !== "production") {
+    allowBootMigrations();
+    return;
+  }
+  if (args.config.db.runMigrationsOnBoot !== true) {
+    allowBootMigrations();
+    return;
+  }
 
   const { adapter, logger } = args;
   const migrationsDir = resolve(process.cwd(), args.config.db.migrationsDir);
@@ -181,11 +195,6 @@ export async function runProdMigrationsIfEnabled(
       return migrateCore(deps as never);
     });
 
-  // Opened before any work, so the window this closes — services registered but
-  // the schema unverified — never exists unguarded. Consumers that arrive from
-  // another surface now wait here instead of serving on the registered flag.
-  const gate = beginBootMigrations();
-
   try {
     logger.info("[Nextly] Running production migrations on boot...");
     const resolvedSchema = await resolveDeclaredSchema({
@@ -224,7 +233,7 @@ export async function runProdMigrationsIfEnabled(
       throw bootMigrationsNotRun(adapter.dialect);
     }
     logger.info(`[Nextly] Boot migrations complete (${applied} applied).`);
-    gate.allow();
+    allowBootMigrations();
   } catch (err) {
     // A refusal is not a failure to swallow. Every other error here is
     // recoverable by running `nextly migrate` against a database the app can
@@ -246,7 +255,7 @@ export async function runProdMigrationsIfEnabled(
           : bootMigrationsNotRun(args.adapter.dialect);
       // Recorded BEFORE rethrowing, so the next request through either entry
       // point refuses too rather than finding services already registered.
-      gate.refuse(fatal);
+      refuseBootMigrations(fatal);
       // Reopen the registration gate, or the sticky flag above is unreachable.
       // Both entry points call this helper only inside
       // `if (!isServicesRegistered())`, and `registerServices()` has already
@@ -277,6 +286,6 @@ export async function runProdMigrationsIfEnabled(
     // The app continues on this path, so the gate must open — a swallowed
     // failure that left it pending would hang every consumer forever, turning a
     // recoverable error into a worse outage than the one being tolerated.
-    gate.allow();
+    allowBootMigrations();
   }
 }

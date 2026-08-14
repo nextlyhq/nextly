@@ -5,13 +5,15 @@
  * schema is unverified — and another surface keying off the registered flag
  * would serve inside that window whatever the wait eventually decided.
  */
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../errors";
 import {
   _resetBootMigrationsGateForTest,
+  allowBootMigrations,
   awaitBootMigrations,
-  beginBootMigrations,
+  openBootMigrationsGate,
+  refuseBootMigrations,
 } from "../boot-migrations-gate";
 
 const refusal = (): NextlyError =>
@@ -35,6 +37,14 @@ async function isPending(p: Promise<unknown>): Promise<boolean> {
 
 beforeEach(() => {
   _resetBootMigrationsGateForTest();
+  // The gate only opens for a production boot with migrations configured, which
+  // is exactly the state these cases are about. `stubEnv` rather than direct
+  // assignment so the restore cannot leak a value into a sibling suite.
+  vi.stubEnv("NODE_ENV", "production");
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe("the boot-migrations gate", () => {
@@ -47,25 +57,41 @@ describe("the boot-migrations gate", () => {
   });
 
   /**
+   * The gate must not open for a boot that will never settle it. Registration
+   * happens in the CLI and the test harness too, and a gate opened there would
+   * hang every later consumer forever.
+   */
+  it("does not open when this boot will not run migrations", async () => {
+    openBootMigrationsGate(false);
+    await expect(awaitBootMigrations()).resolves.toBeUndefined();
+  });
+
+  it("does not open outside production", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    openBootMigrationsGate(true);
+    await expect(awaitBootMigrations()).resolves.toBeUndefined();
+  });
+
+  /**
    * The race itself. A consumer arriving mid-boot must WAIT, not decide — and
    * not fail either: throwing while pending would turn every normal cold-boot
    * request into a 503.
    */
   it("holds a consumer that arrives while migrations are still running", async () => {
-    const gate = beginBootMigrations();
+    openBootMigrationsGate(true);
 
     const consumer = awaitBootMigrations();
     expect(await isPending(consumer)).toBe(true);
 
-    gate.allow();
+    allowBootMigrations();
     await expect(consumer).resolves.toBeUndefined();
   });
 
   it("rejects the waiting consumer when the boot refuses", async () => {
-    const gate = beginBootMigrations();
+    openBootMigrationsGate(true);
     const consumer = awaitBootMigrations();
 
-    gate.refuse(refusal());
+    refuseBootMigrations(refusal());
 
     await expect(consumer).rejects.toMatchObject({
       code: "NEXTLY_BOOT_MIGRATIONS_NOT_RUN",
@@ -79,8 +105,8 @@ describe("the boot-migrations gate", () => {
    * serves the schema the process refused.
    */
   it("keeps refusing consumers that arrive after it settled", async () => {
-    const gate = beginBootMigrations();
-    gate.refuse(refusal());
+    openBootMigrationsGate(true);
+    refuseBootMigrations(refusal());
 
     await expect(awaitBootMigrations()).rejects.toMatchObject({
       code: "NEXTLY_BOOT_MIGRATIONS_NOT_RUN",
@@ -97,8 +123,8 @@ describe("the boot-migrations gate", () => {
    * that simply never opened would satisfy the refusal tests.
    */
   it("stays open once a boot allowed it", async () => {
-    const gate = beginBootMigrations();
-    gate.allow();
+    openBootMigrationsGate(true);
+    allowBootMigrations();
 
     await expect(awaitBootMigrations()).resolves.toBeUndefined();
     await expect(awaitBootMigrations()).resolves.toBeUndefined();

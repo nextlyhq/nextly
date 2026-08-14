@@ -65,6 +65,14 @@ export function buildServiceConfig(
   // Start with provided config or empty object
   const serviceConfig: Partial<NextlyServiceConfig> = {};
 
+  // Carried so `registerServices` can open the boot-migrations gate before it
+  // publishes the container. Set here because this builder is the one both boot
+  // paths go through, which is what stops the flag reaching one and not the
+  // other — the failure this whole change exists to prevent.
+  if (providedConfig?.config?.db?.runMigrationsOnBoot === true) {
+    serviceConfig.runMigrationsOnBoot = true;
+  }
+
   // Copy over service config properties (excluding 'config')
   if (providedConfig) {
     const { config: nextlyConfig, ...rest } = providedConfig;
