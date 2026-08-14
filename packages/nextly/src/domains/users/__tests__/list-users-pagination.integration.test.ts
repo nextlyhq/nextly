@@ -227,6 +227,21 @@ describe("listUsers pagination over users with several roles (real SQLite)", () 
     expect(single.roles).toHaveLength(1);
   });
 
+  it("bounds the page size a caller can ask for", async () => {
+    // `user-dispatcher.ts` forwards `toNumber(p.limit)` with nothing bounding it, and this method
+    // is reachable directly as well — `ListUsersSchema`'s `max(100)` is not applied on either
+    // path. Roles are fetched with `inArray` over the page's ids, one bound parameter per user,
+    // so an unbounded page would exceed SQLite's default SQLITE_MAX_VARIABLE_NUMBER of 32766 and
+    // fail AFTER the page query had already succeeded.
+    const page = await query.listUsers({ page: 1, limit: 1_000_000 });
+
+    // Clamped to the shared PAGINATION_DEFAULTS.maxLimit, not to the requested value.
+    expect(page.meta.limit).toBe(500);
+    // The fixture holds fewer users than the clamp, so every user still comes back — the bound
+    // caps the request without truncating a legitimate result.
+    expect(page.data).toHaveLength(USER_COUNT);
+  }, 30_000);
+
   it("reports a total counting users rather than joined rows", async () => {
     const page = await query.listUsers({ page: 1, limit: PAGE_SIZE });
 

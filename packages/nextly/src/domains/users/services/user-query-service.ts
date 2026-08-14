@@ -29,6 +29,7 @@ import { and, eq, ne, or, asc, desc, count, sql, inArray } from "drizzle-orm";
 import { GetUserByIdSchema } from "@nextly/schemas/_zod/user";
 import { EmailSchema } from "@nextly/schemas/_zod/validation";
 import type { MinimalUser } from "@nextly/types/auth";
+import { clampLimit } from "@nextly/types/pagination";
 
 import { toDbError } from "../../../database/errors";
 import { container } from "../../../di/container";
@@ -360,13 +361,23 @@ export class UserQueryService extends BaseService {
   ): Promise<ListUsersResponse> {
     const {
       page = 1,
-      limit = 10,
+      limit: requestedLimit = 10,
       search,
       emailVerified,
       hasPassword,
       sortBy = "email",
       sortOrder = "asc",
     } = options || {};
+
+    // The dispatcher forwards whatever numeric `limit` arrived on the request, and this method is
+    // also reachable directly, so nothing upstream bounds it. An unbounded page is a problem in
+    // its own right, and it became a hard failure once roles were fetched with `inArray` over the
+    // page's ids: one bound parameter per user, against a SQLite default
+    // `SQLITE_MAX_VARIABLE_NUMBER` of 32766.
+    //
+    // Clamped rather than chunked, because the bound is what the API already advertises — the
+    // shared helper, so this cannot drift from every other paginated list.
+    const limit = clampLimit(requestedLimit);
 
     const { users, userRoles, roles } = this.tables;
 
