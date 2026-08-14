@@ -44,14 +44,25 @@ import { createTestNextly, type TestNextly } from "../plugins/test-nextly";
 
 import { seedAllPermissions } from "./seed-permissions";
 
-const CRUD_AND_LIFECYCLE = [
-  "create-articles",
-  "delete-articles",
-  "publish-articles",
-  "read-articles",
-  "unpublish-articles",
-  "update-articles",
+/**
+ * The actions collection seeding produces, named once.
+ *
+ * Written per resource in each test, the two lists agree on the day they are
+ * typed and drift the first time the action set moves — and a suite whose two
+ * halves disagree about what seeding should produce reports whichever one was
+ * remembered.
+ */
+const COLLECTION_ACTIONS = [
+  "create",
+  "delete",
+  "publish",
+  "read",
+  "unpublish",
+  "update",
 ];
+
+const slugsFor = (resource: string): string[] =>
+  COLLECTION_ACTIONS.map(action => `${action}-${resource}`).sort();
 
 let current: TestNextly | undefined;
 
@@ -103,7 +114,7 @@ describe("permission seeding across the two boot paths", () => {
     await seedAllPermissions();
 
     expect(await permissionSlugsFor(handle, "articles")).toEqual(
-      CRUD_AND_LIFECYCLE
+      slugsFor("articles")
     );
   });
 
@@ -125,13 +136,8 @@ describe("permission seeding across the two boot paths", () => {
     );
 
     await seedAllPermissions();
-    expect(await permissionSlugsFor(handle, "reports")).toEqual([
-      "create-reports",
-      "delete-reports",
-      "publish-reports",
-      "read-reports",
-      "unpublish-reports",
-      "update-reports",
-    ]);
+    expect(await permissionSlugsFor(handle, "reports")).toEqual(
+      slugsFor("reports")
+    );
   });
 });
