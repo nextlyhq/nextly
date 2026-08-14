@@ -69,7 +69,23 @@ git diff "$CAND^..$CAND" -- "$PATHS"          # what the stranded commit did
 git diff "$MERGE^..$MERGE" -- "$PATHS"        # what the squash contains
 ```
 
-Its hunks appearing in the second is the evidence. Their absence is the loss. When it matters — a
+Its hunks appearing in the second is the evidence. Their absence is the loss —
+**unless a later candidate cancels it.**
+
+Judge the tail's NET effect, not each commit alone. When the screen names
+several commits and a later one reverts or supersedes an earlier one, neither
+individual patch need appear in the squash, and checking them one at a time
+reports an intentionally cancelled intermediate as lost work. That is the same
+correction step 4 already makes for a pull request as a whole, applied to the
+candidate list:
+
+```sh
+FIRST=$(git log --format=%H "$GH..$TIP" | tail -1)
+git diff "$GH..$TIP" -- "$PATHS"              # what the tail did, on net
+```
+
+Compare THAT against the squash. A tail whose net effect is empty lost nothing,
+however many commits the screen listed. When it matters — a
 release, an incident, a PR whose tail you have reason to doubt — verify the
 commits you intended to land by content, per the numbered steps below, and do
 not let an empty range stand in for that.
@@ -325,24 +341,33 @@ missing its last commit, reading as complete with every thread resolved.
 after something has already shipped. Merge with the head you verified as a
 PRECONDITION, so the merge itself refuses when the branch has moved:
 
-This runs BEFORE a merge exists, so it cannot borrow `$GH` from the block above:
-that one reads `mergeCommit` and exits when there is none, which is every open
-PR. Acquire the head on its own:
+This runs BEFORE a merge exists, so it cannot borrow from the block above: that
+one reads `mergeCommit` and exits when there is none, which is every open PR.
+
+**Pass in the revision you VERIFIED. Do not re-read the head here.** Re-reading
+returns whatever is newest, which after a push is exactly the unverified
+revision the flag exists to reject — so a fresh read turns the precondition into
+a rubber stamp for the newest commit. The value to pass is the one the green
+checks and the clean review belong to:
 
 ```sh
 set -euo pipefail
 PR=<number>
-GH=$(gh pr view "$PR" --json headRefOid --jq .headRefOid) || {
-  echo "PR#$PR: head query failed — do not merge" >&2
-  exit 2
+VERIFIED=<the sha whose checks were green and whose review was clean>
+
+# Confirms the branch has not moved since, and refuses rather than merging on.
+NOW=$(gh pr view "$PR" --json headRefOid --jq .headRefOid) || {
+  echo "PR#$PR: head query failed — do not merge" >&2; exit 2
 }
-[ -n "$GH" ] || { echo "PR#$PR: empty head — do not merge" >&2; exit 2; }
-gh pr merge "$PR" --squash --match-head-commit "$GH"
+[ "$NOW" = "$VERIFIED" ] || {
+  echo "PR#$PR: head moved $VERIFIED -> $NOW; re-run the gate" >&2; exit 2
+}
+gh pr merge "$PR" --squash --match-head-commit "$VERIFIED"
 ```
 
-`$GH` must be the revision the green checks and the clean review belong to, so
-read it in the SAME step that merges — a value carried from an earlier step is
-the stale head this flag exists to reject. Bind it to that variable rather than retyping a SHA:
+The comparison is a courtesy that yields a readable message; `--match-head-commit`
+is what makes it safe, because it is the server that refuses. Both take
+`$VERIFIED`, never `$NOW`. Bind it to that variable rather than retyping a SHA:
 a merge precondition naming the wrong revision either refuses a correct merge or,
 worse, permits the one it was added to stop.
 
