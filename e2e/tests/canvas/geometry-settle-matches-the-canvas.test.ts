@@ -230,6 +230,29 @@ async function geometrySpanMs(
         };
       }
 
+      // The browser DROPS a declaration it cannot parse and leaves the rule standing, so the
+      // computed style falls back to the initial `all 0s` — a silent zero that any allowance
+      // covers. Asked of the parsed rule rather than of the computed value, because the computed
+      // value is identical for "no transition declared" and "transition of zero length".
+      const parsed = (style.sheet?.cssRules[0] as CSSStyleRule | undefined)
+        ?.style;
+      const declaresTransition = Boolean(
+        parsed &&
+          (parsed.transition ||
+            parsed.transitionProperty ||
+            parsed.transitionDuration)
+      );
+      if (!declaresTransition) {
+        cleanup();
+        return {
+          matched: true,
+          ms: 0,
+          unclassified: [] as string[],
+          unresolvedVars: [] as string[],
+          dropped: true,
+        };
+      }
+
       const computed = getComputedStyle(el);
 
       // A custom property that resolves to nothing makes the whole declaration invalid at
@@ -248,7 +271,13 @@ async function geometrySpanMs(
       );
       if (unresolvedVars.length > 0) {
         cleanup();
-        return { matched: true, ms: 0, unclassified: [], unresolvedVars };
+        return {
+          matched: true,
+          ms: 0,
+          unclassified: [],
+          unresolvedVars,
+          dropped: false,
+        };
       }
 
       const seconds = (value: string) =>
@@ -292,7 +321,13 @@ async function geometrySpanMs(
         longest = Math.max(longest, spanAt(effective));
       }
       cleanup();
-      return { matched: true, ms: longest, unclassified, unresolvedVars };
+      return {
+        matched: true,
+        ms: longest,
+        unclassified,
+        unresolvedVars,
+        dropped: false,
+      };
     },
     [
       rule,
@@ -309,6 +344,13 @@ async function geometrySpanMs(
       `the pinned rule "${rule}" matches no drop-zone probe element, so its timing cannot be ` +
         `read and a zero span here would be indistinguishable from a removed transition. Add the ` +
         `state it is qualified by to PROBE_STATES.`
+    );
+  }
+  if (result.dropped) {
+    throw new Error(
+      `the browser parsed the pinned rule but DROPPED its transition declaration, so the computed ` +
+        `style is the initial 0s — a zero that covers any allowance. The declaration is malformed ` +
+        `for this browser; fix the rule rather than re-pinning it.`
     );
   }
   if (result.unresolvedVars.length > 0) {
@@ -486,6 +528,14 @@ test("the span derivation refuses what it cannot answer", async ({ page }) => {
       '".nx-pb-dropzone{transition:height var(--zone-duration)}",'
     )
   ).rejects.toThrow(/--zone-duration/);
+
+  // A value this browser cannot parse is DROPPED, leaving the rule standing and the computed
+  // style at the initial `all 0s`. Measured: the sheet still reports one rule, so counting rules
+  // cannot see this — the parsed declaration being empty is what separates it from a rule that
+  // legitimately declares a zero-length transition.
+  await expect(
+    geometrySpanMs(page, '".nx-pb-dropzone{transition:height notatime}",')
+  ).rejects.toThrow(/DROPPED/);
 });
 
 test("a variable-backed duration resolves once the fixture defines it", async ({
