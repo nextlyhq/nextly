@@ -25,22 +25,41 @@ const CANVAS_CSS = resolve(
   "../../../packages/plugin-page-builder/src/admin/canvas/IframeCanvas.tsx"
 );
 
-/** Every `transition` duration the drop-zone rules declare, in milliseconds. */
-function zoneTransitionDurationsMs(source: string): number[] {
-  const found: number[] = [];
-  for (const rule of source.split("\n")) {
-    if (!rule.includes("nx-pb-dropzone") || !rule.includes("transition"))
+/**
+ * How long each `transition` entry can still be moving geometry, in milliseconds.
+ *
+ * Duration PLUS delay, per entry, because the shorthand carries both and the settle allowance has
+ * to cover the moment the last one stops. `height .1s ease .05s` is 150ms of possible movement;
+ * reading the two numbers separately reports 100 and 50, and each passes a 120ms allowance while
+ * the edge keeps travelling past it — the guard green for the same reason the probe is wrong.
+ *
+ * A `transition` shorthand takes at most two times, and the FIRST is the duration and the second
+ * the delay, whatever order the other keywords appear in. Anything past the second is a keyword,
+ * so summing every number in the entry would inflate the total instead.
+ */
+function zoneTransitionSpansMs(source: string): number[] {
+  const spans: number[] = [];
+  for (const line of source.split("\n")) {
+    if (!line.includes("nx-pb-dropzone") || !line.includes("transition"))
       continue;
-    for (const [, value, unit] of rule.matchAll(/([\d.]+)(ms|s)\b/g)) {
-      found.push(unit === "s" ? Number(value) * 1000 : Number(value));
+    const declaration = /transition\s*:\s*([^;"']+)/.exec(line);
+    if (!declaration) continue;
+    // Comma-separated entries, each its own property with its own timings.
+    for (const entry of declaration[1].split(",")) {
+      const times = [...entry.matchAll(/([\d.]+)(ms|s)\b/g)].map(
+        ([, value, unit]) =>
+          unit === "s" ? Number(value) * 1000 : Number(value)
+      );
+      if (times.length === 0) continue;
+      spans.push(times[0] + (times[1] ?? 0));
     }
   }
-  return found;
+  return spans;
 }
 
 test("the PoC driver's settle allowance covers the zone transition it animates", () => {
   const source = readFileSync(CANVAS_CSS, "utf8");
-  const durations = zoneTransitionDurationsMs(source);
+  const durations = zoneTransitionSpansMs(source);
 
   // The positive control, and it is the whole reason this file is not vacuous: a parser that
   // matched nothing would satisfy every assertion below by having no values to check.
@@ -52,7 +71,7 @@ test("the PoC driver's settle allowance covers the zone transition it animates",
   for (const duration of durations) {
     expect(
       duration,
-      `a drop-zone transition of ${String(duration)}ms is not covered by the driver's ${String(declared)}ms geometrySettleMs — raise geometrySettleMs in poc-driver.ts`
+      `a drop-zone transition lasting ${String(duration)}ms is not covered by the driver's ${String(declared)}ms geometrySettleMs — raise geometrySettleMs in poc-driver.ts`
     ).toBeLessThanOrEqual(declared);
   }
 });
