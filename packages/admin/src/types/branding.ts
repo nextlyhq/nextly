@@ -83,14 +83,6 @@ export interface PluginMetadata {
   singles?: string[];
   /** Slugs of contributed field groups, for the detail page's contributions view. */
   fieldGroups?: string[];
-  /** Declared custom permissions (identity + display fields only; enabled plugins). */
-  permissions?: Array<{
-    action: string;
-    resource: string;
-    label?: string;
-    description?: string;
-    danger?: boolean;
-  }>;
   /** Declared HTTP routes as method + path (enabled plugins only). */
   /**
    * Declared HTTP routes. `fullPath` is the namespace the dispatcher mounts

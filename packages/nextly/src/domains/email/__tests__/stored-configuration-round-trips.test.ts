@@ -319,6 +319,79 @@ describe("a configuration whose parse is not a fixed point", () => {
     expect(stored.configuration).toEqual({ apiKey: "k" });
   });
 
+  // A `Map` keeps its entries where `JSON.stringify` cannot read, so the column
+  // would hold `{}` and the adapter would run without the operator's headers.
+  // The round-trip comparison catches it without knowing what a `Map` is,
+  // which is the property worth having: the same check refuses a `Set`, a
+  // class instance, and whatever else is invented next.
+  it("refuses a value whose serialisation keeps nothing", async () => {
+    register("mapped", input => ({
+      apiKey: String((input as { apiKey: unknown }).apiKey),
+      headers: new Map([["x-team", "ops"]]),
+    }));
+
+    await expect(write("mapped", { apiKey: "k" })).rejects.toThrow(
+      /parsing what would be saved does not return what was saved/
+    );
+  });
+
+  // Reached through an array rather than a key, and a `Set` rather than a
+  // `Map` — same check, no second branch.
+  it("refuses an emptied value nested inside an array", async () => {
+    register("nested-set", input => ({
+      apiKey: String((input as { apiKey: unknown }).apiKey),
+      routes: [{ region: "eu", tags: new Set(["primary"]) }],
+    }));
+
+    await expect(write("nested-set", { apiKey: "k" })).rejects.toThrow(
+      /parsing what would be saved does not return what was saved/
+    );
+  });
+
+  // An ORDINARY object can empty itself, by defining a `toJSON` that returns
+  // nothing while holding real values. Nothing about its prototype says so.
+  it("refuses a plain object whose own toJSON discards its fields", async () => {
+    register("self-emptying", input => ({
+      apiKey: String((input as { apiKey: unknown }).apiKey),
+      headers: { token: "ops", toJSON: () => ({}) },
+    }));
+
+    await expect(write("self-emptying", { apiKey: "k" })).rejects.toThrow(
+      /parsing what would be saved does not return what was saved/
+    );
+  });
+
+  // An array can do it too, and an array carrying NAMED properties loses
+  // those to serialisation while its indices survive.
+  it("refuses an array that loses what serialisation cannot carry", async () => {
+    register("named-array", input => ({
+      apiKey: String((input as { apiKey: unknown }).apiKey),
+      scopes: Object.assign(["send"], { region: "eu" }),
+    }));
+
+    await expect(write("named-array", { apiKey: "k" })).rejects.toThrow(
+      /parsing what would be saved does not return what was saved/
+    );
+  });
+
+  // Field ORDER is not a difference. The comparison is structural, so a parser
+  // that rebuilds its output field by field — an ordinary thing to write — is
+  // accepted, and `updateProvider` must agree with that when it decides
+  // whether a save changed the configuration.
+  it("stores a configuration whose parser reorders its own fields", async () => {
+    register("reordering", input => {
+      const value = input as { apiKey: unknown; region?: unknown };
+      return value.region === undefined
+        ? { apiKey: String(value.apiKey), region: "eu" }
+        : { region: String(value.region), apiKey: String(value.apiKey) };
+    });
+
+    const provider = await write("reordering", { apiKey: "k" });
+
+    const stored = await service.getProviderDecrypted(provider.id);
+    expect(stored.configuration).toEqual({ apiKey: "k", region: "eu" });
+  });
+
   // An ARRAY is ordinary configuration and JSON preserves it exactly. Its
   // `length` is a non-enumerable own key, so a naive own-key comparison
   // rejects every provider that has one.

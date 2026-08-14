@@ -27,7 +27,9 @@ import {
   OPTIONAL_STATUS_CONTEXTS,
   missingRequired,
   PATH_FILTER_WINDOW,
-  MAINTAINER_ASSOCIATIONS,
+  WRITE_PERMISSIONS,
+  hasWriteAccess,
+  pathsForFiltering,
   PATH_FILTER_COMMIT_LIMIT,
   pageWrapping,
   pathMatches,
@@ -35,6 +37,7 @@ import {
   repoFromRemoteUrl,
   requiredChecks,
   reviewCoverage,
+  SUBMITTED_REVIEW_STATES,
   reviewsCoveringTip,
   runCli,
   staleVerification,
@@ -256,6 +259,18 @@ describe("verdictCoversTip", () => {
   });
 });
 
+describe("SUBMITTED_REVIEW_STATES", () => {
+  it("names the states that ARE coverage rather than excluding one", () => {
+    expect(SUBMITTED_REVIEW_STATES).toEqual([
+      "APPROVED",
+      "CHANGES_REQUESTED",
+      "COMMENTED",
+    ]);
+    expect(SUBMITTED_REVIEW_STATES).not.toContain("DISMISSED");
+    expect(SUBMITTED_REVIEW_STATES).not.toContain("PENDING");
+  });
+});
+
 describe("reviewCoverage", () => {
   it("separates never-looked from looked-and-found-nothing", () => {
     // These render identically in every count-based gate. Two CI-wide changes
@@ -408,13 +423,53 @@ describe("OPTIONAL_STATUS_CONTEXTS", () => {
   });
 });
 
-describe("maintainer associations", () => {
-  it("counts only associations carrying write access", () => {
-    // Any account can submit an APPROVED review, a contributor's own and a
-    // bot's included, so the state alone does not say the project accepted it.
-    expect(MAINTAINER_ASSOCIATIONS).toEqual(["OWNER", "MEMBER", "COLLABORATOR"]);
-    expect(MAINTAINER_ASSOCIATIONS).not.toContain("CONTRIBUTOR");
-    expect(MAINTAINER_ASSOCIATIONS).not.toContain("NONE");
+describe("hasWriteAccess", () => {
+  it("accepts the permissions that actually carry write", () => {
+    for (const p of WRITE_PERMISSIONS) expect(hasWriteAccess(p)).toBe(true);
+  });
+
+  it("refuses read, none, and anything unrecognised", () => {
+    // The case the association allowlist got wrong: in an ORGANISATION
+    // repository `MEMBER` means membership of the org and says nothing about
+    // access here, so a read-only member's approval was counted as the project
+    // accepting the change. A permission is the fact; an association is a label.
+    expect(hasWriteAccess("read")).toBe(false);
+    expect(hasWriteAccess("none")).toBe(false);
+    expect(hasWriteAccess("triage")).toBe(false);
+    expect(hasWriteAccess(null)).toBe(false);
+    expect(hasWriteAccess("SOMETHING_NEW")).toBe(false);
+  });
+});
+
+describe("pathsForFiltering", () => {
+  const many = Array.from({ length: 400 }, (_, i) => `packages/a/${i}.ts`);
+
+  it("applies the 300-file window in BOTH modes", () => {
+    // A property of filter evaluation itself, so it holds whichever event
+    // produced the run.
+    expect(pathsForFiltering({ changedPaths: many, commits: 3, merged: false }))
+      .toHaveLength(300);
+    expect(pathsForFiltering({ changedPaths: many, commits: 3, merged: true }))
+      .toHaveLength(300);
+  });
+
+  it("applies the 1000-commit bypass only BEFORE a merge", () => {
+    // It is a property of the pull request's diff. After a merge the checks
+    // come from a push of the squash commit — one commit, whatever the pull
+    // request contained — so the pull request's count belongs to an event that
+    // is over, and using it would empty the list on any large pull request and
+    // require every workflow regardless of what the push triggered.
+    expect(
+      pathsForFiltering({ changedPaths: many, commits: 1500, merged: false })
+    ).toEqual([]);
+    expect(
+      pathsForFiltering({ changedPaths: many, commits: 1500, merged: true })
+    ).toHaveLength(300);
+  });
+
+  it("returns nothing readable as nothing", () => {
+    expect(pathsForFiltering({ changedPaths: null, commits: 1, merged: false }))
+      .toEqual([]);
   });
 });
 
@@ -618,14 +673,43 @@ describe("reviewsCoveringTip", () => {
   it("ignores a review written against an EARLIER revision", () => {
     // Counting it reports a reviewer as having covered a commit it never saw.
     const reviews = [
-      { user: { login: "coderabbitai[bot]" }, commit_id: other },
+      { user: { login: "coderabbitai[bot]" }, commit_id: other, state: "COMMENTED" },
+    ];
+
+    expect(reviewsCoveringTip(reviews, tip, "coderabbitai[bot]")).toEqual([]);
+  });
+
+  it("does NOT count a DISMISSED review, which GitHub invalidated", () => {
+    // A dismissed review says nothing and opens no thread, so counting it makes
+    // the gate read clean on a revision whose only review was withdrawn — with
+    // the unresolved thread count at zero for the same reason.
+    const reviews = [
+      { user: { login: "coderabbitai[bot]" }, commit_id: tip, state: "DISMISSED" },
+    ];
+
+    expect(reviewsCoveringTip(reviews, tip, "coderabbitai[bot]")).toEqual([]);
+  });
+
+  it("does NOT count an unsubmitted PENDING draft", () => {
+    const reviews = [
+      { user: { login: "coderabbitai[bot]" }, commit_id: tip, state: "PENDING" },
+    ];
+
+    expect(reviewsCoveringTip(reviews, tip, "coderabbitai[bot]")).toEqual([]);
+  });
+
+  it("does NOT count a state this code has never met", () => {
+    // The property that makes a NAMED set the right shape: excluding one state
+    // grants coverage to every other, including any added later.
+    const reviews = [
+      { user: { login: "coderabbitai[bot]" }, commit_id: tip, state: "SOMETHING_NEW" },
     ];
 
     expect(reviewsCoveringTip(reviews, tip, "coderabbitai[bot]")).toEqual([]);
   });
 
   it("counts a review whose commit_id IS the tip", () => {
-    const reviews = [{ user: { login: "coderabbitai[bot]" }, commit_id: tip }];
+    const reviews = [{ user: { login: "coderabbitai[bot]" }, commit_id: tip, state: "COMMENTED" }];
 
     expect(reviewsCoveringTip(reviews, tip, "coderabbitai[bot]")).toHaveLength(
       1
@@ -634,7 +718,7 @@ describe("reviewsCoveringTip", () => {
 
   it("ignores another reviewer's review of the same revision", () => {
     const reviews = [
-      { user: { login: "chatgpt-codex-connector[bot]" }, commit_id: tip },
+      { user: { login: "chatgpt-codex-connector[bot]" }, commit_id: tip, state: "COMMENTED" },
     ];
 
     expect(reviewsCoveringTip(reviews, tip, "coderabbitai[bot]")).toEqual([]);
@@ -648,7 +732,7 @@ describe("reviewsCoveringTip", () => {
     // truncating both sides identifies no particular commit.
     const short = tip.slice(0, 9);
     const reviews = [
-      { user: { login: "coderabbitai[bot]" }, commit_id: short },
+      { user: { login: "coderabbitai[bot]" }, commit_id: short, state: "COMMENTED" },
     ];
 
     expect(reviewsCoveringTip(reviews, short, "coderabbitai[bot]")).toEqual([]);
