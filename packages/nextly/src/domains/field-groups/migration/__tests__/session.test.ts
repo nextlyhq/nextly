@@ -50,6 +50,20 @@ function createAdapter(
      * behind and which the session reads as live.
      */
     expiresIn?: number;
+    /**
+     * Called as each transaction opens, with its 1-based sequence number.
+     *
+     * Awaited before the body runs, so returning a pending promise HOLDS that transaction open.
+     * That is the only way to place one transaction's completion at a chosen point relative to
+     * another's, which several properties here are ABOUT: a renewal and the work it protects are
+     * concurrent by construction, and asserting what happens when they interleave a particular way
+     * needs the interleaving to be chosen rather than hoped for.
+     *
+     * Throwing models a transaction that could not reach the database at all. The wrapper below
+     * rewraps it exactly as a real adapter does, so a caller sees the same opaque failure it would
+     * see in production rather than the error the test wrote.
+     */
+    onTransaction?: (seq: number) => Promise<void> | void;
   } = {}
 ) {
   const clock = createLockClock();
@@ -61,6 +75,7 @@ function createAdapter(
   const ddl: string[] = [];
   let open = 0;
   let peakOpen = 0;
+  let transactions = 0;
 
   const ctx = {
     lockRow: vi.fn(async () => undefined),
@@ -96,7 +111,10 @@ function createAdapter(
     transaction: vi.fn(async (work: (c: unknown) => Promise<unknown>) => {
       open += 1;
       peakOpen = Math.max(peakOpen, open);
+      transactions += 1;
+      const seq = transactions;
       try {
+        await options.onTransaction?.(seq);
         return await work(ctx);
       } catch (error) {
         // What the real adapters do: anything that is not already a
@@ -722,6 +740,81 @@ describe("field-group migration session", () => {
       expect(reachedTheEnd).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(0);
       expect(reachedTheEnd).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Losing the claim and finishing the work are concurrent events, so they can land in either
+  // order — and the order decides which mechanism reports the loss. When loss wins, the race
+  // rejects and the test above covers it. When COMPLETION wins, the race carries the callback's
+  // value and the loss arrives afterwards, with nothing left watching for it: the release is
+  // skipped (the work was still running when the row stopped being maintained), which leaves
+  // `heldToTheEnd` at its initial `true`. Both guards therefore pass and the run reports success
+  // on a claim it had already declared lost.
+  it("fails a completed run whose claim was declared lost as it finished", async () => {
+    vi.useFakeTimers();
+    try {
+      // Transaction 1 is the acquisition, 2..5 are the four renewals the TTL allows, 6 is the
+      // release. Sequence numbers rather than call-order guesses, so a change in how many
+      // transactions the session takes fails this loudly instead of silently retargeting it.
+      const ACQUIRE = 1;
+      const LAST_RENEWAL = 1 + LOCK_RENEWALS_BEFORE_LOSS;
+      const RELEASE = LAST_RENEWAL + 1;
+
+      const h = createAdapter({
+        heldBy: null,
+        onTransaction: async seq => {
+          if (seq === ACQUIRE) return;
+          if (seq === RELEASE) {
+            // 🔴 The interleaving this test exists for. The final renewal is still in flight when
+            // the release opens, so yielding here lets its failure — and the loss it declares —
+            // land while the release is between its own awaits. That is exactly the window where
+            // the callback has already produced a value and nothing is watching the claim.
+            for (let turn = 0; turn < 50; turn++) await Promise.resolve();
+            return;
+          }
+          // Every renewal fails to reach the database. Not proof the claim is gone, which is why
+          // it takes all four before the session gives up on it.
+          throw new Error("connection reset");
+        },
+      });
+
+      const run = withMigrationSession(
+        { adapter: h.adapter, dialect: "postgresql", label: "run-1" },
+        async () => {
+          // Spend the first three attempts, awaiting each so the failures are genuinely
+          // consecutive rather than overlapping.
+          for (
+            let attempt = 1;
+            attempt < LOCK_RENEWALS_BEFORE_LOSS;
+            attempt++
+          ) {
+            await vi.advanceTimersByTimeAsync(LOCK_RENEW_INTERVAL_MS);
+          }
+          // 🔴 Synchronous, and NOT awaited. It starts the fourth renewal and returns before that
+          // renewal can settle, which is what makes completion win the race. Awaiting here would
+          // let the loss land first and exercise the other path entirely.
+          vi.advanceTimersByTime(LOCK_RENEW_INTERVAL_MS);
+          return "migrated";
+        }
+      );
+
+      // 🔴 The REASON, not just the code. `heldToTheEnd` reports a different reason from the same
+      // factory, so asserting SERVICE_UNAVAILABLE alone would pass on the guard that was already
+      // there and prove nothing about this one.
+      await expect(run).rejects.toMatchObject({
+        code: "SERVICE_UNAVAILABLE",
+        logContext: {
+          reason: "migration lock claim was lost before completion",
+        },
+      });
+
+      // 🔴 Positive control on WHICH guard fired. The release ran and cleared the row, so it found
+      // the claim still ours and still live and reported `heldToTheEnd` — the pre-existing
+      // completion check had nothing to object to. That is what makes the rejection above evidence
+      // about this race rather than about a takeover the older guard would have caught anyway.
+      expect(h.owner()).toBeNull();
     } finally {
       vi.useRealTimers();
     }

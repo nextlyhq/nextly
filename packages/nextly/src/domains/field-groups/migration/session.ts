@@ -704,6 +704,26 @@ export async function withMigrationSession<T>(
 
   // Reached only when `fn` RESOLVED — a rejection propagated out of the block above and never gets
   // here, which is the ordering that keeps the caller's own failure primary.
+  //
+  // 🔴 That same ordering is what makes `claimWasLost` decisive HERE, with no record of which
+  // promise won the race required. `claimLost` only ever REJECTS, so it cannot have won and still
+  // arrive at this line; reaching it with the flag set means the loss was observed while the
+  // callback was finishing — the race took `fn`'s value, and the renewal reporting a takeover ran
+  // before the block above resumed. The release is then skipped for the right reason (work was
+  // still running when the row stopped being ours) which leaves `heldToTheEnd` at its initial
+  // `true`, so the check below cannot see it and the run would report success on a claim a
+  // contender already holds. Completing is not the same as having been protected while completing.
+  if (claimWasLost) {
+    throw NextlyError.serviceUnavailable({
+      logMessage:
+        "field-group migration lost its lock as it finished; another run may have overlapped it",
+      logContext: {
+        reason: "migration lock claim was lost before completion",
+        label,
+      },
+    });
+  }
+
   if (!heldToTheEnd && !releasedOnSignal) {
     throw NextlyError.serviceUnavailable({
       logMessage:
