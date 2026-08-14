@@ -267,6 +267,28 @@ export const ADMIN_KEYS_NOT_PERSISTED = {
   preview: "holds a function; needs server-side evaluation rather than storage",
 } as const;
 
+/**
+ * Re-establish the `admin` type on a value that has lost it.
+ *
+ * The HMR payload builder holds its config as `unknown`: it reads a module that has been
+ * re-imported across a reload, so nothing carries the authored type across that boundary. The
+ * projection keeps its precise signature — it is the boundary that decides what may be stored, and
+ * widening it to `unknown` would mean every caller could hand it anything.
+ *
+ * So the narrowing lives here, once, named for what it does. It checks only that the value is an
+ * object: the projection reads individual keys and each is optional, so a malformed one yields a
+ * projection with undefined fields rather than a throw — the same outcome as an absent `admin`.
+ *
+ * No assertion is needed after that narrowing: every option on `CollectionAdminOptions` is
+ * optional, so a non-null object is already assignable to it.
+ */
+export function asAdminOptions(
+  value: unknown
+): CollectionAdminOptions | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  return value;
+}
+
 export function toPersistedAdmin(admin: CollectionConfig["admin"]) {
   if (!admin) return undefined;
   return {

@@ -604,7 +604,11 @@ export class CollectionRegistryService extends BaseRegistryService<
               description: resolveDescription(config) ?? null,
               fields: config.fields,
               timestamps: config.timestamps,
-              admin: config.admin,
+              // Explicit null when the config no longer declares an admin block, matching the
+              // metadata-only branch below. Removing `admin` usually accompanies some other
+              // edit, and that edit selects THIS branch — so without it the common case is the
+              // one where stale placement survives.
+              admin: config.admin ?? null,
               configPath: config.configPath,
               schemaHash,
               locked: true,

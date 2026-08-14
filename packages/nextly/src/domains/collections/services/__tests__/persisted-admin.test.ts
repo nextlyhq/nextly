@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { CollectionConfig } from "../../../../collections/config/define-collection";
 import {
   ADMIN_KEYS_NOT_PERSISTED,
+  asAdminOptions,
   resolveDescription,
   toPersistedAdmin,
 } from "../collection-sync-service";
@@ -135,5 +136,36 @@ describe("ADMIN_KEYS_NOT_PERSISTED", () => {
         0
       );
     }
+  });
+});
+
+/**
+ * The seam where a config has lost its type.
+ *
+ * The HMR payload builder reads a module re-imported across a reload and holds `admin` as
+ * `unknown`, so something has to re-establish the type before the projection can run. Keeping
+ * that narrowing in one named place is what lets the projection keep a precise signature — the
+ * alternative, widening it to accept `unknown`, would let every caller hand it anything.
+ */
+describe("asAdminOptions", () => {
+  it("passes an object through so the projection can read it", () => {
+    const narrowed = asAdminOptions({ order: 3, sidebarGroup: "editorial" });
+    // Through the projection, because that is what the caller does with it — asserting the
+    // narrowing alone would not show that the value survives the trip.
+    expect(toPersistedAdmin(narrowed)?.order).toBe(3);
+    expect(toPersistedAdmin(narrowed)?.sidebarGroup).toBe("editorial");
+  });
+
+  it.each([
+    ["undefined", undefined],
+    ["null", null],
+    ["a string", "admin"],
+    ["a number", 7],
+  ])("treats %s as no admin block at all", (_label, value) => {
+    // Not a throw. A malformed value reaching this seam means a reload delivered something
+    // unexpected, and refusing to boot over it would be a worse outcome than a collection
+    // rendering with default admin options.
+    expect(asAdminOptions(value)).toBeUndefined();
+    expect(toPersistedAdmin(asAdminOptions(value))).toBeUndefined();
   });
 });
