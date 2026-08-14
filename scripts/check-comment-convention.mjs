@@ -22,7 +22,8 @@
  *   node scripts/check-comment-convention.mjs [roots...]      # defaults to packages apps e2e
  */
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { readFileSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 
 /**
@@ -140,19 +141,40 @@ export function isReviewDomain(file) {
   return REVIEW_DOMAIN_PATHS.some(prefix => path.startsWith(prefix));
 }
 
-/** Every TypeScript source file under `root`. */
+/**
+ * Every authored source file under `root`, taken from git's index rather than from the
+ * filesystem.
+ *
+ * A directory walk reads whatever is on disk, and what is on disk depends on which build and
+ * test commands the machine has run. `apps/playground/.next-e2e/` holds compiled bundles that
+ * embed the comments of every module they bundle, so a walk reports them as findings, attributes
+ * them to a generated path, and does so only on machines where that directory happens to exist -
+ * clean in a fresh worktree, twenty findings after an e2e run, from identical sources.
+ *
+ * Extending the excluded-name list cannot close that. `.next` was listed and `.next-e2e` was
+ * not, and the next tool to add an output directory reopens it. Tracked-ness is the property
+ * actually wanted: generated output is ignored, authored source is committed, and git already
+ * holds that answer exactly.
+ *
+ * `-z` because a path may contain a newline, and `--` so a root that looks like a flag is still
+ * read as a path.
+ */
 export function sourceFiles(root) {
-  const found = [];
-  for (const entry of readdirSync(root)) {
-    if (EXCLUDED_DIRS.has(entry) || EXCLUDED_FILES.has(entry)) continue;
-    const full = join(root, entry);
-    if (statSync(full).isDirectory()) {
-      found.push(...sourceFiles(full));
-    } else if (SOURCE_EXTENSIONS.some(ext => entry.endsWith(ext))) {
-      found.push(full);
-    }
-  }
-  return found;
+  const listed = execFileSync("git", ["ls-files", "-z", "--", root], {
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  return listed
+    .split("\0")
+    .filter(Boolean)
+    .filter(path => SOURCE_EXTENSIONS.some(ext => path.endsWith(ext)))
+    .filter(path => {
+      const parts = path.split("/");
+      return (
+        !parts.some(part => EXCLUDED_DIRS.has(part)) &&
+        !EXCLUDED_FILES.has(parts[parts.length - 1])
+      );
+    });
 }
 
 /**
