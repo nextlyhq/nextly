@@ -79,7 +79,12 @@ export default function PluginsTable() {
 
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebouncedValue(search, UI.SEARCH_DEBOUNCE_MS);
-  const { page, pageSize, setPage, setPageSize, resetPage } = usePagination();
+  // 25 rather than the hook's default: an installed-plugins list is short and
+  // read in one pass, so a smaller page would split most installations across
+  // pages that no one needs to visit.
+  const { page, pageSize, setPage, setPageSize, resetPage } = usePagination({
+    initialPageSize: 25,
+  });
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
 
