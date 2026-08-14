@@ -609,7 +609,7 @@ export async function runFileMigrations(args: {
 
   const dz = adapter as unknown as DrizzleAdapter;
   const executeSql = async (sqlText: string): Promise<number> => {
-    const statements = splitSqlStatements(sqlText);
+    const statements = splitSqlStatements(sqlText, dialect);
     await executeTransaction(dz, dialect, async () => {
       for (const statement of statements) {
         await dz.executeQuery(statement);
@@ -904,7 +904,59 @@ export async function executeTransaction(
   }
 }
 
-export function splitSqlStatements(sql: string): string[] {
+/**
+ * Whether a `--` line comment begins at `index`.
+ *
+ * MySQL is the odd one out: it starts a comment at `--` only when the next
+ * character is whitespace or a control character, so `n--1` is `n - -1` rather
+ * than a comment. Postgres and SQLite comment on any `--`. Treating MySQL like
+ * the others would swallow the rest of that line, take its semicolon with it,
+ * and hand the driver two statements in one string.
+ *
+ * One predicate rather than two, because the line filter and the character scan
+ * both need this answer and a second copy would drift from this one.
+ */
+function isLineCommentAt(
+  text: string,
+  index: number,
+  dialect?: SupportedDialect
+): boolean {
+  if (text[index] !== "-" || text[index + 1] !== "-") return false;
+  if (dialect !== "mysql") return true;
+  const next = text[index + 2];
+  // End of input closes the statement anyway, so `--` with nothing after it is
+  // a comment for this purpose.
+  if (next === undefined) return true;
+  // Whitespace or a control character, which is MySQL's rule verbatim. Written as
+  // a code-point comparison rather than a regex range: a control character inside
+  // a pattern is unreadable in source and `no-control-regex` rejects it.
+  // A third `-` does NOT qualify — `n---1` is arithmetic rather than a comment.
+  return /\s/.test(next) || next.charCodeAt(0) <= 0x1f;
+}
+
+/**
+ * The character that CLOSES the quoted region this character opens, or
+ * undefined when it opens none.
+ *
+ * `'` and `"` close with themselves everywhere. The identifier forms are
+ * dialect-specific: SQLite reads `[...]` as a quoted identifier while Postgres
+ * reads `[` as an array subscript, and MySQL uses backticks where Postgres has
+ * no such form.
+ */
+function quoteOpenerAt(
+  char: string | undefined,
+  dialect?: SupportedDialect
+): string | undefined {
+  if (char === "'" || char === '"') return char;
+  if (dialect === "sqlite" && char === "[") return "]";
+  if (dialect === "mysql" && char === "`") return "`";
+  return undefined;
+}
+
+export function splitSqlStatements(
+  sql: string,
+  dialect?: SupportedDialect
+): string[] {
   // Remove Drizzle's statement breakpoint markers and SQL comments.
   // drizzle-kit uses two marker patterns in generated migration SQL:
   //   1. Standalone: `--> statement-breakpoint` on its own line (between CREATE TABLE blocks)
@@ -918,7 +970,7 @@ export function splitSqlStatements(sql: string): string[] {
       if (trimmed.startsWith("--> statement-breakpoint")) return false;
       // Remove pure SQL comment lines (but keep lines that have SQL after comments)
       if (
-        trimmed.startsWith("--") &&
+        isLineCommentAt(trimmed, 0, dialect) &&
         !trimmed.includes("CREATE") &&
         !trimmed.includes("ALTER") &&
         !trimmed.includes("DROP") &&
@@ -943,13 +995,40 @@ export function splitSqlStatements(sql: string): string[] {
     const char = cleanedSql[i];
     const prevChar = cleanedSql[i - 1];
 
-    if ((char === "'" || char === '"') && prevChar !== "\\") {
-      if (!inString) {
-        inString = true;
-        stringChar = char;
-      } else if (char === stringChar) {
-        inString = false;
-      }
+    // Comments are copied through verbatim without being scanned, because the
+    // characters inside one are prose rather than SQL. An apostrophe in a
+    // retained comment ("SQLite doesn't support ...") would otherwise open a
+    // string that never closes, and every semicolon after it stops separating
+    // statements — the whole file then reaches the driver as one statement.
+    if (!inString && isLineCommentAt(cleanedSql, i, dialect)) {
+      const lineEnd = cleanedSql.indexOf("\n", i);
+      const end = lineEnd === -1 ? cleanedSql.length : lineEnd;
+      current += cleanedSql.slice(i, end);
+      i = end - 1;
+      continue;
+    }
+    if (!inString && char === "/" && cleanedSql[i + 1] === "*") {
+      const close = cleanedSql.indexOf("*/", i + 2);
+      const end = close === -1 ? cleanedSql.length : close + 2;
+      current += cleanedSql.slice(i, end);
+      i = end - 1;
+      continue;
+    }
+
+    // Quoted IDENTIFIERS count as quoted regions too, not just string literals.
+    // SQLite accepts `[a--b]` and MySQL accepts a backtick-quoted `a--b`; with
+    // only ' and " tracked, the dashes inside one read as a comment opener and
+    // the statement's semicolon disappears into it.
+    //
+    // The bracket and backtick forms are applied per dialect rather than
+    // everywhere: `[` is not a quote in Postgres, where it subscripts an array,
+    // so treating it as one there would swallow ordinary SQL.
+    const opener = quoteOpenerAt(char, dialect);
+    if (!inString && opener) {
+      inString = true;
+      stringChar = opener;
+    } else if (inString && char === stringChar && prevChar !== "\\") {
+      inString = false;
     }
 
     if (char === ";" && !inString) {
