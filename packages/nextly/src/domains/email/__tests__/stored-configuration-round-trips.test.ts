@@ -390,7 +390,7 @@ describe("a configuration whose parse is not a fixed point", () => {
     });
 
     await expect(write("mapped", { apiKey: "k" })).rejects.toThrow(
-      /at headers that keeps nothing when written as JSON/
+      /at headers that changes when written as JSON/
     );
   });
 
@@ -403,7 +403,7 @@ describe("a configuration whose parse is not a fixed point", () => {
     }));
 
     await expect(write("nested-set", { apiKey: "k" })).rejects.toThrow(
-      /at routes\.\[0\]\.tags that keeps nothing/
+      /at routes\.\[0\]\.tags that changes when written as JSON/
     );
   });
 
@@ -421,7 +421,7 @@ describe("a configuration whose parse is not a fixed point", () => {
     });
 
     await expect(write("self-emptying", { apiKey: "k" })).rejects.toThrow(
-      /at headers that keeps nothing when written as JSON/
+      /at headers that changes when written as JSON/
     );
   });
 
@@ -439,7 +439,7 @@ describe("a configuration whose parse is not a fixed point", () => {
     });
 
     await expect(write("self-emptying-array", { apiKey: "k" })).rejects.toThrow(
-      /at scopes that keeps nothing when written as JSON/
+      /at scopes that changes when written as JSON/
     );
   });
 

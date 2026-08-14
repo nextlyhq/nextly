@@ -351,36 +351,31 @@ export class EmailProviderService extends BaseService {
       });
     }
 
-    // Coercion and DESTRUCTION are not the same thing, and only the first one
-    // was decided. A `Date` serialises to a string that still carries it; a
-    // `Map` of headers serialises to `{}` and carries nothing, so storing it
-    // stores none of what the operator entered and the adapter runs without
-    // their settings. Refused here rather than in the fixed-point check below,
-    // which cannot see it: both sides of that comparison are already past the
-    // column, so an empty projection agrees with an empty projection.
-    //
-    // Asked of the SERIALISATION rather than of the type. Anything that keeps
-    // some of itself -- a string, a number, a populated object -- is a
-    // coercion and is stored. Anything that keeps none of itself is refused,
-    // whatever it was.
     const roundTripped: unknown = JSON.parse(serialized);
     const unchanged: unknown = JSON.parse(serialized);
 
-    // Read against the projection ALREADY COMPUTED above rather than by
-    // serialising each node again. One serialisation happened, its result is
-    // in hand, and asking it is both cheaper and the only way to be sure the
-    // answer describes what will actually be written -- a `toJSON` that
-    // returns something different on its second call would otherwise be
-    // judged on a value nothing stores.
-    const emptied = this.emptiedBySerialisation(stored, roundTripped);
-    if (emptied) {
+    // Coercion and DESTRUCTION are not the same thing, and only the first was
+    // decided. The rule is stated as ONE permitted difference rather than as a
+    // walk looking for damage: the parsed value and the form the column will
+    // hold must be the same configuration, EXCEPT that a value may become
+    // plain text. That is the `Date` case, and it is the only one.
+    //
+    // Written this way because the alternative was tried and does not close.
+    // A check that walks the value looking for shapes JSON loses has to know
+    // every shape: a `Map`, a `Set`, an object whose own `toJSON` empties it,
+    // an array that does the same, an array that empties to `[]`. Each is a
+    // separate branch and the next one is always missing. Naming the single
+    // ACCEPTED difference instead leaves nothing to enumerate — anything that
+    // is not that difference is refused, including shapes nobody has met yet.
+    const differs = this.storedFormDiffers(stored, unchanged);
+    if (differs) {
       throw new NextlyError({
         code: "BUSINESS_RULE_VIOLATION",
-        publicMessage: `Email provider "${type}" parsed its configuration into a value at ${emptied} that keeps nothing when written as JSON, so saving it would discard what was entered. Return a plain object or an array there.`,
+        publicMessage: `Email provider "${type}" parsed its configuration into a value at ${differs} that changes when written as JSON, so what is saved would not be what was parsed. Return plain objects, arrays and primitives from \`parseConfig\` -- a value that becomes text, such as a \`Date\`, is stored as that text.`,
         logContext: {
-          reason: "email-provider-configuration-emptied-by-serialisation",
+          reason: "email-provider-configuration-not-storable",
           type,
-          path: emptied,
+          path: differs,
         },
       });
     }
@@ -493,75 +488,78 @@ export class EmailProviderService extends BaseService {
     return prototype === Object.prototype || prototype === null;
   }
 
-  private emptiedBySerialisation(
+  /**
+   * Where a parsed value and the form the column will hold stop being the
+   * same configuration, or `undefined` when they agree.
+   *
+   * ONE difference is permitted, and it is the whole policy: an object may
+   * become a PRIMITIVE. `JSON.stringify` turns a `Date` into its ISO string,
+   * and the project accepts that coercion rather than refusing the write.
+   *
+   * Everything else must match. An object compared against an object must be
+   * an ORDINARY one, because a `Map` and a `Set` keep their contents where
+   * `JSON.stringify` cannot read and so report the same empty shape a genuinely
+   * empty object does. A class whose `toJSON` returns a populated object is
+   * refused for the same reason: the column would hold the fields and the
+   * adapter would not get the class.
+   *
+   * Keys holding `undefined` or a function are excluded from the comparison,
+   * because `JSON.stringify` does not write them -- which is how an absent
+   * optional field is ordinarily spelled.
+   */
+  private storedFormDiffers(
     value: unknown,
     projection: unknown,
     path: string[] = []
   ): string | undefined {
-    if (value === null || typeof value !== "object") return undefined;
+    const here = (): string =>
+      path.length === 0 ? "the configuration" : path.join(".");
 
-    // What the column would hold at this position. Anything other than an
-    // empty object kept something -- a string, a number, an array, a populated
-    // object -- and is a coercion.
-    const keptNothing =
-      projection !== null &&
-      typeof projection === "object" &&
-      !Array.isArray(projection) &&
-      Object.keys(projection).length === 0;
-
-    if (keptNothing && this.heldSomething(value)) {
-      return path.length === 0 ? "the configuration" : path.join(".");
+    // The permitted coercion.
+    if (
+      value !== null &&
+      typeof value === "object" &&
+      (typeof projection === "string" ||
+        typeof projection === "number" ||
+        typeof projection === "boolean")
+    ) {
+      return undefined;
     }
 
-    // Only positions that SURVIVED are worth descending into. A node whose
-    // projection kept nothing has already been answered, and one that changed
-    // shape -- a `Date` to a string -- has no children to walk.
-    if (Array.isArray(value) && Array.isArray(projection)) {
+    if (Array.isArray(value) || Array.isArray(projection)) {
+      if (!Array.isArray(value) || !Array.isArray(projection)) return here();
+      if (value.length !== projection.length) return here();
       for (const [index, entry] of value.entries()) {
-        const emptied = this.emptiedBySerialisation(entry, projection[index], [
+        const differs = this.storedFormDiffers(entry, projection[index], [
           ...path,
           `[${index}]`,
         ]);
-        if (emptied) return emptied;
+        if (differs) return differs;
       }
       return undefined;
     }
 
-    if (
-      projection !== null &&
-      typeof projection === "object" &&
-      !Array.isArray(projection)
-    ) {
-      const held: Record<string, unknown> = projection as Record<
-        string,
-        unknown
-      >;
-      for (const [key, entry] of Object.entries(value)) {
-        const emptied = this.emptiedBySerialisation(entry, held[key], [
+    if (value !== null && typeof value === "object") {
+      if (projection === null || typeof projection !== "object") return here();
+      if (!this.isOrdinaryObject(value)) return here();
+
+      const held = projection as Record<string, unknown>;
+      const written = Object.entries(value).filter(
+        ([, entry]) => entry !== undefined && typeof entry !== "function"
+      );
+      if (written.length !== Object.keys(held).length) return here();
+      for (const [key, entry] of written) {
+        if (!Object.hasOwn(held, key)) return here();
+        const differs = this.storedFormDiffers(entry, held[key], [
           ...path,
           key,
         ]);
-        if (emptied) return emptied;
+        if (differs) return differs;
       }
+      return undefined;
     }
-    return undefined;
-  }
 
-  /**
-   * Whether a value carried anything the column was supposed to receive.
-   *
-   * An array is judged by its length and an object by its own enumerable
-   * values, because those are what `JSON.stringify` would have written. A
-   * value keeping its state anywhere else -- a `Map`'s entries, a `Set`'s
-   * members -- reports nothing here, so the ordinary-object test is what
-   * catches it: a `{}` that really is empty is ordinary, and a `Map` is not.
-   */
-  private heldSomething(value: object): boolean {
-    if (Array.isArray(value)) return value.length > 0;
-    const hasValues = Object.values(value).some(
-      entry => entry !== undefined && typeof entry !== "function"
-    );
-    return hasValues || !this.isOrdinaryObject(value);
+    return Object.is(value, projection) ? undefined : here();
   }
 
   /**
