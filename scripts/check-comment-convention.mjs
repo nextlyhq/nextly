@@ -348,8 +348,8 @@ export function commentText(source, { lineComments = true, jsx = false, hashComm
   // Only for files that ARE JSX. Parsing a plain .ts file as TSX turns ordinary generic syntax
   // into phantom JsxText spans, and comments falling inside them would be dropped - a false
   // NEGATIVE, which is the worse direction for a gate.
-  const jsxText = jsx ? jsxTextRanges(source) : [];
-  const insideJsxText = start => jsxText.some(r => start >= r.pos && start < r.end);
+  const facts = parserFacts(source, jsx);
+  const jsxText = facts.jsxText;
 
   const comments = [];
   const scanner = ts.createScanner(
@@ -369,9 +369,6 @@ export function commentText(source, { lineComments = true, jsx = false, hashComm
   // Whether each open paren belongs to an if/while/for HEADER. A slash after such a paren opens a
   // regular expression - `if (ready) /x/.test(v)` is a statement, not a division - while a slash
   // after a call or grouping paren divides.
-  const parens = [];
-  let closedControlHeader = false;
-  let previous = ts.SyntaxKind.Unknown;
   let token = scanner.scan();
 
   while (token !== ts.SyntaxKind.EndOfFileToken) {
@@ -381,8 +378,7 @@ export function commentText(source, { lineComments = true, jsx = false, hashComm
     // TypeScript's - which is what keeps character classes and escapes correct.
     if (
       (token === ts.SyntaxKind.SlashToken || token === ts.SyntaxKind.SlashEqualsToken) &&
-      (!ENDS_A_VALUE.has(previous) ||
-        (previous === ts.SyntaxKind.CloseParenToken && closedControlHeader))
+      facts.regexStarts.has(scanner.getTokenStart())
     ) {
       token = scanner.reScanSlashToken();
     }
@@ -398,7 +394,6 @@ export function commentText(source, { lineComments = true, jsx = false, hashComm
         // the line the scanner just consumed: `<div>https://x</div>; // Codex asked` has a real
         // comment after the URL, and discarding the line would take it too.
         scanner.resetTokenState(jsxSpan.end);
-        previous = ts.SyntaxKind.Unknown;
         token = scanner.scan();
         continue;
       }
@@ -413,35 +408,54 @@ export function commentText(source, { lineComments = true, jsx = false, hashComm
         // template as code, and a `//` in that text reads as a comment.
         const resumed = scanner.reScanTemplateToken(false);
         if (resumed === ts.SyntaxKind.TemplateTail) interpolations.pop();
-        previous = resumed;
         token = scanner.scan();
         continue;
       }
       interpolations[interpolations.length - 1] -= 1;
     }
 
-    if (token === ts.SyntaxKind.OpenParenToken) {
-      parens.push(CONTROL_HEADERS.has(previous));
-    } else if (token === ts.SyntaxKind.CloseParenToken) {
-      closedControlHeader = parens.pop() === true;
-    }
-    if (!TRIVIA.has(token)) previous = token;
     token = scanner.scan();
   }
 
   return comments;
 }
 
-/** The spans the parser classifies as rendered JSX text, which no comment can begin inside. */
-function jsxTextRanges(source) {
-  const ranges = [];
-  const sf = ts.createSourceFile("x.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+/**
+ * The two things the SCANNER cannot decide for itself, taken from the parser in one pass.
+ *
+ * `regexStarts` holds the offset of every regular-expression literal. Whether a `/` opens one or
+ * divides is a grammar question, not a lexical one - `value as number / 2` divides while
+ * `if (ready) /x/.test(v)` does not - and a set of "token kinds that end a value" is a
+ * reimplementation of the parser's state that is wrong wherever it is incomplete. Each gap is a
+ * SILENT one: the slash re-scans as a regular expression and swallows the comment behind it. So
+ * the answer is read from the parser, which already computed it.
+ *
+ * `jsxText` holds rendered JSX text, which no comment can begin inside: `<span>https://x</span>`
+ * reaches the scanner as a slash pair. Populated only for files that ARE JSX, because parsing a
+ * plain `.ts` file as TSX turns ordinary generic syntax into phantom JsxText spans and comments
+ * falling inside them would be dropped.
+ */
+function parserFacts(source, jsx) {
+  const sourceFile = ts.createSourceFile(
+    jsx ? "f.tsx" : "f.ts",
+    source,
+    ts.ScriptTarget.Latest,
+    false,
+    jsx ? ts.ScriptKind.TSX : ts.ScriptKind.TS
+  );
+  const regexStarts = new Set();
+  const jsxText = [];
   const visit = node => {
-    if (node.kind === ts.SyntaxKind.JsxText) ranges.push({ pos: node.pos, end: node.end });
+    if (node.kind === ts.SyntaxKind.RegularExpressionLiteral) {
+      regexStarts.add(node.getStart(sourceFile));
+    }
+    if (jsx && node.kind === ts.SyntaxKind.JsxText) {
+      jsxText.push({ pos: node.pos, end: node.end });
+    }
     node.forEachChild(visit);
   };
-  visit(sf);
-  return ranges;
+  visit(sourceFile);
+  return { regexStarts, jsxText };
 }
 
 /**
@@ -611,24 +625,6 @@ function hashLineComments(source, { shell = false } = {}) {
   return comments;
 }
 
-/** Keywords whose parenthesised header is followed by a statement, not by an operator. */
-const CONTROL_HEADERS = new Set([
-  ts.SyntaxKind.IfKeyword,
-  ts.SyntaxKind.WhileKeyword,
-  ts.SyntaxKind.ForKeyword,
-  ts.SyntaxKind.WithKeyword,
-]);
-
-/** Trivia carries no meaning for the regex-or-division decision, so it must not become `previous`. */
-const TRIVIA = new Set([
-  ts.SyntaxKind.SingleLineCommentTrivia,
-  ts.SyntaxKind.MultiLineCommentTrivia,
-  ts.SyntaxKind.WhitespaceTrivia,
-  ts.SyntaxKind.NewLineTrivia,
-  ts.SyntaxKind.ShebangTrivia,
-  ts.SyntaxKind.ConflictMarkerTrivia,
-]);
-
 /**
  * Tokens after which a `/` DIVIDES, because each ends a value.
  *
@@ -637,35 +633,6 @@ const TRIVIA = new Set([
  * "division" at worst reports a comment that was really regex data. The first failure is silent
  * and the second is visible.
  */
-const ENDS_A_VALUE = new Set([
-  ts.SyntaxKind.Identifier,
-  // `this.#count / 2` divides. Without this the slash is re-scanned as a regex and swallows
-  // the comment that follows it.
-  ts.SyntaxKind.PrivateIdentifier,
-  // A postfix non-null assertion ends a value too: `value! / total` divides.
-  ts.SyntaxKind.ExclamationToken,
-  ts.SyntaxKind.NumericLiteral,
-  ts.SyntaxKind.BigIntLiteral,
-  ts.SyntaxKind.StringLiteral,
-  ts.SyntaxKind.NoSubstitutionTemplateLiteral,
-  ts.SyntaxKind.TemplateTail,
-  ts.SyntaxKind.CloseParenToken,
-  ts.SyntaxKind.CloseBracketToken,
-  ts.SyntaxKind.ThisKeyword,
-  ts.SyntaxKind.SuperKeyword,
-  ts.SyntaxKind.TrueKeyword,
-  ts.SyntaxKind.FalseKeyword,
-  ts.SyntaxKind.NullKeyword,
-  ts.SyntaxKind.PlusPlusToken,
-  ts.SyntaxKind.MinusMinusToken,
-  // `const x = /re/ / 2` and `const x = {} / 2` both divide. CloseBraceToken also ends a BLOCK,
-  // after which a slash would open a regex - so this errs towards division, deliberately and in
-  // the direction the file already states: mistaking a regex for division reports its body as a
-  // comment, which is visible, while the reverse swallows a real comment silently.
-  ts.SyntaxKind.RegularExpressionLiteral,
-  ts.SyntaxKind.CloseBraceToken,
-]);
-
 /**
  * CSS comments, which are only ever `/* ... *\/`.
  *
