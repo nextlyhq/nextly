@@ -296,6 +296,38 @@ still the READ; and a human bringing outside knowledge can spot a bad
 classification the check reads perfectly. Run the input through the instrument
 instead of predicting what someone would infer from it.
 
+## A measurement standing in for a CATEGORY clears more than it checked
+
+The commonest false clean is not a wrong measurement. It is a correct one
+answering a narrower question than the claim it gets used for, which is why
+re-running it never helps: the number was right, and the sentence built on it
+was wider.
+
+Three from this repository, arriving from unrelated directions:
+
+- **"Zero queue depth" used as "not load."** It rules out CONTENTION. A runner
+  that is intrinsically slower per unit of work is still load, and is invisible
+  to a queue-depth check — so a test dying at a timeout was declared a hang on
+  the strength of a measurement that could not see the cause it was excluding.
+- **"The marker is present" used as "the merge landed whole."** It rules out
+  one commit having gone missing, not the tail.
+- **"The controls pass" used as "the findings are real."** It rules out the
+  check being wrong on the shapes tested, not on the ones that produced the
+  reports.
+
+The tell is a sentence where the evidence names one thing and the conclusion
+names a family: a queue, a marker, a control — against load, a merge, a set of
+findings. When you notice it, do not look for a better number first. Name the
+CATEGORY, list what else is in it, and ask which members the measurement can
+actually see.
+
+What settles it is usually evidence that VARIES with the thing being claimed.
+The load case was decided by a factor that appeared only where there was real
+work to be slow at — 4ms to 11ms on a trivial test against 85ms to 5136ms on a
+rendering one. A hang does not scale with work and contention would not spare
+the trivial cases, so one measurement excluded both. A single timing at the
+ceiling, however precise, could not have.
+
 ## For an ADVISORY check, firing on correct code is worse than missing
 
 Read the scope first, because the asymmetry inverts and the inverted case is a
