@@ -336,8 +336,10 @@ describe("the command", () => {
 });
 
 describe("numbered task and plan labels", () => {
-  // `Task #17:` is the canonical written form and is exactly what the pattern exists to catch, so
-  // requiring the digit to follow the noun immediately left the commonest spelling passing.
+  // A hash between the noun and the number is the canonical written form and is exactly what the
+  // pattern exists to catch, so requiring the digit to follow the noun immediately left the
+  // commonest spelling passing. The fixtures below carry the literal shapes; this comment cannot,
+  // because the extractor reads comment text and would report it.
   it("matches a hash-prefixed number", () => {
     expect(offencesIn("// Task #17: migrate the records").length).toBeGreaterThan(0);
     expect(offencesIn("// Plan #12: split the adapter").length).toBeGreaterThan(0);
