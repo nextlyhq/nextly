@@ -32,7 +32,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 import { POC_GEOMETRY_SETTLE_MS } from "./poc-driver";
 
@@ -53,12 +53,74 @@ const CANVAS_CSS = resolve(
  * `spanMs` is read off `declaration` by a person. It cannot go stale on its own — the only thing
  * that changes it is an edit to that text, which the first assertion refuses.
  */
-const PINNED_GEOMETRY = {
-  declaration:
-    '".nx-pb-dropzone{height:0;border-radius:3px;transition:height .1s ease,background .1s ease}",',
-  // `height` transitions over `.1s` with no delay. `background` moves no edge this probe measures.
-  spanMs: 100,
-} as const;
+const PINNED_DECLARATION =
+  '".nx-pb-dropzone{height:0;border-radius:3px;transition:height .1s ease,background .1s ease}",';
+
+/** Properties whose transition moves the vertical edge this probe measures. */
+const GEOMETRY_PROPERTIES = new Set([
+  "height",
+  "min-height",
+  "max-height",
+  "block-size",
+  "margin",
+  "margin-top",
+  "margin-bottom",
+  "padding",
+  "padding-top",
+  "padding-bottom",
+  "top",
+  "bottom",
+  "inset",
+  "transform",
+  "all",
+]);
+
+/**
+ * How long the geometry in a rule keeps moving, computed BY THE BROWSER.
+ *
+ * The rule is injected into a real document and the resulting `transition-*` longhands are read
+ * back off a matching element. Those are already resolved: the shorthand is expanded, each
+ * property paired with its own duration and delay, times normalised to seconds, and `calc()`,
+ * `var()` and signed values evaluated. Nothing here interprets CSS syntax.
+ *
+ * That is the point. Computing this span from source text means reimplementing CSS, and the only
+ * implementation guaranteed to agree with the canvas is the one the canvas runs in.
+ */
+async function geometrySpanMs(
+  page: Page,
+  declaration: string
+): Promise<number> {
+  // The pinned literal is a quoted, comma-suffixed line of a TypeScript array; the rule inside it
+  // is what a browser can accept.
+  const rule = declaration.trim().replace(/^"/, "").replace(/",?$/, "");
+  return page.evaluate(
+    ([css, geometry]) => {
+      const style = document.createElement("style");
+      style.textContent = css as string;
+      document.head.append(style);
+      const el = document.createElement("div");
+      el.className = "nx-pb-dropzone";
+      document.body.append(el);
+      const computed = getComputedStyle(el);
+      const seconds = (value: string) =>
+        value.split(",").map(v => Number.parseFloat(v.trim()) * 1000);
+      const properties = computed.transitionProperty
+        .split(",")
+        .map(v => v.trim());
+      const durations = seconds(computed.transitionDuration);
+      const delays = seconds(computed.transitionDelay);
+      let longest = 0;
+      properties.forEach((property, i) => {
+        if (!(geometry as string[]).includes(property)) return;
+        longest = Math.max(longest, (durations[i] ?? 0) + (delays[i] ?? 0));
+      });
+      el.remove();
+      style.remove();
+      return longest;
+    },
+    [rule, [...GEOMETRY_PROPERTIES]] as const
+  );
+}
 
 /** Every drop-zone line declaring a transition, trimmed, in file order. */
 function transitionLines(source: string): string[] {
@@ -79,19 +141,42 @@ test("the drop-zone geometry timing has not changed under the probe", () => {
 
   expect(
     found,
-    "the canvas drop-zone transition changed. Re-derive how long its geometry keeps moving, " +
-      "update PINNED_GEOMETRY here — both its declaration AND its spanMs, and raise POC_GEOMETRY_SETTLE_MS in " +
-      "poc-driver.ts if the span now exceeds it."
-  ).toEqual([PINNED_GEOMETRY.declaration]);
+    "the canvas drop-zone transition changed. Update PINNED_DECLARATION here; the span it " +
+      "produces is computed by the browser, so nothing else needs recalculating — but raise " +
+      "POC_GEOMETRY_SETTLE_MS in poc-driver.ts if the new span exceeds it."
+  ).toEqual([PINNED_DECLARATION]);
 });
 
-test("the driver's settle allowance covers that geometry", () => {
-  // The other half. Pinning the text alone passes while someone lowers the allowance underneath
-  // it, which lets the probe resume measuring an edge that is still travelling.
+test("the driver's settle allowance covers that geometry", async ({ page }) => {
+  const spanMs = await geometrySpanMs(page, PINNED_DECLARATION);
+
+  // A computation that returned 0 for every input would satisfy the comparison below by being
+  // smaller than any allowance, so the derivation is required to have found something.
+  expect(spanMs).toBeGreaterThan(0);
+
   expect(
     POC_GEOMETRY_SETTLE_MS,
     `geometrySettleMs is ${String(POC_GEOMETRY_SETTLE_MS)}ms and the drop-zone geometry moves for ` +
-      `${String(PINNED_GEOMETRY.spanMs)}ms, so the probe can re-measure an edge that is still ` +
-      "travelling. Raise it in poc-driver.ts."
-  ).toBeGreaterThanOrEqual(PINNED_GEOMETRY.spanMs);
+      `${String(spanMs)}ms, so the probe can re-measure an edge that is still travelling. Raise it ` +
+      "in poc-driver.ts."
+  ).toBeGreaterThanOrEqual(spanMs);
+});
+
+test("the span derivation reads geometry and ignores the rest", async ({
+  page,
+}) => {
+  // Controls on the derivation itself, since the pinned rule exercises only one shape. The browser
+  // resolves the syntax; what is asserted here is that the RIGHT properties are counted and that a
+  // delay is included.
+  const span = (rule: string) =>
+    geometrySpanMs(page, `".nx-pb-dropzone{${rule}}",`);
+
+  expect(await span("transition:height .1s ease")).toBe(100);
+  expect(await span("transition:height .1s ease .05s")).toBe(150);
+  // A colour moves no edge this probe measures, so its longer timing is not charged.
+  expect(await span("transition:height .1s ease,background .3s ease")).toBe(
+    100
+  );
+  // The browser evaluates what a regex could not.
+  expect(await span("transition:height calc(.04s + .03s) ease")).toBe(70);
 });
