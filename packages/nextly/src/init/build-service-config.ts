@@ -65,18 +65,19 @@ export function buildServiceConfig(
   // Start with provided config or empty object
   const serviceConfig: Partial<NextlyServiceConfig> = {};
 
-  // Carried so `registerServices` can open the boot-migrations gate before it
-  // publishes the container. Set here because this builder is the one both boot
-  // paths go through, which is what stops the flag reaching one and not the
-  // other — the failure this whole change exists to prevent.
-  if (providedConfig?.config?.db?.runMigrationsOnBoot === true) {
-    serviceConfig.runMigrationsOnBoot = true;
-  }
-
   // Copy over service config properties (excluding 'config')
   if (providedConfig) {
     const { config: nextlyConfig, ...rest } = providedConfig;
     Object.assign(serviceConfig, rest);
+
+    // AFTER the caller spread, and derived only from the nested config, so a
+    // caller cannot set it directly. It is internal wiring, not an option: the
+    // gate it opens must match what `runProdMigrationsIfEnabled` will actually
+    // do, and that reads `config.db.runMigrationsOnBoot`. A caller passing a
+    // conflicting top-level value would open no gate while migrations ran
+    // anyway — the exact unguarded window this exists to close.
+    serviceConfig.runMigrationsOnBoot =
+      nextlyConfig?.db?.runMigrationsOnBoot === true;
 
     // If storagePlugins not explicitly provided, use from nextly.config.ts
     if (!serviceConfig.storagePlugins && nextlyConfig?.storage) {
