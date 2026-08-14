@@ -67,29 +67,44 @@ export function slotIsFormatted(node: BlockNode, slotName: string): boolean {
   return slots?.find(s => s.name === slotName)?.childLayout === "formatted";
 }
 
+/** Every slot this node declares whose children it lays out formatted. */
+function formattedSlotsOf(node: BlockNode): string[] {
+  const def = defaultBlockRegistry.get(node.type);
+  const slots = def ? def.slots : declaredSlotsOf(node.type);
+  return (slots ?? [])
+    .filter(spec => spec.childLayout === "formatted")
+    .map(spec => spec.name);
+}
+
 /**
- * Whether this node should offer an "append into me" drop target.
+ * The slot an "append into me" drop target should add to, or `null` for none.
  *
- * A formatted container renders no trailing drop zone of its own — an element between or after its
- * children would become a cell of its layout — so appending to it needs a target on the container
- * itself. Two conditions narrow that:
+ * A formatted slot renders no trailing drop zone — an element after its children would become a
+ * cell of its layout — so reaching the end of one needs a target on the container itself. Which
+ * slot that is has to be DERIVED, because a container may declare a formatted slot under any name;
+ * naming `default` here would leave a custom container's `items` slot reachable for insert-before
+ * and unreachable for append.
  *
- * - it must lay its own children out formatted, since anything else already has a trailing zone;
- * - it must NOT itself be a child of a formatted slot. There, the same element already carries the
- *   "insert before me" target, and two droppables on one element share a rectangle and a priority,
- *   so the one registered first takes every collision. Registering a second that can never win
- *   states a capability the canvas does not have.
+ * Two conditions return `null`, and both are about one element being unable to carry two intents:
  *
- * The honest consequence: a populated formatted container inside another formatted slot — a Row
- * with children inside a Grid — has no target for "append after its last child". Reaching it needs
- * the two intents separated by REGION rather than by element, which is drop-zone geometry rather
+ * - the node is itself a child of a formatted slot, so this element already holds the "insert
+ *   before me" target. Two droppables on one element share a rectangle and a priority, so the one
+ *   registered first takes every collision, and registering a second states a capability the canvas
+ *   does not have.
+ * - the node declares MORE THAN ONE formatted slot, which is the same collision between two
+ *   appends. Nothing on the element distinguishes which slot a pointer means.
+ *
+ * The honest consequence in both cases: no target for "append after the last child". Reaching it
+ * needs the intents separated by REGION rather than by element, which is drop-zone geometry rather
  * than a flag.
  */
-export function offersAppendTarget(
+export function appendTargetSlot(
   node: BlockNode,
   isChildOfFormattedSlot: boolean
-): boolean {
-  return slotIsFormatted(node, DEFAULT_SLOT) && !isChildOfFormattedSlot;
+): string | null {
+  if (isChildOfFormattedSlot) return null;
+  const formatted = formattedSlotsOf(node);
+  return formatted.length === 1 ? formatted[0] : null;
 }
 
 type RefCb = (el: Element | null) => void;
@@ -263,20 +278,20 @@ function DraggableNode({
     data: { kind: "dropzone", parentId, slot, index: dropBeforeIndex ?? 0 },
   });
 
-  // A formatted container itself: "append" target for its own default slot, since it has no
-  // trailing DropZone of its own. `dropBeforeIndex` being set means this element already carries
-  // the parent's "insert before" target, which is the case the rule excludes.
-  const formatted = offersAppendTarget(node, dropBeforeIndex != null);
-  const appendIndex = node.slots?.default?.length ?? 0;
+  // A formatted container itself: "append" target for the formatted slot it declares, since that
+  // slot draws no trailing DropZone. `dropBeforeIndex` being set means this element already
+  // carries the parent's "insert before" target, which is one of the cases the rule excludes.
+  const appendSlot = appendTargetSlot(node, dropBeforeIndex != null);
+  const appendIndex = appendSlot ? (node.slots?.[appendSlot]?.length ?? 0) : 0;
   const append = useDroppable({
     id: `append:${node.id}`,
     type: BLOCK_TYPE,
     accept: BLOCK_TYPE,
-    disabled: !formatted,
+    disabled: appendSlot === null,
     data: {
       kind: "dropzone",
       parentId: node.id,
-      slot: "default",
+      slot: appendSlot ?? DEFAULT_SLOT,
       index: appendIndex,
     },
   });
@@ -295,7 +310,7 @@ function DraggableNode({
   const ref = mergeRefs(
     dragRef,
     before.ref,
-    formatted ? append.ref : undefined
+    appendSlot ? append.ref : undefined
   );
 
   if (!def) {

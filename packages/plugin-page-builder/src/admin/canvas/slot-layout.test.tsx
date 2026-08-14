@@ -19,7 +19,7 @@ import { makeNode } from "../../core/tree";
 import type { BlockNode } from "../../core/types";
 import { RenderNode } from "../../render/RenderNode";
 
-import { offersAppendTarget, slotIsFormatted } from "./CanvasNode";
+import { appendTargetSlot, slotIsFormatted } from "./CanvasNode";
 
 import "../../render/blocks/index";
 
@@ -199,28 +199,41 @@ describe("every container's slot declares how it lays children out", () => {
   });
 });
 
-describe("which containers offer an append target", () => {
+describe("which slot an append target adds to", () => {
   const columns = makeNode("core/columns");
   const heading = makeNode("core/heading");
 
-  it("offers one to a formatted container in ordinary block flow", () => {
-    // Nothing else can reach the end of its slot: a formatted container draws no trailing zone.
-    expect(offersAppendTarget(columns, false)).toBe(true);
+  it("names the formatted slot, rather than assuming it is called default", () => {
+    // Derived, because a container may declare its formatted slot under any name. Naming
+    // `default` would leave a custom container's `items` slot reachable for insert-before and
+    // unreachable for append.
+    expect(appendTargetSlot(columns, false)).toBe("default");
   });
 
   it("withholds it where the same element already carries an insert-before target", () => {
     // Two droppables on one element share a rectangle and a priority, so the first registered
     // takes every collision and the second states a capability the canvas does not have.
-    expect(offersAppendTarget(columns, true)).toBe(false);
+    expect(appendTargetSlot(columns, true)).toBe(null);
   });
 
   it("withholds it from a container that already has a trailing zone", () => {
     const container = makeNode("core/container");
     expect(slotIsFormatted(container, "default")).toBe(false);
-    expect(offersAppendTarget(container, false)).toBe(false);
+    expect(appendTargetSlot(container, false)).toBe(null);
   });
 
   it("withholds it from a block that holds no children at all", () => {
-    expect(offersAppendTarget(heading, false)).toBe(false);
+    expect(appendTargetSlot(heading, false)).toBe(null);
+  });
+
+  it("covers every formatted slot in the catalogue, whatever it is named", () => {
+    // The sweep that makes the derivation mean something: each container whose children really
+    // are cells must resolve to the slot the canvas would append to. A hardcoded `default` would
+    // pass this today and fail the first container that names its formatted slot otherwise.
+    for (const { type, slot } of containerSlots()) {
+      const node = makeNode(type);
+      if (!slotIsFormatted(node, slot)) continue;
+      expect(appendTargetSlot(node, false)).toBe(slot);
+    }
   });
 });

@@ -135,6 +135,39 @@ describe("finding blocks in a slot nothing declares", () => {
     ).toEqual(["Left", "Right"]);
   });
 
+  it("reports a child whose declared parents exclude this container", () => {
+    // The other structural direction. A container that accepts everything is still not a home for
+    // a block that names its parents, and the write path refuses it — so the finder has to report
+    // it or the page is unsaveable with nothing to act on.
+    const root = withSlots("core/container", {
+      default: [withSlots("core/column", { default: [heading("Stray")] })],
+    });
+
+    expect(
+      validateDocument(doc(root), defaultBlockRegistry, { allowUnknown: true })
+    ).toContain("may only sit inside");
+
+    const entries = findInvalidSlotEntries(root, defaultBlockRegistry);
+    expect(entries.map(e => e.kind)).toEqual(["not-allowed"]);
+
+    const repaired = repairInvalidSlot(root, entries[0], defaultBlockRegistry);
+    expect(
+      validateDocument(doc(repaired), defaultBlockRegistry, {
+        allowUnknown: true,
+      })
+    ).toBe(true);
+
+    // Repaired by WRAPPING, derived from the child's own parent list: a stray column becomes a
+    // one-column row, which is what the document was describing whether or not it said so.
+    const wrapper = repaired.slots?.default?.[0];
+    expect(wrapper?.type).toBe("core/columns");
+    expect(wrapper?.slots?.default?.[0]?.type).toBe("core/column");
+    // And the column's own child survived, so the repair moved the block rather than replacing it.
+    expect(wrapper?.slots?.default?.[0]?.slots?.default?.[0]?.props?.text).toBe(
+      "Stray"
+    );
+  });
+
   it("does not offer a wrapper the inner slot would refuse in turn", () => {
     // Wrapping is only correct when it produces a SAVEABLE document. A permitted container whose
     // own default slot excludes the child would move the refusal one level down and leave the

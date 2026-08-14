@@ -153,8 +153,40 @@ function soleWrapperFor(
 ): string | undefined {
   const permitted = spec.allowedBlocks;
   if (!permitted || permitted.length !== 1) return undefined;
-  const wrapperType = permitted[0];
+  return wrapperIfItHolds(permitted[0], childType, registry);
+}
 
+/**
+ * The one type that could carry this child into a slot it is not allowed to sit in directly.
+ *
+ * The mirror of {@link soleWrapperFor}, reading the CHILD's restriction rather than the slot's:
+ * a block naming exactly one permitted parent says precisely what to put around it. A stray
+ * `core/column` in an ordinary container becomes a one-column row, which is what the author was
+ * describing whether or not the document ever said so.
+ *
+ * Only when the outer slot will actually take that wrapper — otherwise the repair moves the
+ * refusal up a level instead of resolving it.
+ */
+function soleParentWrapperFor(
+  spec: SlotSpec | undefined,
+  childType: string,
+  registry: BlockRegistry
+): string | undefined {
+  const parents = declaredParentsOf(childType);
+  if (!parents || parents.length !== 1) return undefined;
+  const wrapperType = parents[0];
+  if (spec?.allowedBlocks && !spec.allowedBlocks.includes(wrapperType)) {
+    return undefined;
+  }
+  return wrapperIfItHolds(wrapperType, childType, registry);
+}
+
+/** Whether `wrapperType` is a container whose default slot would accept `childType`. */
+function wrapperIfItHolds(
+  wrapperType: string,
+  childType: string,
+  registry: BlockRegistry
+): string | undefined {
   const def = registry.get(wrapperType);
   const slots = def ? (def.slots ?? []) : declaredSlotsOf(wrapperType);
   if (!slots) return undefined;
@@ -244,6 +276,23 @@ export function findInvalidSlotEntries(
           // refuses the document for it exactly as it does for an undeclared slot name. Reported
           // here rather than only enforced, because this is the one fault the author can see and
           // still cannot act on: the block draws, so nothing about it says why saving fails.
+          const parents = declaredParentsOf(child.type);
+          if (parents && !parents.includes(node.type)) {
+            // Refused by the write path exactly as an allowlist violation is, and reported in the
+            // same shape: a block the author can see, on a page that will not save, with nothing
+            // on the block to say why.
+            found.push({
+              ...at,
+              key: `not-allowed:${child.id}`,
+              kind: "not-allowed",
+              slotName,
+              node: child,
+              type: child.type,
+              descendantCount: countDescendants(child),
+              wrapWith: soleParentWrapperFor(spec, child.type, registry),
+            });
+            continue;
+          }
           if (spec?.allowedBlocks && !spec.allowedBlocks.includes(child.type)) {
             found.push({
               ...at,

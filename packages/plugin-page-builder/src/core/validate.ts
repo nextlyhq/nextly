@@ -3,7 +3,7 @@
  * human-readable error string. Used as the `pages.content` field validator (M3) and
  * defensively in the editor. Pure and React-free.
  */
-import { declaredSlotsOf } from "./block-structure";
+import { declaredParentsOf, declaredSlotsOf } from "./block-structure";
 import type { BlockRegistry } from "./registry";
 import type { BlockDocument, BlockNode } from "./types";
 import { MAX_DEPTH, MAX_NODES } from "./types";
@@ -70,6 +70,14 @@ export function validateDocument(
         for (const child of children) {
           if (spec?.allowedBlocks && !spec.allowedBlocks.includes(child.type)) {
             return `${child.type} is not allowed in slot "${slotName}" of ${n.type}`;
+          }
+          // The child's own restriction, checked HERE as well as in the editor's `canDrop`. A
+          // structural rule enforced on only one of the two is a rule the write path accepts and
+          // every insertion path refuses, so a stored or hand-authored document could hold a shape
+          // no editor would create — and nothing would ever report it.
+          const parents = declaredParentsOf(child.type);
+          if (parents && !parents.includes(n.type)) {
+            return `${child.type} may only sit inside ${parents.join(" or ")}, not ${n.type}`;
           }
           const e = check(child, depth + 1);
           if (e) return e;
