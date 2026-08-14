@@ -23,6 +23,7 @@ import { describeValue, pointer } from "./issue-text";
 import { DEFAULT_LIMITS, LIMIT_WARNING_RATIO } from "./limits";
 import type { DocumentLimits } from "./limits";
 import { surveyDocument } from "./measure-bytes";
+import type { DocumentSurvey } from "./measure-bytes";
 import { isPlainRecord } from "./plain-record";
 import type { TokenKind } from "./style/catalog-types";
 import { MAX_NAMED_CLASS_NAME_LENGTH } from "./style/named-class";
@@ -334,7 +335,7 @@ export function validate(
   }
 
   const beforeLimits = issues.length;
-  checkLimits(doc, limits, issues);
+  const survey = checkLimits(doc, limits, issues);
   // Any limit rejection, not the byte one alone. A forest over the node or
   // depth cap is refused BEFORE its bytes are measured, so asking only about
   // size would leave the expensive per-value work running on a document already
@@ -399,12 +400,12 @@ export function validate(
   const queue: Array<{ node: BlockNode; path: string }> = [];
   for (
     let i = 0;
-    i < doc.nodes.length && queue.length <= limits.maxNodes;
+    i < doc.nodes.length && queue.length <= survey.limits.maxNodes;
     i++
   ) {
     queue.push({ node: doc.nodes[i], path: pointer("/nodes", i) });
   }
-  for (let i = 0; i < queue.length && i < limits.maxNodes; i++) {
+  for (let i = 0; i < queue.length && i < survey.limits.maxNodes; i++) {
     const { node, path } = queue[i];
     validateNode(node, path, nodeState);
     if (isPlainRecord(node) && isPlainRecord(node.slots)) {
@@ -413,7 +414,7 @@ export function validate(
           const slotPath = pointer(pointer(path, "slots"), slot);
           for (
             let c = 0;
-            c < children.length && queue.length <= limits.maxNodes;
+            c < children.length && queue.length <= survey.limits.maxNodes;
             c++
           ) {
             queue.push({ node: children[c], path: pointer(slotPath, c) });
@@ -472,7 +473,7 @@ function checkLimits(
   doc: BlockDocument,
   limits: DocumentLimits,
   issues: ValidationIssue[]
-): void {
+): DocumentSurvey {
   // ONE traversal answers all three bounds.
   //
   // Depth, node count and serialized size were measured by two separate walks,
@@ -493,7 +494,7 @@ function checkLimits(
       path: "/nodes",
       code: "depth-exceeded",
       severity: "error",
-      message: `Node tree is nested deeper than the maximum of ${limits.maxDepth}.`,
+      message: `Node tree is nested deeper than the maximum of ${survey.limits.maxDepth}.`,
     });
   }
   if (survey.tooManyNodes) {
@@ -501,14 +502,14 @@ function checkLimits(
       path: "/nodes",
       code: "node-count-exceeded",
       severity: "error",
-      message: `Document exceeds the maximum of ${limits.maxNodes} nodes.`,
+      message: `Document exceeds the maximum of ${survey.limits.maxNodes} nodes.`,
     });
   }
   // A structurally over-cap document is already rejected, and the walk stopped
   // at that breach — so its byte count is a lower bound rather than a
   // measurement, and reporting a size from it would report a number that was
   // never finished.
-  if (survey.tooDeep || survey.tooManyNodes) return;
+  if (survey.tooDeep || survey.tooManyNodes) return survey;
 
   // The CAUSE, not just the refusal. A document over the limit is fixed by
   // removing content; one holding a value JSON cannot write is not made smaller
@@ -526,7 +527,7 @@ function checkLimits(
       path: "",
       code: "document-too-large",
       severity: "error",
-      message: `Document exceeds the maximum of ${limits.maxBytes} bytes.`,
+      message: `Document exceeds the maximum of ${survey.limits.maxBytes} bytes.`,
     });
   } else if (survey.unserializable) {
     issues.push({
@@ -536,16 +537,17 @@ function checkLimits(
       message:
         "Document holds a value JSON cannot write, so it has no stored form.",
     });
-  } else if (bytes > limits.maxBytes * LIMIT_WARNING_RATIO) {
+  } else if (bytes > survey.limits.maxBytes * LIMIT_WARNING_RATIO) {
     issues.push({
       path: "",
       code: "document-size-warning",
       severity: "warning",
       message: `Document is ${bytes} bytes, over ${Math.round(
         LIMIT_WARNING_RATIO * 100
-      )}% of the ${limits.maxBytes}-byte limit.`,
+      )}% of the ${survey.limits.maxBytes}-byte limit.`,
     });
   }
+  return survey;
 }
 
 interface NodeCheckState {

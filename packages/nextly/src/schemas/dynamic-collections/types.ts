@@ -161,6 +161,14 @@ export interface CollectionAdminConfig {
   sidebarGroup?: string;
 
   /**
+   * Which fields the entry list shows as columns, and in what order.
+   *
+   * Field keys. One that no longer exists is ignored rather than erroring, so a rename leaves a
+   * shorter list rather than an unusable screen.
+   */
+  defaultColumns?: string[];
+
+  /**
    * Whether this collection is provided by a plugin.
    */
   isPlugin?: boolean;
@@ -377,7 +385,12 @@ export interface DynamicCollectionInsert {
   tableName: string;
 
   /** Optional description of the collection */
-  description?: string;
+  /**
+   * `null` CLEARS the stored value on update; `undefined` leaves it unchanged. The two are
+   * distinct intents and the update path reads them that way, as it already does for
+   * `revalidate` and `webhooks`.
+   */
+  description?: string | null;
 
   /** Field configurations defining the collection schema */
   fields: FieldConfig[];
@@ -420,7 +433,11 @@ export interface DynamicCollectionInsert {
   localized?: boolean;
 
   /** Admin UI configuration options */
-  admin?: CollectionAdminConfig;
+  /**
+   * `null` CLEARS the stored block on update; `undefined` leaves it unchanged — so a config
+   * that drops its `admin` entirely does not strand a sidebar position it no longer declares.
+   */
+  admin?: CollectionAdminConfig | null;
 
   /** Where the collection was defined */
   source: CollectionSource;

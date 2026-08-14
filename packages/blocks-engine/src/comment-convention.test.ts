@@ -20,6 +20,34 @@ import { describe, expect, it } from "vitest";
  * and a check that gets silenced is worth less than no check. These match the
  * specific shapes that have actually appeared: a count of review iterations, a
  * reference to a reviewer, and a deictic reference to the change itself.
+ *
+ * Every one of them matches a NAME the code cannot own — a review tool, the
+ * pull request, the reviewer. That is what makes them safe: those words carry
+ * no meaning inside a description of what the code does, so matching them
+ * cannot reject a correct comment.
+ *
+ * ORDINAL PROCESS NARRATION IS NOT ENFORCED HERE, and that is stated rather
+ * than left to be inferred from its absence: "the third instance of this shape
+ * we have found" passes this suite, and no other check in the repository covers
+ * it. The convention still forbids it; nothing mechanical catches it.
+ *
+ * The reason generalises. "The third instance of this shape we have found" is process
+ * history; "the third instance in the array owns the separator" describes a
+ * parser. The difference is intent, not vocabulary, so no expression over the
+ * words can separate them. Pairing the ordinal with a discovery verb does not
+ * help either, because those verbs are ordinary technical words: a cache
+ * MISSES, a guard CATCHES, a value is FOUND. The negative controls below hold
+ * sentences of exactly that shape which describe runtime behaviour. This file
+ * matches structure and leaves intent unenforced, rather than pretending intent
+ * is detectable syntax.
+ *
+ * Narrowing to first-person discovery — "we found", "I fixed" — looks like the
+ * reliable version and is not. Measured against this repository, the first
+ * expression of that shape matches `verify-credentials.ts`'s "of whether we
+ * found a user", which describes what a lookup returned. The OBJECT of the verb
+ * separates the two cases, and enumerating objects is the unbounded surface
+ * again. That sample sits among the negative controls below, so any matcher
+ * keyed on first-person discovery is rejected by this suite.
  */
 const FORBIDDEN: Array<{ pattern: RegExp; why: string }> = [
   {
@@ -41,29 +69,6 @@ const FORBIDDEN: Array<{ pattern: RegExp; why: string }> = [
   {
     pattern: /\breviewer\s+(said|asked|found|flagged)\b/i,
     why: "quotes a conversation",
-  },
-  {
-    // Ordinal process narration: "the third instance ... was found", "the
-    // second time this regressed". A comment counting how often something has
-    // been DISCOVERED describes the history of the work rather than the code,
-    // and that history is not available to whoever reads the file next. It gets
-    // past the patterns above because it narrates without naming a review or a
-    // tool.
-    //
-    // The ordinal alone is not the signal, and two rounds of narrowing say so:
-    // ordinary prose counts things. "The first occurrence sees the `+` that
-    // leaves the first root" describes parsing; "the second time the callback
-    // runs, reuse the cached value" describes runtime. Both are correct
-    // comments and an ordinal-only pattern rejected them. So the ordinal must
-    // sit within a clause of DISCOVERY — found, missed, fixed, regressed — which
-    // is what separates narrating the work from describing the code.
-    //
-    // A check that fires on correct prose gets silenced, and a silenced check is
-    // worth less than none, which is why this errs toward missing violations
-    // rather than toward catching bystanders.
-    pattern:
-      /\bthe\s+(second|third|fourth|fifth)\s+(time|instance)\b[^.]{0,80}\b(found|caught|missed|fixed|discovered|reported|flagged|shipped|regressed|recurr\w*)\b/i,
-    why: "counts how often something was found, which is process history",
   },
 ];
 
@@ -151,8 +156,6 @@ describe("code comments describe the code", () => {
       "/* Codex flagged this */",
       "// the reviewer asked for a guard here",
       "// added in this PR",
-      "// the third instance of this shape we have found",
-      "// broken for the second time this week, fixed again",
     ];
     for (const sample of offending) {
       const [comment] = commentText(sample);
@@ -171,6 +174,17 @@ describe("code comments describe the code", () => {
       "// the first occurrence sees the `+` that leaves the first root",
       "// the second time the callback runs, reuse the cached value",
       "// the third instance in the array owns the separator",
+      // Ordinal counting beside a discovery verb, all three describing runtime
+      // behaviour rather than the work that produced the file. They are what a
+      // pattern keyed on that shape rejects, and are here so that adding one
+      // fails.
+      "// the second time the cache missed, refresh the credentials",
+      "// the third instance found in the pool is the one that owns the lock",
+      "// on the second retry the fixed backoff is replaced by the jittered one",
+      // First-person discovery, taken verbatim from `verify-credentials.ts`. It
+      // describes what a lookup returned, so a matcher keyed on "we found"
+      // rejects working prose and is refused here.
+      "// of whether we found a user. Without this branch, the miss path returns",
     ];
     for (const sample of allowed) {
       const [comment] = commentText(sample);
