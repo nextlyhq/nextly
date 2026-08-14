@@ -370,4 +370,55 @@ describe("a configuration whose parse is not a fixed point", () => {
       scopes: ["send", "read"],
     });
   });
+
+  // Coercion and DESTRUCTION are different, and only the first is accepted.
+  // A `Map`'s entries are not own enumerable properties, so it serialises to
+  // `{}` — the operator's headers are gone and the adapter runs without them.
+  // The fixed-point comparison cannot see this on its own: both of its sides
+  // are already past the column, so an empty projection agrees with an empty
+  // projection and the write looks clean.
+  it("refuses a value whose serialisation keeps nothing", async () => {
+    register("mapped", input => {
+      const value = input as { apiKey: unknown; headers?: unknown };
+      return {
+        apiKey: String(value.apiKey),
+        headers:
+          value.headers instanceof Map
+            ? value.headers
+            : new Map([["x-team", "ops"]]),
+      };
+    });
+
+    await expect(write("mapped", { apiKey: "k" })).rejects.toThrow(
+      /at headers that keeps nothing when written as JSON/
+    );
+  });
+
+  // Reached through an array rather than a key, so the walk is not only over
+  // object properties. A `Set` empties the same way a `Map` does.
+  it("refuses an emptied value nested inside an array", async () => {
+    register("nested-set", input => ({
+      apiKey: String((input as { apiKey: unknown }).apiKey),
+      routes: [{ region: "eu", tags: new Set(["primary"]) }],
+    }));
+
+    await expect(write("nested-set", { apiKey: "k" })).rejects.toThrow(
+      /at routes\.\[0\]\.tags that keeps nothing/
+    );
+  });
+
+  // The boundary case that stops the rule above from over-reaching: a plain
+  // empty object also serialises to `{}` and has lost nothing, because there
+  // was nothing to lose. Refusing it would reject an ordinary configuration
+  // that happens to carry an empty map of options.
+  it("stores a configuration containing an empty plain object", async () => {
+    register("empty-object", input => ({
+      apiKey: String((input as { apiKey: unknown }).apiKey),
+      headers: {},
+    }));
+
+    const provider = await write("empty-object", { apiKey: "k" });
+    const stored = await service.getProviderDecrypted(provider.id);
+    expect(stored.configuration).toEqual({ apiKey: "k", headers: {} });
+  });
 });

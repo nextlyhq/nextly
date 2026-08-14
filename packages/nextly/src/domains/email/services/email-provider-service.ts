@@ -351,6 +351,31 @@ export class EmailProviderService extends BaseService {
       });
     }
 
+    // Coercion and DESTRUCTION are not the same thing, and only the first one
+    // was decided. A `Date` serialises to a string that still carries it; a
+    // `Map` of headers serialises to `{}` and carries nothing, so storing it
+    // stores none of what the operator entered and the adapter runs without
+    // their settings. Refused here rather than in the fixed-point check below,
+    // which cannot see it: both sides of that comparison are already past the
+    // column, so an empty projection agrees with an empty projection.
+    //
+    // Asked of the SERIALISATION rather than of the type. Anything that keeps
+    // some of itself -- a string, a number, a populated object -- is a
+    // coercion and is stored. Anything that keeps none of itself is refused,
+    // whatever it was.
+    const emptied = this.emptiedBySerialisation(stored);
+    if (emptied) {
+      throw new NextlyError({
+        code: "BUSINESS_RULE_VIOLATION",
+        publicMessage: `Email provider "${type}" parsed its configuration into a value at ${emptied} that keeps nothing when written as JSON, so saving it would discard what was entered. Return a plain object or an array there.`,
+        logContext: {
+          reason: "email-provider-configuration-emptied-by-serialisation",
+          type,
+          path: emptied,
+        },
+      });
+    }
+
     const roundTripped: unknown = JSON.parse(serialized);
     const unchanged: unknown = JSON.parse(serialized);
 
@@ -423,6 +448,72 @@ export class EmailProviderService extends BaseService {
     // is stored is what was checked" true by construction rather than by
     // argument, and the two are now the same object.
     return roundTripped as Record<string, unknown>;
+  }
+
+  /**
+   * Where in a parsed configuration serialisation keeps NONE of a value, or
+   * `undefined` when every value survives in some form.
+   *
+   * Asked of the projection rather than of the type, so a shape nobody has
+   * thought of is judged by what it leaves behind rather than by whether it is
+   * on a list. A `Date` becomes a string and keeps its instant; a `Map` or a
+   * `Set` becomes `{}` and keeps nothing, because its entries are not own
+   * enumerable properties and `JSON.stringify` reads nothing else.
+   *
+   * Only NON-ORDINARY objects are asked. A plain `{}` also projects to `{}`
+   * and has lost nothing -- it was empty -- and the same is true of an object
+   * whose only keys held `undefined`, which is how an absent optional field is
+   * ordinarily written.
+   *
+   * @param value - a node of the parsed configuration
+   * @param path - the keys walked to reach it, for the message
+   */
+  private emptiedBySerialisation(
+    value: unknown,
+    path: string[] = []
+  ): string | undefined {
+    if (value === null || typeof value !== "object") return undefined;
+
+    const label = path.length === 0 ? "the configuration" : path.join(".");
+
+    if (Array.isArray(value)) {
+      for (const [index, entry] of value.entries()) {
+        const emptied = this.emptiedBySerialisation(entry, [
+          ...path,
+          `[${index}]`,
+        ]);
+        if (emptied) return emptied;
+      }
+      return undefined;
+    }
+
+    const prototype: unknown = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      // Its own serialisation decides this, which is the point: a class that
+      // defines `toJSON` and returns something useful is a coercion, and one
+      // that defines nothing reachable is a loss. `undefined` here means the
+      // key is dropped from its parent entirely, which the caller's own
+      // guards already cover for the root and which is the ordinary meaning
+      // of an absent optional anywhere else.
+      const projection: string | undefined = JSON.stringify(value);
+      if (projection !== undefined) {
+        const asJson: unknown = JSON.parse(projection);
+        if (
+          asJson !== null &&
+          typeof asJson === "object" &&
+          !Array.isArray(asJson) &&
+          Object.keys(asJson).length === 0
+        ) {
+          return label;
+        }
+      }
+    }
+
+    for (const [key, entry] of Object.entries(value)) {
+      const emptied = this.emptiedBySerialisation(entry, [...path, key]);
+      if (emptied) return emptied;
+    }
+    return undefined;
   }
 
   /**
