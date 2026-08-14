@@ -1,0 +1,47 @@
+name: Review verdict
+
+# Its own workflow rather than a job in `ci.yml`, because it answers to
+# different events. The verdict is a function of REVIEW state, which changes
+# without the head moving: a job triggered only by `pull_request` reports
+# "no review at this head" and then never runs again, so the answer it leaves
+# behind is the one taken before anybody reviewed. Adding review events to
+# `ci.yml` instead would rebuild and retest the whole repository every time a
+# comment is posted.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+  pull_request_review_comment:
+    types: [created, edited, deleted]
+
+# Advisory, deliberately. A REQUIRED check asserting "a bot has reviewed this
+# exact revision" blocks the repository on a third party: an outage or an
+# exhausted per-account review quota would make every pull request unmergeable
+# with no local remedy, and an outside contributor cannot summon either reviewer
+# at all. Running it visibly first is what produces the false-refusal rate that
+# decision needs.
+concurrency:
+  group: review-verdict-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  verdict:
+    name: Review verdict (advisory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Report the verdict
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/ci-verdict.mjs "${{ github.event.pull_request.number }}"
