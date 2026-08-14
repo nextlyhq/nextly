@@ -74,6 +74,22 @@ function deepTree(): BlockNode {
   return root;
 }
 
+/**
+ * A root that declares a formatted slot, which is the only shape reaching the ROOT append target.
+ *
+ * `deepTree` cannot: its root is a plain container, whose append target is disabled because it
+ * declares no formatted slot. A container renders its slot content one level deeper, so the root's
+ * own append competes with the insert-before targets of the children it holds — the same slot,
+ * therefore the same rank.
+ */
+function formattedRoot(): BlockNode {
+  const root = makeNode("core/grid");
+  root.slots = {
+    default: [makeNode("core/heading"), makeNode("core/heading")],
+  };
+  return root;
+}
+
 function render(root: BlockNode): void {
   renderToStaticMarkup(
     <EditorProvider
@@ -112,8 +128,13 @@ describe("canvas drop targets rank on one scale", () => {
     expect(enabled).toContain(`dz:${root.slots!.default[0].id}:default:0`);
   });
 
-  it("gives every enabled target an explicit numeric priority", () => {
-    render(deepTree());
+  // Both fixtures, because between them they enable all three call sites and neither does alone:
+  // a plain-container root disables the root append, and a formatted root produces no zones.
+  it.each([
+    ["a deeply nested tree", deepTree],
+    ["a root that appends into its own slot", formattedRoot],
+  ])("gives every enabled target in %s a numeric priority", (_label, build) => {
+    render(build());
 
     // An unset priority is the defect itself, so this is the direct statement of it. It is not a
     // stand-in for the ordering assertions below — a scale can be fully populated and still be
@@ -124,6 +145,10 @@ describe("canvas drop targets rank on one scale", () => {
       .filter(r => typeof r.collisionPriority !== "number")
       .map(r => r.id);
     expect(unset).toEqual([]);
+
+    // Asserted here rather than left implicit: an empty enabled set has no unset members either,
+    // so the check above is satisfied perfectly by a render that registered nothing at all.
+    expect(registered.filter(r => !r.disabled).length).toBeGreaterThan(0);
   });
 
   it("ranks a container's own append target above the zones holding it", () => {
@@ -141,6 +166,24 @@ describe("canvas drop targets rank on one scale", () => {
     expect(typeof append).toBe("number");
     expect(typeof siblingZone).toBe("number");
     expect(append as number).toBeGreaterThan(siblingZone as number);
+  });
+
+  it("ranks the root's own append target with the slot it appends to", () => {
+    const root = formattedRoot();
+    render(root);
+
+    const [first] = root.slots!.default;
+
+    // Both target the root's default slot — one at the end, one before the first child — so they
+    // are peers and must tie, leaving geometry to separate them. This is the third call site, and
+    // `deepTree` cannot reach it: without a fixture whose root declares a formatted slot, the
+    // root append is disabled and every assertion about it passes by never having been made.
+    const rootAppend = priorityOf(`append:${root.id}`);
+    const childBefore = priorityOf(`before:${first.id}`);
+
+    expect(typeof rootAppend).toBe("number");
+    expect(typeof childBefore).toBe("number");
+    expect(rootAppend).toBe(childBefore);
   });
 
   it("ranks a deeper zone above a shallower one", () => {
