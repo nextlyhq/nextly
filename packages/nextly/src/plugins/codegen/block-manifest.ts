@@ -43,7 +43,7 @@ export const PAGE_BUILDER_PLUGIN = "@nextlyhq/plugin-page-builder";
  * Separate from any block's `version`, which describes one block's props. A
  * reader checks this to know whether it understands the file at all.
  */
-export const BLOCK_MANIFEST_VERSION = 1;
+export const BLOCK_MANIFEST_VERSION = 2;
 
 /**
  * The highest version a declared block may carry.
@@ -178,6 +178,15 @@ export const blockManifestEntrySchema = z
     supports: z.record(z.string(), z.unknown()).optional(),
     /** Named child regions, for container blocks. */
     slots: z.record(z.string(), z.unknown()).optional(),
+    /**
+     * The block names this block may be a DIRECT child of; absent means anywhere.
+     *
+     * Typed as an array of strings rather than left open, unlike the fields above: those carry
+     * whatever a plugin puts in them, while this one is consumed as STRUCTURE — a reader deciding
+     * where a block may be placed. A malformed value here does not degrade, it forbids, so the
+     * shape is pinned at the boundary rather than trusted from whoever wrote the file.
+     */
+    parent: z.array(z.string()).optional(),
   })
   .strict();
 
@@ -561,6 +570,11 @@ function toEntry(block: DeclaredBlock, source: string): BlockManifestDraft {
   if (isRecord(block.props)) entry.props = block.props;
   if (isRecord(block.supports)) entry.supports = block.supports;
   if (isRecord(block.slots)) entry.slots = block.slots;
+  // Carried because the manifest is read to decide where a block may LEGALLY sit — by editor
+  // builds and by agents generating documents. Omitting it does not make the restriction lenient;
+  // it makes every reader of this file believe there is none, so they generate placements the
+  // write validator then refuses, with nothing in the manifest explaining why.
+  if (Array.isArray(block.parent)) entry.parent = [...block.parent];
   return entry;
 }
 

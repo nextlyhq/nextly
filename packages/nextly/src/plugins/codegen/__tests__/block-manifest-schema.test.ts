@@ -395,6 +395,12 @@ describe("the published JSON Schema", () => {
                   "pattern": "^(?!(?:nextly\\/component-instance)$)[a-z0-9]+(?:-[a-z0-9]+)*\\/[a-z0-9]+(?:-[a-z0-9]+)*$",
                   "type": "string",
                 },
+                "parent": {
+                  "items": {
+                    "type": "string",
+                  },
+                  "type": "array",
+                },
                 "props": {
                   "additionalProperties": {},
                   "propertyNames": {
@@ -438,7 +444,7 @@ describe("the published JSON Schema", () => {
             "type": "array",
           },
           "manifestVersion": {
-            "const": 1,
+            "const": 2,
             "type": "number",
           },
         },
