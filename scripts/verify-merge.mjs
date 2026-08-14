@@ -11,6 +11,38 @@
  *
  * So the decisions live here as pure functions, and every I/O call stays in the
  * caller: a function that fetches cannot be handed the case it must get right.
+ *
+ * ## What this does NOT cover
+ *
+ * Stated because a gate's worst failure is being trusted past its range, and a
+ * reader who knows only what it checks will assume the rest.
+ *
+ * - **It is a point-in-time snapshot, not a lock.** Threads, check-runs and
+ *   statuses are read once. A thread reopened, or a check rerun, after its query
+ *   and before the exit is not seen: the freshness comparison at the end covers
+ *   the revision and the pull request's own mutable fields, not every input a
+ *   blocker was derived from. `gh pr merge --match-head-commit <tip>` is what
+ *   makes the merge itself refuse a moved head; nothing here can hold the rest
+ *   of GitHub still.
+ *
+ * - **`REQUIRED_CHECKS` is a floor, not a proof.** It names the workflows whose
+ *   absence is known to mean no coverage. Others in `.github/workflows` are
+ *   path-triggered and are judged only when they report, so a workflow that
+ *   fails to create its check-runs is invisible here unless it is listed. Adding
+ *   one is deliberate work; the list does not derive itself.
+ *
+ * - **`refs/pull/N/merge` is resolved, not pinned.** A base branch advancing
+ *   mid-run can change which revision that ref names, and the filter would then
+ *   be read from a revision other than the one the checks ran on.
+ *
+ * - **"Landed whole" screens; it cannot certify.** A mutable remote ref cannot
+ *   answer "no commit ever existed here outside the merge", so an empty
+ *   candidate list means this look found nothing, never that nothing was lost.
+ *
+ * The project runs this ADVISORY: a session invokes it, and merging is still a
+ * human decision. That is why the limits above are acceptable rather than
+ * defects — each narrows a window that a merge precondition, not this script,
+ * is what closes.
  */
 
 /**

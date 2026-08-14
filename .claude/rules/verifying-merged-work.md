@@ -27,6 +27,14 @@ plus the change rather than the tree CI ran on, and the two disagree. Measured
 on one merged pull request here, the branch head reported the CI job and one
 integration leg as `success` while the merge commit had them queued.
 
+**Know its range before trusting it.** The script's module header lists what it
+does not cover, and the four worth carrying in your head are: it snapshots
+threads and checks once rather than holding them still; `REQUIRED_CHECKS` is a
+floor listing workflows whose absence is known to mean no coverage, not every
+workflow; `refs/pull/N/merge` is resolved rather than pinned; and the
+landed-whole range screens without certifying. The project runs this advisory,
+so those windows are closed by the merge precondition below, not by the script.
+
 **Exit status distinguishes three outcomes, and the third is not a softer
 second.** `0` passed, `1` blocked, `2` did not get to answer — a rewritten
 history, or a candidate list from the landed-whole screen that nobody has
