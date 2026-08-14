@@ -1,32 +1,32 @@
 /**
- * The drop-zone timing the probe's settle allowance was chosen against.
+ * The drop-zone timing the probe's settle allowance is chosen against.
  *
  * `poc-driver` declares `geometrySettleMs` — how long the canvas may still be moving a zone edge
- * after the pointer enters it — and the canvas animates that geometry in its own stylesheet. Two
- * statements of one fact, and nothing in either file refers to the other.
+ * after the pointer enters it — while the canvas animates that geometry in its own stylesheet.
+ * Two statements of one fact, in files that do not refer to each other, so this holds them
+ * together.
  *
- * ## Why this PINS the declaration instead of reading it
+ * It asserts two things, and needs both:
  *
- * The first version parsed the `transition` shorthand out of `IframeCanvas.tsx` and compared the
- * computed span against the allowance. That reader was wrong FOURTEEN times, and the list is worth
- * keeping because it is the argument: a hardcoded copy of the value it was checking; every time
- * token read separately so a delay was never summed; commas inside `cubic-bezier()` treated as
- * entry separators; an unsigned delay read as its magnitude; a unit-bearing identifier
- * (`var(--ease-50ms)`) mined for a duration; a second declaration on one line never seen;
- * `calc(.04s + .03s)` summed as separate numbers; a colour's timing charged to the geometry
- * budget; a property-last shorthand (`.2s ease margin`) misread; an implicit-`all` shorthand
- * skipped; a non-exhaustive geometry allowlist silently dropping `max-height` and `block-size`;
- * longhand `transition-duration` overrides ignored; and a leading `+` rejected.
+ * - the stylesheet declaration is UNCHANGED, so a timing edit cannot pass unnoticed;
+ * - the driver's allowance still covers the span that declaration produces.
  *
- * Each fix was correct and each earned the next finding, because a regex over CSS source does not
- * DETERMINE the answer being asked of it — `.claude/rules/derived-checks.md` calls that an
- * abstraction mismatch, where patching by example has no end.
+ * Either alone is satisfiable while the pair is wrong. Pinning only the text passes when the
+ * allowance is lowered underneath it; checking only the allowance passes when the transition is
+ * lengthened.
  *
- * So this makes no semantic claim about CSS. It asserts the declaration is UNCHANGED. That is
- * complete by construction: every one of the fourteen cases changes the text, so every one trips
- * it, and none requires the test to understand what it changed to. The cost is that a cosmetic
- * edit also trips it — which is the right direction, because the person editing that line is
- * exactly the person who should re-check the allowance.
+ * ## Why the declaration is PINNED rather than parsed
+ *
+ * Computing a span from CSS source means representing CSS: comma-separated entries whose commas
+ * may belong to a timing function, times that may be signed or written as `calc()` or resolved
+ * through a variable, properties that may appear last or be implicit, longhand declarations that
+ * override the shorthand, and only some properties moving the edge this probe measures. A regex
+ * cannot represent that, and each spelling handled reveals another.
+ *
+ * Pinning makes no semantic claim, which is what makes it complete: every one of those spellings
+ * changes the text, so every one trips this, and none requires the test to understand what it
+ * changed to. The cost is that a cosmetic edit trips it as well — which is the direction to want,
+ * because whoever edits that line is who should re-derive the allowance.
  */
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -44,12 +44,22 @@ const CANVAS_CSS = resolve(
 /**
  * The drop-zone rules carrying a `transition`, exactly as the canvas writes them.
  *
- * Regenerate by running the selector below against the file; do not hand-edit to make a failure
- * go away, because the failure IS the notification that the geometry timing moved.
+ * Do not hand-edit to clear a failure: the failure is the notification that the geometry timing
+ * moved, and clearing it without re-deriving {@link PINNED_GEOMETRY_SPAN_MS} silently widens what
+ * the probe tolerates.
  */
 const PINNED = [
   '".nx-pb-dropzone{height:0;border-radius:3px;transition:height .1s ease,background .1s ease}",',
 ];
+
+/**
+ * How long the geometry above keeps moving, in milliseconds.
+ *
+ * Read off {@link PINNED} by a person rather than computed, and it travels with it: the only way
+ * this value goes stale is an edit to that declaration, which the assertion below refuses. `height`
+ * transitions over `.1s` with no delay; `background` moves no edge this probe measures.
+ */
+const PINNED_GEOMETRY_SPAN_MS = 100;
 
 /** Every drop-zone line declaring a transition, trimmed, in file order. */
 function transitionLines(source: string): string[] {
@@ -64,15 +74,25 @@ function transitionLines(source: string): string[] {
 test("the drop-zone geometry timing has not changed under the probe", () => {
   const found = transitionLines(readFileSync(CANVAS_CSS, "utf8"));
 
-  // The positive control, and it is not decoration: a selector that matched nothing would satisfy
-  // an equality against an empty PINNED and certify a file it never read.
+  // A selector that matched nothing would satisfy an equality against an empty expectation and
+  // certify a file it never read.
   expect(found.length).toBeGreaterThan(0);
 
   expect(
     found,
-    `the canvas drop-zone transition changed. Re-derive how long geometry can still be moving and ` +
-      `update POC_GEOMETRY_SETTLE_MS in poc-driver.ts (currently ${String(POC_GEOMETRY_SETTLE_MS)}ms), ` +
-      `then update PINNED here. This test deliberately does not parse CSS: doing so was wrong ` +
-      `fourteen times, so it reports that the timing moved rather than guessing by how much.`
+    "the canvas drop-zone transition changed. Re-derive how long its geometry keeps moving, " +
+      "update PINNED_GEOMETRY_SPAN_MS and PINNED here, and raise POC_GEOMETRY_SETTLE_MS in " +
+      "poc-driver.ts if the span now exceeds it."
   ).toEqual(PINNED);
+});
+
+test("the driver's settle allowance covers that geometry", () => {
+  // The other half. Pinning the text alone passes while someone lowers the allowance underneath
+  // it, which lets the probe resume measuring an edge that is still travelling.
+  expect(
+    POC_GEOMETRY_SETTLE_MS,
+    `geometrySettleMs is ${String(POC_GEOMETRY_SETTLE_MS)}ms and the drop-zone geometry moves for ` +
+      `${String(PINNED_GEOMETRY_SPAN_MS)}ms, so the probe can re-measure an edge that is still ` +
+      "travelling. Raise it in poc-driver.ts."
+  ).toBeGreaterThanOrEqual(PINNED_GEOMETRY_SPAN_MS);
 });
