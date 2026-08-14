@@ -8,6 +8,7 @@ import {
   ChevronRight,
   ChevronsRight,
 } from "@admin/components/icons";
+import { PAGINATION } from "@admin/constants/pagination";
 import { cn } from "@admin/lib/utils";
 
 import type { PaginationProps } from "./types";
@@ -44,29 +45,37 @@ import type { PaginationProps } from "./types";
  *
  * ## Usage Examples
  *
- * ### Basic Usage
- * ```tsx
- * import { Pagination } from "@nextly/admin";
+ * ### Basic usage
  *
+ * A table hands its pagination to `DataTableView` as data and never renders
+ * this component itself — the table knows which of its two views is showing,
+ * so it is the only thing that can place a pager correctly:
+ *
+ * ```tsx
  * function UserList() {
- *   const [page, setPage] = useState(0);
- *   const [pageSize, setPageSize] = useState(10);
+ *   const { page, pageSize, setPage, setPageSize } = usePagination();
  *   const { data } = useUsers({ pagination: { page, pageSize } });
  *
  *   return (
- *     <Pagination
- *       currentPage={page}
- *       totalPages={data.meta.totalPages}
- *       pageSize={pageSize}
- *       onPageChange={setPage}
- *       onPageSizeChange={(size) => {
- *         setPageSize(size);
- *         setPage(0); // Reset to first page
+ *     <DataTableView
+ *       columns={columns}
+ *       rows={data.items}
+ *       pagination={{
+ *         currentPage: page,
+ *         totalPages: data.meta.totalPages,
+ *         pageSize,
+ *         onPageChange: setPage,
+ *         onPageSizeChange: setPageSize,
  *       }}
  *     />
  *   );
  * }
  * ```
+ *
+ * `usePagination` owns the first-page resets, so `onPageSizeChange` is its
+ * `setPageSize` rather than a wrapper that also calls `setPage(0)`. Rendering
+ * this component directly is for lists that are NOT tables — a grid, or rows
+ * drawn by something other than `DataTableView`.
  *
  * ### With Custom Page Size Options
  * ```tsx
@@ -122,7 +131,7 @@ export const Pagination = React.forwardRef<HTMLElement, PaginationProps>(
       currentPage,
       totalPages,
       pageSize,
-      pageSizeOptions = [10, 25, 50],
+      pageSizeOptions = PAGINATION.TABLE_PAGE_SIZE_OPTIONS,
       showPageSizeSelector = true,
       maxVisiblePages = 5,
       onPageChange,

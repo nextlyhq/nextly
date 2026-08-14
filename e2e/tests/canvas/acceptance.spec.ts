@@ -34,6 +34,7 @@ import {
   LARGE_FIXTURE,
   NESTED_FIXTURE,
   TALL_FIXTURE,
+  readSeededBlockBoxes,
   seedPage,
 } from "./fixtures";
 import { mapFramePointToHost } from "./coordinate-mapping";
@@ -564,29 +565,26 @@ test.describe("a canvas any Nextly editor could ship", () => {
   test("shifts no existing block when its drop zones appear", async ({
     request,
   }) => {
-    note(
-      PLAN_POINT.zeroLayoutShift,
-      "B-6",
-      "this canvas's drop zones take layout space, so every block below the " +
-        "pointer moves — the same shortfall checklist.spec.ts already marks"
-    );
+    note(PLAN_POINT.zeroLayoutShift, "B-6");
     await driver.mountTree(await seedPage(request, FLAT_LIST_FIXTURE));
 
-    const before = await driver.readBlockBoxes();
+    const before = await readSeededBlockBoxes(driver, FLAT_LIST_FIXTURE);
     await dragFromPanel(driver);
-    const during = await driver.readBlockBoxes();
+    // Without this the assertion below is satisfied by a drag that never
+    // started: no drag means no zones appear, `during` equals `before`, and
+    // zero reflow is indistinguishable from zero interaction.
+    expect(
+      await driver.isDragging(),
+      "the drag must be active for the mid-drag geometry to mean anything"
+    ).toBe(true);
+    const during = await readSeededBlockBoxes(driver, FLAT_LIST_FIXTURE);
     await driver.cancel();
 
     // Unrounded, and every edge. Comparing tops alone passes a canvas that
     // reflows horizontally, and rounding hides a shift under half a pixel —
     // exactly the size a grid or a percentage-width column produces.
-    // Marked HERE, not on the declaration. The declaration form makes
-    // EVERY error in the body expected, so a failed seed or a broken
-    // reader goes green exactly like the shortfall.
-    test.fail(
-      true,
-      "drop zones take layout space, so every block below the pointer moves"
-    );
+    // The droppable is out of flow and its slot is permanently zero-height, so
+    // no zone contributes geometry at any point in a drag.
     expect(during, "drop zones must take no layout space").toEqual(before);
   });
 

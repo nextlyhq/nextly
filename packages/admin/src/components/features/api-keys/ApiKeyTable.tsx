@@ -30,6 +30,8 @@ import type {
   NextlyColumn,
   RowAction,
 } from "@admin/components/ui/table/data-table";
+import { PAGINATION } from "@admin/constants/pagination";
+import { usePagination } from "@admin/hooks/usePagination";
 import type { ApiKeyMeta } from "@admin/services/apiKeyApi";
 
 // ============================================================
@@ -121,8 +123,7 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
 }) => {
   const [search, setSearch] = useState("");
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
-  const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState(10);
+  const { page, pageSize, setPage, setPageSize, resetPage } = usePagination();
 
   const toggleColumn = (key: string) => {
     setHiddenColumns(prev => {
@@ -132,11 +133,6 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
       return next;
     });
   };
-
-  const handlePageSizeChange = useCallback((newPageSize: number) => {
-    setPageSize(newPageSize);
-    setPage(0);
-  }, []);
 
   const allColumns = useMemo((): NextlyColumn<ApiKeyMeta>[] => {
     return [
@@ -269,8 +265,8 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
 
   // Reset to the first page whenever the search term changes.
   useEffect(() => {
-    setPage(0);
-  }, [search]);
+    resetPage();
+  }, [search, resetPage]);
 
   const rowActions = useCallback(
     (key: ApiKeyMeta): RowAction<ApiKeyMeta>[] => {
@@ -359,9 +355,9 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
               currentPage: page,
               totalPages: Math.max(1, totalPages),
               pageSize,
-              pageSizeOptions: [10, 25, 50],
+              pageSizeOptions: PAGINATION.TABLE_PAGE_SIZE_OPTIONS,
               onPageChange: setPage,
-              onPageSizeChange: handlePageSizeChange,
+              onPageSizeChange: setPageSize,
               totalItems,
               isLoading,
             }}

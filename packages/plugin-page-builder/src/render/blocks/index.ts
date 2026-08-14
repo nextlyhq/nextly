@@ -19,6 +19,7 @@ export { icon } from "./icon";
 export { list } from "./list";
 export { iconList } from "./iconList";
 export { buttonGroup } from "./buttonGroup";
+export { column } from "./column";
 export { columns } from "./columns";
 export { row } from "./row";
 export { cover } from "./cover";

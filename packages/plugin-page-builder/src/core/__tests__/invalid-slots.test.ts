@@ -27,6 +27,7 @@ import {
   removeSlot,
 } from "../tree";
 import { validateDocument } from "../validate";
+import { MAX_DEPTH } from "../types";
 
 import type { BlockNode } from "../types";
 
@@ -88,6 +89,136 @@ describe("finding blocks in a slot nothing declares", () => {
 
     expect(
       validateDocument(doc(repaired), defaultBlockRegistry, {
+        allowUnknown: true,
+      })
+    ).toBe(true);
+  });
+
+  it("reports a child a DECLARED slot refuses, which is also unsaveable", () => {
+    // The finder's claim is what the write path refuses, and an allowlist refusal is refused
+    // exactly as an undeclared slot name is. Run with the empty registry the config and server
+    // paths have, so it is structure answering rather than a loaded renderer.
+    const root = withSlots("core/container", {
+      default: [
+        withSlots("core/columns", {
+          default: [heading("Left"), heading("Right")],
+        }),
+      ],
+    });
+
+    expect(
+      validateDocument(doc(root), defaultBlockRegistry, { allowUnknown: true })
+    ).toContain("is not allowed in slot");
+
+    const entries = findInvalidSlotEntries(root, defaultBlockRegistry);
+    expect(entries.map(e => e.kind)).toEqual(["not-allowed", "not-allowed"]);
+
+    const repaired = entries.reduce(
+      (tree, entry) => repairInvalidSlot(tree, entry, defaultBlockRegistry),
+      root
+    );
+
+    expect(
+      validateDocument(doc(repaired), defaultBlockRegistry, {
+        allowUnknown: true,
+      })
+    ).toBe(true);
+
+    // The repair KEPT both blocks. Every other entry kind removes, so a repair that quietly
+    // deleted here would still satisfy the validator above and lose the author's content.
+    // What the wrapper is BUILT from is not assertable here and deliberately is not asserted: this
+    // file runs with an empty registry, so a definition-backed construction and an empty one look
+    // identical. `InvalidSlotBanner.test.tsx` makes that claim, where the registry is populated.
+    const row = repaired.slots?.default?.[0];
+    expect(row?.slots?.default).toHaveLength(2);
+    expect(
+      row?.slots?.default?.map(c => c.slots?.default?.[0]?.props?.text)
+    ).toEqual(["Left", "Right"]);
+  });
+
+  it("reports a child whose declared parents exclude this container", () => {
+    // The other structural direction. A container that accepts everything is still not a home for
+    // a block that names its parents, and the write path refuses it — so the finder has to report
+    // it or the page is unsaveable with nothing to act on.
+    const root = withSlots("core/container", {
+      default: [withSlots("core/column", { default: [heading("Stray")] })],
+    });
+
+    expect(
+      validateDocument(doc(root), defaultBlockRegistry, { allowUnknown: true })
+    ).toContain("may only sit inside");
+
+    const entries = findInvalidSlotEntries(root, defaultBlockRegistry);
+    expect(entries.map(e => e.kind)).toEqual(["not-allowed"]);
+
+    const repaired = repairInvalidSlot(root, entries[0], defaultBlockRegistry);
+    expect(
+      validateDocument(doc(repaired), defaultBlockRegistry, {
+        allowUnknown: true,
+      })
+    ).toBe(true);
+
+    // Repaired by WRAPPING, derived from the child's own parent list: a stray column becomes a
+    // one-column row, which is what the document was describing whether or not it said so.
+    const wrapper = repaired.slots?.default?.[0];
+    expect(wrapper?.type).toBe("core/columns");
+    expect(wrapper?.slots?.default?.[0]?.type).toBe("core/column");
+    // And the column's own child survived, so the repair moved the block rather than replacing it.
+    expect(wrapper?.slots?.default?.[0]?.slots?.default?.[0]?.props?.text).toBe(
+      "Stray"
+    );
+  });
+
+  it("does not offer a wrapper the inner slot would refuse in turn", () => {
+    // Wrapping is only correct when it produces a SAVEABLE document. A permitted container whose
+    // own default slot excludes the child would move the refusal one level down and leave the
+    // page exactly as unsaveable, while the banner reported the repair as done.
+    const own = createBlockRegistry();
+    own.register({
+      type: "test/row",
+      version: 1,
+      label: "Row",
+      icon: "Square",
+      category: "layout",
+      defaultProps: {},
+      isContainer: true,
+      slots: [{ name: "default", allowedBlocks: ["test/cell"] }],
+      render: () => null,
+    });
+    own.register({
+      type: "test/cell",
+      version: 1,
+      label: "Cell",
+      icon: "Square",
+      category: "layout",
+      defaultProps: {},
+      isContainer: true,
+      slots: [{ name: "default", allowedBlocks: ["test/only"] }],
+      render: () => null,
+    });
+
+    const root = withSlots("test/row", { default: [heading("Refused")] });
+    const [entry] = findInvalidSlotEntries(root, own);
+    expect(entry.kind).toBe("not-allowed");
+    expect(entry.kind === "not-allowed" && entry.wrapWith).toBeUndefined();
+
+    // The control that makes that absence mean something. `undefined` is what every other way of
+    // failing this lookup returns too — an unregistered wrapper, a non-container, a missing
+    // default slot — so the SAME shape with only the inner allowlist widened has to offer it.
+    const permissive = createBlockRegistry();
+    for (const d of own.all()) {
+      permissive.register(
+        d.type === "test/cell" ? { ...d, slots: [{ name: "default" }] } : d
+      );
+    }
+    const [offered] = findInvalidSlotEntries(root, permissive);
+    expect(offered.kind === "not-allowed" && offered.wrapWith).toBe(
+      "test/cell"
+    );
+
+    // And the repair it does prescribe still makes the document save.
+    expect(
+      validateDocument(doc(repairInvalidSlot(root, entry, own)), own, {
         allowUnknown: true,
       })
     ).toBe(true);
@@ -324,5 +455,50 @@ describe("finding blocks in a slot nothing declares", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]?.node.id).toBe(child.id);
     expect(entries[0]?.slotName).toBe("default");
+  });
+
+  it("does not offer a wrap that would breach the depth limit", () => {
+    // A wrapper adds a level. Offering one to a child already at the limit trades a slot
+    // violation for a depth violation: the banner clears and the page still refuses to save,
+    // with the fault now somewhere the author has even less to act on.
+    let deepest: BlockNode = withSlots("core/columns", {
+      default: [heading("At the bottom")],
+    });
+    // Stack containers until the heading sits at MAX_DEPTH.
+    for (let level = 0; level < MAX_DEPTH - 1; level += 1) {
+      deepest = withSlots("core/container", { default: [deepest] });
+    }
+
+    const [entry] = findInvalidSlotEntries(deepest, defaultBlockRegistry);
+    expect(entry.kind).toBe("not-allowed");
+    expect(entry.kind === "not-allowed" && entry.wrapWith).toBeUndefined();
+
+    // The control: the SAME shape shallow enough to hold the wrapper does offer it.
+    const shallow = withSlots("core/container", {
+      default: [
+        withSlots("core/columns", { default: [heading("Near the top")] }),
+      ],
+    });
+    const [ok] = findInvalidSlotEntries(shallow, defaultBlockRegistry);
+    expect(ok.kind === "not-allowed" && ok.wrapWith).toBe("core/column");
+  });
+
+  it("refuses a document whose ROOT restricts its parents", () => {
+    // The walk only ever sees a node as somebody's child, so the one node with no parent was the
+    // one node the rule never reached — and a `core/column` at the root renders as an ordinary
+    // div while validating as fine.
+    const root = withSlots("core/column", { default: [heading("Stranded")] });
+    expect(
+      validateDocument(doc(root), defaultBlockRegistry, { allowUnknown: true })
+    ).toContain("sits inside nothing");
+
+    // The control: a root that restricts nothing is still accepted.
+    expect(
+      validateDocument(
+        doc(withSlots("core/container", { default: [heading("Fine")] })),
+        defaultBlockRegistry,
+        { allowUnknown: true }
+      )
+    ).toBe(true);
   });
 });
