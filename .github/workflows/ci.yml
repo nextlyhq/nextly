@@ -93,6 +93,25 @@ jobs:
             fail_open "base $BASE_SHA is not present; running everything."
           fi
 
+          # On a pull request, compare against the MERGE BASE rather than the
+          # base branch's current tip. `pull_request.base.sha` moves as `main`
+          # advances, so diffing from it reports every commit `main` gained
+          # since the branch point as though this pull request had made it.
+          # Measured here: a change touching one `.claude/` file read as six
+          # files and ran the full matrix. The error is in the safe direction —
+          # it can only ever run MORE — but in a repository with several
+          # branches active it fires on nearly every pull request, which is the
+          # whole cost this job exists to remove.
+          #
+          # A push already carries the right value in `before`: the previous tip
+          # of that branch, which is the merge base by construction.
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            MERGE_BASE=$(git merge-base "$BASE_SHA" "$HEAD_SHA" 2>/dev/null) || \
+              fail_open "no merge base for $BASE_SHA..$HEAD_SHA; running everything."
+            [ -n "$MERGE_BASE" ] || fail_open "empty merge base; running everything."
+            BASE_SHA="$MERGE_BASE"
+          fi
+
           CHANGED=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" 2>/dev/null) || \
             fail_open "could not diff $BASE_SHA..$HEAD_SHA; running everything."
 
