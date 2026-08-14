@@ -693,9 +693,11 @@ let REMOTE_FOR_FETCH = "origin";
  *
  * `refs/pull/N/merge` and a squash commit belong to the base repository even
  * when the branch does not, so they are fetched from here rather than from the
- * head remote, which for a fork holds neither. Resolved through the same
- * function as the head remote: from a fork checkout `origin` is the fork, so a
- * literal here is the defect this variable exists to fix, one step along.
+ * head remote, which for a fork holds neither.
+ *
+ * Resolved rather than assumed, through the same function as the head remote.
+ * `origin` names the base repository only in a checkout of that repository; in
+ * a fork's checkout it is the fork, which holds neither of these objects.
  */
 let BASE_REMOTE = "origin";
 
