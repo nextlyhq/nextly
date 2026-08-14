@@ -25,10 +25,12 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-Render every list pager inside its table instead of beside it.
+Give `DataTableView` a `pagination` prop and let the table place its own pager.
 
-Some admin lists passed pagination to `DataTableView`'s `footer` and the rest rendered it as a sibling. The footer exists because a pager's placement depends on whether the row table or the mobile card view is showing, and `DataTableView` is the only component that knows: it sits inside the card on desktop and takes the column's gap on mobile. A pager rendered beside the table sits outside that decision, so it lands in the wrong place on one of the two layouts.
+A pager's placement depends on whether the row table or the mobile card view is showing, and `DataTableView` is the only component that knows: the pager sits inside the card on desktop and takes the column's gap on mobile. Every list used to build the pager markup itself and hand it over, which left that decision at the call site — where the wrong arrangement is the one you get by writing the markup in reading order, and where several surfaces had drifted into it.
 
-API keys, deliveries, collections, field groups, singles, email providers, email templates, image sizes, entries and the media list view now pass it as `footer`. A test parses the admin sources and fails any `<Pagination>` rendered beside a `<DataTableView>` rather than inside its footer; a surface that paginates something other than a table is named individually, by the pager's accessible label.
+Tables now pass `pagination` as data: `currentPage`, `pageSize`, `onPageChange` and the rest, typed as the pager's own props rather than a restatement of them. A caller supplying state has no opportunity to place the control, so the mistake is no longer available to make. API keys, deliveries, webhooks, collections, field groups, singles, roles, users, plugins, email providers, email templates, image sizes, entries and the media list view are all on it, and `MediaListView` forwards the prop rather than a node.
 
-Two fixes found along the way. Choosing a larger page size on the image sizes list left the page number pointing past the end of the list, showing the empty message over a list that had rows. And the media library's two pagers now carry distinct accessible labels rather than both announcing themselves as "Pagination".
+Two surfaces keep rendering a pager directly, and say why where they render it: the media grid, which has no row-versus-card view to place one for, and the user-fields list, whose drag-reorderable rows are drawn by a DndContext over a plain table rather than by `DataTableView`.
+
+Two fixes found along the way. Choosing a larger page size on the image sizes list left the page number pointing past the end, showing the empty message over a list that had rows. And the media library's two pagers now carry distinct accessible labels rather than both announcing themselves as "Pagination".
