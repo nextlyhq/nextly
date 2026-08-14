@@ -181,7 +181,8 @@ function soleWrapperFor(
   childType: string,
   registry: BlockRegistry,
   childBottomDepth: number,
-  roomForAWrapper: boolean
+  roomForAWrapper: boolean,
+  outerParentType: string | null
 ): string | undefined {
   // Accepts an absent spec so the caller does not have to prove one is present. A slot with no
   // declaration has no allowlist, so it refuses nothing and needs no wrapper — the same answer
@@ -193,7 +194,8 @@ function soleWrapperFor(
     childType,
     registry,
     childBottomDepth,
-    roomForAWrapper
+    roomForAWrapper,
+    outerParentType
   );
 }
 
@@ -213,7 +215,8 @@ function soleParentWrapperFor(
   childType: string,
   registry: BlockRegistry,
   childBottomDepth: number,
-  roomForAWrapper: boolean
+  roomForAWrapper: boolean,
+  outerParentType: string | null
 ): string | undefined {
   const parents = parentsOf(childType, registry);
   if (!parents || parents.length === 0) return undefined;
@@ -229,7 +232,8 @@ function soleParentWrapperFor(
     childType,
     registry,
     childBottomDepth,
-    roomForAWrapper
+    roomForAWrapper,
+    outerParentType
   );
 }
 
@@ -246,7 +250,9 @@ function wrapperIfItHolds(
   childType: string,
   registry: BlockRegistry,
   childBottomDepth: number,
-  roomForAWrapper: boolean
+  roomForAWrapper: boolean,
+  /** The type the wrapper will sit inside, or `null` when it becomes the document root. */
+  outerParentType: string | null
 ): string | undefined {
   // A wrapper adds a level to the whole subtree. Offering one to a child whose DEEPEST descendant
   // already sits at the limit trades a slot violation for a depth violation: the banner clears,
@@ -277,6 +283,17 @@ function wrapperIfItHolds(
   // may only sit under one parent is not made placeable by a wrapper that accepts everything.
   const childParents = parentsOf(childType, registry);
   if (childParents && !childParents.includes(wrapperType)) return undefined;
+  // Finally the WRAPPER's own restriction, which is the half asking only about the child cannot
+  // see. Restrictions chain: a wrapper that may itself sit nowhere here moves the violation up a
+  // level instead of resolving it, and `validate` refuses the repaired document with a message
+  // naming the wrapper the banner just offered. A root repair is the sharper case — the wrapper
+  // BECOMES the root, so any restriction at all is unsatisfiable, exactly as it was for the block
+  // that produced the entry.
+  const wrapperParents = parentsOf(wrapperType, registry);
+  if (wrapperParents) {
+    if (outerParentType === null) return undefined;
+    if (!wrapperParents.includes(outerParentType)) return undefined;
+  }
   return wrapperType;
 }
 
@@ -371,7 +388,11 @@ export function findInvalidSlotEntries(
               root.type,
               registry,
               heightOf(root),
-              roomForAWrapper
+              roomForAWrapper,
+              // The wrapper BECOMES the root, so it sits inside nothing — and a wrapper that
+              // restricts its own parents could not satisfy that any more than the block being
+              // repaired can.
+              null
             )
           : undefined,
     });
@@ -427,7 +448,8 @@ export function findInvalidSlotEntries(
                 child.type,
                 registry,
                 here.length + heightOf(child),
-                roomForAWrapper
+                roomForAWrapper,
+                node.type
               ),
             });
             continue;
@@ -446,7 +468,8 @@ export function findInvalidSlotEntries(
                 child.type,
                 registry,
                 here.length + heightOf(child),
-                roomForAWrapper
+                roomForAWrapper,
+                node.type
               ),
             });
             // Not descended into, for the same reason an undeclared block is not: this entry is

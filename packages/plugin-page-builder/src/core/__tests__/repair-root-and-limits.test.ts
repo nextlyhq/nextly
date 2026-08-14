@@ -176,6 +176,58 @@ describe("a block permitted under NO parent", () => {
   });
 });
 
+describe("a wrapper that is itself restricted", () => {
+  // `acme/child` may only sit in `acme/wrapper`, which may only sit in `acme/shell`. Offering the
+  // wrapper without asking where IT may sit moves the violation up a level: the banner clears and
+  // `validate` refuses the result, naming the block the repair just inserted.
+  const shell = defineBlock({
+    name: "acme/shell",
+    version: 1,
+    description: "The only place a wrapper may sit.",
+    example: { props: {} },
+    slots: { default: {} },
+    render: () => null,
+  });
+  const wrapper = defineBlock({
+    name: "acme/wrapper",
+    version: 1,
+    description: "Restricted itself.",
+    example: { props: {} },
+    slots: { default: {} },
+    parent: ["acme/shell"],
+    render: () => null,
+  });
+  const child = defineBlock({
+    name: "acme/child",
+    version: 1,
+    description: "Belongs in the wrapper.",
+    example: { props: {} },
+    parent: ["acme/wrapper"],
+    render: () => null,
+  });
+
+  afterEach(() => {
+    clearBlocks();
+  });
+
+  it("is not offered where it could not sit", () => {
+    registerBlocks([shell, wrapper, child], { source: "@acme/blocks" });
+    // `core/container` is not `acme/shell`, so the wrapper may not sit here either.
+    const root = node("core/container", { default: [node("acme/child")] });
+    const [entry] = findInvalidSlotEntries(root, registry);
+    expect(entry).toMatchObject({ kind: "not-allowed", type: "acme/child" });
+    expect((entry as { wrapWith?: string }).wrapWith).toBeUndefined();
+  });
+
+  it("is not offered as a ROOT, because a root sits inside nothing", () => {
+    registerBlocks([shell, wrapper, child], { source: "@acme/blocks" });
+    const root = node("acme/child");
+    const [entry] = findInvalidSlotEntries(root, registry);
+    expect(entry).toMatchObject({ kind: "root-parent", type: "acme/child" });
+    expect((entry as { wrapWith?: string }).wrapWith).toBeUndefined();
+  });
+});
+
 describe("a child permitted under several parents", () => {
   const multi = defineBlock({
     name: "acme/multi",
