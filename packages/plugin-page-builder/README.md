@@ -216,11 +216,17 @@ defineBlock({
 Blocks can bump `version` and ship a pure `migrate(old, fromVersion)`, and unknown blocks are
 preserved (never dropped).
 
-Migration runs when the **editor** loads a document, which is the surface that both reads props
-into controls and writes the document back — so a page opened and saved is a page upgraded. The
-**published page does not migrate**: `PageRenderer` draws the stored document as it is. Blocks
-therefore have to read their props defensively whatever version wrote them, which they must do
-anyway for a hand-edited or plugin-authored document.
+Migration runs when the **editor** loads a document, so the inspector reads props through controls
+that describe them. Where it PERSISTS depends on the mount:
+
+- the **edit view** saves what the editor holds, so an opened-and-saved page is upgraded;
+- a **field mount** (`PageBuilderField`) does not. The host form keeps the value it was given, and
+  the upgrade reaches storage with the author's first real edit rather than on open;
+- the **published page** does not migrate at all: `PageRenderer` draws the stored document as it is.
+
+So blocks have to read their props defensively whatever version wrote them — which they must do
+anyway for a hand-edited or plugin-authored document. Migration only ever moves a document
+FORWARD: a node written by a newer definition than this build registers is left exactly as found.
 
 ## Security
 

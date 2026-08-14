@@ -35,7 +35,12 @@ import {
   removeSlot,
   wrapInSlot,
 } from "./tree";
-import { DEFAULT_SLOT, type BlockNode, type SlotSpec } from "./types";
+import {
+  DEFAULT_SLOT,
+  MAX_DEPTH,
+  type BlockNode,
+  type SlotSpec,
+} from "./types";
 
 /** Where a fault sits, and how to say so to someone who cannot click on it. */
 interface InvalidSlotLocation {
@@ -147,11 +152,12 @@ function declaredFor(
 function soleWrapperFor(
   spec: SlotSpec,
   childType: string,
-  registry: BlockRegistry
+  registry: BlockRegistry,
+  childDepth: number
 ): string | undefined {
   const permitted = spec.allowedBlocks;
   if (!permitted || permitted.length !== 1) return undefined;
-  return wrapperIfItHolds(permitted[0], childType, registry);
+  return wrapperIfItHolds(permitted[0], childType, registry, childDepth);
 }
 
 /**
@@ -168,7 +174,8 @@ function soleWrapperFor(
 function soleParentWrapperFor(
   spec: SlotSpec | undefined,
   childType: string,
-  registry: BlockRegistry
+  registry: BlockRegistry,
+  childDepth: number
 ): string | undefined {
   const parents = declaredParentsOf(childType);
   if (!parents || parents.length !== 1) return undefined;
@@ -176,7 +183,7 @@ function soleParentWrapperFor(
   if (spec?.allowedBlocks && !spec.allowedBlocks.includes(wrapperType)) {
     return undefined;
   }
-  return wrapperIfItHolds(wrapperType, childType, registry);
+  return wrapperIfItHolds(wrapperType, childType, registry, childDepth);
 }
 
 /**
@@ -190,8 +197,13 @@ function soleParentWrapperFor(
 function wrapperIfItHolds(
   wrapperType: string,
   childType: string,
-  registry: BlockRegistry
+  registry: BlockRegistry,
+  childDepth: number
 ): string | undefined {
+  // A wrapper adds a level. Offering one to a child already at the limit trades a slot violation
+  // for a depth violation: the banner clears, and the page still refuses to save — with the fault
+  // now somewhere the author has even less to act on.
+  if (childDepth + 1 > MAX_DEPTH) return undefined;
   const def = registry.get(wrapperType);
   const slots = def ? (def.slots ?? []) : declaredSlotsOf(wrapperType);
   if (!slots) return undefined;
@@ -251,6 +263,8 @@ export function findInvalidSlotEntries(
 ): InvalidSlotEntry[] {
   const found: InvalidSlotEntry[] = [];
 
+  // `ancestry` already counts the levels above this node, so a child's depth is its length + 1 —
+  // derived from the walk rather than tracked beside it, where the two would drift.
   const walk = (node: BlockNode, ancestry: string[]): void => {
     const stored = node.slots;
     if (!stored) return;
@@ -294,7 +308,12 @@ export function findInvalidSlotEntries(
               node: child,
               type: child.type,
               descendantCount: countDescendants(child),
-              wrapWith: soleParentWrapperFor(spec, child.type, registry),
+              wrapWith: soleParentWrapperFor(
+                spec,
+                child.type,
+                registry,
+                here.length
+              ),
             });
             continue;
           }
@@ -307,7 +326,7 @@ export function findInvalidSlotEntries(
               node: child,
               type: child.type,
               descendantCount: countDescendants(child),
-              wrapWith: soleWrapperFor(spec, child.type, registry),
+              wrapWith: soleWrapperFor(spec, child.type, registry, here.length),
             });
             // Not descended into, for the same reason an undeclared block is not: this entry is
             // the repair target, and anything beneath it is settled by whichever repair is taken.

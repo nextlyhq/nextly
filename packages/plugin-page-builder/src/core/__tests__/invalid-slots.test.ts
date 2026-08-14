@@ -27,6 +27,7 @@ import {
   removeSlot,
 } from "../tree";
 import { validateDocument } from "../validate";
+import { MAX_DEPTH } from "../types";
 
 import type { BlockNode } from "../types";
 
@@ -454,5 +455,50 @@ describe("finding blocks in a slot nothing declares", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]?.node.id).toBe(child.id);
     expect(entries[0]?.slotName).toBe("default");
+  });
+
+  it("does not offer a wrap that would breach the depth limit", () => {
+    // A wrapper adds a level. Offering one to a child already at the limit trades a slot
+    // violation for a depth violation: the banner clears and the page still refuses to save,
+    // with the fault now somewhere the author has even less to act on.
+    let deepest: BlockNode = withSlots("core/columns", {
+      default: [heading("At the bottom")],
+    });
+    // Stack containers until the heading sits at MAX_DEPTH.
+    for (let level = 0; level < MAX_DEPTH - 1; level += 1) {
+      deepest = withSlots("core/container", { default: [deepest] });
+    }
+
+    const [entry] = findInvalidSlotEntries(deepest, defaultBlockRegistry);
+    expect(entry.kind).toBe("not-allowed");
+    expect(entry.kind === "not-allowed" && entry.wrapWith).toBeUndefined();
+
+    // The control: the SAME shape shallow enough to hold the wrapper does offer it.
+    const shallow = withSlots("core/container", {
+      default: [
+        withSlots("core/columns", { default: [heading("Near the top")] }),
+      ],
+    });
+    const [ok] = findInvalidSlotEntries(shallow, defaultBlockRegistry);
+    expect(ok.kind === "not-allowed" && ok.wrapWith).toBe("core/column");
+  });
+
+  it("refuses a document whose ROOT restricts its parents", () => {
+    // The walk only ever sees a node as somebody's child, so the one node with no parent was the
+    // one node the rule never reached — and a `core/column` at the root renders as an ordinary
+    // div while validating as fine.
+    const root = withSlots("core/column", { default: [heading("Stranded")] });
+    expect(
+      validateDocument(doc(root), defaultBlockRegistry, { allowUnknown: true })
+    ).toContain("sits inside nothing");
+
+    // The control: a root that restricts nothing is still accepted.
+    expect(
+      validateDocument(
+        doc(withSlots("core/container", { default: [heading("Fine")] })),
+        defaultBlockRegistry,
+        { allowUnknown: true }
+      )
+    ).toBe(true);
   });
 });

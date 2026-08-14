@@ -28,6 +28,14 @@ export function validateDocument(
   const seen = new Set<string>();
   let count = 0;
 
+  // A root that restricts its parents has none, which is not the same as being satisfied. Checked
+  // once here rather than inside the walk, because the walk only ever sees a node as somebody's
+  // child — so the one node with no parent was the one node the rule never reached.
+  const rootParents = declaredParentsOf(d.root.type);
+  if (rootParents) {
+    return `${d.root.type} may only sit inside ${rootParents.join(" or ")}, and a document root sits inside nothing`;
+  }
+
   const check = (n: BlockNode, depth: number): string | null => {
     if (depth > MAX_DEPTH) return `tree exceeds max depth ${MAX_DEPTH}`;
     if (++count > MAX_NODES) return `tree exceeds max node count ${MAX_NODES}`;
