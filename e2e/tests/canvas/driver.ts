@@ -158,6 +158,22 @@ export interface CanvasDriver {
   dwellAllowanceMs?: number;
 
   /**
+   * How long this canvas may still be moving a zone's edge after the pointer
+   * enters it, in milliseconds.
+   *
+   * Declared per driver for the same reason `dwellAllowanceMs` is: the duration
+   * belongs to the canvas — the PoC animates a drop zone's geometry over 100ms
+   * in its own stylesheet — so no constant written into a probe is correct for
+   * every canvas. A probe carrying its own copy re-brackets while the edge is
+   * still travelling once that duration grows, agrees with itself on a whole
+   * pixel, and returns a stale depth with nothing reporting it was rushed.
+   *
+   * Optional: a driver that omits it gets the probe's default. A canvas whose
+   * zone geometry never animates declares 0.
+   */
+  geometrySettleMs?: number;
+
+  /**
    * Ordinal of the active drop zone among ALL drop zones in document order, or
    * -1 when none is active. Ordinal rather than id because the droppable id is
    * not present in the DOM.
@@ -568,7 +584,8 @@ export function dwellAllowanceOf(driver: Partial<CanvasDriver>): number {
 type ZoneInsetDriver = Pick<
   CanvasDriver,
   "moveBy" | "zoneContainingPointer" | "pointer"
->;
+> &
+  Partial<Pick<CanvasDriver, "geometrySettleMs">>;
 
 /** What the coarse approach observed, which is more than the zone it reached. */
 interface ZoneApproach {
@@ -692,7 +709,24 @@ const EDGE_SETTLE_ATTEMPTS = 3;
  * duration rather than a guess. Paired with the agreement check: the wait covers
  * the animation, the agreement confirms it is over.
  */
-const EDGE_SETTLE_MS = 120;
+const DEFAULT_GEOMETRY_SETTLE_MS = 120;
+
+/**
+ * How long this canvas may still be moving a zone's edge after the pointer
+ * enters it, in milliseconds.
+ *
+ * Declared per driver for the same reason {@link CanvasDriver.dwellAllowanceMs}
+ * is: the duration belongs to the canvas, so no constant written here is
+ * correct for every canvas. A probe carrying its own number is a second copy of
+ * a fact the canvas owns — lengthen the transition and the probe re-brackets
+ * while the edge is still travelling, agrees with itself on a whole pixel, and
+ * returns a stale depth with nothing reporting that anything was rushed.
+ *
+ * Optional: a driver that omits it gets {@link DEFAULT_GEOMETRY_SETTLE_MS}.
+ * Understating it is self-punishing rather than self-serving — measurements
+ * come back stale and the assertions built on them fail — which is what makes
+ * it safe to trust a driver's own answer.
+ */
 
 /** One wait, named for what it is, so no caller invents its own. */
 function settleMs(ms: number): Promise<void> {
@@ -900,7 +934,7 @@ export async function dragToInsetInZone(
     // Across the transition rather than adjacent to it. Two brackets taken back
     // to back land inside the same animation frame and can agree on a whole
     // pixel the edge is still travelling through.
-    await settle(EDGE_SETTLE_MS);
+    await settle(driver.geometrySettleMs ?? DEFAULT_GEOMETRY_SETTLE_MS);
   }
   if (boundaryY === null) return refuse(zone, "boundary-not-found");
 
