@@ -16,7 +16,7 @@
 import { declaredSlotsOf } from "../../core/block-structure";
 import type { BlockRegistry } from "../../core/registry";
 import { findNode } from "../../core/tree";
-import { DEFAULT_SLOT, type BlockNode } from "../../core/types";
+import type { BlockNode } from "../../core/types";
 
 import { canDrop } from "./dropRules";
 import { locateNode } from "./locate";
@@ -33,6 +33,10 @@ export interface InsertTarget {
  *
  * "Place" is a container AND one of its slots: a container may hold its children under any name,
  * so which slot accepts the block is part of the answer rather than an assumption.
+ *
+ * A remembered position is applied only in the slot it was read from, whatever that slot is
+ * named — the accepting slot and the source slot being the same is what makes an index mean
+ * anything.
  *
  * The search runs OUTWARD from the selection — the selected container first, then each ancestor,
  * then the page root — because that is the order of least surprise: a block lands as close to what
@@ -53,7 +57,10 @@ export function planInsert(
   let candidate = selected ?? root;
   // Where the branch we came from sits, so an ancestor takes the block directly after the subtree
   // the author was working in rather than at the far end of the page.
-  let after: number | null = null;
+  // Where the branch we came from sits, as a slot AND an index. Both, because an index only
+  // means something in the slot it was read from: carried anywhere else it names a place among
+  // children it was never among.
+  let after: { slot: string; index: number } | null = null;
 
   for (;;) {
     const slot = acceptingSlotOf(candidate, blockType, registry);
@@ -62,11 +69,9 @@ export function planInsert(
       return {
         parentId: candidate.id,
         slot,
-        // A position is only carried into the SAME slot it came from; anywhere else it names a
-        // place among children it was never among.
         index:
-          after !== null && slot === DEFAULT_SLOT
-            ? Math.min(after + 1, count)
+          after && after.slot === slot
+            ? Math.min(after.index + 1, count)
             : count,
       };
     }
@@ -74,7 +79,7 @@ export function planInsert(
     if (!location) return null;
     const parent = findNode(root, location.parentId);
     if (!parent) return null;
-    after = location.slot === DEFAULT_SLOT ? location.index : null;
+    after = { slot: location.slot, index: location.index };
     candidate = parent;
   }
 }

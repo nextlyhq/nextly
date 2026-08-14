@@ -486,3 +486,44 @@ describe("a document loaded into the editor", () => {
     expect(initialState(baseDoc()).dirty).toBe(false);
   });
 });
+
+describe("a document written by a newer definition", () => {
+  it("is not stamped backwards to the version this build knows", () => {
+    // Opened after a rollback, or by an older editor. Stamping the older number onto newer data
+    // tells a LATER upgrade that migrations still have to run against props they have already
+    // been run against, which corrupts them — so the node is left exactly as found, the same
+    // answer an unknown block gets.
+    const ahead: BlockDocument = {
+      version: 1,
+      root: makeNode("core/container", {}, undefined, {
+        default: [
+          {
+            ...makeNode("core/image", { aspectPreset: "16/9" }),
+            definitionVersion: 99,
+          },
+        ],
+      }),
+    };
+    const image = initialState(ahead).document.root.slots!.default![0];
+    expect(image.definitionVersion).toBe(99);
+    expect(image.props.aspectPreset).toBe("16/9");
+  });
+
+  it("still upgrades one written by an older definition", () => {
+    // The positive control. A guard that refused to stamp anything would pass the case above.
+    const behind: BlockDocument = {
+      version: 1,
+      root: makeNode("core/container", {}, undefined, {
+        default: [
+          {
+            ...makeNode("core/image", { aspectPreset: "" }),
+            definitionVersion: 1,
+          },
+        ],
+      }),
+    };
+    const image = initialState(behind).document.root.slots!.default![0];
+    expect(image.definitionVersion).toBe(2);
+    expect(image.props.aspectPreset).toBe("original");
+  });
+});

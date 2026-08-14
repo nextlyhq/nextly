@@ -129,23 +129,27 @@ export function EditorProvider({
   const onDocumentChangeRef = useRef(onDocumentChange);
   onDocumentChangeRef.current = onDocumentChange;
 
-  // Push document changes to a host form (field mount). The initial mount is
-  // skipped, EXCEPT when loading migrated the document: the editor draws and
-  // edits the migrated tree, so a host form still holding the stored one would
-  // submit a document that is not the one on screen — and the upgrade, having
-  // been applied where the author can see it, would never persist.
+  // Push document changes to a host form (field mount), not on the initial mount.
   //
-  // Identity is what separates the two. `migrateDocument` returns the same
-  // object when nothing needed upgrading, so this fires only for a document that
-  // really changed; pushing unconditionally would loop through the form's own
-  // onChange, which is what the guard exists for.
+  // A load-time MIGRATION is deliberately not pushed, and the reason is worth
+  // stating because the opposite looks right. The only channel to the host form
+  // is the same one an edit uses, so pushing an upgrade nobody made marks the
+  // form dirty and arms its navigation guard on a page that was merely opened.
+  // And a push keyed to the incoming document re-fires when the host RESETS the
+  // field to a different entry, writing the previous entry's tree back over it.
+  //
+  // So the upgrade is applied to what the editor SHOWS — which is what stops the
+  // inspector rendering an old value through controls that no longer describe it
+  // — and reaches storage with the author's first real edit. Persisting it
+  // without an edit needs a write that does not mark the form dirty, which is
+  // the host form's API rather than this one's.
   useEffect(() => {
     if (firstRender.current) {
       firstRender.current = false;
-      if (state.document === doc) return;
+      return;
     }
     onDocumentChangeRef.current?.(state.document);
-  }, [state.document, doc]);
+  }, [state.document]);
 
   // Same for the page custom CSS (its own first-render guard: CSS edits must sync
   // even before any document edit, and vice versa).

@@ -21,7 +21,14 @@ function migrateNode(node: BlockNode, registry: BlockRegistry): BlockNode {
         ...(style ? { style } : {}),
         definitionVersion: def.version,
       };
-    } else if (from !== def.version) {
+    } else if (from < def.version) {
+      // Only ever stamped FORWARD. A node whose `definitionVersion` is greater
+      // than the registered one was written by a newer deployment — opened after
+      // a rollback, or by an older editor — and stamping the older number onto
+      // it would tell a later upgrade that migrations still had to run against
+      // props they have already been run against. Left exactly as found, which
+      // is the same answer this gives an unknown block: retain what this build
+      // cannot describe rather than reshaping it.
       next = { ...node, definitionVersion: def.version };
     }
   }

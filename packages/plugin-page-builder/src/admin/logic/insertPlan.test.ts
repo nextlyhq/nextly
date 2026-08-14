@@ -170,6 +170,26 @@ describe("finding where an inserted block goes", () => {
     });
   });
 
+  it("keeps the position inside a NAMED slot it reached", () => {
+    // Selecting the first child of `sidebar` and inserting should place the new block after it,
+    // not at the end. The slot being named is irrelevant to whether an index means something —
+    // what matters is that the accepting slot IS the one the index was read from.
+    // A NON-container, so the walk is forced up to the aside rather than stopping at a
+    // selection that would have accepted the block itself.
+    const first = node("test/text", undefined, "first");
+    const aside = node(
+      "test/aside",
+      { sidebar: [first, node("test/text")] },
+      "aside"
+    );
+    const root = node("test/page", { default: [aside] }, "page");
+    expect(planInsert(root, "first", "test/text", registry)).toEqual({
+      parentId: "aside",
+      slot: "sidebar",
+      index: 1,
+    });
+  });
+
   it("does not carry a position out of a differently named slot", () => {
     // `body` index 0 says nothing about where to sit among `default`'s children, so the block
     // appends into the ancestor instead of claiming a position it cannot have meant.
