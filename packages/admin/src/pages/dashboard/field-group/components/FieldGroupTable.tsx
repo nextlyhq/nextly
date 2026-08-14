@@ -67,29 +67,32 @@ function getSourceBadge(source?: FieldGroupSource): {
 }
 
 /** Migration-status badge variant + label. */
-function getMigrationBadge(status?: FieldGroupMigrationStatus): {
+type MigrationBadge = {
   variant: "success" | "warning" | "primary" | "default" | "destructive";
   label: string;
-} {
-  switch (status) {
-    case "synced":
-      return { variant: "success", label: "Synced" };
-    case "pending":
-      return { variant: "warning", label: "Pending" };
-    case "generated":
-      return { variant: "primary", label: "Generated" };
-    case "applied":
-      return { variant: "success", label: "Applied" };
-    case "failed":
-      return { variant: "destructive", label: "Failed" };
-    // Its own badge rather than falling through to the default. `-` reads as "no migration state",
-    // which is the opposite of what this one means, and it is the state an operator most needs to
-    // find: the tables moved and the stored definition did not.
-    case "diverged":
-      return { variant: "destructive", label: "Diverged" };
-    default:
-      return { variant: "default", label: "-" };
-  }
+};
+
+/** Every migration status this table can be handed, keyed so the compiler demands each one. */
+const MIGRATION_BADGES: Record<FieldGroupMigrationStatus, MigrationBadge> = {
+  synced: { variant: "success", label: "Synced" },
+  pending: { variant: "warning", label: "Pending" },
+  generated: { variant: "primary", label: "Generated" },
+  applied: { variant: "success", label: "Applied" },
+  failed: { variant: "destructive", label: "Failed" },
+  diverged: { variant: "destructive", label: "Diverged" },
+};
+
+function getMigrationBadge(status?: FieldGroupMigrationStatus): MigrationBadge {
+  // 🔴 An exhaustive Record rather than a switch with a `default`, and that is the control.
+  //
+  // A `default` arm silently absorbs any status added later: `diverged` rendered as `-` here — "no
+  // migration state", the opposite of what it means, and the state an operator most needs to find —
+  // while the sidebar indicator, which already keyed a Record off the same union, could not compile
+  // until it was handled. The compiler is a boundary; remembering to add a case is not.
+  //
+  // `undefined` keeps its own answer, because "this row has no status" is a real case and is not
+  // the same as an unhandled one.
+  return status ? MIGRATION_BADGES[status] : { variant: "default", label: "-" };
 }
 
 /** Columns pinned as always-visible in the column toggle. */
