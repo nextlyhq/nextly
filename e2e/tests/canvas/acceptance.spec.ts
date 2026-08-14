@@ -580,13 +580,8 @@ test.describe("a canvas any Nextly editor could ship", () => {
     // Unrounded, and every edge. Comparing tops alone passes a canvas that
     // reflows horizontally, and rounding hides a shift under half a pixel —
     // exactly the size a grid or a percentage-width column produces.
-    // Marked HERE, not on the declaration. The declaration form makes
-    // EVERY error in the body expected, so a failed seed or a broken
-    // reader goes green exactly like the shortfall.
-    test.fail(
-      true,
-      "drop zones take layout space, so every block below the pointer moves"
-    );
+    // The droppable is out of flow and its slot is permanently zero-height, so
+    // no zone contributes geometry at any point in a drag.
     expect(during, "drop zones must take no layout space").toEqual(before);
   });
 

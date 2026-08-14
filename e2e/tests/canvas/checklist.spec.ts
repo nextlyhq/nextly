@@ -186,12 +186,9 @@ test("[acceptance] point 4: siblings do not move during a drag", async ({
     "a drag must not add, remove or reorder blocks"
   ).toEqual(idsOf(before));
 
-  // Only the geometry assertion is the known gap: zones expand from 0px to 6px
-  // when a drag starts and push every block below them down.
-  test.fail(
-    true,
-    "zones expand from 0px to 6px and push every block below them down"
-  );
+  // A zone's slot stays at zero height for the document's whole life and the
+  // droppable that catches the pointer is out of flow, so starting a drag moves
+  // nothing.
   expect(shifted, "point 4 requires zero layout shift during a drag").toEqual(
     []
   );
