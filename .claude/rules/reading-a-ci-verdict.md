@@ -192,20 +192,52 @@ broken `main` is fixed, every PR that went red because of it **stays red**. No
 one's checks clear themselves, and a stale red is indistinguishable from a real
 one on inspection.
 
-**Re-running the old run does NOT pick the repair up, and this is the part that
-looks like the remedy.** GitHub's documentation is explicit: a re-run "will also
-use the same `GITHUB_SHA` (commit SHA) and `GITHUB_REF` (git ref) of the
-original event that triggered the workflow run". For a `pull_request` run —
-which is every leg of `ci.yml` and `integration.yml` here — that ref is the
-synthetic merge commit computed when the event fired, so the re-run evaluates
-the same combination of your branch and the OLD, broken `main`. It goes red
-again for the original reason, which reads as the failure being real.
+**Whether `gh run rerun` picks the repair up is a property of the WORKFLOW, not
+of the re-run.** Two authorities appear to disagree here and both are right,
+which is worth setting out because the wrong reading is actionable at 3am.
 
-So a moved base needs a NEW event, not a repeated one: rebase onto the repaired
-`main`, or push, and let a fresh `pull_request` run compute a new merge commit.
+GitHub's documentation says a re-run "will also use the same `GITHUB_SHA`
+(commit SHA) and `GITHUB_REF` (git ref) of the original event that triggered the
+workflow run". That is true, and it is about the ENVIRONMENT.
 
-`gh run rerun` remains the right tool for a genuine flake, where the base is not
-in question:
+It does not decide what lands in the working tree. `actions/checkout` given no
+`ref:` input takes its `refs/pull/` branch, which resolves the REF and discards
+the pinned commit:
+
+```ts
+else if (upperRef.startsWith('REFS/PULL/')) {
+  const branch = ref.substring('refs/pull/'.length)
+  result.ref = `refs/remotes/pull/${branch}`
+}
+```
+
+GitHub recomputes `refs/pull/N/merge` when the base moves, so the checkout
+fetches a merge commit built against the REPAIRED `main` while `$GITHUB_SHA`
+still names the old one.
+
+**Measured on this repository**, run `31755967442` on #777: attempt 1 failed at
+`Bare-Error guard controls (unit)`, the allowlist ratchet broken on `main` at
+the time. After the repair merged, attempt 3 of the same run PASSED that step
+and failed later elsewhere. That step runs a vitest file which reads only the
+working tree — it shells out to no git command — so the repaired allowlist can
+only have arrived in the checkout.
+
+All four gating workflows here (`ci.yml`, `integration.yml`, `secret-scan.yml`,
+`preview.yml`) use the default checkout with no `ref:`, so on THIS repository a
+re-run does pick up a moved base.
+
+**Do not carry that conclusion to a workflow you have not read.** A step pinning
+`ref: ${{ github.sha }}`, or any script consuming `$GITHUB_SHA` directly, gets
+the original merge commit and will re-run identically forever — red for a reason
+that was fixed hours ago. Check what the workflow checks out before deciding
+which case you are in.
+
+**Rebase or push is correct under either reading**, and needs no determination
+first: it creates a new event, a new merge commit, and a run nobody has to
+reason about. Prefer it when a moved base is the suspicion.
+
+`gh run rerun` is the right tool for a genuine flake, where the base is not in
+question:
 
 ```sh
 gh run rerun "$RUN_ID"            # whole run
