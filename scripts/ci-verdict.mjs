@@ -481,10 +481,19 @@ async function main(argv) {
   // number of rows unchanged — so a length check accepts a snapshot that has
   // already gone stale, and only ever catches the shape of change it was
   // written for.
-  const fingerprint = (rv, th) =>
+  // Issue comments are in the snapshot because the rate-limit marker is EDITED
+  // IN PLACE: a blocking reviewer can add or remove it without any review being
+  // submitted and without the head moving, so every other check here stays
+  // identical while the verdict it feeds flips.
+  const fingerprint = (rv, th, ic) =>
     JSON.stringify([
       rv.map(r => [r?.id, r?.user?.login, r?.commit_id, r?.state]),
       th.map(t => [t?.isResolved, t?.comments?.nodes?.[0]?.author?.login]),
+      ic.map(c => [
+        c?.id,
+        c?.user?.login,
+        RATE_LIMIT_MARKER.test(c?.body ?? ""),
+      ]),
     ]);
   const reviewsNow = gh([
     "api",
@@ -492,8 +501,15 @@ async function main(argv) {
     "--paginate",
     "--slurp",
   ]).flat();
+  const issueCommentsNow = gh([
+    "api",
+    `repos/${repo}/issues/${pr}/comments`,
+    "--paginate",
+    "--slurp",
+  ]).flat();
   if (
-    fingerprint(reviews, threads) !== fingerprint(reviewsNow, readThreads())
+    fingerprint(reviews, threads, issueComments) !==
+    fingerprint(reviewsNow, readThreads(), issueCommentsNow)
   ) {
     process.stderr.write("ci-verdict: review state changed mid-run; re-run\n");
     return 2;
@@ -535,9 +551,8 @@ async function main(argv) {
   // tail: resetting it back to the merged head leaves an empty range that is
   // indistinguishable from a branch that never advanced, which is precisely the
   // tail this check exists to find. Refuse rather than report zero.
-  let rewritten = 0;
-  if (meta.state !== "OPEN") {
-    rewritten = gh([
+  const rewriteEvents = () =>
+    gh([
       "api",
       "--paginate",
       "--slurp",
@@ -551,6 +566,10 @@ async function main(argv) {
           "head_ref_restored",
         ].includes(event?.event)
       ).length;
+
+  let rewritten = 0;
+  if (meta.state !== "OPEN") {
+    rewritten = rewriteEvents();
     if (rewritten > 0) {
       process.stderr.write(
         `ci-verdict: ${rewritten} history-rewrite event(s); tail NOT CHECKABLE\n`
@@ -592,6 +611,18 @@ async function main(argv) {
   if (headOf() !== head || settled.state !== meta.state) {
     process.stderr.write(
       "ci-verdict: head or pull-request state changed mid-run; re-run\n"
+    );
+    return 2;
+  }
+
+  // The rewrite evidence is re-read AFTER the final ref observation, because a
+  // force-push away from `head` and back to it leaves every SHA identical while
+  // recording an event that makes the tail uncheckable. An empty range from a
+  // mutable ref is not proof that nothing was there — it is proof that nothing
+  // is there NOW, and the timeline is the only record that the ref moved.
+  if (meta.state !== "OPEN" && rewriteEvents() !== rewritten) {
+    process.stderr.write(
+      "ci-verdict: branch history rewritten mid-run; tail NOT CHECKABLE\n"
     );
     return 2;
   }
