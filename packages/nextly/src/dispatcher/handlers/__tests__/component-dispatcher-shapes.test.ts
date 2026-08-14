@@ -204,12 +204,94 @@ describe("dispatchComponents, mutations (respondMutation)", () => {
     const response = result as Response;
     expect(response.status).toBe(200);
     const body = await response.json();
-    // No fields update + existing migrationStatus "applied" carries
-    // through, so the toast picks the "applied successfully" branch.
     expect(body).toEqual({
-      message: 'Component "hero" updated and migration applied successfully.',
+      message: 'Component "hero" updated.',
       item: updated,
     });
+
+    // 🔴 The handler is a transport now, so what makes this test load-bearing is WHERE the write
+    // went. Asserting only the body would keep passing if the handler wrote the registry itself
+    // again — which is the state that let two other transports skip the schema half entirely.
+    // Observing the real call's arguments is what pins the delegation.
+    expect(registry.updateComponent).toHaveBeenCalledWith(
+      "hero",
+      { label: "Hero (renamed)" },
+      { source: "ui" }
+    );
+  });
+
+  // A property of the SERVICE, asserted through the dispatcher because that is where a caller meets
+  // it: a PATCH naming only `label` must not clear the description, the admin block or the fields.
+  // The registry translates absent-means-untouched, so handing it an explicit `undefined` for every
+  // unsent property would erase them.
+  it("updateComponent sends only the properties the request carried", async () => {
+    const existing = {
+      slug: "hero",
+      tableName: "comp_hero",
+      fields: [],
+      migrationStatus: "applied" as const,
+    };
+    const registry = makeRegistry({
+      isLocked: vi.fn().mockResolvedValue(false),
+      getComponent: vi.fn().mockResolvedValue(existing),
+      updateComponent: vi.fn().mockResolvedValue(existing),
+    });
+    wireRegistry(registry);
+
+    await dispatchComponents(
+      "updateComponent",
+      { slug: "hero" },
+      { description: "Only this." }
+    );
+
+    const [, patch] = registry.updateComponent.mock.calls[0] as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(Object.keys(patch)).toEqual(["description"]);
+  });
+
+  // 🔴 The body is a type ASSERTION over whatever JSON arrived, so a non-boolean survives it. The
+  // string "false" is truthy, which would take the ENABLED branch and drop the main table's
+  // translatable columns — while the registry, which stores `localized === true`, recorded the
+  // group DISABLED. Refusing is the only outcome that keeps those two agreeing.
+  it("updateComponent refuses a non-boolean localized rather than acting on it", async () => {
+    const existing = {
+      slug: "hero",
+      tableName: "comp_hero",
+      fields: [],
+      localized: false,
+      migrationStatus: "applied" as const,
+    };
+    const registry = makeRegistry({
+      isLocked: vi.fn().mockResolvedValue(false),
+      getComponent: vi.fn().mockResolvedValue(existing),
+      updateComponent: vi.fn().mockResolvedValue(existing),
+    });
+    wireRegistry(registry);
+
+    // 🔴 Asserted on the REASON, not the code. Reading the raw body instead makes `"false"` truthy,
+    // which takes the enable branch and is refused by the localization-config gate — also a
+    // VALIDATION_ERROR. A code-only assertion passes on both the fixed and the broken code and
+    // certifies nothing; the path is what separates them.
+    await expect(
+      dispatchComponents("updateComponent", { slug: "hero" }, {
+        localized: "false",
+      } as unknown as Record<string, unknown>)
+    ).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: [
+          expect.objectContaining({
+            path: "localized",
+            code: "invalid_type",
+          }),
+        ],
+      },
+    });
+
+    // Nothing was written: the refusal has to happen before the row moves, not after.
+    expect(registry.updateComponent).not.toHaveBeenCalled();
   });
 });
 

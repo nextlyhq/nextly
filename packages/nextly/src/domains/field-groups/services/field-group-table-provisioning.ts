@@ -208,3 +208,35 @@ export async function reconcileComponentCompanion(args: {
   // Runtime registration of the companion is handled by registerComponentRuntimeSchema(localized)
   // in the calling handlers, so no separate registration is needed here.
 }
+
+/**
+ * Which discriminator column a field group's table actually carries.
+ *
+ * PROBED rather than assumed, because the storage migration renames these tables and their
+ * columns: which spelling a given database uses is a fact about that database, not something a
+ * release can infer from its own version. The constant is the fallback for a table the probe
+ * cannot see, which is the shape a fresh install has.
+ *
+ * Here rather than private to a transport for the reason the rest of this module exists: the
+ * dispatcher held it, so every other transport that rebinds a runtime schema either reimplemented
+ * it or skipped it.
+ *
+ * 🔴 Call it BEFORE the DDL, never from inside `registerComponentRuntimeSchema`. That function's
+ * `catch` is a cache-refresh failsafe — it suppresses so a refresh problem cannot fail a request
+ * whose schema change already committed — and a catalog probe placed inside it inherits that
+ * policy, letting a caller report success while leaving the runtime table unregistered or holding
+ * obsolete columns. Resolving first is equivalent and safer: a schema change only ever alters user
+ * columns, so the discriminator is the same either side of it, and a probe that cannot answer
+ * fails the request before anything is committed.
+ */
+export async function resolveComponentTypeColumn(
+  adapter: DrizzleAdapter,
+  tableName: string
+): Promise<string> {
+  const { resolveTypeColumns } = await import(
+    "../storage/resolve-storage-names"
+  );
+  const { STORAGE_FORMAT } = await import("../../../schemas/storage-format");
+  const typeColumns = await resolveTypeColumns(adapter, [tableName]);
+  return typeColumns.get(tableName) ?? STORAGE_FORMAT.columns.type;
+}
