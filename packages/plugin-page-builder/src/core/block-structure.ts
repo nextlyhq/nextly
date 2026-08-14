@@ -287,6 +287,18 @@ for (const type of PLAIN_BLOCK_TYPES) {
   declareStructure({ type, slots: [] });
 }
 
+/**
+ * Whether this package itself declares the type, as opposed to a plugin contributing it.
+ *
+ * The distinction matters wherever something is BUILT rather than merely judged. A contributed
+ * block is known well enough to enforce its nesting rules, and not well enough to construct: its
+ * defaults, its version and its renderer live in the engine registry, which `createNode` and the
+ * canvas do not read.
+ */
+export function isDeclaredHere(type: string): boolean {
+  return CORE_BLOCK_STRUCTURES[type] !== undefined;
+}
+
 /** Whether a node's type is one this build has structure for. */
 export function hasStructure(node: BlockNode): boolean {
   return structureOf(node.type) !== undefined;

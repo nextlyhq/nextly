@@ -26,7 +26,7 @@
  *
  * @module core/invalid-slots
  */
-import { declaredSlotsOf, parentsOf } from "./block-structure";
+import { declaredSlotsOf, isDeclaredHere, parentsOf } from "./block-structure";
 import { createNode, type BlockRegistry } from "./registry";
 import { slotAdmits } from "./slot-allow";
 import {
@@ -254,6 +254,13 @@ function wrapperIfItHolds(
   // act on. Measured from the bottom of the subtree, not from the node, because the node can sit
   // well inside the limit while what it holds does not.
   if (childBottomDepth + 1 > MAX_DEPTH) return undefined;
+  // A repair BUILDS the wrapper, so it may only name a type this build can build AND draw. A
+  // block a plugin contributed is known to the engine registry, which `createNode` and the canvas
+  // do not read — wrapping in one produces a node with no defaults and no version, drawn as an
+  // empty unknown block that hides the child the repair was preserving. Enforcing the nesting rule
+  // for such a block is right; offering to construct one is not, and the two are different powers.
+  if (!registry.get(wrapperType) && !isDeclaredHere(wrapperType))
+    return undefined;
   // And a NODE, which is the same trade against the other limit. A document already at MAX_NODES
   // has room for the wrapper only if something leaves, so offering one there clears the banner and
   // hands back a document refused for a count the author never chose and cannot see.
@@ -342,7 +349,10 @@ export function findInvalidSlotEntries(
   // examines CHILDREN — so this fault produced an unsaveable page and an empty banner, the one
   // combination that leaves an author with no statement of what is wrong and no action to take.
   const rootParents = parentsOf(root.type, registry);
-  if (rootParents && rootParents.length > 0) {
+  // `rootParents &&` alone, matching what `validate` asks. An EMPTY array is a block that may sit
+  // nowhere at all: validation refuses it at the root because the array is defined, so a finder
+  // testing the length instead suppressed the entry and left an unsaveable page with no banner.
+  if (rootParents) {
     found.push({
       key: `root-parent:${root.id}`,
       kind: "root-parent",

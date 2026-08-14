@@ -34,6 +34,19 @@ function paste(document: BlockDocument, pasted: BlockNode) {
 }
 
 describe("pasting a subtree", () => {
+  it("still inserts when an UNRELATED unknown block sits elsewhere on the page", () => {
+    // A page may hold a block whose plugin this process has not loaded, and that block is
+    // preserved rather than rejected. Judging the whole document with the write path's default
+    // policy refused every paste while such a block existed anywhere — an unrelated edit made
+    // impossible, preserving nothing.
+    const document: BlockDocument = {
+      version: 1,
+      root: node("core/container", { default: [node("acme/not-loaded")] }),
+    };
+    const next = paste(document, node("core/heading"));
+    expect(next.document.root.slots?.default).toHaveLength(2);
+  });
+
   it("inserts one whose internal relations are all legal", () => {
     // The positive control, and the reason the refusal below is about the subtree rather than about
     // paste being broken: the same operation with a well-formed tree does insert.

@@ -117,6 +117,65 @@ describe("a wrap repair against the DEPTH limit", () => {
   });
 });
 
+describe("a wrapper this build cannot construct", () => {
+  const shell = defineBlock({
+    name: "acme/shell",
+    version: 1,
+    description: "A contributed container.",
+    example: { props: {} },
+    slots: { default: {} },
+    render: () => null,
+  });
+  const only = defineBlock({
+    name: "acme/only",
+    version: 1,
+    description: "Belongs in a contributed container.",
+    example: { props: {} },
+    parent: ["acme/shell"],
+    render: () => null,
+  });
+
+  afterEach(() => {
+    clearBlocks();
+  });
+
+  it("is not offered, even though the nesting rule is enforced", () => {
+    registerBlocks([shell, only], { source: "@acme/blocks" });
+    const root = node("core/container", { default: [node("acme/only")] });
+    const [entry] = findInvalidSlotEntries(root, registry);
+    // The fault IS reported — the rule is enforced for a contributed block.
+    expect(entry).toMatchObject({ kind: "not-allowed", type: "acme/only" });
+    // The repair is not offered, because `createNode` and the canvas read this package's registry
+    // and would build an empty unknown block that hides the child it was preserving.
+    expect((entry as { wrapWith?: string }).wrapWith).toBeUndefined();
+  });
+});
+
+describe("a block permitted under NO parent", () => {
+  const nowhere = defineBlock({
+    name: "acme/nowhere",
+    version: 1,
+    description: "Declares an empty parent list.",
+    example: { props: {} },
+    parent: [],
+    render: () => null,
+  });
+
+  afterEach(() => {
+    clearBlocks();
+  });
+
+  it("is reported at the root, matching what validation refuses", () => {
+    registerBlocks([nowhere], { source: "@acme/blocks" });
+    const root = node("acme/nowhere", { default: [] });
+    // Validation refuses it because the array is DEFINED. A finder testing the length instead
+    // suppressed the entry and left an unsaveable page with an empty banner.
+    const [entry] = findInvalidSlotEntries(root, registry);
+    expect(entry).toMatchObject({ kind: "root-parent", type: "acme/nowhere" });
+    expect((entry as { wrapWith?: string }).wrapWith).toBeUndefined();
+  });
+});
+
 describe("a child permitted under several parents", () => {
   const multi = defineBlock({
     name: "acme/multi",

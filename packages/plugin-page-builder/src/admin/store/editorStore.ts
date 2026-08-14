@@ -346,7 +346,14 @@ export function editorReducer(
       if (
         validateDocument(
           { ...state.document, root: pasted },
-          defaultBlockRegistry
+          defaultBlockRegistry,
+          // The SAME unknown-block policy the field write path uses. A page may
+          // legitimately hold a block whose plugin this process has not loaded,
+          // and refusing the paste because one exists ELSEWHERE in the document
+          // would make an unrelated edit impossible while preserving nothing —
+          // the structural checks below still apply to every block that IS
+          // known, which is what this call is here for.
+          { allowUnknown: true }
         ) !== true
       ) {
         return state;
