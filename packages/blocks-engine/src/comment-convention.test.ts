@@ -43,18 +43,26 @@ const FORBIDDEN: Array<{ pattern: RegExp; why: string }> = [
     why: "quotes a conversation",
   },
   {
-    // Ordinal process narration: "the third instance", "the second time".
-    // A comment counting how many times something has been found describes the
-    // history of the work rather than the code, and that history is not
-    // available to whoever reads the file next. It gets past the patterns above
-    // because it narrates without naming a review or a tool.
+    // Ordinal process narration: "the third instance ... was found", "the
+    // second time this regressed". A comment counting how often something has
+    // been DISCOVERED describes the history of the work rather than the code,
+    // and that history is not available to whoever reads the file next. It gets
+    // past the patterns above because it narrates without naming a review or a
+    // tool.
     //
-    // Deliberately requires a leading "the" and excludes "first", because
-    // ordinary technical prose counts things: "the first occurrence sees the
-    // `+` that leaves the first root" is a real comment in this package about
-    // parsing, and a broader pattern flagged it. A check that fires on correct
-    // prose gets silenced, and a silenced check is worth less than none.
-    pattern: /\bthe\s+(second|third|fourth|fifth)\s+(time|instance)\b/i,
+    // The ordinal alone is not the signal, and two rounds of narrowing say so:
+    // ordinary prose counts things. "The first occurrence sees the `+` that
+    // leaves the first root" describes parsing; "the second time the callback
+    // runs, reuse the cached value" describes runtime. Both are correct
+    // comments and an ordinal-only pattern rejected them. So the ordinal must
+    // sit within a clause of DISCOVERY — found, missed, fixed, regressed — which
+    // is what separates narrating the work from describing the code.
+    //
+    // A check that fires on correct prose gets silenced, and a silenced check is
+    // worth less than none, which is why this errs toward missing violations
+    // rather than toward catching bystanders.
+    pattern:
+      /\bthe\s+(second|third|fourth|fifth)\s+(time|instance)\b[^.]{0,80}\b(found|caught|missed|fixed|discovered|reported|flagged|shipped|regressed|recurr\w*)\b/i,
     why: "counts how often something was found, which is process history",
   },
 ];
@@ -143,8 +151,8 @@ describe("code comments describe the code", () => {
       "/* Codex flagged this */",
       "// the reviewer asked for a guard here",
       "// added in this PR",
-      "// the third instance of this shape",
-      "// broken for the second time this week",
+      "// the third instance of this shape we have found",
+      "// broken for the second time this week, fixed again",
     ];
     for (const sample of offending) {
       const [comment] = commentText(sample);
@@ -161,6 +169,8 @@ describe("code comments describe the code", () => {
       "/* The descriptor reports an accessor without invoking it. */",
       "// A slot named `__proto__` survives JSON as an ordinary own key.",
       "// the first occurrence sees the `+` that leaves the first root",
+      "// the second time the callback runs, reuse the cached value",
+      "// the third instance in the array owns the separator",
     ];
     for (const sample of allowed) {
       const [comment] = commentText(sample);

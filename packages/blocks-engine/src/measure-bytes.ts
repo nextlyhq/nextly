@@ -105,7 +105,15 @@ function asSerialized(value: unknown, key: string): unknown {
   // different function each time: a hook returning a 2 KB serializer on the
   // first read and an empty one on the second measured 101 bytes for a value
   // the writer emits at 2,101, and the cap passed it.
-  const hook = (value as { toJSON?: unknown } | null | undefined)?.toJSON;
+  // Objects and BigInt ONLY, which is exactly what the writer probes. Looking
+  // the hook up on a primitive BOXES it, so an environment defining
+  // `Number.prototype.toJSON` — or `String`'s, or `Boolean`'s — made every
+  // number in the document run an inherited hook that `JSON.stringify` never
+  // calls. The document was then reported unserializable and refused, while the
+  // writer emitted it unchanged.
+  const probed = typeof value === "object" || typeof value === "bigint";
+  if (!probed || value === null) return value;
+  const hook = (value as { toJSON?: unknown }).toJSON;
   return typeof hook === "function"
     ? (hook as (this: unknown, key: string) => unknown).call(value, key)
     : value;
@@ -454,9 +462,15 @@ export function surveyDocument(
     }
     return limit;
   };
-  bounded(limits.maxBytes, "maxBytes");
-  bounded(limits.maxDepth, "maxDepth");
-  bounded(limits.maxNodes, "maxNodes");
+  // SNAPSHOT the validated numbers. Validating and then re-reading `limits.*`
+  // through the walk lets an accessor or proxy answer `100` to the check and
+  // `undefined` afterwards, and a document-supplied hook can mutate a shared
+  // plain object mid-walk — either way the quota that was verified is not the
+  // one enforced. Measured: a 10,000-byte string traversed in full and returned
+  // `tooLarge: false` after `maxBytes` passed validation.
+  const maxBytes = bounded(limits.maxBytes, "maxBytes");
+  const maxDepth = bounded(limits.maxDepth, "maxDepth");
+  const maxNodes = bounded(limits.maxNodes, "maxNodes");
 
   let bytes = 0;
   let unserializable = false;
@@ -474,9 +488,9 @@ export function surveyDocument(
 
   const done = (): DocumentSurvey => ({
     bytes,
-    tooLarge: bytes > limits.maxBytes,
+    tooLarge: bytes > maxBytes,
     tooDeep: false,
-    tooManyNodes: nodes > limits.maxNodes,
+    tooManyNodes: nodes > maxNodes,
     unserializable,
     nodes,
     depth: deepest,
@@ -484,11 +498,11 @@ export function surveyDocument(
 
   /** Account for a value that cannot contain others. */
   const takeScalar = (held: unknown): boolean => {
-    bytes += scalarBytes(held, limits.maxBytes - bytes);
+    bytes += scalarBytes(held, maxBytes - bytes);
     if (!isSerializableScalar(held) || refusedByWriter(held)) {
       unserializable = true;
     }
-    return bytes > limits.maxBytes;
+    return bytes > maxBytes;
   };
 
   while (stack.length > 0) {
@@ -636,10 +650,10 @@ export function surveyDocument(
         if (hiddenPlacement !== "refused" && hiddenPlacement.kind === "node") {
           nodes += 1;
           if (hiddenPlacement.depth > deepest) deepest = hiddenPlacement.depth;
-          if (hiddenPlacement.depth > limits.maxDepth) {
+          if (hiddenPlacement.depth > maxDepth) {
             return { ...done(), tooDeep: true };
           }
-          if (nodes > limits.maxNodes) return { ...done(), tooManyNodes: true };
+          if (nodes > maxNodes) return { ...done(), tooManyNodes: true };
         }
 
         // A hidden value is not readable by the writer but IS readable by the
@@ -669,17 +683,15 @@ export function surveyDocument(
         // writes nothing for it — which is why this is the array branch only.
         if (!keyed) {
           bytes += 4;
-          if (bytes > limits.maxBytes) return { ...done(), tooLarge: true };
+          if (bytes > maxBytes) return { ...done(), tooLarge: true };
         }
         continue;
       }
 
       if (keyed) {
         bytes +=
-          utf8ByteLength(key, limits.maxBytes) +
-          3 +
-          (frame.emitted === true ? 1 : 0);
-        if (bytes > limits.maxBytes) return { ...done(), tooLarge: true };
+          utf8ByteLength(key, maxBytes) + 3 + (frame.emitted === true ? 1 : 0);
+        if (bytes > maxBytes) return { ...done(), tooLarge: true };
       }
 
       const placement = memberPlacement(
@@ -759,9 +771,8 @@ export function surveyDocument(
           // wrong depth, and disagree with `treeDepth`.
           nodes += 1;
           if (reached.depth > deepest) deepest = reached.depth;
-          if (reached.depth > limits.maxDepth)
-            return { ...done(), tooDeep: true };
-          if (nodes > limits.maxNodes) return { ...done(), tooManyNodes: true };
+          if (reached.depth > maxDepth) return { ...done(), tooDeep: true };
+          if (nodes > maxNodes) return { ...done(), tooManyNodes: true };
         }
         if (takeScalar(held)) return { ...done(), tooLarge: true };
       }
@@ -800,8 +811,8 @@ export function surveyDocument(
     if (kind === "node") {
       nodes += 1;
       if (depth > deepest) deepest = depth;
-      if (depth > limits.maxDepth) return { ...done(), tooDeep: true };
-      if (nodes > limits.maxNodes) return { ...done(), tooManyNodes: true };
+      if (depth > maxDepth) return { ...done(), tooDeep: true };
+      if (nodes > maxNodes) return { ...done(), tooManyNodes: true };
     }
 
     if (typeof value !== "object" || value === null) {
@@ -878,14 +889,14 @@ export function surveyDocument(
       // writes one element per position whether or not that position is
       // present.
       bytes += 2 + Math.max(0, length - 1);
-      if (bytes > limits.maxBytes) return { ...done(), tooLarge: true };
+      if (bytes > maxBytes) return { ...done(), tooLarge: true };
 
       // Every position costs at least one more byte — the shortest thing JSON
       // can write at one is a single digit, and a hole costs four — so an array
       // whose length alone outruns the remaining budget is refused here, before
       // anything is spent per position. Without this bound the walk did work
       // proportional to `length` for an array it was always going to reject.
-      if (bytes + length > limits.maxBytes) {
+      if (bytes + length > maxBytes) {
         bytes += length;
         return { ...done(), tooLarge: true };
       }
@@ -920,7 +931,7 @@ export function surveyDocument(
     }
 
     bytes += 2; // braces
-    if (bytes > limits.maxBytes) return { ...done(), tooLarge: true };
+    if (bytes > maxBytes) return { ...done(), tooLarge: true };
 
     stack.push({
       value,

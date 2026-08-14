@@ -429,6 +429,61 @@ describe("measureBytes", () => {
     ).toThrow(RangeError);
   });
 
+  it("does not probe toJSON on a primitive, as the writer does not", () => {
+    // `JSON.stringify` looks the hook up only on objects and BigInt. Looking it
+    // up on a number BOXES the number, so an environment defining
+    // `Number.prototype.toJSON` made every numeric member run an inherited hook
+    // the writer never calls — and the document was then refused while the
+    // writer emitted it unchanged.
+    const numberProto = Number.prototype as unknown as Record<string, unknown>;
+    let calls = 0;
+    Object.defineProperty(numberProto, "toJSON", {
+      value() {
+        calls += 1;
+        return "hooked";
+      },
+      writable: true,
+      configurable: true,
+    });
+    try {
+      const document = { formatVersion: 1, kind: "page", nodes: [] };
+      // The precondition: the writer really does ignore it.
+      expect(JSON.stringify(document)).toBe(
+        '{"formatVersion":1,"kind":"page","nodes":[]}'
+      );
+      const before = calls;
+
+      const survey = measureBytes(document, Number.MAX_SAFE_INTEGER);
+
+      expect(calls).toBe(before);
+      expect(survey.exceeded).toBe(false);
+      expect(survey.bytes).toBe(realBytes(document));
+    } finally {
+      delete numberProto.toJSON;
+    }
+  });
+
+  it("enforces the limits it validated, not the ones re-read later", () => {
+    // Validating a bound and then re-reading it through the walk lets an
+    // accessor answer once for the check and differently afterwards, so the
+    // quota verified is not the quota enforced.
+    let reads = 0;
+    const limits = {
+      get maxBytes() {
+        reads += 1;
+        return reads === 1 ? 100 : Number.MAX_SAFE_INTEGER;
+      },
+      maxDepth: 12,
+      maxNodes: 5000,
+    };
+
+    const survey = surveyDocument({ a: "x".repeat(10_000) }, limits);
+
+    // The bound that passed validation was 100, so that is the one that must
+    // decide the verdict.
+    expect(survey.tooLarge).toBe(true);
+  });
+
   it("runs a structural member's toJSON exactly once", () => {
     // Keeping the ORIGINAL for structural counting must not also mean re-running
     // the hook on it. Marking the pushed value unnormalized did exactly that:

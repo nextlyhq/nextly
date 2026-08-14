@@ -339,11 +339,20 @@ export function validate(
   // depth cap is refused BEFORE its bytes are measured, so asking only about
   // size would leave the expensive per-value work running on a document already
   // known to be invalid.
+  //
+  // `document-unwritable` belongs here for a sharper reason than tidiness: the
+  // byte pass could not measure what it refused. A `styles` accessor is
+  // reported absent rather than invoked, so its megabytes were never counted —
+  // and the per-value work below reaches the same field by ordinary property
+  // access, runs the getter, and parses everything it returns. Leaving it out
+  // meant the one document whose size is UNKNOWN was the one whose values were
+  // parsed in full.
   const overLimits = issues
     .slice(beforeLimits)
     .some(
       issue =>
         issue.code === "document-too-large" ||
+        issue.code === "document-unwritable" ||
         issue.code === "node-count-exceeded" ||
         issue.code === "depth-exceeded"
     );

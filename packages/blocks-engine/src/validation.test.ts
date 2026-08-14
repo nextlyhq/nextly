@@ -2143,3 +2143,65 @@ describe("measureBytes probes a value only where the writer does", () => {
     expect(measureBytes({ v: disguised }, 1_000).exceeded).toBe(true);
   });
 });
+
+describe("an unstorable document does not have its values parsed", () => {
+  it("skips per-value work when the byte pass could not measure the document", () => {
+    // The byte precondition REFUSES to invoke an accessor, so it never learns
+    // how large that field is. The per-value work below reaches the same field
+    // by ordinary property access, runs the getter, and parses everything it
+    // returns — so the one document whose size is UNKNOWN was the one whose
+    // values were parsed in full.
+    //
+    // Counting getter invocations is what separates the implementations: both
+    // report the document invalid, and only one of them reads the megabytes.
+    let reads = 0;
+    const node: Record<string, unknown> = {
+      id: "n1",
+      type: "core/text",
+      version: 1,
+      props: {},
+    };
+    Object.defineProperty(node, "styles", {
+      get() {
+        reads += 1;
+        // A token reference the lookup below does NOT know, which is what
+        // `validateStyleValues` reports — so this fixture produces a style
+        // issue when parsed and none when skipped. Without that, the assertion
+        // is satisfied by the fixture rather than by the behaviour.
+        return { base: { base: { color: { $token: "no.such.token" } } } };
+      },
+      enumerable: true,
+      configurable: true,
+    });
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [node],
+    });
+
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+      tokens: { kindOf: () => undefined },
+    });
+
+    // Refused, and refused for the right reason.
+    expect(issues.some(i => i.code === "document-unwritable")).toBe(true);
+
+    // The style tree behind the accessor is never PARSED, which is the
+    // unbounded work: every value builds an AST apiece, and the byte pass
+    // refused to measure this field so nothing bounded it.
+    expect(
+      issues.some(
+        i => i.code === "invalid-style-values" || i.code === "unknown-token"
+      )
+    ).toBe(false);
+
+    // What this does NOT do, stated rather than implied: the property is still
+    // READ, so the getter still runs. Skipping the read entirely would mean not
+    // validating the node's shape at all, and a document is refused on its
+    // shape long before its style values matter. The exposure that closes is
+    // the parsing of whatever the getter returns, not the single invocation.
+    expect(reads).toBeGreaterThan(0);
+  });
+});
