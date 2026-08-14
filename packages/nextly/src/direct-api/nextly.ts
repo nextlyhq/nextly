@@ -59,6 +59,7 @@ import { RolePermissionService } from "../domains/auth/services/role-permission-
 import { RoleService } from "../domains/auth/services/role-service";
 import type { FieldGroupMetadataService } from "../domains/field-groups/services/field-group-metadata-service";
 import { NextlyError } from "../errors/nextly-error";
+import { assertBootMigrationsSettled } from "../init/boot-migrations-gate";
 import { buildPluginServicesNamespace } from "../plugins/services/plugin-services-registry";
 import type { CollectionsHandler } from "../services/collections-handler";
 import type { EmailProviderService } from "../services/email/email-provider-service";
@@ -662,6 +663,12 @@ const globalForDirectApi = globalThis as unknown as {
  * ```
  */
 export function getNextly(config?: DirectAPIConfig): Nextly {
+  // Registration is not readiness. A production boot publishes services and
+  // THEN waits for the migrate lock, so this flag is true throughout a window
+  // in which the schema is unverified — and this getter is synchronous, so it
+  // cannot wait for the answer the way the async surfaces do.
+  assertBootMigrationsSettled();
+
   if (!isServicesRegistered()) {
     throw new NextlyError({
       code: "INTERNAL_ERROR",
