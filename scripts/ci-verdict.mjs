@@ -13,6 +13,15 @@
 // posts a single object per round carrying many comments, another posts one
 // object per finding. No rule over objects means the same thing for both.
 //
+// What this measures is COVERAGE and OUTSTANDING WORK. It never measures
+// whether a finding was addressed CORRECTLY, and no input here could tell it:
+// a thread is resolved by whoever closes it, which is ordinarily the author,
+// and the author is the party most likely to be wrong about their own fix. So
+// a resolved thread carrying a false claim is indistinguishable here from one
+// carrying a real one, and both count as zero. A clean verdict says a required
+// reviewer read this revision and nothing is left open — never that the code
+// is right.
+//
 // Every function here is pure. The caller fetches; these decide. A function
 // that performs its own I/O cannot be handed the inputs it must get right.
 
