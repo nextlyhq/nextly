@@ -474,6 +474,14 @@ export function pageWrapping(key) {
  * while the title check is failing. Normalising here means `jobPasses` stays
  * the single definition of passing rather than growing a second one.
  */
+/**
+ * Status contexts published by reviewers the gate reports rather than requires.
+ *
+ * Their verdict is deliberately advisory, so the status carrying it must not
+ * become a blocker through the other surface.
+ */
+export const OPTIONAL_STATUS_CONTEXTS = Object.freeze(["CodeRabbit"]);
+
 export function statusAsRun(status) {
   const state = status?.state;
   return {
@@ -984,9 +992,10 @@ export function main(argv) {
   // instead assumes reviews complete in the order they were requested, and an
   // older-head review finishing after a current-head one then hides a verdict
   // that does cover this revision behind one that does not.
-  const reviewedSha = reviewsCoveringTip(reviews, tip, CODEX).length
+  const submitted = reviews.filter(r => r?.state !== "PENDING");
+  const reviewedSha = reviewsCoveringTip(submitted, tip, CODEX).length
     ? tip
-    : reviews
+    : submitted
         .filter(r => r?.user?.login === CODEX && r?.commit_id)
         .map(r => r.commit_id)
         .pop();
@@ -1019,7 +1028,17 @@ export function main(argv) {
         pageWrapping("statuses")
       ).flatMap(page => page.statuses ?? [])
     : [];
-  const allChecks = [...checkRuns, ...statuses.map(statusAsRun)];
+  // An optional reviewer's own status is excluded from the blocking set. Its
+  // review is reported and never blocks, so letting the status it publishes
+  // reach `blockingJobs` would enforce through one surface what the verdict
+  // explicitly declines to enforce through the other — and a quota exhaustion,
+  // which is the common cause, would then block every pull request at once.
+  const allChecks = [
+    ...checkRuns,
+    ...statuses
+      .filter(s => !OPTIONAL_STATUS_CONTEXTS.includes(s?.context))
+      .map(statusAsRun),
+  ];
 
   const verdict = gateVerdict({
     // Deliberately the TIP even after a merge, unlike the checks above. A review

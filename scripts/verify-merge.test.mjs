@@ -24,6 +24,7 @@ import {
   gateVerdict,
   jobPasses,
   landedWhole,
+  OPTIONAL_STATUS_CONTEXTS,
   missingRequired,
   PATH_FILTER_WINDOW,
   pageWrapping,
@@ -385,6 +386,23 @@ describe("formatVerdict", () => {
 
     expect(text).toContain("GATE PASSED");
     expect(text).toContain("not-reviewed");
+  });
+});
+
+describe("OPTIONAL_STATUS_CONTEXTS", () => {
+  it("names the reviewer whose verdict is reported rather than required", () => {
+    // Its review never blocks, so the status carrying that review must not
+    // block either — enforcing through one surface what the verdict declines to
+    // enforce through the other. Quota exhaustion is the common cause, and it
+    // would block every pull request at once.
+    expect(OPTIONAL_STATUS_CONTEXTS).toContain("CodeRabbit");
+  });
+
+  it("does not exempt a required context", () => {
+    // The control: an over-broad list would silence real blockers.
+    expect(OPTIONAL_STATUS_CONTEXTS).not.toContain(
+      "action-semantic-pull-request"
+    );
   });
 });
 
