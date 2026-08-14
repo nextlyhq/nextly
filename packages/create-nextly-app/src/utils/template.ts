@@ -235,6 +235,23 @@ const SKIP_FILES = new Set([".DS_Store", "Thumbs.db", ".gitkeep"]);
 type MergeStrategy = "managed-block" | "append-missing-lines";
 
 /**
+ * What to do when the destination name is a link rather than a regular file.
+ *
+ * The two cases are opposite, and treating them alike is what makes this a per-entry choice:
+ *
+ * - `preserve` — writing through the link would edit its referent, which may be a shared file
+ *   outside the project. The developer arranged the link deliberately; leave it and skip.
+ * - `materialize` — git does NOT follow a symlinked `.gitignore` at all (it reads the link, not
+ *   its target), so preserving one means the scaffold's patterns never take effect. Measured:
+ *   with `.gitignore` a symlink to a file containing `.env*`, `git check-ignore -v .env` reports
+ *   no match; as a regular file it matches. Since a scaffold writes a real `.env`, preserving the
+ *   link would leave it committable — the exact failure this table exists to prevent. So the link
+ *   is replaced by a regular file carrying its former contents plus the scaffold's, and the
+ *   referent is left untouched.
+ */
+type LinkPolicy = "preserve" | "materialize";
+
+/**
  * Files a template stores under one name and a project must receive under another.
  *
  * Two unrelated reasons converge on the same mechanism, which is why there is one table rather
@@ -260,6 +277,7 @@ const RENAMED_ON_COPY: ReadonlyArray<{
   readonly shipped: string;
   readonly inProject: string;
   readonly merge: MergeStrategy;
+  readonly onLink: LinkPolicy;
 }> = [
   // Line-wise, because an ignore file is a set of patterns: the developer's entries stay and the
   // scaffold's missing ones are added, so `.env` ends up ignored either way.
@@ -267,6 +285,7 @@ const RENAMED_ON_COPY: ReadonlyArray<{
     shipped: "gitignore",
     inProject: ".gitignore",
     merge: "append-missing-lines",
+    onLink: "materialize",
   },
   // The guide carries its content inside a managed block, which is exactly the region a
   // regeneration is allowed to replace.
@@ -274,6 +293,7 @@ const RENAMED_ON_COPY: ReadonlyArray<{
     shipped: "AGENTS.md.template",
     inProject: "AGENTS.md",
     merge: "managed-block",
+    onLink: "preserve",
   },
   // One line pointing at the guide. If a project already points there, nothing to add; if it has
   // its own instructions, they keep them and gain the pointer.
@@ -281,6 +301,7 @@ const RENAMED_ON_COPY: ReadonlyArray<{
     shipped: "CLAUDE.md.template",
     inProject: "CLAUDE.md",
     merge: "append-missing-lines",
+    onLink: "preserve",
   },
 ];
 
@@ -454,7 +475,7 @@ async function restoreShippedNames(
 ): Promise<Set<string>> {
   const merged = new Set<string>();
 
-  for (const { shipped, inProject, merge } of RENAMED_ON_COPY) {
+  for (const { shipped, inProject, merge, onLink } of RENAMED_ON_COPY) {
     const from = path.join(targetDir, shipped);
     if (!(await fs.pathExists(from))) continue;
 
@@ -487,6 +508,25 @@ async function restoreShippedNames(
     // guide. That is the right trade: the developer arranged the link deliberately, and silently
     // editing a file the project shares with something else is not this tool's decision.
     if (destination.isSymbolicLink() || destination.nlink > 1) {
+      if (onLink === "materialize") {
+        // Read THROUGH the link for its content, then unlink and write a regular file in its
+        // place. The referent keeps whatever it held; only this project's entry stops being a
+        // link, which is what git requires for the patterns to apply at all.
+        const existing = await fs.readFile(to, "utf-8").catch(() => "");
+        const incoming = await fs.readFile(from, "utf-8");
+        await fs.remove(to);
+        await fs.writeFile(
+          to,
+          appendMissingLines(
+            existing,
+            applyPlaceholders(incoming, placeholders)
+          ),
+          "utf-8"
+        );
+        await fs.remove(from);
+        merged.add(inProject);
+        continue;
+      }
       await fs.remove(from);
       // Recorded as untouchable, not merely un-merged. The recursive placeholder pass treats a
       // HARD link as an ordinary file — `readdir`'s Dirent reports `isFile()` for it, unlike a

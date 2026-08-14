@@ -370,9 +370,10 @@ describe("scaffolding over a project that already has these files", () => {
   }, 30_000);
 
   it("updates the existing block when a stray START follows it", async () => {
-    // The layout the previous two fixes both missed: a VALID block, then a stray start later.
-    // Selecting the last start finds the stray, the end lookup fails, and a SECOND block is
-    // appended — leaving the stale generated instructions in place forever.
+    // A complete block followed by an unmatched start marker. The region a regeneration owns is
+    // the complete pair, so the block must be REPLACED and the stray left alone — an
+    // implementation that treats the stray as the region finds no end for it and appends a
+    // second block, leaving the stale generated instructions in place permanently.
     const after = await scaffoldOver({
       "AGENTS.md": [
         "<!-- nextly:managed:start -->",
@@ -461,6 +462,42 @@ describe("scaffolding over a project that already has these files", () => {
     expect((await lstat(path.join(target, "CLAUDE.md"))).isSymbolicLink()).toBe(
       true
     );
+  }, 30_000);
+
+  it("materializes a symlinked .gitignore so its patterns apply", async () => {
+    workdir = await mkdtemp(path.join(tmpdir(), "nextly-ignore-link-"));
+    const target = path.join(workdir, "project");
+    await mkdir(target, { recursive: true });
+
+    // git does NOT follow a symlinked `.gitignore` — it reads the link, not its target — so a
+    // preserved link means none of the scaffold's patterns apply and the real `.env` a scaffold
+    // writes stays committable. The guide entries preserve links; this one must not.
+    const shared = path.join(workdir, "shared-ignore");
+    await writeFile(shared, "coverage/\n", "utf-8");
+    await symlink(shared, path.join(target, ".gitignore"));
+
+    await copyTemplate({
+      projectName: "my-app",
+      projectType: "blank",
+      targetDir: target,
+      database: sqlite,
+      templateSource: {
+        basePath: path.join(templatesRoot, "base"),
+        templatePath: path.join(templatesRoot, "blank"),
+      },
+      allowExistingTarget: true,
+    });
+
+    // A regular file now, carrying what the link held plus the scaffold's patterns.
+    const stat = await lstat(path.join(target, ".gitignore"));
+    expect(stat.isSymbolicLink()).toBe(false);
+    const contents = await readFile(path.join(target, ".gitignore"), "utf-8");
+    expect(contents).toContain("coverage/");
+    expect(contents).toMatch(/^\.env/m);
+
+    // The referent is left exactly as it was: materializing takes this project out of the
+    // arrangement rather than editing whatever else points at that file.
+    expect(await readFile(shared, "utf-8")).toBe("coverage/\n");
   }, 30_000);
 
   it("does not write through a hard-linked guide", async () => {

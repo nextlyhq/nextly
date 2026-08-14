@@ -38,14 +38,20 @@ working on an app.
 
 ## Things that surprise people
 
-- **`@nextlyhq/plugin-sdk` is the only stable import surface.** Not "avoid the
-  internals of `nextly` and `@nextlyhq/admin`" — do not import those packages at
-  all. Everything a plugin needs is re-exported: `definePlugin` from the root,
-  `registerComponents` / `registerKnownPlugin` from `@nextlyhq/plugin-sdk/admin`,
-  `createTestNextly` from `@nextlyhq/plugin-sdk/testing`. Importing the admin
-  package directly compiles today and breaks on a patch release, because that
-  surface carries no compatibility promise to plugin authors. If the SDK does not
-  expose what you need, that is worth raising rather than working around.
+- **Plugin APIs come from `@nextlyhq/plugin-sdk`; schema APIs come from
+  `nextly/config`.** The SDK is the stability boundary for everything a plugin
+  does AS a plugin: `definePlugin`, `registerComponents` and
+  `registerKnownPlugin` from `@nextlyhq/plugin-sdk/admin`, `createTestNextly`
+  from `@nextlyhq/plugin-sdk/testing`, field factories, `pluginField`,
+  `NextlyError`. Collections and singles are defined the same way an app defines
+  them, with `defineCollection` from `nextly/config` — which is what
+  `src/collections/example.ts` does.
+
+  **What is never supported is importing `@nextlyhq/admin` directly.** It carries
+  no compatibility promise to plugin authors, so an import that compiles today
+  breaks on a patch release. If you need something from it that the SDK does not
+  re-export, that is worth raising rather than reaching past the boundary.
+
 - **The root export must stay React-free.** It is imported by the host's server
   config, so a React import at `src/index.ts` breaks apps that never render your
   admin UI. Components belong on the `./admin` subpath, which is where the host
