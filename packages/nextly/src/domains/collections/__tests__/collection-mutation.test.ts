@@ -105,6 +105,16 @@ const storedHookExecute = vi.hoisted(() =>
   vi.fn().mockResolvedValue({ data: undefined, errors: [] })
 );
 
+// Field hooks are an independently movable dispatcher: `updateEntry` calls `runFieldHooks`
+// directly, so it is a fourth door the ordering assertions have to watch. Spied rather than
+// stubbed wholesale, so the rest of the registry keeps its real behaviour.
+const runFieldHooksSpy = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+
+vi.mock("../../../shared/lib/field-level-registry", async importActual => {
+  const actual = await importActual<Record<string, unknown>>();
+  return { ...actual, runFieldHooks: runFieldHooksSpy };
+});
+
 vi.mock("@nextly/hooks/stored-hook-executor", () => {
   class MockStoredHookExecutor {
     execute = storedHookExecute;
@@ -499,6 +509,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       expect(mockHookRegistry.executeBeforeOperation).not.toHaveBeenCalled();
       expect(mockHookRegistry.execute).not.toHaveBeenCalled();
       expect(storedHookExecute).not.toHaveBeenCalled();
+      expect(runFieldHooksSpy).not.toHaveBeenCalled();
     });
 
     it("runs those same hooks for a caller it allows", async () => {
@@ -515,6 +526,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
 
       expect(mockHookRegistry.executeBeforeOperation).toHaveBeenCalled();
       expect(mockHookRegistry.execute).toHaveBeenCalled();
+      expect(runFieldHooksSpy).toHaveBeenCalled();
     });
 
     it("should execute beforeOperation hooks", async () => {

@@ -4532,15 +4532,23 @@ export class CollectionMutationService extends BaseService {
       // verdict that has stopped being true. Exploiting it requires an actor who
       // held legitimate access moments earlier.
       //
-      // Narrowing it is cheaper than it looks, and closing it is not.
-      // `checkCollectionAccess` accepts a transaction-bound `executor` so its
-      // RBAC and metadata reads run on the transaction's connection, and
-      // `updateEntryInTransaction` already calls it that way — so routing this
-      // path through that shape is ordinary work. It would close the stale
-      // DOCUMENT case only: that path locks the content row, while the role,
-      // permission and collection-metadata rows the verdict also depends on are
-      // read without locks and the transaction is not serializable. A grant
-      // revoked concurrently still races.
+      // Two facts about closing it, and no proposed remedy, because the last
+      // three attempts at one here were each wrong in a different direction.
+      //
+      // The evaluator can already read inside a transaction:
+      // `checkCollectionAccess` takes a transaction-bound `executor` so its RBAC
+      // and metadata reads run on that connection. So the missing piece is not
+      // the evaluator.
+      //
+      // And a transaction alone would not close the window anyway. Locking the
+      // content row leaves the role, permission and collection-metadata rows the
+      // verdict also depends on unlocked, and the transaction is not
+      // serializable, so a grant revoked concurrently still races.
+      //
+      // `updateEntryInTransaction` is NOT the path to delegate to: it accepts
+      // none of `locale`, `context`, `sourceVersionNo` or `authenticatedScope`,
+      // and it performs neither the localized companion writes nor the
+      // working-draft promotion this method owns.
       //
       // One rule for anyone editing this method: do NOT move validation,
       // relationship resolution or hook dispatch ahead of this check to shorten
