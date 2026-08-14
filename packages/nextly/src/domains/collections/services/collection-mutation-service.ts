@@ -4532,23 +4532,33 @@ export class CollectionMutationService extends BaseService {
       // verdict that has stopped being true. Exploiting it requires an actor who
       // held legitimate access moments earlier.
       //
-      // Closing it means authorizing against the row as locked, and the parts
-      // that would take are already here rather than absent:
+      // Narrowing it is cheaper than it looks, and closing it is not.
       // `checkCollectionAccess` accepts a transaction-bound `executor` so its
-      // RBAC and metadata reads run on the transaction's own connection instead
-      // of taking a second pooled one, and `updateEntryInTransaction` already
-      // calls it that way. What remains is routing this path through the same
-      // shape, which is work rather than a blocker.
+      // RBAC and metadata reads run on the transaction's connection, and
+      // `updateEntryInTransaction` already calls it that way — so routing this
+      // path through that shape is ordinary work. It would close the stale
+      // DOCUMENT case only: that path locks the content row, while the role,
+      // permission and collection-metadata rows the verdict also depends on are
+      // read without locks and the transaction is not serializable. A grant
+      // revoked concurrently still races.
       //
-      // Two things follow for anyone editing this method, and the first is a
-      // rule rather than a preference: do NOT move validation, relationship
-      // resolution or hook dispatch ahead of this check to shorten the gap.
-      // Authorization is a precondition, so work placed before it runs for
-      // callers who are about to be refused, and hooks in particular have
-      // effects outside this process. Add such work INSIDE the transaction.
+      // One rule for anyone editing this method: do NOT move validation,
+      // relationship resolution or hook dispatch ahead of this check to shorten
+      // the gap. Authorization is a precondition, so work placed before it runs
+      // for callers about to be refused, and hooks reach outside this process.
+      // `collection-mutation.test.ts` holds that ordering for hooks, with an
+      // authorized positive control so it cannot pass by nothing dispatching.
       //
-      // Second, a rule that must be judged against the row as locked belongs in
-      // the under-lock re-check the publish path already uses, not here.
+      // Moving such work INTO the transaction is not the general answer either,
+      // and this method is already evidence: component-registry and
+      // webhook-field resolution are deliberately resolved outside it, and
+      // `assertLocalizedFieldGroupsWritable` warms its verdicts beforehand
+      // because resolving inside would issue a query that aborts the whole
+      // transaction on PostgreSQL. Work that uses a pooled helper stays where
+      // it is; only work that already takes an executor can move.
+      //
+      // A rule that must be judged against the row as locked belongs in the
+      // under-lock re-check the publish path already uses, not here.
       const accessDenied = await this.accessService.checkCollectionAccess(
         params.collectionName,
         "update",

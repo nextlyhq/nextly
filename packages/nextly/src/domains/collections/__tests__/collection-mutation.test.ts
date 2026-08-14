@@ -468,6 +468,41 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       expect(result.statusCode).toBe(403);
     });
 
+    it("runs no hook for a caller it refuses", async () => {
+      // Authorization is a precondition, so nothing may run on behalf of a caller about to be
+      // refused. Hooks are the sharp case: they reach outside this process, so one dispatched
+      // before the gate is an effect a refused request still caused.
+      //
+      // The 403 assertion above cannot see this — a hook fired before the check leaves the status
+      // unchanged — and moving hook dispatch above the access check still compiles.
+      selectData.rows = [createSampleEntry()];
+      mockAccessControlService.evaluateAccess.mockResolvedValueOnce({
+        allowed: false,
+        reason: "Not authorized to update",
+      });
+
+      await service.updateEntry(
+        { collectionName: "posts", entryId: "entry-1", user: { id: "user-1" } },
+        { title: "Updated" }
+      );
+
+      expect(mockHookRegistry.executeBeforeOperation).not.toHaveBeenCalled();
+    });
+
+    it("runs that same hook for a caller it allows", async () => {
+      // The positive control the assertion above needs. Without it a registry that never
+      // dispatches anything — a renamed seam, a mock that stopped being wired — satisfies
+      // `not.toHaveBeenCalled()`, and the ordering rule reads as enforced while nothing checks it.
+      selectData.rows = [createSampleEntry()];
+
+      await service.updateEntry(
+        { collectionName: "posts", entryId: "entry-1", user: { id: "user-1" } },
+        { title: "Updated" }
+      );
+
+      expect(mockHookRegistry.executeBeforeOperation).toHaveBeenCalled();
+    });
+
     it("should execute beforeOperation hooks", async () => {
       selectData.rows = [createSampleEntry()];
 
