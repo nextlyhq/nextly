@@ -118,8 +118,11 @@ sat for a day at 5 green checks, and that one was real.
 Both counts have since risen to 17 and 14 as their runs finished, which is the
 point: a check COUNT is a reading of one moment and cannot be re-derived later.
 Nor is there a total to compare against — the matrices expand with the diff, so
-a change touching `templates/` adds `scaffold-build.yml`'s six legs on top of
-everything else. **Do not substitute one fixed number for another**; a document
+a change touching `templates/base/**`, `templates/blank/**` or `templates/blog/**`
+adds `scaffold-build.yml`'s matrix legs on top of everything else. Note which
+paths those are: `templates/plugin/**` is deliberately NOT in that trigger list,
+so a plugin-template PR correctly gets no scaffold run, and expecting one there
+turns a working filter into a suspected dropped trigger. **Do not substitute one fixed number for another**; a document
 whose conclusion is that counts are unreliable should not hand you a range to
 check counts against. The run-level query is the discriminator.
 
@@ -205,8 +208,9 @@ is another FEATURE BRANCH never triggers them. Measured across
 
 **This is the most dangerous entry in the file, and the last two rows are why.**
 A stacked PR is not visibly empty of CI. It carries the two
-`pull_request_target` checks and, whenever it happens to touch `templates/`,
-`packages/ui/**` or the lockfile, path-filtered builds as well — and those carry
+`pull_request_target` checks and, whenever it happens to touch one of the
+scaffold-eligible template directories, `packages/ui/**` or the lockfile,
+path-filtered builds as well — and those carry
 matrices, so `scaffold-build.yml` alone contributes six legs. A stacked PR can
 therefore present a comfortably populated list of green checks, several of them
 having genuinely compiled something. **No bound is given here deliberately**:
@@ -363,77 +367,93 @@ as approval:
 
 ```bash
 #!/usr/bin/env bash
+# Merge gate: has every required reviewer seen THIS head, and is anything still open?
 set -euo pipefail
-REPO=nextlyhq/nextly; PR=${1:?pr}; BOT='chatgpt-codex-connector[bot]'
+REPO=${REPO:-nextlyhq/nextly}; PR=${1:?pr}
+BOTS=${BOTS:-'chatgpt-codex-connector[bot],coderabbitai[bot]'}
 d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
 
 HEAD=$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq .headRefOid)
 
-# Every query fails closed: an unavailable answer is not a clean one. Payloads
-# go to files, not argv -- a busy PR's JSON exceeds ARG_MAX via --argjson.
+# Every query fails closed: an unavailable answer is not a clean one.
 gh api "repos/$REPO/pulls/$PR/reviews"   --paginate --slurp > "$d/rv.json"
-gh api "repos/$REPO/pulls/$PR/comments"  --paginate --slurp > "$d/cm.json"
 gh api "repos/$REPO/issues/$PR/comments" --paginate --slurp > "$d/ic.json"
+gh api graphql -F pr="$PR" -f query='
+  query($pr:Int!){ repository(owner:"nextlyhq",name:"nextly"){ pullRequest(number:$pr){
+    reviewThreads(first:100){ nodes { isResolved } } } } }' > "$d/th.json"
 
-OUT=$(jq -n --slurpfile rv "$d/rv.json" --slurpfile cm "$d/cm.json" \
-            --slurpfile ic "$d/ic.json" --arg b "$BOT" --arg s "$HEAD" '
-  # The LATEST review at this head. Re-requesting a review without pushing
-  # leaves several at one SHA, and the older ones keep their findings forever.
-  ($rv | flatten | map(select(.user.login == $b and .commit_id == $s))
-       | sort_by(.submitted_at) | last) as $r
-  | (if $r == null then [] else [$r.id] end) as $ids
-  | ($cm | flatten | map(select(.pull_request_review_id as $i | $ids | index($i))) | length) as $n
+OUT=$(jq -n --slurpfile rv "$d/rv.json" --slurpfile ic "$d/ic.json" \
+            --slurpfile th "$d/th.json" --arg bots "$BOTS" --arg s "$HEAD" '
+  ($bots | split(",")) as $need
+  # COVERAGE only: did each bot submit any review at this head? Counting a
+  # bot every review object as "a round" is wrong -- CodeRabbit posts one
+  # object per finding, so "the latest review" is its LAST finding alone.
+  | ($rv | flatten | map(select(.commit_id == $s) | .user.login) | unique) as $seen
+  | ($need - $seen) as $missing
+  # OUTSTANDING findings are the unresolved threads. GitHub already tracks
+  # this, it is bot-agnostic, and it survives re-reviews at one SHA.
+  | ($th[0].data.repository.pullRequest.reviewThreads.nodes
+       | map(select(.isResolved == false)) | length) as $open
   | ($ic | flatten | map(select(.user.login == "coderabbitai[bot]"
         and (.body | test("Review limit reached")))) | length) as $rl
-  | { head: $s, review_at_head: ($r.id // null), findings: $n, coderabbit_rate_limited: $rl,
-      verdict: (if   ($ids|length) == 0 then "NO REVIEW AT HEAD"
-                elif $n  > 0            then "NOT CLEAN"
-                elif $rl > 0            then "CODERABBIT RATE-LIMITED"
+  | { head: $s, reviewed_head: $seen, missing_reviews: $missing,
+      unresolved_threads: $open, coderabbit_rate_limited: $rl,
+      verdict: (if   ($missing|length) > 0 then "MISSING REVIEW AT HEAD"
+                elif $open > 0            then "UNRESOLVED THREADS"
+                elif $rl   > 0            then "CODERABBIT RATE-LIMITED"
                 else "CLEAN" end) }')
 printf '%s\n' "$OUT"
-# The gate must REFUSE, not report. jq exits 0 for every verdict it prints.
 [ "$(printf '%s' "$OUT" | jq -r .verdict)" = "CLEAN" ] || exit 1
 ```
 
-Run against this PR while five findings were outstanding:
+Run against this PR at `b56de97f4`:
 
 ```json
 {
-  "head": "cbc848bfc792773d7e08ce14417314dbeb66fe54",
-  "review_at_head": 4935344357,
-  "findings": 5,
+  "head": "b56de97f4f49dc99dcf2ab9b4df822b62f922ed6",
+  "reviewed_head": ["chatgpt-codex-connector[bot]", "mobeenabdullah"],
+  "missing_reviews": ["coderabbitai[bot]"],
+  "unresolved_threads": 2,
   "coderabbit_rate_limited": 1,
-  "verdict": "NOT CLEAN"
+  "verdict": "MISSING REVIEW AT HEAD"
 }
 ```
 
-`EXIT=1`. **That last line is the difference between a gate and a report**, and
-it was missing from the first two versions: `jq` exits 0 for every verdict it
-prints, including `NOT CLEAN`, so `set -e` does nothing and the caller walks on.
+`EXIT=1`. **That last line is the difference between a gate and a report** — `jq`
+exits 0 for every verdict it prints, `NOT CLEAN` included, so without it `set -e`
+does nothing and the caller walks on.
 
-**Six things in that script are there because a shorter version was wrong**,
-every one found by running it rather than by reading it:
+**The shape of this script is the lesson, and it took six wrong versions.** The
+first five tried to reconstruct "was the latest review clean" from review
+objects, and each fix exposed the next assumption:
 
-- **`--slurpfile`, not `--argjson`.** Passing the payloads through argv worked
-  on a quiet PR and died with `Argument list too long` on a busy one. It failed
-  loudly, which is the acceptable direction, but the gate was unusable exactly
-  when a PR had accumulated enough review traffic to need it.
-- **Standalone `jq`, not `gh api --jq`.** That flag takes one filter string and
-  has no `--arg`; the invocation exits `accepts 1 arg(s), received 4`, so both
-  queries took their failure branch and the gate could never return clean.
-  `--slurp` also cannot combine with `--jq`, which is what forces the pipe.
-- **The LATEST review at the head, not every review at it.** Re-requesting a
-  review without pushing — what you do after rejecting a finding — leaves
-  several review objects on one SHA, and joining to all of them lets a
-  superseded round's findings hold the verdict at NOT CLEAN permanently.
-- **The join is real.** An earlier version computed review IDs and never
-  consumed them, counting every bot comment on the PR, so findings from previous
-  rounds counted against the current head forever.
-- **`NO REVIEW AT HEAD` is its own outcome.** Zero findings because nothing
-  reviewed and zero findings because nothing was found are the same number.
-- **The rate-limit marker REJECTS rather than annotating.** It was reported in
-  its own field while the verdict ignored it, so a PR with a clean Codex review
-  and an unreviewed CodeRabbit came out `CLEAN`.
+- the login must be the complete `...[bot]`, but a substring match is spoofable;
+- `pulls/$PR/comments` cannot see a clean review, because a clean review has no
+  inline comments;
+- `state` is `COMMENTED` at six findings and at one, so it is not a verdict;
+- the review IDs must actually be JOINED to the comments, or every earlier
+  round's findings count against the current head forever;
+- and re-requesting a review without pushing leaves several review objects on
+  one SHA, so the join has to pick a round rather than all of them.
+
+**Then the round model broke outright.** Measured here: Codex posts ONE review
+object carrying many comments, while CodeRabbit posts one object PER FINDING —
+six objects at `cbc848bfc`, one comment each. "The latest review" is a whole
+round for one bot and a single finding for the other, so no per-object rule is
+correct for both.
+
+So the script stopped reconstructing rounds. It asks the two questions that are
+actually being gated on, each from the source that owns it:
+
+- **Coverage** — did each required bot submit ANY review at this head? A review
+  object exists whether or not it carried findings, which is the property the
+  earlier versions kept failing to observe.
+- **Outstanding work** — how many review threads are UNRESOLVED? GitHub already
+  tracks this, it is bot-agnostic, it survives several reviews at one SHA, and
+  it is the thing "are there open findings" actually means.
+
+Counting findings was always a proxy for the second question. Asking the second
+question directly deletes the entire class of defect above.
 
 **Four things in that script are there because the shorter version was wrong**,
 each found only by running it:
