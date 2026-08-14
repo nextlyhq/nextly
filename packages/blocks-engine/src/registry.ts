@@ -189,6 +189,45 @@ function assertValidDefinition(def: AnyBlockDefinition): void {
       `block "${def.name}" defaultProps must be a plain object.`
     );
   }
+  // A slot's `allow` is read by every nesting decision, and a malformed one does not degrade — a
+  // reader spreading `allow: 42` throws `TypeError: spec.allow is not iterable` at the first
+  // validation, repair or insertion lookup, a long way from the definition that caused it and
+  // naming neither. Checked here for the same reason `parent` is: the type rejects it at the
+  // authoring site, and definitions also arrive from JavaScript plugins and from JSON.
+  if (def.slots !== undefined) {
+    if (!isPlainRecord(def.slots)) {
+      fail(
+        "NEXTLY_BLOCK_INVALID",
+        `block "${def.name}" slots must be a plain object keyed by slot name.`
+      );
+    }
+    for (const [slotName, spec] of Object.entries(def.slots)) {
+      if (!isPlainRecord(spec)) {
+        fail(
+          "NEXTLY_BLOCK_INVALID",
+          `block "${def.name}" slot "${slotName}" must be a plain object.`
+        );
+      }
+      const allow = (spec as { allow?: unknown }).allow;
+      if (allow === undefined) continue;
+      // A namespace wildcard is permitted here and is not a block NAME, so this cannot reuse
+      // `isBlockName`: `core/*` names a set rather than a block.
+      const wellFormed =
+        Array.isArray(allow) &&
+        allow.every(
+          entry =>
+            typeof entry === "string" &&
+            (isBlockName(entry) ||
+              (entry.endsWith("/*") && isBlockName(`${entry.slice(0, -2)}/x`)))
+        );
+      if (!wellFormed) {
+        fail(
+          "NEXTLY_BLOCK_INVALID",
+          `block "${def.name}" slot "${slotName}" allow must be an array of block names like "core/heading" or namespaces like "core/*".`
+        );
+      }
+    }
+  }
   // `parent` restricts where instances may sit, so a malformed one does not
   // degrade — it forbids. A bare string is the shape to fear: it is iterable,
   // so a reader spreading it produces one-character "block names", every real

@@ -69,3 +69,55 @@ describe("parent validation at registration", () => {
     ).toThrow(/parent must be an array/);
   });
 });
+
+describe("slot allow-list validation at registration", () => {
+  const withSlots = (slots: unknown) => ({ ...base, name: "acme/box", slots });
+
+  it("accepts block names and namespace wildcards", () => {
+    // The positive control on BOTH accepted forms: a gate refusing either would pass every
+    // rejection below while making the field unusable.
+    expect(() =>
+      registerBlocks(
+        [
+          withSlots({ default: { allow: ["core/heading", "acme/*"] } }),
+        ] as never,
+        { source: "acme" }
+      )
+    ).not.toThrow();
+  });
+
+  it("accepts a slot that restricts nothing", () => {
+    expect(() =>
+      registerBlocks([withSlots({ default: {} })] as never, { source: "acme" })
+    ).not.toThrow();
+  });
+
+  it("refuses an allow that is not an array", () => {
+    // The shape that reaches a spread as `TypeError: spec.allow is not iterable`, at the first
+    // nesting lookup rather than at the declaration.
+    expect(() =>
+      registerBlocks([withSlots({ default: { allow: 42 } })] as never, {
+        source: "acme",
+      })
+    ).toThrow(/allow must be an array/);
+  });
+
+  it("refuses an entry that is neither a name nor a namespace", () => {
+    expect(() =>
+      registerBlocks(
+        [withSlots({ default: { allow: ["heading"] } })] as never,
+        {
+          source: "acme",
+        }
+      )
+    ).toThrow(/allow must be an array/);
+  });
+
+  it("refuses a slot spec that is not an object", () => {
+    expect(() =>
+      registerBlocks([withSlots({ default: "yes" })] as never, {
+        source: "acme",
+      })
+    ).toThrow(/must be a plain object/);
+  });
+});
