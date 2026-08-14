@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 
+import { defaultBlockRegistry } from "../../core/registry";
 import { findNode, makeNode } from "../../core/tree";
-import type { BlockDocument } from "../../core/types";
+import { validateDocument } from "../../core/validate";
+import type { BlockDocument, BlockNode } from "../../core/types";
 import "../../render/blocks"; // populate defaultBlockRegistry (block defaults)
 import { editorReducer, initialState } from "./editorStore";
 
@@ -353,5 +355,133 @@ describe("editorReducer — repairing a slot nothing declares", () => {
     s = editorReducer(s, { type: "UNDO" });
 
     expect(findNode(s.document.root, ghostId)).toBeDefined();
+  });
+});
+
+describe("the store refuses what the save path would refuse", () => {
+  /**
+   * The guard lives in the REDUCER, so it is asserted here rather than at a call site. Every
+   * surface that adds a block reaches this one function, and a rule checked only where the person
+   * writing it happened to look is not a rule — paste was already a second door.
+   */
+  const rowDoc = (children: BlockNode[] = []): BlockDocument => ({
+    version: 1,
+    root: makeNode("core/container", {}, undefined, {
+      default: [makeNode("core/columns", {}, undefined, { default: children })],
+    }),
+  });
+  const rowIdOf = (doc: BlockDocument) => doc.root.slots!.default![0].id;
+
+  it("has a restricted slot to test against", () => {
+    // Without this the refusals below are satisfied by a catalogue where nothing restricts
+    // anything, and every assertion passes for the wrong reason.
+    const doc = rowDoc();
+    expect(
+      validateDocument(
+        {
+          ...doc,
+          root: makeNode("core/columns", {}, undefined, {
+            default: [makeNode("core/heading", { text: "x" })],
+          }),
+        },
+        defaultBlockRegistry,
+        { allowUnknown: true }
+      )
+    ).toContain("is not allowed in slot");
+  });
+
+  it("refuses an ADD the slot does not accept", () => {
+    const doc = rowDoc();
+    const next = editorReducer(initialState(doc), {
+      type: "ADD",
+      parentId: rowIdOf(doc),
+      slot: "default",
+      nodeType: "core/heading",
+      index: 0,
+    });
+    expect(findNode(next.document.root, rowIdOf(doc))?.slots?.default).toEqual(
+      []
+    );
+    expect(next.dirty).toBe(false);
+  });
+
+  it("refuses a PASTE the slot does not accept", () => {
+    // The path a Copy followed by "Paste block after" takes, which never consults `planInsert`.
+    const doc = rowDoc();
+    const next = editorReducer(initialState(doc), {
+      type: "PASTE_NODE",
+      parentId: rowIdOf(doc),
+      slot: "default",
+      index: 0,
+      node: makeNode("core/heading", { text: "pasted" }),
+    });
+    expect(findNode(next.document.root, rowIdOf(doc))?.slots?.default).toEqual(
+      []
+    );
+  });
+
+  it("refuses a MOVE into a slot that does not accept the moving block", () => {
+    const doc: BlockDocument = {
+      version: 1,
+      root: makeNode("core/container", {}, undefined, {
+        default: [
+          makeNode("core/columns", {}, undefined, { default: [] }),
+          makeNode("core/heading", { text: "loose" }),
+        ],
+      }),
+    };
+    const rowId = doc.root.slots!.default![0].id;
+    const headingId = doc.root.slots!.default![1].id;
+    const next = editorReducer(initialState(doc), {
+      type: "MOVE",
+      id: headingId,
+      parentId: rowId,
+      slot: "default",
+      index: 0,
+    });
+    expect(findNode(next.document.root, rowId)?.slots?.default).toEqual([]);
+    expect(findNode(next.document.root, headingId)).toBeDefined();
+  });
+
+  it("still allows what the slot DOES accept", () => {
+    // The positive control. A guard that refused everything would pass all three cases above.
+    const doc = rowDoc();
+    const next = editorReducer(initialState(doc), {
+      type: "ADD",
+      parentId: rowIdOf(doc),
+      slot: "default",
+      nodeType: "core/column",
+      index: 0,
+    });
+    expect(
+      findNode(next.document.root, rowIdOf(doc))?.slots?.default
+    ).toHaveLength(1);
+  });
+});
+
+describe("a document loaded into the editor", () => {
+  it("is migrated on the way in, so a stored value reads as the choice it now has a name for", () => {
+    // `migrate` is unreachable unless something calls it, and the editor is the surface that both
+    // reads props into controls and writes the document back.
+    const stored: BlockDocument = {
+      version: 1,
+      root: makeNode("core/container", {}, undefined, {
+        default: [
+          {
+            ...makeNode("core/image", { aspectPreset: "" }),
+            definitionVersion: 1,
+          },
+        ],
+      }),
+    };
+    const image = initialState(stored).document.root.slots!.default![0];
+    expect(image.props.aspectPreset).toBe("original");
+    expect(image.definitionVersion).toBe(2);
+  });
+
+  it("does not report the page as edited for having been migrated", () => {
+    // An upgrade the author did not make must not ask them to approve it; it rides along with
+    // their first real change.
+    expect(initialState(baseDoc()).dirty).toBe(false);
   });
 });

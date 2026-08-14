@@ -5,7 +5,13 @@
  * third party adds a block with one `registerBlock()` call and no core edit.
  * Types are namespaced (`core/heading`, `acme/pricing-table`) to stay collision-free.
  */
-import type { BlockDefinition, ControlDef } from "./types";
+import { makeNode } from "./tree";
+import {
+  DEFAULT_SLOT,
+  type BlockDefinition,
+  type BlockNode,
+  type ControlDef,
+} from "./types";
 
 export interface BlockRegistry {
   register(def: BlockDefinition): void;
@@ -72,3 +78,33 @@ export function createControlRegistry(): ControlRegistry {
 
 /** The default style/visual control registry (extensible — novel controls register here). */
 export const defaultControlRegistry: ControlRegistry = createControlRegistry();
+
+/**
+ * A new instance of `type`, built from the definition the registry holds.
+ *
+ * The one place a block is brought into existence, because every field here is a promise the
+ * definition makes about its own instances: the props its render reads, the style it ships with,
+ * whether it opens a slot, and which version of the definition the instance was written by. A
+ * second construction path fills in what its author happened to remember, and a block whose
+ * `validate` needs an initialized prop is then created already unsaveable.
+ *
+ * An unregistered type still yields a node. Retaining what this build cannot describe is the
+ * behaviour the whole document model is built on, and refusing here would make a repair that
+ * reaches for a plugin block throw instead.
+ */
+export function createNode(
+  type: string,
+  registry: BlockRegistry,
+  slots?: Record<string, BlockNode[]>
+): BlockNode {
+  const def = registry.get(type);
+  const node = makeNode(
+    type,
+    def ? structuredClone(def.defaultProps) : {},
+    def?.defaultStyle ? structuredClone(def.defaultStyle) : undefined,
+    slots ?? (def?.isContainer ? { [DEFAULT_SLOT]: [] } : undefined)
+  );
+  // Stamped so a later migration can tell what wrote this instance. Without it every node reads
+  // as version 1 and a block already past its first version re-runs migrations it never needed.
+  return def ? { ...node, definitionVersion: def.version } : node;
+}

@@ -183,20 +183,24 @@ export function dropSlots(root: BlockNode, parentId: string): BlockNode {
  *
  * One wrapper per child rather than one around the run of them, because the children were siblings
  * and grouping them would change the arrangement while claiming to preserve it.
+ *
+ * The wrapper is BUILT BY THE CALLER rather than named by type, because a block brought into
+ * existence with empty props is one whose definition never got to say what its instances start
+ * with — and for a block whose `validate` needs an initialized prop, the advertised repair would
+ * leave the document exactly as unsaveable. This module knows the tree and not the registry, so
+ * the construction belongs to whoever holds both.
  */
 export function wrapInSlot(
   root: BlockNode,
   parentId: string,
   slot: string,
   id: string,
-  wrapperType: string
+  makeWrapper: (child: BlockNode) => BlockNode
 ): BlockNode {
   return mapTree(root, n => {
     if (n.id !== parentId || !n.slots?.[slot]) return n;
     const children = n.slots[slot].map(child =>
-      child.id === id
-        ? makeNode(wrapperType, {}, undefined, { [DEFAULT_SLOT]: [child] })
-        : child
+      child.id === id ? makeWrapper(child) : child
     );
     return { ...n, slots: { ...n.slots, [slot]: children } };
   });

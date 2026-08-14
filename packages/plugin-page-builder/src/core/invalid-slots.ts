@@ -27,7 +27,7 @@
  * @module core/invalid-slots
  */
 import { declaredSlotsOf } from "./block-structure";
-import type { BlockRegistry } from "./registry";
+import { createNode, type BlockRegistry } from "./registry";
 import {
   dropSlots,
   findNode,
@@ -322,7 +322,10 @@ export function repairInvalidSlot(
             entry.parentId,
             entry.slotName,
             entry.node.id,
-            entry.wrapWith
+            child =>
+              // Through the shared constructor, so the wrapper starts with everything its own
+              // definition promises rather than with whatever this call remembered to pass.
+              createNode(entry.wrapWith!, registry, { [DEFAULT_SLOT]: [child] })
           )
         : removeFromSlot(
             root,

@@ -61,10 +61,35 @@ const placeholderStyle = {
  * caller-supplied definition is the whole answer about its own slots; structure answers where no
  * definition is registered, which is the state the config and server paths run in.
  */
-function slotIsFormatted(node: BlockNode, slotName: string): boolean {
+export function slotIsFormatted(node: BlockNode, slotName: string): boolean {
   const def = defaultBlockRegistry.get(node.type);
   const slots = def ? def.slots : declaredSlotsOf(node.type);
   return slots?.find(s => s.name === slotName)?.childLayout === "formatted";
+}
+
+/**
+ * Whether this node should offer an "append into me" drop target.
+ *
+ * A formatted container renders no trailing drop zone of its own — an element between or after its
+ * children would become a cell of its layout — so appending to it needs a target on the container
+ * itself. Two conditions narrow that:
+ *
+ * - it must lay its own children out formatted, since anything else already has a trailing zone;
+ * - it must NOT itself be a child of a formatted slot. There, the same element already carries the
+ *   "insert before me" target, and two droppables on one element share a rectangle and a priority,
+ *   so the one registered first takes every collision. Registering a second that can never win
+ *   states a capability the canvas does not have.
+ *
+ * The honest consequence: a populated formatted container inside another formatted slot — a Row
+ * with children inside a Grid — has no target for "append after its last child". Reaching it needs
+ * the two intents separated by REGION rather than by element, which is drop-zone geometry rather
+ * than a flag.
+ */
+export function offersAppendTarget(
+  node: BlockNode,
+  isChildOfFormattedSlot: boolean
+): boolean {
+  return slotIsFormatted(node, DEFAULT_SLOT) && !isChildOfFormattedSlot;
 }
 
 type RefCb = (el: Element | null) => void;
@@ -239,8 +264,9 @@ function DraggableNode({
   });
 
   // A formatted container itself: "append" target for its own default slot, since it has no
-  // trailing DropZone of its own.
-  const formatted = slotIsFormatted(node, DEFAULT_SLOT);
+  // trailing DropZone of its own. `dropBeforeIndex` being set means this element already carries
+  // the parent's "insert before" target, which is the case the rule excludes.
+  const formatted = offersAppendTarget(node, dropBeforeIndex != null);
   const appendIndex = node.slots?.default?.length ?? 0;
   const append = useDroppable({
     id: `append:${node.id}`,

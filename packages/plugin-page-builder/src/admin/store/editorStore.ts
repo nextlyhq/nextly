@@ -4,13 +4,13 @@
  * block registry — never a hard-coded list.
  */
 import { declaredSlotNames } from "../../core/invalid-slots";
+import { migrateDocument } from "../../core/migrate";
 import type { MotionConfig } from "../../core/motion";
-import { defaultBlockRegistry } from "../../core/registry";
+import { createNode, defaultBlockRegistry } from "../../core/registry";
 import {
   duplicateNode,
   findNode,
   insertNode,
-  makeNode,
   moveNode,
   reidSubtree,
   dropSlots,
@@ -20,12 +20,14 @@ import {
   updateNode,
   wrapInSlot,
 } from "../../core/tree";
-import type {
-  BlockDocument,
-  BlockNode,
-  Binding,
-  StyleValues,
+import {
+  DEFAULT_SLOT,
+  type BlockDocument,
+  type BlockNode,
+  type Binding,
+  type StyleValues,
 } from "../../core/types";
+import { canDrop } from "../logic/dropRules";
 
 const HISTORY_LIMIT = 50;
 const BASE_BREAKPOINT = "base";
@@ -40,12 +42,51 @@ export interface EditorState {
   customCss: string;
 }
 
+/**
+ * Whether a node of `childType` may sit in `parentId`'s `slot`.
+ *
+ * Applied in the REDUCER rather than at each call site, because "which slots accept which blocks"
+ * is an invariant of the document and a caller is free to forget it. Drag-and-drop asks `canDrop`
+ * through `planDrop`, and the library's Insert button asks it through `planInsert` — but paste,
+ * keyboard reorder and anything added later reach the store directly, and a rule enforced on the
+ * paths whoever wrote it was looking at is not a rule.
+ *
+ * A refused action leaves the state untouched. That is silent, which is not good enough on its own
+ * and is much better than writing a document the save path will refuse: the surfaces that PLAN an
+ * insertion pick an accepting target before dispatching, so this only fires for a route that did
+ * not ask.
+ */
+function slotAccepts(
+  root: BlockNode,
+  parentId: string,
+  slot: string,
+  childType: string
+): boolean {
+  const parent = findNode(root, parentId);
+  if (!parent) return false;
+  return canDrop(parent.type, slot, childType, defaultBlockRegistry).ok;
+}
+
+/**
+ * The starting state for a document just loaded into the editor.
+ *
+ * The document is MIGRATED on the way in. A block's `migrate` is the only thing that can bring a
+ * stored instance up to what its current definition expects, and the editor is where that has to
+ * happen: it is the surface that reads props into controls and the surface that writes the document
+ * back, so a document opened here and saved is a document upgraded. Without it every `migrate` in
+ * the catalogue is unreachable, and an instance written by an older definition is shown through
+ * controls that no longer describe it.
+ *
+ * `dirty` stays false. Migration is not an edit the author made, and marking the page unsaved the
+ * moment it opens would ask them to approve something they did not do — the upgrade rides along
+ * with their first real change instead.
+ */
 export function initialState(
   document: BlockDocument,
   customCss = ""
 ): EditorState {
   return {
-    document,
+    document: migrateDocument(document, defaultBlockRegistry),
     selectedId: null,
     activeBreakpoint: BASE_BREAKPOINT,
     past: [],
@@ -159,13 +200,7 @@ function keepValidSelection(
 
 /** Build a fresh node for `type` from the registry's declared defaults. */
 export function createNodeFromType(nodeType: string): BlockNode {
-  const def = defaultBlockRegistry.get(nodeType);
-  const props = def ? structuredClone(def.defaultProps) : {};
-  const style = def?.defaultStyle
-    ? structuredClone(def.defaultStyle)
-    : undefined;
-  const slots = def?.isContainer ? { default: [] } : undefined;
-  return makeNode(nodeType, props, style, slots);
+  return createNode(nodeType, defaultBlockRegistry);
 }
 
 /** Commit a new root: push current onto history (bounded), clear redo, mark dirty. */
@@ -199,6 +234,9 @@ export function editorReducer(
       return { ...state, activeBreakpoint: action.breakpoint };
 
     case "ADD": {
+      if (!slotAccepts(root, action.parentId, action.slot, action.nodeType)) {
+        return state;
+      }
       const node = createNodeFromType(action.nodeType);
       return commit(
         state,
@@ -207,11 +245,19 @@ export function editorReducer(
       );
     }
 
-    case "MOVE":
+    case "MOVE": {
+      const moving = findNode(root, action.id);
+      if (
+        !moving ||
+        !slotAccepts(root, action.parentId, action.slot, moving.type)
+      ) {
+        return state;
+      }
       return commit(
         state,
         moveNode(root, action.id, action.parentId, action.slot, action.index)
       );
+    }
 
     case "REMOVE": {
       const next = removeNode(root, action.id);
@@ -259,7 +305,10 @@ export function editorReducer(
         action.parentId,
         action.slot,
         action.id,
-        action.wrapperType
+        child =>
+          createNode(action.wrapperType, defaultBlockRegistry, {
+            [DEFAULT_SLOT]: [child],
+          })
       );
       return commit(state, next);
     }
@@ -340,6 +389,9 @@ export function editorReducer(
       );
 
     case "PASTE_NODE": {
+      if (!slotAccepts(root, action.parentId, action.slot, action.node.type)) {
+        return state;
+      }
       const fresh = reidSubtree(action.node);
       return commit(
         state,

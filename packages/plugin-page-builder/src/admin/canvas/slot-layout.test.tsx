@@ -19,6 +19,8 @@ import { makeNode } from "../../core/tree";
 import type { BlockNode } from "../../core/types";
 import { RenderNode } from "../../render/RenderNode";
 
+import { offersAppendTarget, slotIsFormatted } from "./CanvasNode";
+
 import "../../render/blocks/index";
 
 const MARKER = "nx-slot-layout-probe";
@@ -194,5 +196,31 @@ describe("every container's slot declares how it lays children out", () => {
       .filter(p => p.style !== null && !formats(displayOf(p.style ?? "")))
       .map(p => `${p.type}.${p.slot}`);
     expect(overclaimed).toEqual([]);
+  });
+});
+
+describe("which containers offer an append target", () => {
+  const columns = makeNode("core/columns");
+  const heading = makeNode("core/heading");
+
+  it("offers one to a formatted container in ordinary block flow", () => {
+    // Nothing else can reach the end of its slot: a formatted container draws no trailing zone.
+    expect(offersAppendTarget(columns, false)).toBe(true);
+  });
+
+  it("withholds it where the same element already carries an insert-before target", () => {
+    // Two droppables on one element share a rectangle and a priority, so the first registered
+    // takes every collision and the second states a capability the canvas does not have.
+    expect(offersAppendTarget(columns, true)).toBe(false);
+  });
+
+  it("withholds it from a container that already has a trailing zone", () => {
+    const container = makeNode("core/container");
+    expect(slotIsFormatted(container, "default")).toBe(false);
+    expect(offersAppendTarget(container, false)).toBe(false);
+  });
+
+  it("withholds it from a block that holds no children at all", () => {
+    expect(offersAppendTarget(heading, false)).toBe(false);
   });
 });
