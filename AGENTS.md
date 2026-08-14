@@ -116,8 +116,8 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
   report on types the checker cannot see: measured here, a docs-only commit
   failed `nextly#lint` with `@typescript-eslint/no-unnecessary-type-assertion`
   on a load-bearing assertion, and `pnpm --filter nextly... build` cleared it
-  along with the `no-unresolved` error beside it. The `no-unsafe-*` family fails
-  the other way, going quiet where everything degrades to `any`.
+  along with the `no-unresolved` error beside it.
+
 
   That is the dangerous half, because the two errors read differently. An
   unresolved import NAMES A PACKAGE and reads as environmental. A type-aware

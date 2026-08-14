@@ -44,10 +44,12 @@ returned 31 rows and `commits/<merge_commit_sha>/check-runs` returned 0. For an
 open PR that `merge_commit_sha` is GitHub's own test-merge, which nothing runs
 against. (Inside a workflow the relationship inverts, but only for `pull_request`:
 there `github.sha` IS the synthetic merge commit. On `pull_request_target` it is
-the tip of the BASE branch, and on `push` it is the pushed commit — so
-`labeler.yml` and `pr-title.yml` here see `main`, not the PR revision. Do not
-carry a variable named `SHA` between contexts, and qualify the claim by event
-before relying on it.)
+the tip of the BASE branch — `main` for an ordinary PR, and the PARENT FEATURE
+BRANCH for a stacked one, so `labeler.yml` and `pr-title.yml` see whichever the
+PR targets rather than the PR's own revision. On `push` it is the pushed commit.
+Do not carry a variable named `SHA` between contexts, and qualify the claim by
+event AND by base before relying on it.)
+
 
 **`set -o pipefail` is load-bearing, not tidiness.** Without it the exit status
 is `sort`'s, so an authentication failure, a rate limit or a transient 5xx from
@@ -248,10 +250,18 @@ main-filtered workflows stay absent — having done exactly what the instruction
 said. `git rebase --force-rebase` (or `--no-ff`) replays regardless, and an
 empty commit or a close-and-reopen also start CI.
 
-Whichever you pick, the check is the same and it is not optional: the head SHA
-must differ afterwards, and `gh run list --commit <new head> --workflow ci.yml`
-must return a run. A remedy that is believed to have worked is how a stacked PR
-sits for a day looking retargeted. Close-and-reopen
+The check that follows depends on which you picked, and conflating them rejects
+a remedy that worked:
+
+- **rebase, push, empty commit** — the head SHA must DIFFER afterwards, and
+  `gh run list --commit <new head> --workflow ci.yml` must return a run.
+- **close and reopen** — the head cannot differ, by construction. Require a run
+  whose identity is NEW instead: capture the run ID before reopening and require
+  a different one after, or compare `createdAt` against the reopen.
+
+Either way something must be confirmed to have started. A remedy that is
+believed to have worked is how a stacked PR sits for a day looking retargeted.
+ Close-and-reopen
 also starts CI and is the worse remedy, because it leaves the head SHA
 unchanged: the diff expands to include the parent stack while every existing
 review still points at that same SHA, so a coverage check keyed on the head
@@ -459,7 +469,13 @@ The properties, each earned by a version that got it wrong:
   reading it certifies the revision BEFORE the one you are about to merge, and
   a recheck that also reads `headRefOid` compares one stale value to another
   and never fires. Resolve `headRefName` from `gh`, then the SHA from
-  `ls-remote`, after a fetch.
+  `ls-remote`, after a fetch — and for a CROSS-REPOSITORY pull request, against
+  the fork rather than `origin`. The base repository does not own a
+  contributor's head ref, so `ls-remote origin` there returns nothing, or worse
+  returns an unrelated branch of the same name and the gate inspects a revision
+  belonging to somebody else. Resolve `headRepositoryOwner` and
+  `headRepository`, as `verifying-merged-work.md` already does for its tail
+  check.
 - **Fail closed, and REFUSE rather than report.** Every query failing means the
   answer is unavailable, which is not a clean one; and a verdict that is printed
   but not connected to an exit status lets the caller walk on.
@@ -489,12 +505,17 @@ leaves the head untouched, so the merge succeeds with an unresolved thread
 seconds old. The window is narrow and it is real, and every gate described here
 sits inside it.
 
-The only mechanism that actually covers mutable verdict state is a
-server-enforced required status that new reviews invalidate — branch protection
-requiring review approval with stale reviews dismissed on push, or a required
-check the verdict publishes. Until one of those is configured, the honest
-description of everything above is a LOOK taken shortly before merging, not a
-boundary. Say which one you have.
+The mechanism has to invalidate on the event that actually occurs, and the
+obvious candidate does not. **Required approval with stale approvals dismissed
+on push does NOT close this**: a late bot finding arrives as a `COMMENTED`
+review, which is neither a new commit nor an approval, so it dismisses nothing
+and the merge proceeds carrying it. Two settings do cover it — requiring
+CONVERSATION RESOLUTION before merging, which a new unresolved thread
+immediately violates, or a required check that the verdict process itself
+updates. Until one of those is configured, the honest description of everything
+above is a LOOK taken shortly before merging, not a boundary. Say which one you
+have.
+
 
 Note that its procedure and this one fail in opposite directions, which is why
 neither substitutes for the other. Content-verification confirmed #766 had
