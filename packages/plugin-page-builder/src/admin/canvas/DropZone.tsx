@@ -60,7 +60,7 @@ export function DropZone({
   // zone's place in the document and is zero-height for its whole life, so a
   // drag starting never reflows anything. The inner element is the DROPPABLE —
   // dnd-kit measures the node it is given a ref to — and is out of flow, so it
-  // can be big enough to hit without occupying any space.
+  // occupies the gap it marks without contributing to layout.
   return (
     <div className="nx-pb-dropzone-slot">
       <div

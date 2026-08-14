@@ -86,17 +86,21 @@ const OVERLAY_CSS = [
   // works until you click something, which reads as a drag defect and is a
   // containing-block one.
   ".nx-pb-dropzone-slot{position:relative;height:0}",
-  // Taller than the visible hint on purpose: this rect is what the pointer is
-  // tested against, and a 6px band is a hard target to hit while dragging.
+  // The SAME 6px band the in-flow zone occupied, centred on the gap it marks.
+  // This changes what a zone COSTS, not what it catches, so the pointer meets
+  // exactly the geometry it met before and no targeting behaviour moves with it.
+  //
+  // A larger rect is worth having and is deliberately not here. A zone's box
+  // extends above its own slot, so a taller one reaches into the element before
+  // it and changes which zones are eligible where — a claim about targeting,
+  // which needs its own evidence rather than riding along with a claim about
+  // layout.
+  //
   // `pointer-events` are live only during a drag, so at rest the zone cannot
   // intercept a click meant for the block behind it.
-  ".nx-pb-dropzone{position:absolute;left:0;right:0;top:-6px;height:12px;border-radius:3px;pointer-events:none}",
-  ".nx-pb-dropzone[data-drag]{pointer-events:auto}",
-  // The hint is drawn by a pseudo-element so that what the pointer is measured
-  // against and what the author sees can differ in size without either being a
-  // lie: the band marks where the block lands, the rect decides what is hit.
-  ".nx-pb-dropzone[data-drag]::after{content:'';position:absolute;left:0;right:0;top:3px;height:6px;border-radius:3px;background:color-mix(in srgb, var(--nx-pb-ed-primary) 12%, transparent);transition:background .1s ease}",
-  ".nx-pb-dropzone[data-active]::after{background:var(--nx-pb-ed-primary);box-shadow:0 0 0 4px color-mix(in srgb, var(--nx-pb-ed-primary) 15%, transparent)}",
+  ".nx-pb-dropzone{position:absolute;left:0;right:0;top:-3px;height:6px;border-radius:3px;background:transparent;pointer-events:none;transition:background .1s ease}",
+  ".nx-pb-dropzone[data-drag]{pointer-events:auto;background:color-mix(in srgb, var(--nx-pb-ed-primary) 12%, transparent)}",
+  ".nx-pb-dropzone[data-active]{background:var(--nx-pb-ed-primary);box-shadow:0 0 0 4px color-mix(in srgb, var(--nx-pb-ed-primary) 15%, transparent)}",
   // Empty-container placeholder.
   ".nx-pb-dropzone-empty{border:2px dashed var(--nx-pb-ed-border-strong);border-radius:8px;padding:20px 12px;margin:6px;text-align:center;color:var(--nx-pb-ed-muted-foreground);font-size:13px;background:var(--nx-pb-ed-muted)}",
   ".nx-pb-dropzone-empty[data-active]{border-color:var(--nx-pb-ed-primary);background:color-mix(in srgb, var(--nx-pb-ed-primary) 12%, transparent);color:var(--nx-pb-ed-primary)}",
