@@ -144,12 +144,18 @@ describe("changesRequested", () => {
    * coverage, so this also pins that clearing and covering are separate
    * questions about the same review object.
    */
-  it("clears on a dismissal, which still grants no coverage", () => {
+  /**
+   * Dismissal invalidates the review it names. A dismissed APPROVAL therefore
+   * withdraws the clearance, leaving the objection standing — and a dismissed
+   * changes-request is already represented by its own row no longer reading
+   * `CHANGES_REQUESTED`, so no case needs `DISMISSED` to clear anything.
+   */
+  it("does not let a dismissed approval clear an objection", () => {
     const reviews = [
       at("CHANGES_REQUESTED", "2026-08-14T10:00:00Z", 1),
       at("DISMISSED", "2026-08-14T11:00:00Z", 2),
     ];
-    expect(changesRequested(reviews, HEAD)).toEqual([]);
+    expect(changesRequested(reviews, HEAD)).toEqual([CODEX]);
     expect(reviewersAtHead(reviews, HEAD)).toEqual([CODEX]);
   });
 
