@@ -202,8 +202,8 @@ describe("the allowlist", () => {
   // the scan WIDENS to files it previously skipped, whatever those files already contained is by
   // definition pre-existing. The checker's own source came out of EXCLUDED_FILES and brought 12
   // recorded offences with it. A raise for any other reason is the silencing this guards against.
-  const EXPECTED_ENTRIES = 245;
-  const EXPECTED_TOTAL = 470;
+  const EXPECTED_ENTRIES = 239;
+  const EXPECTED_TOTAL = 461;
 
   it("matches its pinned size exactly", () => {
     expect(readAllowlist().size).toBe(EXPECTED_ENTRIES);
@@ -349,9 +349,29 @@ describe("numbered task and plan labels", () => {
     expect(offencesIn("// Task 17: migrate the records").length).toBeGreaterThan(0);
   });
 
+  it("does not match a bare plan colon in ordinary prose", () => {
+    // "query plan", "execution plan" and "cache the plan" are ordinary technical English. Matching
+    // a bare `plan:` rejected correct comments describing runtime behaviour, and a check that
+    // rejects correct comments gets switched off rather than fixed.
+    expect(offencesIn("// The query plan: use an index scan to avoid sorting")).toEqual([]);
+    expect(offencesIn("// execution plan: nested loop")).toEqual([]);
+  });
+
   it("does not match ordinary prose about a task", () => {
     // The negative control the widening must not break: "task" is an ordinary word.
     expect(offencesIn("// the task queue drains oldest first")).toEqual([]);
+  });
+});
+
+describe("interpreter directives", () => {
+  it("skips a shebang only in shell", () => {
+    // A shebang is an interpreter directive rather than prose, but YAML has no shebang: there a
+    // first line beginning `#!` is simply a comment, and skipping it unconditionally left the
+    // first line of every YAML file unreadable.
+    expect(offencesIn("#!/bin/sh\necho hi", readOptionsFor("f.sh"))).toEqual([]);
+    expect(
+      offencesIn(`#! ${"Codex"} asked for this\nkey: value`, readOptionsFor("f.yml")).length
+    ).toBeGreaterThan(0);
   });
 });
 

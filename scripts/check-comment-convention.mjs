@@ -94,10 +94,14 @@ export const FORBIDDEN = [
     domainVocabulary: true,
   },
   {
-    // A numbered task or plan: "Task 17:", "Plan C2". The convention names tasks and plans
-    // alongside reviews, and this is the shape they arrive in - a reference to a document the
-    // reader has no way to open, describing why the code was written rather than what it does.
-    pattern: /\b(?:[a-z]\d+\s+)?(?:task|plan)\s*(?:#\s*)?(?:[a-z]?\d+|:)/i,
+    // A NUMBERED task or plan: "Task 17", "Task #17", "Plan C2". The convention names tasks and
+    // plans alongside reviews, and this is the shape they arrive in - a reference to a document
+    // the reader has no way to open, describing why the code was written rather than what it does.
+    //
+    // The number is required. A bare "plan:" is ordinary technical English - a query plan, an
+    // execution plan, a cache plan - and matching it rejected correct comments describing runtime
+    // behaviour, which is the failure that gets a check switched off rather than fixed.
+    pattern: /\b(?:[a-z]\d+\s+)?(?:task|plan)\s*(?:#\s*)?[a-z]?\d+/i,
     why: "names a task or plan rather than the code",
   },
   {
@@ -545,7 +549,10 @@ function hashLineComments(source, { shell = false } = {}) {
 
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i];
-    if (i === 0 && line.startsWith("#!")) continue;
+    // Only in shell. `#!/usr/bin/env bash` is an interpreter directive rather than prose, but YAML
+    // has no shebang - there a first line beginning `#!` is simply a comment, and skipping it left
+    // the first line of every YAML file unreadable by this check.
+    if (shell && i === 0 && line.startsWith("#!")) continue;
 
     if (heredoc) {
       const terminator = heredoc.stripTabs ? line.replace(/^\t+/, "") : line;
