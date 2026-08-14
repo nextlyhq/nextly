@@ -321,13 +321,6 @@ function memberPlacement(
  * The stack is explicit so deep nesting cannot overflow, every bound stops the
  * walk at its first breach, and no branch reads a value it has not guarded.
  */
-/** Bounds a survey was measured against, as primitive numbers. */
-export interface SurveyedLimits {
-  maxBytes: number;
-  maxDepth: number;
-  maxNodes: number;
-}
-
 export interface DocumentSurvey {
   /**
    * The bounds this survey ENFORCED, snapshotted before the walk began.
@@ -339,10 +332,17 @@ export interface DocumentSurvey {
    * check and a large one afterwards leaves the caller's walk unbounded while
    * this survey's verdict says the document was refused.
    *
+   * `Readonly<SurveyLimits>` rather than a second interface of the same three
+   * members: the shape a caller passes IN and the shape it reads back OUT are
+   * the same three bounds, and two names for them would drift and would ask a
+   * reader to work out which is which. `readonly` because the object is frozen,
+   * so a type permitting assignment would describe a runtime `TypeError` as
+   * legal.
+   *
    * Primitive numbers, because `bounded` rejects anything else — so a consumer
    * of this field cannot be handed an accessor at one remove.
    */
-  limits: SurveyedLimits;
+  limits: Readonly<SurveyLimits>;
   /** Serialized size in bytes; a lower bound once `tooLarge` is set. */
   bytes: number;
   /** The byte cap was passed. */
@@ -550,7 +550,7 @@ export function surveyDocument(
   // Built once and shared by every survey this walk returns, so a caller cannot
   // be handed two objects that disagree, and frozen because the bound a caller
   // reads must be the one that was enforced rather than one a later reader set.
-  const enforced: SurveyedLimits = Object.freeze({
+  const enforced: Readonly<SurveyLimits> = Object.freeze<SurveyLimits>({
     maxBytes,
     maxDepth,
     maxNodes,
