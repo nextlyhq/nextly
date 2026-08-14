@@ -141,6 +141,37 @@ export function isReviewDomain(file) {
   return REVIEW_DOMAIN_PATHS.some(prefix => path.startsWith(prefix));
 }
 
+/** The comments that predate this check, as a path to per-file count. */
+export const ALLOWLIST_FILE = "scripts/comment-convention-allowlist.json";
+
+/**
+ * The allowlist, validated.
+ *
+ * It records what the repository already contained when the check went live, so the rule can be
+ * enforced from the first commit without rewriting comments whose authors are better placed to
+ * rewrite them. Counts are per file rather than a single total: a bare list would exempt a file
+ * entirely, so a NEW offence added to an already-listed file would land unnoticed - which is the
+ * case the check most needs to catch.
+ *
+ * A malformed file aborts rather than degrading to an empty allowlist. Empty would read as "no
+ * exemptions", turn every pre-existing comment into a failure, and present a parse error as a
+ * wave of unrelated findings.
+ */
+export function readAllowlist(root = process.cwd()) {
+  const raw = JSON.parse(readFileSync(join(root, ALLOWLIST_FILE), "utf8"));
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error(`${ALLOWLIST_FILE} must be an object mapping each path to its offence count`);
+  }
+  for (const [path, count] of Object.entries(raw)) {
+    if (!Number.isInteger(count) || count < 1) {
+      throw new Error(
+        `${ALLOWLIST_FILE}: ${path} must map to a positive integer, got ${String(count)}`
+      );
+    }
+  }
+  return new Map(Object.entries(raw));
+}
+
 /**
  * Every authored source file under `root`, taken from git's index rather than from the
  * filesystem.
@@ -273,7 +304,7 @@ function main() {
     process.exit(1);
   }
 
-  const offences = [];
+  const byFile = new Map();
   let skipped = 0;
   for (const file of files) {
     if (isReviewDomain(file)) {
@@ -285,29 +316,65 @@ function main() {
       // matching, so the stored text carries runs of spaces where data used to be; printing it
       // raw spreads a single finding over several ragged lines and buries which comment it is.
       const excerpt = comment.replace(/\s+/g, " ").trim().slice(0, 120);
-      offences.push(`${relative(process.cwd(), file)}\n    ${why} — ${excerpt}`);
+      const path = relative(process.cwd(), file).split(sep).join("/");
+      byFile.set(path, [...(byFile.get(path) ?? []), `${why} — ${excerpt}`]);
     }
   }
 
-  if (offences.length > 0) {
-    console.error(
-      `${offences.length} comment(s) narrate the process rather than describe the code:\n`
+  const allowlist = readAllowlist();
+  const failures = [];
+
+  for (const [path, found] of byFile) {
+    const allowed = allowlist.get(path) ?? 0;
+    if (found.length <= allowed) continue;
+    failures.push(
+      `${path} — ${found.length} offence(s), ${allowed} allowed:\n` +
+        found.map(one => `      ${one}`).join("\n")
     );
-    for (const offence of offences) console.error(`  ${offence}\n`);
+  }
+
+  // Entries whose file now holds fewer offences than recorded, which is what makes the allowlist
+  // shrink rather than merely stop growing.
+  //
+  // Checked only on the DEFAULT scan. An explicit root deliberately reads part of the repository,
+  // so every allowlisted path outside it holds zero offences as far as that scan can tell, and
+  // treating those as fixed would walk the allowlist to nothing on the strength of files nobody
+  // opened.
+  if (!explicit) {
+    for (const [path, allowed] of allowlist) {
+      const found = byFile.get(path)?.length ?? 0;
+      if (found >= allowed) continue;
+      failures.push(
+        found === 0
+          ? `${path} — no offences remain; delete its entry from ${ALLOWLIST_FILE}`
+          : `${path} — ${found} offence(s) remain but ${allowed} allowed; lower it to ${found}`
+      );
+    }
+  }
+
+  if (failures.length > 0) {
+    console.error(`${failures.length} file(s) disagree with ${ALLOWLIST_FILE}:\n`);
+    for (const failure of failures) console.error(`  ${failure}\n`);
     console.error(
-      "Comments describe the code only. Rewrite each to state what the code does and why, " +
-        "with no reference to reviews, tools, or the change itself."
+      "Comments describe the code only: state what the code does and why, with no reference to " +
+        "reviews, tools, or the change itself.\n" +
+        "The allowlist records what predated this check and may only shrink. Do not add an entry " +
+        "to silence a new comment; rewrite the comment."
     );
     process.exit(1);
   }
 
-  // The skipped count is reported rather than left implicit: a file the scan declined to read
-  // produces the same silence as a file it read and cleared, so a growing allowlist would shrink
-  // what is actually checked while the summary line kept saying the same thing.
+  // Both counts are reported rather than left implicit. A file the scan declined to read and a
+  // file it read and cleared produce the same silence, so without these a growing allowlist or a
+  // widening path exemption would shrink what is actually checked while this line kept saying the
+  // same thing.
+  const exempt = [...allowlist.values()].reduce((sum, count) => sum + count, 0);
   console.log(
     `${files.length - skipped} of ${files.length} source files across ${roots.join(", ")}: ` +
-      `no comment names a review, tool or change` +
-      (skipped > 0 ? ` (${skipped} skipped as review-process tooling).` : ".")
+      "no new comment names a review, tool or change" +
+      (skipped > 0 ? `; ${skipped} skipped as review-process tooling` : "") +
+      (exempt > 0 ? `; ${exempt} pre-existing offence(s) still allowlisted` : "") +
+      "."
   );
 }
 

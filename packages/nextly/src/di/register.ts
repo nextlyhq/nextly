@@ -1131,8 +1131,8 @@ export async function registerServices(
   // transformed value here lets a transformer make the two disagree — opening
   // no gate while migrations run, or a gate nothing settles. No first-party
   // transformer touches it today, which is a property of the current plugin set
-  // rather than of the code — so the window stays open for whichever transformer
-  // starts touching it.
+  // rather than of the code, and this PR exists because of a window nobody
+  // thought reachable.
   openBootMigrationsGate(config.runMigrationsOnBoot === true);
 
   globalForReg.__nextly_isRegistered = true;

@@ -1,0 +1,14 @@
+{
+  "packages/admin/src/components/features/entries/EntryForm/EntryForm.tsx": 1,
+  "packages/admin/src/components/shared/search-bar/call-site-classes.test.ts": 1,
+  "packages/nextly/src/di/register.ts": 1,
+  "packages/nextly/src/domains/collections/services/collection-mutation-service.ts": 1,
+  "packages/nextly/src/domains/email/__tests__/stored-configuration-round-trips.test.ts": 1,
+  "packages/nextly/src/domains/field-groups/migration/__tests__/run.test.ts": 1,
+  "packages/nextly/src/domains/schema/pipeline/__tests__/pushschema-pipeline.integration.test.ts": 1,
+  "packages/nextly/src/domains/schema/pipeline/prompt-dispatcher/clack-terminal.ts": 1,
+  "packages/nextly/src/domains/schema/services/__tests__/schema-change-exclusion.test.ts": 1,
+  "packages/nextly/src/shared/base-registry-service.ts": 1,
+  "packages/plugin-sdk/src/block-exports.test-d.ts": 1,
+  "packages/ui/src/components/__tests__/tabs-contract.test.ts": 1
+}

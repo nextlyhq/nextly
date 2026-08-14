@@ -17,7 +17,8 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { eq, ne, and, like, ilike } from "drizzle-orm";
 
-// `OperationType` is not imported: this module references only `BeforeOperationArgs`.
+// `OperationType` was removed during the PR 4 migration — this module no longer
+// references it, so we import only `BeforeOperationArgs`.
 import type { BeforeOperationArgs } from "@nextly/hooks/types";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
@@ -25,8 +26,7 @@ import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
 import { isFieldGroupField } from "../../../collections/fields/guards";
 import type { FieldConfig } from "../../../collections/fields/types";
-// Database failures surface as NextlyError, via toDbError, rather than as a
-// mapped service error.
+// PR 4 migration: switched from mapDbErrorToServiceError to NextlyError.
 import { toDbError } from "../../../database/errors";
 // The public CollectionServiceResult shape is preserved because the legacy
 // CollectionEntryService facade and CollectionBulkService still consume it;

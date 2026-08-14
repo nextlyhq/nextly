@@ -1,10 +1,14 @@
+import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
+  ALLOWLIST_FILE,
   DEFAULT_ROOTS,
   FORBIDDEN,
   commentText,
+  isReviewDomain,
   offencesIn,
+  readAllowlist,
   sourceFiles,
 } from "./check-comment-convention.mjs";
 
@@ -129,5 +133,75 @@ describe("the file walk", () => {
     for (const required of ["packages", "apps", "e2e", "templates", "scripts"]) {
       expect(DEFAULT_ROOTS, `${required} is outside the enforced scope`).toContain(required);
     }
+  });
+
+  it("reads authored source and not build output", () => {
+    // The list comes from git rather than from a directory walk. A walk reads whatever the
+    // machine's build commands left behind, and generated bundles embed the comments of every
+    // module they bundle — so the same sources scanned clean in a fresh worktree and reported
+    // twenty findings against `.next-e2e/` paths in a checkout where that directory existed.
+    const generated = sourceFiles("apps").filter(path => /\/\.next|\/dist\//.test(path));
+    expect(generated, "generated output is not authored source").toEqual([]);
+  });
+});
+
+/**
+ * The allowlist is what lets this rule be enforced from its first commit: it records the comments
+ * that predated the check, so the rule blocks new ones without demanding that whoever adds it
+ * rewrite prose belonging to other authors.
+ *
+ * Its value depends entirely on only ever shrinking, and nothing about the JSON file itself says
+ * so. These are what say so.
+ */
+describe("the allowlist", () => {
+  // Pinned so growth appears in the diff. Without it an entry can be added in the same commit as
+  // the comment it exempts, which turns the allowlist into a way of silencing the check rather
+  // than a record of what predates it. Lower this as entries are removed; never raise it.
+  const EXPECTED_ENTRIES = 12;
+
+  it("has not grown", () => {
+    expect(readAllowlist().size).toBeLessThanOrEqual(EXPECTED_ENTRIES);
+  });
+
+  it("names files that exist", () => {
+    // A path that no longer resolves exempts nothing, so it cannot fail visibly. It just sits
+    // there making the count overstate how much is left to clean up.
+    for (const path of readAllowlist().keys()) {
+      expect(existsSync(path), `${path} is on the allowlist but not on disk`).toBe(true);
+    }
+  });
+
+  it("maps every entry to a positive whole number", () => {
+    for (const [path, count] of readAllowlist()) {
+      expect(Number.isInteger(count), `${path} must map to an integer`).toBe(true);
+      expect(count, `${path} must map to a positive count`).toBeGreaterThan(0);
+    }
+  });
+
+  it("refuses a malformed file rather than reading it as empty", () => {
+    // Degrading to an empty allowlist would turn every pre-existing comment into a failure and
+    // present a parse error as a wave of unrelated findings.
+    expect(() => readAllowlist("/nonexistent-root-for-this-test")).toThrow();
+  });
+});
+
+describe("review-process tooling", () => {
+  it.each([
+    "scripts/ci-verdict.mjs",
+    "scripts/verify-merge.mjs",
+    "scripts/release/check-changesets.mjs",
+  ])("exempts %j, whose subject matter IS the review process", path => {
+    expect(isReviewDomain(path)).toBe(true);
+  });
+
+  it.each([
+    "packages/nextly/src/di/register.ts",
+    "scripts/check-comment-convention.mjs",
+    "scripts/drizzle-version.cjs",
+  ])("does not exempt %j", path => {
+    // The exemption is for code whose DOMAIN is pull requests, not for `scripts/` generally.
+    // Widening it to the directory would take the release tooling's neighbours out of scope
+    // without anyone choosing that.
+    expect(isReviewDomain(path)).toBe(false);
   });
 });

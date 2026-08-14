@@ -3,10 +3,10 @@
  *
  * Read this first, because the name of the file oversells it. A pass means
  * "no violation this scanner could see", NOT "no violation". The scan reads
- * source syntax, and syntax has an unbounded surface: every spelling closed
- * leaves another, and fixes to this scanner have repeatedly left gaps of their
- * own. Treat a green here as evidence, never as a guarantee, and never as a
- * reason to skip looking.
+ * source syntax, and syntax has an unbounded surface: 24 review rounds
+ * produced 94 findings and not one round came back empty, with the last three
+ * finding gaps in the previous round's fixes. Treat a green here as evidence,
+ * never as a guarantee, and never as a reason to skip looking.
  *
  * KNOWN GAPS, left open deliberately rather than patched:
  *

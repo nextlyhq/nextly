@@ -12,10 +12,11 @@
 // The intentional v1 limitation per F4 Option E plan: code-first non-TTY
 // users get a clear error directing them to a TTY terminal.
 //
-// Browser channel ('browser') is not implemented here: it is treated exactly
-// like channel='terminal'. That fallback is safe because UI-first prompts never
-// reach this dispatcher — the admin resolves them before save — so it is never
-// the only thing standing between a user and a prompt they need.
+// Browser channel ('browser'): NOT implemented in this PR. F10 will add
+// SSE-based browser modal rendering. For now, channel='browser' is
+// treated like channel='terminal' (terminal prompt). UI-first prompts
+// don't go through this dispatcher in PR 5 - they're handled in admin UI
+// before save - so this is OK.
 
 import * as clack from "@clack/prompts";
 

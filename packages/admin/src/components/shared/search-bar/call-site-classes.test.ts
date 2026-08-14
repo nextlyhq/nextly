@@ -13,13 +13,14 @@
  * - **This test** sees every call site whether or not anything renders it, and
  *   can only read what is written literally in the source.
  *
- * That division is the point. Predicting the rendered string from the AST means
- * reading every valid spelling of a class: aliases, namespace imports,
- * `{...{ className }}`, computed and quoted keys, `||` mistaken for `&&`, `+`
- * concatenation, template interpolation, character references, variant prefixes,
- * a shadowed `cn`. That surface is the whole language, so a scan over it can only
- * ever be patched — which is why this file reads what is written literally and
- * leaves the rendered value to the runtime check.
+ * That division is the point. An earlier version of this file tried to be
+ * complete on its own by predicting the rendered string from the AST, and took
+ * thirteen review rounds finding valid spellings it read wrongly: aliases,
+ * namespace imports, `{...{ className }}`, computed and quoted keys, `||`
+ * mistaken for `&&`, `+` concatenation, template interpolation, character
+ * references, variant prefixes, a shadowed `cn`. Every fix was correct and
+ * every one was followed by another, because the surface it was covering is the
+ * whole language.
  *
  * The runtime warning removes that surface rather than patching it: it does not
  * predict the string, it has it. So this side stops guessing. A `className`

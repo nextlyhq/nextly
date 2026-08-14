@@ -1,8 +1,8 @@
 // F3 integration tests — real PostgreSQL via docker-compose.
 //
 // SQLite-specific real-DB tests already live in
-// pushschema-pipeline.test.ts, which covers the recreate-pattern and PRAGMA
-// wrapping path against in-memory better-sqlite3.
+// pushschema-pipeline.test.ts (the PR-4 review additions cover the
+// recreate-pattern + PRAGMA wrapping path against in-memory better-sqlite3).
 //
 // This file covers PostgreSQL via TEST_POSTGRES_URL (auto-skips when
 // unset). MySQL is deferred to F15 — F3 has no MySQL-specific code
