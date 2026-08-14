@@ -402,14 +402,15 @@ export const PERMITTED_DWELL_FLOOR_MS = 100;
 export const DEFAULT_DWELL_ALLOWANCE_MS = 3 * PERMITTED_DWELL_FLOOR_MS;
 
 /**
- * How long a stationary pointer is given to stop producing new targets.
+ * How many times a stationary pointer may see the reading change before it is
+ * called unsettled.
  *
- * Four dwells. A canvas is entitled to one, and to another if the first expiry
- * moved the pointer's target somewhere that starts a second; past that it is
- * changing its mind with no input to justify it, which is a defect rather than
- * permitted lag and must not be reported as a settled reading.
+ * A canvas is entitled to one change, and to another if the first expiry moved
+ * the target somewhere that starts a second; past a few it is changing its mind
+ * with no input to justify it, which is a defect rather than permitted lag and
+ * must not be reported as a settled reading.
  */
-const SETTLE_ROUNDS = 4;
+const SETTLE_TRANSITIONS = 4;
 
 /** The capability these readers need, so a test can supply exactly it. */
 type TargetReader = Pick<CanvasDriver, "readActiveTarget"> &
@@ -491,21 +492,27 @@ export async function settledValue<T>(
   subject = "reading"
 ): Promise<T> {
   let value = await read();
-  // Bounded by ROUNDS, never by a clock. What is being tolerated is a canvas
-  // changing its mind a bounded number of times, and each round already bounds
-  // its own wait by the allowance — so a wall-clock budget adds nothing and
-  // collapses to zero for a canvas that declares no dwell, where it would turn
-  // a single asynchronous re-render between two reads into a harness error
-  // instead of a settled reading.
-  for (let round = 0; round < SETTLE_ROUNDS; round += 1) {
+  // Bounded by TRANSITIONS, never by a clock. What is being tolerated is a
+  // canvas changing its mind a bounded number of times, and each observation
+  // already bounds its own wait by the allowance — so a wall-clock budget adds
+  // nothing and collapses to zero for a canvas that declares no dwell, where it
+  // would turn a single asynchronous re-render between two reads into a harness
+  // error instead of a settled reading.
+  //
+  // The count is of CHANGES, so the permitted number of them is followed by one
+  // more observation rather than ending on one. Ending on a transition would
+  // reject a reader that changed exactly the permitted number of times and then
+  // held perfectly still — asynchronous relayout does precisely that — and the
+  // refusal would land on the reading that finally settled.
+  for (let transition = 0; transition <= SETTLE_TRANSITIONS; transition += 1) {
     const next = await departureFrom(read, value, allowanceMs);
     if (next === value) return value;
     value = next;
   }
   throw new Error(
-    `the ${subject} changed on all ${String(SETTLE_ROUNDS)} settling rounds ` +
-      `with a stationary pointer (last seen ${String(value)}), so nothing read ` +
-      `here is settled`
+    `the ${subject} changed more than ${String(SETTLE_TRANSITIONS)} times with ` +
+      `a stationary pointer (last seen ${String(value)}), so nothing read here ` +
+      `is settled`
   );
 }
 

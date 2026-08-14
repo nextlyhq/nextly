@@ -78,7 +78,7 @@ test("throws rather than returning a value from a reader that never holds still"
       DEFAULT_DWELL_ALLOWANCE_MS,
       "test reading"
     )
-  ).rejects.toThrow(/test reading changed on all \d+ settling rounds/);
+  ).rejects.toThrow(/test reading changed more than \d+ times/);
 });
 
 test("tolerates a reader that settles only after changing more than once", async () => {
@@ -152,4 +152,19 @@ test("tolerates a change when the driver declares no dwell", async () => {
   }, 0);
 
   expect(value).toBe(2);
+});
+
+test("accepts a reader that changes the permitted number of times and then holds", async () => {
+  // The count bounds CHANGES, so a reader that changes exactly the permitted
+  // number of times and then holds perfectly still has settled — asynchronous
+  // relayout produces precisely that shape. Ending the loop on a transition
+  // rather than on an observation rejected it, and the refusal landed on the
+  // reading that finally settled.
+  let reads = 0;
+  const value = await settledValue(async () => {
+    reads += 1;
+    return reads <= 4 ? reads : 99;
+  }, 0);
+
+  expect(value).toBe(99);
 });
