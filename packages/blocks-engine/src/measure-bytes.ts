@@ -327,6 +327,11 @@ export interface DocumentSurvey {
    * check and a large one afterwards leaves the caller's walk unbounded while
    * this survey's verdict says the document was refused.
    *
+   * `readonly` on the PROPERTY as well as its members. Freezing the inner
+   * object leaves `survey.limits = {...}` legal, and a walk reading the
+   * replacement would be bounded by numbers this survey never enforced — which
+   * is the whole point of publishing the snapshot.
+   *
    * `Readonly<SurveyLimits>` rather than a second interface of the same three
    * members: the shape a caller passes IN and the shape it reads back OUT are
    * the same three bounds, and two names for them would drift and would ask a
@@ -337,7 +342,7 @@ export interface DocumentSurvey {
    * Primitive numbers, because `bounded` rejects anything else — so a consumer
    * of this field cannot be handed an accessor at one remove.
    */
-  limits: Readonly<SurveyLimits>;
+  readonly limits: Readonly<SurveyLimits>;
   /** Serialized size in bytes; a lower bound once `tooLarge` is set. */
   bytes: number;
   /** The byte cap was passed. */

@@ -46,8 +46,8 @@ import { describe, expect, it } from "vitest";
  * expression of that shape matches `verify-credentials.ts`'s "of whether we
  * found a user", which describes what a lookup returned. The OBJECT of the verb
  * separates the two cases, and enumerating objects is the unbounded surface
- * again. That sample is a negative control below, so the next attempt fails on
- * it immediately rather than shipping and being silenced.
+ * again. That sample sits among the negative controls below, so any matcher
+ * keyed on first-person discovery is rejected by this suite.
  */
 const FORBIDDEN: Array<{ pattern: RegExp; why: string }> = [
   {
@@ -182,8 +182,8 @@ describe("code comments describe the code", () => {
       "// the third instance found in the pool is the one that owns the lock",
       "// on the second retry the fixed backoff is replaced by the jittered one",
       // First-person discovery, taken verbatim from `verify-credentials.ts`. It
-      // describes what a lookup returned, so a pattern keyed on "we found"
-      // rejects working prose.
+      // describes what a lookup returned, so a matcher keyed on "we found"
+      // rejects working prose and is refused here.
       "// of whether we found a user. Without this branch, the miss path returns",
     ];
     for (const sample of allowed) {
