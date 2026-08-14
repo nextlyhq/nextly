@@ -571,10 +571,10 @@ export interface ShellState {
  * and a stable URL says nothing about the canvas having unmounted for some
  * other reason.
  *
- * Shared so the acceptance suite and the checklist suite cannot drift into
- * asserting the same named property two different ways — a fix applied to one
- * probe would otherwise never reach the other, and the two would disagree while
- * both claiming to cover point 12.
+ * Offered as one reader so a correction reaches every caller. It does not yet
+ * have every caller: `checklist.spec.ts` builds the same two readings inline,
+ * so a fix made here does not reach it and the two can answer the same named
+ * question differently. Routing that one through here is the remaining half.
  */
 export async function readShellState(
   page: { url: () => string },
