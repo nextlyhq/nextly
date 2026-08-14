@@ -248,6 +248,18 @@ jobs:
       - name: Storage-spelling gate (field-group storage format)
         run: pnpm check:storage-format-literals
 
+      # `pnpm dev` refuses to start when the concurrency limit written into the
+      # root scripts stops exceeding the number of persistent `dev` tasks, and
+      # that count grows whenever any package gains a `dev` script. Nothing else
+      # here can see it: the failure is in the launcher, so every build, test and
+      # type check stays green while the workspace dev command is dead.
+      #
+      # Static on purpose. Actually running `turbo run dev` would mean starting
+      # twenty long-running watchers to observe a property that is decided
+      # before any of them runs.
+      - name: Dev concurrency gate (persistent task count)
+        run: pnpm check:dev-concurrency
+
       # The drizzle-v1 migration's own safety net (review-driven: these
       # suites previously executed in NO CI job because the `nextly`
       # package's full test task carries a pre-existing failing baseline).
