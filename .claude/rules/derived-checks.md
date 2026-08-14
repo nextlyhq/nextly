@@ -362,6 +362,23 @@ Three from this repository, arriving from unrelated directions:
   check being wrong on the shapes tested, not on the ones that produced the
   reports.
 
+**The sharpest special case: an assertion satisfied by ABSENCE certifies
+whatever it could not see.** Where the passing condition is "no evidence of a
+problem", no evidence AT ALL satisfies it perfectly, and the two are the same
+output. Three from one day here, all different mechanisms:
+
+- a page that failed to load, read as fewer changed files
+- a check a filtered workflow never created, read as an excused check
+- a commit pushed onto an already-merged branch, whose SHA no CI run will ever
+  be created for, read as a clean gate — an empty check-run list satisfies
+  "nothing failed" exactly
+
+The fix is not a better query for failures. It is to assert the POPULATION
+first and the verdict second: `total > 0 AND bad == 0`, rows fetched before
+rows judged. Any check whose green can be produced by an empty input needs that
+first clause, and a filter written to find problems will never supply it —
+`select(status != ok)` cannot tell you whether anything was selected from.
+
 The tell is a sentence where the evidence names one thing and the conclusion
 names a family: a queue, a marker, a control — against load, a merge, a set of
 findings. When you notice it, do not look for a better number first. Name the
