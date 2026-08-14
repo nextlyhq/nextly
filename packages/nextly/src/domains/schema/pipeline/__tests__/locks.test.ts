@@ -26,6 +26,67 @@ function fakeDb(opts: { acquireRows: number[] }) {
   };
 }
 
+/**
+ * MySQL takes its wait as `GET_LOCK`'s second argument. Passing 0
+ * unconditionally made `mode: "wait"` silently fail-fast there — it THREW where
+ * Postgres reports `ran: false`, so the two dialects disagreed about what a busy
+ * lock is, and a boot handling one outcome was unprotected on the other.
+ */
+function fakeMysql(locked: 0 | 1) {
+  const calls: string[] = [];
+  return {
+    calls,
+    execute: vi.fn(async (q: unknown) => {
+      const text = JSON.stringify(q);
+      calls.push(text);
+      if (text.includes("GET_LOCK")) return { rows: [{ locked }] };
+      return { rows: [] };
+    }),
+  };
+}
+
+describe("withMigrateLock (mysql named lock)", () => {
+  it("waits with a real timeout instead of polling with 0", async () => {
+    const db = fakeMysql(1);
+
+    await withMigrateLock(db, "mysql", async () => "ok", {
+      mode: "wait",
+      maxWaitMs: 30_000,
+    });
+
+    const get = db.calls.find(c => c.includes("GET_LOCK"));
+    expect(get).toBeDefined();
+    // 30s, not 0. A 0 here is the fail-fast call wearing wait mode's name.
+    expect(get).toContain("30");
+    expect(get).not.toMatch(/"GET_LOCK\(\?, 0\)"/);
+  });
+
+  it("reports a busy lock as not-run in wait mode, rather than throwing", async () => {
+    const db = fakeMysql(0);
+    const fn = vi.fn(async () => "applied");
+
+    const outcome = await withMigrateLock(db, "mysql", fn, {
+      mode: "wait",
+      maxWaitMs: 1_000,
+    });
+
+    expect(outcome).toEqual({ ran: false, reason: "lock-held" });
+    expect(fn).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The control: fail-fast still THROWS on a busy lock. Without it the test
+   * above is satisfied by a dialect that never reports busy at all.
+   */
+  it("still throws on a busy lock in fail-fast mode", async () => {
+    const db = fakeMysql(0);
+
+    await expect(
+      withMigrateLock(db, "mysql", async () => "x")
+    ).rejects.toMatchObject({ code: "NEXTLY_MIGRATE_LOCK_BUSY" });
+  });
+});
+
 describe("withMigrateLock (postgres lock row)", () => {
   it("acquires (row returned), runs fn, releases", async () => {
     const db = fakeDb({ acquireRows: [1] });
