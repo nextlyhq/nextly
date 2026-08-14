@@ -91,6 +91,51 @@ describe("reviewersAtHead", () => {
     ).toEqual([CODEX]);
   });
 
+  /**
+   * Retargeting a stacked pull request moves the BASE while the head SHA stays
+   * put, so the reviewed diff widens under a revision that never changed. A
+   * review predating that carries the current head in `commit_id` and is still
+   * evidence about a diff that no longer exists — nothing about the revision
+   * gives it away, which is why coverage needs a lower bound as well.
+   */
+  it("does not count a review submitted before the base last moved", () => {
+    const stale = {
+      ...review(CODEX, HEAD),
+      submitted_at: "2026-08-14T09:00:00Z",
+    };
+    expect(reviewersAtHead([stale], HEAD, "2026-08-14T10:00:00Z")).toEqual([]);
+    // The positive control: the same review, submitted after the retarget.
+    const fresh = {
+      ...review(CODEX, HEAD),
+      submitted_at: "2026-08-14T11:00:00Z",
+    };
+    expect(reviewersAtHead([fresh], HEAD, "2026-08-14T10:00:00Z")).toEqual([
+      CODEX,
+    ]);
+  });
+
+  /**
+   * No bound means no pull request has been retargeted, which must not quietly
+   * become "nothing counts" — the ordinary case has no `submitted_at` bound to
+   * clear at all.
+   */
+  it("counts a review normally when the base has never moved", () => {
+    expect(reviewersAtHead([review(CODEX, HEAD)], HEAD, undefined)).toEqual([
+      CODEX,
+    ]);
+  });
+
+  /**
+   * A review whose timestamp is missing cannot be SHOWN to postdate the
+   * retarget, and unknown is not the same as covered — so it is withheld
+   * rather than counted.
+   */
+  it("withholds coverage from a review with no submitted time once a bound exists", () => {
+    expect(
+      reviewersAtHead([review(CODEX, HEAD)], HEAD, "2026-08-14T10:00:00Z")
+    ).toEqual([]);
+  });
+
   it("answers empty rather than throwing when the query returned nothing usable", () => {
     expect(reviewersAtHead(undefined, HEAD)).toEqual([]);
     expect(reviewersAtHead([review(CODEX, HEAD)], "")).toEqual([]);
