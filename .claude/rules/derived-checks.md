@@ -234,10 +234,18 @@ instrument answers correctly on an input whose answer you knew, which is a
 different claim from every existing report being real. Where the two are
 confused, a green control run quietly converts open findings into resolved ones.
 
-If the controls pass, keep fixing the findings — and say the instrument was
-checked, rather than leaving it under suspicion. If any fails, the check is the
-problem, and only then is it worth asking which of three things is unreliable —
-the remedies differ, and applying the wrong one looks like diligence:
+If the controls pass, the instrument is sound on the shapes exercised — say so,
+rather than leaving it under suspicion, and go on judging the reported findings
+ONE AT A TIME. Passing controls does not confirm any of them; a check can be
+right about the shapes you tested and wrong about the instance in front of you.
+
+If a control fails, do not conclude "the check is broken" either. A fixture that
+never invoked the check fails its control while the reader and the classifier
+are both fine — the HARNESS case below — so a red control means only that the
+run did not produce the expected result. Establish that the check was actually
+exercised before diagnosing it, and then ask which of three things is
+unreliable; the remedies differ, and applying the wrong one looks like
+diligence:
 
 - **The READ** — the check cannot see what it is looking at. Before reaching
   for a rewrite, separate two cases a failed control cannot tell apart, because
@@ -259,14 +267,20 @@ the remedies differ, and applying the wrong one looks like diligence:
   patch-by-example after any number of rounds — the same absence-is-not-evidence
   trap this file is otherwise about.
 
-  What separates them is whether the reader's input domain can be ENUMERATED.
-  Ask: can you state the complete set of forms this position admits, from the
-  grammar or the schema rather than from the failures seen so far, and does the
-  reader handle each? A JSX expression admits a listable set of node kinds; a
-  database column admits a listable set of types. That question has an answer
-  and the answer is checkable. "What can appear in a template literal that
-  eventually becomes a class string" does not — which is what makes it a
-  mismatch rather than a long list.
+  What separates them is whether the instrument's input DETERMINES the property
+  you are asking about. Not whether the syntax is finite — it usually is, and
+  that is why counting node kinds does not settle it. A JSX expression admits a
+  listable set of kinds, and two of those kinds are an identifier and a call,
+  whose resulting class string may not exist until the program runs. Finite
+  syntax, undetermined value.
+
+  So ask of the specific question: given everything this instrument can see, is
+  there exactly one answer? "Which JSX node encloses this element" — yes, the
+  tree says so, and a reader that gets it wrong is missing a case. "What string
+  will this expression evaluate to" — no, not from source, however many node
+  kinds you handle. The first is a repairable omission however long the list;
+  the second is a mismatch on the first example, and no amount of enumeration
+  reaches it.
 
   Worked example of the second: a source
   check for a component's class names took thirteen rounds finding spellings it
@@ -330,10 +344,13 @@ was wider.
 
 Three from this repository, arriving from unrelated directions:
 
-- **"Zero queue depth" used as "not load."** It rules out CONTENTION. A runner
-  that is intrinsically slower per unit of work is still load, and is invisible
-  to a queue-depth check — so a test dying at a timeout was declared a hang on
-  the strength of a measurement that could not see the cause it was excluding.
+- **"Zero queue depth" used as "not load."** It rules out BACKLOG — jobs
+  waiting to start — and not much else. Workers that have all dequeued and are
+  now competing for a lock, a CPU, a database connection or a disk leave the
+  queue at zero while contention is exactly what is causing the timeout; and a
+  runner intrinsically slower per unit of work is invisible to it entirely. A
+  test dying at a timeout was declared a hang on the strength of a measurement
+  that could not see either of the causes it was taken to exclude.
 - **"The marker is present" used as "the commit landed."** It confirms that
   matching text exists in the scope searched, and nothing more. Unless the
   marker is UNIQUE to that commit and the search is scoped to the path it
@@ -418,9 +435,18 @@ thoroughness. Instead:
   under-reporting guard that documents itself is honest; one that silently
   drifts toward under-reporting is the same code with the reader misled.
 
-State the remaining boundary rather than covering it badly. A named limitation
-is a check whose silence means something; an unnamed one is indistinguishable
-from coverage.
+State the remaining boundary rather than covering it badly — and where you can,
+REPRESENT it in the output rather than only in a comment. A documented
+limitation still emits the same nothing for "checked and valid" as for "not
+checked", so CI, the next reader and any downstream consumer go on treating an
+unexamined input as a clean one; prose in the file does not reach them.
+
+Give the unchecked case its own value: a third state beside pass and fail, a
+`skipped` count the run prints, a `{ known: false }` in the result. Then a
+caller that needs certainty can ask for it, and one that does not can carry on —
+which a comment cannot arrange. Only when the shape genuinely admits no third
+state does naming the limitation become the whole remedy, and then say so
+explicitly rather than leaving it as the default.
 
 And classify at the CALL SITE, not at the definition. A shared helper does not
 acquire one kind: a caller that logs a warning and a caller that gates a write
