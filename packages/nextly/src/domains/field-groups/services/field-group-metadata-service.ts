@@ -505,7 +505,13 @@ export class FieldGroupMetadataService {
     const creatorLines = (fields: FieldDefinition[]): Map<string, string> => {
       const sql = new FieldGroupSchemaService(dialect).generateMigrationSQL(
         args.existing.tableName,
-        fields,
+        // The stored field list and the config field list are two representations of one thing, and
+        // this service already crosses between them where it writes the registry row and where it
+        // reconciles the companion. Crossed here for the same reason: the creator is declared
+        // against the config shape, and it is the creator's answer this needs.
+        fields as unknown as Parameters<
+          InstanceType<typeof FieldGroupSchemaService>["generateMigrationSQL"]
+        >[1],
         { localized: args.localized }
       );
       const out = new Map<string, string>();
