@@ -431,21 +431,21 @@ function malformedMemberArraysFor(entry: Record<string, unknown>): unknown[] {
  * Held OUTSIDE `alternativesFor`, which is what keeps this affordable, and the
  * distinction is about what the value probes rather than about its cost. The
  * alternatives are crossed with each other — layered into conjunctions, then
- * fanned out through the omitted and sole passes — because a branch can be
- * keyed on two props at once. Length is not a value another prop can be keyed
- * on: the truncation runs before any other prop is read, so pairing an
- * oversized array with each `kind` and `start` alternative re-renders a thousand
- * items to reach a branch the first render already reached.
+ * fanned out through the omitted and sole passes. A prop set carrying a thousand
+ * items costs about two orders of magnitude more per render than any other, so
+ * the clamp in `layeredVariants` — which repeats a short alternative list's LAST
+ * value into every later layer — was pinning the oversized array into layer
+ * after layer and then fanning each one out again.
  *
- * The clamp in `layeredVariants` is what turns that from a duplicate into many:
- * a prop with fewer alternatives than the widest one repeats its LAST value into
- * every later layer, so an oversized array sitting at the end of the list is
- * pinned into each of them and then fanned out again. One prop set per array
- * prop reaches the same branch.
+ * This pass is the base case: one prop set per array prop, crossed with every
+ * host state and policy. That crossing is the part not traded away, because a
+ * block whose truncated output branches on the host would otherwise go
+ * unrendered.
  *
- * Still crossed with every host state and policy, which is the part that must
- * not be traded away: a block whose truncated output branches on the host is a
- * block this file would otherwise pass over.
+ * Pairing the oversized array with the OTHER props is still needed and is not
+ * done here — see `oversizedConjunctions`, which derives its cases from these
+ * and runs them against a single host state. The two together cost about what
+ * one of the old fanned-out layers did.
  */
 /**
  * An oversized array paired with each alternative the OTHER props can take.
@@ -460,37 +460,49 @@ function malformedMemberArraysFor(entry: Record<string, unknown>): unknown[] {
  * single-prop pass uses. What that leaves uncovered is a style needing the
  * oversized array and TWO other props away from base at once.
  */
-function oversizedConjunctions(block: AnyBlockDefinition): unknown[] {
-  const base = {
+/**
+ * A block's props as every pass starts from them: its defaults, with its
+ * example spread over the top.
+ *
+ * One definition, because three passes need it and a second copy is a second
+ * answer to what "unmodified" means for a block.
+ */
+function baseProps(block: AnyBlockDefinition): Record<string, unknown> {
+  return {
     ...(block.defaultProps ?? {}),
     ...(block.example.props ?? {}),
   } as Record<string, unknown>;
-  const schema: Record<string, unknown> = block.props ?? {};
-  const arrays = Object.entries(schema).filter(
-    ([, entry]) => (entry as { type?: unknown }).type === "array"
-  );
-  if (arrays.length === 0) return [];
-
-  const variants: unknown[] = [];
-  for (const [arrayName] of arrays) {
-    const oversized = {
-      ...base,
-      [arrayName]: Array.from({ length: 1001 }, (_, index) => `i${index}`),
-    };
-    for (const [name, values] of alternativesFor(schema)) {
-      if (name === arrayName) continue;
-      for (const value of values) {
-        variants.push({ ...oversized, [name]: value });
-      }
-    }
-  }
-  return variants;
 }
 
-function oversizedArrayVariants(
-  base: Record<string, unknown>,
-  schema: Record<string, unknown>
-): unknown[] {
+function oversizedConjunctions(block: AnyBlockDefinition): unknown[] {
+  const schema: Record<string, unknown> = block.props ?? {};
+  const alternatives = alternativesFor(schema);
+
+  // DERIVED from the base-spread cases rather than rebuilt beside them. Both
+  // passes answer one question — what does this block do when an array is past
+  // the renderer's cap — and rediscovering the array props, the base, and the
+  // oversized length here would be a second definition of it. They agree today;
+  // a later change to any of the three would move one and leave the other
+  // exercising inputs the first no longer uses.
+  return oversizedArrayVariants(block).flatMap(oversized => {
+    const set = oversized as Record<string, unknown>;
+    // Which prop this case made oversized, read back off the case itself: it is
+    // the array long enough to have passed the cap, and its own alternatives
+    // must not overwrite it.
+    const arrayName = Object.keys(set).find(
+      name => Array.isArray(set[name]) && (set[name] as unknown[]).length > 1000
+    );
+    return [...alternatives]
+      .filter(([name]) => name !== arrayName)
+      .flatMap(([name, values]) =>
+        values.map(value => ({ ...set, [name]: value }))
+      );
+  });
+}
+
+function oversizedArrayVariants(block: AnyBlockDefinition): unknown[] {
+  const base = baseProps(block);
+  const schema: Record<string, unknown> = block.props ?? {};
   return Object.entries(schema)
     .filter(([, entry]) => (entry as { type?: unknown }).type === "array")
     .map(([name]) => ({
@@ -583,10 +595,7 @@ function soleVariants(
 
 /** The prop sets each block is exercised with. */
 function propVariants(block: AnyBlockDefinition): unknown[] {
-  const base = {
-    ...(block.defaultProps ?? {}),
-    ...(block.example.props ?? {}),
-  } as Record<string, unknown>;
+  const base = baseProps(block);
   const schema: Record<string, unknown> = block.props ?? {};
   const alternatives = alternativesFor(schema);
   // The UNMODIFIED defaults are their own case. Spreading the example over them
@@ -613,7 +622,7 @@ function propVariants(block: AnyBlockDefinition): unknown[] {
     ...soleVariants(base, schema),
     ...layered.flatMap(layer => soleVariants(layer, schema)),
     ...malformedVariants(base, schema),
-    ...oversizedArrayVariants(base, schema),
+    ...oversizedArrayVariants(block),
   ];
 }
 
@@ -864,6 +873,43 @@ const PROBES: {
   block: AnyBlockDefinition;
   property: string;
 }[] = [
+  {
+    // Reachable ONLY through the oversized-conjunction pass, which is what
+    // gives that pass a control of its own. Every other probe here declares an
+    // empty schema and writes its style unconditionally, so the base variant
+    // loop finds all of them — and a conjunction pass that returned nothing
+    // would leave this suite green while the coverage it adds was gone.
+    //
+    // The style needs BOTH an array past the renderer's cap and another prop
+    // away from its example value, which is exactly the shape the base-spread
+    // case cannot reach: it holds every other prop at that value.
+    label: "a style needing an oversized array and a non-base prop",
+    property: "color",
+    block: {
+      name: "test/probe-oversized-conjunction",
+      version: 1,
+      props: {
+        items: { type: "array", of: "text" },
+        kind: { type: "select", options: ["unordered", "ordered"] },
+      },
+      defaultProps: { kind: "unordered", items: [] },
+      example: { props: { kind: "unordered", items: ["one"] } },
+      render: ({
+        props,
+        className,
+      }: {
+        props: { items?: unknown; kind?: unknown };
+        className: string;
+      }) => {
+        const items = Array.isArray(props.items) ? props.items : [];
+        const conditional =
+          items.length > 1000 && props.kind === "ordered"
+            ? { style: { color: "red" } }
+            : {};
+        return <div className={className} {...conditional} />;
+      },
+    } as unknown as AnyBlockDefinition,
+  },
   {
     label: "a style behind a component",
     property: "color",
