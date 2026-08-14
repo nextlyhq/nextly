@@ -379,6 +379,14 @@ export interface RawFieldGroupRecord {
   createdBy?: string | null;
   createdAt: Date;
   updatedAt: Date;
+  /**
+   * Optional here and REQUIRED on the mapped definition, deliberately.
+   *
+   * The registry's own record type declares it non-optional, but this shape also describes rows
+   * read back from databases created before the column existed, where the driver returns nothing
+   * for it. The mapper collapses both to a boolean, so the public type can promise one.
+   */
+  localized?: boolean | null;
 }
 
 /**
@@ -398,6 +406,11 @@ export function mapFieldGroupRecord(
       unknown
     >[],
     admin: record.admin as FieldGroupDefinition["admin"],
+    // The dialect's storage is already decided elsewhere: the registry's row mapper normalises the
+    // integer MySQL and SQLite hold to a boolean, so nothing here re-derives that. This only
+    // collapses the optional declaration above, and absent reads false — the shape a row predating
+    // the column actually describes.
+    localized: record.localized === true,
     source: record.source as "code" | "ui",
     locked: record.locked,
     configPath: record.configPath ?? undefined,

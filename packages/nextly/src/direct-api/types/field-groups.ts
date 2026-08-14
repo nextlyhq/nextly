@@ -91,6 +91,17 @@ export interface FieldGroupDefinition {
     imageURL?: string;
   };
 
+  /**
+   * Whether this field group stores translatable values per locale.
+   *
+   * `true` means its translatable columns live in `comp_<slug>_locales` rather than on the main
+   * table. Always present: the setting is a fact about the stored field group, and reporting
+   * `undefined` for a non-localized one would make "not localized" indistinguishable from "this
+   * client is too old to know", which is the distinction a caller comparing before and after a
+   * toggle depends on.
+   */
+  localized: boolean;
+
   /** Source of the field group definition */
   source: "code" | "ui";
 

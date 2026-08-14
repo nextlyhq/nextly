@@ -356,6 +356,12 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     if (data.fields) {
       updateData.fields = JSON.stringify(data.fields);
       updateData.migration_status = data.migrationStatus || "pending";
+    } else if (data.migrationStatus !== undefined) {
+      // How far a schema change GOT is not a property of the field list, and coupling the two made
+      // it unwritable on its own. That left the one caller who has an outcome and nothing else to
+      // say — a write that failed after its DDL committed — unable to record it, so a row went on
+      // describing a shape the tables no longer have with nothing marking the divergence.
+      updateData.migration_status = data.migrationStatus;
     }
 
     if (data.fields || localizationChanged) {

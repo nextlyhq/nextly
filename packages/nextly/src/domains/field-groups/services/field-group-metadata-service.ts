@@ -320,7 +320,9 @@ export class FieldGroupMetadataService {
     // enabling seeds the companion from the main table and drops those columns, disabling restores
     // and archives them. A save that skipped that would persist the flag while the content stayed
     // where the runtime no longer looks for it.
-    if (input.fields !== undefined || localized !== wasLocalized) {
+    const movedSchema =
+      input.fields !== undefined || localized !== wasLocalized;
+    if (movedSchema) {
       await this.reconcileCompanion({
         existing,
         fields,
@@ -330,29 +332,107 @@ export class FieldGroupMetadataService {
     }
 
     // 2. RECORD, after the physical change succeeded.
-    const record = await this.registry.updateComponent(
-      input.slug,
+    try {
+      const record = await this.registry.updateComponent(
+        input.slug,
+        {
+          ...(input.label !== undefined ? { label: input.label } : {}),
+          ...(input.description !== undefined
+            ? { description: input.description }
+            : {}),
+          ...(input.admin !== undefined ? { admin: input.admin } : {}),
+          ...(requestedLocalized !== undefined
+            ? { localized: requestedLocalized }
+            : {}),
+          ...(input.fields !== undefined
+            ? {
+                fields:
+                  input.fields as unknown as DynamicFieldGroupInsert["fields"],
+                schemaHash: await this.hashFields(input.fields),
+              }
+            : {}),
+        },
+        { source: input.source ?? "ui" }
+      );
+
+      return { record };
+    } catch (error) {
+      // Only when the tables actually MOVED. A metadata-only edit that fails to write has changed
+      // nothing, so the row still describes the database correctly and there is no divergence to
+      // record — marking it `failed` there would invent a repair for a state that is fine.
+      if (!movedSchema) throw error;
+      // Returns `never`, so this is a raise rather than a value — written as a return so the
+      // compiler, not a comment, is what establishes that nothing falls out of this method.
+      return await this.recordUnrecordedTransition(input.slug, existing, error);
+    }
+  }
+
+  /**
+   * The registry write failed AFTER the companion transition committed. Say so, and mark the row.
+   *
+   * 🔴 The two halves of this operation cannot be made atomic — MySQL commits DDL implicitly, which
+   * is why this service says so at the top of the file — so this is the state the ordering leaves
+   * when the second half fails. The tables have the new shape and the row still describes the old
+   * one.
+   *
+   * Raising the registry's own error would be worse than useless here: it reads as "the write did
+   * not happen", which invites a retry, and a retry re-derives `wasLocalized` from the row that
+   * still says the old value. For an enable that means seeding the companion a second time from
+   * main-table columns the first attempt already dropped. The caller has to be told the physical
+   * change stands.
+   *
+   * The status write is BEST EFFORT and its failure is not raised. It is a narrow single-column
+   * update, so it survives the failures that realistically break the full write — a rejected field
+   * list, an oversized label, a value the driver cannot encode — and if the database is genuinely
+   * unreachable it fails too, which is why the log carries everything needed to find the field
+   * group without it.
+   */
+  private async recordUnrecordedTransition(
+    slug: string,
+    existing: DynamicFieldGroupRecord,
+    cause: unknown
+  ): Promise<never> {
+    this.logger.error(
+      "[FieldGroups] Schema transition committed but its registry row was not written.",
       {
-        ...(input.label !== undefined ? { label: input.label } : {}),
-        ...(input.description !== undefined
-          ? { description: input.description }
-          : {}),
-        ...(input.admin !== undefined ? { admin: input.admin } : {}),
-        ...(requestedLocalized !== undefined
-          ? { localized: requestedLocalized }
-          : {}),
-        ...(input.fields !== undefined
-          ? {
-              fields:
-                input.fields as unknown as DynamicFieldGroupInsert["fields"],
-              schemaHash: await this.hashFields(input.fields),
-            }
-          : {}),
-      },
-      { source: input.source ?? "ui" }
+        slug,
+        tableName: existing.tableName,
+        wasLocalized: existing.localized === true,
+        error: cause instanceof Error ? cause.message : String(cause),
+      }
     );
 
-    return { record };
+    try {
+      await this.registry.updateComponent(
+        slug,
+        { migrationStatus: "failed" },
+        { source: "code" }
+      );
+    } catch (markError) {
+      this.logger.error(
+        "[FieldGroups] Could not mark the field group's migration as failed either.",
+        {
+          slug,
+          error:
+            markError instanceof Error ? markError.message : String(markError),
+        }
+      );
+    }
+
+    // Constructed rather than `NextlyError.internal`, which fixes the public message to "An
+    // unexpected error occurred." That is the one thing this caller must NOT be told: the whole
+    // point is that the edit half-happened and repeating it is harmful.
+    throw new NextlyError({
+      code: "INTERNAL_ERROR",
+      statusCode: 500,
+      publicMessage: `The field group's tables were changed, but recording the change failed. "${slug}" is marked as a failed migration and its stored definition still describes the previous shape. Do not retry the same edit: check the server logs and reconcile the field group before editing it again.`,
+      cause: cause instanceof Error ? cause : undefined,
+      logContext: {
+        reason: "registry write failed after committed schema transition",
+        slug,
+        tableName: existing.tableName,
+      },
+    });
   }
 
   /** The stored hash for a field set, from the one implementation the whole pipeline uses. */

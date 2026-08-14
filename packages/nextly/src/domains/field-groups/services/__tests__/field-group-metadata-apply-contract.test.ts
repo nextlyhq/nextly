@@ -28,6 +28,10 @@ vi.mock("../field-group-table-provisioning", () => ({
     bound.push(tableName);
   }),
   reconcileComponentCompanion: vi.fn(async () => {}),
+  // The update path probes which discriminator column the existing table carries before it moves
+  // anything. Stubbed to the current spelling: an unstubbed export throws on call, and the update
+  // tests below would then be describing a companion transition that never started.
+  resolveComponentTypeColumn: vi.fn(async () => "type"),
 }));
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
@@ -327,5 +331,141 @@ describe("a create whose generated names would not fit is refused", () => {
     });
 
     expect(migrationStatus).toBe("applied");
+  });
+});
+
+/**
+ * The two halves of an update cannot be made atomic — MySQL commits DDL implicitly — so the state
+ * where the tables moved and the row did not is reachable by construction rather than by neglect.
+ *
+ * What it must not be is SILENT, and it must not read to the caller as "nothing happened": the
+ * registry's own error says that, and acting on it means retrying an edit whose first half already
+ * stands. A retry re-derives `wasLocalized` from a row that still holds the old value, so an enable
+ * would seed the companion a second time from main-table columns the first attempt dropped.
+ */
+describe("an update whose row write fails after the tables moved", () => {
+  /** A registry holding one field group, whose row write fails the first time it is attempted. */
+  function registryWhoseWriteFails(args: {
+    localized?: boolean;
+    failure?: unknown;
+  }) {
+    const record = {
+      id: "fg-1",
+      slug: "hero",
+      tableName: "comp_hero",
+      label: "Hero",
+      fields: [{ name: "heading", type: "text" }],
+      localized: args.localized ?? false,
+      locked: false,
+      schemaVersion: 1,
+    };
+    let attempts = 0;
+    return {
+      record,
+      getAllComponents: vi.fn().mockResolvedValue([]),
+      registerComponent: vi.fn(async (row: unknown) => row),
+      getComponent: vi.fn().mockResolvedValue(record),
+      // Fails the real write and accepts the narrow status mark that follows it, which is the whole
+      // reason the mark is worth attempting: a single-column update survives the failures that
+      // realistically break a full row write.
+      updateComponent: vi.fn(async () => {
+        attempts += 1;
+        if (attempts === 1)
+          throw args.failure ?? new Error("row write rejected");
+        return record;
+      }),
+    };
+  }
+
+  it("tells the caller the change stands, and marks the row failed", async () => {
+    const registry = registryWhoseWriteFails({});
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    const refusal = await service
+      .updateFieldGroup({
+        slug: "hero",
+        fields: [
+          { name: "heading", type: "text" },
+          { name: "subheading", type: "text" },
+        ] as never,
+      })
+      .catch((error: unknown) => error);
+
+    // Asserted on the MESSAGE, not only the code. The registry's own failure is an internal error
+    // too, so the code alone cannot separate "the write failed and nothing happened" from "the
+    // write failed and the tables already moved" — and only the second may not be retried.
+    expect(refusal).toBeInstanceOf(NextlyError);
+    expect((refusal as NextlyError).code).toBe("INTERNAL_ERROR");
+    expect((refusal as NextlyError).publicMessage).toContain(
+      "Do not retry the same edit"
+    );
+
+    // The transition really did run, so this is describing the state it claims to describe rather
+    // than a request that failed earlier.
+    const { reconcileComponentCompanion } = await import(
+      "../field-group-table-provisioning"
+    );
+    expect(reconcileComponentCompanion).toHaveBeenCalled();
+
+    // The divergence is RECORDED, not merely raised: the raise reaches one caller once, the row is
+    // what anyone looking later can see.
+    expect(registry.updateComponent).toHaveBeenCalledTimes(2);
+    expect(registry.updateComponent.mock.calls[1]?.[1]).toEqual({
+      migrationStatus: "failed",
+    });
+  });
+
+  it("raises the original error, unmarked, when nothing physical moved", async () => {
+    // 🔴 The control that stops this becoming a blanket rewrite of every failed update. A label-only
+    // edit issues no DDL, so a failed write leaves the row describing the database correctly. There
+    // is no divergence, and marking one would invent a repair for a state that is fine.
+    const failure = new Error("row write rejected");
+    const registry = registryWhoseWriteFails({ failure });
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    const refusal = await service
+      .updateFieldGroup({ slug: "hero", label: "Hero (renamed)" })
+      .catch((error: unknown) => error);
+
+    expect(refusal).toBe(failure);
+    expect(registry.updateComponent).toHaveBeenCalledTimes(1);
+  });
+
+  it("still raises when the row could not even be marked", async () => {
+    // Best effort means the mark's own failure must not replace the diagnosis the caller needs.
+    const registry = registryWhoseWriteFails({});
+    registry.updateComponent = vi.fn(async () => {
+      throw new Error("database unreachable");
+    });
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    const refusal = await service
+      .updateFieldGroup({
+        slug: "hero",
+        fields: [
+          { name: "heading", type: "text" },
+          { name: "subheading", type: "text" },
+        ] as never,
+      })
+      .catch((error: unknown) => error);
+
+    expect((refusal as NextlyError).publicMessage).toContain(
+      "Do not retry the same edit"
+    );
+    // The mark was attempted and refused, which is the state this describes. Asserting only the
+    // raise would pass on an implementation that never tried.
+    expect(registry.updateComponent).toHaveBeenCalledTimes(2);
   });
 });

@@ -61,18 +61,25 @@ function makeRegistry(overrides: Partial<Registry> = {}): Registry {
   };
 }
 
+/**
+ * Wire the dispatcher's two dependencies and hand back the SERVICE.
+ *
+ * Returned rather than kept private because delegation is a claim about which object the handler
+ * called, and only the service can witness it: the registry is reached either way, so observing
+ * the registry alone answers "was the row written" and not "who wrote it".
+ */
 function wireRegistry(registry: Registry) {
   vi.mocked(getComponentRegistryFromDI).mockReturnValue(
     registry as unknown as ReturnType<typeof getComponentRegistryFromDI>
   );
   // The real service with NO adapter, which is this suite's own premise: the create generates its
   // statements and runs none, so these stay tests of the response shape rather than of DDL.
-  vi.mocked(getFieldGroupMetadataServiceFromDI).mockReturnValue(
-    new FieldGroupMetadataService(
-      registry as unknown as FieldGroupRegistryService,
-      { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }
-    )
+  const service = new FieldGroupMetadataService(
+    registry as unknown as FieldGroupRegistryService,
+    { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }
   );
+  vi.mocked(getFieldGroupMetadataServiceFromDI).mockReturnValue(service);
+  return service;
 }
 
 beforeEach(() => {
@@ -193,7 +200,10 @@ describe("dispatchComponents, mutations (respondMutation)", () => {
       getComponent: vi.fn().mockResolvedValue(existing),
       updateComponent: vi.fn().mockResolvedValue(updated),
     });
-    wireRegistry(registry);
+    const service = wireRegistry(registry);
+    // Spied rather than replaced: the real method still runs, so the registry assertion below is
+    // still describing a real call rather than one this spy invented.
+    const updateFieldGroup = vi.spyOn(service, "updateFieldGroup");
 
     const result = await dispatchComponents(
       "updateComponent",
@@ -210,9 +220,21 @@ describe("dispatchComponents, mutations (respondMutation)", () => {
     });
 
     // 🔴 The handler is a transport now, so what makes this test load-bearing is WHERE the write
-    // went. Asserting only the body would keep passing if the handler wrote the registry itself
-    // again — which is the state that let two other transports skip the schema half entirely.
-    // Observing the real call's arguments is what pins the delegation.
+    // went — and this has to be observed on the SERVICE, not on the registry.
+    //
+    // The registry is reached on both paths: through the service, and by a handler that writes the
+    // row itself. So `expect(registry.updateComponent).toHaveBeenCalledWith(...)` is satisfied by
+    // exactly the regression it was written to catch — the state that let two other transports
+    // write the row and skip the schema half entirely. It answers "was the row written", which is
+    // a neighbouring question to "who wrote it".
+    expect(updateFieldGroup).toHaveBeenCalledWith({
+      slug: "hero",
+      label: "Hero (renamed)",
+      source: "ui",
+    });
+
+    // Kept as well, because it pins something the service call does not: what the service passes
+    // ON, unsent properties excluded.
     expect(registry.updateComponent).toHaveBeenCalledWith(
       "hero",
       { label: "Hero (renamed)" },
