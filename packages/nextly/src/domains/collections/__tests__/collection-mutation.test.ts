@@ -98,9 +98,16 @@ vi.mock("@nextly/hooks/context-builder", () => ({
   buildContext: vi.fn((opts: Record<string, unknown>) => opts),
 }));
 
+// Hoisted so every instance shares one spy. A per-instance `vi.fn()` is unreachable from a test,
+// which would leave this seam unobservable — and an unobservable seam is exactly where hook
+// dispatch could move ahead of the access check without any assertion noticing.
+const storedHookExecute = vi.hoisted(() =>
+  vi.fn().mockResolvedValue({ data: undefined, errors: [] })
+);
+
 vi.mock("@nextly/hooks/stored-hook-executor", () => {
   class MockStoredHookExecutor {
-    execute = vi.fn().mockResolvedValue({ data: undefined, errors: [] });
+    execute = storedHookExecute;
   }
   return { StoredHookExecutor: MockStoredHookExecutor };
 });
@@ -486,13 +493,19 @@ describe("CollectionEntryService — Mutation Contracts", () => {
         { title: "Updated" }
       );
 
+      // EVERY dispatch seam, not the one that happened to be handy. Asserting only
+      // `executeBeforeOperation` leaves `execute` — which carries `beforeUpdate` — and the stored
+      // hook executor free to move above the gate with this test still green.
       expect(mockHookRegistry.executeBeforeOperation).not.toHaveBeenCalled();
+      expect(mockHookRegistry.execute).not.toHaveBeenCalled();
+      expect(storedHookExecute).not.toHaveBeenCalled();
     });
 
-    it("runs that same hook for a caller it allows", async () => {
-      // The positive control the assertion above needs. Without it a registry that never
-      // dispatches anything — a renamed seam, a mock that stopped being wired — satisfies
-      // `not.toHaveBeenCalled()`, and the ordering rule reads as enforced while nothing checks it.
+    it("runs those same hooks for a caller it allows", async () => {
+      // The positive control the assertions above need, and it has to cover the same seams: one
+      // that never dispatches — a renamed method, a mock that stopped being wired — satisfies
+      // `not.toHaveBeenCalled()`, and the ordering rule then reads as enforced while nothing
+      // checks it.
       selectData.rows = [createSampleEntry()];
 
       await service.updateEntry(
@@ -501,6 +514,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       );
 
       expect(mockHookRegistry.executeBeforeOperation).toHaveBeenCalled();
+      expect(mockHookRegistry.execute).toHaveBeenCalled();
     });
 
     it("should execute beforeOperation hooks", async () => {
