@@ -2,10 +2,9 @@
  * How each package manager spells "run this script" and "run this binary".
  *
  * One answer to a question asked in several places: the next-steps screen printed after a
- * scaffold, and the agent guide written into the project. Both used to hardcode npm, and a
- * guide that says `npm run dev` inside a Yarn project is not merely untidy — under Yarn's
- * default PnP linker there is no `node_modules/.bin`, so `npm run dev` cannot resolve `next`
- * and the command fails outright.
+ * scaffold, and the agent guide written into the project. Hardcoding npm is not merely untidy —
+ * under Yarn's default PnP linker there is no `node_modules/.bin`, so `npm run dev` cannot
+ * resolve `next` and the command fails outright.
  *
  * @module utils/package-manager-commands
  */

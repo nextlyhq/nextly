@@ -19,7 +19,7 @@ service to start.
 | `src/collections/`     | code-first collection definitions, when this project uses them     |
 | `src/app/(frontend)/`  | the public site                                                    |
 | `src/app/admin/`       | the admin panel, served at `/admin`                                |
-| `migrations/`          | SQL migrations, one file per dialect variant                       |
+| `migrations/`          | SQL migrations, in this project's dialect                          |
 | `src/types/generated/` | generated types — never edit by hand                               |
 
 ## Commands
@@ -88,14 +88,22 @@ const slug = typeof doc.slug === "string" ? doc.slug : undefined;
   narrowed scope — the caller's identity has to be IN the key, or one user's
   rows get served to another:
 
-  **A read is only "public" if the QUERY makes it so.** `find()` defaults to
-  `overrideAccess: true` — a trusted server read that bypasses access rules — so
-  filtering by slug alone can return a draft, or a row the rules would have
-  hidden, and then cache it for every visitor. Constrain the query explicitly:
+  **A shared cache entry is only safe if the read is public for EVERY reader.**
+  Two independent things can make it not so, and each needs its own answer:
+
+  - **drafts** — `find()` defaults to `overrideAccess: true`, a trusted server
+    read, so a slug filter alone can return an unpublished row. `status:
+    "published"` is enforced even on a trusted read and fixes this one.
+  - **per-row access rules** — owner-only scoping, role-based visibility, an API
+    key's narrowed scope. `status` does NOT evaluate these; it is a
+    draft/published lifecycle filter and nothing more. A published row that only
+    its owner may read is still returned by the query above.
+
+  So the decision is: **does this collection carry read-access rules?**
 
   ```ts
-  // Public: `status: "published"` is enforced even on a trusted read, so drafts
-  // cannot reach the shared entry. Same result for every reader → stable key.
+  // NO access rules — the result is identical for every reader, so one shared
+  // entry is correct and gets the full ISR benefit.
   cachedFind(
     () =>
       nextly.find({
@@ -106,18 +114,16 @@ const slug = typeof doc.slug === "string" ? doc.slug : undefined;
     { tags: nextlyTags("posts"), keyParts: ["posts", slug] }
   );
 
-  // Per-user: evaluate the access rules as the CALLER, and put their identity in
-  // the key — the entry is no longer the same for every reader.
+  // ACCESS RULES — evaluate them as the caller, and put the caller's identity in
+  // the key. The entry is per-reader; that is the point, not a compromise.
   cachedFind(
-    () =>
-      nextly.find({ collection: "orders", user, overrideAccess: false }),
+    () => nextly.find({ collection: "orders", user, overrideAccess: false }),
     { tags: nextlyTags("orders"), keyParts: ["orders", "list", user.id] }
   );
   ```
 
-  If the collection carries per-row access rules, a stable key is wrong even when
-  the route looks public. When in doubt, do not cache: a missing cache is slow, a
-  shared one leaks.
+  If you are unsure whether a collection has read rules, do not cache it. A
+  missing cache is slow; a shared one leaks.
 
 ## Conventions worth keeping
 
