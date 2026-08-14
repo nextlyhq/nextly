@@ -248,6 +248,18 @@ jobs:
       - name: Storage-spelling gate (field-group storage format)
         run: pnpm check:storage-format-literals
 
+      # `pnpm dev` refuses to start when the concurrency limit written into the
+      # root scripts stops exceeding the number of persistent `dev` tasks, and
+      # that count grows whenever any package gains a `dev` script. Nothing else
+      # here can see it: the failure is in the launcher, so every build, test and
+      # type check stays green while the workspace dev command is dead.
+      #
+      # Static on purpose. Actually running `turbo run dev` would mean starting
+      # twenty long-running watchers to observe a property that is decided
+      # before any of them runs.
+      - name: Dev concurrency gate (persistent task count)
+        run: pnpm check:dev-concurrency
+
       # The drizzle-v1 migration's own safety net (review-driven: these
       # suites previously executed in NO CI job because the `nextly`
       # package's full test task carries a pre-existing failing baseline).
@@ -303,7 +315,7 @@ jobs:
       # `turbo run test` never reaches it. Its own suite runs here: a defect in
       # the release-notes builder only surfaces during a real publish, after the
       # packages are already on npm. Needs no build, runs in milliseconds.
-      - name: Release script tests
+      - name: Script tests
         run: pnpm test:scripts
 
       # The published packages version in lockstep, so a changeset that names
@@ -627,6 +639,22 @@ jobs:
           # avoids the multi-minute pnpm install during the smoke check.
           npm exec --yes --package="$tarball" -- create-nextly-app smoke-app --template blank --skip-install --yes
           test -f smoke-app/package.json && echo "scaffold ok"
+
+      # The generated scripts and the CLI's command set live in two different
+      # packages, and nothing compared them: every project shipped a
+      # `db:migrate:reset` calling a command `nextly` has never registered, which
+      # failed the first time a user ran it while every build stayed green.
+      #
+      # It runs HERE rather than in `scaffold-build.yml` because this job is
+      # reached by a change to EITHER side. That workflow triggers on the
+      # scaffolder and the templates, so a pull request that removes or renames a
+      # CLI command — the other half of the contract — would never run it.
+      - name: Check the generated scripts name real CLI commands
+        shell: bash
+        run: |
+          node scripts/check-scaffold-cli-scripts.mjs \
+            /tmp/scaffold-test/smoke-app \
+            packages/nextly/dist/cli/nextly.mjs
   # The `dev` script of `packages/ui` starts TWO watchers, and the shape it used
   # before — `a --watch & b --watch & wait` — is POSIX. `cmd.exe` treats `&` as a
   # SEQUENTIAL separator and has no `wait`, so on Windows the first watcher held

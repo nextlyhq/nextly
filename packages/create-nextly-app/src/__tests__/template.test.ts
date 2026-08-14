@@ -172,7 +172,10 @@ describe("generatePackageJson", () => {
     expect(result.scripts["db:migrate"]).toBe("nextly migrate");
     expect(result.scripts["db:migrate:status"]).toBe("nextly migrate:status");
     expect(result.scripts["db:migrate:fresh"]).toBe("nextly migrate:fresh");
-    expect(result.scripts["db:migrate:reset"]).toBe("nextly migrate:reset");
+    // Asserted ABSENT: `nextly migrate:reset` is not a registered command, so
+    // generating this script shipped every project a `npm run db:migrate:reset`
+    // that fails. The test previously pinned it as expected output.
+    expect(result.scripts["db:migrate:reset"]).toBeUndefined();
     expect(result.scripts["types:generate"]).toBe("nextly generate:types");
   });
 

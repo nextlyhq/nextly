@@ -411,23 +411,104 @@ function outOfRangeValuesFor(entry: Record<string, unknown>): unknown[] {
  * a member of the wrong type is a different state, and the one `core/list`
  * coerces per item — `stored.slice(...).map(item => text(item))` exists for it.
  *
- * The renderer's own `MAX_ITEMS` truncation is a branch of the same kind, and
- * the oversized array below reaches it at the smallest input that does.
+ * A member of the wrong TYPE is a value alternative like any other, so these
+ * belong in the cross product. An oversized array is not — see
+ * `oversizedArrayVariants`.
  */
 function malformedMemberArraysFor(entry: Record<string, unknown>): unknown[] {
   if (entry.type !== "array") return [];
-  return [
-    [42],
-    [null],
-    [{}],
-    ["ok", 42],
-    // Past the renderer's own truncation. `core/list` slices at a thousand
-    // before it maps, and that slice is a branch like any other: a stored array
-    // can be any length, and nothing in the schema says otherwise. Sized just
-    // over the cap rather than far past it, so the branch is reached at the
-    // smallest input that reaches it.
-    Array.from({ length: 1001 }, (_, index) => `i${index}`),
-  ];
+  return [[42], [null], [{}], ["ok", 42]];
+}
+
+/**
+ * One prop set per array prop, sized past the renderer's own truncation.
+ *
+ * `core/list` slices at a thousand before it maps, and that slice is a branch
+ * like any other: a stored array can be any length, and nothing in the schema
+ * says otherwise. Sized just over the cap rather than far past it, so the branch
+ * is reached at the smallest input that reaches it.
+ *
+ * Held OUTSIDE `alternativesFor`, which is what keeps this affordable, and the
+ * distinction is about what the value probes rather than about its cost. The
+ * alternatives are crossed with each other — layered into conjunctions, then
+ * fanned out through the omitted and sole passes. A prop set carrying a thousand
+ * items costs about two orders of magnitude more per render than any other, so
+ * the clamp in `layeredVariants` — which repeats a short alternative list's LAST
+ * value into every later layer — was pinning the oversized array into layer
+ * after layer and then fanning each one out again.
+ *
+ * This pass is the base case: one prop set per array prop, crossed with every
+ * host state and policy. That crossing is the part not traded away, because a
+ * block whose truncated output branches on the host would otherwise go
+ * unrendered.
+ *
+ * Pairing the oversized array with the OTHER props is still needed and is not
+ * done here — see `oversizedConjunctions`, which derives its cases from these
+ * and runs them against a single host state. The two together cost about what
+ * one of the old fanned-out layers did.
+ */
+/**
+ * An oversized array paired with each alternative the OTHER props can take.
+ *
+ * The base-spread case in {@link oversizedArrayVariants} holds every other prop
+ * at its example value, so a style written only when the array is past the cap
+ * AND another prop is away from that value is never rendered — `core/list`
+ * examples an unordered list, so a declaration guarded by
+ * `items.length > MAX && kind === "ordered"` is not reached by it.
+ *
+ * One prop moved at a time, not the cross product, which is the same bound the
+ * single-prop pass uses. What that leaves uncovered is a style needing the
+ * oversized array and TWO other props away from base at once.
+ */
+/**
+ * A block's props as every pass starts from them: its defaults, with its
+ * example spread over the top.
+ *
+ * One definition, because three passes need it and a second copy is a second
+ * answer to what "unmodified" means for a block.
+ */
+function baseProps(block: AnyBlockDefinition): Record<string, unknown> {
+  return {
+    ...(block.defaultProps ?? {}),
+    ...(block.example.props ?? {}),
+  } as Record<string, unknown>;
+}
+
+function oversizedConjunctions(block: AnyBlockDefinition): unknown[] {
+  const schema: Record<string, unknown> = block.props ?? {};
+  const alternatives = alternativesFor(schema);
+
+  // DERIVED from the base-spread cases rather than rebuilt beside them. Both
+  // passes answer one question — what does this block do when an array is past
+  // the renderer's cap — and rediscovering the array props, the base, and the
+  // oversized length here would be a second definition of it. They agree today;
+  // a later change to any of the three would move one and leave the other
+  // exercising inputs the first no longer uses.
+  return oversizedArrayVariants(block).flatMap(oversized => {
+    const set = oversized as Record<string, unknown>;
+    // Which prop this case made oversized, read back off the case itself: it is
+    // the array long enough to have passed the cap, and its own alternatives
+    // must not overwrite it.
+    const arrayName = Object.keys(set).find(
+      name => Array.isArray(set[name]) && (set[name] as unknown[]).length > 1000
+    );
+    return [...alternatives]
+      .filter(([name]) => name !== arrayName)
+      .flatMap(([name, values]) =>
+        values.map(value => ({ ...set, [name]: value }))
+      );
+  });
+}
+
+function oversizedArrayVariants(block: AnyBlockDefinition): unknown[] {
+  const base = baseProps(block);
+  const schema: Record<string, unknown> = block.props ?? {};
+  return Object.entries(schema)
+    .filter(([, entry]) => (entry as { type?: unknown }).type === "array")
+    .map(([name]) => ({
+      ...base,
+      [name]: Array.from({ length: 1001 }, (_, index) => `i${index}`),
+    }));
 }
 
 function alternativesFor(
@@ -514,10 +595,7 @@ function soleVariants(
 
 /** The prop sets each block is exercised with. */
 function propVariants(block: AnyBlockDefinition): unknown[] {
-  const base = {
-    ...(block.defaultProps ?? {}),
-    ...(block.example.props ?? {}),
-  } as Record<string, unknown>;
+  const base = baseProps(block);
   const schema: Record<string, unknown> = block.props ?? {};
   const alternatives = alternativesFor(schema);
   // The UNMODIFIED defaults are their own case. Spreading the example over them
@@ -544,6 +622,7 @@ function propVariants(block: AnyBlockDefinition): unknown[] {
     ...soleVariants(base, schema),
     ...layered.flatMap(layer => soleVariants(layer, schema)),
     ...malformedVariants(base, schema),
+    ...oversizedArrayVariants(block),
   ];
 }
 
@@ -731,21 +810,49 @@ async function inspectBlock(block: AnyBlockDefinition): Promise<Inspection> {
   const permitted = ALLOWED.get(block.name) ?? new Set<string>();
   const offenders: string[] = [];
   let reached = false;
+
+  const inspect = async (
+    props: unknown,
+    ctx: PageContext,
+    hostPolicy: object | undefined
+  ): Promise<void> => {
+    const html = await renderHtml(block, props, ctx, hostPolicy);
+    const { roots, carriesClass } = inspectableTags(html);
+    if (carriesClass) reached = true;
+    for (const tag of roots) {
+      for (const property of inlinePropertiesOf(tag)) {
+        if (permitted.has(property)) continue;
+        offenders.push(`${block.name}: ${property}`);
+      }
+    }
+  };
+
   for (const props of propVariants(block)) {
     for (const ctx of contexts()) {
       for (const hostPolicy of hostPolicies()) {
-        const html = await renderHtml(block, props, ctx, hostPolicy);
-        const { roots, carriesClass } = inspectableTags(html);
-        if (carriesClass) reached = true;
-        for (const tag of roots) {
-          for (const property of inlinePropertiesOf(tag)) {
-            if (permitted.has(property)) continue;
-            offenders.push(`${block.name}: ${property}`);
-          }
-        }
+        await inspect(props, ctx, hostPolicy);
       }
     }
   }
+
+  // The oversized cases run against ONE host state rather than all of them, and
+  // the split is what makes them affordable. A prop set carrying a thousand
+  // items costs about two orders of magnitude more per render than any other,
+  // so crossing every one of them with thirteen host states and four policies
+  // spends the whole file's budget on a single block.
+  //
+  // What that gives up is a style conditional on length AND a host state at
+  // once. This file already declines the equivalent elsewhere — `layeredVariants`
+  // is bounded by the widest prop rather than the cross product, and
+  // `soleVariants` moves one prop at a time — so a three-way conjunction is
+  // outside what any of these passes reach, and length is the axis where paying
+  // for it is most expensive.
+  const [ctx] = contexts();
+  const [hostPolicy] = hostPolicies();
+  for (const props of oversizedConjunctions(block)) {
+    await inspect(props, ctx!, hostPolicy);
+  }
+
   return { reached, offenders };
 }
 
@@ -766,6 +873,43 @@ const PROBES: {
   block: AnyBlockDefinition;
   property: string;
 }[] = [
+  {
+    // Reachable ONLY through the oversized-conjunction pass, which is what
+    // gives that pass a control of its own. Every other probe here declares an
+    // empty schema and writes its style unconditionally, so the base variant
+    // loop finds all of them — and a conjunction pass that returned nothing
+    // would leave this suite green while the coverage it adds was gone.
+    //
+    // The style needs BOTH an array past the renderer's cap and another prop
+    // away from its example value, which is exactly the shape the base-spread
+    // case cannot reach: it holds every other prop at that value.
+    label: "a style needing an oversized array and a non-base prop",
+    property: "color",
+    block: {
+      name: "test/probe-oversized-conjunction",
+      version: 1,
+      props: {
+        items: { type: "array", of: "text" },
+        kind: { type: "select", options: ["unordered", "ordered"] },
+      },
+      defaultProps: { kind: "unordered", items: [] },
+      example: { props: { kind: "unordered", items: ["one"] } },
+      render: ({
+        props,
+        className,
+      }: {
+        props: { items?: unknown; kind?: unknown };
+        className: string;
+      }) => {
+        const items = Array.isArray(props.items) ? props.items : [];
+        const conditional =
+          items.length > 1000 && props.kind === "ordered"
+            ? { style: { color: "red" } }
+            : {};
+        return <div className={className} {...conditional} />;
+      },
+    } as unknown as AnyBlockDefinition,
+  },
   {
     label: "a style behind a component",
     property: "color",

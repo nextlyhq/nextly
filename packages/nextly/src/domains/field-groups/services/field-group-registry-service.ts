@@ -336,10 +336,31 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       updateData.description = data.description;
     }
 
+    // 🔴 The version advances when the PHYSICAL SHAPE changes, not when `fields` happens to be
+    // present. `schema_version` is an optimistic lock: `assertSchemaVersionMatch` rejects a save
+    // whose editor was loaded before someone else changed the schema, so anything that moves
+    // storage has to invalidate an in-flight editor.
+    //
+    // Toggling `localized` moves every translatable column between the main table and
+    // `comp_<slug>_locales`. Tying the bump to `fields` alone left that transition invisible to the
+    // guard: a preview taken beforehand still matched, and applying it wrote a stale field set over
+    // a shape that had already moved. `applyComponentSchemaChanges` bumps after the same physical
+    // transition, so this is two paths performing one move and only one of them advancing the lock.
+    //
+    // Compared against the STORED value rather than merely being present, so a request that resends
+    // the current setting does not invalidate every open editor for no reason.
+    const localizationChanged =
+      data.localized !== undefined &&
+      (data.localized === true) !== (existing.localized === true);
+
     if (data.fields) {
       updateData.fields = JSON.stringify(data.fields);
-      updateData.schema_version = existing.schemaVersion + 1;
       updateData.migration_status = data.migrationStatus || "pending";
+    }
+
+    if (data.fields || localizationChanged) {
+      // One increment even when both changed: the row moved to the next version, once.
+      updateData.schema_version = existing.schemaVersion + 1;
     }
 
     if (data.admin !== undefined) {
