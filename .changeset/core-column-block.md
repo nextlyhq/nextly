@@ -25,4 +25,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-Write a block node's own fields in the declared order when an op rewrites it, so undoing a removed field restores the document rather than only its values.
+Add `core/column` as a real block and restrict `core/columns` to accept only columns, so a column can carry its own width, background and alignment.
