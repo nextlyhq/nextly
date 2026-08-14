@@ -274,6 +274,31 @@ function readMember(container: object, key: string | number): Member {
  * caller-supplied code and can throw. A walk that is a precondition for parsing
  * untrusted input must not let that escape.
  */
+/**
+ * Whether a failed own-key reflection also leaves the document with no stored
+ * form.
+ *
+ * `JSON.stringify` enumerates a record's own keys through the same internal
+ * operation this walk uses, so a key list that cannot be read here is one the
+ * writer cannot read either — the document is unwritable as well as unreadable.
+ *
+ * An ARRAY is exempt: the writer takes its length and its indices and never
+ * enumerates own keys, so it can still produce a stored form from a value whose
+ * key list throws.
+ *
+ * A structural-only branch is exempt too. There the bytes were taken from a
+ * `toJSON` replacement while the ORIGINAL tree is walked for depth and node
+ * count, so the traps failing here belong to a tree the writer never visits.
+ * Calling that unwritable would report no stored form for a document that has
+ * one.
+ */
+function keyFailureRefusesWriter(
+  isArray: boolean,
+  structuralOnly: boolean | undefined
+): boolean {
+  return !isArray && structuralOnly !== true;
+}
+
 function isPlainRecordSafely(value: object): {
   plain: boolean;
   threw: boolean;
@@ -1067,25 +1092,29 @@ export function surveyDocument(
       continue;
     }
 
-    // Reflection on a Proxy runs caller-supplied traps, which can throw. This
-    // walk is a precondition for parsing untrusted input, so a trap must not
-    // take down the process doing the checking.
+    // `Array.isArray` reads the brand through a proxy and throws only when that
+    // proxy has been revoked; it runs no trap otherwise. It comes FIRST because
+    // it decides which branch runs, and because every key reflection below has
+    // to classify its own failure differently for an array than for a record.
+    //
+    // Every reflection in this walk is wrapped: the walk is a precondition for
+    // parsing untrusted input, so a trap must not take down the process doing
+    // the checking.
+    let isArray: boolean;
     try {
-      if (Object.getOwnPropertySymbols(value).length > 0) lossy = true;
+      isArray = Array.isArray(value);
     } catch {
       unreadable = true;
       continue;
     }
 
-    // `Array.isArray` reads the brand through a proxy and throws when that
-    // proxy has been revoked, so the one reflection left unguarded here was the
-    // one that decides which branch runs. Every other reflection in this walk
-    // is wrapped; this was not, and an exception from it escaped a function
-    // whose whole contract is to return a verdict rather than raise.
-    let isArray: boolean;
+    // Reflection on a Proxy runs caller-supplied traps, which can throw.
     try {
-      isArray = Array.isArray(value);
+      if (Object.getOwnPropertySymbols(value).length > 0) lossy = true;
     } catch {
+      if (keyFailureRefusesWriter(isArray, frame.structuralOnly)) {
+        unwritable = true;
+      }
       unreadable = true;
       continue;
     }
@@ -1150,6 +1179,15 @@ export function surveyDocument(
     }
 
     const shape = isPlainRecordSafely(value);
+    // A probe that THREW observed nothing, so it cannot support a claim about
+    // the prototype. `JSON.stringify` never consults `getPrototypeOf`, so a
+    // proxy that throws only from that trap still writes its ordinary form —
+    // a proxy over `{ a: 1 }` still produces `{"a":1}`. Reporting it as lossy
+    // would claim storage rewrites a document storage round-trips exactly.
+    if (shape.threw) {
+      unreadable = true;
+      continue;
+    }
     if (!shape.plain) {
       lossy = true;
       // And the bytes are not the writer's. A non-plain object is walked for the
@@ -1159,10 +1197,6 @@ export function surveyDocument(
       // measured here. The size a caller gets would describe an object the
       // writer never emits, so the totals stop being totals.
       approximate = true;
-    }
-    if (shape.threw) {
-      unreadable = true;
-      continue;
     }
 
     // Own property NAMES rather than `for...in`. Both cost the same for a
@@ -1174,6 +1208,12 @@ export function surveyDocument(
     try {
       names = Object.getOwnPropertyNames(value);
     } catch {
+      // The second reflection through `[[OwnPropertyKeys]]` on this value. A
+      // stateful trap can admit the symbol probe above and refuse this one, so
+      // both sites classify the failure rather than only the first to run.
+      if (keyFailureRefusesWriter(isArray, frame.structuralOnly)) {
+        unwritable = true;
+      }
       unreadable = true;
       continue;
     }

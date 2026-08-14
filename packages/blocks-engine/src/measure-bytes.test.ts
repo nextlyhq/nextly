@@ -81,11 +81,58 @@ describe("the three things the writer can do", () => {
     expect(survey.unreadable).toBe(true);
     expect(survey.complete).toBe(false);
     expect(survey.unserializable).toBe(true);
+    // And UNWRITABLE, not merely unread. `JSON.stringify` enumerates a record's
+    // own keys through the same internal operation, so a key list this walk
+    // cannot read is one the writer cannot read either — asserted below.
+    expect(survey.unwritable).toBe(true);
 
     expect(measureBytes(hostile, 1_000_000).exceeded).toBe(true);
     // And `JSON.stringify` agrees the document has no stored form, which is
     // what makes accepting it the wrong answer rather than a lenient one.
     expect(() => JSON.stringify(hostile)).toThrow();
+  });
+
+  it("does not call an ARRAY unwritable when its key list throws", () => {
+    // The counterpart to the record above, and the reason that rule is not
+    // "a failed key reflection means unwritable". `JSON.stringify` writes an
+    // array from its length and its indices and never enumerates own keys, so
+    // it produces a stored form for exactly the value the walk could not
+    // enumerate. Measured: this proxy serializes to `[1,2]`.
+    const hostile = new Proxy([1, 2], {
+      ownKeys() {
+        throw new Error("no");
+      },
+    });
+
+    const survey = surveyDocument({ items: hostile }, LIMITS);
+    expect(survey.unreadable).toBe(true);
+    expect(survey.unwritable).toBe(false);
+    expect(JSON.stringify(hostile)).toBe("[1,2]");
+  });
+
+  it("does not call a document lossy when only its prototype probe throws", () => {
+    // `JSON.stringify` never consults `getPrototypeOf`, so a proxy that throws
+    // from that trap alone still writes its ordinary form — measured, this one
+    // serializes to `{"a":1}`. A probe that THREW observed nothing, so it
+    // cannot support a claim about the prototype at all; reporting `lossy`
+    // there says storage rewrites a document that round-trips exactly.
+    const hostile = new Proxy(
+      { a: 1 },
+      {
+        getPrototypeOf() {
+          throw new Error("no");
+        },
+      }
+    );
+
+    const survey = surveyDocument({ nested: hostile }, LIMITS);
+    expect(survey.lossy).toBe(false);
+    expect(survey.unwritable).toBe(false);
+    // Still unreadable: the walk declined to descend, so the totals below it
+    // are lower bounds and the survey must not read as complete.
+    expect(survey.unreadable).toBe(true);
+    expect(survey.complete).toBe(false);
+    expect(JSON.stringify(hostile)).toBe('{"a":1}');
   });
 
   it("treats a member hook that throws as unwritable, not merely rewritten", () => {
