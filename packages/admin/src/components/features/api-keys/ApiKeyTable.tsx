@@ -24,7 +24,6 @@ import { useCallback, useMemo, useState, useEffect } from "react";
 
 import { SettingsTableToolbar } from "@admin/components/features/settings";
 import { AlertTriangle, Columns, Edit, Trash2 } from "@admin/components/icons";
-import { Pagination } from "@admin/components/shared/pagination";
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { DataTableView } from "@admin/components/ui/table/data-table";
 import type {
@@ -351,17 +350,21 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
             registryKey="api-keys"
             ariaLabel="API keys table"
             emptyMessage="No API keys yet. Create your first key to authenticate programmatic access."
-          />
-
-          <Pagination
-            currentPage={page}
-            totalPages={Math.max(1, totalPages)}
-            pageSize={pageSize}
-            pageSizeOptions={[10, 25, 50]}
-            onPageChange={setPage}
-            onPageSizeChange={handlePageSizeChange}
-            totalItems={totalItems}
-            isLoading={isLoading}
+            // The pager belongs to the table, not beside it. Rendered here it
+            // lands inside the card on desktop and in the column's gap on
+            // mobile --
+            // a decision only this component can make, because only it knows
+            // which of the two views is showing.
+            pagination={{
+              currentPage: page,
+              totalPages: Math.max(1, totalPages),
+              pageSize,
+              pageSizeOptions: [10, 25, 50],
+              onPageChange: setPage,
+              onPageSizeChange: handlePageSizeChange,
+              totalItems,
+              isLoading,
+            }}
           />
         </>
       )}

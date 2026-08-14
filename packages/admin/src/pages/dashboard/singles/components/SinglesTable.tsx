@@ -27,7 +27,6 @@ import {
   type LucideIcon,
 } from "@admin/components/icons";
 import { BulkDeleteDialog } from "@admin/components/shared/bulk-action-dialogs";
-import { Pagination } from "@admin/components/shared/pagination";
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { toast } from "@admin/components/ui";
 import { DataTableView } from "@admin/components/ui/table/data-table";
@@ -607,19 +606,26 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
             registryKey="singles"
             ariaLabel="Singles table"
             emptyMessage="No Singles found. Try adjusting your search or filters."
+            // The table owns the pager, so it is placed for whichever view is
+            // showing. Same `data` gate as the field group
+            // list, and for the same reason: the rows are filtered client-side
+            // after fetching, so only the server's meta says a response landed.
+            pagination={
+              data
+                ? {
+                    currentPage: page,
+                    totalPages:
+                      data.meta.totalPages > 0 ? data.meta.totalPages : 1,
+                    pageSize,
+                    pageSizeOptions: [10, 25, 50],
+                    onPageChange: setPage,
+                    onPageSizeChange: handlePageSizeChange,
+                    isLoading,
+                    totalItems: data.meta.total,
+                  }
+                : undefined
+            }
           />
-          {data && (
-            <Pagination
-              currentPage={page}
-              totalPages={data.meta.totalPages > 0 ? data.meta.totalPages : 1}
-              pageSize={pageSize}
-              pageSizeOptions={[10, 25, 50]}
-              onPageChange={setPage}
-              onPageSizeChange={handlePageSizeChange}
-              isLoading={isLoading}
-              totalItems={data.meta.total}
-            />
-          )}
         </>
       )}
 
