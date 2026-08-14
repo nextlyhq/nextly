@@ -288,18 +288,46 @@ test("refuses a step budget it cannot honour, rather than running forever", asyn
   );
 });
 
+/**
+ * A canvas whose zone edge moves once, at a WALL-CLOCK moment after construction.
+ *
+ * Time rather than an entry count, because the thing being modelled is a CSS transition and the
+ * moment that matters is DURING the probe's settle wait — after one bracket has succeeded and
+ * before the next begins. An entry-counted fixture cannot express that: the approach consumes the
+ * first entry, so the edge has already finished moving before any bracket runs, and the test
+ * passes with or without the code it exists to check.
+ */
+function edgeMovesAtCanvas(band: Band, afterMs: number, byPx: number) {
+  const bornAt = Date.now();
+  let y = 0;
+  return {
+    pointer: () => ({ x: 0, y }),
+    moveBy: async (_dx: number, dy: number) => {
+      y += dy;
+    },
+    zoneContainingPointer: async () => {
+      const from =
+        Date.now() - bornAt >= afterMs ? band.from + byPx : band.from;
+      return y >= from && y < band.to ? band.zone : -1;
+    },
+  };
+}
+
 test("re-enters a zone whose edge moved DOWN out from under the pointer", async () => {
   // The direction the real canvas produces: a drop zone swaps its 3px drag margin for a 4px
   // active one, so the top edge travels DOWN and a pointer resting on the old boundary is left
   // just above the new one. A bracket that only ever retreats moves further away, and reports an
   // edge it is standing one pixel short of as unfindable.
-  const canvas = shiftingEdgeCanvas({ zone: 5, from: 50, to: 90 }, 1, 0, 1);
+  //
+  // 60ms lands inside the probe's settle wait, which is 120ms — so the first bracket succeeds
+  // against the original edge and the second meets the moved one.
+  const canvas = edgeMovesAtCanvas({ zone: 5, from: 50, to: 90 }, 60, 4);
 
   const result = await dragToInsetInZone(canvas, 6);
 
   expect(result.refused).toBeUndefined();
   expect(result.zone).toBe(5);
   expect(result.insetPx).toBe(6);
-  // Measured from the edge where it SETTLED, not where it started.
-  expect(canvas.pointer().y).toBe(57);
+  // Measured from where the edge SETTLED (54), not where it started (50).
+  expect(canvas.pointer().y).toBe(60);
 });
