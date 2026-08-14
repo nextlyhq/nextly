@@ -239,5 +239,14 @@ export type { TabsProps, TabsContentProps } from "../types/tabs";
  * Reading the component's own props keeps the two from drifting: a variant
  * added later reaches every consumer without a second edit.
  */
+/**
+ * The list's props, including its `variant`.
+ * @public
+ */
 export type TabsListProps = ComponentPropsWithoutRef<typeof TabsList>;
+
+/**
+ * The trigger's props, including its `size`.
+ * @public
+ */
 export type TabsTriggerProps = ComponentPropsWithoutRef<typeof TabsTrigger>;
