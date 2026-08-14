@@ -87,8 +87,20 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
 /**
  * The page is two columns with a sticky metadata rail. What these pin is where
  * each half lives: the metadata sits in the rail, and what the plugin
- * contributes — its permissions and API routes included — stays in the main
- * column, visible without an interaction rather than behind one.
+ * contributes stays in the main column, visible without an interaction rather
+ * than behind one.
+ *
+ * Permissions ARE pinned here again, and they are the one half that has to be
+ * awaited: they arrive from the authenticated permissions endpoint rather than
+ * with the branding payload, so they are absent at first paint and present
+ * after it. Asserting them synchronously would pass on that first-paint
+ * absence rather than on the card having rendered anything.
+ *
+ * That the PUBLIC payload withholds them is a different claim and is covered
+ * in `packages/nextly/src/plugins/admin-meta.test.ts`, against a plugin that
+ * DECLARES one — the two must not be confused, since this page showing a
+ * permission is exactly what that serializer test forbids the payload from
+ * carrying.
  */
 /**
  * Supplies the QueryClient the permissions card needs. That card reads rows
