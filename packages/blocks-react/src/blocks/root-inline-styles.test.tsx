@@ -447,6 +447,46 @@ function malformedMemberArraysFor(entry: Record<string, unknown>): unknown[] {
  * not be traded away: a block whose truncated output branches on the host is a
  * block this file would otherwise pass over.
  */
+/**
+ * An oversized array paired with each alternative the OTHER props can take.
+ *
+ * The base-spread case in {@link oversizedArrayVariants} holds every other prop
+ * at its example value, so a style written only when the array is past the cap
+ * AND another prop is away from that value is never rendered — `core/list`
+ * examples an unordered list, so a declaration guarded by
+ * `items.length > MAX && kind === "ordered"` is not reached by it.
+ *
+ * One prop moved at a time, not the cross product, which is the same bound the
+ * single-prop pass uses. What that leaves uncovered is a style needing the
+ * oversized array and TWO other props away from base at once.
+ */
+function oversizedConjunctions(block: AnyBlockDefinition): unknown[] {
+  const base = {
+    ...(block.defaultProps ?? {}),
+    ...(block.example.props ?? {}),
+  } as Record<string, unknown>;
+  const schema: Record<string, unknown> = block.props ?? {};
+  const arrays = Object.entries(schema).filter(
+    ([, entry]) => (entry as { type?: unknown }).type === "array"
+  );
+  if (arrays.length === 0) return [];
+
+  const variants: unknown[] = [];
+  for (const [arrayName] of arrays) {
+    const oversized = {
+      ...base,
+      [arrayName]: Array.from({ length: 1001 }, (_, index) => `i${index}`),
+    };
+    for (const [name, values] of alternativesFor(schema)) {
+      if (name === arrayName) continue;
+      for (const value of values) {
+        variants.push({ ...oversized, [name]: value });
+      }
+    }
+  }
+  return variants;
+}
+
 function oversizedArrayVariants(
   base: Record<string, unknown>,
   schema: Record<string, unknown>
@@ -761,21 +801,49 @@ async function inspectBlock(block: AnyBlockDefinition): Promise<Inspection> {
   const permitted = ALLOWED.get(block.name) ?? new Set<string>();
   const offenders: string[] = [];
   let reached = false;
+
+  const inspect = async (
+    props: unknown,
+    ctx: PageContext,
+    hostPolicy: object | undefined
+  ): Promise<void> => {
+    const html = await renderHtml(block, props, ctx, hostPolicy);
+    const { roots, carriesClass } = inspectableTags(html);
+    if (carriesClass) reached = true;
+    for (const tag of roots) {
+      for (const property of inlinePropertiesOf(tag)) {
+        if (permitted.has(property)) continue;
+        offenders.push(`${block.name}: ${property}`);
+      }
+    }
+  };
+
   for (const props of propVariants(block)) {
     for (const ctx of contexts()) {
       for (const hostPolicy of hostPolicies()) {
-        const html = await renderHtml(block, props, ctx, hostPolicy);
-        const { roots, carriesClass } = inspectableTags(html);
-        if (carriesClass) reached = true;
-        for (const tag of roots) {
-          for (const property of inlinePropertiesOf(tag)) {
-            if (permitted.has(property)) continue;
-            offenders.push(`${block.name}: ${property}`);
-          }
-        }
+        await inspect(props, ctx, hostPolicy);
       }
     }
   }
+
+  // The oversized cases run against ONE host state rather than all of them, and
+  // the split is what makes them affordable. A prop set carrying a thousand
+  // items costs about two orders of magnitude more per render than any other,
+  // so crossing every one of them with thirteen host states and four policies
+  // spends the whole file's budget on a single block.
+  //
+  // What that gives up is a style conditional on length AND a host state at
+  // once. This file already declines the equivalent elsewhere — `layeredVariants`
+  // is bounded by the widest prop rather than the cross product, and
+  // `soleVariants` moves one prop at a time — so a three-way conjunction is
+  // outside what any of these passes reach, and length is the axis where paying
+  // for it is most expensive.
+  const [ctx] = contexts();
+  const [hostPolicy] = hostPolicies();
+  for (const props of oversizedConjunctions(block)) {
+    await inspect(props, ctx!, hostPolicy);
+  }
+
   return { reached, offenders };
 }
 
