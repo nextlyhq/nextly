@@ -202,8 +202,8 @@ describe("the allowlist", () => {
   // the scan WIDENS to files it previously skipped, whatever those files already contained is by
   // definition pre-existing. The checker's own source came out of EXCLUDED_FILES and brought 12
   // recorded offences with it. A raise for any other reason is the silencing this guards against.
-  const EXPECTED_ENTRIES = 239;
-  const EXPECTED_TOTAL = 461;
+  const EXPECTED_ENTRIES = 212;
+  const EXPECTED_TOTAL = 417;
 
   it("matches its pinned size exactly", () => {
     expect(readAllowlist().size).toBe(EXPECTED_ENTRIES);
@@ -349,6 +349,18 @@ describe("numbered task and plan labels", () => {
     expect(offencesIn("// Task 17: migrate the records").length).toBeGreaterThan(0);
   });
 
+  it("does not match numbered runtime concepts", () => {
+    // A number alone does not separate a label from ordinary technical English: a scheduler
+    // really does assign work items by number, and a query planner really does number its plans.
+    expect(offencesIn("// The scheduler assigns task 17 to worker 2")).toEqual([]);
+    expect(offencesIn("// Query plan 2 is invalidated when the schema changes")).toEqual([]);
+  });
+
+  it("matches the parenthesised label form", () => {
+    // The second unambiguous shape. Prose does not bracket a runtime concept this way.
+    expect(offencesIn("/** @since v0.0.3-alpha (Plan D4) */").length).toBeGreaterThan(0);
+  });
+
   it("does not match a bare plan colon in ordinary prose", () => {
     // "query plan", "execution plan" and "cache the plan" are ordinary technical English. Matching
     // a bare `plan:` rejected correct comments describing runtime behaviour, and a check that
@@ -427,6 +439,19 @@ describe("the hash dialects", () => {
       // `<<<` takes its operand on the same line, so no body follows. Reading it as a heredoc
       // would swallow every line to the end of the file.
       expect(names(shell(`grep x <<< "$var"\n# ${NARRATION}\n`))).toBe(true);
+    });
+
+    it("accepts a non-identifier delimiter", () => {
+      // Bash defines the delimiter as a general word, so `123` and `EOF!` are both valid.
+      // Refusing them left their bodies scanned as source and reported as comments.
+      expect(names(shell(`cat <<123\n# ${NARRATION}\n123\n`))).toBe(false);
+      expect(names(shell(`cat <<EOF!\n# ${NARRATION}\nEOF!\n`))).toBe(false);
+    });
+
+    it("does not treat a bare arithmetic shift as a heredoc", () => {
+      // What made the shape restriction necessary, now handled by tracking `((` directly - so a
+      // valid numeric delimiter is accepted without a left shift opening a body.
+      expect(names(shell(`(( n = 1 << 2 ))\n# ${NARRATION}\n`))).toBe(true);
     });
 
     it("does not treat an arithmetic left shift as a heredoc", () => {

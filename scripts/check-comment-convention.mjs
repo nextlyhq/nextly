@@ -98,10 +98,20 @@ export const FORBIDDEN = [
     // plans alongside reviews, and this is the shape they arrive in - a reference to a document
     // the reader has no way to open, describing why the code was written rather than what it does.
     //
-    // The number is required. A bare "plan:" is ordinary technical English - a query plan, an
-    // execution plan, a cache plan - and matching it rejected correct comments describing runtime
-    // behaviour, which is the failure that gets a check switched off rather than fixed.
-    pattern: /\b(?:[a-z]\d+\s+)?(?:task|plan)\s*(?:#\s*)?[a-z]?\d+/i,
+    // A number AND a trailing colon are both required, because neither alone separates a label
+    // from ordinary technical English. "plan:" alone matches a query plan or an execution plan;
+    // "task 17" alone matches "the scheduler assigns task 17 to worker 2". Only the label form,
+    // "Task 17:", is unambiguous - and matching either half rejected correct comments describing
+    // runtime behaviour, which is the failure that gets a check switched off rather than fixed.
+    //
+    // A PARENTHESISED label is the second unambiguous form and is matched too: "(Plan D4)" is a
+    // reference, while prose does not bracket a runtime concept that way.
+    //
+    // The cost is stated rather than hidden: a bare "Plan C2" mid-sentence is NOT matched, because
+    // nothing in its syntax distinguishes it from prose. That is the same limit this file already
+    // accepts for ordinal narration - the difference is intent, not vocabulary.
+    pattern:
+      /(?:\b(?:[a-z]\d+\s+)?(?:task|plan)\s*(?:#\s*)?[a-z]?\d+\s*:)|(?:\((?:task|plan)\s*(?:#\s*)?[a-z]?\d+\))/i,
     why: "names a task or plan rather than the code",
   },
   {
@@ -520,8 +530,10 @@ function heredocDelimiter(line, start) {
   }
   // A quoted delimiter is unambiguous. An UNQUOTED one must look like a word, because a left
   // shift reaches here as `<< 2` and opening a heredoc on it would swallow the rest of the file.
+  // No shape requirement: Bash defines the delimiter as a general word, so `123` and `EOF!` are
+  // both valid and refusing them left their bodies scanned as source. Arithmetic contexts, which
+  // are the reason a shape rule existed, are tracked directly above instead.
   if (!delim) return null;
-  if (!quoted && !/^[A-Za-z_][\w.-]*$/.test(delim)) return null;
   return { delim, stripTabs, end };
 }
 
@@ -596,6 +608,14 @@ function hashLineComments(source, { shell = false } = {}) {
       // A subshell or grouping inside the substitution closes with the same character, so its
       // `)` must not restore the enclosing quote - doing so would read the rest of a
       // `"$( (cmd); # c )"` line as quoted data and miss the comment.
+      // A bare `(( ))` is arithmetic too, and it is what still made a delimiter SHAPE restriction
+      // necessary. Tracking it means the shape rule can go, so valid delimiters like `123` and
+      // `EOF!` stop being refused - a refusal that left their bodies scanned as source.
+      if (shell && !quote && c === "(" && line[at + 1] === "(" && substitutions.length === 0) {
+        substitutions.push({ quote, arithmetic: true, depth: 0 });
+        at += 1;
+        continue;
+      }
       if (shell && !quote && c === "(" && substitutions.length > 0) {
         substitutions[substitutions.length - 1].depth += 1;
         continue;
