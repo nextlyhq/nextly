@@ -80,6 +80,27 @@ function roundTrip(nodes: BlockNode[], op: BuilderOp) {
   return { applied, undone };
 }
 
+/**
+ * Time allowed for a case whose fixture is deliberately enormous.
+ *
+ * The 150,000-node fixture below exists to exceed V8's call-argument cap, so its
+ * size cannot be reduced without removing the thing under test. What it asserts
+ * is that the count does not raise a native `RangeError` — a property with no
+ * time in it at all — but building and walking that forest is genuinely slow,
+ * and slower still on a shared worker under memory pressure.
+ *
+ * Measured before the number was chosen, because a tolerance added to survive
+ * noise is subtracted from detection: `applyOp` over this fixture takes 1,459 ms
+ * on a developer machine, against 49-55 s observed on a loaded CI worker. At
+ * that spread a 120 s budget still fails a regression an order of magnitude
+ * worse than today, while the previous 30 s produced reds that read as a
+ * caller's defect — twice on branches that never touched this package.
+ *
+ * The budget is generous because it is not the thing being asserted, matching
+ * `MEASUREMENT_TIMEOUT_MS` in `blocks-engine`'s performance suite.
+ */
+const REFUSAL_TIMEOUT_MS = 120_000;
+
 describe("an op and its inverse", () => {
   it.each<[string, BuilderOp]>([
     [
@@ -1724,31 +1745,35 @@ describe("what the boundary checks before editing at all", () => {
 });
 
 describe("a guard that must not crash on the input it refuses", () => {
-  it("refuses a deeply nested value without exhausting the stack", () => {
-    // A recursive walk leaked a native RangeError here, so the document broke
-    // the guard that exists to refuse it and the byte cap never ran.
-    let deep: Record<string, unknown> = {};
-    const root = deep;
-    for (let level = 0; level < 15_000; level += 1) {
-      const next: Record<string, unknown> = {};
-      deep.child = next;
-      deep = next;
-    }
+  it(
+    "refuses a deeply nested value without exhausting the stack",
+    () => {
+      // A recursive walk leaked a native RangeError here, so the document broke
+      // the guard that exists to refuse it and the byte cap never ran.
+      let deep: Record<string, unknown> = {};
+      const root = deep;
+      for (let level = 0; level < 15_000; level += 1) {
+        const next: Record<string, unknown> = {};
+        deep.child = next;
+        deep = next;
+      }
 
-    let thrown: unknown;
-    try {
-      applyOp(doc(), { kind: "update", id: "a", patch: { props: root } });
-    } catch (error) {
-      thrown = error;
-    }
-    // The op may be accepted or refused — what must NOT happen is a native
-    // stack overflow escaping instead of an OpError.
-    expect(thrown).not.toBeInstanceOf(RangeError);
-    // A generous ceiling, not a fix. The fixture size is load-bearing —
-    // 150,000 exceeds V8's call-argument cap, which is the whole point — and CI
-    // runs several matrices at once, so the default budget measures the machine
-    // rather than this code.
-  }, 30_000);
+      let thrown: unknown;
+      try {
+        applyOp(doc(), { kind: "update", id: "a", patch: { props: root } });
+      } catch (error) {
+        thrown = error;
+      }
+      // The op may be accepted or refused — what must NOT happen is a native
+      // stack overflow escaping instead of an OpError.
+      expect(thrown).not.toBeInstanceOf(RangeError);
+      // A generous ceiling, not a fix. The fixture size is load-bearing —
+      // 150,000 exceeds V8's call-argument cap, which is the whole point — and CI
+      // runs several matrices at once, so the default budget measures the machine
+      // rather than this code.
+    },
+    REFUSAL_TIMEOUT_MS
+  );
 
   it("refuses a very wide slot without exceeding the call-argument limit", () => {
     // `push(...children)` passes each child as a call ARGUMENT, and V8 caps
