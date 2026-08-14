@@ -64,17 +64,16 @@ export function reviewersAtHead(reviews, head) {
  * single thread, so thread resolution cannot see it: without this, an explicit
  * refusal reads as coverage with nothing outstanding.
  *
- * The LAST submitted review decides, matching how a reviewer's position is
- * settled generally — a later `APPROVED` or `COMMENTED` from the same account
- * supersedes an earlier objection.
+ * Deliberately NOT scoped to the head. A request for changes is a standing
+ * position on the pull request, not on one revision: pushing a commit does not
+ * answer it, and a later `COMMENTED` review on the new head does not either. A
+ * head-scoped version discards the whole objection the moment the author
+ * pushes, which is the state it most needs to survive.
  */
-export function changesRequested(reviews, head) {
-  if (!Array.isArray(reviews) || typeof head !== "string" || head === "") {
-    return [];
-  }
+export function changesRequested(reviews) {
+  if (!Array.isArray(reviews)) return [];
   // Ordered oldest first, so each account's later reviews decide what survives.
   const ordered = reviews
-    .filter(review => review?.commit_id === head)
     .filter(review => typeof review?.user?.login === "string")
     .slice()
     .sort((a, b) =>
@@ -216,7 +215,9 @@ export function report({
   const missing = missingReviewers(reviews, head, required);
   const unresolved = unresolvedThreads(threads);
   const limited = rateLimited(issueComments);
-  const refused = changesRequested(reviews, head);
+  // Coverage is asked at the head; a standing objection is asked of the whole
+  // pull request. Two questions with two scopes, from the same rows.
+  const refused = changesRequested(reviews);
   const { verdict, detail, exitCode } = verdictFor({
     missing,
     unresolved,

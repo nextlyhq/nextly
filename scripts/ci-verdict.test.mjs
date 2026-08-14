@@ -123,7 +123,7 @@ describe("changesRequested", () => {
       at("CHANGES_REQUESTED", "2026-08-14T10:00:00Z", 1),
       at("COMMENTED", "2026-08-14T11:00:00Z", 2),
     ];
-    expect(changesRequested(reviews, HEAD)).toEqual([CODEX]);
+    expect(changesRequested(reviews)).toEqual([CODEX]);
     expect(report({ ...BASE, reviews, threads: [] }).verdict).toBe(
       "CHANGES REQUESTED"
     );
@@ -134,7 +134,7 @@ describe("changesRequested", () => {
       at("CHANGES_REQUESTED", "2026-08-14T10:00:00Z", 1),
       at("APPROVED", "2026-08-14T11:00:00Z", 2),
     ];
-    expect(changesRequested(reviews, HEAD)).toEqual([]);
+    expect(changesRequested(reviews)).toEqual([]);
     expect(report({ ...BASE, reviews, threads: [] }).verdict).toBe("CLEAN");
   });
 
@@ -148,7 +148,7 @@ describe("changesRequested", () => {
       at("CHANGES_REQUESTED", "2026-08-14T10:00:00Z", 1),
       at("DISMISSED", "2026-08-14T11:00:00Z", 2),
     ];
-    expect(changesRequested(reviews, HEAD)).toEqual([]);
+    expect(changesRequested(reviews)).toEqual([]);
     expect(reviewersAtHead(reviews, HEAD)).toEqual([CODEX]);
   });
 
@@ -162,15 +162,35 @@ describe("changesRequested", () => {
       at("COMMENTED", "2026-08-14T10:00:00Z", 1),
       at("CHANGES_REQUESTED", "2026-08-14T11:00:00Z", 2),
     ];
-    expect(changesRequested(reviews, HEAD)).toEqual([CODEX]);
+    expect(changesRequested(reviews)).toEqual([CODEX]);
   });
 
-  it("ignores an objection recorded against an earlier commit", () => {
-    const stale = {
-      ...at("CHANGES_REQUESTED", "2026-08-14T10:00:00Z"),
-      commit_id: OLD,
-    };
-    expect(changesRequested([stale], HEAD)).toEqual([]);
+  /**
+   * The case a head-scoped rule gets wrong: an objection raised on an earlier
+   * commit is not answered by pushing a new one, nor by a later remark on the
+   * new head. Coverage is still required AT the head, so the two questions are
+   * asked at different scopes from the same rows.
+   */
+  it("keeps an objection raised on an earlier commit alive at the head", () => {
+    const reviews = [
+      { ...at("CHANGES_REQUESTED", "2026-08-14T10:00:00Z", 1), commit_id: OLD },
+      at("COMMENTED", "2026-08-14T11:00:00Z", 2),
+    ];
+    expect(changesRequested(reviews)).toEqual([CODEX]);
+    expect(reviewersAtHead(reviews, HEAD)).toEqual([CODEX]);
+    expect(report({ ...BASE, reviews, threads: [] }).verdict).toBe(
+      "CHANGES REQUESTED"
+    );
+  });
+
+  /** An approval on the new head answers an objection raised on the old one. */
+  it("clears when a later approval lands on a newer commit", () => {
+    const reviews = [
+      { ...at("CHANGES_REQUESTED", "2026-08-14T10:00:00Z", 1), commit_id: OLD },
+      at("APPROVED", "2026-08-14T11:00:00Z", 2),
+    ];
+    expect(changesRequested(reviews)).toEqual([]);
+    expect(report({ ...BASE, reviews, threads: [] }).verdict).toBe("CLEAN");
   });
 });
 
