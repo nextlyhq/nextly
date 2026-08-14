@@ -13,6 +13,11 @@ import { shutdownServices } from "../di";
 import { resolveDeclaredSchema } from "../domains/schema/migrate/resolved-schema";
 import { NextlyError } from "../errors";
 
+import {
+  awaitBootMigrations,
+  beginBootMigrations,
+} from "./boot-migrations-gate";
+
 interface AdapterLike {
   dialect: "postgresql" | "mysql" | "sqlite";
   getDrizzle: () => unknown;
@@ -90,9 +95,6 @@ export interface RunProdMigrationsArgs {
  * is now correct — the migration it would need to observe is the one that did
  * not run. A restart is the recovery, and that is what an orchestrator does.
  */
-const globalForBootMigrations = globalThis as unknown as {
-  __nextly_bootMigrationsRefused?: NextlyError;
-};
 
 /** The refusal, built in one place so its code and wording cannot drift. */
 function bootMigrationsNotRun(dialect: string): NextlyError {
@@ -126,8 +128,7 @@ export async function runProdMigrationsIfEnabled(
 ): Promise<void> {
   // Before the environment checks, because a process that has already refused
   // must keep refusing regardless of how the next caller reaches this.
-  const refused = globalForBootMigrations.__nextly_bootMigrationsRefused;
-  if (refused) throw refused;
+  await awaitBootMigrations();
 
   if (process.env.NODE_ENV !== "production") return;
   if (args.config.db.runMigrationsOnBoot !== true) return;
@@ -180,6 +181,11 @@ export async function runProdMigrationsIfEnabled(
       return migrateCore(deps as never);
     });
 
+  // Opened before any work, so the window this closes — services registered but
+  // the schema unverified — never exists unguarded. Consumers that arrive from
+  // another surface now wait here instead of serving on the registered flag.
+  const gate = beginBootMigrations();
+
   try {
     logger.info("[Nextly] Running production migrations on boot...");
     const resolvedSchema = await resolveDeclaredSchema({
@@ -218,6 +224,7 @@ export async function runProdMigrationsIfEnabled(
       throw bootMigrationsNotRun(adapter.dialect);
     }
     logger.info(`[Nextly] Boot migrations complete (${applied} applied).`);
+    gate.allow();
   } catch (err) {
     // A refusal is not a failure to swallow. Every other error here is
     // recoverable by running `nextly migrate` against a database the app can
@@ -239,7 +246,7 @@ export async function runProdMigrationsIfEnabled(
           : bootMigrationsNotRun(args.adapter.dialect);
       // Recorded BEFORE rethrowing, so the next request through either entry
       // point refuses too rather than finding services already registered.
-      globalForBootMigrations.__nextly_bootMigrationsRefused = fatal;
+      gate.refuse(fatal);
       // Reopen the registration gate, or the sticky flag above is unreachable.
       // Both entry points call this helper only inside
       // `if (!isServicesRegistered())`, and `registerServices()` has already
@@ -267,5 +274,9 @@ export async function runProdMigrationsIfEnabled(
         err instanceof Error ? err.message : String(err)
       }. The app will continue; run \`nextly migrate\` to resolve.`
     );
+    // The app continues on this path, so the gate must open — a swallowed
+    // failure that left it pending would hang every consumer forever, turning a
+    // recoverable error into a worse outage than the one being tolerated.
+    gate.allow();
   }
 }

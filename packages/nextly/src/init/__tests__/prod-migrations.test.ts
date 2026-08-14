@@ -1,5 +1,6 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { NextlyError } from "../../errors";
+import { _resetBootMigrationsGateForTest } from "../boot-migrations-gate";
 
 const shutdownServices = vi.fn();
 vi.mock("../../di", () => ({ shutdownServices: () => shutdownServices() }));
@@ -51,8 +52,7 @@ describe("runProdMigrationsIfEnabled", () => {
   beforeEach(() => {
     // Process-global by design — the refusal must outlive a request — so it has
     // to be cleared between cases or the first refusal fails every test after.
-    delete (globalThis as { __nextly_bootMigrationsRefused?: unknown })
-      .__nextly_bootMigrationsRefused;
+    _resetBootMigrationsGateForTest();
     shutdownServices.mockClear();
   });
 
@@ -160,8 +160,7 @@ describe("runProdMigrationsIfEnabled", () => {
       }
     );
 
-    delete (globalThis as { __nextly_bootMigrationsRefused?: unknown })
-      .__nextly_bootMigrationsRefused;
+    _resetBootMigrationsGateForTest();
 
     const my = args({ migrateCore: vi.fn(async () => notRun()) });
     my.adapter.dialect = "mysql";
