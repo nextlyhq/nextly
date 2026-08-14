@@ -25,12 +25,25 @@ then assert `success` on each of those.** Absence of `failure` is not a
 verdict — `queued`, `in_progress`, `skipped` and _never triggered_ all satisfy
 it.
 
-```sh
+```bash
 set -o pipefail
-gh api "repos/nextlyhq/nextly/commits/$SHA/check-runs?per_page=100" --paginate \
-  --jq '.check_runs[]|"\(.status)/\(.conclusion // "none")\t\(.name)"' \
+gh api "repos/nextlyhq/nextly/commits/$PR_HEAD_SHA/check-runs?per_page=100" \
+  --paginate --jq '.check_runs[]|"\(.status)/\(.conclusion // "none")\t\(.name)"' \
   | sort || { echo "check-runs query FAILED — not clean" >&2; exit 2; }
 ```
+
+That command REPORTS; it does not gate. `sort` exits 0 for any successful
+response, including one whose rows are all `queued`, and including an empty
+`check_runs` array — so piping it into a merge decision reproduces the false
+clean this file is about. Read it, then assert `success` on each job the scope
+decision requires, and exit nonzero otherwise.
+
+**Query the PR HEAD sha, not the merge sha.** They are different commits and
+only one carries the checks: measured on this PR, `commits/<head>/check-runs`
+returned 31 rows and `commits/<merge_commit_sha>/check-runs` returned 0. For an
+open PR that `merge_commit_sha` is GitHub's own test-merge, which nothing runs
+against. (Inside a workflow the relationship inverts — `github.sha` IS the merge
+commit — so do not carry a variable named `SHA` between the two contexts.)
 
 **`set -o pipefail` is load-bearing, not tidiness.** Without it the exit status
 is `sort`'s, so an authentication failure, a rate limit or a transient 5xx from
@@ -136,6 +149,10 @@ because three different things produce it and only one is a defect:
   workflow's own `on:` block. Legitimate, and nothing is wrong.
 - **a base filter excluded the PR** — `branches: [main]` against a stacked base,
   which is the section below.
+- **the PR has a merge conflict** — GitHub cannot compute `refs/pull/N/merge`,
+  so no `pull_request` workflow runs at all. The remedy is to resolve the
+  conflict; a push that does not resolve it changes nothing, which reads as the
+  trigger still being dropped.
 
 Settle it by reading that workflow's `on:` block against this commit's diff, not
 by looking harder at the run list. All three return the same nothing.
@@ -207,7 +224,7 @@ reopen. Then gate on the run, never on the base having been changed.
 
 `ci.yml` fans out from one job:
 
-```
+```text
 changes -> ci (Lint / Typecheck / Test / Build) -> e2e            (Browser tests)
                                                 -> scaffold-smoke (Scaffold smoke)
                                                 -> dev-script-smoke (Dev script ...)
@@ -219,7 +236,7 @@ PR at once, reported as one red job.
 
 Measured on PR #787's head `d243c855c`, which is what that looks like:
 
-```
+```text
 completed/failure   Lint / Typecheck / Test / Build
 completed/skipped   Browser tests
 completed/skipped   Dev script starts every watcher (${{ matrix.os }})
@@ -319,7 +336,7 @@ have nothing to do with the code.
 **Match the bot's COMPLETE login, which carries a `[bot]` suffix.** Measured on
 this repo's PRs:
 
-```
+```text
 chatgpt-codex-connector[bot]
 coderabbitai[bot]
 pkg-pr-new[bot]
@@ -337,23 +354,60 @@ false negative for a spoofable one is a worse trade than it looks, because the
 false negative announces itself as "no verdict" and the spoof announces itself
 as approval:
 
-```sh
-set -o pipefail
-BOT=chatgpt-codex-connector[bot]
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+REPO=nextlyhq/nextly; PR=${1:?pr}; BOT='chatgpt-codex-connector[bot]'
 
-# The review objects, newest last. `state` is NOT a verdict — see below.
-REVIEWS=$(gh api "repos/nextlyhq/nextly/pulls/$PR/reviews" --paginate \
-  --jq --arg b "$BOT" '.[]|select(.user.login==$b)|"\(.id)\t\(.commit_id)"') || {
-  echo "reviews query FAILED — not clean" >&2; exit 2
-}
+HEAD=$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq .headRefOid)
 
-# The findings attached to each review. A review absent here carried none.
-FINDINGS=$(gh api "repos/nextlyhq/nextly/pulls/$PR/comments" --paginate \
-  --jq --arg b "$BOT" '.[]|select(.user.login==$b)|.pull_request_review_id') || {
-  echo "comments query FAILED — not clean" >&2; exit 2
-}
-printf '%s\n' "$FINDINGS" | sort | uniq -c
+# Every query fails closed: an unavailable answer is not a clean one.
+REVIEWS=$(gh api "repos/$REPO/pulls/$PR/reviews"  --paginate --slurp)
+COMMENTS=$(gh api "repos/$REPO/pulls/$PR/comments" --paginate --slurp)
+ISSUES=$(gh api "repos/$REPO/issues/$PR/comments"  --paginate --slurp)
+
+jq -n --argjson rv "$REVIEWS" --argjson cm "$COMMENTS" --argjson ic "$ISSUES" \
+      --arg b "$BOT" --arg s "$HEAD" '
+  ($rv | flatten | map(select(.user.login == $b and .commit_id == $s) | .id)) as $ids
+  | ($cm | flatten | map(select(.pull_request_review_id as $i | $ids | index($i))) | length) as $n
+  | ($ic | flatten | map(select(.user.login == "coderabbitai[bot]"
+        and (.body | test("Review limit reached")))) | length) as $rl
+  | { head: $s, reviews_at_head: ($ids|length), findings: $n, coderabbit_rate_limited: $rl,
+      verdict: (if ($ids|length) == 0 then "NO REVIEW AT HEAD"
+                elif $n > 0 then "NOT CLEAN"
+                else "CLEAN" end) }'
 ```
+
+Run against this PR at `57ba3e9c4`, which had three findings outstanding:
+
+```json
+{
+  "head": "57ba3e9c4e9db81ff38b0df3a30c7348ff168d94",
+  "reviews_at_head": 1,
+  "findings": 3,
+  "coderabbit_rate_limited": 0,
+  "verdict": "NOT CLEAN"
+}
+```
+
+**Four things in that script are there because the shorter version was wrong**,
+each found only by running it:
+
+- **`--slurp`, and standalone `jq` rather than `gh api --jq`.** `gh api` takes
+  `--jq` as a single filter string and has no `--arg`; the invocation
+  `gh api --jq --arg b "$BOT" '...'` exits with `accepts 1 arg(s), received 4`.
+  Written that way, BOTH queries take their failure branch and the gate can
+  never return clean — a fail-closed so complete it never fails at all.
+  `--slurp` cannot combine with `--jq`, which is what forces the pipe.
+- **The join is real.** An earlier version computed review IDs and then counted
+  every bot comment on the PR, never consuming the review list — so historical
+  findings from previous rounds counted against the current head forever, and a
+  genuinely clean review could not be observed.
+- **`NO REVIEW AT HEAD` is its own outcome.** Zero findings because no review
+  exists and zero findings because the review was clean are the same number.
+- **No `printf` on a possibly-empty variable.** `printf '%s\n' "$EMPTY"` emits
+  one blank record, so `uniq -c` reported `1` for a clean review — the count
+  rejecting precisely the case it was written to detect.
 
 **Each query is captured and its status checked BEFORE the count is read**, and
 that is not belt-and-braces. Left as a pipeline, the status is `uniq`'s: an
@@ -383,7 +437,7 @@ is the field that looks like it does.** It records the GitHub review event, not
 whether the bot found anything. Measured across four consecutive rounds on this
 PR:
 
-```
+```text
 review=4934719144  sha=6ddf99bd4  state=COMMENTED  findings=6
 review=4934879982  sha=750063e00  state=COMMENTED  findings=3
 review=4934934820  sha=8653d09ce  state=COMMENTED  findings=4
@@ -412,7 +466,21 @@ rather than leaving it open at both ends.
 machine.** When it is reached it posts a "Review limit reached" comment and
 zero review objects, and its check goes green — so a rate-limited non-review and
 a clean review render the same. Read the comment BODY, not the check colour.
-Some PRs here have never received a CodeRabbit review at all.
+The marker lives in `issues/$PR/comments`, which is a different endpoint from
+`pulls/$PR/comments`: the latter returns only inline review comments and never
+shows it.
+
+**Finding the marker rejects a verdict. NOT finding it proves nothing**, and
+this one is measured rather than reasoned. CodeRabbit EDITS THAT SAME COMMENT
+IN PLACE when the review eventually runs: on this PR, comment `5290377552` has
+`created_at` 06:47:36 carrying "Review limit reached" and `updated_at` 08:10:08
+carrying the review summary, with the marker gone. The evidence that nothing was
+reviewed is destroyed by the thing that reviews it, so a later reader finds a
+normal summary and no trace of the hours the PR spent uncovered.
+
+Treat the marker as a one-way rejection, and derive COVERAGE the same way as for
+any other bot — a review object at the head sha, with findings joined to it.
+Absence of a complaint is not presence of a review.
 
 **A verdict names a commit, and it is evidence about THAT commit only.** Require
 the reviewed sha to EQUAL the head you are about to merge:
