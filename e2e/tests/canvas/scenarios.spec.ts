@@ -89,8 +89,8 @@ async function expectIndicatorAtPointer(
   const active = await settledTarget(driver);
 
   // Read after the walk AND after the settle, so it belongs to the position and
-  // the target everything below is about. Reading before the walk certified a
-  // rectangle from a position the pointer had since left.
+  // the target everything below is about. Reading before the walk would certify
+  // a rectangle from a position the pointer has since left.
   const rect = await driver.readIndicatorRect();
   expect(rect, `${label}: an indicator must be visible`).not.toBeNull();
   const nearest = await driver.nearestZoneToPointer();

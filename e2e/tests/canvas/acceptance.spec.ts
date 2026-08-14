@@ -307,9 +307,10 @@ test.describe("a canvas any Nextly editor could ship", () => {
         // the assertions below read this. A stale reading there is wrong in
         // both directions: a pointer that has just entered may legitimately
         // have no owner yet, AND it may still be showing the PREVIOUS zone's
-        // owner — and a gate that only settled the null case recorded that
-        // second one as though the canvas had chosen it. Outside a zone
-        // nothing asserts on the value, so the wait is not spent there.
+        // owner. Settling only the absent case answers the first and takes the
+        // second at face value, recording a lingering owner as one the canvas
+        // chose. Outside a zone nothing asserts on the value, so the wait is
+        // not spent there.
         const owner =
           containing >= 0
             ? await settledValue(
@@ -962,10 +963,10 @@ test.describe("a canvas any Nextly editor could ship", () => {
 
     // BOTH drags, measured the same way, and compared against each other.
     // Reading only the canvas drag asks whether it works, not whether it is the
-    // same engine — two independent implementations satisfy that whenever the
-    // canvas one happens to report dragging, which is the green this case was
-    // returning. The property is AGREEMENT, so neither side may be a constant
-    // written into this file.
+    // same engine — two independent implementations both satisfy that whenever
+    // the canvas one reports dragging, so it cannot separate them. The property
+    // is AGREEMENT, which is why neither side may be a constant written into
+    // this file.
     //
     // The panel side runs BEFORE the marker, with everything it depends on.
     // Under an active `test.fail`, a panel-side harness regression — a broken

@@ -132,8 +132,8 @@ test("honours a dwell the driver declares to be longer than the default", async 
 });
 
 test("takes the default for a driver that declares no dwell", async () => {
-  // The capability is optional, so a driver written before it existed keeps
-  // working rather than silently settling with a zero allowance.
+  // The capability is optional, so a driver that declares nothing settles
+  // against the default rather than silently against a zero allowance.
   const read = dwellingReader(1, 2, DEFAULT_DWELL_ALLOWANCE_MS / 2);
 
   expect(await settledTarget({ readActiveTarget: read })).toBe(2);
