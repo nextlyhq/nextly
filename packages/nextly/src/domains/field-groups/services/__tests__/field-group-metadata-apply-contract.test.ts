@@ -368,12 +368,21 @@ describe("an update whose row write fails after the tables moved", () => {
       // Fails the real write and accepts the narrow status mark that follows it, which is the whole
       // reason the mark is worth attempting: a single-column update survives the failures that
       // realistically break a full row write.
-      updateComponent: vi.fn(async () => {
-        attempts += 1;
-        if (attempts === 1)
-          throw args.failure ?? new Error("row write rejected");
-        return record;
-      }),
+      // The parameters are declared even though nothing here reads them: a mock with no declared
+      // parameters records its calls as an empty tuple, so indexing into one is a type error rather
+      // than the assertion it was written as.
+      updateComponent: vi.fn(
+        async (
+          _slug: string,
+          _data: Record<string, unknown>,
+          _options?: { source?: string }
+        ) => {
+          attempts += 1;
+          if (attempts === 1)
+            throw args.failure ?? new Error("row write rejected");
+          return record;
+        }
+      ),
     };
   }
 
@@ -442,9 +451,15 @@ describe("an update whose row write fails after the tables moved", () => {
   it("still raises when the row could not even be marked", async () => {
     // Best effort means the mark's own failure must not replace the diagnosis the caller needs.
     const registry = registryWhoseWriteFails({});
-    registry.updateComponent = vi.fn(async () => {
-      throw new Error("database unreachable");
-    });
+    registry.updateComponent = vi.fn(
+      async (
+        _slug: string,
+        _data: Record<string, unknown>,
+        _options?: { source?: string }
+      ) => {
+        throw new Error("database unreachable");
+      }
+    );
     const adapter = adapterDouble(async () => true);
     const service = serviceOver(
       registry as unknown as ReturnType<typeof registryDouble>,
