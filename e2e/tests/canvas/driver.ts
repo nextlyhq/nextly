@@ -381,8 +381,9 @@ export const PERMITTED_DWELL_FLOOR_MS = 100;
  *   compliant canvas legitimately switched, then reads that switch as missing
  *   hysteresis.
  *
- * Sharing one constant meant raising it to fix the first broke the second and
- * lowering it did the reverse.
+ * One constant cannot serve both: any value large enough for the first is too
+ * large for the second, and any value small enough for the second is too small
+ * for the first.
  *
  * The requirement states a dwell of MORE than 100ms and gives no upper bound,
  * so no finite wait is provably sufficient and no global constant can be
@@ -417,10 +418,10 @@ type TargetReader = Pick<CanvasDriver, "readActiveTarget"> &
 /**
  * What an edge search needs, which is less than a whole canvas.
  *
- * Declared as the capability rather than the interface so these searches can be
- * run against a simulated resolver. Three of the dwell fixes in this file are
- * invisible on a canvas that declares no dwell, and a fix nothing can fail is a
- * fix nobody can check.
+ * Declared as the capability rather than the whole interface so these searches
+ * can run against a simulated resolver as well as a real canvas. Their waiting
+ * behaviour is only observable against a canvas that declares a dwell, and the
+ * canvas this suite drives declares none.
  */
 type EdgeSearchDriver = Pick<CanvasDriver, "moveBy" | "readActiveTarget"> &
   Partial<Pick<CanvasDriver, "dwellAllowanceMs">>;
