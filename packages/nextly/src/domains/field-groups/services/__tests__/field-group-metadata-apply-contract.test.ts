@@ -85,9 +85,15 @@ function registryDouble() {
  * failure these tests inject; routing it into the exclusion's probe as well would refuse the create
  * before it started, and every assertion below would be describing a different path.
  */
-function adapterDouble(tableExists: () => Promise<boolean>) {
+function adapterDouble(
+  tableExists: () => Promise<boolean>,
+  // The dialect the service reads its column shapes for. Parameterised because whether a change
+  // needs DDL is a per-dialect question: the same `maxLength` edit alters a MySQL VARCHAR and
+  // leaves a SQLite TEXT untouched, and a guard tested on one dialect says nothing about the other.
+  dialect: "postgresql" | "mysql" | "sqlite" = "postgresql"
+) {
   return withMigrationLockSurface({
-    getCapabilities: () => ({ dialect: "postgresql" as const }),
+    getCapabilities: () => ({ dialect }),
     // The parameter is declared even though nothing here reads it: `entityStatements` reads the
     // recorded calls, and a mock with no declared parameters records them as an empty tuple.
     executeQuery: vi.fn(async (_sql: string) => []),
@@ -465,6 +471,105 @@ describe("a field-group update refuses what it cannot deliver", () => {
       .updateFieldGroup({
         slug: "hero",
         fields: [{ name: "score", type: "number", dbType: "decimal" }] as never,
+      })
+      .catch((error: unknown) => error);
+
+    expect(refusal).toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: [
+          expect.objectContaining({
+            path: "fields.score",
+            code: "requires_schema_change",
+          }),
+        ],
+      },
+    });
+    expect(registry.updateComponent).not.toHaveBeenCalled();
+  });
+
+  // 🔴 THE case a column comparison cannot see. `unique` creates `uq_<table>_<column>` and leaves
+  // the column itself byte-identical, so a check that reads only the column shape accepts the edit
+  // and the constraint is never created — duplicates stay physically permitted while the registry
+  // records the field as unique.
+  it("refuses a uniqueness change, which alters an index and not the column", async () => {
+    const registry = registryWithGroup({
+      fields: [{ name: "code", type: "text" }],
+    });
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    const refusal = await service
+      .updateFieldGroup({
+        slug: "hero",
+        fields: [{ name: "code", type: "text", unique: true }] as never,
+      })
+      .catch((error: unknown) => error);
+
+    expect(refusal).toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: [
+          expect.objectContaining({
+            path: "fields.code",
+            code: "requires_schema_change",
+          }),
+        ],
+      },
+    });
+    expect(registry.updateComponent).not.toHaveBeenCalled();
+  });
+
+  // 🔴 THE control against over-refusing. SQLite has one string type, so a `maxLength` edit renders
+  // to the same TEXT column and needs no DDL at all. Refusing it would send a caller to an apply
+  // flow for a database change that does not exist — and the Direct API has no apply flow to send
+  // them to.
+  it("allows a bound change that renders to the same column on this dialect", async () => {
+    const registry = registryWithGroup({
+      fields: [{ name: "heading", type: "text", maxLength: 100 }] as never,
+    });
+    const adapter = adapterDouble(async () => true, "sqlite");
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    await expect(
+      service.updateFieldGroup({
+        slug: "hero",
+        fields: [{ name: "heading", type: "text", maxLength: 255 }] as never,
+      })
+    ).resolves.toMatchObject({
+      record: expect.objectContaining({ slug: "hero" }),
+    });
+  });
+
+  // 🔴 THE case the main table cannot see, because the column is not on it. A localized field's
+  // column lives in `comp_<slug>_locales`, and the companion reconciler diffs that table by NAME
+  // only — so a same-named field whose storage changes emits no ALTER there either, and the group
+  // would advance describing a column shape the companion does not have.
+  it("refuses a storage change to a field whose column lives in the companion", async () => {
+    const registry = registryWithGroup({
+      localized: true,
+      fields: [
+        { name: "score", type: "number", dbType: "integer", localized: true },
+      ] as never,
+    });
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    const refusal = await service
+      .updateFieldGroup({
+        slug: "hero",
+        fields: [
+          { name: "score", type: "number", dbType: "decimal", localized: true },
+        ] as never,
       })
       .catch((error: unknown) => error);
 
