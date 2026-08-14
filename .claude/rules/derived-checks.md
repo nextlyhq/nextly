@@ -227,7 +227,14 @@ asked it the question:
   the control on an isolated fixture, where "not nothing" means what it says.
 - a NEGATIVE control — a valid input it must stay silent on, in that same shape:
   the aliased spelling, the computed value, the member of the population the
-  findings clustered around.
+  findings clustered around. **Its silence is evidence only once you have shown
+  the check RAN on it**, and that is not inherited from the positive control
+  being green: a fixture excluded by a glob, never discovered, or wired to a
+  path that no longer exists produces exactly the same silence as a valid input
+  correctly passed. So make the invocation observable for this fixture — assert
+  it was among the inputs read, or mutate this same fixture into the reportable
+  form and require THAT to be reported, which proves the input reaches the
+  mechanism while leaving the valid case as the thing being asserted.
 
 One pair per SUBSHAPE, because a family of findings usually is not one shape.
 A scanner that handles a named alias can still misread a namespace alias and a
@@ -396,6 +403,22 @@ belongs on the input the check consumed, not on the verdict it emitted —
 correct run of a check whose happy path is silence fails, which is most of
 them, and the rule gets removed for being wrong rather than fixed.
 
+**And nonempty is not complete, which is the failure the first clause invites
+you to stop looking for.** `total > 0` separates "read nothing" from "read
+something" and says nothing about whether it read everything, so a PARTIAL read
+passes it while hiding exactly what a full one would have found: a paginated
+query answering with its first page, a glob that matched one directory of
+three, a query capped by a server-side maximum nobody set. The violation on
+page two is as absent as it was before, and now a population assertion vouches
+for the run.
+
+So assert the population you EXPECT, not merely a nonzero one. What that costs
+is small and it varies by check: exhaust the pagination and say so; compare
+against a count from a different source; require the specific members you know
+must be there; or plant a sentinel in the region a truncated read would miss
+and require it back. Any of those distinguishes a complete read from a lucky
+prefix, and `> 0` distinguishes neither.
+
 The tell is a sentence where the evidence names one thing and the conclusion
 names a family: a queue, a marker, a control — against load, a merge, a set of
 findings. When you notice it, do not look for a better number first. Name the
@@ -491,15 +514,29 @@ caller that needs certainty can ask for it, and one that does not can carry on �
 which a comment cannot arrange.
 
 Where the result shape is fixed and admits no third state, the remedy is NOT to
-fall back to documenting it. That leaves every caller receiving the same answer
-for "checked and valid" as for "not checked", which is the defect this paragraph
-opens by naming, and a sentence in the file does not reach a caller. Narrow the
-accepted INPUT instead, so one the check cannot decide is REFUSED rather than
-silently passed. That fits inside any pass/fail shape, because refusing is a
-fail, and it turns an invisible gap into a boundary the caller has to handle.
-Where even the input cannot be narrowed, put the gap somewhere the run can be
-read — the skipped count in the log, the summary line — and keep the comment as
-the record of that decision rather than as the control for it.
+fall back to documenting it — a sentence in the file does not reach a caller.
+But it is not to REFUSE the input either, and that correction is worth stating
+because refusing is the obvious next move and this section spent a round making
+it. Mapping "cannot decide" onto `fail` inside an advisory check emits a finding
+against input that may be perfectly valid, which is the false positive the top
+of this section calls more damaging than a miss: the guard gets suppressed and
+takes its true positives with it. Squeezing an unknown into a binary does not
+preserve it whichever value you pick — `pass` hides it, `fail` misreports it.
+
+So the remedy depends on the classification the section already made, and the
+two answers are genuinely different:
+
+- **A precondition** may and should refuse. A miss there permits the prohibited
+  action, so failing closed on an undecidable input is correct however
+  inconvenient, and the caller has to handle it.
+- **An advisory check** must not. Keep it silent on what it cannot decide, and
+  put the unknown where it survives the binary instead: a skipped count the run
+  prints, a line in the summary, a separate artifact. Then make sure nothing
+  gates on that clean result as though it meant "checked" — an advisory answer
+  wired into a decisive gate is the actual defect, and it is fixed at the gate
+  rather than by making the check shout.
+
+The comment records the decision either way. It is never the control.
 
 And classify at the CALL SITE, not at the definition. A shared helper does not
 acquire one kind: a caller that logs a warning and a caller that gates a write
