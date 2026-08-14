@@ -424,8 +424,18 @@ function globSegmentSource(glob) {
     const char = glob[i];
     if (char === "*") {
       if (glob[i + 1] === "*") {
-        source += ".*";
-        i += 1;
+        // `**/` spans zero OR MORE directories, so `**/*.md` matches a root
+        // README as well as a nested one. Requiring the separator made the gate
+        // demand integration checks the workflow deliberately never created,
+        // which does not merely over-require: those checks can never appear, so
+        // a documentation-only pull request could never pass at all.
+        if (glob[i + 2] === "/") {
+          source += "(?:.*/)?";
+          i += 2;
+        } else {
+          source += ".*";
+          i += 1;
+        }
       } else {
         source += "[^/]*";
       }
@@ -589,7 +599,6 @@ export function landedWhole({ checkable, reason, candidates }) {
 // ---------------------------------------------------------------------------
 
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 const REPO = "nextlyhq/nextly";
@@ -659,6 +668,17 @@ function ghLog(merged, tip) {
     encoding: "utf8",
   }).trim();
   return out ? out.split("\n") : [];
+}
+
+/**
+ * A file as it stood at one revision, fetched first so the read cannot silently
+ * fall back to whatever the working tree happens to hold.
+ */
+function workflowAt(revision, path) {
+  run(["fetch", "origin", revision, "--quiet"]);
+  return execFileSync("git", ["show", `${revision}:${path}`], {
+    encoding: "utf8",
+  });
 }
 
 /** Every configured remote as `[name, url]`, for matching against the head repository. */
@@ -767,11 +787,13 @@ export function main(argv) {
   // judged: `pull_request` before a merge, `push` to the base branch after one.
   // The two blocks are edited independently, so answering from the wrong one
   // waits for a check that will never report or excuses one that should have.
+  // From the revision being judged, not from the working tree. The two differ
+  // whenever the checkout has moved on, and this command is expected to run
+  // outside the pull request's worktree: a later commit adding a path to
+  // `paths-ignore` would otherwise excuse checks that an older merge was
+  // genuinely due to create.
   const integrationIgnore = workflowPathsIgnore(
-    readFileSync(
-      new URL("../.github/workflows/integration.yml", import.meta.url),
-      "utf8"
-    ),
+    workflowAt(subject, ".github/workflows/integration.yml"),
     merged ? "push" : "pull_request"
   );
   const required = requiredChecks(integrationIgnore);
@@ -833,12 +855,15 @@ export function main(argv) {
   // judge a merged pull request half on the merge commit and half on the branch
   // — and the half still reading the branch is the half that reports green.
   const statuses = subject
-    ? ghJson([
-        "api",
-        `repos/${REPO}/commits/${subject}/status`,
-        "--jq",
-        ".statuses",
-      ])
+    ? flatPages(
+        ghJson([
+          "api",
+          "--paginate",
+          "--slurp",
+          `repos/${REPO}/commits/${subject}/status?per_page=100`,
+        ]),
+        "statuses"
+      ).flatMap(page => page.statuses ?? [])
     : [];
   const allChecks = [...checkRuns, ...statuses.map(statusAsRun)];
 

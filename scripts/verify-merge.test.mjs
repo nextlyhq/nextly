@@ -495,14 +495,25 @@ describe("pathMatches", () => {
     expect(pathMatches("**/*.md", "packages/nextly/srcXmd")).toBe(false);
   });
 
-  it("reads **/ as requiring a directory, which errs toward requiring", () => {
-    // A root-level `README.md` does not match `**/*.md` on the literal reading
-    // of the filter, so a pull request touching only that file is treated as
-    // one `integration.yml` runs for. That direction is deliberate: over-
-    // requiring a check produces an argument, under-requiring one produces a
-    // silent gap, which is the failure this file exists to refuse.
-    expect(pathMatches("**/*.md", "README.md")).toBe(false);
+  it("matches a ROOT file with **/, as the workflow matcher does", () => {
+    // `**/` spans zero or more directories. Requiring the separator made the
+    // gate demand integration checks the workflow deliberately never creates —
+    // and those can never appear, so a documentation-only pull request could
+    // not pass at all rather than merely being held to a stricter bar.
+    expect(pathMatches("**/*.md", "README.md")).toBe(true);
     expect(pathMatches("**/*.md", "docs/guide.md")).toBe(true);
+    expect(pathMatches("**/*.md", "docs/a/b/guide.md")).toBe(true);
+  });
+
+  it("still refuses a non-matching extension under **/", () => {
+    // The control: without it, a translation collapsing to `.*` passes every
+    // assertion above while matching files the filter never covered.
+    expect(pathMatches("**/*.md", "packages/nextly/src/index.ts")).toBe(false);
+  });
+
+  it("keeps the docs prefix anchored", () => {
+    expect(pathMatches("docs/**", "docs/a/reference.md")).toBe(true);
+    expect(pathMatches("docs/**", "packages/docs/a.md")).toBe(false);
   });
 });
 
