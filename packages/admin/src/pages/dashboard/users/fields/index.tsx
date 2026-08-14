@@ -812,6 +812,13 @@ function UserFieldsTable() {
             onPageChange={setPage}
             onPageSizeChange={handlePageSizeChange}
             totalItems={totalItems + filteredStaticFields.length}
+            // Named rather than left as the default "Pagination". A screen
+            // reader announces this control by that name, and the admin
+            // renders several pagers across its pages, so a generic one says
+            // nothing about which list it moves. The placement guard also
+            // identifies this pager by the label: a count cannot tell two
+            // identical pagers apart, so an exemption written for one of them
+            // would otherwise excuse whichever came first.
             ariaLabel="User fields pagination"
           />
           {/* </div> */}

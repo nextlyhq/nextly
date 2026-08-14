@@ -127,7 +127,17 @@ describe("DataTableView footer", () => {
     );
 
     expect(screen.getByRole("alert")).toBeInTheDocument();
-    expect(screen.getByTestId("footer")).toBeInTheDocument();
+    const footer = screen.getByTestId("footer");
+    expect(footer).toBeInTheDocument();
+
+    // Presence is not placement, and asserting only presence is what let the
+    // footer render outside the card here while every assertion stayed green.
+    // The pager has to sit in the SAME surface it occupies when the request
+    // succeeds, or a failed page moves it out of the card it normally lives in.
+    expect(tokensOf(footer.parentElement)).toContain("@md/table:border");
+    expect(tokensOf(footer.parentElement)).toContain(
+      "@md/table:overflow-hidden"
+    );
   });
 
   it("renders nothing extra when no footer is given", () => {

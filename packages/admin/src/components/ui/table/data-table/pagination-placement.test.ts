@@ -157,9 +157,16 @@ function insideTableFooter(node: ts.Node, file: ts.SourceFile): boolean {
     if (current.name.getText(file) !== "footer") continue;
     // JsxAttribute -> JsxAttributes -> the opening or self-closing element.
     const owner = current.parent?.parent;
-    if (!owner) return false;
+    if (!owner) continue;
     const tag = tagNameOf(owner, file);
-    return tag === TABLE || (tag !== undefined && FORWARDS_FOOTER.has(tag));
+    if (tag === TABLE || (tag !== undefined && FORWARDS_FOOTER.has(tag))) {
+      return true;
+    }
+    // Keep climbing rather than answering on the FIRST footer found. A valid
+    // composition can nest one inside another -- `<DataTableView footer={
+    // <Panel footer={<Pagination />} />} />` reaches the panel's attribute
+    // first -- and stopping there rejects a pager that is genuinely inside the
+    // table's footer. Only running out of ancestors is a no.
   }
   return false;
 }
@@ -206,22 +213,19 @@ function ariaLabelOf(node: ts.Node, file: ts.SourceFile): string | undefined {
 }
 
 /**
- * Whether this element was EXTRACTED to a name rather than written in place.
+ * The variable a pager was extracted into, when it was.
  *
  * `const pager = <Pagination ... />` then `footer={pager}` is a behaviour-
- * preserving refactor for readability, and a walk up from the declaration finds
- * no `footer` ancestor — so the pager reads as detached and the suite rejects
- * correct code. That is the failure that gets a guard deleted rather than
- * fixed, and it is worse than the miss it prevents.
+ * preserving refactor, and a walk up from the DECLARATION finds no `footer`
+ * ancestor — so judging it there rejects correct code. Judging it nowhere is
+ * the other error: it blesses `const pager = ...` followed by a sibling
+ * `{pager}`, which is the defect this suite exists for wearing a variable name.
  *
- * Following the identifier to its uses would mean resolving every way a value
- * can travel, which is the surface this repo's earlier source checks lost to.
- * So an extracted element is not judged here, and this is the ONE documented
- * blind spot: a pager assigned to a name and then rendered beside the table is
- * not reported. Written down rather than left implicit, because a check whose
- * silence means something has to say where it is silent.
+ * So the declaration is not the place to answer, and the answer is not
+ * "unknown" either: the identifier's USES are where the pager actually lands,
+ * and within one file they can be found exactly.
  */
-function isExtractedToName(node: ts.Node): boolean {
+function extractedName(node: ts.Node): string | undefined {
   for (let current = node.parent; current; current = current.parent) {
     // Reached JSX first: it is written in place, wherever that place is. The
     // FRAGMENT matters as much as the element — `const x = (<>...</>)` is
@@ -232,17 +236,44 @@ function isExtractedToName(node: ts.Node): boolean {
       ts.isJsxFragment(current) ||
       ts.isJsxAttribute(current)
     ) {
-      return false;
+      return undefined;
     }
-    if (
-      ts.isVariableDeclaration(current) ||
-      ts.isPropertyAssignment(current) ||
-      ts.isPropertyDeclaration(current)
-    ) {
-      return true;
+    if (ts.isVariableDeclaration(current) && ts.isIdentifier(current.name)) {
+      return current.name.text;
+    }
+    // A pager assigned into a property rather than a plain variable travels
+    // through the object, which this does not follow. Reported at the
+    // declaration so it is visible rather than silently excused.
+    if (ts.isPropertyAssignment(current) || ts.isPropertyDeclaration(current)) {
+      return undefined;
     }
   }
-  return false;
+  return undefined;
+}
+
+/**
+ * Every place a name is rendered into JSX, as `{name}` or `prop={name}`.
+ *
+ * Scoped to the file on purpose. A value exported and rendered elsewhere is not
+ * followed, and that boundary is real rather than convenient: these pagers are
+ * local to their page, and resolving across modules is the unbounded surface
+ * this repo's earlier source checks lost to.
+ */
+function jsxUsesOf(name: string, file: ts.SourceFile): ts.Node[] {
+  const uses: ts.Node[] = [];
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isIdentifier(node) &&
+      node.text === name &&
+      node.parent &&
+      ts.isJsxExpression(node.parent)
+    ) {
+      uses.push(node);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  return uses;
 }
 
 /** Every pager in a file that is NOT inside a table's `footer`, found by binding. */
@@ -251,13 +282,20 @@ function detachedPagers(file: ts.SourceFile): ts.Node[] {
   const found: ts.Node[] = [];
   const visit = (node: ts.Node): void => {
     const tag = isElementOccurrence(node) ? tagNameOf(node, file) : undefined;
-    if (
-      tag !== undefined &&
-      names.has(tag) &&
-      !insideTableFooter(node, file) &&
-      !isExtractedToName(node)
-    ) {
-      found.push(node);
+    if (tag !== undefined && names.has(tag)) {
+      const name = extractedName(node);
+      if (name === undefined) {
+        // Written in place: judged where it stands.
+        if (!insideTableFooter(node, file)) found.push(node);
+      } else {
+        // Extracted: judged at every place the name is rendered. A pager whose
+        // uses are all inside a table footer is correctly placed however it was
+        // spelled; one used as a sibling is detached however it was spelled.
+        // An unused declaration renders nowhere and is reported by neither.
+        for (const use of jsxUsesOf(name, file)) {
+          if (!insideTableFooter(use, file)) found.push(use);
+        }
+      }
     }
     ts.forEachChild(node, visit);
   };
@@ -474,10 +512,9 @@ describe("list pagination", () => {
     );
     expect(detachedPagers(extracted), "extracted footer").toHaveLength(0);
 
-    // The same shape used as a real sibling is the documented blind spot: also
-    // silent. Asserted so the cost of the exemption is visible rather than
-    // discovered, and so it stays a deliberate miss rather than drifting into
-    // one nobody remembers choosing.
+    // The same shape used as a real sibling IS caught. Judging the declaration
+    // would reject the correct form above; judging nothing would bless this
+    // one. The uses are what decide, so both come out right.
     const extractedSibling = parse(
       "control.tsx",
       "const pager = <Pagination page={1} />;\n" +
@@ -485,7 +522,31 @@ describe("list pagination", () => {
     );
     expect(
       detachedPagers(extractedSibling),
-      "extracted sibling is a known miss"
+      "extracted sibling is still detached"
+    ).toHaveLength(1);
+
+    // Rendered in both places: the sibling use is reported and the footer use
+    // is not, so one declaration yields exactly one finding.
+    const extractedBoth = parse(
+      "control.tsx",
+      "const pager = <Pagination page={1} />;\n" +
+        "const x = (<><DataTableView columns={c} rows={r} footer={pager} />{pager}</>);"
+    );
+    expect(
+      detachedPagers(extractedBoth),
+      "only the detached use is reported"
+    ).toHaveLength(1);
+
+    // A pager nested inside another component's footer, itself inside the
+    // table's footer, is correctly placed. Answering on the FIRST footer found
+    // would reject it.
+    const nestedFooter = parse(
+      "control.tsx",
+      "const x = <DataTableView columns={c} rows={r} footer={<Panel footer={<Pagination page={1} />} />} />;"
+    );
+    expect(
+      detachedPagers(nestedFooter),
+      "nested inside the table footer"
     ).toHaveLength(0);
   });
 

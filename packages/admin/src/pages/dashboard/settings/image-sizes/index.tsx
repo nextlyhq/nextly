@@ -134,11 +134,13 @@ function ImageSizesContent({
     setPage(0);
   }, [search]);
 
-  // A larger page size makes the current page number point further into the
-  // list than the list reaches, and the slice below then returns nothing --
-  // leaving the empty message on a list that has rows. The row the user was
-  // looking at is on the first page under any page size, so that is where
-  // resizing lands them.
+  // Changing the page size makes the current page number point somewhere the
+  // list may not reach -- at a larger size the slice below starts past the end
+  // and returns nothing, leaving the empty message on a list that has rows.
+  // Returning to the first page is always in range, and it is what every other
+  // list in the admin does, so the two behave alike. It does NOT keep the rows
+  // that were on screen: row 31 is on page 2 at twenty-five per page, and the
+  // reset moves away from it.
   const handlePageSizeChange = React.useCallback((size: number) => {
     setPageSize(size);
     setPage(0);

@@ -785,6 +785,11 @@ export function MediaLibrary({
                   showPageSizeSelector
                   onPageChange={handlePageChange}
                   onPageSizeChange={handlePageSizeChange}
+                  // This page renders TWO pagers -- one per view -- and they
+                  // are identical in every other prop. Distinct names are what
+                  // a screen reader announces, and what lets the placement
+                  // guard exempt the grid's pager without also excusing the
+                  // list's, which belongs in the table footer below.
                   ariaLabel="Media grid pagination"
                 />
               )}
@@ -817,6 +822,9 @@ export function MediaLibrary({
                       showPageSizeSelector
                       onPageChange={handlePageChange}
                       onPageSizeChange={handlePageSizeChange}
+                      // The other half of the pair above: same props, other
+                      // view, so the name is what tells them apart to a screen
+                      // reader and to the placement guard.
                       ariaLabel="Media list pagination"
                     />
                   ) : undefined

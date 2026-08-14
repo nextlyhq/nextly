@@ -302,6 +302,23 @@ export function DataTableView<Row extends object>({
   const colSpan =
     visibleColumns.length + (selection ? 1 : 0) + (hasRowActions ? 1 : 0);
 
+  // The surface that holds the views and the footer, defined once because BOTH
+  // return paths below render a footer into it. Written out in each branch, the
+  // error path silently lost the card, the clipping and the breakpoint gap, so
+  // a pager that is correctly placed in the normal state moved outside the card
+  // the moment a request failed -- the exact defect this component's `footer`
+  // exists to prevent.
+  const surfaceClassName = cn(
+    // Clipping is NOT part of the card. The table view rounds its own
+    // corners through whatever encloses it, and a globally coloured
+    // <thead> paints square corners through a rounded parent that does
+    // not clip -- which the shared DataTable is, and it is the caller
+    // that passes bordered={false}. So this stays unconditional.
+    "flex flex-col gap-4 @md/table:block @md/table:gap-0 @md/table:overflow-hidden",
+    bordered &&
+      "@md/table:rounded-md @md/table:border @md/table:border-border @md/table:bg-card @md/table:text-card-foreground"
+  );
+
   // A failed request and an empty result are different facts, and only one of
   // them can be true. Rendering the table anyway pairs "could not load" with
   // "no users available", which states as data what is actually the absence of
@@ -316,12 +333,13 @@ export function DataTableView<Row extends object>({
         >
           <TableError message={error} />
         </div>
-        {/* The footer stays. It carries the pager, and a request that failed
+        {/* The footer stays, and stays in the SAME surface it occupies when the
+            request succeeds. It carries the pager, and a request that failed
             for ONE page leaves the user on that page with no rows -- so
             removing the controls here removes the only way back to a page that
             works. The rows are gone; the navigation out of the failure is not
-            part of the failure. */}
-        {footer}
+            part of the failure, and neither is its placement. */}
+        {footer && <div className={surfaceClassName}>{footer}</div>}
       </div>
     );
   }
@@ -343,19 +361,7 @@ export function DataTableView<Row extends object>({
           column: the row cards carry their own borders and the footer takes the
           column's gap. At and above it, it becomes the card and the footer sits
           inside as the table's own footer. */}
-      <div
-        className={cn(
-          // Clipping is NOT part of the card. The table view rounds its own
-          // corners through whatever encloses it, and a globally coloured
-          // <thead> paints square corners through a rounded parent that does
-          // not clip -- which the shared DataTable is, and it is the caller
-          // that passes bordered={false}. So this stays unconditional, as it
-          // was before the card moved onto this element.
-          "flex flex-col gap-4 @md/table:block @md/table:gap-0 @md/table:overflow-hidden",
-          bordered &&
-            "@md/table:rounded-md @md/table:border @md/table:border-border @md/table:bg-card @md/table:text-card-foreground"
-        )}
-      >
+      <div className={surfaceClassName}>
         {/* Mobile / narrow: card view */}
         <div className="flex flex-col gap-4 @md/table:hidden">
           {loading && rows.length === 0 ? (
