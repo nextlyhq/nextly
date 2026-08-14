@@ -23,14 +23,6 @@ const plugins: PluginMetadata[] = [
     collections: ["forms", "form-submissions"],
     singles: ["form-settings"],
     menu: [{ label: "All Forms", to: "/admin/collections/forms" }],
-    permissions: [
-      {
-        action: "export",
-        resource: "submissions",
-        label: "Export Submissions",
-        danger: true,
-      },
-    ],
     routes: [
       {
         method: "GET",
@@ -45,14 +37,6 @@ const plugins: PluginMetadata[] = [
     enabled: false,
     placement: "plugins",
     collections: ["retained"],
-    permissions: [
-      {
-        action: "purge",
-        resource: "archive",
-        label: "Purge Archive",
-        danger: true,
-      },
-    ],
     whenEnabled: {
       routes: [
         {
