@@ -431,9 +431,13 @@ is what makes it safe, because it is the server that refuses. Both take
 a merge precondition naming the wrong revision either refuses a correct merge or,
 worse, permits the one it was added to stop.
 
-**Read the full object name; never reconstruct one from an abbreviation.** The
-flag needs all forty characters, every printed form of a SHA is abbreviated, and
-the two failures are not symmetric. A fabricated value that happens to prefix
+**Copy a full object name; never extend an abbreviated one.** The flag needs all
+forty characters, and both forms are in circulation: `git rev-parse HEAD`,
+`git log --format=%H` and the `ls-remote | cut -f1` above print the object name
+in full, while `--oneline`, `%h` and most of what `gh` displays print a prefix.
+So the rule is not "distrust printed SHAs" — it is to know which of the two you
+are looking at, and to take the full form when one is available rather than
+lengthening a short one. The two failures are not symmetric. A fabricated value that happens to prefix
 the real head still refuses — which is the flag working. A fabricated value is
 never accidentally CORRECT, so the danger is not this command; it is every other
 place a hand-assembled SHA is used where nothing checks it.
