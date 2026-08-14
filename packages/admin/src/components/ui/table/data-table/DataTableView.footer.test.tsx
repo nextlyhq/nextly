@@ -197,6 +197,20 @@ describe("DataTableView footer", () => {
     expect(tokensOf(pager.parentElement)).toContain("@md/table:border");
   });
 
+  it("keeps a zero-valued footer, which React renders", () => {
+    // `footer` is a ReactNode and `0` is a valid one -- a caller passing
+    // `selectedIds.length` with nothing selected renders "0". A truthiness test
+    // on the slot drops it, which is content loss wearing a falsy value.
+    render(
+      <DataTableView<Row>
+        columns={[{ name: "name", header: "Name" }]}
+        rows={ROWS}
+        footer={0}
+      />
+    );
+    expect(screen.getByText("0")).toBeInTheDocument();
+  });
+
   it("renders a custom footer alongside the pager, not instead of it", () => {
     // `footer` is an arbitrary node rather than a pager, so a caller using it
     // for a selection summary or bulk actions and then adopting `pagination`

@@ -337,11 +337,16 @@ export function DataTableView<Row extends object>({
   // `pagination` lost that content silently, with both props public, both
   // permitted by the type, and nothing reporting the loss. A summary above its
   // pager is a real arrangement, so it is the one this renders.
+  // Nullish rather than truthy. `footer` is a ReactNode, and `0` is a valid one
+  // that React renders as "0" -- a caller passing `selectedIds.length` with
+  // nothing selected has it disappear under a truthiness test. That is the same
+  // silent content loss this resolution exists to remove, one type narrower.
+  const hasFooter = footer !== undefined && footer !== null;
   const footerContent =
-    footer || pagination ? (
+    hasFooter || pagination !== undefined ? (
       <>
         {footer}
-        {pagination && <Pagination {...pagination} />}
+        {pagination !== undefined && <Pagination {...pagination} />}
       </>
     ) : undefined;
 
