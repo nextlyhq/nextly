@@ -538,13 +538,30 @@ export class FieldGroupMetadataService {
     // than the spec object, because that string IS the column the reconciler would write: on SQLite
     // a `maxLength` change moves the spec and renders to the same TEXT, which needs no statement and
     // must not be refused.
+    // Not a valid rendering of any column, so it can never equal one.
+    const NO_COMPANION_COLUMN = "\u0000none";
     const companionOf = (fields: FieldDefinition[]): Map<string, string> => {
       const out = new Map<string, string>();
       for (const field of fields) {
         if (!isFieldLocalized(field, args.localized)) continue;
         const column = fieldToLocalizedColumnSpec(field, dialect, "fieldGroup");
-        if (column)
-          out.set(field.name, `${column.name} ${ddlType(column, dialect)}`);
+        // 🔴 Recorded even when it materialises NO column, rather than skipped.
+        //
+        // Skipping made a field that gains or loses its column invisible: a `component` or
+        // many-to-many field stores its data elsewhere and produces none, so changing it to `text`
+        // under the same name left this map without a "before" entry and the change without a
+        // common name to compare. `buildCompanionReconcileStatements` then diffs the raw localized
+        // NAMES, sees the name already present, and emits no ADD — so the registry and the runtime
+        // advance to a companion column nothing created. The reverse leaves the old one behind.
+        //
+        // A sentinel keeps the name in the map with a value that cannot collide with a rendered
+        // column, so the transition reads as what it is: a change on a name present in both.
+        out.set(
+          field.name,
+          column
+            ? `${column.name} ${ddlType(column, dialect)}`
+            : NO_COMPANION_COLUMN
+        );
       }
       return out;
     };

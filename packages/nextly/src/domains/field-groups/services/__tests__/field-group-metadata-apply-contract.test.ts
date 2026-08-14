@@ -799,6 +799,73 @@ describe("a field-group update refuses what it cannot deliver", () => {
     });
   });
 
+  // 🔴 THE transition a column-shape comparison cannot see, because one side HAS no column. A
+  // localized `component` field stores its data in its own table and materialises nothing in the
+  // companion; changing it to `text` under the same name needs an ADD COLUMN that the reconciler
+  // never emits — it diffs raw localized NAMES, and the name was already there. The registry and
+  // the runtime would advance to a companion column nothing created.
+  it("refuses a localized field that gains a companion column under the same name", async () => {
+    const registry = registryWithGroup({
+      localized: true,
+      fields: [{ name: "body", type: "component", localized: true }] as never,
+    });
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    const refusal = await service
+      .updateFieldGroup({
+        slug: "hero",
+        fields: [{ name: "body", type: "text", localized: true }] as never,
+      })
+      .catch((error: unknown) => error);
+
+    expect(refusal).toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: expect.arrayContaining([
+          expect.objectContaining({
+            path: "fields.body",
+            code: "requires_schema_change",
+          }),
+        ]),
+      },
+    });
+    expect(registry.updateComponent).not.toHaveBeenCalled();
+  });
+
+  // The reverse, which strands the old column instead of missing a new one.
+  it("refuses a localized field that loses its companion column", async () => {
+    const registry = registryWithGroup({
+      localized: true,
+      fields: [{ name: "body", type: "text", localized: true }] as never,
+    });
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    const refusal = await service
+      .updateFieldGroup({
+        slug: "hero",
+        fields: [{ name: "body", type: "component", localized: true }] as never,
+      })
+      .catch((error: unknown) => error);
+
+    expect(refusal).toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: expect.arrayContaining([
+          expect.objectContaining({ code: "requires_schema_change" }),
+        ]),
+      },
+    });
+    expect(registry.updateComponent).not.toHaveBeenCalled();
+  });
+
   // A layout-only field has no column anywhere, so adding one cannot need DDL on any table.
   it("allows a field that produces no column at all", async () => {
     const registry = registryWithGroup({
