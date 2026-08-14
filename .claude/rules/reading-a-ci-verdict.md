@@ -42,8 +42,12 @@ decision requires, and exit nonzero otherwise.
 only one carries the checks: measured on this PR, `commits/<head>/check-runs`
 returned 31 rows and `commits/<merge_commit_sha>/check-runs` returned 0. For an
 open PR that `merge_commit_sha` is GitHub's own test-merge, which nothing runs
-against. (Inside a workflow the relationship inverts — `github.sha` IS the merge
-commit — so do not carry a variable named `SHA` between the two contexts.)
+against. (Inside a workflow the relationship inverts, but only for `pull_request`:
+there `github.sha` IS the synthetic merge commit. On `pull_request_target` it is
+the tip of the BASE branch, and on `push` it is the pushed commit — so
+`labeler.yml` and `pr-title.yml` here see `main`, not the PR revision. Do not
+carry a variable named `SHA` between contexts, and qualify the claim by event
+before relying on it.)
 
 **`set -o pipefail` is load-bearing, not tidiness.** Without it the exit status
 is `sort`'s, so an authentication failure, a rate limit or a transient 5xx from
@@ -411,7 +415,11 @@ The properties, each earned by a version that got it wrong:
   at a single commit. "The latest review" is a whole round for one and a single
   finding for the other, so no per-object rule is right for both.
 - **Ask the two questions directly instead.** COVERAGE: did each required
-  reviewer submit any review at this head? OUTSTANDING WORK: how many review
+  reviewer submit a review at this head that still stands? A `DISMISSED` review
+  is one GitHub explicitly invalidated and it opens no thread, so counting it
+  clears the gate on a review that no longer says anything. Grant coverage from
+  a NAMED set of states rather than withholding it from one, so a state this
+  code has not met refuses instead of counting. OUTSTANDING WORK: how many review
   threads are UNRESOLVED? GitHub already tracks the second, it is bot-agnostic,
   and it survives several reviews at one SHA. Counting findings was always a
   proxy for it.
@@ -433,6 +441,15 @@ the first. `verifying-merged-work.md` carries the merge gate itself —
 `gh pr merge --match-head-commit "$VERIFIED"`, which makes the check and the
 merge one atomic operation — along with the stranded-tail screen and everything
 about verifying by content.
+
+**Its "was the job green?" step reads the MERGE commit's check-runs and this
+file reads the PR head. Both are right, and the difference is the phase rather
+than a disagreement.** Before merging there is no merge commit — the
+`merge_commit_sha` an open PR reports is GitHub's own test-merge, which nothing
+runs against and which returned zero rows when measured. After merging, the
+squash lands on `main` and `push: branches: [main]` runs against it, so the
+merge commit is the one carrying the verdict. Read the head to decide whether to
+merge; read the merge commit to decide whether `main` is healthy.
 
 Note that its procedure and this one fail in opposite directions, which is why
 neither substitutes for the other. Content-verification confirmed #766 had
