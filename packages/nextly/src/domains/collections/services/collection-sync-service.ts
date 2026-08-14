@@ -43,7 +43,10 @@ import type {
 } from "../../../collections/config/define-collection";
 import type { SanitizedNextlyConfig } from "../../../collections/config/define-config";
 import type { FieldConfig } from "../../../collections/fields/types";
-import type { DynamicCollectionRecord } from "../../../schemas/dynamic-collections/types";
+import type {
+  CollectionAdminConfig,
+  DynamicCollectionRecord,
+} from "../../../schemas/dynamic-collections/types";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import {
@@ -311,6 +314,32 @@ const _everyAdminKeyIsClassified: UnclassifiedAdminKey extends never
 void _everyAdminKeyIsClassified;
 
 /**
+ * Everything this projection returns is a field the registry actually stores.
+ *
+ * The companion to the check above, and it has to be its own assertion because the two run in
+ * opposite directions. That one is computed from what the projection RETURNS, so it catches a
+ * key the persisted shape declares and the projection drops — which is how `order` and
+ * `sidebarGroup` were being lost. Basing it on `CollectionAdminConfig` instead would certify
+ * those as handled simply because the column type mentions them.
+ *
+ * This one is the reverse: every key the projection emits must exist on `CollectionAdminConfig`.
+ * Assignability alone does not give it, since a structural check permits extra properties — so a
+ * key could be marked "persisted" by the check above merely by being returned, while the column's
+ * type never described it and nothing could read it back with types.
+ */
+type UnstorableProjectedKey = Exclude<
+  keyof NonNullable<ReturnType<typeof toPersistedAdmin>>,
+  keyof CollectionAdminConfig
+>;
+const _everyProjectedKeyIsStorable: UnstorableProjectedKey extends never
+  ? true
+  : [
+      "projected key(s) absent from CollectionAdminConfig — declare them or stop returning them",
+      UnstorableProjectedKey,
+    ] = true;
+void _everyProjectedKeyIsStorable;
+
+/**
  * The description a collection is stored with.
  *
  * `admin.description` and the top-level `description` are two spellings of one thing — help text
@@ -320,10 +349,20 @@ void _everyAdminKeyIsClassified;
  * The top-level field takes precedence: it is the documented home, so an author who sets both is
  * most plausibly migrating from the `admin` spelling and expects the explicit field to win.
  */
-export function resolveDescription(
-  config: Pick<CollectionConfig, "description" | "admin">
-): string | undefined {
-  return config.description ?? config.admin?.description;
+export function resolveDescription(config: {
+  description?: string;
+  admin?: unknown;
+}): string | undefined {
+  if (config.description !== undefined) return config.description;
+
+  // `admin` is narrowed here rather than required as a typed shape, because one of the callers
+  // holds it as `unknown`: the HMR payload builder reads a config that has crossed a module
+  // reload and does not carry its type. Narrowing in the single resolver keeps that seam honest
+  // without a cast at the call site, and without every caller repeating the check.
+  if (typeof config.admin !== "object" || config.admin === null)
+    return undefined;
+  const description = (config.admin as { description?: unknown }).description;
+  return typeof description === "string" ? description : undefined;
 }
 
 /**

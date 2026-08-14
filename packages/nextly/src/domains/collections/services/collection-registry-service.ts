@@ -44,6 +44,8 @@ import {
 } from "../../webhooks/recording-policy";
 import { isConfigOwnedSource } from "../../webhooks/recording-provenance";
 
+import { resolveDescription } from "./collection-sync-service";
+
 /** Options for updating a collection. */
 export interface UpdateCollectionOptions {
   /** Source making the update. Used to enforce locking rules. */
@@ -230,7 +232,7 @@ export class CollectionRegistryService extends BaseRegistryService<
       slug: data.slug,
       labels: JSON.stringify(data.labels),
       table_name: tableName,
-      description: data.description,
+      description: data.description ?? undefined,
       fields: fieldsJson,
       timestamps: (data.timestamps ?? true) ? 1 : 0,
       admin: data.admin ? JSON.stringify(data.admin) : null,
@@ -599,7 +601,7 @@ export class CollectionRegistryService extends BaseRegistryService<
             config.slug,
             {
               labels: config.labels,
-              description: config.description,
+              description: resolveDescription(config) ?? null,
               fields: config.fields,
               timestamps: config.timestamps,
               admin: config.admin,
@@ -625,13 +627,23 @@ export class CollectionRegistryService extends BaseRegistryService<
           await this.seedPermissionsForCollection(config.slug);
         } else if (
           this.adminConfigChanged(config.admin, existing.admin) ||
-          this.labelsChanged(config.labels, existing.labels)
+          this.labelsChanged(config.labels, existing.labels) ||
+          resolveDescription(config) !== (existing.description ?? undefined)
         ) {
           await this.updateCollection(
             config.slug,
             {
               labels: config.labels,
-              admin: config.admin,
+              // Resolved, because a collection may spell its description under `admin` — and
+              // compared above for the same reason: without it, editing or removing that
+              // spelling leaves the row stale until some unrelated schema change happens to
+              // trigger a write.
+              description: resolveDescription(config) ?? null,
+              // Explicit null when the config no longer declares an admin block, so
+              // `updateCollection` clears the column instead of reading `undefined` as "leave
+              // unchanged" and stranding a sidebar position the config has dropped. Same
+              // reasoning as `revalidate` and `webhooks` above.
+              admin: config.admin ?? null,
               locked: true,
             },
             { source: config.source ?? "code" }

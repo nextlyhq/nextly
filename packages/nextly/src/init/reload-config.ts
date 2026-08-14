@@ -27,6 +27,7 @@ import { type SQL } from "drizzle-orm";
 
 import type { CollectionHooks } from "../collections/config/define-collection";
 import { type ResolvedAuditRetentionConfig } from "../domains/audit/retention-config";
+import { resolveDescription } from "../domains/collections/services/collection-sync-service";
 import { withMigrationExcluded } from "../domains/field-groups/migration/sync-guard";
 import { chooseTypeColumns } from "../domains/field-groups/storage/resolve-storage-names";
 import type { I18nTransitionKind } from "../domains/i18n/migration/transition-state";
@@ -316,7 +317,7 @@ function buildCollectionSyncPayload(collections: CollectionDef[]) {
         plural: c.labels?.plural ?? `${c.slug}s`,
       },
       fields: c.fields ?? [],
-      description: c.description,
+      description: resolveDescription(c),
       tableName: c.dbName,
       timestamps: c.timestamps,
       admin: c.admin,
