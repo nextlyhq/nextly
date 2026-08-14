@@ -299,6 +299,21 @@ test("keeps an edge-moving refusal inside the zone it reports, going DOWN", asyn
   expect(await canvas.zoneContainingPointer()).toBe(result.zone);
 });
 
+test("enters a zone thinner than one unit of the approach budget", async () => {
+  // Every other band in this file is at least 8px tall, so none of them can be stepped over and
+  // none could have caught this. A 3px band is what a 6 CSS-pixel drop zone becomes at the 0.5
+  // canvas scale the suite supports, and it starts at 51 so it does not begin on a multiple of the
+  // old 4px stride — the arrangement that put an entire zone between two commands.
+  const canvas = bandedCanvas([{ zone: 2, from: 51, to: 54 }]);
+
+  const result = await dragToInsetInZone(canvas, 0);
+
+  // The zone is REACHED. Reporting it as `too-narrow` for a depth it cannot hold would also be a
+  // correct answer; skipping it and reporting a later zone, or none, is not.
+  expect(result.zone).toBe(2);
+  expect(result.insetPx).toBe(0);
+});
+
 test("refuses a depth it cannot represent, rather than rounding to one it can", async () => {
   // A caller deriving a depth from fractional or scaled DOM geometry would
   // otherwise get 13px of movement for a 12.5px request and a success saying 13

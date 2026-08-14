@@ -597,8 +597,13 @@ async function approachZone(
 ): Promise<ZoneApproach> {
   const startedAt = driver.pointer().y;
   let zone = await driver.zoneContainingPointer();
-  for (let step = 0; step < maxSteps && zone < 0; step += 1) {
-    await driver.moveBy(0, INSET_APPROACH_PX);
+  // Bounded in PIXELS and stepped at the probe resolution. The budget a caller
+  // expressed in coarse steps reaches exactly as far as before; what changed is
+  // that every pixel along the way is sampled, so a zone thinner than a coarse
+  // step is entered rather than jumped over.
+  const budgetPx = maxSteps * INSET_APPROACH_PX;
+  for (let moved = 0; moved < budgetPx && zone < 0; moved += INSET_PROBE_PX) {
+    await driver.moveBy(0, INSET_PROBE_PX);
     zone = await driver.zoneContainingPointer();
   }
   return { zone, travelledPx: driver.pointer().y - startedAt };
@@ -655,7 +660,19 @@ export interface ZoneInset {
 /** Pixels per step while closing on the boundary, once the zone has been found. */
 const INSET_PROBE_PX = 1;
 
-/** Pixels per step while approaching, before any zone has been reached. */
+/**
+ * How far one unit of a caller's step budget carries the approach, in pixels.
+ *
+ * A BUDGET SCALE, not a step size. The approach walks at {@link INSET_PROBE_PX}
+ * so it cannot stride over a zone: a drop zone is 6 CSS pixels tall, which at
+ * the 0.5 canvas scale this suite supports is 3 host pixels, and a 4px step
+ * starting at a fractional offset can place the entire span between two
+ * commands — the walk then reports the zone below it, or none at all, and the
+ * helper can never say the first zone was `too-narrow` because it never saw it.
+ *
+ * Kept as the multiplier so a `maxSteps` a caller already passes reaches the
+ * same distance it always did; only the sampling in between got finer.
+ */
 const INSET_APPROACH_PX = 4;
 
 /** How many times the boundary may be re-measured before its motion is a verdict. */
