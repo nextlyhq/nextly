@@ -421,6 +421,16 @@ export interface MigrateCoreDeps {
 export interface MigrateCoreResult {
   applied: number;
   coreChanged: boolean;
+  /**
+   * Whether the migration body actually RAN.
+   *
+   * `false` only in `"wait"` mode, where the lock stayed held past the wait
+   * deadline. `applied` is 0 in that case and so is it on an up-to-date
+   * database — the two are indistinguishable without this flag, which is how
+   * production boot came to log `Boot migrations complete (0 applied)` for
+   * migrations that never started.
+   */
+  ran: boolean;
 }
 
 /** Clear a stale migrate lock when `--force-unlock` was passed (else no-op). */
@@ -442,7 +452,7 @@ export async function migrateCore(
   let applied = 0;
   let coreChanged = false;
 
-  await lock(
+  const outcome = await lock(
     deps.db,
     deps.dialect,
     async () => {
@@ -490,7 +500,7 @@ export async function migrateCore(
     }
   );
 
-  return { applied, coreChanged };
+  return { applied, coreChanged, ran: outcome.ran };
 }
 
 /**

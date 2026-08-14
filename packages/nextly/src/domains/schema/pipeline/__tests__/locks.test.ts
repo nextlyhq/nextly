@@ -29,8 +29,8 @@ function fakeDb(opts: { acquireRows: number[] }) {
 describe("withMigrateLock (postgres lock row)", () => {
   it("acquires (row returned), runs fn, releases", async () => {
     const db = fakeDb({ acquireRows: [1] });
-    const ran = await withMigrateLock(db, "postgresql", async () => "ok");
-    expect(ran).toBe("ok");
+    const outcome = await withMigrateLock(db, "postgresql", async () => "ok");
+    expect(outcome).toEqual({ ran: true, value: "ok" });
     expect(
       db.calls.some(
         c => c.includes("CREATE TABLE") && c.includes("nextly_migrate_lock")
@@ -53,13 +53,15 @@ describe("withMigrateLock (postgres lock row)", () => {
   it("wait mode: settles via isSettled() even if never acquired (does not run fn)", async () => {
     const db = fakeDb({ acquireRows: [0] });
     const fn = vi.fn(async () => "applied");
-    const ran = await withMigrateLock(db, "postgresql", fn, {
+    const outcome = await withMigrateLock(db, "postgresql", fn, {
       mode: "wait",
       maxWaitMs: 50,
       pollMs: 10,
       isSettled: async () => true,
     });
-    expect(ran).toBeUndefined();
+    // Reported as NOT RUN rather than as an undefined value, so a caller
+    // cannot read it as "the body ran and returned nothing".
+    expect(outcome).toEqual({ ran: false, reason: "lock-held" });
     expect(fn).not.toHaveBeenCalled();
   });
 
@@ -75,6 +77,9 @@ describe("withMigrateLock (postgres lock row)", () => {
 
   it("sqlite is a no-op pass-through", async () => {
     const db = fakeDb({ acquireRows: [0] });
-    expect(await withMigrateLock(db, "sqlite", async () => "s")).toBe("s");
+    expect(await withMigrateLock(db, "sqlite", async () => "s")).toEqual({
+      ran: true,
+      value: "s",
+    });
   });
 });

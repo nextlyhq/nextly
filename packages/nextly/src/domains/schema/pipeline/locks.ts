@@ -125,12 +125,26 @@ export async function forceUnlock(
  * `undefined` if wait mode settled without running `fn` (another process applied
  * the migrations while we waited).
  */
+/**
+ * Whether the guarded body RAN, and its value if it did.
+ *
+ * A discriminated result rather than `T | undefined`, because `undefined` was
+ * doing double duty: "your function returned undefined" and "your function
+ * never ran". Only one caller ever distinguished them, by convention, and the
+ * one that did not was production boot — which logged
+ * `Boot migrations complete (0 applied)` for migrations that never started.
+ * The compiler now makes every call site decide.
+ */
+export type MigrateLockOutcome<T> =
+  | { ran: true; value: T }
+  | { ran: false; reason: "lock-held" };
+
 export async function withMigrateLock<T>(
   db: unknown,
   dialect: SupportedDialect,
   fn: () => Promise<T>,
   opts?: MigrateLockOptions
-): Promise<T | undefined> {
+): Promise<MigrateLockOutcome<T>> {
   switch (dialect) {
     case "postgresql": {
       const pg = db as PgLike;
@@ -143,21 +157,26 @@ export async function withMigrateLock<T>(
         const deadline = Date.now() + (opts.maxWaitMs ?? ttl * 1000);
         const pollMs = opts.pollMs ?? POLL_MS;
         while (!acquired && Date.now() < deadline) {
-          if (opts.isSettled && (await opts.isSettled())) return undefined;
+          if (opts.isSettled && (await opts.isSettled()))
+            return { ran: false, reason: "lock-held" };
           await new Promise(r => setTimeout(r, pollMs));
           acquired = await tryAcquirePg(pg, ttl);
         }
         if (!acquired) {
+          // Says SKIPPED, because that is what happens. The previous wording,
+          // "proceeding without it", described running the migrations anyway —
+          // the opposite of the `return` beneath it — and a caller reading the
+          // log had no way to tell the difference from "already up to date".
           opts.logger?.warn?.(
-            "[Nextly] migrate lock still held after waiting; proceeding without it."
+            "[Nextly] migrate lock still held after waiting; migrations SKIPPED."
           );
-          return undefined;
+          return { ran: false, reason: "lock-held" };
         }
       }
 
       if (!acquired) lockBusy();
       try {
-        return await fn();
+        return { ran: true, value: await fn() };
       } finally {
         await releasePg(pg);
       }
@@ -170,13 +189,13 @@ export async function withMigrateLock<T>(
       const v = acquired[0]?.locked;
       if (!(v === 1 || v === true)) lockBusy();
       try {
-        return await fn();
+        return { ran: true, value: await fn() };
       } finally {
         await my.execute(sql`SELECT RELEASE_LOCK(${MYSQL_LOCK_NAME})`);
       }
     }
     case "sqlite":
-      return fn();
+      return { ran: true, value: await fn() };
     default: {
       const _exhaustive: never = dialect;
       throw new Error(`Unsupported dialect: ${String(_exhaustive)}`);

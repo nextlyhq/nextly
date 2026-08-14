@@ -27,7 +27,7 @@ import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/intro
 import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import { snapshotComparableTables } from "../../domains/schema/pipeline/managed-tables";
-import { describeError } from "../../errors/index";
+import { describeError, NextlyError } from "../../errors/index";
 import { createContext, type CommandContext } from "../program";
 import {
   createAdapter,
@@ -151,9 +151,7 @@ export async function runMigrateResolve(
     // this flag, and recovery is exactly when a stale lock is most likely.
     await maybeForceUnlock(options, db, dialect);
 
-    // fail-fast mode (the default) never returns undefined — it runs fn or
-    // throws — so the non-null assertion below is safe.
-    const result = (await withMigrateLock(db, dialect, () =>
+    const outcome = await withMigrateLock(db, dialect, () =>
       resolveMigration({
         mode,
         filename,
@@ -204,7 +202,20 @@ export async function runMigrateResolve(
           return introspectLiveSnapshot(db, dialect, managed);
         },
       })
-    ))!;
+    );
+
+    // Fail-fast mode: a busy lock throws rather than reporting `ran: false`, so
+    // this branch is unreachable today. Asserted rather than assumed, because
+    // "unreachable" is a property of the caller's options and those move.
+    if (!outcome.ran) {
+      throw new NextlyError({
+        code: "NEXTLY_RESOLVE_LOCK_NOT_HELD",
+        publicMessage:
+          "The migrate lock was released without resolving the migration. " +
+          "Nothing was written; retry once no other schema operation is running.",
+      });
+    }
+    const result = outcome.value;
 
     switch (result.kind) {
       case "applied":
