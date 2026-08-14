@@ -16,7 +16,13 @@ const assertBootMigrationsSettled = vi.fn();
 vi.mock("../../init/boot-migrations-gate", () => ({
   assertBootMigrationsSettled: () => assertBootMigrationsSettled(),
 }));
-vi.mock("../../di", () => ({ isServicesRegistered: () => true }));
+// `../di/register`, which is what `nextly.ts` actually imports — mocking
+// `../di` left the real one in place and it returned false, so the control
+// failed for a reason that had nothing to do with the gate.
+vi.mock("../../di/register", () => ({
+  isServicesRegistered: () => true,
+  getService: () => undefined,
+}));
 
 const { getNextly } = await import("../nextly");
 
