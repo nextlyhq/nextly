@@ -216,8 +216,15 @@ those findings, which certifies the instrument on the strength of never having
 asked it the question:
 
 - a POSITIVE control — an input carrying the repeated shape that must be
-  reported, where the expected result is not "nothing". A check that reports
-  nothing under every circumstance passes every negative control ever written.
+  reported. A check that reports nothing under every circumstance passes every
+  negative control ever written, which is what this one is for. But "the result
+  is not nothing" is the wrong assertion to write for it: run the check over a
+  population that already reports things and an unrelated existing finding
+  satisfies that condition while the shape you injected stays invisible. The
+  negative control then passes as well, and the instrument is certified by a
+  pair neither half of which ever saw the subshape. Assert that the output NAMES
+  the injected input, or take the DELTA against the same run without it — or put
+  the control on an isolated fixture, where "not nothing" means what it says.
 - a NEGATIVE control — a valid input it must stay silent on, in that same shape:
   the aliased spelling, the computed value, the member of the population the
   findings clustered around.
@@ -375,9 +382,19 @@ output. Three from one day here, all different mechanisms:
 
 The fix is not a better query for failures. It is to assert the POPULATION
 first and the verdict second: `total > 0 AND bad == 0`, rows fetched before
-rows judged. Any check whose green can be produced by an empty input needs that
-first clause, and a filter written to find problems will never supply it —
-`select(status != ok)` cannot tell you whether anything was selected from.
+rows judged. A filter written to find problems will never supply that first
+clause — `select(status != ok)` cannot tell you whether anything was selected
+from.
+
+**Which population, though — the one whose emptiness means "I could not look",
+never the one whose emptiness is a legitimate clean answer.** Those are
+different sets and only the first is evidence. A scan for forbidden imports
+across a package that has none is empty at the FINDINGS level and is a correct
+pass; what would mean the run was blind is zero FILES read. So the clause
+belongs on the input the check consumed, not on the verdict it emitted —
+`files > 0 AND violations == 0`. Put it on the verdict instead and every
+correct run of a check whose happy path is silence fails, which is most of
+them, and the rule gets removed for being wrong rather than fixed.
 
 The tell is a sentence where the evidence names one thing and the conclusion
 names a family: a queue, a marker, a control — against load, a merge, a set of
@@ -404,11 +421,21 @@ Read the scope first, because the asymmetry inverts and the inverted case is a
 security hole rather than a style preference.
 
 **Classify by what a MISS costs, at the call site — never by the check's form.**
-"Lint" is a shape, not a consequence. This repository's `gitleaks` hook is a
-lint by every structural measure and a mandatory security gate by consequence:
-a miss puts a credential in a commit, and the repo forbids bypassing it. A
-taxonomy that sorted by form would drop it in the advisory bucket and then tell
-you to prefer the miss.
+"Lint" is a shape, not a consequence. This repository runs `gitleaks` from two
+places and they classify OPPOSITELY, which is the clearest argument available
+that the call site rather than the check decides. `.husky/pre-commit` runs it
+when the binary is present and prints a nudge when it is not — deliberately
+fail-open, and right to be, since a tool missing from a laptop must not stop
+work. `secret-scan.yml` is the precondition, and says so itself: "this is the
+enforcement gate". A miss there puts a credential in the repository. A taxonomy
+sorting by form files both under lint and then advises preferring the miss for
+the one that cannot afford it.
+
+Read the enforcing side's own boundary before leaning on it, rather than
+assuming it covers whatever the advisory side skipped. That workflow is
+`pull_request: branches: [main]`, so a pull request stacked on another feature
+branch never triggers it — the layering is real for the main-targeting case and
+absent for the stacked one.
 
 **An advisory check** is one whose false negative costs only the defect it
 failed to report — a convention guard, a dead-code or dead-class warning, a
@@ -461,9 +488,18 @@ unexamined input as a clean one; prose in the file does not reach them.
 Give the unchecked case its own value: a third state beside pass and fail, a
 `skipped` count the run prints, a `{ known: false }` in the result. Then a
 caller that needs certainty can ask for it, and one that does not can carry on —
-which a comment cannot arrange. Only when the shape genuinely admits no third
-state does naming the limitation become the whole remedy, and then say so
-explicitly rather than leaving it as the default.
+which a comment cannot arrange.
+
+Where the result shape is fixed and admits no third state, the remedy is NOT to
+fall back to documenting it. That leaves every caller receiving the same answer
+for "checked and valid" as for "not checked", which is the defect this paragraph
+opens by naming, and a sentence in the file does not reach a caller. Narrow the
+accepted INPUT instead, so one the check cannot decide is REFUSED rather than
+silently passed. That fits inside any pass/fail shape, because refusing is a
+fail, and it turns an invisible gap into a boundary the caller has to handle.
+Where even the input cannot be narrowed, put the gap somewhere the run can be
+read — the skipped count in the log, the summary line — and keep the comment as
+the record of that decision rather than as the control for it.
 
 And classify at the CALL SITE, not at the definition. A shared helper does not
 acquire one kind: a caller that logs a warning and a caller that gates a write
