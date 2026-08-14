@@ -26,12 +26,33 @@ const CANVAS_CSS = resolve(
 );
 
 /**
+ * Properties whose transition moves a zone EDGE.
+ *
+ * A `background` transition changes nothing the probe measures, so its timing must not be charged
+ * to the settle allowance — the stylesheet already carries one, and a visual timing change would
+ * otherwise either fail CI or make every geometry probe wait for a colour.
+ */
+const GEOMETRY_PROPERTIES = [
+  "height",
+  "width",
+  "margin",
+  "padding",
+  "inset",
+  "top",
+  "bottom",
+  "transform",
+  "all",
+];
+
+/** Syntax this reader cannot evaluate, and must not guess at. */
+const UNREPRESENTABLE = /\bcalc\(|\bvar\(|\bclamp\(|\bmin\(|\bmax\(/;
+
+/**
  * The comma-separated entries of a `transition` shorthand, splitting only at TOP LEVEL.
  *
  * A timing function carries its own commas — `cubic-bezier(.1,.7,1,.1)` has three — so an
  * unconditional split tears one entry into pieces and separates a delay from the duration it
- * belongs to. The two then pass an allowance check independently while the transition they
- * describe runs for their sum.
+ * belongs to.
  */
 function topLevelEntries(declaration: string): string[] {
   const entries: string[] = [];
@@ -51,88 +72,120 @@ function topLevelEntries(declaration: string): string[] {
   return entries;
 }
 
-/**
- * How long each `transition` entry can still be moving geometry, in milliseconds.
- *
- * Duration PLUS delay, and the delay is SIGNED. A negative delay is valid CSS and means the
- * transition starts partway through, so it finishes EARLIER: `height .1s ease -.05s` ends 50ms
- * after the style change, not 150ms. Reading the magnitude would reject a transition the
- * allowance already covers — a false failure, which is the direction that gets a guard disabled.
- *
- * A `transition` shorthand takes at most two times, and the FIRST is the duration and the second
- * the delay, whatever order the other keywords appear in. Anything past the second is a keyword,
- * so summing every number in the entry would inflate the total instead.
- */
-export function zoneTransitionSpansMs(source: string): number[] {
-  const spans: number[] = [];
-  for (const line of source.split("\n")) {
-    if (!line.includes("nx-pb-dropzone") || !line.includes("transition"))
-      continue;
-    const declaration = /transition\s*:\s*([^;"']+)/.exec(line);
-    if (!declaration) continue;
-    for (const entry of topLevelEntries(declaration[1])) {
-      // The sign is part of the token. `[\d.]+` alone reads `-.05s` as `.05s`, which is the
-      // magnitude of a value whose whole meaning is its direction.
-      const times = [...entry.matchAll(/(-?[\d.]+)(ms|s)\b/g)].map(
-        ([, value, unit]) =>
-          unit === "s" ? Number(value) * 1000 : Number(value)
-      );
-      if (times.length === 0) continue;
-      spans.push(times[0] + (times[1] ?? 0));
-    }
-  }
-  return spans;
+/** What this reader could not judge, so a caller can refuse rather than under-report. */
+export interface TransitionScan {
+  /** Geometry spans it DID evaluate, in milliseconds. */
+  readonly spansMs: number[];
+  /** Declarations it declined to evaluate, verbatim. */
+  readonly unreadable: string[];
 }
 
-test("the PoC driver's settle allowance covers the zone transition it animates", () => {
+/**
+ * Every geometry `transition` on the drop-zone rules, and everything this reader refused.
+ *
+ * **It reports what it cannot represent instead of guessing.** That is the whole design, and it
+ * is a correction: this reader has been wrong nine times, and every one was a silent WRONG NUMBER
+ * rather than a refusal — a hardcoded allowance, an unsummed delay, commas inside a timing
+ * function, an unsigned delay, a unit-bearing identifier read as a time, a second declaration on
+ * one line never seen, `calc()` summed as separate numbers, and a colour's timing charged to the
+ * geometry budget. A regex cannot represent CSS, so the honest move is not another case: it is to
+ * say so when the input leaves what it can represent.
+ *
+ * Refusing is safe HERE specifically because a refusal fails the test. The caller turns anything
+ * in `unreadable` into a failure naming the declaration, so an unjudgeable transition stops CI
+ * rather than passing quietly — the opposite of the direction every previous defect failed in.
+ *
+ * The end state is to delete this entirely: if the canvas derived its transition from an exported
+ * constant, the driver would import that constant and there would be nothing to parse. Filed as
+ * `tasks/left-tasks/2026-08-14-2200-delete-the-transition-parser.md`.
+ */
+export function scanZoneTransitions(source: string): TransitionScan {
+  const spansMs: number[] = [];
+  const unreadable: string[] = [];
+  for (const line of source.split("\n")) {
+    if (!line.includes("nx-pb-dropzone")) continue;
+    // EVERY declaration on the line, not the first. CSS applies the last of a duplicate pair, so
+    // stopping at one records a value the browser does not use.
+    for (const [, body] of line.matchAll(/transition\s*:\s*([^;"']+)/g)) {
+      for (const entry of topLevelEntries(body)) {
+        if (UNREPRESENTABLE.test(entry)) {
+          unreadable.push(entry.trim());
+          continue;
+        }
+        const property = entry.trim().split(/\s+/)[0];
+        if (!GEOMETRY_PROPERTIES.includes(property)) continue;
+        // Times only where a NUMBER precedes the unit, so `var(--ease-50ms)` — already refused
+        // above — and any identifier carrying a unit cannot be read as a duration.
+        const times = [...entry.matchAll(/(?:^|\s)(-?[\d.]+)(ms|s)\b/g)].map(
+          ([, value, unit]) =>
+            unit === "s" ? Number(value) * 1000 : Number(value)
+        );
+        if (times.length === 0) continue;
+        spansMs.push(times[0] + (times[1] ?? 0));
+      }
+    }
+  }
+  return { spansMs, unreadable };
+}
+
+test("the PoC driver's settle allowance covers the zone geometry it animates", () => {
   const source = readFileSync(CANVAS_CSS, "utf8");
-  const durations = zoneTransitionSpansMs(source);
+  const { spansMs, unreadable } = scanZoneTransitions(source);
 
-  // The positive control, and it is the whole reason this file is not vacuous: a parser that
-  // matched nothing would satisfy every assertion below by having no values to check.
-  expect(durations.length).toBeGreaterThan(0);
+  // Refusals are FAILURES, not skips. An unjudgeable declaration is exactly when this guard has
+  // nothing to say, and saying nothing is how the previous nine defects passed.
+  expect(
+    unreadable,
+    `this reader cannot evaluate ${unreadable.join(" | ")} — compute the span another way or delete the parser (see tasks/left-tasks/2026-08-14-2200-delete-the-transition-parser.md)`
+  ).toEqual([]);
 
-  // Imported rather than restated, so this cannot pass against a number the driver does not
-  // actually use — a guard holding its own copy compares a constant with itself.
-  const declared = POC_GEOMETRY_SETTLE_MS;
-  for (const duration of durations) {
+  // The positive control, and the whole reason this file is not vacuous: a reader that matched
+  // nothing would satisfy the comparison below by having nothing to compare.
+  expect(spansMs.length).toBeGreaterThan(0);
+
+  for (const span of spansMs) {
     expect(
-      duration,
-      `a drop-zone transition lasting ${String(duration)}ms is not covered by the driver's ${String(declared)}ms geometrySettleMs — raise geometrySettleMs in poc-driver.ts`
-    ).toBeLessThanOrEqual(declared);
+      span,
+      `a drop-zone geometry transition lasting ${String(span)}ms is not covered by the driver's ${String(POC_GEOMETRY_SETTLE_MS)}ms geometrySettleMs — raise geometrySettleMs in poc-driver.ts`
+    ).toBeLessThanOrEqual(POC_GEOMETRY_SETTLE_MS);
   }
 });
 
-/**
- * The parser, exercised on inputs whose answer is known.
- *
- * Reading it off the real stylesheet cannot cover these: the shapes that broke it are ones the
- * canvas does not currently use, and a guard is worth having precisely for the day it does. This
- * parser has now been wrong in four distinct ways — a hardcoded allowance, an unsummed delay,
- * commas inside a timing function, and an unsigned delay — so the controls exercise the SHAPES
- * rather than the current CSS.
- */
-test("the span parser reads each transition shape correctly", () => {
-  const spans = (css: string) =>
-    zoneTransitionSpansMs(`  ".nx-pb-dropzone{transition:${css}}",`);
+test("the reader judges what it can and refuses what it cannot", () => {
+  const scan = (css: string) =>
+    scanZoneTransitions(`  ".nx-pb-dropzone{transition:${css}}",`);
 
-  // Duration alone.
-  expect(spans("height .1s ease")).toEqual([100]);
+  // Duration alone, and duration plus delay.
+  expect(scan("height .1s ease").spansMs).toEqual([100]);
+  expect(scan("height .1s ease .05s").spansMs).toEqual([150]);
 
-  // Duration plus delay: the sum is what the allowance must cover.
-  expect(spans("height .1s ease .05s")).toEqual([150]);
+  // A timing function's own commas are not entry separators.
+  expect(scan("height .1s cubic-bezier(.1,.7,1,.1) .05s").spansMs).toEqual([
+    150,
+  ]);
 
-  // A timing function's own commas are NOT entry separators. Split naively this reports two
-  // spans of 100 and 50, each of which clears a 120ms allowance while the transition runs 150ms.
-  expect(spans("height .1s cubic-bezier(.1,.7,1,.1) .05s")).toEqual([150]);
+  // A NEGATIVE delay starts the transition partway through, so it ends EARLIER.
+  expect(scan("height .1s ease -.05s").spansMs).toEqual([50]);
 
-  // A NEGATIVE delay starts the transition partway through, so it ends EARLIER. Read as a
-  // magnitude this is 150 and would reject a transition the allowance already covers.
-  expect(spans("height .1s ease -.05s")).toEqual([50]);
+  // A non-geometry property moves no edge, so its timing is not the probe's concern.
+  expect(scan("height .1s ease, background .1s ease .2s").spansMs).toEqual([
+    100,
+  ]);
 
-  // Several properties, each its own entry with its own timings.
-  expect(spans("height .1s ease .05s,background .2s ease")).toEqual([150, 200]);
+  // A unit-bearing IDENTIFIER is not a time. This one is refused outright as a `var()`, which is
+  // the honest answer — the reader cannot know what the variable resolves to.
+  expect(scan("height .1s var(--ease-50ms)").unreadable).toHaveLength(1);
+  expect(scan("height .1s var(--ease-50ms)").spansMs).toEqual([]);
 
-  // Milliseconds as well as seconds.
-  expect(spans("height 120ms ease 30ms")).toEqual([150]);
+  // A computed time is refused rather than summed wrongly.
+  expect(scan("height .06s ease calc(.04s + .03s)").unreadable).toHaveLength(1);
+
+  // Milliseconds, and BOTH declarations when a line carries two — CSS applies the later one, so
+  // recording only the first hides the value the browser actually uses.
+  expect(scan("height 120ms ease 30ms").spansMs).toEqual([150]);
+  expect(
+    scanZoneTransitions(
+      `  ".nx-pb-dropzone{transition:height .1s;transition:height .15s}",`
+    ).spansMs
+  ).toEqual([100, 150]);
 });
