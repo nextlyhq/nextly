@@ -41,6 +41,7 @@ import type {
 } from "./types";
 import { detectPackageManager, detectProject } from "./utils/detect";
 import { emptyDirectory, isDirectoryNotEmpty } from "./utils/fs";
+import { scriptRunner } from "./utils/package-manager-commands";
 import { copyTemplate } from "./utils/template";
 
 /**
@@ -514,10 +515,9 @@ export async function createNextly(
   // --- Success output ---
 
   const pm = projectInfo.packageManager;
-  // npm requires `npm run <script>`; pnpm/yarn/bun accept the bare
-  // form as a shorthand for `run`. Without this, scaffolds chosen
-  // with npm print `npm dev` which fails with "Unknown command: dev".
-  const devCommand = pm === "npm" ? "npm run dev" : `${pm} dev`;
+  // Through the shared renderer, so the next-steps screen and the agent guide written into the
+  // project cannot disagree about how this manager spells "run a script".
+  const devCommand = `${scriptRunner(pm)} dev`;
 
   // Build next steps content
   const lines: string[] = [];

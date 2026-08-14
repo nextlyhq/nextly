@@ -11,6 +11,8 @@ import type {
   ProjectType,
 } from "../types";
 
+import { binaryRunner, scriptRunner } from "./package-manager-commands";
+
 /**
  * Templates whose `nextly.config.ts` registers `formBuilderPlugin`. The
  * plugin (and its admin imports) only ship with these scaffolds — every
@@ -321,23 +323,40 @@ function mergeManagedBlock(existing: string, incoming: string): string {
 function findManagedRegion(
   text: string
 ): { start: number; end: number } | null {
-  // The LAST start, then the FIRST end after it. Both halves are load-bearing, and each covers a
-  // mirror of the other:
+  // Scans for COMPLETE pairs rather than reasoning about first/last occurrences, which is the
+  // third attempt at this and the reason for the change of approach. Each earlier version fixed
+  // one malformed layout and broke on its mirror:
   //
-  //   stray start … [valid block]         → the last start IS the valid block's, so the stray
-  //                                          sits outside the region and its text survives.
-  //   [valid block] … prose … stray end   → the first end after that start is the block's OWN
-  //                                          end, so the prose following it survives.
+  //   first start + first end   → a stray START swallowed the block below it
+  //   last end + start before   → a stray END swallowed the prose above it
+  //   last start + first end    → a stray START after a valid block hid that block, so a second
+  //                               one was appended and the stale instructions stayed forever
   //
-  // Taking the last END instead pairs a valid start with a stray end and deletes everything
-  // between them; taking the first START pairs a stray start with a valid end and does the same.
-  const startIndex = text.lastIndexOf(MANAGED_START);
-  if (startIndex === -1) return null;
+  // A pair is complete when an END follows a START with NO other START in between; an
+  // intervening START means the first one was never terminated. The LAST complete pair is the
+  // block a regeneration owns, and every marker outside it is the developer's text.
+  let cursor = 0;
+  let found: { start: number; end: number } | null = null;
 
-  const endIndex = text.indexOf(MANAGED_END, startIndex + MANAGED_START.length);
-  if (endIndex === -1) return null;
+  for (;;) {
+    const startIndex = text.indexOf(MANAGED_START, cursor);
+    if (startIndex === -1) return found;
 
-  return { start: startIndex, end: endIndex + MANAGED_END.length };
+    const after = startIndex + MANAGED_START.length;
+    const endIndex = text.indexOf(MANAGED_END, after);
+    if (endIndex === -1) return found;
+
+    const nextStart = text.indexOf(MANAGED_START, after);
+    if (nextStart !== -1 && nextStart < endIndex) {
+      // Unterminated: another block opens before this one closes. Leave it to the developer and
+      // keep looking from the inner start.
+      cursor = nextStart;
+      continue;
+    }
+
+    found = { start: startIndex, end: endIndex + MANAGED_END.length };
+    cursor = found.end;
+  }
 }
 
 /**
@@ -381,6 +400,39 @@ function appendMissingLines(existing: string, incoming: string): string {
   // Only leading NEWLINES are dropped. `trimStart()` would take leading spaces too, and a leading
   // space is part of a git ignore pattern — it would rewrite the developer's first rule.
   return `${missing.join("\n")}\n\n${existing.replace(/^\n+/, "")}`;
+}
+
+/**
+ * Whether `incoming` is a pointer whose target resolves to `destination` itself.
+ *
+ * `@name` in an instruction file is an include. If the named file resolves to the file the
+ * pointer is being written into, the result imports itself — an agent following it goes in a
+ * circle instead of reaching a guide.
+ *
+ * Compared by RESOLVED path, because the case that produces this is a symlink: the two names
+ * differ while denoting one file. A target that cannot be resolved answers true as well — a
+ * dangling pointer installs nothing, so writing it has no upside to weigh against the risk.
+ */
+async function pointsAtItself(
+  targetDir: string,
+  destination: string,
+  incoming: string
+): Promise<boolean> {
+  const names = incoming
+    .split("\n")
+    .map(line => line.trim())
+    .filter(line => line.startsWith("@"))
+    .map(line => line.slice(1));
+  if (names.length === 0) return false;
+
+  const self = await fs.realpath(destination).catch(() => destination);
+  for (const name of names) {
+    const resolved = await fs
+      .realpath(path.join(targetDir, name))
+      .catch(() => null);
+    if (resolved === null || resolved === self) return true;
+  }
+  return false;
 }
 
 /**
@@ -460,6 +512,15 @@ async function restoreShippedNames(
         ? mergeManagedBlock(existing, rendered)
         : appendMissingLines(existing, rendered);
 
+    // A pointer that resolves back to this file makes the guide import itself. The arrangement
+    // is the REVERSE link — `AGENTS.md -> CLAUDE.md` — where the guide entry is skipped as a
+    // link and this entry would then add `@AGENTS.md` to the very file `AGENTS.md` resolves to.
+    if (await pointsAtItself(targetDir, to, incoming)) {
+      await fs.remove(from);
+      merged.add(inProject);
+      continue;
+    }
+
     await fs.writeFile(to, combined, "utf-8");
     await fs.remove(from);
     merged.add(inProject);
@@ -523,6 +584,8 @@ export function resolveTemplatePath(localTemplatePath?: string): string {
  * Build the placeholder map from user selections.
  */
 function buildPlaceholderMap(options: {
+  /** Renders `{{runCommand}}` / `{{execCommand}}` so a guide's commands match the manager in use. */
+  packageManager?: PackageManager;
   database?: DatabaseConfig;
   databaseUrl?: string;
   /** Plugin package name → fills `{{pluginName}}` (plugin template, D44). */
@@ -530,13 +593,21 @@ function buildPlaceholderMap(options: {
   /** Plugin's `nextly` compat range → fills `{{nextlyRange}}` (D44). */
   nextlyRange?: string;
 }): Record<string, string> {
-  const { database, databaseUrl, pluginName, nextlyRange } = options;
+  const { database, databaseUrl, pluginName, nextlyRange, packageManager } =
+    options;
 
   const map: Record<string, string> = {};
   if (database) {
     map["{{databaseDialect}}"] = database.type;
     map["{{databaseUrl}}"] = databaseUrl || database.envExample;
   }
+  // Always set, never conditional. `packageManager` is optional on the copy options, and a guide
+  // that shipped with a literal `{{runCommand}}` in its command list would be worse than one
+  // naming the wrong manager. npm is the safe default: it is what a project has when nothing
+  // said otherwise, and its spelling (`npm run x`) is the explicit form the others also accept.
+  const pm = packageManager ?? "npm";
+  map["{{runCommand}}"] = scriptRunner(pm);
+  map["{{execCommand}}"] = binaryRunner(pm);
   if (pluginName) map["{{pluginName}}"] = pluginName;
   if (nextlyRange) map["{{nextlyRange}}"] = nextlyRange;
   return map;
@@ -1471,7 +1542,11 @@ export async function copyTemplate(
   // The placeholder map is built here rather than at step 9 because a merge into a file the
   // developer already had must render the incoming text itself; step 9 then skips what it
   // merged, so their prose is never rewritten.
-  const placeholders = buildPlaceholderMap({ database, databaseUrl });
+  const placeholders = buildPlaceholderMap({
+    database,
+    databaseUrl,
+    packageManager,
+  });
   if (approach) {
     placeholders["{{approach}}"] = approach;
   }
@@ -1561,6 +1636,7 @@ async function copyPluginTemplate(opts: {
   const placeholders = buildPlaceholderMap({
     pluginName: projectName,
     nextlyRange,
+    packageManager,
   });
   const alreadyRendered = await restoreShippedNames(targetDir, placeholders);
 
