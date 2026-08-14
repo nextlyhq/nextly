@@ -125,6 +125,9 @@ describe("finding blocks in a slot nothing declares", () => {
 
     // The repair KEPT both blocks. Every other entry kind removes, so a repair that quietly
     // deleted here would still satisfy the validator above and lose the author's content.
+    // What the wrapper is BUILT from is not assertable here and deliberately is not asserted: this
+    // file runs with an empty registry, so a definition-backed construction and an empty one look
+    // identical. `InvalidSlotBanner.test.tsx` makes that claim, where the registry is populated.
     const row = repaired.slots?.default?.[0];
     expect(row?.slots?.default).toHaveLength(2);
     expect(

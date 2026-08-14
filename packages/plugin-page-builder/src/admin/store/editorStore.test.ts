@@ -362,7 +362,8 @@ describe("the store refuses what the save path would refuse", () => {
   /**
    * The guard lives in the REDUCER, so it is asserted here rather than at a call site. Every
    * surface that adds a block reaches this one function, and a rule checked only where the person
-   * writing it happened to look is not a rule — paste was already a second door.
+   * writing it happened to look is not a rule: drag, the library button, paste and keyboard reorder
+   * are four doors, and only two of them plan an insertion first.
    */
   const rowDoc = (children: BlockNode[] = []): BlockDocument => ({
     version: 1,

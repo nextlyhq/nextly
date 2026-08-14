@@ -199,6 +199,16 @@ describe("the repair banner", () => {
       "core/column",
       "core/column",
     ]);
+    // Each wrapper carries what its own DEFINITION promises new instances, rather than an empty
+    // object: a block whose `validate` needs an initialized prop would otherwise be created
+    // already unsaveable, leaving the page refused after the repair the banner advertised. This
+    // suite loads `render/blocks`, so there is a definition to disagree with.
+    const columnDef = defaultBlockRegistry.get("core/column");
+    expect(columnDef?.defaultProps).not.toEqual({});
+    for (const column of row?.slots?.default ?? []) {
+      expect(column.props).toEqual(columnDef?.defaultProps);
+      expect(column.definitionVersion).toBe(columnDef?.version);
+    }
     expect(
       row?.slots?.default?.map(c => c.slots?.default?.[0]?.props?.text)
     ).toEqual(["Left half", "Right half"]);
