@@ -444,10 +444,22 @@ answered `Head branch was modified`. That message names a race, and no race had
 occurred — the head was untouched and the SHA was invented. Reading the error at
 face value would have sent the next step chasing a phantom push.
 
-So take it from `git ls-remote origin "refs/heads/$BR"` in the same command that
-uses it, and read `Head branch was modified` as EITHER a moved head or a wrong
-value. The two are indistinguishable from the message, and one of them is a
-typing error rather than an event.
+So capture it in full when you VERIFY, from the ref rather than from any
+printed abbreviation, and carry that value into `$VERIFIED`. Not at merge time:
+re-reading the tip here binds the flag to whatever is newest, which after a push
+is the unverified revision this precondition exists to reject — the rubber stamp
+this section warns about three paragraphs above. The point is to avoid
+retyping a SHA, never to refresh one.
+
+Derive the remote the same way the tail check above does, from
+`isCrossRepository`: `origin` is the BASE repository, so for a fork it does not
+own `refs/heads/$BR` and returns nothing — or, where the base has a branch of the
+same name, an unrelated revision. That derivation already exists in this file;
+reuse it rather than writing a second one.
+
+Then read `Head branch was modified` as EITHER a moved head or a wrong value.
+The two are indistinguishable from the message, and one of them is a typing
+error rather than an event.
 
 This is the case that argues for the flag most directly, and it is not the race
 this section otherwise describes. A race is narrow and needs bad timing. A
