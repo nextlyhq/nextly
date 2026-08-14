@@ -262,18 +262,32 @@ function extractedName(node: ts.Node): string | undefined {
 function jsxUsesOf(name: string, file: ts.SourceFile): ts.Node[] {
   const uses: ts.Node[] = [];
   const visit = (node: ts.Node): void => {
-    if (
-      ts.isIdentifier(node) &&
-      node.text === name &&
-      node.parent &&
-      ts.isJsxExpression(node.parent)
-    ) {
+    if (ts.isIdentifier(node) && node.text === name && inJsxExpression(node)) {
       uses.push(node);
     }
     ts.forEachChild(node, visit);
   };
   visit(file);
   return uses;
+}
+
+/**
+ * Whether an identifier is rendered from inside a JSX expression, at any depth.
+ *
+ * The IMMEDIATE parent is not enough. `{show && pager}` puts a binary
+ * expression between the name and the `{...}`, `{cond ? pager : null}` puts a
+ * conditional there, and both render the pager exactly as `{pager}` does — so
+ * matching only the direct parent finds the plain spelling and misses every
+ * gated one, which is how most call sites actually write it.
+ */
+function inJsxExpression(node: ts.Node): boolean {
+  for (let current = node.parent; current; current = current.parent) {
+    if (ts.isJsxExpression(current)) return true;
+    // Stop at the element boundary: past it, any match belongs to a different
+    // expression rather than to this one.
+    if (ts.isJsxElement(current) || ts.isJsxFragment(current)) return false;
+  }
+  return false;
 }
 
 /** Every pager in a file that is NOT inside a table's `footer`, found by binding. */
@@ -536,6 +550,33 @@ describe("list pagination", () => {
       detachedPagers(extractedBoth),
       "only the detached use is reported"
     ).toHaveLength(1);
+
+    // Gated renders. The identifier sits under a binary or conditional
+    // expression rather than directly under `{...}`, which is how most real
+    // call sites write it -- so matching only the immediate parent would find
+    // the plain spelling and miss every one of these.
+    const gatedSibling = parse(
+      "control.tsx",
+      "const pager = <Pagination page={1} />;\n" +
+        "const x = (<><DataTableView columns={c} rows={r} />{show && pager}</>);"
+    );
+    expect(detachedPagers(gatedSibling), "gated sibling").toHaveLength(1);
+
+    const ternarySibling = parse(
+      "control.tsx",
+      "const pager = <Pagination page={1} />;\n" +
+        "const x = (<><DataTableView columns={c} rows={r} />{ready ? pager : null}</>);"
+    );
+    expect(detachedPagers(ternarySibling), "ternary sibling").toHaveLength(1);
+
+    // The same gating inside the footer is correct and stays silent, so the
+    // fix cannot have been "report every gated use".
+    const gatedFooter = parse(
+      "control.tsx",
+      "const pager = <Pagination page={1} />;\n" +
+        "const x = <DataTableView columns={c} rows={r} footer={show && pager} />;"
+    );
+    expect(detachedPagers(gatedFooter), "gated footer").toHaveLength(0);
 
     // A pager nested inside another component's footer, itself inside the
     // table's footer, is correctly placed. Answering on the FIRST footer found
