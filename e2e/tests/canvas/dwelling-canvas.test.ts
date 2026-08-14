@@ -1,16 +1,17 @@
 /**
  * The edge searches, run against a SIMULATED dwell-based canvas.
  *
- * Three of this harness's dwell fixes are invisible on the canvas it currently
- * drives: the PoC declares `dwellAllowanceMs: 0` because it genuinely has no
- * hysteresis, so every wait reduces to a no-op and the suite is green with or
- * without them. A fix nothing can fail is a fix nobody can check, and the whole
- * point of these searches is to admit an implementation that does not exist
- * yet.
+ * The requirement permits hysteresis expressed as a distance margin OR as a
+ * dwell timer, and these searches have to work for both. The canvas this suite
+ * drives implements neither — it declares `dwellAllowanceMs: 0` because its
+ * indicator flips on every 2px move — so running the searches against it
+ * exercises only the zero-dwell path, and every wait they contain reduces to a
+ * no-op there.
  *
- * So the compliant canvas is simulated here instead. `dwellingCanvas` is a
- * resolver whose hysteresis is a TIMER — the requirement's other permitted
- * form — and each test states which broken version of the harness it fails on.
+ * The other permitted form is therefore simulated. `dwellingCanvas` is a
+ * resolver that commits only after the pointer has rested in a new zone, which
+ * is what makes the waiting behaviour observable at all, and each test states
+ * which broken search it distinguishes.
  *
  * No browser, matching `oscillation.test.ts` and `settle.test.ts`.
  */
@@ -73,9 +74,10 @@ function dwellingCanvas(bands: readonly Band[], dwellMs: number) {
 
 test("acquires a first target on a resolver whose timer each move resets", async () => {
   // `dragUntilTarget` moves 8px a step. With a dwell longer than a step's round
-  // trip, every move restarts the timer, so a version that sampled immediately
-  // walked the whole budget without a target ever becoming active — and both
-  // hysteresis suites then failed their precondition before reaching the
+  // trip, every move restarts the timer, so an acquisition that sampled
+  // immediately never sees a target become active: it exhausts the whole budget
+  // and reports none. Both hysteresis suites assert on a target before they
+  // begin, so they would fail that precondition without reaching the
   // dwell-aware search they exist to run.
   const canvas = dwellingCanvas([{ from: 0, to: 400 }], 60);
 
@@ -87,11 +89,11 @@ test("finds an edge past dead space instead of racing through it", async () => {
   // gap, and reaches a NARROW one — narrow enough that a search giving it no
   // wait steps over it in a single move.
   //
-  // This is what fails when departure is measured from the last ZONE rather
-  // than the last value SEEN: once the pointer is in dead space every read
-  // differs from that baseline at once, so the wait expires immediately for the
-  // rest of the walk and the narrow zone is never observed. `crossed` comes
-  // back false, and both hysteresis tests skip on a canvas that is compliant.
+  // Measuring departure from the last ZONE rather than the last value SEEN is
+  // what this separates: in dead space every read differs from a zone baseline
+  // at once, so the wait expires immediately for the rest of the walk and the
+  // narrow zone is never observed. `crossed` is then false and both hysteresis
+  // tests skip, on a canvas that is compliant.
   const canvas = dwellingCanvas(
     [
       { from: 0, to: 40 },
@@ -108,8 +110,8 @@ test("finds an edge past dead space instead of racing through it", async () => {
 
 test("brackets that edge rather than exhausting the reverse budget", async () => {
   // The reverse search steps one pixel at a time, so a compliant timer can be
-  // carried through the entire budget in less time than one dwell. Reading
-  // immediately then returns the crossed target every step, the edge is never
+  // carried through the entire budget in less time than one dwell. An immediate
+  // read then returns the crossed target at every step, the edge is never
   // bracketed, and the jitter that follows is discarded as inconclusive —
   // silently, which is worse than failing.
   const canvas = dwellingCanvas(
