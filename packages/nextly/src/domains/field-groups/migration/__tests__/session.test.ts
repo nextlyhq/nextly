@@ -16,10 +16,12 @@ import {
   type MigrationDialect,
 } from "../session";
 import {
+  classifyLockStatement,
   createLockClock,
   createLockRow,
   interpretLockStatement,
   isRenewalStatement,
+  type LockStatementKind,
 } from "./helpers/migration-lock-double";
 
 /**
@@ -64,6 +66,16 @@ function createAdapter(
      * see in production rather than the error the test wrote.
      */
     onTransaction?: (seq: number) => Promise<void> | void;
+    /**
+     * Called after each lock statement is interpreted, with what that statement WAS.
+     *
+     * The renewal writes an expiry and reads it back inside ONE transaction, so a test modelling
+     * time passing between those two — a process suspended or descheduled mid-transaction — has
+     * nowhere else to stand: every other lever moves the clock between transactions, which is a
+     * different question. Classified through {@link classifyLockStatement} rather than a regex of
+     * this suite's own, so the double cannot disagree with itself about which statement is which.
+     */
+    onStatement?: (kind: LockStatementKind | undefined) => void;
   } = {}
 ) {
   const clock = createLockClock();
@@ -88,10 +100,13 @@ function createAdapter(
     }),
     runStatement: vi.fn(async (statement: SQL) => {
       interpretLockStatement(lock, statement);
+      options.onStatement?.(classifyLockStatement(statement));
     }),
-    queryStatement: vi.fn(async (statement: SQL) =>
-      interpretLockStatement(lock, statement)
-    ),
+    queryStatement: vi.fn(async (statement: SQL) => {
+      const rows = interpretLockStatement(lock, statement);
+      options.onStatement?.(classifyLockStatement(statement));
+      return rows;
+    }),
   };
 
   const adapter = {
@@ -740,6 +755,51 @@ describe("field-group migration session", () => {
       expect(reachedTheEnd).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(0);
       expect(reachedTheEnd).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // A renewal writes an expiry and reads it back in ONE transaction, and the gap between those two
+  // statements is not zero: a suspended or descheduled process can spend longer there than the whole
+  // TTL. The row then still NAMES this claim while the lease it just wrote is already in the past,
+  // so ownership alone reports a successful renewal on a lock a contender may take the instant the
+  // transaction commits — and the callback carries on believing it is protected.
+  it("treats a renewal whose lease expired mid-transaction as lost", async () => {
+    vi.useFakeTimers();
+    try {
+      let suspended = false;
+      const h = createAdapter({
+        heldBy: null,
+        onStatement: kind => {
+          // 🔴 Once, and only after the renewal's UPDATE — so the readback that follows it inside
+          // the SAME transaction is the statement that sees the advanced clock. Advancing anywhere
+          // else models time passing BETWEEN transactions, which the other tests already cover and
+          // which this property is not about.
+          if (kind === "renew" && !suspended) {
+            suspended = true;
+            h.clock.advance(LOCK_TTL_SECONDS + 1);
+          }
+        },
+      });
+
+      const run = withMigrationSession(
+        { adapter: h.adapter, dialect: "postgresql", label: "run-1" },
+        async () => {
+          await vi.advanceTimersByTimeAsync(LOCK_RENEW_INTERVAL_MS);
+        }
+      );
+
+      await expect(run).rejects.toMatchObject({
+        code: "SERVICE_UNAVAILABLE",
+        logContext: { reason: "migration lock claim lapsed or was taken over" },
+      });
+
+      // 🔴 Positive controls separating this from the takeover case, which a different guard
+      // already covers. The row still names this run — nobody took it — and the hook did fire, so
+      // the green above cannot be a renewal that was never reached.
+      expect(h.owner()).toMatch(/^run-1#/);
+      expect(suspended).toBe(true);
     } finally {
       vi.useRealTimers();
     }
