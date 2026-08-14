@@ -292,7 +292,31 @@ describe("changesRequested", () => {
       },
       at("APPROVED", "2026-08-14T11:00:00Z", 2),
     ];
-    expect(changesRequested(reviews, ORDER)).toEqual([]);
+    expect(changesRequested(reviews, ORDER, true)).toEqual([]);
+  });
+
+  /**
+   * The same reviews, with the order known to be INCOMPLETE. GitHub serves at
+   * most 250 commits for one pull request, so a long history yields a map
+   * missing revisions nobody rewrote — and a truncated order is
+   * indistinguishable from a rebased one by inspection. Absence may only be
+   * read as erasure once the order is known to be whole.
+   */
+  it("does not read absence as erasure when the commit order is truncated", () => {
+    const reviews = [
+      {
+        ...at("CHANGES_REQUESTED", "2026-08-14T10:00:00Z", 1),
+        commit_id: ERASED,
+      },
+      at("APPROVED", "2026-08-14T11:00:00Z", 2),
+    ];
+    expect(changesRequested(reviews, ORDER, false)).toEqual([CODEX]);
+    // Omitted entirely, which is the case a caller reaches by forgetting the
+    // flag rather than by deciding anything. It must land on the refusing side.
+    expect(changesRequested(reviews, ORDER)).toEqual([CODEX]);
+    expect(report({ ...BASE, reviews, threads: [] }).verdict).toBe(
+      "CHANGES REQUESTED"
+    );
   });
 
   /**
