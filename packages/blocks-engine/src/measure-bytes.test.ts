@@ -240,6 +240,104 @@ describe("measureBytes", () => {
     }
   });
 
+  it("counts a hole in a node list as a node, like the structural helpers do", () => {
+    // A hole is a malformed CHILD, not an absent one, and `countNodes` counts
+    // it. Omitting it made the survey disagree with the helpers it replaces — a
+    // chain ending in a hole surveyed one node and one level short, and a
+    // sparse node array never reached the node cap at all.
+    const sparseChildren = new Array<unknown>(3);
+    sparseChildren[0] = {
+      id: "present",
+      type: "core/text",
+      version: 1,
+      props: {},
+    };
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "root",
+          type: "core/section",
+          version: 1,
+          props: {},
+          slots: { children: sparseChildren },
+        },
+      ],
+    };
+
+    const survey = surveyDocument(document, {
+      maxBytes: Number.MAX_SAFE_INTEGER,
+      maxDepth: Number.MAX_SAFE_INTEGER,
+      maxNodes: Number.MAX_SAFE_INTEGER,
+    });
+
+    // root, plus three positions of which two are holes.
+    expect(survey.nodes).toBe(4);
+    expect(survey.depth).toBe(2);
+    expect(survey.unserializable).toBe(true);
+  });
+
+  it("reaches the node cap through a sparse node list", () => {
+    const survey = surveyDocument(
+      { formatVersion: 1, kind: "page", nodes: new Array<unknown>(5001) },
+      { maxBytes: Number.MAX_SAFE_INTEGER, maxDepth: 12, maxNodes: 5000 }
+    );
+    expect(survey.tooManyNodes).toBe(true);
+  });
+
+  it("surveys a hidden value instead of looking away from it", () => {
+    // A non-enumerable own property is skipped by the WRITER and still read by
+    // the schema, so refusing it and stopping left what it hides outside every
+    // bound: 5,001 nodes behind a hidden `nodes` surveyed as zero nodes, and
+    // validation then walked them anyway.
+    const nodes = Array.from({ length: 5001 }, (_, index) => ({
+      id: `n${index}`,
+      type: "core/text",
+      version: 1,
+      props: {},
+    }));
+    const document: Record<string, unknown> = {
+      formatVersion: 1,
+      kind: "page",
+    };
+    Object.defineProperty(document, "nodes", {
+      value: nodes,
+      enumerable: false,
+      writable: true,
+      configurable: true,
+    });
+    // The precondition: the writer really does drop it, so this is the hidden
+    // case rather than an ordinary one.
+    expect(JSON.stringify(document)).not.toContain("n0");
+
+    const survey = surveyDocument(document, {
+      maxBytes: Number.MAX_SAFE_INTEGER,
+      maxDepth: 12,
+      maxNodes: 5000,
+    });
+
+    expect(survey.unserializable).toBe(true);
+    expect(survey.tooManyNodes).toBe(true);
+  });
+
+  it("refuses a NaN limit rather than silently dropping every bound", () => {
+    // Every cap is a `>` comparison and every comparison against NaN is false,
+    // so a NaN limit removes the bounds while the walk reports success.
+    expect(() => measureBytes("x".repeat(1000), Number.NaN)).toThrow(
+      RangeError
+    );
+    expect(() =>
+      surveyDocument({}, { maxBytes: 100, maxDepth: Number.NaN, maxNodes: 100 })
+    ).toThrow(RangeError);
+
+    // Infinity stays supported: it is how an exact count is requested, and the
+    // walk terminates on the cycle set rather than on the cap.
+    expect(() =>
+      measureBytes({ a: 1 }, Number.POSITIVE_INFINITY)
+    ).not.toThrow();
+  });
+
   it("runs a structural member's toJSON exactly once", () => {
     // Keeping the ORIGINAL for structural counting must not also mean re-running
     // the hook on it. Marking the pushed value unnormalized did exactly that:

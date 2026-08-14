@@ -425,6 +425,27 @@ export function surveyDocument(
   root: unknown,
   limits: SurveyLimits
 ): DocumentSurvey {
+  // A NaN limit removes every bound silently, because each cap is a `>`
+  // comparison and every comparison against NaN is false. Measured:
+  // `measureBytes("x".repeat(1_000_000), NaN)` walked the whole string and
+  // returned `exceeded: false` — the walk reporting success while having no
+  // bound at all, which is the worst of the two failure directions.
+  //
+  // Infinity is deliberately NOT rejected: an infinite byte limit is the
+  // supported way to ask for an exact count, and the walk terminates there on
+  // the cycle set rather than on the cap.
+  const bounded = (limit: number, name: string): number => {
+    if (Number.isNaN(limit)) {
+      throw new RangeError(
+        `surveyDocument: ${name} is NaN, which would remove the bound it exists to impose.`
+      );
+    }
+    return limit;
+  };
+  bounded(limits.maxBytes, "maxBytes");
+  bounded(limits.maxDepth, "maxDepth");
+  bounded(limits.maxNodes, "maxNodes");
+
   let bytes = 0;
   let unserializable = false;
   let nodes = 0;
@@ -577,6 +598,50 @@ export function surveyDocument(
 
       if (skipped) {
         unserializable = true;
+
+        // A skipped member is still a member, and the caps still have to
+        // describe it. Refusing it and then looking away is the third instance
+        // of one shape in this walk — a refused `__proto__` slot hid a whole
+        // subtree the same way — and it fails in two directions here:
+        //
+        //  - a HOLE in a node list is a position the structural helpers count,
+        //    so omitting it made the survey disagree with `countNodes` and
+        //    `treeDepth` (a 12-deep chain ending in a hole surveyed as 12, not
+        //    13; a sparse `Array(5001)` never reached the node cap);
+        //  - a NON-ENUMERABLE own property is skipped by the writer but is
+        //    still reachable by the schema's direct read, so a hidden `nodes`
+        //    array of 5,001 valid nodes surveyed as zero nodes and 33 bytes,
+        //    and `validate()` then walked the hidden forest anyway.
+        const hiddenPlacement = memberPlacement(
+          frame.containerKind ?? "value",
+          frame.depth,
+          key,
+          container === root
+        );
+        if (hiddenPlacement !== "refused" && hiddenPlacement.kind === "node") {
+          nodes += 1;
+          if (hiddenPlacement.depth > deepest) deepest = hiddenPlacement.depth;
+          if (hiddenPlacement.depth > limits.maxDepth) {
+            return { ...done(), tooDeep: true };
+          }
+          if (nodes > limits.maxNodes) return { ...done(), tooManyNodes: true };
+        }
+
+        // A hidden value is not readable by the writer but IS readable by the
+        // schema, so its size has to be surveyed rather than assumed to be
+        // nothing. Only a value we actually hold can be walked: an absent
+        // member or a throwing hook leaves nothing to descend into.
+        if (hidden && member.present && typeof member.value === "object") {
+          if (member.value !== null && hiddenPlacement !== "refused") {
+            stack.push({
+              value: member.value,
+              kind: hiddenPlacement.kind,
+              depth: hiddenPlacement.depth,
+              normalized: true,
+            });
+          }
+        }
+
         // A position JSON cannot read still occupies one: it writes `null`
         // there, four bytes. A record's missing key costs nothing, because JSON
         // writes nothing for it — which is why this is the array branch only.
