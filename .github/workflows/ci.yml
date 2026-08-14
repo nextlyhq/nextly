@@ -303,7 +303,7 @@ jobs:
       # `turbo run test` never reaches it. Its own suite runs here: a defect in
       # the release-notes builder only surfaces during a real publish, after the
       # packages are already on npm. Needs no build, runs in milliseconds.
-      - name: Release script tests
+      - name: Script tests
         run: pnpm test:scripts
 
       # The published packages version in lockstep, so a changeset that names

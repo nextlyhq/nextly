@@ -6,6 +6,23 @@ an act rather than a file type, and the checks below are needed before any file
 of the merged work has been opened.
 -->
 
+## The decisions in this file are also code
+
+`scripts/verify-merge.mjs` implements the judgements below as pure functions —
+whether a branch can answer the question at all, whether a job counts as
+passing, whether a review verdict belongs to the revision being merged, and
+whether a second reviewer looked. `scripts/verify-merge.test.mjs` runs them
+against the inputs that produced this repository's actual false cleans, and
+`pnpm test:scripts` runs it in CI.
+
+Prefer them to re-deriving the logic in shell. The snippets here stay because
+the reasoning is worth reading, but a snippet is not a control: every one of
+them was wrong at least once — a count computed and never read, an exit status
+swallowed by the pipeline that consumed it, a comparison against a base that
+moves — and each was found by a person executing it mentally rather than by
+anything running it. When a rule and the script disagree, the script is the one
+with tests.
+
 ## A squash merge makes every ancestry check unsound
 
 Merging squashes the branch into one new commit, so the branch head is **never**
