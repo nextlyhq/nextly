@@ -37,7 +37,10 @@ import { dirname, join, resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import type { CollectionConfig } from "../../../collections/config/define-collection";
+import type {
+  CollectionAdminOptions,
+  CollectionConfig,
+} from "../../../collections/config/define-collection";
 import type { SanitizedNextlyConfig } from "../../../collections/config/define-config";
 import type { FieldConfig } from "../../../collections/fields/types";
 import type { DynamicCollectionRecord } from "../../../schemas/dynamic-collections/types";
@@ -236,6 +239,31 @@ export interface CollectionSyncResultWithValidation
  * Exported so the projection can be asserted directly rather than only through
  * a sync that needs a database.
  */
+/**
+ * `admin` keys this projection deliberately does NOT carry, each with the reason it is absent.
+ *
+ * Every key of `CollectionAdminOptions` must appear either in the object `toPersistedAdmin`
+ * returns or here — enforced below, at compile time. That is the point: the list of persisted
+ * keys is precisely what has drifted twice already (both conversion paths once omitted
+ * `defaultColumns`, and only one of them carried `disableCreate`), and a drop is invisible
+ * because the value type-checks at the author's keyboard and simply never arrives.
+ *
+ * Adding an option to `CollectionAdminOptions` now fails the build until it is classified.
+ */
+export const ADMIN_KEYS_NOT_PERSISTED = {
+  /**
+   * Written to the collection's own `description` column instead of into `admin`, so the two
+   * authoring paths describe a collection in one place. See `resolveDescription`.
+   */
+  description: "stored on the collection row rather than under `admin`",
+  /**
+   * Carries `url`, a function of the entry, which no column can hold. Serving it needs the
+   * admin to ASK the server to evaluate it rather than to read it back, which is a change to
+   * how the panel obtains config and is deliberately not folded in here.
+   */
+  preview: "holds a function; needs server-side evaluation rather than storage",
+} as const;
+
 export function toPersistedAdmin(admin: CollectionConfig["admin"]) {
   if (!admin) return undefined;
   return {
@@ -246,6 +274,11 @@ export function toPersistedAdmin(admin: CollectionConfig["admin"]) {
     defaultColumns: admin.defaultColumns,
     isPlugin: admin.isPlugin,
     disableCreate: admin.disableCreate,
+    // Sidebar placement. Both are read by `DynamicCollectionNav`, which takes its collections
+    // from the persisted registry — so omitting them here meant a code-first collection could
+    // set them, type-check, and still sort by the default.
+    order: admin.order,
+    sidebarGroup: admin.sidebarGroup,
     pagination: admin.pagination
       ? {
           defaultLimit: admin.pagination.defaultLimit,
@@ -255,6 +288,42 @@ export function toPersistedAdmin(admin: CollectionConfig["admin"]) {
     // Include custom components for plugins (e.g., custom Edit views)
     components: admin.components,
   };
+}
+
+/**
+ * Every `admin` option is either persisted or explicitly excluded — checked by the compiler.
+ *
+ * A plain assertion the checker EVALUATES, rather than a suppression: when
+ * `CollectionAdminOptions` gains a key that is in neither set, `UnclassifiedAdminKey` stops
+ * being `never` and this line fails with the offending key names in the error text.
+ */
+type UnclassifiedAdminKey = Exclude<
+  keyof CollectionAdminOptions,
+  | keyof NonNullable<ReturnType<typeof toPersistedAdmin>>
+  | keyof typeof ADMIN_KEYS_NOT_PERSISTED
+>;
+const _everyAdminKeyIsClassified: UnclassifiedAdminKey extends never
+  ? true
+  : [
+      "unclassified admin key(s) — persist them or list a reason",
+      UnclassifiedAdminKey,
+    ] = true;
+void _everyAdminKeyIsClassified;
+
+/**
+ * The description a collection is stored with.
+ *
+ * `admin.description` and the top-level `description` are two spellings of one thing — help text
+ * under the collection title — and only the second has a column. Resolved in ONE place so the two
+ * sync paths cannot disagree about which wins.
+ *
+ * The top-level field takes precedence: it is the documented home, so an author who sets both is
+ * most plausibly migrating from the `admin` spelling and expects the explicit field to win.
+ */
+export function resolveDescription(
+  config: Pick<CollectionConfig, "description" | "admin">
+): string | undefined {
+  return config.description ?? config.admin?.description;
 }
 
 /**
@@ -677,7 +746,7 @@ export class CollectionSyncService extends BaseService {
         plural: config.labels?.plural ?? toPluralLabel(config.slug),
       },
       fields: config.fields,
-      description: config.description,
+      description: resolveDescription(config),
       tableName: config.dbName ?? config.slug.replace(/-/g, "_"),
       timestamps: config.timestamps ?? true,
       // Persist Draft/Published, i18n, and the resolved versioning config through
@@ -879,7 +948,7 @@ export class CollectionSyncService extends BaseService {
           plural: config.labels?.plural ?? toPluralLabel(config.slug),
         },
         tableName,
-        description: config.description,
+        description: resolveDescription(config),
         fields: config.fields,
         timestamps: config.timestamps ?? true,
         // Why: status from defineCollection() input if present, otherwise false.
