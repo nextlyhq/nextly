@@ -72,14 +72,14 @@ export interface CachedFindOptions {
  * @example
  * // Public entry detail — cached and busted when any post changes. Tag with the
  * // collection tag; a slug-routed read has no entry id until the fetch resolves.
- * const post = await cachedFind(() => nextly.findBySlug("posts", slug), {
- *   tags: nextlyTags("posts"),
- *   keyParts: ["posts", slug],
- * });
+ * const post = await cachedFind(
+ *   () => nextly.find({ collection: "posts", where: { slug: { equals: slug } } }),
+ *   { tags: nextlyTags("posts"), keyParts: ["posts", slug] }
+ * );
  *
  * @example
  * // Per-user list — the caller's id is in the key so it never leaks.
- * const mine = await cachedFind(() => nextly.find("orders", { user }), {
+ * const mine = await cachedFind(() => nextly.find({ collection: "orders", user }), {
  *   tags: nextlyTags("orders"),
  *   keyParts: ["orders", "list", user.id],
  * });

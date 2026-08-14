@@ -13,12 +13,14 @@
  * under its special name, which is the state this replaces.
  */
 import {
+  lstat,
   mkdir,
   mkdtemp,
   readFile,
   readdir,
   rm,
   stat,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -281,6 +283,69 @@ describe("scaffolding over a project that already has these files", () => {
       "Always run the linter before you claim you are done."
     );
     expect(after["CLAUDE.md"]).toContain("@AGENTS.md");
+  }, 30_000);
+
+  it("does not rewrite a placeholder the developer wrote in their own prose", async () => {
+    const after = await scaffoldOver({
+      "AGENTS.md":
+        "# Notes\n\nOur deploy script substitutes {{databaseDialect}} itself.\n",
+    });
+
+    // The merge renders the INCOMING guide and leaves their text alone. The recursive pass that
+    // renders the rest of the scaffold rewrites whole files, so it has to skip this one.
+    expect(after["AGENTS.md"]).toContain(
+      "Our deploy script substitutes {{databaseDialect}} itself."
+    );
+    // ...while the guide it merged in is still rendered.
+    expect(after["AGENTS.md"]).toContain("Agent guide for this Nextly project");
+    expect(after["AGENTS.md"]).toContain("This project uses **sqlite**");
+  }, 30_000);
+
+  it("treats a whitespace-prefixed ignore pattern as a different pattern", async () => {
+    // git strips TRAILING whitespace from a pattern and keeps LEADING whitespace, so ` .env*`
+    // does not ignore `.env` — measured with `git check-ignore -v .env`. Treating it as equal to
+    // `.env*` would skip adding the pattern that works, and the scaffold writes a real `.env`.
+    const after = await scaffoldOver({ ".gitignore": " .env*\n" });
+
+    const lines = after[".gitignore"].split("\n");
+    expect(lines).toContain(" .env*"); // theirs, untouched
+    expect(lines.some(l => l === ".env" || l === ".env*")).toBe(true);
+  }, 30_000);
+
+  it("does not write through a CLAUDE.md symlink", async () => {
+    workdir = await mkdtemp(path.join(tmpdir(), "nextly-symlink-"));
+    const target = path.join(workdir, "project");
+    await mkdir(target, { recursive: true });
+
+    const guide = "# My guide\n\nRun the linter before saying you are done.\n";
+    await writeFile(path.join(target, "AGENTS.md"), guide, "utf-8");
+    // The common arrangement: one file, reachable under both names.
+    await symlink("AGENTS.md", path.join(target, "CLAUDE.md"));
+
+    await copyTemplate({
+      projectName: "my-app",
+      projectType: "blank",
+      targetDir: target,
+      database: sqlite,
+      templateSource: {
+        basePath: path.join(templatesRoot, "base"),
+        templatePath: path.join(templatesRoot, "blank"),
+      },
+      allowExistingTarget: true,
+    });
+
+    // Writing through the link would append the pointer INTO the guide it points at — measured:
+    // `AGENTS.md` ends up containing a literal `@AGENTS.md` line, and the link still looks
+    // untouched, so nothing in the project shows it happened.
+    const merged = await readFile(path.join(target, "AGENTS.md"), "utf-8");
+    expect(merged).toContain("Run the linter before saying you are done.");
+    expect(merged.split("\n").filter(l => l.trim() === "@AGENTS.md")).toEqual(
+      []
+    );
+    // And the link is left as the developer arranged it.
+    expect((await lstat(path.join(target, "CLAUDE.md"))).isSymbolicLink()).toBe(
+      true
+    );
   }, 30_000);
 
   it("does not duplicate a CLAUDE.md pointer that is already there", async () => {

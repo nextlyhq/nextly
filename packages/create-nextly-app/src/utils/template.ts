@@ -327,15 +327,20 @@ function extractManagedBlock(incoming: string): string {
 /**
  * Append the lines of `incoming` that `existing` does not already contain, in order.
  *
- * Compared after trimming so indentation or a trailing space does not duplicate a pattern the file
- * already has. Blank lines and comments are carried only when something real accompanies them, so
- * a re-run cannot accumulate section headers.
+ * TRAILING whitespace is ignored when comparing and LEADING whitespace is not, because that is
+ * what git does with an ignore pattern: it strips trailing spaces unless escaped, and treats a
+ * leading space as part of the pattern. So a file containing ` .env*` does NOT ignore `.env`
+ * (`git check-ignore -v .env` reports no match), and treating it as equal to `.env*` would skip
+ * adding the pattern that actually works — leaving the scaffold's real `.env` committable.
+ *
+ * Blank lines are dropped so a re-run cannot accumulate separators.
  */
 function appendMissingLines(existing: string, incoming: string): string {
-  const have = new Set(existing.split("\n").map(line => line.trim()));
+  const key = (line: string): string => line.replace(/\s+$/, "");
+  const have = new Set(existing.split("\n").map(key));
   const missing = incoming
     .split("\n")
-    .filter(line => line.trim() !== "" && !have.has(line.trim()));
+    .filter(line => line.trim() !== "" && !have.has(key(line)));
 
   if (missing.length === 0) return existing;
   return `${existing.trimEnd()}\n\n${missing.join("\n")}\n`;
@@ -348,17 +353,46 @@ function appendMissingLines(existing: string, incoming: string): string {
  * Each entry is a no-op when the template does not carry that file, so a template without an
  * ignore file or without a guide is not given an empty one it never asked for.
  *
- * Runs BEFORE placeholder replacement: the shipped suffix is not a text extension, so a guide
- * renamed afterwards would keep its `{{databaseDialect}}` unresolved.
+ * Runs BEFORE the recursive placeholder pass: the shipped suffix is not a text extension, so a
+ * guide renamed afterwards would keep its `{{databaseDialect}}` unresolved. When merging into a
+ * developer's file the incoming text is rendered HERE instead, because that later pass rewrites
+ * whole files — it would substitute a `{{databaseDialect}}` occurring in the developer's own
+ * prose, breaking the promise that text outside the managed block is left alone. A file this
+ * function merged into is therefore already complete and is excluded from that pass.
+ *
+ * @param placeholders - substitutions to render into merged content
+ * @returns project-relative names this function merged into, for the caller to skip later
  */
-async function restoreShippedNames(targetDir: string): Promise<void> {
+async function restoreShippedNames(
+  targetDir: string,
+  placeholders: Record<string, string>
+): Promise<Set<string>> {
+  const merged = new Set<string>();
+
   for (const { shipped, inProject, merge } of RENAMED_ON_COPY) {
     const from = path.join(targetDir, shipped);
     if (!(await fs.pathExists(from))) continue;
 
     const to = path.join(targetDir, inProject);
-    if (!(await fs.pathExists(to))) {
+
+    // `lstat` describes the link itself; `pathExists` follows it and answers about the target. A
+    // dangling link is therefore "absent" to `pathExists` while still occupying the name, and a
+    // link to a real file reads as an ordinary destination.
+    const destination = await fs.lstat(to).catch(() => null);
+
+    if (!destination) {
       await fs.move(from, to);
+      continue;
+    }
+
+    // Writing through a link edits whatever it points at. The arrangement that makes this
+    // concrete is the common `CLAUDE.md -> AGENTS.md`: merging the pointer would append
+    // `@AGENTS.md` INTO the guide that was just merged, and a link pointing outside the project
+    // would let a scaffold modify a file elsewhere on the machine entirely. Measured — the write
+    // lands on the target and leaves the link in place, so nothing in the project directory shows
+    // that it happened.
+    if (destination.isSymbolicLink()) {
+      await fs.remove(from);
       continue;
     }
 
@@ -368,14 +402,18 @@ async function restoreShippedNames(targetDir: string): Promise<void> {
       fs.readFile(to, "utf-8"),
       fs.readFile(from, "utf-8"),
     ]);
-    const merged =
+    const rendered = applyPlaceholders(incoming, placeholders);
+    const combined =
       merge === "managed-block"
-        ? mergeManagedBlock(existing, incoming)
-        : appendMissingLines(existing, incoming);
+        ? mergeManagedBlock(existing, rendered)
+        : appendMissingLines(existing, rendered);
 
-    await fs.writeFile(to, merged, "utf-8");
+    await fs.writeFile(to, combined, "utf-8");
     await fs.remove(from);
+    merged.add(inProject);
   }
+
+  return merged;
 }
 
 // ============================================================
@@ -471,19 +509,29 @@ async function replacePlaceholdersInFile(
 
   if (!isTextFile) return;
 
-  let content = await fs.readFile(filePath, "utf-8");
-  let changed = false;
+  const content = await fs.readFile(filePath, "utf-8");
+  const rendered = applyPlaceholders(content, placeholders);
 
+  if (rendered !== content) {
+    await fs.writeFile(filePath, rendered, "utf-8");
+  }
+}
+
+/**
+ * Substitute `{{placeholder}}` markers in a string.
+ *
+ * The single implementation of what rendering MEANS, so the recursive pass over a scaffolded
+ * project and the merge into a developer's existing file cannot disagree about it.
+ */
+function applyPlaceholders(
+  content: string,
+  placeholders: Record<string, string>
+): string {
+  let rendered = content;
   for (const [placeholder, value] of Object.entries(placeholders)) {
-    if (content.includes(placeholder)) {
-      content = content.replaceAll(placeholder, value);
-      changed = true;
-    }
+    rendered = rendered.replaceAll(placeholder, value);
   }
-
-  if (changed) {
-    await fs.writeFile(filePath, content, "utf-8");
-  }
+  return rendered;
 }
 
 /**
@@ -491,7 +539,16 @@ async function replacePlaceholdersInFile(
  */
 async function replacePlaceholders(
   dir: string,
-  placeholders: Record<string, string>
+  placeholders: Record<string, string>,
+  /**
+   * Names, relative to the walk's root, that are already rendered and must not be rewritten.
+   *
+   * A file merged into one the developer already had carries their prose as well as the
+   * scaffold's, and this pass rewrites whole files — so running it over such a file would
+   * substitute a `{{placeholder}}` occurring in THEIR text.
+   */
+  skip: ReadonlySet<string> = new Set(),
+  root: string = dir
 ): Promise<void> {
   const entries = await fs.readdir(dir, { withFileTypes: true });
 
@@ -500,8 +557,9 @@ async function replacePlaceholders(
 
     if (entry.isDirectory()) {
       if (entry.name === "node_modules" || entry.name === ".git") continue;
-      await replacePlaceholders(fullPath, placeholders);
+      await replacePlaceholders(fullPath, placeholders, skip, root);
     } else if (entry.isFile()) {
+      if (skip.has(path.relative(root, fullPath))) continue;
       await replacePlaceholdersInFile(fullPath, placeholders);
     }
   }
@@ -1350,7 +1408,14 @@ export async function copyTemplate(
 
   // Step 6c: Give the project the real names for the files the template ships renamed — the
   // ignore file npm strips out of the tarball, and the agent guide kept inert in the source.
-  await restoreShippedNames(targetDir);
+  // The placeholder map is built here rather than at step 9 because a merge into a file the
+  // developer already had must render the incoming text itself; step 9 then skips what it
+  // merged, so their prose is never rewritten.
+  const placeholders = buildPlaceholderMap({ database, databaseUrl });
+  if (approach) {
+    placeholders["{{approach}}"] = approach;
+  }
+  const alreadyRendered = await restoreShippedNames(targetDir, placeholders);
 
   // Step 6d: Undo the side effect of the workspace file above for the pnpm versions that
   // read it as a workspace declaration. Only for pnpm, because npm warns about the setting
@@ -1372,13 +1437,9 @@ export async function copyTemplate(
     "utf-8"
   );
 
-  // Step 9: Replace placeholders in all text files
-  // Include approach placeholder for seed scripts
-  const placeholders = buildPlaceholderMap({ database, databaseUrl });
-  if (approach) {
-    placeholders["{{approach}}"] = approach;
-  }
-  await replacePlaceholders(targetDir, placeholders);
+  // Step 9: Replace placeholders in all text files, except the ones step 6c already rendered
+  // while merging them into content the developer wrote.
+  await replacePlaceholders(targetDir, placeholders, alreadyRendered);
 }
 
 /**
@@ -1436,16 +1497,18 @@ async function copyPluginTemplate(opts: {
   // The plugin scaffold is a git repository too, and npm strips its ignore file the same way. It
   // carries its own agent guide — a publishable library rather than an app, so the base guide
   // would describe the wrong project — and that guide is restored by the same table.
-  await restoreShippedNames(targetDir);
+  const nextlyRange = await resolvePluginNextlyRange(useYalc);
+  const placeholders = buildPlaceholderMap({
+    pluginName: projectName,
+    nextlyRange,
+  });
+  const alreadyRendered = await restoreShippedNames(targetDir, placeholders);
 
   // It installs like any other project too, so it meets the same workspace-root refusal the
   // pnpm workspace file provokes on pnpm 9 — through the same writer as the app path.
   await writeScaffoldNpmrc(targetDir, packageManager);
 
-  // Fill plugin placeholders across the copied tree (src/ + dev/).
-  const nextlyRange = await resolvePluginNextlyRange(useYalc);
-  await replacePlaceholders(
-    targetDir,
-    buildPlaceholderMap({ pluginName: projectName, nextlyRange })
-  );
+  // Fill plugin placeholders across the copied tree (src/ + dev/), leaving alone whatever was
+  // rendered while merging into a file the developer already had.
+  await replacePlaceholders(targetDir, placeholders, alreadyRendered);
 }
