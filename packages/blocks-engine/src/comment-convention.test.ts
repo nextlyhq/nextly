@@ -29,12 +29,13 @@ import { describe, expect, it } from "vitest";
  * There is deliberately no pattern for ordinal narration, and the reason
  * generalises. "The third instance of this shape we have found" is process
  * history; "the third instance in the array owns the separator" describes a
- * parser. The difference is intent, not vocabulary. Narrowing such a pattern
- * toward discovery verbs does not close the gap, because those verbs are
- * ordinary technical words too — a cache MISSES, a guard CATCHES, a value is
- * FOUND — so each narrowing admits a new bystander. The negative controls below
- * keep three of them. This file matches structure and leaves intent
- * unenforced, rather than pretending intent is detectable syntax.
+ * parser. The difference is intent, not vocabulary, so no expression over the
+ * words can separate them. Pairing the ordinal with a discovery verb does not
+ * help either, because those verbs are ordinary technical words: a cache
+ * MISSES, a guard CATCHES, a value is FOUND. The negative controls below hold
+ * sentences of exactly that shape which describe runtime behaviour. This file
+ * matches structure and leaves intent unenforced, rather than pretending intent
+ * is detectable syntax.
  */
 const FORBIDDEN: Array<{ pattern: RegExp; why: string }> = [
   {
@@ -161,11 +162,10 @@ describe("code comments describe the code", () => {
       "// the first occurrence sees the `+` that leaves the first root",
       "// the second time the callback runs, reuse the cached value",
       "// the third instance in the array owns the separator",
-      // Each of these was refused by a successive narrowing of an ordinal
-      // pattern that no longer exists, and they are kept as the reason it does
-      // not: a discovery verb is also ordinary technical vocabulary, so no
-      // amount of tightening separates counting the work from counting the
-      // data. A pattern reintroduced here fails on one of them.
+      // Ordinal counting beside a discovery verb, all three describing runtime
+      // behaviour rather than the work that produced the file. They are what a
+      // pattern keyed on that shape rejects, and are here so that adding one
+      // fails.
       "// the second time the cache missed, refresh the credentials",
       "// the third instance found in the pool is the one that owns the lock",
       "// on the second retry the fixed backoff is replaced by the jittered one",
