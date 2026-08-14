@@ -320,6 +320,53 @@ describe("changesRequested", () => {
   });
 
   /**
+   * A commit COUNT cannot establish that an order describes the revisions
+   * being merged. A branch force-pushed to a different history of the same
+   * length and restored before the later ref reads yields a map that satisfies
+   * every size comparison while omitting the head — so `report` re-establishes
+   * completeness from the head's presence rather than trusting the flag, and an
+   * order that does not reach the revision under judgement licenses nothing.
+   */
+  it("does not read absence as erasure when the order omits the head", () => {
+    const reviews = [
+      {
+        ...at("CHANGES_REQUESTED", "2026-08-14T10:00:00Z", 1),
+        commit_id: ERASED,
+      },
+      { ...at("APPROVED", "2026-08-14T11:00:00Z", 2), commit_id: OLD },
+      // Coverage at the head, so the verdict reaches the objection rather than
+      // stopping at MISSING REVIEW AT HEAD. A COMMENTED review grants coverage
+      // and clears nothing.
+      at("COMMENTED", "2026-08-14T12:00:00Z", 3),
+    ];
+    // Marked complete, and genuinely missing HEAD — the transient history.
+    const withoutHead = new Map([[OLD, 0]]);
+    expect(
+      report({
+        ...BASE,
+        reviews,
+        threads: [],
+        revisionOrder: withoutHead,
+        revisionOrderComplete: true,
+      }).verdict
+    ).toBe("CHANGES REQUESTED");
+    // The positive control: the same reviews and the same claim of
+    // completeness, against an order that DOES reach the head, must clear.
+    expect(
+      report({
+        ...BASE,
+        reviews,
+        threads: [],
+        revisionOrder: new Map([
+          [OLD, 0],
+          [HEAD, 1],
+        ]),
+        revisionOrderComplete: true,
+      }).verdict
+    ).toBe("CLEAN");
+  });
+
+  /**
    * The control for the case above, in the opposite direction. An approval
    * naming a revision the pull request no longer has speaks to code that will
    * not merge, so it cannot answer an objection against live history — and

@@ -375,11 +375,16 @@ export function report({
   // revisions — pushing a commit does not answer it — while whether a given
   // approval supersedes one is a question about which revision that approval
   // spoke to.
-  const refused = changesRequested(
-    reviews,
-    revisionOrder,
-    revisionOrderComplete
-  );
+  // Completeness is re-established HERE rather than taken on the caller's word,
+  // because a count cannot establish it. A branch force-pushed to a different
+  // history of the same length and restored before the later ref reads leaves a
+  // map that satisfies every size comparison while describing revisions that
+  // are not the ones being merged — and the head's absence from it is the thing
+  // that gives that away. An order that does not reach the revision under
+  // judgement cannot license reading any other absence as erasure.
+  const orderReachesHead =
+    revisionOrderComplete === true && revisionOrder?.get(head) !== undefined;
+  const refused = changesRequested(reviews, revisionOrder, orderReachesHead);
   const { verdict, detail, exitCode } = verdictFor({
     missing,
     unresolved,
@@ -869,14 +874,32 @@ async function main(argv) {
 // unencoded, and skipping `realpathSync` leaves a symlinked prefix — `/tmp` is
 // `/private/tmp` on macOS — unresolved. Either mismatch makes the gate exit 0
 // having run nothing, which is the worst way for a gate to fail.
+// BOTH forms are compared, because which one `import.meta.url` carries depends
+// on a runtime flag rather than on this file. `--preserve-symlinks-main` (which
+// `NODE_OPTIONS` can supply from outside the command line) keeps the symlink in
+// `import.meta.url`, while `realpathSync` resolves it away — so a resolve-only
+// comparison fails to match when the gate is invoked through a symlink under
+// that flag, and the process exits 0 having executed nothing.
 const invokedDirectly = () => {
   if (!process.argv[1]) return false;
+  const entries = new Set();
+  for (const path of [process.argv[1], resolvedEntry(process.argv[1])]) {
+    if (path === undefined) continue;
+    try {
+      entries.add(pathToFileURL(path).href);
+    } catch {
+      // A path that cannot be expressed as a file URL is not this module.
+    }
+  }
+  return entries.has(import.meta.url);
+};
+
+/** The symlink-resolved form of `path`, or `undefined` when it cannot be read. */
+const resolvedEntry = path => {
   try {
-    return (
-      import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href
-    );
+    return realpathSync(path);
   } catch {
-    return false;
+    return undefined;
   }
 };
 if (invokedDirectly()) {
