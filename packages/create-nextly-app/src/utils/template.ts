@@ -321,11 +321,21 @@ function mergeManagedBlock(existing: string, incoming: string): string {
 function findManagedRegion(
   text: string
 ): { start: number; end: number } | null {
-  const endIndex = text.lastIndexOf(MANAGED_END);
-  if (endIndex === -1) return null;
-
-  const startIndex = text.lastIndexOf(MANAGED_START, endIndex);
+  // The LAST start, then the FIRST end after it. Both halves are load-bearing, and each covers a
+  // mirror of the other:
+  //
+  //   stray start … [valid block]         → the last start IS the valid block's, so the stray
+  //                                          sits outside the region and its text survives.
+  //   [valid block] … prose … stray end   → the first end after that start is the block's OWN
+  //                                          end, so the prose following it survives.
+  //
+  // Taking the last END instead pairs a valid start with a stray end and deletes everything
+  // between them; taking the first START pairs a stray start with a valid end and does the same.
+  const startIndex = text.lastIndexOf(MANAGED_START);
   if (startIndex === -1) return null;
+
+  const endIndex = text.indexOf(MANAGED_END, startIndex + MANAGED_START.length);
+  if (endIndex === -1) return null;
 
   return { start: startIndex, end: endIndex + MANAGED_END.length };
 }
@@ -430,6 +440,11 @@ async function restoreShippedNames(
     // editing a file the project shares with something else is not this tool's decision.
     if (destination.isSymbolicLink() || destination.nlink > 1) {
       await fs.remove(from);
+      // Recorded as untouchable, not merely un-merged. The recursive placeholder pass treats a
+      // HARD link as an ordinary file — `readdir`'s Dirent reports `isFile()` for it, unlike a
+      // symlink — so without this it would render `{{databaseDialect}}` through the shared inode
+      // and modify a file outside the project after the merge had carefully declined to.
+      merged.add(inProject);
       continue;
     }
 
@@ -545,6 +560,17 @@ async function replacePlaceholdersInFile(
     basename === ".gitignore";
 
   if (!isTextFile) return;
+
+  // A hard link shares its inode with every other name pointing at it, and `lstat` cannot tell
+  // one from an ordinary file — being a regular file is exactly what a hard link is. `nlink`
+  // separates them. Rewriting one would edit whatever else points there, possibly outside the
+  // project, so this refuses rather than substituting.
+  //
+  // Scoped to the whole walk rather than to the guide: any template file the developer had
+  // already hard-linked carries the same hazard, and a per-file skip list would only ever cover
+  // the names someone thought of.
+  const link = await fs.lstat(filePath).catch(() => null);
+  if (link && link.nlink > 1) return;
 
   const content = await fs.readFile(filePath, "utf-8");
   const rendered = applyPlaceholders(content, placeholders);
