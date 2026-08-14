@@ -34,14 +34,11 @@ export type FieldGroupLockColumn = "id" | "owner" | "expires_at";
 export function fieldGroupLockColumnTypes(
   dialect: SupportedDialect
 ): Record<FieldGroupLockColumn, string> {
-  const columns =
-    dialect === "postgresql"
-      ? pgTableConfig(pg.nextlyFieldGroupLock).columns
-      : dialect === "mysql"
-        ? mysqlTableConfig(my.nextlyFieldGroupLock).columns
-        : sqliteTableConfig(sl.nextlyFieldGroupLock).columns;
   const declared = new Map(
-    columns.map(column => [column.name, column.getSQLType()])
+    lockForDialect(dialect).columns.map(column => [
+      column.name,
+      column.getSQLType(),
+    ])
   );
 
   const read = (name: FieldGroupLockColumn): string => {
@@ -67,15 +64,32 @@ export function fieldGroupLockColumnTypes(
   };
 }
 
-/** The lock table for the requested dialect. */
-export function fieldGroupLockTables(dialect: SupportedDialect) {
+/**
+ * The ONE place a dialect is turned into a lock table, with the columns that table declares.
+ *
+ * 🔴 Both public functions below are views of this, rather than two selections that happen to
+ * agree. A second selection does not need to be wrong to be dangerous: written as a ternary chain
+ * ending in a bare `else`, it silently ASSIGNS every future dialect to whichever branch is last, so
+ * adding one to `SupportedDialect` would compile and emit another dialect's column types. Here the
+ * `never` assignment below makes the compiler demand a case instead.
+ */
+function lockForDialect(dialect: SupportedDialect) {
   switch (dialect) {
     case "postgresql":
-      return { nextlyFieldGroupLock: pg.nextlyFieldGroupLock };
+      return {
+        table: pg.nextlyFieldGroupLock,
+        columns: pgTableConfig(pg.nextlyFieldGroupLock).columns,
+      };
     case "mysql":
-      return { nextlyFieldGroupLock: my.nextlyFieldGroupLock };
+      return {
+        table: my.nextlyFieldGroupLock,
+        columns: mysqlTableConfig(my.nextlyFieldGroupLock).columns,
+      };
     case "sqlite":
-      return { nextlyFieldGroupLock: sl.nextlyFieldGroupLock };
+      return {
+        table: sl.nextlyFieldGroupLock,
+        columns: sqliteTableConfig(sl.nextlyFieldGroupLock).columns,
+      };
     default: {
       // Exhaustiveness check — TypeScript flags any missing dialect at compile time, so reaching
       // here at runtime means a dialect was added without a table for it. `internal` because that
@@ -89,4 +103,9 @@ export function fieldGroupLockTables(dialect: SupportedDialect) {
       });
     }
   }
+}
+
+/** The lock table for the requested dialect, as a schema fragment. */
+export function fieldGroupLockTables(dialect: SupportedDialect) {
+  return { nextlyFieldGroupLock: lockForDialect(dialect).table };
 }
