@@ -272,6 +272,17 @@ describe("scaffolding over a project that already has these files", () => {
     expect(after[".gitignore"]).toContain("node_modules");
   }, 30_000);
 
+  it("keeps a CLAUDE.md the developer wrote and adds the pointer", async () => {
+    const after = await scaffoldOver({
+      "CLAUDE.md": "Always run the linter before you claim you are done.\n",
+    });
+
+    expect(after["CLAUDE.md"]).toContain(
+      "Always run the linter before you claim you are done."
+    );
+    expect(after["CLAUDE.md"]).toContain("@AGENTS.md");
+  }, 30_000);
+
   it("does not duplicate a CLAUDE.md pointer that is already there", async () => {
     const after = await scaffoldOver({
       "CLAUDE.md": "@AGENTS.md\n",
