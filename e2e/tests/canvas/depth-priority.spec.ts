@@ -151,13 +151,37 @@ test("[acceptance] a descendant outranks an ancestor whose target covers it", as
   const source = await driver.dragSourceCentre();
   await driver.startDragAt(source);
 
-  // Dead centre of the nested container. Every ancestor zone in the block-flow
-  // fixture lies outside this point; the grid's insert-before target does not.
-  const centre = {
+  // The SEAM between the two inner spacers, not the container's centre.
+  //
+  // Gap zones are deliberately zero-height so they cost no layout, which means
+  // they contain the pointer only along the line where they sit. At the
+  // container's centre the descendant therefore has no candidate at all and the
+  // ancestor's full-box target is the only entrant — a competition with one
+  // side missing, which no priority rule can decide. Measured: the inner
+  // container's three zones were present and registered with none active,
+  // while the grid's `before` target was.
+  //
+  // The seam is where both are genuinely claimable, so it is the only place the
+  // property under test is even expressible.
+  const seam = {
     x: innerBox!.x + innerBox!.width / 2,
     y: innerBox!.y + innerBox!.height / 2,
   };
-  await driver.moveBy(centre.x - source.x, centre.y - source.y);
+  await driver.moveBy(seam.x - source.x, seam.y - source.y);
+
+  // Collisions are recomputed on pointer MOVE, so a single jump computes the
+  // winner once — and if that computation lands while the canvas is still
+  // settling, nothing afterwards revisits it. The stale winner then stays
+  // active for as long as the pointer is still, which polling cannot fix
+  // because polling observes without moving anything.
+  //
+  // Measured: with one jump this test passed on a cold Next cache and failed on
+  // every warm one, deterministically, with identical build output — the cold
+  // run being ~20s slower was the whole difference. Two small steps at the
+  // destination force a recomputation after the layout is final, and land the
+  // pointer back where the assertion claims it is.
+  await driver.moveBy(1, 0);
+  await driver.moveBy(-1, 0);
 
   // Polled, not read once. The collision observer resolves asynchronously after
   // a pointer move, so a single read immediately afterwards samples whatever
@@ -168,6 +192,30 @@ test("[acceptance] a descendant outranks an ancestor whose target covers it", as
   // Waiting cannot manufacture a pass: without depth priority the ancestor's
   // target is stably active for as long as the pointer stays here, so the poll
   // exhausts its budget and reports the ancestor.
+  // Diagnostic before the assertion: what droppables exist, which is active,
+  // and what priority each carries. Printed unconditionally so a failure comes
+  // with the state that produced it rather than a fourth hypothesis.
+  const snapshot = await page
+    .frameLocator("iframe")
+    .locator("body")
+    .evaluate(body => {
+      const owner = (el: Element) =>
+        el.parentElement?.closest("[data-nx-id]")?.getAttribute("data-nx-id") ??
+        "(none)";
+      const zones = [
+        ...body.querySelectorAll(".nx-pb-dropzone, .nx-pb-dropzone-empty"),
+      ].map(
+        z =>
+          `zone owner=${owner(z)} active=${z.getAttribute("data-active") ?? "-"}`
+      );
+      const blocks = [...body.querySelectorAll("[data-nx-id]")].map(
+        b =>
+          `node ${b.getAttribute("data-nx-id")} before=${b.classList.contains("nx-pb-drop-before")} append=${b.classList.contains("nx-pb-drop-append")}`
+      );
+      return [...blocks, ...zones].join("\n");
+    });
+  console.log("--- canvas state at assertion ---\n" + snapshot + "\n---");
+
   await expect
     .poll(() => activeTargetOwner(page), {
       timeout: 5_000,
