@@ -80,6 +80,59 @@ const TEMPLATE_ROLES = [
 ] as const;
 
 /**
+ * How many candidates to consider for one address. `search` matches the email
+ * column with LIKE, so a full address narrows to a handful of rows; this bound
+ * exists so a pathological match set cannot turn the lookup into a table scan.
+ */
+const EMAIL_MATCH_LIMIT = 200;
+
+/**
+ * The user with exactly this email, or null.
+ *
+ * Narrowed with `search` and then compared exactly, rather than paged. Two
+ * separate reasons, and the second is not obvious:
+ *
+ * 1. The users namespace does not filter. It forwards pagination, `search` and
+ *    the verification/password flags to its service and drops anything else, so
+ *    a `where` clause type-checks and returns the first arbitrary user. The
+ *    caller treats a result as "this account exists" and rewrites its roles, so
+ *    a wrong row here rewrites the wrong account.
+ * 2. Paging cannot be relied on to visit every user. `listUsers` applies LIMIT
+ *    and OFFSET after LEFT JOINing the role tables and then groups the rows by
+ *    user, while its total counts base users — so one user holding three roles
+ *    consumes three rows of the page, and a scan driven by `hasNext` can end
+ *    before reaching a later account.
+ *
+ * `search` is not sufficient on its own either: it also spans name and custom
+ * text fields, so a user whose display name contains someone else's address
+ * would match. The exact comparison below is what identifies the account;
+ * `search` only makes the candidate set small enough to read in one page.
+ *
+ * Comparison is case-insensitive because addresses are stored as entered while
+ * mail routing is not case-sensitive on the domain, so a re-run differing only
+ * in case must find the same account rather than create a second.
+ */
+async function findUserByEmail(
+  nextly: Nextly,
+  email: string
+): Promise<Record<string, unknown> | null> {
+  const target = email.toLowerCase();
+
+  const result = await nextly.users.find({
+    search: email,
+    limit: EMAIL_MATCH_LIMIT,
+  });
+
+  return (
+    result.items.find(
+      candidate =>
+        typeof candidate.email === "string" &&
+        candidate.email.toLowerCase() === target
+    ) ?? null
+  );
+}
+
+/**
  * Pick permission IDs appropriate for each role. Fetches the catalog of
  * auto-generated collection/single permissions (registered by Nextly
  * during collection sync) and slices it per role scope.
@@ -526,7 +579,16 @@ export async function seed({
     // collections path (which only knows about user-defined collections
     // like dc_posts) and throws "schema not found"; users is a core
     // collection with its own query namespace.
-    const existing = await nextly.users.findOne({ search: user.email });
+    // Matched on the returned rows rather than through a query filter. The users
+    // namespace forwards only pagination, `search` and the verification/password
+    // flags to its service, so a `where` clause is accepted by the type and then
+    // ignored — a lookup written that way returns the first arbitrary user, and
+    // this loop would go on to overwrite that account's roles.
+    //
+    // `search` is not the alternative: it spans name, email and custom text
+    // fields, so a user whose display name contains someone else's address would
+    // match. Only an exact comparison identifies the account.
+    const existing = await findUserByEmail(nextly, user.email);
     // Build role IDs array if seed-data declares one. Nextly's user
     // mutation service accepts `roles: string[]` in the create/update
     // payload and handles the `user_roles` join rows automatically.

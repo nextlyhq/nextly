@@ -224,6 +224,40 @@ export interface CollectionSyncResultWithValidation
 }
 
 /**
+ * The persisted shape of a collection's admin options.
+ *
+ * One implementation, because this projection is needed on two paths — the
+ * ordinary code-first sync and the temporary-collection conversion — and a
+ * hand-copied second copy drops whatever its author did not know about. That is
+ * not hypothetical: both copies omitted `defaultColumns`, so declaring it
+ * type-checked at the config surface and never reached the registry, leaving the
+ * admin to auto-select columns as though the setting did not exist.
+ *
+ * Exported so the projection can be asserted directly rather than only through
+ * a sync that needs a database.
+ */
+export function toPersistedAdmin(admin: CollectionConfig["admin"]) {
+  if (!admin) return undefined;
+  return {
+    group: admin.group,
+    icon: admin.icon,
+    hidden: admin.hidden,
+    useAsTitle: admin.useAsTitle,
+    defaultColumns: admin.defaultColumns,
+    isPlugin: admin.isPlugin,
+    disableCreate: admin.disableCreate,
+    pagination: admin.pagination
+      ? {
+          defaultLimit: admin.pagination.defaultLimit,
+          limits: admin.pagination.limits,
+        }
+      : undefined,
+    // Include custom components for plugins (e.g., custom Edit views)
+    components: admin.components,
+  };
+}
+
+/**
  * Orchestrates synchronization of code-first collections.
  *
  * This service coordinates between:
@@ -657,24 +691,7 @@ export class CollectionSyncService extends BaseService {
       // Forward the cache-revalidation config verbatim (no resolver — the
       // authored `{ tags?, disable? }` shape is persisted as-is).
       revalidate: config.revalidate,
-      admin: config.admin
-        ? {
-            group: config.admin.group,
-            icon: config.admin.icon,
-            hidden: config.admin.hidden,
-            useAsTitle: config.admin.useAsTitle,
-            isPlugin: config.admin.isPlugin,
-            disableCreate: config.admin.disableCreate,
-            pagination: config.admin.pagination
-              ? {
-                  defaultLimit: config.admin.pagination.defaultLimit,
-                  limits: config.admin.pagination.limits,
-                }
-              : undefined,
-            // Include custom components for plugins (e.g., custom Edit views)
-            components: config.admin.components,
-          }
-        : undefined,
+      admin: toPersistedAdmin(config.admin),
     }));
   }
 
@@ -870,23 +887,7 @@ export class CollectionSyncService extends BaseService {
         status: (config as { status?: boolean }).status === true,
         // Collection-level i18n master switch (mirrors `status`).
         localized: (config as { localized?: boolean }).localized === true,
-        admin: config.admin
-          ? {
-              group: config.admin.group,
-              icon: config.admin.icon,
-              hidden: config.admin.hidden,
-              useAsTitle: config.admin.useAsTitle,
-              isPlugin: config.admin.isPlugin,
-              pagination: config.admin.pagination
-                ? {
-                    defaultLimit: config.admin.pagination.defaultLimit,
-                    limits: config.admin.pagination.limits,
-                  }
-                : undefined,
-              // Include custom components for plugins (e.g., custom Edit views)
-              components: config.admin.components,
-            }
-          : undefined,
+        admin: toPersistedAdmin(config.admin),
         source: "code",
         locked: true,
         schemaHash: "",
