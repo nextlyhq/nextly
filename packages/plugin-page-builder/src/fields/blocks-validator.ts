@@ -162,12 +162,28 @@ export function validateBlocksValue(
     precise.push(...disallowedBlockIssues(doc, path, label, options));
     precise.push(...unserializableIssues(doc, path, label));
   }
-  const namesUnwritableKeys = precise.some(
+  // The precise walk names the offending KEYS, so the engine's document-level
+  // summary of the same defect is redundant once it has run. Both verdicts are
+  // superseded, because that walk reports every value the writer mishandles
+  // rather than only the ones it refuses: `bigint` is the unwritable case,
+  // while `function` and `symbol` are the lossy one, and all three come back as
+  // `UNSERIALIZABLE_VALUE` naming the key.
+  //
+  // Leaving either in place gives one defect two verdicts — a generic one and
+  // an actionable one — and spends the issue allowance twice on the same
+  // repair.
+  const SUPERSEDED_BY_PRECISE_KEYS: ReadonlySet<string> = new Set([
+    "document-unwritable",
+    "document-lossy",
+  ]);
+  const namesOffendingKeys = precise.some(
     issue => issue.code === "UNSERIALIZABLE_VALUE"
   );
 
   for (const issue of documentIssues) {
-    if (issue.code === "document-unwritable" && namesUnwritableKeys) continue;
+    if (SUPERSEDED_BY_PRECISE_KEYS.has(issue.code) && namesOffendingKeys) {
+      continue;
+    }
     issues.push({
       path,
       // The engine's codes are the documented repair vocabulary. Translating
