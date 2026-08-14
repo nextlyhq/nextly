@@ -671,24 +671,52 @@ async function main(argv) {
   // commit listing cannot report about itself: a truncated list looks exactly
   // like a complete one of that length.
   const pullObject = gh(["api", `repos/${repo}/pulls/${pr}`]);
-  const revisionOrder = new Map(
-    gh(["api", `repos/${repo}/pulls/${pr}/commits`, "--paginate", "--slurp"])
-      .flat()
-      .map((commit, index) => [commit.sha, index])
+  const commits = gh([
+    "api",
+    `repos/${repo}/pulls/${pr}/commits`,
+    "--paginate",
+    "--slurp",
+  ]).flat();
+  // A list POSITION is only a stand-in for ancestry while the history is
+  // linear. Once the pull request contains a merge, two commits on sibling
+  // sides have positions that compare while neither contains the other — so an
+  // approval with the higher index can "cover" an objection whose code the
+  // approved tree never held.
+  //
+  // Rather than infer ancestry from an order that cannot express it, the order
+  // is WITHHELD entirely: every rank lookup then misses, and the existing
+  // conservative path leaves identity as the only thing that clears an
+  // objection. Fewer clearances, never a wrong one — and no second notion of
+  // coverage to keep in step with the first.
+  //
+  // `parents` already rides along on the commits payload, so this costs no
+  // extra request.
+  const linearHistory = commits.every(
+    commit => (commit?.parents?.length ?? 1) <= 1
   );
+  if (!linearHistory) {
+    process.stderr.write(
+      "ci-verdict: merge commit in the pull request; revision ORDER withheld, " +
+        "so only an approval naming the objected revision clears it\n"
+    );
+  }
+  const revisionOrder = linearHistory
+    ? new Map(commits.map((commit, index) => [commit.sha, index]))
+    : undefined;
   // GitHub serves at most 250 commits from that endpoint and `--paginate`
   // cannot reach past it, returning a short list and no error. Compared against
   // the map's SIZE rather than the array's length, because a duplicate sha
   // would inflate the array while collapsing in the Map and make a truncated
   // history read as complete.
   const revisionOrderComplete =
+    revisionOrder !== undefined &&
     typeof pullObject.commits === "number" &&
     revisionOrder.size >= pullObject.commits;
   if (!revisionOrderComplete) {
     const total =
       typeof pullObject.commits === "number" ? pullObject.commits : "unknown";
     process.stderr.write(
-      `ci-verdict: commit order incomplete (${revisionOrder.size} of ${total}); ` +
+      `ci-verdict: commit order incomplete (${revisionOrder?.size ?? 0} of ${total}); ` +
         `an objection on a revision absent from it will NOT be cleared\n`
     );
   }
