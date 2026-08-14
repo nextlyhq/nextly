@@ -179,15 +179,29 @@ function withTitleValidator<T extends { name: string }>(
   );
 }
 
+// The shared fixture declares `author` as `type: "relation"`, but `normalizeRelationshipFields`
+// dispatches on `type === "relationship"`. A value under the shared spelling therefore reaches the
+// normaliser and is skipped, so an ordering assertion on the spy passes while the mechanism it
+// names never runs. Corrected here rather than in the shared helper, which other suites rely on.
+function asRelationshipFields<T extends { name: string; type?: string }>(
+  fields: T[]
+): T[] {
+  return fields.map(field =>
+    field.type === "relation" ? { ...field, type: "relationship" } : field
+  );
+}
+
 function collectionWithTitleValidator() {
   const base = createMockCollection();
+  const shape = <T extends { name: string; type?: string }>(fields: T[]) =>
+    asRelationshipFields(withTitleValidator(fields));
   return {
     ...base,
     schemaDefinition: {
       ...base.schemaDefinition,
-      fields: withTitleValidator(base.schemaDefinition.fields),
+      fields: shape(base.schemaDefinition.fields),
     },
-    fields: withTitleValidator(base.fields),
+    fields: shape(base.fields),
   };
 }
 
@@ -621,6 +635,12 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       expect(titleValidate).toHaveBeenCalled();
       expect(titleFieldAccess).toHaveBeenCalled();
       expect(normalizeRelationshipFieldsSpy).toHaveBeenCalled();
+      // The mechanism, not just the entry point: normalisation reduces the admin's object to its
+      // id, and the data object is mutated in place, so this reads what the call actually did.
+      const normalised = normalizeRelationshipFieldsSpy.mock.calls[0]?.[0] as
+        | Record<string, unknown>
+        | undefined;
+      expect(normalised?.author).toBe("user-9");
     });
 
     it("should execute beforeOperation hooks", async () => {
