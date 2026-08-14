@@ -1772,11 +1772,26 @@ function assertFitsCaps(
     ? measureBytes(before, Number.POSITIVE_INFINITY).bytes
     : limits.maxBytes;
   const size = measureBytes(result, ceiling);
+  // Unstorable and too large are different verdicts, and the message says which.
+  // A cyclic document, or one holding `undefined`, a function or a `Date`,
+  // cannot be written at any size — reporting that as an overage would tell an
+  // author their two-node page had outgrown a two-megabyte cap and send them
+  // deleting content that was never the problem.
+  //
+  // `exceeded` covers BOTH, which is why the refusal is one branch rather than
+  // two: a caller asking only whether the document fits still refuses one that
+  // has no stored form. Reading a separate flag for that is fail-open, and was
+  // measured to be — it silently stopped this guard refusing cyclic documents
+  // until a second check was added by hand.
   if (size.exceeded) {
     throw new OpError(
-      `${verb}: this would leave the document over ${String(ceiling)} bytes, ` +
-        `past the ${String(limits.maxBytes)} it may hold. The edit would ` +
-        `apply and then fail to save.`
+      size.reason === "unwritable"
+        ? `${verb}: this would leave the document holding a value that cannot ` +
+          `be stored — a cycle, or something JSON does not preserve. The ` +
+          `edit would apply and then fail to save.`
+        : `${verb}: this would leave the document over ${String(ceiling)} ` +
+          `bytes, past the ${String(limits.maxBytes)} it may hold. The edit ` +
+          `would apply and then fail to save.`
     );
   }
 }

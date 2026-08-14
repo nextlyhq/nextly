@@ -17,9 +17,17 @@ function deps(over: Record<string, unknown> = {}) {
     lockMode: "fail-fast" as const,
     reconcileCoreFn: vi.fn(async () => ({ changed: false })),
     runFileMigrationsFn: vi.fn(async () => 0),
-    // pass-through lock that just runs fn (so we test the core, not the lock)
-    withLock: async (_db: unknown, _d: unknown, fn: () => Promise<unknown>) =>
-      fn(),
+    // Pass-through lock that just runs fn (so we test the core, not the lock),
+    // in the real shape: the outcome is discriminated so a caller cannot
+    // confuse "returned undefined" with "never ran".
+    withLock: async (
+      _db: unknown,
+      _d: unknown,
+      fn: () => Promise<unknown>
+    ) => ({
+      ran: true as const,
+      value: await fn(),
+    }),
     ...over,
   };
 }

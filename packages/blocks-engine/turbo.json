@@ -1,0 +1,29 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "test": {
+      // One suite here reads this package's OWN emitted bundles, because the
+      // property it checks — what a published entry point pulls in — is a fact
+      // about the artifact rather than about the source. The root task depends
+      // on `^build`, which builds dependencies and not this package, and
+      // `dist/**` is not a root test input, so without this edge the suite
+      // either finds no `dist` or reads bundles produced before the change.
+      "dependsOn": ["$TURBO_EXTENDS$", "build"],
+      // `$TURBO_EXTENDS$` keeps the root inputs rather than restating them.
+      // `dist/**` is appended because those bundles are a real input to the
+      // suite, and a cached pass ignoring them would survive a change to what
+      // the bundler emits. `tsup.config.ts` decides which entry points exist
+      // at all, so a change there changes what the boundary suite is checking.
+      "inputs": ["$TURBO_EXTENDS$", "dist/**", "tsup.config.ts"]
+    },
+    "test:watch": {
+      // The same build edge as `test`: a watch run reads the same bundles, and
+      // a task inheriting only the root definition would start against
+      // whatever `dist` happened to be on disk.
+      "dependsOn": ["$TURBO_EXTENDS$", "build"],
+      "cache": false,
+      "persistent": true
+    }
+  }
+}

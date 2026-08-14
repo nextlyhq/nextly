@@ -75,7 +75,7 @@ function baseDeps(overrides: Record<string, unknown> = {}) {
         _db: unknown,
         _d: unknown,
         fn: () => Promise<T>
-      ): Promise<T> => fn(),
+      ): Promise<{ ran: true; value: T }> => ({ ran: true, value: await fn() }),
       ...overrides,
     },
   };

@@ -295,6 +295,24 @@ export interface CollectionAdminOptions {
   group?: string;
 
   /**
+   * Which fields the admin's entry list shows as columns, and in what order.
+   *
+   * Omitted, the list picks its own columns. Naming them is how a collection
+   * whose useful fields are not its first few becomes readable — a posts list
+   * is far more use showing status and publish date than the next two fields
+   * that happen to be declared.
+   *
+   * Names are field keys. A key that does not exist is ignored rather than
+   * erroring, so a rename leaves a shorter list rather than an unusable screen.
+   *
+   * This mirrors the same option in the visual schema
+   * (`schemas/_zod/ui-schema.ts`), which is what the admin has always read.
+   * Declaring it here lets a code-first collection reach a feature the two
+   * authoring paths were otherwise split on.
+   */
+  defaultColumns?: string[];
+
+  /**
    * Whether this collection is provided by a plugin.
    *
    * When `true`, the collection appears in the "Plugins" section of the sidebar

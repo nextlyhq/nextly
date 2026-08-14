@@ -21,7 +21,8 @@ export type DocumentFormatVersion = 1;
 export const DOCUMENT_FORMAT_VERSION: DocumentFormatVersion = 1;
 
 /**
- * What a stored builder document IS:
+ * What a stored builder document IS, and every legal `kind` for validation and
+ * exhaustive iteration:
  * - `page`      — an entry's blocks-field content
  * - `pattern`   — a copy-on-insert saved subtree (including full-page patterns)
  * - `component` — a linked, reusable definition with exposed props/slots/variants
@@ -31,22 +32,23 @@ export const DOCUMENT_FORMAT_VERSION: DocumentFormatVersion = 1;
  *
  * The enum is closed: an unknown kind is a validation error in strict mode and
  * preserved untouched in forgiving mode, the same policy as unknown block types.
+ *
+ * The LIST is the declaration and the type is derived from it, the way the
+ * binding vocabularies are. Written the other way round the two are independent
+ * declarations that happen to agree: removing an entry from the list leaves the
+ * type still permitting it, so `BlockDocument` accepts a kind the published
+ * schema and the generated parser both reject, and every test on both sides
+ * still passes. Deriving makes the format unable to be half-changed.
  */
-export type DocumentKind =
-  | "page"
-  | "pattern"
-  | "component"
-  | "region"
-  | "template";
-
-/** Every legal `kind`, for validation and exhaustive iteration. */
-export const DOCUMENT_KINDS: readonly DocumentKind[] = [
+export const DOCUMENT_KINDS = [
   "page",
   "pattern",
   "component",
   "region",
   "template",
-];
+] as const;
+
+export type DocumentKind = (typeof DOCUMENT_KINDS)[number];
 
 /**
  * Document-level settings. Deliberately minimal: SEO and publishing state are
@@ -167,7 +169,7 @@ interface BindingBase {
  */
 export type Binding =
   | (BindingBase & {
-      source?: "entry" | "item" | "site";
+      source?: Exclude<BindingSource, "single">;
       sourceKey?: never;
     })
   | (BindingBase & {
@@ -176,19 +178,116 @@ export type Binding =
       sourceKey: string;
     });
 
-export type BindingSource = "entry" | "item" | "single" | "site";
+/**
+ * Every legal binding source, as a runtime value.
+ *
+ * The list is the source of truth and `BindingSource` is derived from it, not
+ * the other way around. A consumer that must enumerate the sources — a schema,
+ * a picker, a generator — otherwise restates them as literals, and a restated
+ * list stays valid TypeScript after this one changes: adding a source here
+ * would leave the copy rejecting documents the engine accepts, with every test
+ * on both sides still passing. Deriving makes that divergence unrepresentable
+ * rather than merely discouraged.
+ */
+export const BINDING_SOURCES = ["entry", "item", "single", "site"] as const;
+
+export type BindingSource = (typeof BINDING_SOURCES)[number];
+
+/**
+ * Whether a string names a binding source.
+ *
+ * Takes `string` rather than the union: every caller is holding a value off a
+ * stored document, so a signature demanding the answer as its argument would be
+ * unusable at the only call sites that matter. The widening cast is confined
+ * here so no caller has to write one, which is what keeps the list from being
+ * copied for want of a predicate.
+ */
+export function isBindingSource(value: string): value is BindingSource {
+  return (BINDING_SOURCES as readonly string[]).includes(value);
+}
+
+/**
+ * The source that applies when a binding names none.
+ *
+ * Stated as a value for the same reason as the list: the schema and the
+ * resolver both need to know which source an omitted `source` means, and a
+ * default agreed in two places is a default in neither.
+ */
+export const DEFAULT_BINDING_SOURCE: BindingSource = "entry";
 
 /**
  * Structured, locale-aware formatting for bound values. Each variant maps to
  * the matching `Intl` formatter; `options` passes through to it. Formatting is
  * declarative data so documents stay language-neutral and agent-writable.
  */
-export type BindingFormat =
-  | { type: "date"; options?: Record<string, unknown> }
-  | { type: "number"; options?: Record<string, unknown> }
-  | { type: "currency"; currency: string; options?: Record<string, unknown> }
-  | { type: "relativeTime"; options?: Record<string, unknown> }
-  | { type: "list"; options?: Record<string, unknown> };
+/**
+ * The formats a bound value may be rendered with, and the extra field each one
+ * requires — the single declaration everything else is derived from.
+ *
+ * A runtime list and a union of shapes are two answers to "what formats
+ * exist", and a type-level equality check between them is a comparison rather
+ * than a derivation: it catches a divergence after both have been written,
+ * while still requiring two synchronized edits to add a format. The generator
+ * reads the list and engine consumers read the union, so between those two
+ * edits they describe different stored formats.
+ *
+ * Declaring the shapes once removes the second answer. The list is the map's
+ * keys, the union is built from its entries, and adding a format is one edit
+ * that cannot be half-made.
+ *
+ * A value of `null` means the variant carries no field of its own; `currency`
+ * is the only one that does, and the type of that field is what the union
+ * needs, not a description of it.
+ */
+export const BINDING_FORMAT_SHAPES = {
+  date: null,
+  number: null,
+  currency: { currency: "" as string },
+  relativeTime: null,
+  list: null,
+} as const;
+
+export type BindingFormatType = keyof typeof BINDING_FORMAT_SHAPES;
+
+/** Every legal `format.type`, as a runtime value. */
+export const BINDING_FORMAT_TYPES = Object.keys(
+  BINDING_FORMAT_SHAPES
+) as readonly BindingFormatType[] as readonly [
+  BindingFormatType,
+  ...BindingFormatType[],
+];
+
+/**
+ * Structured, locale-aware formatting for bound values. Each variant maps to
+ * the matching `Intl` formatter; `options` passes through to it. Formatting is
+ * declarative data so documents stay language-neutral and agent-writable.
+ *
+ * Built from {@link BINDING_FORMAT_SHAPES}: each key becomes a variant carrying
+ * its own required fields, so the union cannot name a format the list omits or
+ * omit one the list names.
+ */
+export type BindingFormat = {
+  [K in BindingFormatType]: {
+    type: K;
+    options?: Record<string, unknown>;
+  } & MutableFields<(typeof BINDING_FORMAT_SHAPES)[K]>;
+}[BindingFormatType];
+
+/**
+ * A shape entry's fields as a writable object type.
+ *
+ * `BINDING_FORMAT_SHAPES` is `as const` so the KEYS can drive
+ * {@link BindingFormatType}, and that same annotation makes every value
+ * `readonly`. Carried through untouched it would have narrowed the public
+ * union: `format.currency = "EUR"` on a variant narrowed to `currency` stopped
+ * compiling, which is a source-breaking change to a published type and has
+ * nothing to do with how the format is stored. The mapped type strips the
+ * modifier the const assertion added, leaving the fields as writable as they
+ * were before they were derived.
+ */
+type MutableFields<S> = S extends null
+  ? unknown
+  : { -readonly [K in keyof S]: S[K] };
 
 // ---------------------------------------------------------------------------
 // Visibility — entry-field conditions + per-breakpoint device visibility
@@ -224,14 +323,10 @@ export interface Condition {
  * Interactive states styles can target. A closed set: extending it after the
  * format freeze is a document-format migration, not an edit.
  */
-export type StyleState = "base" | "hover" | "focus" | "active";
+/** Derived from the list for the same reason as {@link DOCUMENT_KINDS}. */
+export const STYLE_STATES = ["base", "hover", "focus", "active"] as const;
 
-export const STYLE_STATES: readonly StyleState[] = [
-  "base",
-  "hover",
-  "focus",
-  "active",
-];
+export type StyleState = (typeof STYLE_STATES)[number];
 
 /**
  * A breakpoint id referencing the site-level breakpoint definitions (viewport

@@ -294,15 +294,26 @@ describe("validation scales linearly with document size", () => {
     MEASUREMENT_TIMEOUT_MS
   );
 
-  it("handles a document at the node ceiling", () => {
-    const doc = fiveThousandNodePage();
-    const issues = validate(doc, ctx);
-    // At exactly the cap the document is legal, so the size itself is not an
-    // issue; this asserts the engine completes rather than that it is silent.
-    expect(
-      issues.filter(issue => issue.code === "node-count-exceeded")
-    ).toEqual([]);
-  });
+  it(
+    "handles a document at the node ceiling",
+    () => {
+      const doc = fiveThousandNodePage();
+      const issues = validate(doc, ctx);
+      // At exactly the cap the document is legal, so the size itself is not an
+      // issue; this asserts the engine completes rather than that it is silent.
+      expect(
+        issues.filter(issue => issue.code === "node-count-exceeded")
+      ).toEqual([]);
+    },
+    // Given the same budget as the measurements above, for the reason stated
+    // there: what is asserted is COMPLETION, not speed, so the implicit 5 s
+    // default was a wall-clock threshold this test never chose. Building and
+    // validating five thousand nodes is fast — 26.8 ms locally, fastest of
+    // three — but a saturated worker runs this file more than twenty times
+    // slower, and a budget that survives an idle runner and fails a loaded one
+    // measures the machine rather than the engine.
+    MEASUREMENT_TIMEOUT_MS
+  );
 });
 
 describe("migration scales linearly with document size", () => {

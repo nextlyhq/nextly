@@ -600,11 +600,11 @@ export async function baselineCore(
     { ttlSeconds: deps.ttlSeconds }
   );
 
-  // `withMigrateLock` resolves without running its body only in "wait" mode,
-  // where another process is expected to have done the work. Adoption is never
-  // that: nobody else is going to baseline this database, so an empty result
-  // here would mean reporting success for a history that was never started.
-  if (result === undefined) {
+  // `withMigrateLock` reports `ran: false` only in "wait" mode. Adoption is
+  // never a case where someone else did the work: nobody else is going to
+  // baseline this database, so returning here would mean reporting success for
+  // a history that was never started.
+  if (!result.ran) {
     throw new NextlyError({
       code: "NEXTLY_BASELINE_LOCK_NOT_HELD",
       publicMessage:
@@ -612,7 +612,7 @@ export async function baselineCore(
         "Nothing was written; retry once no other schema operation is running.",
     });
   }
-  return result;
+  return result.value;
 }
 
 export async function runMigrateBaseline(

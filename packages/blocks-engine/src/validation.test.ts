@@ -14,7 +14,8 @@ import {
   VALIDATION_FIXTURES,
 } from "./validation.fixtures";
 import type { BlockTypeLookup } from "./validation";
-import { ISSUE_CODES, measureBytes, validate } from "./validation";
+import { measureBytes } from "./measure-bytes";
+import { ISSUE_CODES, validate } from "./validation";
 
 function lookup(types: string[]): BlockTypeLookup {
   const set = new Set(types);
@@ -565,7 +566,12 @@ describe("validation never throws on adversarial input", () => {
       issues = validate(doc, {
         breakpoints: FIXTURE_BREAKPOINTS,
         mode: "strict",
-        limits: { maxDepth: 12, maxNodes: 100, maxBytes: 1_000_000 },
+        // The byte cap is deliberately far out of reach. This test is about the
+        // NODE cap bounding the walk, and a forest of 500,000 children also
+        // outruns a 1 MB budget — so a byte limit near the document's real size
+        // decides the outcome before the node cap is consulted, and the
+        // assertion below would be reporting on a bound the test does not name.
+        limits: { maxDepth: 12, maxNodes: 100, maxBytes: 100_000_000 },
       });
     }).not.toThrow();
     expect(issues.some(i => i.code === "node-count-exceeded")).toBe(true);
@@ -1397,7 +1403,17 @@ describe("style keys inherited from a prototype", () => {
       hover: { base: { nope: "1px" } },
     }) as Record<string, unknown>;
     styles.base = { base: { display: "block" } };
-    expect(codesFor(styles)).toEqual(["invalid-style-values"]);
+    // TWO issues now, and both are true. `invalid-style-values` names the
+    // specific defect; `document-unwritable` is the document-level statement
+    // that what would be stored is not what was validated, reached first
+    // because a custom prototype makes this not a JSON value at all. The second
+    // is additional information rather than noise: a caller reading only the
+    // first error still learns the document cannot be stored, which is the fact
+    // that decides whether to save.
+    expect(codesFor(styles)).toEqual([
+      "document-unwritable",
+      "invalid-style-values",
+    ]);
   });
 
   it("are refused at the breakpoint level too", () => {
@@ -1407,7 +1423,12 @@ describe("style keys inherited from a prototype", () => {
       tablet: { nope: "1px" },
     }) as Record<string, unknown>;
     byBreakpoint.base = { display: "block" };
-    expect(codesFor({ base: byBreakpoint })).toEqual(["invalid-style-values"]);
+    // Both, for the same reason as the case above: the specific defect plus
+    // the document-level statement that it has no stored form.
+    expect(codesFor({ base: byBreakpoint })).toEqual([
+      "document-unwritable",
+      "invalid-style-values",
+    ]);
   });
 
   it("are not read off a polluted Object.prototype", () => {
@@ -1884,6 +1905,13 @@ describe("measureBytes agrees with the serializer on hooks and cycles", () => {
     // this was already the answer, because each revisit added bytes until the
     // cap stopped the walk; the cycle set is what makes the exact-count mode
     // reach it instead of never terminating.
+    //
+    // Reported through `reason` rather than through a second flag. Both say a
+    // cycle has no stored form at any size; the difference is that `exceeded`
+    // remains the single "refused" boolean, so a caller asking only whether the
+    // document fits keeps refusing this one. Two independent flags read as
+    // tidier and are fail-OPEN — measured, that shape silently stopped the op
+    // store refusing cyclic documents until the check was added by hand.
     expect(measureBytes(value, Number.POSITIVE_INFINITY)).toEqual({
       bytes: expect.any(Number) as number,
       exceeded: true,
@@ -1934,28 +1962,42 @@ describe("measureBytes says WHY a value cannot be stored", () => {
     });
   });
 
-  it("reports whichever refusal the bounded walk reaches first", () => {
+  it("reports over-limit ahead of unwritable when a document is both", () => {
     // A document can be BOTH unwritable and over the limit, and one `reason`
-    // can only carry one of them. Which one surfaces is decided by traversal:
-    // the walk returns at the FIRST refusal it reaches and never looks further,
-    // because establishing that no unwritable value exists anywhere would mean
-    // reading the whole document — exactly the unbounded pass this counter
-    // exists to avoid.
+    // can only carry one of them. This used to be decided by traversal: the
+    // walk returned at the first refusal it reached, and because the stack is
+    // LIFO that made the answer depend on DECLARATION ORDER — the same two keys
+    // swapped gave opposite reasons, which nothing outside the walk could
+    // predict.
     //
-    // The traversal is a LIFO stack, so an object's LAST entry is visited
-    // first. That makes the answer depend on declaration order, which is
-    // pinned here as the measured behaviour rather than defended as a policy:
-    // nothing outside this walk can predict it, so no caller may rely on which
-    // reason arrives for a document that is both.
-    const reached = measureBytes({ pad: "x".repeat(500), bad: 1n }, 100);
-    const notReached = measureBytes({ bad: 1n, pad: "x".repeat(500) }, 100);
+    // Order is no longer what decides it. Over-limit is reported first, and the
+    // reason is not aesthetic: the byte verdict is what gates the precise
+    // validation walk downstream, so a document that loses it to the other
+    // cause gets an UNBOUNDED traversal — the bound defeated by key order
+    // alone.
+    //
+    // What this does NOT do is make precedence total, and nothing bounded can:
+    // proving no unwritable value exists anywhere means reading the whole
+    // document, which is the pass this counter exists to avoid. An unwritable
+    // value inside a subtree the cap stopped us entering is still unreported.
+    const padFirst = measureBytes({ pad: "x".repeat(500), bad: 1n }, 100);
+    const badFirst = measureBytes({ bad: 1n, pad: "x".repeat(500) }, 100);
 
-    expect(reached.exceeded && reached.reason).toBe("unwritable");
-    expect(notReached.exceeded && notReached.reason).toBe("over-limit");
+    expect(padFirst.exceeded && padFirst.reason).toBe("over-limit");
+    expect(badFirst.exceeded && badFirst.reason).toBe("over-limit");
 
-    // What a caller MAY rely on, and the reason both spellings are safe to
-    // reject on: either way the document is refused.
-    expect([reached.exceeded, notReached.exceeded]).toEqual([true, true]);
+    // Unwritable is still reported on its own, so the ordering above is a
+    // precedence rule rather than the reason being unreachable.
+    const small = measureBytes({ bad: 1n }, 1_000);
+    expect(small.exceeded && small.reason).toBe("unwritable");
+
+    // And either way the document is refused, which is what a caller asking
+    // only "does this fit" relies on.
+    expect([padFirst.exceeded, badFirst.exceeded, small.exceeded]).toEqual([
+      true,
+      true,
+      true,
+    ]);
   });
 
   it("writes an object that only CLAIMS to be a BigInt", () => {
@@ -1974,8 +2016,18 @@ describe("measureBytes says WHY a value cannot be stored", () => {
     expect(written).toBe('{"v":{"x":1}}');
     expect(() => JSON.stringify({ v: Object(1n) })).toThrow(TypeError);
 
-    expect(measureBytes({ v: spoof }, 1_000)).toEqual({
-      bytes: Buffer.byteLength(written, "utf8"),
+    // Refused, but NOT as a BigInt: the symbol-keyed property is one JSON
+    // drops, so the document would not survive storage unchanged.
+    const measuredSpoof = measureBytes({ v: spoof }, 1_000);
+    expect(measuredSpoof.exceeded).toBe(true);
+
+    // THE CONTROL THAT MATTERS. The same object without the symbol key is
+    // accepted and measured exactly as the writer emits it, so the tag
+    // contributed nothing to the refusal above — which is what would break if
+    // classification ever moved back to `Object.prototype.toString`.
+    const plain = { x: 1 };
+    expect(measureBytes({ v: plain }, 1_000)).toEqual({
+      bytes: Buffer.byteLength(JSON.stringify({ v: plain }), "utf8"),
       exceeded: false,
     });
   });
@@ -2013,8 +2065,13 @@ describe("measureBytes reads nothing the writer would not", () => {
     const measured = measureBytes({ v: watched }, 1_000);
 
     expect(reads, "the tag getter ran during measurement").toBe(0);
-    // And the verdict still matches the writer, which stores it.
-    expect(measured.exceeded).toBe(false);
+    // The verdict is a REFUSAL, and not for the reason this test guards. The
+    // writer stores the object, but it stores it WITHOUT the symbol-keyed
+    // property, and a member JSON drops is the same class as `undefined` and a
+    // function — which this counter refuses so the stored document cannot
+    // differ from the one that was checked. The control below is what shows
+    // the tag played no part.
+    expect(measured.exceeded).toBe(true);
   });
 
   it("does not raise when a tag getter throws, because the writer stores it", () => {
@@ -2030,7 +2087,9 @@ describe("measureBytes reads nothing the writer would not", () => {
     // or raising here would be a disagreement with the thing being counted.
     expect(JSON.stringify({ v: hostile })).toBe('{"v":{"x":1}}');
     expect(() => measureBytes({ v: hostile }, 1_000)).not.toThrow();
-    expect(measureBytes({ v: hostile }, 1_000).exceeded).toBe(false);
+    // Refused for carrying a symbol-keyed property, which JSON drops — never
+    // by running the getter, which is the property this test exists for.
+    expect(measureBytes({ v: hostile }, 1_000).exceeded).toBe(true);
   });
 
   it("still refuses a boxed BigInt that carries a tag of its own", () => {
@@ -2082,5 +2141,67 @@ describe("measureBytes probes a value only where the writer does", () => {
 
     expect(() => JSON.stringify({ v: disguised })).toThrow(TypeError);
     expect(measureBytes({ v: disguised }, 1_000).exceeded).toBe(true);
+  });
+});
+
+describe("an unstorable document does not have its values parsed", () => {
+  it("skips per-value work when the byte pass could not measure the document", () => {
+    // The byte precondition REFUSES to invoke an accessor, so it never learns
+    // how large that field is. The per-value work below reaches the same field
+    // by ordinary property access, runs the getter, and parses everything it
+    // returns — so the one document whose size is UNKNOWN was the one whose
+    // values were parsed in full.
+    //
+    // Counting getter invocations is what separates the implementations: both
+    // report the document invalid, and only one of them reads the megabytes.
+    let reads = 0;
+    const node: Record<string, unknown> = {
+      id: "n1",
+      type: "core/text",
+      version: 1,
+      props: {},
+    };
+    Object.defineProperty(node, "styles", {
+      get() {
+        reads += 1;
+        // A token reference the lookup below does NOT know, which is what
+        // `validateStyleValues` reports — so this fixture produces a style
+        // issue when parsed and none when skipped. Without that, the assertion
+        // is satisfied by the fixture rather than by the behaviour.
+        return { base: { base: { color: { $token: "no.such.token" } } } };
+      },
+      enumerable: true,
+      configurable: true,
+    });
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [node],
+    });
+
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+      tokens: { kindOf: () => undefined },
+    });
+
+    // Refused, and refused for the right reason.
+    expect(issues.some(i => i.code === "document-unwritable")).toBe(true);
+
+    // The style tree behind the accessor is never PARSED, which is the
+    // unbounded work: every value builds an AST apiece, and the byte pass
+    // refused to measure this field so nothing bounded it.
+    expect(
+      issues.some(
+        i => i.code === "invalid-style-values" || i.code === "unknown-token"
+      )
+    ).toBe(false);
+
+    // What this does NOT do, stated rather than implied: the property is still
+    // READ, so the getter still runs. Skipping the read entirely would mean not
+    // validating the node's shape at all, and a document is refused on its
+    // shape long before its style values matter. The exposure that closes is
+    // the parsing of whatever the getter returns, not the single invocation.
+    expect(reads).toBeGreaterThan(0);
   });
 });

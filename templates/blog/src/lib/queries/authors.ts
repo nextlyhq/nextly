@@ -29,6 +29,7 @@ import { getNextly } from "nextly";
 import { cachedFind, nextlyTags } from "nextly/runtime";
 import nextlyConfig from "@nextly-config";
 
+import { readOptionalString, toAuthor } from "./coerce";
 import type { Author } from "./types";
 
 /**
@@ -38,20 +39,6 @@ import type { Author } from "./types";
  * fresher author pages at a higher DB cost.
  */
 const AUTHOR_REVALIDATE_SECONDS = 3600;
-
-/**
- * Shape the user doc into the public Author projection. We never return
- * email, password, or role fields - those stay server-side.
- */
-function toAuthor(doc: Record<string, unknown>): Author {
-  return {
-    id: doc.id as string,
-    name: (doc.name as string | undefined) ?? "",
-    slug: (doc.slug as string | undefined) ?? "",
-    bio: (doc.bio as string | null | undefined) ?? null,
-    avatarUrl: (doc.avatarUrl as string | null | undefined) ?? null,
-  };
-}
 
 export async function getAuthorBySlug(slug: string): Promise<Author | null> {
   try {
@@ -63,9 +50,11 @@ export async function getAuthorBySlug(slug: string): Promise<Author | null> {
         // (typically <50) so the full page fetch is cheap.
         const nextly = await getNextly({ config: nextlyConfig });
         const result = await nextly.users.find({ limit: 1000 });
-        const match = (
-          result.items as unknown as Record<string, unknown>[]
-        ).find(d => (d.slug as string | undefined) === slug);
+        // User carries an index signature for its extension fields, so a user
+        // doc is already readable as a record — no cast needed to narrow it.
+        const match = result.items.find(
+          d => readOptionalString(d, "slug") === slug
+        );
         return match ? toAuthor(match) : null;
       },
       {
@@ -89,8 +78,8 @@ export async function getAllAuthorSlugs(): Promise<string[]> {
       async () => {
         const nextly = await getNextly({ config: nextlyConfig });
         const result = await nextly.users.find({ limit: 1000 });
-        return (result.items as unknown as Record<string, unknown>[])
-          .map(d => d.slug as string | undefined)
+        return result.items
+          .map(d => readOptionalString(d, "slug"))
           .filter((s): s is string => typeof s === "string" && s.length > 0);
       },
       {
