@@ -856,13 +856,17 @@ export async function dragToInsetInZone(
       ? travelledPx + INSET_APPROACH_PX
       : maxSteps * INSET_APPROACH_PX;
 
-  // The edge is measured until two consecutive measurements AGREE, because
-  // arriving in a zone changes its geometry: the canvas gives a drop zone a
-  // 6px height and a 3px margin while a drag is in flight, and a 4px margin
-  // once it is the active target — so entering one moves its own edge and
-  // every edge below it. A single reading taken across that transition is
-  // stale by the time the depth is walked, and the returned depth would be
-  // measured from a boundary that has since moved.
+  // The edge is measured until two consecutive measurements AGREE, because a
+  // canvas may RESTYLE a zone at the moment it becomes the active target, and
+  // restyling it moves its own edge and every edge below it. A single reading
+  // taken across that transition is stale by the time the depth is walked, and
+  // the returned depth would be measured from a boundary that has since moved.
+  //
+  // Stated as the property rather than as the rule that currently produces it.
+  // This driver is a vocabulary several canvases implement, so the specific
+  // styling is one canvas's business and is free to change — a canvas that
+  // makes its zones geometrically constant simply settles on the first two
+  // measurements and pays nothing for this loop.
   //
   // Measured rather than waited out. A sleep sized to the 100ms transition
   // would put wall-clock dependence into the one control a band assertion

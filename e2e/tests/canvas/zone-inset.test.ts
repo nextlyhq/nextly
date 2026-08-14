@@ -189,11 +189,14 @@ test("a depth of zero puts the pointer on the first row inside the band", async 
 /**
  * A canvas whose zone edge MOVES the first `shifts` times it is entered.
  *
- * The real one does this: a drop zone is 6px tall with a 3px margin while a
- * drag is in flight and takes a 4px margin once it is the ACTIVE target, so
- * arriving in a zone moves its own edge and every edge below it. A depth
- * measured across that transition is measured from a boundary that has since
- * moved.
+ * A real canvas does this whenever becoming the active target changes a zone's
+ * box: the edge moves, and so does every edge below it, so a depth measured
+ * across that transition is measured from a boundary that has since moved.
+ *
+ * The fixture asserts the PROBE's behaviour, not any canvas's styling. A canvas
+ * whose zones never move is a canvas this case cannot arise on, which makes the
+ * fixture useless as a description of that canvas and still correct as a
+ * description of what the probe must do when it does arise.
  */
 function shiftingEdgeCanvas(
   band: Band,
@@ -302,9 +305,13 @@ test("keeps an edge-moving refusal inside the zone it reports, going DOWN", asyn
 test("enters a zone thinner than one unit of the approach budget", async () => {
   // Every other band in this file is at least 8px tall, so none of them can be stepped over and
   // none could have caught this. A 3px band is what a 6 CSS-pixel drop zone becomes at the 0.5
-  // canvas scale the suite supports, and it starts at 51 so it does not begin on a multiple of the
-  // old 4px stride — the arrangement that put an entire zone between two commands.
-  const canvas = bandedCanvas([{ zone: 2, from: 51, to: 54 }]);
+  // canvas scale the suite supports.
+  //
+  // The BOUNDS are the experiment, not the width. Walking from 0 in 4px strides samples 52 and 56
+  // and nothing between, so `[53, 56)` falls entirely into that gap while a band merely 3px wide
+  // — `[51, 54)`, say — still contains 52 and is found by the coarse walk anyway. A control at
+  // those bounds passes with and without the fix, which is how this one was first written.
+  const canvas = bandedCanvas([{ zone: 2, from: 53, to: 56 }]);
 
   const result = await dragToInsetInZone(canvas, 0);
 
