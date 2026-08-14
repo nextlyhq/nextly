@@ -72,9 +72,48 @@ export interface RunProdMigrationsArgs {
   migrateCore?: MigrateCoreLike;
 }
 
+/**
+ * Set once this process has refused to serve, and never cleared.
+ *
+ * The refusal has to OUTLIVE the request that raised it. Both production entry
+ * points run migrations inside `if (!isServicesRegistered())`, and by the time
+ * this throws, `registerServices()` has already marked DI registered — so the
+ * next request skips migrations entirely and serves the schema this process was
+ * refusing to serve. Throwing once only fails one request.
+ *
+ * On `globalThis` for the same reason the boot plugin list is: Next.js and
+ * Turbopack can evaluate this module in more than one server graph, and a
+ * refusal recorded in one copy has to be seen by the other.
+ *
+ * Never cleared, deliberately. Nothing in the process can establish the schema
+ * is now correct — the migration it would need to observe is the one that did
+ * not run. A restart is the recovery, and that is what an orchestrator does.
+ */
+const globalForBootMigrations = globalThis as unknown as {
+  __nextly_bootMigrationsRefused?: NextlyError;
+};
+
+/** The refusal, built in one place so its code and wording cannot drift. */
+function bootMigrationsNotRun(): NextlyError {
+  return new NextlyError({
+    code: "NEXTLY_BOOT_MIGRATIONS_NOT_RUN",
+    publicMessage:
+      "Boot migrations did not run: the migrate lock was still held after " +
+      "waiting. Refusing to start rather than serve against a schema that may " +
+      "not match this build. This usually resolves on restart once the other " +
+      "instance finishes; if the lock is stale, clear it with " +
+      "`nextly migrate --force-unlock`.",
+  });
+}
+
 export async function runProdMigrationsIfEnabled(
   args: RunProdMigrationsArgs
 ): Promise<void> {
+  // Before the environment checks, because a process that has already refused
+  // must keep refusing regardless of how the next caller reaches this.
+  const refused = globalForBootMigrations.__nextly_bootMigrationsRefused;
+  if (refused) throw refused;
+
   if (process.env.NODE_ENV !== "production") return;
   if (args.config.db.runMigrationsOnBoot !== true) return;
 
@@ -161,15 +200,7 @@ export async function runProdMigrationsIfEnabled(
     // finished. A genuinely stuck lock needs `nextly migrate --force-unlock`,
     // which is the intervention the situation actually calls for.
     if (!ran) {
-      throw new NextlyError({
-        code: "NEXTLY_BOOT_MIGRATIONS_NOT_RUN",
-        publicMessage:
-          "Boot migrations did not run: the migrate lock was still held after " +
-          "waiting. Refusing to start rather than serve against a schema that " +
-          "may not match this build. This usually resolves on restart once the " +
-          "other instance finishes; if the lock is stale, clear it with " +
-          "`nextly migrate --force-unlock`.",
-      });
+      throw bootMigrationsNotRun();
     }
     logger.info(`[Nextly] Boot migrations complete (${applied} applied).`);
   } catch (err) {
@@ -177,12 +208,25 @@ export async function runProdMigrationsIfEnabled(
     // recoverable by running `nextly migrate` against a database the app can
     // still usefully serve; this one means the app does not know what it is
     // serving, which is the case the refusal exists for.
+    // Two fatal shapes, and MySQL is why the second is here: `withMigrateLock`
+    // reports a busy lock as `ran: false` on Postgres but THROWS
+    // `NEXTLY_MIGRATE_LOCK_BUSY` on MySQL when the wait expires mid-flight.
+    // Rethrowing only the first would have left MySQL serving the unmigrated
+    // schema this whole change exists to prevent.
     if (
       err instanceof NextlyError &&
-      err.code === "NEXTLY_BOOT_MIGRATIONS_NOT_RUN"
+      (err.code === "NEXTLY_BOOT_MIGRATIONS_NOT_RUN" ||
+        err.code === "NEXTLY_MIGRATE_LOCK_BUSY")
     ) {
-      logger.error(`[Nextly] ${err.publicMessage}`);
-      throw err;
+      const fatal =
+        err.code === "NEXTLY_BOOT_MIGRATIONS_NOT_RUN"
+          ? err
+          : bootMigrationsNotRun();
+      // Recorded BEFORE rethrowing, so the next request through either entry
+      // point refuses too rather than finding services already registered.
+      globalForBootMigrations.__nextly_bootMigrationsRefused = fatal;
+      logger.error(`[Nextly] ${fatal.publicMessage}`);
+      throw fatal;
     }
     logger.error(
       `[Nextly] Boot migrations failed: ${
