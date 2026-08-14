@@ -221,7 +221,9 @@ export function report({
   blocking,
   advisory = [],
 }) {
-  const required = [...(blocking ?? []), ...advisory];
+  // De-duplicated: a login named in both lists would otherwise be reported
+  // missing twice, which reads as two reviewers rather than one.
+  const required = [...new Set([...(blocking ?? []), ...advisory])];
   const missing = missingReviewers(reviews, head, required);
   const unresolved = unresolvedThreads(threads, advisory);
   const limited = rateLimited(issueComments);
