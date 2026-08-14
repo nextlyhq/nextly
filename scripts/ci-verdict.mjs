@@ -717,199 +717,134 @@ async function main(argv) {
   // The head is re-read AFTER the other queries. A push landing mid-run would
   // otherwise be judged against the revision captured at the start, so a review
   // covering the old head could clear a revision nobody has seen.
-  const headNow = headOf();
-  if (headNow !== head) {
-    process.stderr.write(
-      `ci-verdict: head moved ${head} -> ${headNow}; re-run\n`
-    );
-    return 2;
-  }
-
-  // Review state mutates without moving the head, so the head check alone
-  // cannot see a thread opened or unresolved mid-run. The verdict below is
-  // computed from the first snapshot, and a snapshot known to be stale must not
-  // be reported as clean.
-  // Compared by CONTENT, not by count. A body-only CHANGES_REQUESTED arriving
-  // after the reviews query, or an existing thread being unresolved, leaves the
-  // number of rows unchanged — so a length check accepts a snapshot that has
-  // already gone stale, and only ever catches the shape of change it was
-  // written for.
-  // Issue comments are in the snapshot because the rate-limit marker is EDITED
-  // IN PLACE: a blocking reviewer can add or remove it without any review being
-  // submitted and without the head moving, so every other check here stays
-  // identical while the verdict it feeds flips.
-  const reviewsNow = gh([
-    "api",
-    `repos/${repo}/pulls/${pr}/reviews`,
-    "--paginate",
-    "--slurp",
-  ]).flat();
-  const issueCommentsNow = gh([
-    "api",
-    `repos/${repo}/issues/${pr}/comments`,
-    "--paginate",
-    "--slurp",
-  ]).flat();
-  if (
-    fingerprint(reviews, threads, issueComments) !==
-    fingerprint(reviewsNow, readThreads(), issueCommentsNow)
-  ) {
-    process.stderr.write("ci-verdict: review state changed mid-run; re-run\n");
-    return 2;
-  }
-
-  // The head is checked again AFTER that comparison, because the comparison
-  // itself performs several requests. A push landing during them moves the head
-  // without changing any review state, so the fingerprints match and the
-  // verdict would otherwise describe a revision that is no longer current.
-  if (headOf() !== head) {
-    process.stderr.write("ci-verdict: head moved during the recheck; re-run\n");
-    return 2;
-  }
-
-  // A merged pull request keeps a branch that can still be pushed to, and
-  // GitHub's own `headRefOid` freezes at the revision that merged. Commits
-  // after that point are in neither, so they are counted here rather than left
-  // to be noticed.
-  // A branch that was force-pushed, deleted or restored cannot certify its own
-  // tail: resetting it back to the merged head leaves an empty range that is
-  // indistinguishable from a branch that never advanced, which is precisely the
-  // tail this check exists to find. Refuse rather than report zero.
-  const rewriteEvents = () =>
-    gh([
+  // EVERY volatile input, read together and compared as one value.
+  //
+  // Ordering cannot close this, and three successive attempts to order it are
+  // the evidence: each fix made some read last, and whatever was added after it
+  // became the new gap. The head, the lifecycle, the reviews, the threads, the
+  // issue comments and the rewrite events each change without moving any of the
+  // others, so a sequence of individual checks always leaves the earliest ones
+  // unverified at the moment the verdict is computed.
+  //
+  // Requiring two CONSECUTIVE observations to agree removes the ordering
+  // question rather than answering it: the snapshot the verdict is computed
+  // from is bracketed by an identical one taken after it, so nothing the
+  // verdict depends on changed across the window in which it was decided.
+  const snapshot = () => {
+    const live = gh([
+      "pr",
+      "view",
+      pr,
+      "--repo",
+      repoArg,
+      "--json",
+      "state,headRefOid",
+    ]);
+    const rv = gh([
       "api",
+      `repos/${repo}/pulls/${pr}/reviews`,
       "--paginate",
       "--slurp",
-      `repos/${repo}/issues/${pr}/timeline?per_page=100`,
-    ])
-      .flat()
-      .filter(event =>
-        [
-          "head_ref_force_pushed",
-          "head_ref_deleted",
-          "head_ref_restored",
-        ].includes(event?.event)
-      ).length;
+    ]).flat();
+    const ic = gh([
+      "api",
+      `repos/${repo}/issues/${pr}/comments`,
+      "--paginate",
+      "--slurp",
+    ]).flat();
+    const th = readThreads();
+    return {
+      head: headOf(),
+      state: live.state,
+      mergedHead: live.headRefOid,
+      reviews: rv,
+      threads: th,
+      issueComments: ic,
+      // A force-push away from a revision and back leaves every SHA identical
+      // while recording an event, so the count belongs IN the snapshot rather
+      // than beside it.
+      rewrites: live.state === "MERGED" ? rewriteEvents() : 0,
+    };
+  };
 
-  // Only a MERGED pull request has a tail worth screening. Closed-without-
-  // merging is settled by the lifecycle alone, so running the rewrite screen
-  // there can refuse as NOT CHECKABLE a state that was never in question.
-  let rewritten = 0;
-  if (meta.state === "MERGED") {
-    rewritten = rewriteEvents();
-    if (rewritten > 0) {
-      process.stderr.write(
-        `ci-verdict: ${rewritten} history-rewrite event(s); tail NOT CHECKABLE\n`
-      );
-      return 2;
+  const stamp = s =>
+    JSON.stringify([
+      s.head,
+      s.state,
+      s.mergedHead,
+      s.rewrites,
+      fingerprint(s.reviews, s.threads, s.issueComments),
+    ]);
+
+  // Bounded, because a repository under continuous activity would otherwise
+  // retry forever. Exhausting the attempts is a refusal to answer rather than a
+  // verdict: the state genuinely would not hold still.
+  const STABILITY_ATTEMPTS = 3;
+  let observed = snapshot();
+  let settled = false;
+  for (let attempt = 0; attempt < STABILITY_ATTEMPTS; attempt += 1) {
+    const again = snapshot();
+    if (stamp(observed) === stamp(again)) {
+      settled = true;
+      break;
     }
+    observed = again;
   }
-
-  let stranded = 0;
-  if (meta.state === "MERGED" && meta.headRefOid && meta.headRefOid !== head) {
-    // Fetched from the remote that HAS it: a fork's head is not on `origin`,
-    // so asking the base repository throws before the count can be taken.
-    // BOTH ends of the range. The workflow checks out shallow, and after a
-    // squash the merged head is commonly absent locally — especially for a
-    // fork — so fetching only the current tip leaves `rev-list` failing on an
-    // unknown revision instead of reporting the candidates.
-    execFileSync("git", ["fetch", headRemote, head, meta.headRefOid], {
-      stdio: "ignore",
-    });
-
-    stranded = execFileSync(
-      "git",
-      ["rev-list", "--count", `${meta.headRefOid}..${head}`],
-      { encoding: "utf8" }
-    ).trim();
-    stranded = Number(stranded) || 0;
-  }
-
-  // Outside the range block deliberately. When the branch has NOT advanced the
-  // work above is skipped, and that is exactly the case a push landing during
-  // the timeline request turns into a false `ALREADY MERGED` — the condition
-  // that would have caught it was evaluated from a read taken before the push.
-  // The state is re-read for the same reason: a pull request closed mid-run
-  // leaves every SHA and fingerprint identical, so nothing else here can see
-  // it, and the verdict would be computed from a lifecycle that has changed.
-  const settled = gh([
-    "pr",
-    "view",
-    pr,
-    "--repo",
-    repoArg,
-    "--json",
-    "state,headRefOid",
-  ]);
-  if (headOf() !== head || settled.state !== meta.state) {
+  if (!settled) {
     process.stderr.write(
-      "ci-verdict: head or pull-request state changed mid-run; re-run\n"
+      `ci-verdict: state changed on every one of ${STABILITY_ATTEMPTS} reads; re-run\n`
     );
     return 2;
   }
 
-  // The rewrite evidence is re-read AFTER the final ref observation, because a
-  // force-push away from `head` and back to it leaves every SHA identical while
-  // recording an event that makes the tail uncheckable. An empty range from a
-  // mutable ref is not proof that nothing was there — it is proof that nothing
-  // is there NOW, and the timeline is the only record that the ref moved.
-  if (meta.state === "MERGED" && rewriteEvents() !== rewritten) {
+  if (observed.head !== head || observed.state !== meta.state) {
+    process.stderr.write(
+      "ci-verdict: head or lifecycle moved since the first read; re-run\n"
+    );
+    return 2;
+  }
+  if (meta.state === "MERGED" && observed.rewrites !== rewritten) {
     process.stderr.write(
       "ci-verdict: branch history rewritten mid-run; tail NOT CHECKABLE\n"
     );
     return 2;
   }
 
-  // THE LAST READ BEFORE THE VERDICT, and last on purpose. Every earlier
-  // consistency check is followed by more requests, and each is a window in
-  // which the head can move while nothing else changes — a plain fast-forward
-  // push during the timeline request creates no rewrite event, alters no
-  // review, and leaves a stale zero-candidate range reading as ALREADY MERGED.
-  if (headOf() !== head) {
-    process.stderr.write(
-      "ci-verdict: head moved before the verdict was emitted; re-run\n"
-    );
-    return 2;
-  }
-
-  // The REVIEW evidence is re-read last, because it is what the verdict is made
-  // of and every check between the earlier snapshot and here reads something
-  // else. A blocking reviewer submitting `CHANGES_REQUESTED`, opening a thread
-  // or unresolving one in that window moves no ref and changes no lifecycle, so
-  // each of those checks passes and the verdict would be computed from evidence
-  // already known to be stale. Compared by the same fingerprint, so a change
-  // that leaves every count identical is still caught.
+  // Counted from the SETTLED snapshot rather than from the first read, so the
+  // range is taken between two values the run has confirmed did not move.
+  // A merged pull request keeps a branch that can still be pushed to while
+  // GitHub freezes its `headRefOid` at the revision that merged, so commits
+  // after that point are in neither and would otherwise go unnoticed.
+  let stranded = 0;
   if (
-    fingerprint(reviews, threads, issueComments) !==
-    fingerprint(
-      gh([
-        "api",
-        `repos/${repo}/pulls/${pr}/reviews`,
-        "--paginate",
-        "--slurp",
-      ]).flat(),
-      readThreads(),
-      gh([
-        "api",
-        `repos/${repo}/issues/${pr}/comments`,
-        "--paginate",
-        "--slurp",
-      ]).flat()
-    )
+    meta.state === "MERGED" &&
+    observed.mergedHead &&
+    observed.mergedHead !== head
   ) {
-    process.stderr.write(
-      "ci-verdict: review state changed before the verdict was emitted; re-run\n"
-    );
-    return 2;
+    // Both ends fetched, from the remote that HAS them: the workflow checks out
+    // shallow and after a squash the merged head is commonly absent locally.
+    execFileSync("git", ["fetch", headRemote, head, observed.mergedHead], {
+      stdio: "ignore",
+    });
+    stranded =
+      Number(
+        execFileSync(
+          "git",
+          ["rev-list", "--count", `${observed.mergedHead}..${head}`],
+          { encoding: "utf8" }
+        ).trim()
+      ) || 0;
   }
 
   const result = report({
     head,
     revisionOrder,
     revisionOrderComplete,
-    reviews,
-    threads,
-    issueComments,
+    // From the SETTLED snapshot: the values judged are the ones two
+    // consecutive observations agreed on.
+    reviews: observed.reviews,
+    threads: observed.threads,
+    issueComments: observed.issueComments,
     blocking,
     advisory,
     state: meta.state,
