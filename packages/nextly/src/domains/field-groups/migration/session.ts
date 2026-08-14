@@ -33,6 +33,7 @@ import { sql, type SQL } from "drizzle-orm";
 
 import { safeCode } from "../../../database/errors";
 import { NextlyError } from "../../../errors/nextly-error";
+import { fieldGroupLockColumnTypes } from "../../../schemas/field-group-lock";
 
 /** Dialects the migration runs on. */
 export type MigrationDialect = "postgresql" | "mysql" | "sqlite";
@@ -354,20 +355,13 @@ export interface MigrationSession {
  * hand-copying CREATE TABLE statements that drift.
  */
 export function getMigrationLockDdl(dialect: MigrationDialect): string[] {
-  const idType = dialect === "mysql" ? "int" : "integer";
   // `expires_at` is what separates a run that is still working from one that died holding the row.
   // A holder renews it while it works, so an expired value is an OBSERVATION that the holder stopped
-  // rather than a guess from a threshold. The type follows each dialect's existing convention for a
-  // timestamp column, and must stay in step with the Drizzle declaration in
-  // `schemas/field-group-lock/` — the round-trip guard is what holds them there.
-  const expiresType =
-    dialect === "postgresql"
-      ? "timestamptz"
-      : dialect === "mysql"
-        ? "datetime"
-        : "integer";
+  // rather than a guess from a threshold. Every type here comes from the Drizzle declaration in
+  // `schemas/field-group-lock/`, so the bootstrap and the reconcile cannot describe two shapes.
+  const types = fieldGroupLockColumnTypes(dialect);
   return [
-    `CREATE TABLE IF NOT EXISTS ${MIGRATION_LOCK_TABLE} (id ${idType} PRIMARY KEY, owner text, expires_at ${expiresType})`,
+    `CREATE TABLE IF NOT EXISTS ${MIGRATION_LOCK_TABLE} (id ${types.id} PRIMARY KEY, owner ${types.owner}, expires_at ${types.expires_at})`,
   ];
 }
 
@@ -384,12 +378,10 @@ export function getMigrationLockDdl(dialect: MigrationDialect): string[] {
  * questions, and a caller forbidden from issuing DDL needs to be able to skip both.
  */
 export function getMigrationLockUpgradeDdl(dialect: MigrationDialect): string {
-  const expiresType =
-    dialect === "postgresql"
-      ? "timestamptz"
-      : dialect === "mysql"
-        ? "datetime"
-        : "integer";
+  // Same source as the CREATE above, so the column an old installation gains is the column a new
+  // one is born with. Two independent mappings here would leave upgraded databases a different
+  // shape from fresh ones, and nothing downstream distinguishes them.
+  const expiresType = fieldGroupLockColumnTypes(dialect).expires_at;
   // PostgreSQL can say IF NOT EXISTS here; MySQL and SQLite cannot at the versions this supports,
   // so the duplicate is tolerated by CODE below rather than by syntax.
   const guard = dialect === "postgresql" ? "IF NOT EXISTS " : "";
