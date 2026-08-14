@@ -70,11 +70,43 @@ const OVERLAY_CSS = [
   ".nx-pb-selected::before{content:'\\283F';position:absolute;top:-2px;left:-2px;transform:translateY(-100%);font-size:12px;line-height:1;padding:2px 5px;background:var(--nx-pb-ed-primary);color:var(--nx-pb-ed-primary-foreground);border-radius:4px 4px 0 0;pointer-events:none;z-index:2}",
   ".nx-pb-dragging{opacity:.4}",
   ".nx-pb-empty{color:var(--nx-pb-ed-muted-foreground);padding:32px;text-align:center;font-size:14px}",
-  // Between-item drop zones: collapsed at rest, a hint while dragging, a solid
-  // insertion bar when they are the active drop target.
-  ".nx-pb-dropzone{height:0;border-radius:3px;transition:height .1s ease,background .1s ease}",
-  ".nx-pb-dropzone[data-drag]{height:6px;margin:3px 0;background:color-mix(in srgb, var(--nx-pb-ed-primary) 12%, transparent)}",
-  ".nx-pb-dropzone[data-active]{height:6px;margin:4px 0;background:var(--nx-pb-ed-primary);box-shadow:0 0 0 4px color-mix(in srgb, var(--nx-pb-ed-primary) 15%, transparent)}",
+  // Between-item drop zones. The SLOT stays in flow at zero height for the
+  // document's whole life, so starting a drag moves nothing; the target itself
+  // is taken out of flow and anchored to that slot.
+  //
+  // Growing the zone from 0 to 6px on dragstart is what this replaces. It gave
+  // the pointer something to hit by making the zone occupy space, so every zone
+  // in the document expanded at once and the page moved under the cursor at the
+  // exact moment aim starts to matter.
+  //
+  // The slot carries its own `position: relative` rather than relying on an
+  // ancestor. Selection sets `position: relative` on `.nx-pb-selected`, so an
+  // absolutely-positioned target would otherwise anchor to the canvas normally
+  // and to the selected node once one is an ancestor of it — targeting that
+  // works until you click something, which reads as a drag defect and is a
+  // containing-block one.
+  ".nx-pb-dropzone-slot{position:relative;height:0}",
+  // The SAME 6px band the in-flow zone occupied, centred on the gap it marks.
+  // This changes what a zone COSTS, not what it catches, so the pointer meets
+  // exactly the geometry it met before and no targeting behaviour moves with it.
+  //
+  // A larger rect is worth having and is deliberately not here. A zone's box
+  // extends above its own slot, so a taller one reaches into the element before
+  // it and changes which zones are eligible where — a claim about targeting,
+  // which needs its own evidence rather than riding along with a claim about
+  // layout.
+  //
+  // `pointer-events` are live only during a drag, so at rest the zone cannot
+  // intercept a click meant for the block behind it.
+  // `z-index` because the blocks either side of a gap are authored content and
+  // may carry a stacking context of their own — the Position control supports
+  // exactly that. Two opaque, positive-`z-index` neighbours each paint over
+  // their half of the zone, which hides the insertion bar completely while
+  // dnd-kit still selects the same rectangle: the drop works and nothing shows
+  // where it will land. Editor chrome has to sit above content it annotates.
+  ".nx-pb-dropzone{position:absolute;left:0;right:0;top:-3px;height:6px;border-radius:3px;background:transparent;pointer-events:none;z-index:3;transition:background .1s ease}",
+  ".nx-pb-dropzone[data-drag]{pointer-events:auto;background:color-mix(in srgb, var(--nx-pb-ed-primary) 12%, transparent)}",
+  ".nx-pb-dropzone[data-active]{background:var(--nx-pb-ed-primary);box-shadow:0 0 0 4px color-mix(in srgb, var(--nx-pb-ed-primary) 15%, transparent)}",
   // Empty-container placeholder.
   ".nx-pb-dropzone-empty{border:2px dashed var(--nx-pb-ed-border-strong);border-radius:8px;padding:20px 12px;margin:6px;text-align:center;color:var(--nx-pb-ed-muted-foreground);font-size:13px;background:var(--nx-pb-ed-muted)}",
   ".nx-pb-dropzone-empty[data-active]{border-color:var(--nx-pb-ed-primary);background:color-mix(in srgb, var(--nx-pb-ed-primary) 12%, transparent);color:var(--nx-pb-ed-primary)}",
