@@ -198,6 +198,60 @@ structure rather than by someone else's spelling, at the granularity your claim
 actually needs — which is the separating-property test applied to the identifier
 itself.
 
+## A fix that produces the OPPOSITE failure narrowed the symptom
+
+When a repair is followed by the same defect pointing the other way, the second
+attempt was a different assumption rather than the removal of one. Only the
+third makes the wrong state unrepresentable, so go there directly.
+
+**The tell is that the fix addressed the DIRECTION of the failure rather than
+what produced both directions.** Ask what single thing made the first failure
+possible; if the second attempt leaves it standing, the third failure is already
+written.
+
+Two shapes, and the remedy differs:
+
+- **the cause is something the code cannot observe** — a runtime flag, an
+  environment shape, a value another system spells. Removal is forced, because
+  no amount of assuming correctly is stable. An entry guard here compared
+  `import.meta.url` against `pathToFileURL(process.argv[1])`, which never matches
+  under a symlinked prefix; resolving with `realpathSync` fixed that and broke
+  the opposite case, because `--preserve-symlinks-main` is settable through
+  `NODE_OPTIONS` and turns the resolution off. Accepting BOTH forms depends on
+  neither. Failure mode throughout: the module declined to run and the process
+  **exited 0 having verified nothing**.
+- **the cause is one construct serving two questions** — nothing is hidden, and
+  fixing either direction necessarily exposes the other. A `switch` with a
+  `default` arm silently absorbed a new union member: the union was fully
+  visible, the arm simply declined to look: an exhaustive `Record` makes the
+  compiler demand each case. A sentinel comparison repaired a gain/loss case
+  and immediately produced a false rename pair, because one map answered both
+  "which fields changed value" and "which fields add or drop a column". Split
+  the construct.
+
+The second shape is the commoner one, so do not reach for the first tell alone:
+"something unobservable" fits the flag case and misses the conflation case
+entirely, which would tell someone their `default`-arm bug is not an instance of
+this rule when it is the cleanest kind.
+
+## A gate's OUTPUT is an interface, with no compiler enforcing its use
+
+A return type has a checker; a printed verdict has a person under time pressure
+who will `grep`, `head` or skim it. Both failures below were consumers
+misreading a gate correctly doing its job, and both were cheaper to fix in the
+output than in every caller:
+
+- a refusal printed below the twelfth line was cut off by `head -12`, and the
+  run read as clean. Remedy: the verdict and exit status come FIRST.
+- a finding worded "never reported — no build or test coverage for this
+  revision" was quoted as a durable property of a merged commit. The check-run
+  had not registered yet and subsequently passed. Remedy: a point-in-time
+  reading says so — "AS OF this reading" — and names the causes it cannot
+  separate, because their remedies differ.
+
+Same move as preferring a boundary to a check: make the output accommodate the
+caller it actually has, rather than the one who reads it all.
+
 ## The THIRD finding of one shape is a prompt to TEST the check
 
 Two findings that rhyme are a coincidence. The third is worth a minute spent on
