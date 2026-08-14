@@ -43,6 +43,7 @@ import {
 } from "../../../schemas/users/sqlite";
 import { splitStatements } from "../../schema/pipeline/sql-statement-utils";
 import { UserQueryService } from "../services/user-query-service";
+import { UserService } from "../services/user-service";
 
 const TEST_DB_DIR = join(
   tmpdir(),
@@ -240,6 +241,40 @@ describe("listUsers pagination over users with several roles (real SQLite)", () 
     // The fixture holds fewer users than the clamp, so every user still comes back — the bound
     // caps the request without truncating a legitimate result.
     expect(page.data).toHaveLength(USER_COUNT);
+  }, 30_000);
+
+  it("propagates the clamped page size through the facade, not the request", async () => {
+    // The clamp inside the query service is only half an answer: `UserService.listUsers`
+    // recomputed `offset`/`hasMore` from the REQUESTED limit, and the Direct API derived
+    // `totalPages` from it too. A page-2 request for 1000 users then described a 1000-item page
+    // while the rows came from offset 500 — data and envelope disagreeing about the same page.
+    //
+    // Asserted through the FACADE rather than the query service, because the query service
+    // already had the clamp; a test at that level passes with the defect present.
+    const service = new UserService(
+      query,
+      {} as never,
+      {} as never,
+      undefined,
+      silentLogger as never
+    );
+
+    const page1 = await service.listUsers(
+      { pagination: { page: 1, limit: 1_000_000 } },
+      {} as never
+    );
+    expect(page1.pagination.limit).toBe(500);
+    expect(page1.pagination.offset).toBe(0);
+    expect(page1.data).toHaveLength(USER_COUNT);
+
+    const page2 = await service.listUsers(
+      { pagination: { page: 2, limit: 1_000_000 } },
+      {} as never
+    );
+    // Offset derived from the CLAMPED size. From the request it would be 1,000,000.
+    expect(page2.pagination.offset).toBe(500);
+    expect(page2.data).toHaveLength(0);
+    expect(page2.pagination.hasMore).toBe(false);
   }, 30_000);
 
   it("reports a total counting users rather than joined rows", async () => {
