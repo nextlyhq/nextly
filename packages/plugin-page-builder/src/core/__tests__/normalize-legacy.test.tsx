@@ -101,6 +101,13 @@ describe("a legacy columns row", () => {
     });
     const out = normalizeLegacySlots(root, defaultBlockRegistry);
     const [x, y] = out.slots?.default ?? [];
+    // That these ARE the synthetic wrappers, before comparing them. Two distinct ids is also what
+    // a normalizer returning the tree untouched produces — the two original headings — so the
+    // comparison alone passes on the one outcome this test exists to exclude.
+    expect(x.type).toBe("core/column");
+    expect(y.type).toBe("core/column");
+    expect(x.id).toContain("legacy-wrap:");
+    expect(y.id).toContain("legacy-wrap:");
     expect(x.id).not.toBe(y.id);
   });
 
@@ -119,6 +126,14 @@ describe("a legacy columns row", () => {
     });
 
     const out = normalizeLegacySlots(root, defaultBlockRegistry);
+
+    // The wrapper was actually built, and holds the legacy child. Without this the uniqueness
+    // check below is satisfied by a normalizer that did nothing at all: the stored ids were
+    // already distinct, so "no duplicates" is true of the input as well as of a correct output.
+    const wrapper = out.slots?.default[0].slots?.default[0];
+    expect(wrapper?.type).toBe("core/column");
+    expect(wrapper?.slots?.default[0].id).toBe(legacyChild.id);
+
     const ids: string[] = [];
     const walk = (n: BlockNode) => {
       ids.push(n.id);
@@ -140,9 +155,18 @@ describe("a legacy columns row", () => {
       default: [node("core/columns", { default: [legacyChild] }), collider],
     });
     const idOf = (n: BlockNode) => n.slots?.default[0].slots?.default[0].id;
-    expect(idOf(normalizeLegacySlots(root, defaultBlockRegistry))).toBe(
-      idOf(normalizeLegacySlots(root, defaultBlockRegistry))
-    );
+
+    // The VALUE, pinned before the two passes are compared against each other. `toBe` between two
+    // reads is satisfied by `undefined === undefined`, so a normalizer that produced no wrapper —
+    // or a path expression that stopped matching the tree — agrees with itself perfectly and the
+    // test reports stability it never observed.
+    //
+    // `#2` is what `freeId` appends when the derived id is already taken, and the id it would have
+    // taken is exactly the collider's — which is what the fixture was built to occupy. Expressed
+    // from `collider.id` rather than by respelling the prefix, so the two cannot disagree.
+    const first = idOf(normalizeLegacySlots(root, defaultBlockRegistry));
+    expect(first).toBe(`${collider.id}#2`);
+    expect(idOf(normalizeLegacySlots(root, defaultBlockRegistry))).toBe(first);
   });
 
   it("leaves a document already in the current shape untouched, by IDENTITY", () => {
