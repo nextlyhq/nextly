@@ -108,13 +108,23 @@ export function missingReviewers(reviews, head, required) {
  * thread stays open across re-reviews of one commit, and its resolution is what
  * "this finding is dealt with" actually records.
  */
-export function unresolvedThreads(threads) {
+export function unresolvedThreads(threads, advisory = []) {
   if (!Array.isArray(threads)) return Number.POSITIVE_INFINITY;
   // Anything other than an explicit `true` counts as open. A node missing the
   // field, or a partial response, means resolution could not be established —
   // which is not the same as having established that nothing is open, and only
   // one of those may clear a gate.
-  return threads.filter(thread => thread?.isResolved !== true).length;
+  //
+  // A thread opened by an ADVISORY reviewer does not count. Blocking on it
+  // would let a reviewer that cannot block the merge hold it anyway, through a
+  // different door than the one the policy closed. An author this code cannot
+  // read counts, because "I could not tell whose it is" is not "it is safe to
+  // ignore".
+  return threads.filter(thread => {
+    if (thread?.isResolved === true) return false;
+    const author = thread?.comments?.nodes?.[0]?.author?.login;
+    return !(typeof author === "string" && advisory.includes(author));
+  }).length;
 }
 
 /**
@@ -213,7 +223,7 @@ export function report({
 }) {
   const required = [...(blocking ?? []), ...advisory];
   const missing = missingReviewers(reviews, head, required);
-  const unresolved = unresolvedThreads(threads);
+  const unresolved = unresolvedThreads(threads, advisory);
   const limited = rateLimited(issueComments);
   // Coverage is asked at the head; a standing objection is asked of the whole
   // pull request. Two questions with two scopes, from the same rows.
@@ -253,12 +263,24 @@ export function report({
  */
 async function main(argv) {
   const [pr] = argv;
-  if (!pr) {
+  // Validated before it reaches a URL. A value carrying `/` or `..` rewrites
+  // the request path, so the verdict would describe a different pull request
+  // while naming the one that was asked for.
+  if (!pr || !/^[1-9][0-9]*$/.test(pr)) {
     process.stderr.write("usage: node scripts/ci-verdict.mjs <pr-number>\n");
     return 2;
   }
-  const repo = process.env.GH_REPO ?? "nextlyhq/nextly";
-  const [owner, name] = repo.split("/");
+  // `gh` defines GH_REPO as `[HOST/]OWNER/REPO`, so the owner is the
+  // second-to-last segment rather than the first.
+  const configured = process.env.GH_REPO ?? "nextlyhq/nextly";
+  const segments = configured.split("/").filter(Boolean);
+  if (segments.length < 2 || segments.length > 3) {
+    process.stderr.write(`ci-verdict: GH_REPO must be [HOST/]OWNER/REPO\n`);
+    return 2;
+  }
+  const [name] = segments.slice(-1);
+  const [owner] = segments.slice(-2, -1);
+  const repo = `${owner}/${name}`;
   const { execFileSync } = await import("node:child_process");
   // `ls-remote` needs the ref to be current, and a stale local view of origin
   // would reintroduce the lag this function reads the ref to avoid.
@@ -316,31 +338,38 @@ async function main(argv) {
     "--slurp",
   ]).flat();
   // Paged explicitly: `reviewThreads(first: 100)` silently truncates, and an
-  // unresolved thread past the first page would leave the verdict clean.
-  const threads = [];
-  let cursor = null;
-  for (;;) {
-    const page = gh([
-      "api",
-      "graphql",
-      "-F",
-      `pr=${pr}`,
-      "-F",
-      `owner=${owner}`,
-      "-F",
-      `name=${name}`,
-      "-F",
-      `cursor=${cursor ?? ""}`,
-      "-f",
-      "query=query($pr:Int!,$owner:String!,$name:String!,$cursor:String){" +
-        " repository(owner:$owner,name:$name){ pullRequest(number:$pr){" +
-        " reviewThreads(first:100, after:$cursor){" +
-        " nodes { isResolved } pageInfo { hasNextPage endCursor } } } } }",
-    ]).data.repository.pullRequest.reviewThreads;
-    threads.push(...page.nodes);
-    if (!page.pageInfo?.hasNextPage) break;
-    cursor = page.pageInfo.endCursor;
-  }
+  // unresolved thread past the first page would leave the verdict clean. An
+  // invalid `after` is NOT rejected by the API — it is ignored and page one
+  // comes back — so the first page omits the argument rather than relying on a
+  // value being coerced.
+  const readThreads = () => {
+    const collected = [];
+    let cursor = null;
+    for (;;) {
+      const page = gh([
+        "api",
+        "graphql",
+        "-F",
+        `pr=${pr}`,
+        "-F",
+        `owner=${owner}`,
+        "-F",
+        `name=${name}`,
+        ...(cursor === null ? [] : ["-F", `cursor=${cursor}`]),
+        "-f",
+        "query=query($pr:Int!,$owner:String!,$name:String!,$cursor:String){" +
+          " repository(owner:$owner,name:$name){ pullRequest(number:$pr){" +
+          " reviewThreads(first:100, after:$cursor){" +
+          " nodes { isResolved comments(first:1){ nodes { author { login } } } }" +
+          " pageInfo { hasNextPage endCursor } } } } }",
+      ]).data.repository.pullRequest.reviewThreads;
+      collected.push(...page.nodes);
+      if (!page.pageInfo?.hasNextPage) break;
+      cursor = page.pageInfo.endCursor;
+    }
+    return collected;
+  };
+  const threads = readThreads();
 
   // The head is re-read AFTER the other queries. A push landing mid-run would
   // otherwise be judged against the revision captured at the start, so a review
@@ -353,19 +382,43 @@ async function main(argv) {
     return 2;
   }
 
+  // Review state mutates without moving the head, so the head check alone
+  // cannot see a thread opened or unresolved mid-run. The verdict below is
+  // computed from the first snapshot, and a snapshot known to be stale must not
+  // be reported as clean.
+  if (readThreads().length !== threads.length) {
+    process.stderr.write(
+      "ci-verdict: review threads changed mid-run; re-run\n"
+    );
+    return 2;
+  }
+
+  // Trimmed: a list written with spaces after the commas yields entries that
+  // match no login, and an unmatched blocking reviewer is silently dropped —
+  // the gate then reports clean without that reviewer's coverage.
+  const logins = value =>
+    value
+      .split(",")
+      .map(entry => entry.trim())
+      .filter(Boolean);
+  const blocking = logins(
+    process.env.CI_VERDICT_BLOCKING ?? "chatgpt-codex-connector[bot]"
+  );
+  const advisory = logins(
+    process.env.CI_VERDICT_ADVISORY ?? "coderabbitai[bot]"
+  );
+  if (blocking.length === 0) {
+    process.stderr.write("ci-verdict: no blocking reviewer configured\n");
+    return 2;
+  }
+
   const result = report({
     head,
     reviews,
     threads,
     issueComments,
-    blocking: (
-      process.env.CI_VERDICT_BLOCKING ?? "chatgpt-codex-connector[bot]"
-    )
-      .split(",")
-      .filter(Boolean),
-    advisory: (process.env.CI_VERDICT_ADVISORY ?? "coderabbitai[bot]")
-      .split(",")
-      .filter(Boolean),
+    blocking,
+    advisory,
   });
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   return result.exitCode;

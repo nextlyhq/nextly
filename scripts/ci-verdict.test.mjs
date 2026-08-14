@@ -256,6 +256,52 @@ describe("unresolvedThreads", () => {
   });
 });
 
+describe("advisory review threads", () => {
+  const thread = (login, isResolved) => ({
+    isResolved,
+    comments: { nodes: [{ author: { login } }] },
+  });
+
+  /**
+   * A reviewer excluded from `blocking` must not hold the merge through a
+   * thread either. Blocking on its threads would reinstate through one door the
+   * policy that was closed at another.
+   */
+  it("does not count a thread opened by an advisory reviewer", () => {
+    expect(unresolvedThreads([thread(RABBIT, false)], [RABBIT])).toBe(0);
+    expect(report({ ...BASE, threads: [thread(RABBIT, false)] }).verdict).toBe(
+      "CLEAN"
+    );
+  });
+
+  /** The control: a blocking reviewer's thread still holds it. */
+  it("counts a thread opened by a blocking reviewer", () => {
+    expect(unresolvedThreads([thread(CODEX, false)], [RABBIT])).toBe(1);
+    expect(report({ ...BASE, threads: [thread(CODEX, false)] }).verdict).toBe(
+      "UNRESOLVED THREADS"
+    );
+  });
+
+  /**
+   * A human's thread blocks. Advisory is a named exemption, not a default, so
+   * an author absent from that list counts.
+   */
+  it("counts a thread whose author is neither bot", () => {
+    expect(unresolvedThreads([thread("a-reviewer", false)], [RABBIT])).toBe(1);
+  });
+
+  /**
+   * An author the response did not carry counts. "I could not tell whose it
+   * is" is not "it is safe to ignore".
+   */
+  it("counts a thread whose author is unreadable", () => {
+    expect(unresolvedThreads([{ isResolved: false }], [RABBIT])).toBe(1);
+    expect(
+      unresolvedThreads([{ isResolved: false, comments: {} }], [RABBIT])
+    ).toBe(1);
+  });
+});
+
 describe("rateLimited", () => {
   it("names a reviewer whose comment carries the refusal marker", () => {
     const comments = [
