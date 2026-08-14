@@ -104,6 +104,7 @@ export type {
   BlockTypeLookup,
   ClassLookup,
   IssueCode,
+  ValidationResult,
   IssueSeverity,
   TokenLookup,
   ValidationContext,

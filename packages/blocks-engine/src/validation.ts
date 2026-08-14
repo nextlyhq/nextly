@@ -271,12 +271,57 @@ const ENGINE_NODE_TYPES = new Set<string>([COMPONENT_INSTANCE_TYPE]);
  * renderer can still show what it can. Structural corruption (missing ids,
  * malformed shapes, exceeded limits) is always an error.
  */
+/**
+ * What one validation produced: the issues, and the survey they were derived
+ * from.
+ *
+ * The survey is published because a caller that goes on to walk the same
+ * document needs to know whether the engine measured it in FULL, and issue
+ * codes are the wrong channel for that question. A code says what is wrong with
+ * the document; `complete` says whether these numbers can be trusted, and the
+ * two do not line up — a document JSON merely rewrites is fully measured and
+ * safe to walk, while one holding an accessor is neither, and both are errors.
+ *
+ * Reconstructing the second answer from the first means keeping a list of codes
+ * in the consumer, which is a copy of a fact the engine already established and
+ * goes stale in silence when a verdict is added.
+ */
+export interface ValidationResult {
+  issues: ValidationIssue[];
+  survey: DocumentSurvey;
+}
+
+/**
+ * Issues only — the narrow view, DERIVED from {@link validateDocument} rather
+ * than computed beside it.
+ *
+ * Most callers want exactly this and should keep using it. Reach for the richer
+ * function when the answer decides whether to do more work on the same
+ * document.
+ */
 export function validate(
   doc: BlockDocument,
   ctx: ValidationContext
 ): ValidationIssue[] {
+  return validateDocument(doc, ctx).issues;
+}
+
+export function validateDocument(
+  doc: BlockDocument,
+  ctx: ValidationContext
+): ValidationResult {
   const issues: ValidationIssue[] = [];
   const limits = ctx.limits ?? DEFAULT_LIMITS;
+  // Taken before ANY return, so every path can hand back the measurement it
+  // judged the document with. The walk accepts arbitrary input by design, so a
+  // malformed document surveys as readily as a well-formed one — and a caller
+  // that gets issues without a survey would have to guess whether the absence
+  // means "not measured" or "nothing to measure".
+  const survey = surveyDocument(doc, {
+    maxBytes: limits.maxBytes,
+    maxDepth: limits.maxDepth,
+    maxNodes: limits.maxNodes,
+  });
   const unknownSeverity: IssueSeverity =
     ctx.mode === "strict" ? "error" : "warning";
 
@@ -292,7 +337,7 @@ export function validate(
       severity: "error",
       message: "The document must be an object.",
     });
-    return issues;
+    return { issues, survey };
   }
 
   const knownBreakpoints = collectBreakpointIds(ctx.breakpoints, issues);
@@ -331,11 +376,11 @@ export function validate(
       message: "The document nodes field must be an array.",
     });
     // Nothing further to check without a node forest.
-    return issues;
+    return { issues, survey };
   }
 
   const beforeLimits = issues.length;
-  const survey = checkLimits(doc, limits, issues);
+  checkLimits(survey, issues);
   // Any limit rejection, not the byte one alone. A forest over the node or
   // depth cap is refused BEFORE its bytes are measured, so asking only about
   // size would leave the expensive per-value work running on a document already
@@ -424,7 +469,7 @@ export function validate(
     }
   }
 
-  return issues;
+  return { issues, survey };
 }
 
 /**
@@ -469,12 +514,9 @@ function collectBreakpointIds(
   return ids;
 }
 
-function checkLimits(
-  doc: BlockDocument,
-  limits: DocumentLimits,
-  issues: ValidationIssue[]
-): DocumentSurvey {
-  // ONE traversal answers all three bounds.
+function checkLimits(survey: DocumentSurvey, issues: ValidationIssue[]): void {
+  // ONE traversal answers all three bounds, taken by the caller and handed
+  // here.
   //
   // Depth, node count and serialized size were measured by two separate walks,
   // and the second of them had to decide what counts as a node and how deep it
@@ -483,12 +525,6 @@ function checkLimits(
   // keep them agreeing — and a document sits between them only when they
   // disagree, which is exactly when nobody is looking. Every accepted document
   // also paid for the tree twice.
-  const survey = surveyDocument(doc, {
-    maxBytes: limits.maxBytes,
-    maxDepth: limits.maxDepth,
-    maxNodes: limits.maxNodes,
-  });
-
   if (survey.tooDeep) {
     issues.push({
       path: "/nodes",
@@ -509,7 +545,7 @@ function checkLimits(
   // at that breach — so its byte count is a lower bound rather than a
   // measurement, and reporting a size from it would report a number that was
   // never finished.
-  if (survey.tooDeep || survey.tooManyNodes) return survey;
+  if (survey.tooDeep || survey.tooManyNodes) return;
 
   // The CAUSE, not just the refusal. A document over the limit is fixed by
   // removing content; one holding a value JSON cannot write is not made smaller
@@ -547,7 +583,6 @@ function checkLimits(
       )}% of the ${survey.limits.maxBytes}-byte limit.`,
     });
   }
-  return survey;
 }
 
 interface NodeCheckState {
