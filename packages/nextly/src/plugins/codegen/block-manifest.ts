@@ -198,7 +198,7 @@ export const blockManifestEntrySchema = z
      * where a block may be placed. A malformed value here does not degrade, it forbids, so the
      * shape is pinned at the boundary rather than trusted from whoever wrote the file.
      */
-    parent: z.array(z.string().regex(BLOCK_NAME_RE)).optional(),
+    parent: z.array(z.string().regex(BLOCK_NAME_RE)).min(1).optional(),
   })
   .strict();
 

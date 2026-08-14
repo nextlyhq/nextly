@@ -400,6 +400,7 @@ describe("the published JSON Schema", () => {
                     "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*\\/[a-z0-9]+(?:-[a-z0-9]+)*$",
                     "type": "string",
                   },
+                  "minItems": 1,
                   "type": "array",
                 },
                 "props": {

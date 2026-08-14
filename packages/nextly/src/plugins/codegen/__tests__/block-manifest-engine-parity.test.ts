@@ -86,6 +86,16 @@ describe("the parent names each side accepts", () => {
     ).toThrow();
   });
 
+  it("neither accepts an EMPTY list, which permits no placement", () => {
+    expect(() =>
+      registerBlocks([withParent([])] as never, { source: "acme" })
+    ).toThrow();
+    clearBlocks();
+    expect(() =>
+      buildBlockManifest([consumer(), declaring([withParent([])])])
+    ).toThrow();
+  });
+
   it("neither accepts a bare string in place of the array", () => {
     expect(() =>
       registerBlocks([withParent("core/columns")] as never, { source: "acme" })

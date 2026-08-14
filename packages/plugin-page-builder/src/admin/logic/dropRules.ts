@@ -9,6 +9,7 @@
  */
 import {
   isContainerType,
+  isDeclaredHere,
   parentsOf,
   slotsOf,
 } from "../../core/block-structure";
@@ -40,6 +41,15 @@ export function canDrop(
   const isContainer = isContainerType(parentType, registry);
   if (isContainer === undefined) return { ok: false, reason: "unknown-parent" };
   if (!isContainer) return { ok: false, reason: "not-a-container" };
+  // Structure is enough to ENFORCE a rule and not enough to accept an insertion. A container only
+  // the engine knows is drawn by `CanvasNode` as an unknown-block placeholder that renders no
+  // slots at all — so a child authorized into it is written to the document and then vanishes from
+  // the canvas, which is worse than refusing the drop. Enforcing where a block may NOT go and
+  // granting where it may are different powers, and only the second needs a definition this
+  // package can draw.
+  if (!registry.get(parentType) && !isDeclaredHere(parentType)) {
+    return { ok: false, reason: "unknown-parent" };
+  }
   const slot = (slotsOf(parentType, registry) ?? []).find(
     s => s.name === slotName
   );

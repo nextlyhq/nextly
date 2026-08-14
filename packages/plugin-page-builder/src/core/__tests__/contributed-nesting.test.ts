@@ -13,6 +13,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { canDrop } from "../../admin/logic/dropRules";
 import { declaredParentsOf, slotsOf } from "../block-structure";
 import { createNode, createBlockRegistry } from "../registry";
+import { makeNode } from "../tree";
+import { validateDocument } from "../validate";
 
 /**
  * A container whose only slot is NAMED, and named something other than `default`.
@@ -76,47 +78,67 @@ describe("a contributed block's nesting rules reach the editor", () => {
     expect(declaredParentsOf("acme/shell-item")).toEqual(["acme/shell"]);
   });
 
-  it("accepts a child in the slot the contributed container declares", () => {
+  it("is NOT offered as an insertion parent, because the canvas cannot draw it", () => {
+    // Deliberately changed. This case previously asserted acceptance, and acceptance was wrong:
+    // `CanvasNode` draws a definition this package does not hold as an unknown-block placeholder
+    // that renders no slots, so a child authorized into it is written to the document and then
+    // disappears from the canvas. Refusing the drop is the better failure.
+    //
+    // Enforcing where a block may NOT go and granting where it MAY are different powers. The
+    // first still works for contributed blocks — that is what the rest of this file covers.
     expect(
-      canDrop("acme/shell", "sidebar", "acme/shell-item", registry)
-    ).toEqual({
-      ok: true,
-    });
-  });
-
-  it("refuses the slot name the container did NOT declare", () => {
-    expect(
-      canDrop("acme/shell", "default", "acme/loose", registry).reason
-    ).toBe("unknown-slot");
+      canDrop("acme/shell", "sidebar", "acme/shell-item", registry).reason
+    ).toBe("unknown-parent");
   });
 
   it("refuses a block the child's own parent list excludes", () => {
-    // `core/container` is a perfectly good container that accepts anything; what refuses the drop
-    // is the CHILD's declaration, which is the half no parent can express.
+    // The half that still applies to a contributed block, and the one no parent can express:
+    // `core/container` accepts anything, and the CHILD says it may only sit in `acme/shell`.
     expect(
       canDrop("core/container", "default", "acme/shell-item", registry).reason
     ).toBe("wrong-parent");
   });
 
-  it("still accepts an unrestricted contributed block in the same place", () => {
-    // The separating control: without it, a bridge that refused every contributed block would pass
-    // the assertion above for the wrong reason.
+  it("still accepts an unrestricted contributed block in a container this build draws", () => {
+    // The separating control: a bridge that refused every contributed block would pass the
+    // assertion above for the wrong reason.
     expect(
       canDrop("core/container", "default", "acme/loose", registry).ok
     ).toBe(true);
   });
 
-  it("honours a namespace wildcard rather than matching it literally", () => {
-    // `acme/*` admits `acme/loose`. An exact-match membership test finds no block of that name and
-    // refuses, which is the failure this wildcard support exists to prevent.
-    expect(canDrop("acme/shell", "sidebar", "acme/loose", registry).ok).toBe(
-      true
+  it("reads a contributed slot's namespace wildcard where the rule is ENFORCED", () => {
+    // `canDrop` no longer reaches a contributed container, so the wildcard is exercised where it
+    // still decides something: the write path, which judges a stored document rather than granting
+    // an insertion. `acme/*` must admit `acme/loose` and refuse a namespace that merely starts
+    // with the same letters.
+    const admits = validateDocument(
+      {
+        version: 1,
+        root: makeNode("acme/shell", {}, undefined, {
+          sidebar: [makeNode("acme/loose")],
+        }),
+      },
+      registry,
+      // The TYPE is unknown to this package's registry by construction — that is what makes these
+      // blocks contributed. What is under test is the slot rule structure supplies, so the unknown
+      // type is tolerated exactly as the write path tolerates an unloaded plugin's block.
+      { allowUnknown: true }
     );
-    // And it binds to the separator: a namespace that merely starts with the same letters is not
-    // admitted by it.
-    expect(
-      canDrop("acme/shell", "sidebar", "acmeevil/banner", registry).reason
-    ).toBe("not-allowed-in-slot");
+    expect(admits).toBe(true);
+
+    const refuses = validateDocument(
+      {
+        version: 1,
+        root: makeNode("acme/shell", {}, undefined, {
+          sidebar: [makeNode("acmeevil/banner")],
+        }),
+      },
+      registry,
+      { allowUnknown: true }
+    );
+    expect(refuses).not.toBe(true);
+    expect(String(refuses)).toContain("acmeevil/banner");
   });
 
   it("creates a contributed container with the slot it declares and no other", () => {
