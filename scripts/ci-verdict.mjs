@@ -73,7 +73,7 @@ export function reviewersAtHead(reviews, head) {
  * head-scoped version discards the whole objection the moment the author
  * pushes, which is the state it most needs to survive.
  */
-export function changesRequested(reviews) {
+export function changesRequested(reviews, head = undefined) {
   if (!Array.isArray(reviews)) return [];
   // Ordered oldest first, so each account's later reviews decide what survives.
   const ordered = reviews
@@ -83,19 +83,35 @@ export function changesRequested(reviews) {
       `${a.submitted_at ?? ""}`.localeCompare(`${b.submitted_at ?? ""}`)
     );
 
-  const outstanding = new Set();
+  const outstanding = new Map();
   for (const review of ordered) {
     const login = review.user.login;
     // A COMMENTED review publishes feedback without withdrawing an objection,
     // so only an approval or an explicit dismissal clears one. Treating any
     // later review as clearance lets a follow-up remark retire a request for
     // changes nobody answered.
-    if (review.state === "CHANGES_REQUESTED") outstanding.add(login);
-    else if (review.state === "APPROVED" || review.state === "DISMISSED") {
-      outstanding.delete(login);
+    if (review.state === "CHANGES_REQUESTED") {
+      outstanding.set(login, review.commit_id);
+    } else if (review.state === "APPROVED" || review.state === "DISMISSED") {
+      // An approval clears an objection only when it was made against the SAME
+      // revision or a later one. Reviews arrive out of order — a delayed
+      // approval pinned to an older commit can be submitted after a newer
+      // objection — and a timestamp-only rule lets that stale approval delete
+      // an opinion about the revision being merged.
+      const objectedAt = outstanding.get(login);
+      if (objectedAt === undefined) continue;
+      // A dismissal is an explicit withdrawal and always clears. An approval
+      // clears only when it speaks to the objected revision or to the one being
+      // merged; ancestry is not available here, so "later" is not inferred from
+      // anything weaker than those two identities.
+      const clears =
+        review.state === "DISMISSED" ||
+        review.commit_id === objectedAt ||
+        (head !== undefined && review.commit_id === head);
+      if (clears) outstanding.delete(login);
     }
   }
-  return [...outstanding].sort();
+  return [...outstanding.keys()].sort();
 }
 
 /** Required reviewers with no review at `head`, in the order they were required. */
@@ -271,7 +287,11 @@ export function report({
   const limited = rateLimited(issueComments);
   // Coverage is asked at the head; a standing objection is asked of the whole
   // pull request. Two questions with two scopes, from the same rows.
-  const refused = changesRequested(reviews);
+  // `head` is passed for the CLEARING rule only. An objection itself spans
+  // revisions — pushing a commit does not answer it — while whether a given
+  // approval supersedes one is a question about which revision that approval
+  // spoke to.
+  const refused = changesRequested(reviews, head);
   const { verdict, detail, exitCode } = verdictFor({
     missing,
     unresolved,
@@ -597,7 +617,13 @@ async function main(argv) {
   if (meta.state === "MERGED" && meta.headRefOid && meta.headRefOid !== head) {
     // Fetched from the remote that HAS it: a fork's head is not on `origin`,
     // so asking the base repository throws before the count can be taken.
-    execFileSync("git", ["fetch", headRemote, head], { stdio: "ignore" });
+    // BOTH ends of the range. The workflow checks out shallow, and after a
+    // squash the merged head is commonly absent locally — especially for a
+    // fork — so fetching only the current tip leaves `rev-list` failing on an
+    // unknown revision instead of reporting the candidates.
+    execFileSync("git", ["fetch", headRemote, head, meta.headRefOid], {
+      stdio: "ignore",
+    });
 
     stranded = execFileSync(
       "git",
