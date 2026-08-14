@@ -22,6 +22,7 @@ import {
   createMockAdapter,
   silentLogger,
   createMockFileManager,
+  createMockCollection,
   createMockCollectionService,
   createMockRelationshipService,
   createMockHookRegistry,
@@ -131,6 +132,33 @@ vi.mock("../../../hooks/stored-hook-executor", () => {
 vi.mock("../../../lib/field-transform", () => ({
   transformRichTextFields: vi.fn((entry: unknown) => entry),
 }));
+
+// A schema-supplied `validate` callback is application code that runs on the caller's data, so
+// it belongs behind the access gate for the same reason hooks do. Returning a non-string passes
+// the documented contract, which keeps this observable without changing any outcome.
+const titleValidate = vi.fn().mockReturnValue(true);
+
+// `updateEntry` reads `schemaDefinition.fields` in preference to `fields`, so both lists carry
+// the validator: attaching it to only one leaves the assertion watching a list nothing reads.
+function withTitleValidator<T extends { name: string }>(
+  fields: T[]
+): (T & { validate?: typeof titleValidate })[] {
+  return fields.map(field =>
+    field.name === "title" ? { ...field, validate: titleValidate } : field
+  );
+}
+
+function collectionWithTitleValidator() {
+  const base = createMockCollection();
+  return {
+    ...base,
+    schemaDefinition: {
+      ...base.schemaDefinition,
+      fields: withTitleValidator(base.schemaDefinition.fields),
+    },
+    fields: withTitleValidator(base.fields),
+  };
+}
 
 // ── Test suite ────────────────────────────────────────────────────────────
 
@@ -499,6 +527,9 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       // The 403 assertion above cannot see this — a hook fired before the check leaves the status
       // unchanged — and moving hook dispatch above the access check still compiles.
       selectData.rows = [createSampleEntry()];
+      mockCollectionService.getCollection.mockResolvedValue(
+        collectionWithTitleValidator()
+      );
       mockAccessControlService.evaluateAccess.mockResolvedValueOnce({
         allowed: false,
         reason: "Not authorized to update",
@@ -516,6 +547,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       expect(mockHookRegistry.execute).not.toHaveBeenCalled();
       expect(runFieldHooksSpy).not.toHaveBeenCalled();
       expect(storedHookExecute).not.toHaveBeenCalled();
+      expect(titleValidate).not.toHaveBeenCalled();
     });
 
     it("runs those same hooks for a caller it allows", async () => {
@@ -524,6 +556,9 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       // `not.toHaveBeenCalled()`, and the ordering rule then reads as enforced while nothing
       // checks it.
       selectData.rows = [createSampleEntry()];
+      mockCollectionService.getCollection.mockResolvedValue(
+        collectionWithTitleValidator()
+      );
 
       await service.updateEntry(
         { collectionName: "posts", entryId: "entry-1", user: { id: "user-1" } },
@@ -534,6 +569,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       expect(mockHookRegistry.execute).toHaveBeenCalled();
       expect(runFieldHooksSpy).toHaveBeenCalled();
       expect(storedHookExecute).toHaveBeenCalled();
+      expect(titleValidate).toHaveBeenCalled();
     });
 
     it("should execute beforeOperation hooks", async () => {

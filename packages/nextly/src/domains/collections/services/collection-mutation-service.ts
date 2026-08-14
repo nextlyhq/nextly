@@ -4564,7 +4564,15 @@ export class CollectionMutationService extends BaseService {
       // `assertLocalizedFieldGroupsWritable` warms its verdicts beforehand
       // because resolving inside would issue a query that aborts the whole
       // transaction on PostgreSQL. Work that uses a pooled helper stays where
-      // it is; only work that already takes an executor can move.
+      // it is. Accepting an executor is necessary for work to move but not
+      // sufficient: the transaction runs inside `withVersionConflictRetry`,
+      // which re-runs its closure up to three attempts, so only work whose
+      // repetition is harmless belongs there. Database writes qualify, because
+      // a rolled-back attempt leaves nothing behind. Hook dispatch does not,
+      // whatever its signature accepts: `CollectionHookService.runBeforeChange`
+      // takes an executor and still runs handlers that reach outside this
+      // process, so a retried attempt re-fires effects no rollback can
+      // withdraw. External dispatch stays outside the retrying closure.
       //
       // A rule that must be judged against the row as locked belongs in the
       // under-lock re-check the publish path already uses, not here.
