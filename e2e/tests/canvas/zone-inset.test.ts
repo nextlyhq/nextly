@@ -292,6 +292,10 @@ test("keeps an edge-moving refusal inside the zone it reports, going DOWN", asyn
 
   expect(result.refused).toBe("edge-moving");
   expect(result.insetPx).toBeUndefined();
+  // A REAL zone first. `zone` and the read-back are compared below, and two
+  // absent zones compare equal — so without this the assertion is satisfied by
+  // the pointer being nowhere, which is the outcome it exists to rule out.
+  expect(result.zone).toBeGreaterThanOrEqual(0);
   expect(await canvas.zoneContainingPointer()).toBe(result.zone);
 });
 

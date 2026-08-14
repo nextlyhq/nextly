@@ -856,10 +856,11 @@ export async function dragToInsetInZone(
     if (!found) return refuse(zone, "boundary-not-found");
     if (boundaryY === found.boundaryY) break;
     boundaryY = found.boundaryY;
-    // Across the transition rather than adjacent to it. Two brackets taken back
-    // to back land inside the same animation frame and can agree on a whole
-    // pixel the edge is still travelling through.
-    await settle(EDGE_SETTLE_MS);
+    // Exhaustion is decided BEFORE waiting, because the wait is only ever there
+    // to separate one bracket from the NEXT one. After the last bracket there
+    // is no next one, and waiting anyway gives the edge one more interval to
+    // travel — invalidating the containment that bracket just confirmed, so the
+    // refusal reads back `-1` and reports being in no zone at all.
     if (attempt === EDGE_SETTLE_ATTEMPTS - 1) {
       // Still moving. Reported rather than measured through: a depth taken from
       // an edge that is in motion is a number with no referent.
@@ -875,6 +876,10 @@ export async function dragToInsetInZone(
       // ago" is exactly the claim a moving edge invalidates.
       return refuse(await driver.zoneContainingPointer(), "edge-moving");
     }
+    // Across the transition rather than adjacent to it. Two brackets taken back
+    // to back land inside the same animation frame and can agree on a whole
+    // pixel the edge is still travelling through.
+    await settle(EDGE_SETTLE_MS);
   }
   if (boundaryY === null) return refuse(zone, "boundary-not-found");
 
