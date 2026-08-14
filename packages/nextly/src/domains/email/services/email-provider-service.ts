@@ -284,27 +284,26 @@ export class EmailProviderService extends BaseService {
     // hold is that parsing the stored form returns the stored form, and it is
     // checked here rather than left as an assumption about how parsers behave.
     //
-    // The configuration IS its serialisation, and that is the whole rule the
-    // rest of this method follows. A type the column cannot hold is COERCED
-    // into the form it can — a `Date` becomes its ISO string, an
-    // `undefined`-valued key becomes an absent one — and the coerced form is
-    // what everything downstream sees, because it is what the column holds.
+    // Two ways a parser breaks it, neither visible at the call site:
     //
-    // Defined this way rather than as a list of rejected types on purpose.
-    // Checking the parser's output for shapes JSON loses means finding one
-    // more shape every time somebody writes a new parser — proxies, hidden
-    // keys, shared references, prototypes — and each is a separate rule
-    // arriving as a separate defect. Serialising first makes all of them
-    // unreachable at once, and the cost is stated rather than hidden: an
-    // adapter that expected a `Date` is handed a string.
+    // It may DERIVE a value rather than reshape one. `Buffer.from(key)
+    // .toString("base64")` encodes on the way in and encodes the encoding on
+    // the way out, so the adapter authenticates with a doubly-encoded
+    // credential and the provider answers "bad key" about a key the operator
+    // entered correctly.
     //
-    // What is still REFUSED is the parser that DERIVES rather than reshapes.
-    // `Buffer.from(key).toString("base64")` encodes on the way in and encodes
-    // the encoding on the way out, so the adapter authenticates with a
-    // doubly-encoded credential and the provider answers "bad key" about a key
-    // the operator entered correctly. That is not a type JSON cannot carry; it
-    // is a value that changes every time it is read, and no serialisation
-    // makes it stable.
+    // Or it may return something JSON cannot carry — a `Date`, a `Map`, a
+    // `Set` — which reads back as a string or as an empty object, so the
+    // adapter receives a shape its own parser just rejected.
+    //
+    // Compared against the ROUND-TRIPPED form rather than the parsed one,
+    // because the round-tripped form is what a reader gets and therefore what
+    // the parser has to be a fixed point OF. That makes `undefined` a third
+    // way to fail rather than an exception to the rule: a parser returning
+    // `{ label: undefined }` has JSON drop the key and then puts it back, so
+    // the value in hand and the value in the column are different objects.
+    // Rejecting it is the same answer as for a `Date`, and for the same
+    // reason — return only what the column can hold.
     const stored = parsed as Record<string, unknown>;
 
     // Serialised ONCE and parsed TWICE. `roundTripped` is what a reader gets
@@ -354,32 +353,6 @@ export class EmailProviderService extends BaseService {
     const roundTripped: unknown = JSON.parse(serialized);
     const unchanged: unknown = JSON.parse(serialized);
 
-    // Coercion and DESTRUCTION are not the same thing, and only the first was
-    // decided. The rule is stated as ONE permitted difference rather than as a
-    // walk looking for damage: the parsed value and the form the column will
-    // hold must be the same configuration, EXCEPT that a value may become
-    // plain text. That is the `Date` case, and it is the only one.
-    //
-    // Written this way because the alternative was tried and does not close.
-    // A check that walks the value looking for shapes JSON loses has to know
-    // every shape: a `Map`, a `Set`, an object whose own `toJSON` empties it,
-    // an array that does the same, an array that empties to `[]`. Each is a
-    // separate branch and the next one is always missing. Naming the single
-    // ACCEPTED difference instead leaves nothing to enumerate — anything that
-    // is not that difference is refused, including shapes nobody has met yet.
-    const differs = this.storedFormDiffers(stored, unchanged);
-    if (differs) {
-      throw new NextlyError({
-        code: "BUSINESS_RULE_VIOLATION",
-        publicMessage: `Email provider "${type}" parsed its configuration into a value at ${differs} that changes when written as JSON, so what is saved would not be what was parsed. Return plain objects, arrays and primitives from \`parseConfig\` -- a value that becomes text, such as a \`Date\`, is stored as that text.`,
-        logContext: {
-          reason: "email-provider-configuration-not-storable",
-          type,
-          path: differs,
-        },
-      });
-    }
-
     // Checked again after the round trip, not only before it. A `toJSON` -- on
     // the object itself or on a `Date` inside it -- can turn a record into a
     // scalar or a list, and the first guard read the value the parser returned
@@ -401,42 +374,33 @@ export class EmailProviderService extends BaseService {
       });
     }
 
-    // The stored configuration IS its serialisation, so the comparison is made
-    // in that domain rather than against the object the parser returned.
-    //
-    // A type JSON cannot carry is COERCED, not refused: a `Date` is written as
-    // its ISO string, and a parser that reads that string back into a `Date`
-    // agrees with the column even though the two values are not deep-equal.
-    // The cost is real and is taken deliberately -- an adapter is handed the
-    // string -- and the alternative is a surface that refuses a new shape every
-    // time one is found. Anything the column cannot hold at all is still
-    // refused above, where serialisation fails or produces a non-object.
-    //
-    // What survives is the property this check exists for: re-parsing the
-    // stored form must MEAN the stored form. A parser that derives -- base64
-    // on the way in, base64 of the base64 on the way out -- still differs
-    // after its own round trip, and is still refused.
-    let reparsedJson: unknown;
+    let reparsed: unknown;
     try {
-      const reparsed = provider.parseConfiguration(roundTripped);
-      // Compared through a round trip rather than as a string. Two objects
-      // holding the same fields in a different insertion order serialise to
-      // different text, and a parser that rebuilds its output field by field
-      // is an ordinary thing to write.
-      const reserialized = JSON.stringify(reparsed);
-      reparsedJson =
-        reserialized === undefined ? undefined : JSON.parse(reserialized);
+      reparsed = provider.parseConfiguration(roundTripped);
     } catch {
       // A parser that REJECTS its own stored output fails the same property,
       // and reaches it by throwing rather than by returning something else.
-      // A re-parse that cannot itself be serialised lands here too, and means
-      // the same thing: the row could not be read back.
-      reparsedJson = undefined;
+      // Left as one outcome: both mean the row could not be read back.
+      reparsed = undefined;
     }
-    if (!isDeepStrictEqual(reparsedJson, unchanged)) {
+    // TWO properties, and each misses what the other catches.
+    //
+    // The parsed value must SURVIVE the round trip: a `Date`, a `Map`, an
+    // `Infinity` or a class instance is written as something else, and a
+    // pass-through parser that accepts both forms then agrees with itself
+    // while the adapter receives an ISO string where a `Date` was returned.
+    // Re-parsing alone cannot see that, because both sides of it are already
+    // past the column.
+    //
+    // And re-parsing the stored form must RETURN it, which is what catches a
+    // parser that derives rather than one that loses a type.
+    if (
+      !isDeepStrictEqual(stored, unchanged) ||
+      !isDeepStrictEqual(reparsed, unchanged)
+    ) {
       throw new NextlyError({
         code: "BUSINESS_RULE_VIOLATION",
-        publicMessage: `Email provider "${type}" cannot store this configuration, because parsing what would be saved does not return what was saved. Its \`parseConfig\` must accept its own output unchanged -- derive values in \`createAdapter\` instead.`,
+        publicMessage: `Email provider "${type}" cannot store this configuration, because parsing what would be saved does not return what was saved. Its \`parseConfig\` must accept its own output unchanged -- derive values in \`createAdapter\` instead, and return only what JSON can carry.`,
         logContext: { reason: "email-provider-parse-not-a-fixed-point", type },
       });
     }
@@ -449,117 +413,6 @@ export class EmailProviderService extends BaseService {
     // is stored is what was checked" true by construction rather than by
     // argument, and the two are now the same object.
     return roundTripped as Record<string, unknown>;
-  }
-
-  /**
-   * Where in a parsed configuration serialisation keeps NONE of a value, or
-   * `undefined` when every value survives in some form.
-   *
-   * Asked of the projection rather than of the type, so a shape nobody has
-   * thought of is judged by what it leaves behind rather than by whether it is
-   * on a list. A `Date` becomes a string and keeps its instant; a `Map` or a
-   * `Set` becomes `{}` and keeps nothing, because its entries are not own
-   * enumerable properties and `JSON.stringify` reads nothing else.
-   *
-   * EVERY object is asked, including ordinary ones. An empty projection is
-   * honest only when the value genuinely held nothing JSON could carry, and
-   * the prototype does not decide that: `{ token: "ops", toJSON: () => ({}) }`
-   * is as ordinary as an object gets and still discards its token. What
-   * separates the cases is whether anything was there to lose.
-   *
-   * So a plain `{}` passes because it was empty, and `{ label: undefined }`
-   * passes because `undefined` is how an absent optional field is ordinarily
-   * written. A `Map`, a `Set`, and the self-emptying object above all fail,
-   * for the one reason: they held something and the column would not.
-   *
-   * @param value - a node of the parsed configuration
-   * @param path - the keys walked to reach it, for the message
-   */
-  /**
-   * Whether a value is an ordinary object rather than an instance of anything.
-   *
-   * Used only to decide whether an EMPTY projection is believable: an ordinary
-   * object with no fields really is empty, while a `Map` or a `Set` reports no
-   * own enumerable properties because its contents live somewhere
-   * `JSON.stringify` cannot read.
-   */
-  private isOrdinaryObject(value: object): boolean {
-    const prototype: unknown = Object.getPrototypeOf(value);
-    return prototype === Object.prototype || prototype === null;
-  }
-
-  /**
-   * Where a parsed value and the form the column will hold stop being the
-   * same configuration, or `undefined` when they agree.
-   *
-   * ONE difference is permitted, and it is the whole policy: an object may
-   * become a PRIMITIVE. `JSON.stringify` turns a `Date` into its ISO string,
-   * and the project accepts that coercion rather than refusing the write.
-   *
-   * Everything else must match. An object compared against an object must be
-   * an ORDINARY one, because a `Map` and a `Set` keep their contents where
-   * `JSON.stringify` cannot read and so report the same empty shape a genuinely
-   * empty object does. A class whose `toJSON` returns a populated object is
-   * refused for the same reason: the column would hold the fields and the
-   * adapter would not get the class.
-   *
-   * Keys holding `undefined` or a function are excluded from the comparison,
-   * because `JSON.stringify` does not write them -- which is how an absent
-   * optional field is ordinarily spelled.
-   */
-  private storedFormDiffers(
-    value: unknown,
-    projection: unknown,
-    path: string[] = []
-  ): string | undefined {
-    const here = (): string =>
-      path.length === 0 ? "the configuration" : path.join(".");
-
-    // The permitted coercion.
-    if (
-      value !== null &&
-      typeof value === "object" &&
-      (typeof projection === "string" ||
-        typeof projection === "number" ||
-        typeof projection === "boolean")
-    ) {
-      return undefined;
-    }
-
-    if (Array.isArray(value) || Array.isArray(projection)) {
-      if (!Array.isArray(value) || !Array.isArray(projection)) return here();
-      if (value.length !== projection.length) return here();
-      for (const [index, entry] of value.entries()) {
-        const differs = this.storedFormDiffers(entry, projection[index], [
-          ...path,
-          `[${index}]`,
-        ]);
-        if (differs) return differs;
-      }
-      return undefined;
-    }
-
-    if (value !== null && typeof value === "object") {
-      if (projection === null || typeof projection !== "object") return here();
-      if (!this.isOrdinaryObject(value)) return here();
-
-      const held = projection as Record<string, unknown>;
-      const written = Object.entries(value).filter(
-        ([, entry]) => entry !== undefined && typeof entry !== "function"
-      );
-      if (written.length !== Object.keys(held).length) return here();
-      for (const [key, entry] of written) {
-        if (!Object.hasOwn(held, key)) return here();
-        const differs = this.storedFormDiffers(entry, held[key], [
-          ...path,
-          key,
-        ]);
-        if (differs) return differs;
-      }
-      return undefined;
-    }
-
-    return Object.is(value, projection) ? undefined : here();
   }
 
   /**
@@ -1378,12 +1231,6 @@ export class EmailProviderService extends BaseService {
       // the merged input against a stored parsed value reported a change on
       // every save whose parser normalises anything — a trimmed credential
       // differs from its own stored form on the way in, and never after.
-      // Structurally, matching how `storableConfiguration` decides two
-      // configurations are the same value. `JSON.stringify` orders keys by
-      // insertion, so a parser that rebuilds its output field by field
-      // produces different text for an identical configuration -- and a
-      // no-op save would then file a configuration-change audit event
-      // against a credential nobody touched.
       configurationChanged =
         !existing.readable || !isDeepStrictEqual(existingConfig, parsedMerged);
 

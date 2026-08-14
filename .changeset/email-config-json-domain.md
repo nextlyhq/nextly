@@ -25,4 +25,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-Email provider configuration is now stored as what JSON can carry. A parser returning a `Date` has it written as its ISO string instead of the write being refused; a parser returning an `undefined`-valued key has the key dropped. A parser that derives its value rather than reshaping it is still refused, because re-parsing what was stored would not return what was stored.
+An email provider update no longer records a configuration change when a parser returns the same fields in a different order. `updateProvider` compared serialised text while the write path compares structurally, so a save that altered nothing could file a configuration-change entry in the activity log.

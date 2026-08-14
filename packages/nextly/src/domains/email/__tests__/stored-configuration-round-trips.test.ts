@@ -149,43 +149,17 @@ describe("a configuration whose parse is not a fixed point", () => {
     );
   });
 
-  // JSON carries no `Date`, so the column holds its ISO string. That coercion
-  // is the accepted cost of defining the stored configuration AS its
-  // serialisation: the adapter is handed the string. Asserted on the value
-  // READ BACK, because "the write succeeded" is true of a refusal-free
-  // implementation that stored anything at all.
-  it("stores a value JSON cannot carry as the form the column holds", async () => {
+  // JSON carries no `Date`, so the column holds a string and the adapter is
+  // handed a shape this provider's own parser just rejected.
+  it("refuses a parser returning a value JSON cannot carry", async () => {
     register("dated", input => ({
       apiKey: String((input as { apiKey: unknown }).apiKey),
       issuedAt: new Date(0),
     }));
 
-    const provider = await write("dated", { apiKey: "k" });
-
-    const stored = await service.getProviderDecrypted(provider.id);
-    expect(stored.configuration).toEqual({
-      apiKey: "k",
-      issuedAt: "1970-01-01T00:00:00.000Z",
-    });
-  });
-
-  // The comparison is made in the JSON domain, and the naive way to do that is
-  // to compare the two serialisations as TEXT. Insertion order changes the
-  // text and changes nothing about the value, and a parser that rebuilds its
-  // output field by field is an ordinary thing to write — so a text
-  // comparison would refuse this while a structural one accepts it.
-  it("stores a configuration whose parser reorders its own fields", async () => {
-    register("reordering", input => {
-      const value = input as { apiKey: unknown; region?: unknown };
-      return value.region === undefined
-        ? { apiKey: String(value.apiKey), region: "eu" }
-        : { region: String(value.region), apiKey: String(value.apiKey) };
-    });
-
-    const provider = await write("reordering", { apiKey: "k" });
-
-    const stored = await service.getProviderDecrypted(provider.id);
-    expect(stored.configuration).toEqual({ apiKey: "k", region: "eu" });
+    await expect(write("dated", { apiKey: "k" })).rejects.toThrow(
+      /parsing what would be saved does not return what was saved/
+    );
   });
 
   // The same property reached by throwing rather than by returning something
@@ -202,20 +176,18 @@ describe("a configuration whose parse is not a fixed point", () => {
     );
   });
 
-  // `undefined` is another value JSON cannot carry: the column drops the key.
-  // Under the same rule as the `Date` above the write is accepted and the key
-  // is simply absent, which is what an optional field means anyway.
-  it("stores a parser's undefined-valued key as an absent one", async () => {
+  // `undefined` is a third value JSON cannot carry, not an exception to the
+  // rule: the column drops the key and the parser puts it back, so what is
+  // held and what is stored are different objects on every read.
+  it("refuses a parser that returns an undefined-valued key", async () => {
     register("optional", input => ({
       apiKey: String((input as { apiKey: unknown }).apiKey),
       label: undefined,
     }));
 
-    const provider = await write("optional", { apiKey: "k" });
-
-    const stored = await service.getProviderDecrypted(provider.id);
-    expect(stored.configuration).toEqual({ apiKey: "k" });
-    expect(Object.keys(stored.configuration as object)).not.toContain("label");
+    await expect(write("optional", { apiKey: "k" })).rejects.toThrow(
+      /parsing what would be saved does not return what was saved/
+    );
   });
 
   // A parser that OMITS the key instead round-trips cleanly, which is the
@@ -273,13 +245,10 @@ describe("a configuration whose parse is not a fixed point", () => {
     );
   });
 
-  // A PASS-THROUGH parser: it accepts both the typed value and its JSON form.
-  // Under the previous contract this was the case the round-trip comparison
-  // existed to catch, because re-parsing agrees with itself while the stored
-  // value lost its type. Losing the type is now the defined outcome rather
-  // than a fault, so the assertion is on WHAT IS STORED — which is the only
-  // thing that separates this from a check that stopped looking.
-  it("stores the coerced value a pass-through parser accepts back", async () => {
+  // A PASS-THROUGH parser: it accepts both the typed value and its JSON form,
+  // so re-parsing agrees with itself while the value actually stored lost its
+  // type. The Date test above recreates the Date and cannot see this.
+  it("refuses a pass-through parser whose value loses type in the column", async () => {
     register("passthrough-date", input => {
       const value = input as { apiKey: unknown; issuedAt?: unknown };
       return value.issuedAt === undefined
@@ -287,13 +256,9 @@ describe("a configuration whose parse is not a fixed point", () => {
         : (value as object);
     });
 
-    const provider = await write("passthrough-date", { apiKey: "k" });
-
-    const stored = await service.getProviderDecrypted(provider.id);
-    expect(stored.configuration).toEqual({
-      apiKey: "k",
-      issuedAt: "1970-01-01T00:00:00.000Z",
-    });
+    await expect(write("passthrough-date", { apiKey: "k" })).rejects.toThrow(
+      /parsing what would be saved does not return what was saved|cannot be written as JSON/
+    );
   });
 
   // A root `toJSON` returning undefined makes JSON.stringify return undefined
@@ -354,6 +319,79 @@ describe("a configuration whose parse is not a fixed point", () => {
     expect(stored.configuration).toEqual({ apiKey: "k" });
   });
 
+  // A `Map` keeps its entries where `JSON.stringify` cannot read, so the column
+  // would hold `{}` and the adapter would run without the operator's headers.
+  // The round-trip comparison catches it without knowing what a `Map` is,
+  // which is the property worth having: the same check refuses a `Set`, a
+  // class instance, and whatever else is invented next.
+  it("refuses a value whose serialisation keeps nothing", async () => {
+    register("mapped", input => ({
+      apiKey: String((input as { apiKey: unknown }).apiKey),
+      headers: new Map([["x-team", "ops"]]),
+    }));
+
+    await expect(write("mapped", { apiKey: "k" })).rejects.toThrow(
+      /parsing what would be saved does not return what was saved/
+    );
+  });
+
+  // Reached through an array rather than a key, and a `Set` rather than a
+  // `Map` — same check, no second branch.
+  it("refuses an emptied value nested inside an array", async () => {
+    register("nested-set", input => ({
+      apiKey: String((input as { apiKey: unknown }).apiKey),
+      routes: [{ region: "eu", tags: new Set(["primary"]) }],
+    }));
+
+    await expect(write("nested-set", { apiKey: "k" })).rejects.toThrow(
+      /parsing what would be saved does not return what was saved/
+    );
+  });
+
+  // An ORDINARY object can empty itself, by defining a `toJSON` that returns
+  // nothing while holding real values. Nothing about its prototype says so.
+  it("refuses a plain object whose own toJSON discards its fields", async () => {
+    register("self-emptying", input => ({
+      apiKey: String((input as { apiKey: unknown }).apiKey),
+      headers: { token: "ops", toJSON: () => ({}) },
+    }));
+
+    await expect(write("self-emptying", { apiKey: "k" })).rejects.toThrow(
+      /parsing what would be saved does not return what was saved/
+    );
+  });
+
+  // An array can do it too, and an array carrying NAMED properties loses
+  // those to serialisation while its indices survive.
+  it("refuses an array that loses what serialisation cannot carry", async () => {
+    register("named-array", input => ({
+      apiKey: String((input as { apiKey: unknown }).apiKey),
+      scopes: Object.assign(["send"], { region: "eu" }),
+    }));
+
+    await expect(write("named-array", { apiKey: "k" })).rejects.toThrow(
+      /parsing what would be saved does not return what was saved/
+    );
+  });
+
+  // Field ORDER is not a difference. The comparison is structural, so a parser
+  // that rebuilds its output field by field — an ordinary thing to write — is
+  // accepted, and `updateProvider` must agree with that when it decides
+  // whether a save changed the configuration.
+  it("stores a configuration whose parser reorders its own fields", async () => {
+    register("reordering", input => {
+      const value = input as { apiKey: unknown; region?: unknown };
+      return value.region === undefined
+        ? { apiKey: String(value.apiKey), region: "eu" }
+        : { region: String(value.region), apiKey: String(value.apiKey) };
+    });
+
+    const provider = await write("reordering", { apiKey: "k" });
+
+    const stored = await service.getProviderDecrypted(provider.id);
+    expect(stored.configuration).toEqual({ apiKey: "k", region: "eu" });
+  });
+
   // An ARRAY is ordinary configuration and JSON preserves it exactly. Its
   // `length` is a non-enumerable own key, so a naive own-key comparison
   // rejects every provider that has one.
@@ -369,92 +407,5 @@ describe("a configuration whose parse is not a fixed point", () => {
       apiKey: "k",
       scopes: ["send", "read"],
     });
-  });
-
-  // Coercion and DESTRUCTION are different, and only the first is accepted.
-  // A `Map`'s entries are not own enumerable properties, so it serialises to
-  // `{}` — the operator's headers are gone and the adapter runs without them.
-  // The fixed-point comparison cannot see this on its own: both of its sides
-  // are already past the column, so an empty projection agrees with an empty
-  // projection and the write looks clean.
-  it("refuses a value whose serialisation keeps nothing", async () => {
-    register("mapped", input => {
-      const value = input as { apiKey: unknown; headers?: unknown };
-      return {
-        apiKey: String(value.apiKey),
-        headers:
-          value.headers instanceof Map
-            ? value.headers
-            : new Map([["x-team", "ops"]]),
-      };
-    });
-
-    await expect(write("mapped", { apiKey: "k" })).rejects.toThrow(
-      /at headers that changes when written as JSON/
-    );
-  });
-
-  // Reached through an array rather than a key, so the walk is not only over
-  // object properties. A `Set` empties the same way a `Map` does.
-  it("refuses an emptied value nested inside an array", async () => {
-    register("nested-set", input => ({
-      apiKey: String((input as { apiKey: unknown }).apiKey),
-      routes: [{ region: "eu", tags: new Set(["primary"]) }],
-    }));
-
-    await expect(write("nested-set", { apiKey: "k" })).rejects.toThrow(
-      /at routes\.\[0\]\.tags that changes when written as JSON/
-    );
-  });
-
-  // An ORDINARY object can empty itself too, by defining a `toJSON` that
-  // returns nothing while the object holds real values. Deciding this by
-  // prototype would exempt it — the prototype is `Object.prototype` — so
-  // emptiness has to be judged by whether the value genuinely held nothing.
-  it("refuses a plain object whose own toJSON discards its fields", async () => {
-    register("self-emptying", input => {
-      const value = input as { apiKey: unknown; headers?: unknown };
-      return {
-        apiKey: String(value.apiKey),
-        headers: value.headers ?? { token: "ops", toJSON: () => ({}) },
-      };
-    });
-
-    await expect(write("self-emptying", { apiKey: "k" })).rejects.toThrow(
-      /at headers that changes when written as JSON/
-    );
-  });
-
-  // An ARRAY can empty itself the same way an object can. The walk asks every
-  // position the one question, so nothing has to remember that arrays are a
-  // separate branch — which is exactly what the earlier shape of this check
-  // did forget.
-  it("refuses an array whose own toJSON discards its entries", async () => {
-    register("self-emptying-array", input => {
-      const value = input as { apiKey: unknown; scopes?: unknown };
-      return {
-        apiKey: String(value.apiKey),
-        scopes: value.scopes ?? Object.assign(["send"], { toJSON: () => ({}) }),
-      };
-    });
-
-    await expect(write("self-emptying-array", { apiKey: "k" })).rejects.toThrow(
-      /at scopes that changes when written as JSON/
-    );
-  });
-
-  // The boundary case that stops the rule above from over-reaching: a plain
-  // empty object also serialises to `{}` and has lost nothing, because there
-  // was nothing to lose. Refusing it would reject an ordinary configuration
-  // that happens to carry an empty map of options.
-  it("stores a configuration containing an empty plain object", async () => {
-    register("empty-object", input => ({
-      apiKey: String((input as { apiKey: unknown }).apiKey),
-      headers: {},
-    }));
-
-    const provider = await write("empty-object", { apiKey: "k" });
-    const stored = await service.getProviderDecrypted(provider.id);
-    expect(stored.configuration).toEqual({ apiKey: "k", headers: {} });
   });
 });
