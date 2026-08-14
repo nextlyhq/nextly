@@ -934,6 +934,25 @@ function isLineCommentAt(
   return /\s/.test(next) || next.charCodeAt(0) <= 0x1f;
 }
 
+/**
+ * The character that CLOSES the quoted region this character opens, or
+ * undefined when it opens none.
+ *
+ * `'` and `"` close with themselves everywhere. The identifier forms are
+ * dialect-specific: SQLite reads `[...]` as a quoted identifier while Postgres
+ * reads `[` as an array subscript, and MySQL uses backticks where Postgres has
+ * no such form.
+ */
+function quoteOpenerAt(
+  char: string | undefined,
+  dialect?: SupportedDialect
+): string | undefined {
+  if (char === "'" || char === '"') return char;
+  if (dialect === "sqlite" && char === "[") return "]";
+  if (dialect === "mysql" && char === "`") return "`";
+  return undefined;
+}
+
 export function splitSqlStatements(
   sql: string,
   dialect?: SupportedDialect
@@ -996,13 +1015,20 @@ export function splitSqlStatements(
       continue;
     }
 
-    if ((char === "'" || char === '"') && prevChar !== "\\") {
-      if (!inString) {
-        inString = true;
-        stringChar = char;
-      } else if (char === stringChar) {
-        inString = false;
-      }
+    // Quoted IDENTIFIERS count as quoted regions too, not just string literals.
+    // SQLite accepts `[a--b]` and MySQL accepts a backtick-quoted `a--b`; with
+    // only ' and " tracked, the dashes inside one read as a comment opener and
+    // the statement's semicolon disappears into it.
+    //
+    // The bracket and backtick forms are applied per dialect rather than
+    // everywhere: `[` is not a quote in Postgres, where it subscripts an array,
+    // so treating it as one there would swallow ordinary SQL.
+    const opener = quoteOpenerAt(char, dialect);
+    if (!inString && opener) {
+      inString = true;
+      stringChar = opener;
+    } else if (inString && char === stringChar && prevChar !== "\\") {
+      inString = false;
     }
 
     if (char === ";" && !inString) {

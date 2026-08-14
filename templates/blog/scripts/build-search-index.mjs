@@ -21,14 +21,14 @@
 
 import { execSync } from "node:child_process";
 import {
-  existsSync,
   mkdirSync,
   readdirSync,
+  readFileSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 
 // Next.js 16 app-router builds emit server HTML under .next/server/app, named by
 // route with any route group stripped, so a post at /blog/[slug] lands at
@@ -95,36 +95,85 @@ function assertSiteDirUsable(dir) {
 }
 
 /**
- * Pagefind's own marker file. Its presence is what identifies a directory as
- * Pagefind output, and it is written by every successful index build.
+ * Records which entries THIS script created inside the output directory.
+ *
+ * The cleanup below has to remove a previous index without removing anything
+ * else, and neither the path nor a marker file can establish that. A marker
+ * proves Pagefind wrote *something* here; it does not prove the directory is
+ * exclusively Pagefind's — point `PAGEFIND_OUTPUT_DIR` at `public`, build once
+ * with posts, and Pagefind writes its marker among the site's own assets. A
+ * later empty build would then read the marker as permission to delete them.
+ *
+ * So ownership is recorded rather than inferred: the entries present before a
+ * run are compared with those after it, and only the difference is ever
+ * removed. Anything that was already there is not this script's to delete.
  */
-const PAGEFIND_MARKER = "pagefind-entry.json";
+const MANIFEST = ".nextly-search-index.json";
+
+/** Top-level entry names in `dir`, or an empty list when it does not exist. */
+function entriesOf(dir) {
+  try {
+    return readdirSync(dir);
+  } catch (err) {
+    if (err.code === "ENOENT") return [];
+    throw err;
+  }
+}
+
+/** Record the entries a successful run added, so a later run can remove them. */
+function recordCreatedEntries(dir, before) {
+  const added = entriesOf(dir).filter(
+    entry => !before.includes(entry) && entry !== MANIFEST
+  );
+  try {
+    writeFileSync(
+      join(dir, MANIFEST),
+      `${JSON.stringify({ entries: added }, null, 2)}\n`,
+      "utf-8"
+    );
+  } catch (err) {
+    console.warn(
+      `  (could not record the index manifest: ${err instanceof Error ? err.message : String(err)})`
+    );
+  }
+}
 
 /**
- * Remove a previous index, and ONLY if this directory is one.
+ * Remove exactly the entries a previous run created, and nothing else.
  *
- * `outputDir` comes from the environment, and the removal is recursive — so a
- * plausible override is a destructive command. `PAGEFIND_OUTPUT_DIR=public`
- * would take every static asset with it and `=.` would take the project.
- *
- * Ownership is established structurally rather than by inspecting the path:
- * the directory must contain Pagefind's own entry file. A path that Pagefind
- * did not write does not have one, so it is left alone and reported. That also
- * covers the paths no denylist would think to name.
+ * Returns true when something was removed. Without a manifest nothing is
+ * touched: an index written before this script recorded its output cannot be
+ * distinguished from a directory of unrelated files, and guessing there is what
+ * deletes a user's assets.
  */
 function removePreviousIndex(dir) {
-  const marker = join(dir, PAGEFIND_MARKER);
-  if (!existsSync(marker)) {
-    if (existsSync(dir) && readdirSync(dir).length > 0) {
+  let manifest;
+  try {
+    manifest = JSON.parse(readFileSync(join(dir, MANIFEST), "utf-8"));
+  } catch {
+    if (entriesOf(dir).length > 0) {
       console.log(
-        `\n• ${dir} holds no ${PAGEFIND_MARKER}, so it was not written by ` +
-          "Pagefind — leaving it untouched rather than deleting it."
+        `\n• ${dir} has no ${MANIFEST}, so this script cannot tell which files ` +
+          "it created — leaving them untouched rather than guessing."
       );
     }
     return false;
   }
-  rmSync(dir, { recursive: true, force: true });
-  return true;
+
+  const entries = Array.isArray(manifest.entries) ? manifest.entries : [];
+  const root = resolve(dir);
+  for (const entry of entries) {
+    // Each path is confined to the output directory, so a manifest carrying
+    // `..` or an absolute path cannot reach outside it.
+    const target = resolve(root, entry);
+    if (target !== root && !target.startsWith(root + sep)) continue;
+    rmSync(target, { recursive: true, force: true });
+  }
+  rmSync(join(root, MANIFEST), { force: true });
+
+  // The directory itself goes only when this script's entries were all of it.
+  if (entriesOf(root).length === 0) rmSync(root, { recursive: true, force: true });
+  return entries.length > 0;
 }
 
 /**
@@ -178,11 +227,17 @@ if (!containsHtml(resolve(siteDir, globRoot))) {
   process.exit(0);
 }
 
+// Captured BEFORE the run so the manifest records only what this run adds. In a
+// directory that already holds unrelated files, that difference is the whole of
+// what may later be removed.
+const entriesBefore = entriesOf(resolve(outputDir));
+
 try {
   execSync(
     `npx -y pagefind --site ${siteDir} --output-path ${outputDir} --glob "${glob}"`,
     { stdio: "inherit" }
   );
+  recordCreatedEntries(resolve(outputDir), entriesBefore);
   writeStatus("built");
   console.log(`\n✓ Search index written to ${outputDir}`);
 } catch (err) {

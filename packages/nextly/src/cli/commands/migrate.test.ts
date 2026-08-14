@@ -108,4 +108,42 @@ describe("splitSqlStatements", () => {
     expect(statements).toHaveLength(2);
     expect(statements[1]).toContain('CREATE TABLE "b"');
   });
+  // SQLite reads `[a--b]` as a quoted identifier, so the dashes inside it are
+  // not a comment opener. Missing that swallowed the statement's semicolon and
+  // merged the next statement into the same chunk.
+  it("does not read a comment inside a sqlite bracket-quoted identifier", () => {
+    const sql = [
+      `CREATE TABLE [a--b] ("id" TEXT);`,
+      `CREATE TABLE "c" ("id" TEXT);`,
+    ].join("\n");
+
+    const statements = splitSqlStatements(sql, "sqlite");
+
+    expect(statements).toHaveLength(2);
+    expect(statements[0]).toContain("[a--b]");
+    expect(statements[1]).toContain('CREATE TABLE "c"');
+  });
+
+  it("does not read a comment inside a mysql backtick-quoted identifier", () => {
+    const sql = [
+      "CREATE TABLE `a--b` (`id` TEXT);",
+      "CREATE TABLE `c` (`id` TEXT);",
+    ].join("\n");
+
+    const statements = splitSqlStatements(sql, "mysql");
+
+    expect(statements).toHaveLength(2);
+    expect(statements[1]).toContain("`c`");
+  });
+
+  // `[` is an array subscript in Postgres rather than a quote, so treating it as
+  // one there would swallow ordinary SQL. This pins the dialects apart.
+  it("treats a bracket as ordinary SQL on postgres", () => {
+    const sql = [
+      `CREATE TABLE "a" ("tags" text[]);`,
+      `CREATE TABLE "b" ("id" TEXT);`,
+    ].join("\n");
+
+    expect(splitSqlStatements(sql, "postgresql")).toHaveLength(2);
+  });
 });
