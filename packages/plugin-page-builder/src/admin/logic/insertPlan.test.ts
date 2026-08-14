@@ -47,6 +47,13 @@ registry.register(
 registry.register(
   def("test/aside", { isContainer: true, slots: [{ name: "sidebar" }] })
 );
+// A container whose only slot is named AND restricted, so the walk has to pass over it.
+registry.register(
+  def("test/panel", {
+    isContainer: true,
+    slots: [{ name: "body", allowedBlocks: ["test/cell"] }],
+  })
+);
 registry.register(def("test/text"));
 
 const node = (
@@ -150,20 +157,35 @@ describe("finding where an inserted block goes", () => {
     );
   });
 
-  it("does not carry a position out of a differently named slot", () => {
-    // `sidebar` index 0 says nothing about where to sit among `default`'s children, so the
-    // block appends instead of claiming a position it cannot have meant.
+  it("uses a container's NAMED slot when that is the one accepting the block", () => {
+    // A container is free to hold its children under any name, and the drag path offers a drop
+    // zone for each. An Insert button that asked only about `default` would refuse a container
+    // the very same block can be dropped into.
     const aside = node("test/aside", { sidebar: [] }, "aside");
+    const root = node("test/page", { default: [aside] }, "page");
+    expect(planInsert(root, "aside", "test/text", registry)).toEqual({
+      parentId: "aside",
+      slot: "sidebar",
+      index: 0,
+    });
+  });
+
+  it("does not carry a position out of a differently named slot", () => {
+    // `body` index 0 says nothing about where to sit among `default`'s children, so the block
+    // appends into the ancestor instead of claiming a position it cannot have meant.
+    const panel = node("test/panel", { body: [] }, "panel");
     const root = node(
       "test/page",
       { default: [node("test/box"), node("test/box")] },
       "page"
     );
-    const withAside: BlockNode = {
+    const withPanel: BlockNode = {
       ...root,
-      slots: { default: [...(root.slots?.default ?? [])], sidebar: [aside] },
+      slots: { default: [...(root.slots?.default ?? [])], other: [panel] },
     };
-    expect(planInsert(withAside, "aside", "test/text", registry)?.index).toBe(
+    // Precondition: the panel really does refuse this block, so the walk is forced upward.
+    expect(canDrop("test/panel", "body", "test/text", registry).ok).toBe(false);
+    expect(planInsert(withPanel, "panel", "test/text", registry)?.index).toBe(
       2
     );
   });

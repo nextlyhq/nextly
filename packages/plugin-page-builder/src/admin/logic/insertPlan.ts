@@ -13,6 +13,7 @@
  *
  * Kept React- and @dnd-kit-free so the walk can be unit-tested.
  */
+import { declaredSlotsOf } from "../../core/block-structure";
 import type { BlockRegistry } from "../../core/registry";
 import { findNode } from "../../core/tree";
 import { DEFAULT_SLOT, type BlockNode } from "../../core/types";
@@ -29,6 +30,9 @@ export interface InsertTarget {
 
 /**
  * The nearest place the selection can reach that will take this block, or `null` when nowhere will.
+ *
+ * "Place" is a container AND one of its slots: a container may hold its children under any name,
+ * so which slot accepts the block is part of the answer rather than an assumption.
  *
  * The search runs OUTWARD from the selection — the selected container first, then each ancestor,
  * then the page root — because that is the order of least surprise: a block lands as close to what
@@ -52,21 +56,49 @@ export function planInsert(
   let after: number | null = null;
 
   for (;;) {
-    if (canDrop(candidate.type, DEFAULT_SLOT, blockType, registry).ok) {
-      const count = candidate.slots?.[DEFAULT_SLOT]?.length ?? 0;
+    const slot = acceptingSlotOf(candidate, blockType, registry);
+    if (slot) {
+      const count = candidate.slots?.[slot]?.length ?? 0;
       return {
         parentId: candidate.id,
-        slot: DEFAULT_SLOT,
-        index: after === null ? count : Math.min(after + 1, count),
+        slot,
+        // A position is only carried into the SAME slot it came from; anywhere else it names a
+        // place among children it was never among.
+        index:
+          after !== null && slot === DEFAULT_SLOT
+            ? Math.min(after + 1, count)
+            : count,
       };
     }
     const location = locateNode(root, candidate.id);
     if (!location) return null;
     const parent = findNode(root, location.parentId);
     if (!parent) return null;
-    // Only a position within the SAME slot can be carried upward; a block that came out of a named
-    // slot has no meaningful index in the default one.
     after = location.slot === DEFAULT_SLOT ? location.index : null;
     candidate = parent;
   }
+}
+
+/**
+ * The slot on this container that will take `blockType`, or `undefined` for none.
+ *
+ * Every slot the definition declares is asked, in declaration order, rather than only `default`.
+ * A container is free to hold its children under any name — `sidebar`, `items` — and the drag path
+ * offers a drop zone for each of them, so an Insert button that asked about one name would refuse
+ * a container the very same block can be dropped into.
+ *
+ * Declaration order rather than a preference: it is the order the block author wrote, which is the
+ * only statement of intent available, and it puts `default` first wherever a container declares
+ * one alongside others.
+ */
+function acceptingSlotOf(
+  container: BlockNode,
+  blockType: string,
+  registry: BlockRegistry
+): string | undefined {
+  const def = registry.get(container.type);
+  const slots = def ? def.slots : declaredSlotsOf(container.type);
+  return (slots ?? []).find(
+    spec => canDrop(container.type, spec.name, blockType, registry).ok
+  )?.name;
 }
