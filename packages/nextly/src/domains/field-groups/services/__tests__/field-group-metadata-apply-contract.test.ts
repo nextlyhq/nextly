@@ -34,6 +34,14 @@ vi.mock("../field-group-table-provisioning", () => ({
   resolveComponentTypeColumn: vi.fn(async () => "type"),
 }));
 
+// Enabling localization is gated on the app declaring a `localization` block, and that gate runs
+// BEFORE the schema check these tests are about. Left real, a fixture that turns localization on
+// is refused for a missing config and never reaches the guard — a test passing on the wrong
+// rejection. Its own behaviour is covered where it lives.
+vi.mock("../../../i18n/config/require-app-config", () => ({
+  assertLocalizationConfigured: vi.fn(),
+}));
+
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { NextlyError } from "../../../../errors";
@@ -579,6 +587,119 @@ describe("a field-group update refuses what it cannot deliver", () => {
         errors: [
           expect.objectContaining({
             path: "fields.score",
+            code: "requires_schema_change",
+          }),
+        ],
+      },
+    });
+    expect(registry.updateComponent).not.toHaveBeenCalled();
+  });
+
+  // 🔴 THE case that DESTROYS content rather than leaving a stale shape. `heading` -> `title` on an
+  // already-localized group is invisible to a name-keyed comparison, and the companion reconciler
+  // reads it as ADD `title`, DROP `heading` — every stored translation goes with the drop, with no
+  // rename resolution because a PATCH has nowhere to ask the question.
+  it("refuses a rename on a localized group, which the companion would apply as a drop", async () => {
+    const registry = registryWithGroup({
+      localized: true,
+      fields: [{ name: "heading", type: "text", localized: true }],
+    });
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    const refusal = await service
+      .updateFieldGroup({
+        slug: "hero",
+        fields: [{ name: "title", type: "text", localized: true }] as never,
+      })
+      .catch((error: unknown) => error);
+
+    expect(refusal).toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: expect.arrayContaining([
+          expect.objectContaining({
+            path: "fields.title",
+            code: "requires_schema_change",
+          }),
+          expect.objectContaining({
+            path: "fields.heading",
+            code: "requires_schema_change",
+          }),
+        ]),
+      },
+    });
+    expect(registry.updateComponent).not.toHaveBeenCalled();
+  });
+
+  // 🔴 The same ambiguity through the OTHER companion path. Enabling localization while renaming
+  // hides the change twice over: both names are translatable under the requested state, so neither
+  // appears on the main table, and the enable planner seeds only new columns whose name already
+  // exists on main — so `title` is seeded from nothing and `heading` is left behind on main.
+  it("refuses a rename that arrives with localization being enabled", async () => {
+    const registry = registryWithGroup({
+      localized: false,
+      fields: [{ name: "heading", type: "text", localized: true }],
+    });
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    const refusal = await service
+      .updateFieldGroup({
+        slug: "hero",
+        localized: true,
+        fields: [{ name: "title", type: "text", localized: true }] as never,
+      })
+      .catch((error: unknown) => error);
+
+    expect(refusal).toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: expect.arrayContaining([
+          expect.objectContaining({ code: "requires_schema_change" }),
+        ]),
+      },
+    });
+    expect(registry.updateComponent).not.toHaveBeenCalled();
+  });
+
+  // 🔴 THE property the desired-table builder drops on purpose. It carries no DEFAULT for a user
+  // column, because the diff engine compares it against a live database whose reported defaults
+  // would otherwise churn — but the field group's CREATOR does emit a checkbox default, so a
+  // `defaultValue` edit changes the column while leaving the desired table byte-identical.
+  it("refuses a checkbox default change, which the desired table does not carry", async () => {
+    const registry = registryWithGroup({
+      fields: [
+        { name: "featured", type: "checkbox", defaultValue: false },
+      ] as never,
+    });
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    const refusal = await service
+      .updateFieldGroup({
+        slug: "hero",
+        fields: [
+          { name: "featured", type: "checkbox", defaultValue: true },
+        ] as never,
+      })
+      .catch((error: unknown) => error);
+
+    expect(refusal).toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: [
+          expect.objectContaining({
+            path: "fields.featured",
             code: "requires_schema_change",
           }),
         ],

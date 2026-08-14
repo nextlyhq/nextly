@@ -487,6 +487,47 @@ export class FieldGroupMetadataService {
       for (const column of index.columns) changed.add(attribute(column));
     }
 
+    // What the CREATOR would write for the main table, line by line.
+    //
+    // 🔴 The desired-table builder answers "which columns and indexes exist", which is what the diff
+    // engine compares against introspection — and it deliberately carries no DEFAULT for a user
+    // column, because a live database reports defaults in a form that would make every reconcile
+    // propose changing them. `FieldGroupSchemaService` is the thing that actually creates a field
+    // group's table, and it DOES emit a checkbox's `DEFAULT`. So a `defaultValue` edit changes the
+    // column the creator writes while leaving the desired table identical, and rows inserted without
+    // the field would keep taking the old default.
+    //
+    // Each user column is one line beginning with its quoted name, so a changed line still names the
+    // field it belongs to.
+    const { FieldGroupSchemaService } = await import(
+      "../../../services/field-groups/field-group-schema-service"
+    );
+    const creatorLines = (fields: FieldDefinition[]): Map<string, string> => {
+      const sql = new FieldGroupSchemaService(dialect).generateMigrationSQL(
+        args.existing.tableName,
+        fields,
+        { localized: args.localized }
+      );
+      const out = new Map<string, string>();
+      for (const line of sql.split("\n")) {
+        // A column definition, and nothing else: INDENTED and QUOTED, which the statements are
+        // not. Matching an unquoted leading word instead picked up `CREATE TABLE ...` and reported
+        // a field called "CREATE". The index statements are excluded on purpose — they are already
+        // compared, by name and uniqueness, from the desired table above.
+        const column = /^\s+["`]([A-Za-z0-9_]+)["`]\s+\S/.exec(line);
+        if (column) out.set(column[1], line.trim());
+      }
+      return out;
+    };
+    const creatorBefore = creatorLines(oldFields);
+    const creatorAfter = creatorLines(args.fields);
+    for (const [column, line] of creatorAfter) {
+      if (creatorBefore.get(column) !== line) changed.add(attribute(column));
+    }
+    for (const column of creatorBefore.keys()) {
+      if (!creatorAfter.has(column)) changed.add(attribute(column));
+    }
+
     // The companion, for a field localized on both sides. Compared as the rendered DDL type rather
     // than the spec object, because that string IS the column the reconciler would write: on SQLite
     // a `maxLength` change moves the spec and renders to the same TEXT, which needs no statement and
@@ -507,6 +548,31 @@ export class FieldGroupMetadataService {
       // Only a field present on BOTH sides: an add or a drop is the delta the reconciler applies.
       const was = companionBefore.get(name);
       if (was !== undefined && was !== column) changed.add(name);
+    }
+
+    // 🔴 A companion that both GAINS and LOSES a column in one edit is a rename the reconciler
+    // cannot see, and the consequence is destroyed content rather than a stale shape.
+    //
+    // Neither companion path resolves it. While the group STAYS localized,
+    // `buildCompanionReconcileStatements` diffs by name alone, so a rename becomes ADD the new
+    // column, DROP the old — and every stored translation goes with the drop. While localization is
+    // being ENABLED, `buildCompanionTransitionStatements` seeds only the new columns whose name
+    // already exists on main, so a renamed field is seeded from nothing and its old column is left
+    // behind on the main table.
+    //
+    // A drop-and-add pair is the ambiguity the apply pipeline exists to resolve — its rename
+    // detector asks which of the two a caller meant, and a PATCH has no way to ask. So this refuses
+    // only the PAIR: a pure add is a new translatable field and a pure drop is a removed one, and
+    // the reconciler applies both correctly.
+    const companionAdded = [...companionAfter.keys()].filter(
+      name => !companionBefore.has(name)
+    );
+    const companionDropped = [...companionBefore.keys()].filter(
+      name => !companionAfter.has(name)
+    );
+    if (companionAdded.length > 0 && companionDropped.length > 0) {
+      for (const name of [...companionAdded, ...companionDropped])
+        changed.add(name);
     }
 
     if (changed.size === 0) return;
