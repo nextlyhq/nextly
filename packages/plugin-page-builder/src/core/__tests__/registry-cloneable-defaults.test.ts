@@ -8,7 +8,11 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { createBlockRegistry, createNode } from "../registry";
+import {
+  createBlockRegistry,
+  createNode,
+  type BlockRegistry,
+} from "../registry";
 import type { BlockDefinition } from "../types";
 
 const base = {
@@ -65,8 +69,18 @@ describe("defaults a block instance is cloned from", () => {
   it("without the check, the failure lands at insertion instead", () => {
     // The reason the check is at registration rather than left to fail naturally: this is what an
     // author would have met, and it names neither the block nor the prop.
-    const node = { type: "acme/thing", defaultProps: { fn: () => null } };
-    expect(() => structuredClone(node.defaultProps)).toThrow();
+    //
+    // Reached through a registry that HOLDS the invalid definition rather than by calling
+    // `structuredClone` on a bare object. That would assert a property of the platform — functions
+    // are not cloneable — which is true whether or not `createNode` clones anything, so it stayed
+    // green on the very implementation it exists to describe.
+    const holding: BlockRegistry = {
+      register: () => {},
+      get: () => defWith({ defaultProps: { onPick: () => null } }),
+      has: () => true,
+      all: () => [],
+    };
+    expect(() => createNode("acme/thing", holding)).toThrow();
   });
 });
 
