@@ -24,6 +24,7 @@ import {
   jobPasses,
   landedWhole,
   missingRequired,
+  pageWrapping,
   pathMatches,
   remoteForRepo,
   repoFromRemoteUrl,
@@ -56,12 +57,14 @@ const INTEGRATION_YML = readFileSync(
   "utf8"
 );
 const PR_IGNORE = workflowPathsIgnore(INTEGRATION_YML, "pull_request");
-const REQUIRED = requiredChecks(PR_IGNORE);
+const REQUIRED = requiredChecks(PR_IGNORE, { merged: false });
 
 /** Every required check present and green, which is what a pass needs. */
+const TITLE = "Validate PR title follows Conventional Commits";
 const allGreen = () => [
   green(CI),
   green("gitleaks"),
+  green(TITLE),
   green("Integration (postgres)"),
   green("Integration (mysql)"),
   green("Integration (sqlite)"),
@@ -444,6 +447,7 @@ describe("missingRequired", () => {
       "Integration (postgres)",
       "Integration (mysql)",
       "Integration (sqlite)",
+      TITLE,
     ]);
   });
 
@@ -457,7 +461,7 @@ describe("missingRequired", () => {
         DOCS_CHANGE,
         REQUIRED
       )
-    ).toEqual([]);
+    ).toEqual([TITLE]);
   });
 
   it("requires every check when the change set could not be read", () => {
@@ -469,6 +473,7 @@ describe("missingRequired", () => {
       "Integration (postgres)",
       "Integration (mysql)",
       "Integration (sqlite)",
+      TITLE,
     ]);
   });
 
@@ -479,6 +484,7 @@ describe("missingRequired", () => {
       "Integration (postgres)",
       "Integration (mysql)",
       "Integration (sqlite)",
+      TITLE,
     ]);
   });
 });
@@ -736,6 +742,59 @@ describe("workflowPathsIgnore", () => {
   });
 });
 
+describe("requiredChecks by mode", () => {
+  it("requires the PR-title status before a merge and not after", () => {
+    // It reports through the statuses surface from its own workflow, and only
+    // on a pull request. Judged only when present, a run that never started
+    // left the title unvalidated and the gate green; required after a merge, it
+    // would demand a status a push never writes.
+    expect(requiredChecks([], { merged: false }).map(c => c.name)).toContain(
+      TITLE
+    );
+    expect(requiredChecks([], { merged: true }).map(c => c.name)).not.toContain(
+      TITLE
+    );
+  });
+});
+
+describe("gateVerdict eligibility", () => {
+  const base = {
+    tip: FULL_TIP,
+    unresolvedThreads: 0,
+    checkRuns: allGreen(),
+    changedPaths: CODE_CHANGE,
+    required: REQUIRED,
+    codexReviewedSha: FULL_TIP.slice(0, 10),
+    coderabbitReviewCount: 1,
+  };
+
+  it("blocks a draft, whose checks are green and which cannot merge", () => {
+    const verdict = gateVerdict({ ...base, eligibility: { draft: true } });
+
+    expect(verdict.blockers.map(b => b.kind)).toContain("draft");
+  });
+
+  it("blocks a closed unmerged pull request, which keeps its green checks", () => {
+    const verdict = gateVerdict({
+      ...base,
+      eligibility: { state: "closed", merged: false },
+    });
+
+    expect(verdict.blockers.map(b => b.kind)).toContain("closed");
+  });
+
+  it("does not block a MERGED pull request for being closed", () => {
+    // The control that keeps the case above from blocking every merged pull
+    // request the post-merge mode exists to check: merged ones are closed too.
+    const verdict = gateVerdict({
+      ...base,
+      eligibility: { state: "closed", merged: true },
+    });
+
+    expect(verdict.blockers.map(b => b.kind)).not.toContain("closed");
+  });
+});
+
 describe("flatPages", () => {
   it("refuses a page that could not be read", () => {
     // `--paginate --slurp` returns a failed page as null. Flattening past it
@@ -746,6 +805,23 @@ describe("flatPages", () => {
       TypeError
     );
     expect(() => flatPages(null, "files")).toThrow(TypeError);
+  });
+
+  it("refuses an API error body, which is an object but not a page", () => {
+    // The shape a failed request actually returns. A validator asking only for
+    // a non-null object accepts it, and the `?? []` downstream then drops it —
+    // so an unread page carrying blockers becomes a passing gate.
+    expect(() =>
+      flatPages([{ message: "Bad credentials" }], "check-runs", pageWrapping("check_runs"))
+    ).toThrow(TypeError);
+  });
+
+  it("accepts the wrapped shape the checks endpoints return", () => {
+    const pages = [{ check_runs: [green("a")] }];
+
+    expect(flatPages(pages, "check-runs", pageWrapping("check_runs"))).toEqual(
+      pages
+    );
   });
 
   it("passes pages that were all read", () => {

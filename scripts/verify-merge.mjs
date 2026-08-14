@@ -177,6 +177,7 @@ export function gateVerdict({
   checkRuns,
   changedPaths,
   required,
+  eligibility,
   codexReviewedSha,
   coderabbitReviewCount,
 }) {
@@ -224,6 +225,17 @@ export function gateVerdict({
         detail: `${job.name} (${job.status}/${job.conclusion ?? "-"})`,
       });
     }
+  }
+
+  // GitHub will not merge either of these, so a gate that reports the revision
+  // as mergeable is describing something that cannot happen. Neither is visible
+  // in checks or threads: a closed pull request keeps its green head checks, and
+  // a draft never loses them.
+  if (eligibility?.draft === true) {
+    blockers.push({ kind: "draft", detail: "pull request is a draft" });
+  }
+  if (eligibility?.state === "closed" && eligibility?.merged !== true) {
+    blockers.push({ kind: "closed", detail: "pull request is closed unmerged" });
   }
 
   if (!verdictCoversTip(codexReviewedSha, tip)) {
@@ -357,16 +369,27 @@ export function exitCode({ landedVerdict, mergeable }) {
  * SHORTER list that looks complete: fewer changed files can turn a source change
  * into a documentation-only one and excuse every integration check.
  */
-export function flatPages(pages, label) {
+export function flatPages(pages, label, isReadablePage = Array.isArray) {
   if (!Array.isArray(pages)) {
     throw new TypeError(`${label}: expected an array of pages`);
   }
   for (const page of pages) {
-    if (page === null || typeof page !== "object") {
+    // The predicate is per-ENDPOINT because the shapes differ: files paginate
+    // as bare arrays, check-runs and statuses as objects wrapping one. A single
+    // "is it a non-null object" test spans both and therefore accepts neither
+    // properly — an API error body like `{ message: "Bad credentials" }` passes
+    // it, and is then dropped by the `?? []` downstream, so an unread page
+    // carrying blockers becomes a passing gate.
+    if (!isReadablePage(page)) {
       throw new TypeError(`${label}: a page could not be read`);
     }
   }
   return pages;
+}
+
+/** A paginated page that wraps its array under `key`, as the checks endpoints do. */
+export function pageWrapping(key) {
+  return page => Array.isArray(page?.[key]);
 }
 
 /**
@@ -530,7 +553,7 @@ export function workflowPathsIgnore(workflowText, trigger) {
  * Checks whose absence means the revision has no coverage, not that it is
  * clean, each with the filter deciding whether it was due to report.
  */
-export function requiredChecks(integrationPathsIgnore) {
+export function requiredChecks(integrationPathsIgnore, { merged = false } = {}) {
   return [
     // Every other job in `ci.yml` hangs off this one through `needs: [ci]`, so
     // if it never reported then the browser, scaffold and dev-script jobs did
@@ -544,6 +567,14 @@ export function requiredChecks(integrationPathsIgnore) {
     { name: "Integration (postgres)", pathsIgnore: integrationPathsIgnore },
     { name: "Integration (mysql)", pathsIgnore: integrationPathsIgnore },
     { name: "Integration (sqlite)", pathsIgnore: integrationPathsIgnore },
+    // Reports through the STATUSES surface from its own workflow, and only on a
+    // pull request — a push to the base branch has no title to validate, so
+    // requiring it post-merge would demand a status that is never written.
+    // Judged only when present, a run that never started left the title
+    // unvalidated and the gate green.
+    ...(merged
+      ? []
+      : [{ name: "Validate PR title follows Conventional Commits", pathsIgnore: [] }]),
   ];
 }
 
@@ -715,7 +746,7 @@ export function main(argv) {
     "api",
     `repos/${REPO}/pulls/${pr}`,
     "--jq",
-    "{cross:.head.repo.full_name!=.base.repo.full_name,repo:.head.repo.full_name,branch:.head.ref,merged:.merged,mergeSha:.merge_commit_sha,head:.head.sha}",
+    "{cross:.head.repo.full_name!=.base.repo.full_name,repo:.head.repo.full_name,branch:.head.ref,merged:.merged,mergeSha:.merge_commit_sha,head:.head.sha,state:.state,draft:.draft}",
   ]);
   REMOTE_FOR_FETCH = remoteForRepo(meta.repo, configuredRemotes());
   const tip = lsRemoteTip(REMOTE_FOR_FETCH, meta.branch);
@@ -763,7 +794,8 @@ export function main(argv) {
           "--slurp",
           `repos/${REPO}/commits/${subject}/check-runs?per_page=100`,
         ]),
-        "check-runs"
+        "check-runs",
+        pageWrapping("check_runs")
       ).flatMap(page => page.check_runs ?? [])
     : [];
 
@@ -796,7 +828,7 @@ export function main(argv) {
     workflowAt(subject, ".github/workflows/integration.yml"),
     merged ? "push" : "pull_request"
   );
-  const required = requiredChecks(integrationIgnore);
+  const required = requiredChecks(integrationIgnore, { merged });
   // Paginated. A pull request with more than 100 review threads would
   // otherwise have everything past the first page counted as resolved, which
   // is the reassuring direction.
@@ -862,7 +894,8 @@ export function main(argv) {
           "--slurp",
           `repos/${REPO}/commits/${subject}/status?per_page=100`,
         ]),
-        "statuses"
+        "statuses",
+        pageWrapping("statuses")
       ).flatMap(page => page.statuses ?? [])
     : [];
   const allChecks = [...checkRuns, ...statuses.map(statusAsRun)];
@@ -877,6 +910,7 @@ export function main(argv) {
     checkRuns: allChecks,
     changedPaths,
     required,
+    eligibility: { state: meta.state, draft: meta.draft, merged },
     codexReviewedSha: reviewedSha,
     coderabbitReviewCount: coderabbit,
   });
