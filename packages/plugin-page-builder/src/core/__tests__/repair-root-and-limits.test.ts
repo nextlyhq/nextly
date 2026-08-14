@@ -272,3 +272,64 @@ describe("a child permitted under several parents", () => {
     expect((entry as { wrapWith?: string }).wrapWith).toBeUndefined();
   });
 });
+
+describe("a root whose sole permitted parent is named twice", () => {
+  const repeated = defineBlock({
+    name: "acme/repeated",
+    version: 1,
+    description: "Names one permitted parent, twice.",
+    example: { props: {} },
+    // Accepted by every registration path: the gates require namespaced names, not distinct ones.
+    parent: ["core/container", "core/container"],
+    render: () => null,
+  });
+
+  afterEach(() => {
+    clearBlocks();
+  });
+
+  it("is offered the wrapper, because one name repeated is still one candidate", () => {
+    registerBlocks([repeated], { source: "@acme/blocks" });
+    const root = node("acme/repeated");
+    const [entry] = findInvalidSlotEntries(root, registry);
+    // Counting the raw list reads this as two candidates and reports "no automatic fix", leaving
+    // the author an unsaveable page and nothing to press, while the repair is fully determined.
+    expect(entry).toMatchObject({
+      kind: "root-parent",
+      type: "acme/repeated",
+      wrapWith: "core/container",
+    });
+  });
+
+  it("is actually repaired by it", () => {
+    // The offer is only worth making if applying it resolves the fault; re-running the finder is
+    // what separates "we changed something" from "we fixed it".
+    registerBlocks([repeated], { source: "@acme/blocks" });
+    const root = node("acme/repeated");
+    const [entry] = findInvalidSlotEntries(root, registry);
+    const repaired = repairInvalidSlot(root, entry, registry);
+    expect(repaired.type).toBe("core/container");
+    expect(findInvalidSlotEntries(repaired, registry)).toEqual([]);
+  });
+
+  it("still declines where the repeated names are genuinely two", () => {
+    // The control on the dedupe itself. Collapsing duplicates must not collapse DISTINCT names: a
+    // root naming two real parents is still ambiguous and must be offered nothing.
+    const two = defineBlock({
+      name: "acme/twoparents",
+      version: 1,
+      description: "Names two different permitted parents.",
+      example: { props: {} },
+      parent: ["core/container", "core/cover"],
+      render: () => null,
+    });
+    registerBlocks([two], { source: "@acme/blocks" });
+    const root = node("acme/twoparents");
+    const [entry] = findInvalidSlotEntries(root, registry);
+    expect(entry).toMatchObject({
+      kind: "root-parent",
+      type: "acme/twoparents",
+    });
+    expect((entry as { wrapWith?: string }).wrapWith).toBeUndefined();
+  });
+});

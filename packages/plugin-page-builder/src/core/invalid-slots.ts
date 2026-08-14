@@ -403,20 +403,23 @@ export function findInvalidSlotEntries(
       // No outer slot constrains a root, so the child's own list is the whole question. Exactly one
       // permitted parent that can actually hold it is a determined repair; several is a choice the
       // author has to make, and this entry then reports the fault without offering to guess.
-      wrapWith:
-        rootParents.length === 1
-          ? wrapperIfItHolds(
-              rootParents[0],
-              root.type,
-              registry,
-              heightOf(root),
-              roomForAWrapper,
-              // The wrapper BECOMES the root, so it sits inside nothing — and a wrapper that
-              // restricts its own parents could not satisfy that any more than the block being
-              // repaired can.
-              null
-            )
-          : undefined,
+      // Asked through the same function the nested path uses, rather than counting `rootParents`
+      // here. Counting the raw array makes a definition that repeats its sole permitted parent —
+      // `parent: ["core/container", "core/container"]`, which every registration path accepts —
+      // read as two candidates, so a root whose repair is fully determined is reported with no
+      // automatic fix. One list, deduplicated once, decides both.
+      //
+      // No outer slot constrains a root, so there is no spec to narrow the candidates by.
+      wrapWith: soleParentWrapperFor(
+        undefined,
+        root.type,
+        registry,
+        heightOf(root),
+        roomForAWrapper,
+        // The wrapper BECOMES the root, so it sits inside nothing — and a wrapper that restricts
+        // its own parents could not satisfy that any more than the block being repaired can.
+        null
+      ),
     });
   }
 
