@@ -218,16 +218,132 @@ const SKIP_FILES = new Set([".DS_Store", "Thumbs.db", ".gitkeep"]);
  * Storing a file under a name the tool restores on copy is what `create-next-app` and
  * `create-vite` do, for the first of those reasons.
  */
-const RENAMED_ON_COPY: ReadonlyArray<
-  readonly [shipped: string, inProject: string]
-> = [
-  ["gitignore", ".gitignore"],
-  ["AGENTS.md.template", "AGENTS.md"],
-  ["CLAUDE.md.template", "CLAUDE.md"],
-];
+/**
+ * How a restored file combines with one the project ALREADY has at that name.
+ *
+ * Scaffolding does not always start from an empty directory: the installer targets the current
+ * directory, and it offers "ignore files and continue" on a non-empty one. So the destination can
+ * hold a `.gitignore` the developer wrote, or an `AGENTS.md` full of their own notes. Replacing
+ * either destroys work that the tool has no claim on — and for the guide it would also break the
+ * promise the guide itself makes, that anything outside its managed block is preserved.
+ *
+ * Every strategy therefore keeps what is already there and adds only what the scaffold
+ * contributes. None of them can remove a line the developer wrote.
+ */
+type MergeStrategy = "managed-block" | "append-missing-lines";
 
 /**
- * Give the project the real names for the files the templates ship renamed.
+ * Files a template stores under one name and a project must receive under another.
+ *
+ * Two unrelated reasons converge on the same mechanism, which is why there is one table rather
+ * than a rename per case:
+ *
+ * `.gitignore` — npm removes it from every tarball it packs, always, and with no way to opt out;
+ * a `files` entry does not bring it back. A template storing it under its real name therefore
+ * keeps it in a checkout — which is what `--local-template` reads, and what everyone working on
+ * this repository uses — and loses it in the published CLI, which is what every user runs. The
+ * consequence is not cosmetic: a scaffold writes a real `.env`, so the first `git add .` in a new
+ * project commits it.
+ *
+ * `AGENTS.md` / `CLAUDE.md` — a coding agent reads these as instructions for whatever directory
+ * it finds them in. Stored under their real names they are live instructions for THIS repository,
+ * so an agent maintaining the template would follow scaffold guidance — an unresolved
+ * `{{databaseDialect}}` and commands meant for a generated standalone app — instead of the
+ * monorepo's own. The suffix keeps the source inert until it reaches a project.
+ *
+ * Storing a file under a name the tool restores on copy is what `create-next-app` and
+ * `create-vite` do, for the first of those reasons.
+ */
+const RENAMED_ON_COPY: ReadonlyArray<{
+  readonly shipped: string;
+  readonly inProject: string;
+  readonly merge: MergeStrategy;
+}> = [
+  // Line-wise, because an ignore file is a set of patterns: the developer's entries stay and the
+  // scaffold's missing ones are added, so `.env` ends up ignored either way.
+  {
+    shipped: "gitignore",
+    inProject: ".gitignore",
+    merge: "append-missing-lines",
+  },
+  // The guide carries its content inside a managed block, which is exactly the region a
+  // regeneration is allowed to replace.
+  {
+    shipped: "AGENTS.md.template",
+    inProject: "AGENTS.md",
+    merge: "managed-block",
+  },
+  // One line pointing at the guide. If a project already points there, nothing to add; if it has
+  // its own instructions, they keep them and gain the pointer.
+  {
+    shipped: "CLAUDE.md.template",
+    inProject: "CLAUDE.md",
+    merge: "append-missing-lines",
+  },
+];
+
+/** Delimits the region of a guide that a regeneration owns. */
+const MANAGED_START = "<!-- nextly:managed:start -->";
+const MANAGED_END = "<!-- nextly:managed:end -->";
+
+/**
+ * Replace the managed region of `existing` with the one `incoming` carries, leaving every line
+ * outside it untouched.
+ *
+ * When `existing` has no managed region — a guide the developer wrote themselves — the block is
+ * APPENDED rather than substituted for the file. Their instructions are the ones an agent should
+ * read first, and the scaffold's are additional context rather than a correction.
+ *
+ * An unterminated region (a start marker with no end) is treated as absent. Splicing to the end of
+ * the file would be the alternative, and it would delete everything the developer wrote after the
+ * marker on the strength of a typo.
+ */
+function mergeManagedBlock(existing: string, incoming: string): string {
+  const start = existing.indexOf(MANAGED_START);
+  const end = existing.indexOf(MANAGED_END);
+  const block = extractManagedBlock(incoming);
+
+  if (start === -1 || end === -1 || end < start) {
+    return `${existing.trimEnd()}\n\n${block}\n`;
+  }
+  return (
+    existing.slice(0, start) + block + existing.slice(end + MANAGED_END.length)
+  );
+}
+
+/**
+ * The managed region of `incoming`, or the whole of it when it carries no markers.
+ *
+ * Taking the region rather than the file keeps a merge from nesting one block inside another if a
+ * template ever wraps its guide in a preamble.
+ */
+function extractManagedBlock(incoming: string): string {
+  const start = incoming.indexOf(MANAGED_START);
+  const end = incoming.indexOf(MANAGED_END);
+  if (start === -1 || end === -1 || end < start) return incoming.trim();
+  return incoming.slice(start, end + MANAGED_END.length);
+}
+
+/**
+ * Append the lines of `incoming` that `existing` does not already contain, in order.
+ *
+ * Compared after trimming so indentation or a trailing space does not duplicate a pattern the file
+ * already has. Blank lines and comments are carried only when something real accompanies them, so
+ * a re-run cannot accumulate section headers.
+ */
+function appendMissingLines(existing: string, incoming: string): string {
+  const have = new Set(existing.split("\n").map(line => line.trim()));
+  const missing = incoming
+    .split("\n")
+    .filter(line => line.trim() !== "" && !have.has(line.trim()));
+
+  if (missing.length === 0) return existing;
+  return `${existing.trimEnd()}\n\n${missing.join("\n")}\n`;
+}
+
+/**
+ * Give the project the real names for the files the templates ship renamed, without overwriting
+ * anything the project already has at those names.
  *
  * Each entry is a no-op when the template does not carry that file, so a template without an
  * ignore file or without a guide is not given an empty one it never asked for.
@@ -236,10 +352,29 @@ const RENAMED_ON_COPY: ReadonlyArray<
  * renamed afterwards would keep its `{{databaseDialect}}` unresolved.
  */
 async function restoreShippedNames(targetDir: string): Promise<void> {
-  for (const [shipped, inProject] of RENAMED_ON_COPY) {
+  for (const { shipped, inProject, merge } of RENAMED_ON_COPY) {
     const from = path.join(targetDir, shipped);
     if (!(await fs.pathExists(from))) continue;
-    await fs.move(from, path.join(targetDir, inProject), { overwrite: true });
+
+    const to = path.join(targetDir, inProject);
+    if (!(await fs.pathExists(to))) {
+      await fs.move(from, to);
+      continue;
+    }
+
+    // The destination is the developer's file. Combine into it, then drop the shipped copy so the
+    // project is not left carrying both names.
+    const [existing, incoming] = await Promise.all([
+      fs.readFile(to, "utf-8"),
+      fs.readFile(from, "utf-8"),
+    ]);
+    const merged =
+      merge === "managed-block"
+        ? mergeManagedBlock(existing, incoming)
+        : appendMissingLines(existing, incoming);
+
+    await fs.writeFile(to, merged, "utf-8");
+    await fs.remove(from);
   }
 }
 

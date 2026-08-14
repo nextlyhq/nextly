@@ -66,13 +66,43 @@ const slug = typeof doc.slug === "string" ? doc.slug : undefined;
 - **Users are not a normal collection.** Read them through `nextly.users`, not
   `find({ collection: "users" })`. The users namespace supports pagination and
   `search`; it does not support a `where` filter.
-- **Migrations ship one file per dialect.** `0001_x.sql` is Postgres,
-  `0001_x.mysql.sql` and `0001_x.sqlite.sql` are the others. The CLI picks the
-  variant for the configured dialect; edit all the ones you support.
+- **A migration you generate is one file, in THIS project's dialect.**
+  `npx nextly migrate:create <name>` (there is no npm script for it) writes a
+  single `migrations/<timestamp>_<slug>.sql` containing **{{databaseDialect}}**
+  SQL — no `.mysql.sql` or `.sqlite.sql` beside it. Edit that file.
+- **A suffixed set means the migration was shipped, not generated.** A template
+  that supports every dialect ships `0001_x.sql` (Postgres) alongside
+  `0001_x.mysql.sql` and `0001_x.sqlite.sql`, and the CLI runs the variant for
+  the configured dialect. Those are prebuilt. Adding companion variants to a
+  migration you generated is not part of the normal workflow, and nothing will
+  run them unless this project is itself meant to support several dialects.
 - **The admin needs a first user.** Visit `/admin` after `npm run dev` and
   complete the setup screen.
-- **Cache tags come from `nextly/runtime`.** Wrap reads in `cachedFind` and tag
-  them with `nextlyTags(collection)` so a write invalidates the right pages.
+- **Cache tags come from `nextly/runtime`.** Wrap PUBLIC reads in `cachedFind`
+  and tag them with `nextlyTags(collection)` so a write invalidates the right
+  pages.
+
+  **`keyParts` is a security boundary, not a performance detail.** Two callers
+  whose `keyParts` match share one cache entry. So if the read applies any
+  per-caller rule — owner-only scoping, role-based visibility, an API key's
+  narrowed scope — the caller's identity has to be IN the key, or one user's
+  rows get served to another:
+
+  ```ts
+  // Public: same for every reader, so a stable key is correct.
+  cachedFind(() => nextly.findBySlug("posts", slug), {
+    tags: nextlyTags("posts"),
+    keyParts: ["posts", slug],
+  });
+
+  // Per-user: the caller's id is part of what makes the entry unique.
+  cachedFind(() => nextly.find("orders", { user }), {
+    tags: nextlyTags("orders"),
+    keyParts: ["orders", "list", user.id],
+  });
+  ```
+
+  When in doubt, do not cache. A missing cache is slow; a shared one leaks.
 
 ## Conventions worth keeping
 

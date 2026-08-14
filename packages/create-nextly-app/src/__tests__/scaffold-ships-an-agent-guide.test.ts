@@ -12,7 +12,15 @@
  * arrival in a project. Asserting only the second passes while the source sits in the repository
  * under its special name, which is the state this replaces.
  */
-import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -155,4 +163,122 @@ describe("a scaffolded project arrives with the guide", () => {
     },
     30_000
   );
+});
+
+// Scaffolding does not always start from an empty directory: the installer targets the current
+// directory, and offers "ignore files and continue" on a non-empty one. Everything the developer
+// already wrote at these names has to survive.
+describe("scaffolding over a project that already has these files", () => {
+  let workdir: string;
+
+  beforeAll(() => {
+    vi.stubGlobal("fetch", () => Promise.reject(new Error("offline test")));
+  });
+  afterAll(() => {
+    vi.unstubAllGlobals();
+  });
+
+  afterEach(async () => {
+    if (workdir) await rm(workdir, { recursive: true, force: true });
+  });
+
+  /** Scaffold into a directory already holding `seed`, and return what it holds afterwards. */
+  async function scaffoldOver(
+    seed: Record<string, string>
+  ): Promise<Record<string, string>> {
+    workdir = await mkdtemp(path.join(tmpdir(), "nextly-existing-"));
+    const target = path.join(workdir, "project");
+    await mkdir(target, { recursive: true });
+    for (const [name, contents] of Object.entries(seed)) {
+      await writeFile(path.join(target, name), contents, "utf-8");
+    }
+
+    await copyTemplate({
+      projectName: "my-app",
+      projectType: "blank",
+      targetDir: target,
+      database: sqlite,
+      templateSource: {
+        basePath: path.join(templatesRoot, "base"),
+        templatePath: path.join(templatesRoot, "blank"),
+      },
+      // What the installer sets once the developer has chosen to continue into a non-empty
+      // directory. Without it the copy refuses, and none of this is reachable.
+      allowExistingTarget: true,
+    });
+
+    const out: Record<string, string> = {};
+    for (const name of Object.keys(seed)) {
+      out[name] = await readFile(path.join(target, name), "utf-8");
+    }
+    return out;
+  }
+
+  it("keeps notes written outside the managed block", async () => {
+    const after = await scaffoldOver({
+      "AGENTS.md": [
+        "# House rules",
+        "",
+        "Never touch billing/ without a review.",
+        "",
+        "<!-- nextly:managed:start -->",
+        "stale generated content",
+        "<!-- nextly:managed:end -->",
+        "",
+        "## Footnotes",
+        "Ask Priya about the staging database.",
+      ].join("\n"),
+    });
+
+    // The developer's own text, on BOTH sides of the block.
+    expect(after["AGENTS.md"]).toContain(
+      "Never touch billing/ without a review."
+    );
+    expect(after["AGENTS.md"]).toContain(
+      "Ask Priya about the staging database."
+    );
+    // The block itself is the region a regeneration owns, so it IS replaced.
+    expect(after["AGENTS.md"]).not.toContain("stale generated content");
+    expect(after["AGENTS.md"]).toContain("Agent guide for this Nextly project");
+  }, 30_000);
+
+  it("appends the block to a guide that has no managed region", async () => {
+    const after = await scaffoldOver({
+      "AGENTS.md": "# My own guide\n\nRun the thing, then the other thing.\n",
+    });
+
+    expect(after["AGENTS.md"]).toContain(
+      "Run the thing, then the other thing."
+    );
+    expect(after["AGENTS.md"]).toContain("Agent guide for this Nextly project");
+    // Their guide comes FIRST: an agent reads what the developer wrote before what a scaffold
+    // contributed.
+    expect(after["AGENTS.md"].indexOf("Run the thing")).toBeLessThan(
+      after["AGENTS.md"].indexOf("Agent guide for this Nextly project")
+    );
+  }, 30_000);
+
+  it("keeps an existing .gitignore's patterns and adds the missing ones", async () => {
+    const after = await scaffoldOver({
+      ".gitignore": "# ours\ncoverage/\n.env\n",
+    });
+
+    expect(after[".gitignore"]).toContain("coverage/");
+    // Present in the seed already, so it must not be duplicated.
+    expect(
+      after[".gitignore"].split("\n").filter(l => l.trim() === ".env")
+    ).toHaveLength(1);
+    // A pattern only the template knows about still arrives.
+    expect(after[".gitignore"]).toContain("node_modules");
+  }, 30_000);
+
+  it("does not duplicate a CLAUDE.md pointer that is already there", async () => {
+    const after = await scaffoldOver({
+      "CLAUDE.md": "@AGENTS.md\n",
+    });
+
+    expect(
+      after["CLAUDE.md"].split("\n").filter(l => l.trim() === "@AGENTS.md")
+    ).toHaveLength(1);
+  }, 30_000);
 });

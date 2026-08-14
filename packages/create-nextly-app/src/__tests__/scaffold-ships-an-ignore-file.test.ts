@@ -79,7 +79,13 @@ describe("the ignore file survives packing", () => {
 describe("copyTemplate", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(fs.pathExists).mockResolvedValue(true as never);
+    // Answers per path rather than "true" for everything. A blanket yes would say the project
+    // ALREADY has a `.gitignore`, which is a real case the scaffolder handles by merging into it
+    // — so the rename this test exists to watch would never run, and the test would be reporting
+    // on a branch it does not name.
+    vi.mocked(fs.pathExists).mockImplementation((target: string) =>
+      Promise.resolve(!String(target).endsWith(".gitignore"))
+    );
     vi.mocked(fs.existsSync).mockReturnValue(true);
     vi.mocked(fs.copy).mockResolvedValue(undefined as never);
     vi.mocked(fs.writeFile).mockResolvedValue(undefined as never);
