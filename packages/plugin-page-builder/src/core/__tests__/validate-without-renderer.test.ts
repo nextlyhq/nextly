@@ -41,7 +41,13 @@ describe("the write path with nothing rendered", () => {
   it("still knows what slots a migrated block declares", () => {
     // Structure is data, available at import time, with no React anywhere behind it.
     expect(declaredSlotsOf("core/container")).toEqual([{ name: "default" }]);
-    expect(declaredSlotsOf("core/columns")).toEqual([{ name: "default" }]);
+    // Columns carries the catalogue's only slot restriction, and it is read
+    // from structure alone here — so the write path enforces what may sit in a
+    // column without the renderer having been loaded.
+    expect(declaredSlotsOf("core/columns")).toEqual([
+      { name: "default", allowedBlocks: ["core/column"] },
+    ]);
+    expect(declaredSlotsOf("core/column")).toEqual([{ name: "default" }]);
     expect(declaredSlotsOf("core/grid")).toEqual([{ name: "default" }]);
   });
 
@@ -120,6 +126,7 @@ describe("the write path with nothing rendered", () => {
     // matches the real registry — is what `structure-covers-the-catalog.test.ts` asserts, because
     // only the registry can see it and this file must never load it.
     const containers = [
+      "core/column",
       "core/columns",
       "core/container",
       "core/content-carousel",

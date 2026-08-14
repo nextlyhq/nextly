@@ -86,6 +86,26 @@ export const containerStructure = declareStructure({
 export const columnsStructure = declareStructure({
   type: "core/columns",
   isContainer: true,
+  // The only container that restricts what its slot takes, and the restriction
+  // is what makes a column addressable. While any block could sit directly in
+  // the row, a "column" was an anonymous wrapper the renderer created, so there
+  // was nothing to give a width, a background or an alignment to. Naming the
+  // child makes each column a block an author can select and style, which is
+  // the same split Gutenberg, Elementor and Bricks all arrived at.
+  slots: [{ name: "default", allowedBlocks: ["core/column"] }],
+});
+
+/**
+ * One cell of a {@link columnsStructure} row.
+ *
+ * A container so it can hold anything, and unrestricted so that "what may go in
+ * a column" stays the same question as "what may go on a page" — a column that
+ * accepted less than the canvas would be a rule authors have to learn for no
+ * gain.
+ */
+export const columnStructure = declareStructure({
+  type: "core/column",
+  isContainer: true,
   slots: [{ name: "default" }],
 });
 

@@ -32,14 +32,47 @@ describe("canDrop", () => {
     ).toBe(false);
   });
 
-  it("returns a boolean for the grid slot (allowedBlocks decided in Task 7)", () => {
-    const r = canDrop(
-      "core/grid",
+  it("accepts any block into a slot that restricts nothing", () => {
+    // The catalogue's usual shape: a container declares a slot and takes
+    // whatever the canvas offers. Asserted so the refusal below is read as the
+    // restriction working rather than as containers being generally strict.
+    expect(
+      canDrop("core/grid", "default", "core/heading", defaultBlockRegistry).ok
+    ).toBe(true);
+  });
+
+  it("refuses a block a slot does not list, and says why", () => {
+    // The one restriction in the catalogue. Before it existed the
+    // `not-allowed-in-slot` reason was unreachable in the shipped product:
+    // every container declared a bare slot, so no drop could produce it and
+    // nothing downstream could show an author why a release did nothing.
+    const refusal = canDrop(
+      "core/columns",
       "default",
       "core/heading",
       defaultBlockRegistry
     );
-    expect(typeof r.ok).toBe("boolean");
+
+    expect(refusal.ok).toBe(false);
+    // The REASON, not just the refusal. It is what an invalid-target state has
+    // to render, and it is the field both `planDrop` call sites currently drop.
+    expect(refusal.reason).toBe("not-allowed-in-slot");
+  });
+
+  it("accepts the block that slot does list", () => {
+    // The positive control. Without it a slot restriction that refused
+    // EVERYTHING would satisfy the case above.
+    expect(
+      canDrop("core/columns", "default", "core/column", defaultBlockRegistry).ok
+    ).toBe(true);
+  });
+
+  it("lets a column hold what a page holds", () => {
+    // A column restricting its own contents would be a second rule for authors
+    // to learn, so it takes whatever the canvas offers.
+    expect(
+      canDrop("core/column", "default", "core/heading", defaultBlockRegistry).ok
+    ).toBe(true);
   });
 });
 
