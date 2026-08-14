@@ -42,10 +42,10 @@ describe("canDrop", () => {
   });
 
   it("refuses a block a slot does not list, and says why", () => {
-    // The one restriction in the catalogue. Before it existed the
-    // `not-allowed-in-slot` reason was unreachable in the shipped product:
-    // every container declared a bare slot, so no drop could produce it and
-    // nothing downstream could show an author why a release did nothing.
+    // The one restriction in the catalogue, and so the only thing that makes
+    // `not-allowed-in-slot` reachable in the shipped product at all: a
+    // container declaring a bare slot cannot produce that reason from any drop,
+    // and a reason nothing produces is one no surface can be shown to render.
     const refusal = canDrop(
       "core/columns",
       "default",

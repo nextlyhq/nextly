@@ -87,11 +87,12 @@ export const columnsStructure = declareStructure({
   type: "core/columns",
   isContainer: true,
   // The only container that restricts what its slot takes, and the restriction
-  // is what makes a column addressable. While any block could sit directly in
-  // the row, a "column" was an anonymous wrapper the renderer created, so there
-  // was nothing to give a width, a background or an alignment to. Naming the
-  // child makes each column a block an author can select and style, which is
-  // the same split Gutenberg, Elementor and Bricks all arrived at.
+  // is what makes a column addressable. A row could hold any block directly and
+  // lay each one out as a column, but then a column is a shape the renderer
+  // draws rather than a thing in the document — nothing to select, and nowhere
+  // to put a width, a background or an alignment. Naming the child makes each
+  // column a block an author can reach, which is the same split Gutenberg,
+  // Elementor and Bricks all arrived at.
   slots: [
     {
       name: "default",

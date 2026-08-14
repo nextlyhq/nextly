@@ -150,9 +150,9 @@ describe("the repair banner", () => {
   });
 
   it("keeps a block a slot refuses, by putting it in the one thing that may hold it", () => {
-    // The shape a document stored before `core/columns` restricted its slot carries: headings
-    // sitting directly in the row. The write path refuses it, and the author can SEE the
-    // headings — so a repair that deleted them would take away work in front of them.
+    // A document written while the row took any block carries this shape: headings sitting
+    // directly in the row. The write path refuses it, and the author can SEE the headings — so a
+    // repair that deleted them would take away work in front of them.
     const legacy = docWith({
       default: [
         makeNode("core/columns", {}, undefined, {
@@ -191,8 +191,9 @@ describe("the repair banner", () => {
         allowUnknown: true,
       })
     ).toBe(true);
-    // Both headings survive, each inside a column of its own — the arrangement the row drew
-    // before a column was a block, rather than one column holding both.
+    // Both headings survive, each inside a column of its own. That is the arrangement the row
+    // lays out for two loose children, so the repair preserves what the page looked like rather
+    // than collapsing both into one column.
     const row = repaired.document.root.slots?.default?.[0];
     expect(row?.slots?.default?.map(c => c.type)).toEqual([
       "core/column",

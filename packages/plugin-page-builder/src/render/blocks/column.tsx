@@ -19,12 +19,12 @@ const SELF_ALIGNMENTS = ["flex-start", "center", "flex-end", "stretch"];
 /**
  * One cell of a `core/columns` row.
  *
- * Exists so a column is a block rather than a wrapper. The row used to build an
- * anonymous flex child around each of its children, which meant a column had no
- * identity: nothing to select, nothing to give a width, a background or an
- * alignment to, and nothing an author could target at a breakpoint. Naming it
- * gives every one of those a home for free, because a block already has props,
- * styles and supports.
+ * Exists so a column is a block rather than a shape the row draws. A flex child
+ * built anonymously around each of the row's children has no identity: nothing
+ * to select, nothing to give a width, a background or an alignment to, and
+ * nothing an author can target at a breakpoint. A block has props, styles and
+ * supports already, so naming the column gives every one of those a home for
+ * free.
  *
  * `width` is authored as a CSS length or left empty. Empty means "share the
  * remaining space equally", which is what a row of columns should do before
