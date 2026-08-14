@@ -403,11 +403,12 @@ describe("verdictFor", () => {
 
 describe("a pull request that is no longer open", () => {
   /**
-   * The state that cost four commits: a merged pull request whose branch kept
-   * receiving pushes. Every gate answer below describes an OPEN pull request,
-   * so without this the verdict is "no review at the head" — true, useless, and
-   * repeated forever while the stranded commits sit outside the merge.
+   * A merged pull request whose branch kept receiving pushes. Every other
+   * answer here describes an OPEN pull request, so without this case the
+   * verdict is "no review at the head" — true, useless, and repeated on every
+   * run while the stranded commits sit outside the merge.
    */
+
   it("names a stranded tail rather than reporting missing coverage", () => {
     const v = verdictFor({
       missing: [CODEX],
@@ -427,10 +428,15 @@ describe("a pull request that is no longer open", () => {
     expect(v.exitCode).toBe(0);
   });
 
-  it("treats a closed pull request the same way", () => {
-    expect(
-      verdictFor({ blocking: [CODEX], state: "CLOSED", stranded: 2 }).verdict
-    ).toBe("MERGED WITH A STRANDED TAIL");
+  /**
+   * Closed without merging is a refusal, not a completion. Sharing the merged
+   * branch would report success for a pull request whose work never landed —
+   * and a consumer reading the exit code would treat it as done.
+   */
+  it("refuses a closed pull request rather than calling it merged", () => {
+    const v = verdictFor({ blocking: [CODEX], state: "CLOSED", stranded: 0 });
+    expect(v.verdict).toBe("CLOSED WITHOUT MERGING");
+    expect(v.exitCode).toBe(1);
   });
 
   /**

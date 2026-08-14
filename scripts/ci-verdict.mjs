@@ -176,13 +176,23 @@ export function verdictFor({
   // describes one. Reporting "no review at the head" for a merged PR is true
   // and useless: the branch keeps moving after the merge, so the gate would
   // repeat that forever while commits pushed since sit outside the merge.
-  if (state !== "OPEN") {
+  if (state === "MERGED") {
     return {
       verdict: stranded > 0 ? "MERGED WITH A STRANDED TAIL" : "ALREADY MERGED",
       detail: { state, stranded },
       exitCode: stranded > 0 ? 1 : 0,
     };
   }
+  // Closed without merging is a refusal, not a completion. Sharing the merged
+  // branch would report success for a pull request whose work never landed.
+  if (state !== "OPEN") {
+    return {
+      verdict: "CLOSED WITHOUT MERGING",
+      detail: { state, stranded },
+      exitCode: 1,
+    };
+  }
+
   const blockingMissing = missing.filter(login => blocking.includes(login));
   const blockingLimited = limited.filter(login => blocking.includes(login));
   const blockingRefused = refused.filter(login => blocking.includes(login));
@@ -317,8 +327,21 @@ async function main(argv) {
 
   // Each query is its own process and its failure is its own exception: a
   // rejected request must reach the caller as a refusal, never as empty data.
+  // `--hostname` on every API call, and a host-qualified `--repo`. Parsing the
+  // host out of GH_REPO and then letting the requests default sends them to
+  // public GitHub while claiming to describe an Enterprise repository.
   const gh = args =>
-    JSON.parse(execFileSync("gh", args, { encoding: "utf8", maxBuffer: 64e6 }));
+    JSON.parse(
+      execFileSync(
+        "gh",
+        args[0] === "api"
+          ? ["api", "--hostname", host, ...args.slice(1)]
+          : args,
+        { encoding: "utf8", maxBuffer: 64e6 }
+      )
+    );
+  const repoArg = host === "github.com" ? repo : `${host}/${repo}`;
+
   // The head comes from the REF, not from the pull request object. GitHub's
   // `headRefOid` lags a push — measured a full commit behind while `ls-remote`
   // was already correct — so a gate reading it can certify a revision that is
@@ -328,7 +351,7 @@ async function main(argv) {
     "view",
     pr,
     "--repo",
-    repo,
+    repoArg,
     "--json",
     "headRefName,isCrossRepository,headRepositoryOwner,headRepository,state,headRefOid",
   ]);
@@ -442,6 +465,15 @@ async function main(argv) {
     return 2;
   }
 
+  // The head is checked again AFTER that comparison, because the comparison
+  // itself performs several requests. A push landing during them moves the head
+  // without changing any review state, so the fingerprints match and the
+  // verdict would otherwise describe a revision that is no longer current.
+  if (headOf() !== head) {
+    process.stderr.write("ci-verdict: head moved during the recheck; re-run\n");
+    return 2;
+  }
+
   // Trimmed: a list written with spaces after the commas yields entries that
   // match no login, and an unmatched blocking reviewer is silently dropped —
   // the gate then reports clean without that reviewer's coverage.
@@ -465,9 +497,37 @@ async function main(argv) {
   // GitHub's own `headRefOid` freezes at the revision that merged. Commits
   // after that point are in neither, so they are counted here rather than left
   // to be noticed.
+  // A branch that was force-pushed, deleted or restored cannot certify its own
+  // tail: resetting it back to the merged head leaves an empty range that is
+  // indistinguishable from a branch that never advanced, which is precisely the
+  // tail this check exists to find. Refuse rather than report zero.
+  let rewritten = 0;
+  if (meta.state !== "OPEN") {
+    rewritten = gh([
+      "api",
+      "--paginate",
+      `repos/${repo}/issues/${pr}/timeline?per_page=100`,
+    ]).filter(event =>
+      [
+        "head_ref_force_pushed",
+        "head_ref_deleted",
+        "head_ref_restored",
+      ].includes(event?.event)
+    ).length;
+    if (rewritten > 0) {
+      process.stderr.write(
+        `ci-verdict: ${rewritten} history-rewrite event(s); tail NOT CHECKABLE\n`
+      );
+      return 2;
+    }
+  }
+
   let stranded = 0;
   if (meta.state !== "OPEN" && meta.headRefOid && meta.headRefOid !== head) {
-    execFileSync("git", ["fetch", "origin", head], { stdio: "ignore" });
+    // Fetched from the remote that HAS it: a fork's head is not on `origin`,
+    // so asking the base repository throws before the count can be taken.
+    execFileSync("git", ["fetch", headRemote, head], { stdio: "ignore" });
+
     stranded = execFileSync(
       "git",
       ["rev-list", "--count", `${meta.headRefOid}..${head}`],
