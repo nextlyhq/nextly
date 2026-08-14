@@ -267,6 +267,17 @@ export interface BlockDefinition<P = Record<string, unknown>> {
   icon: string;
   category: BlockCategory;
   isContainer?: boolean;
+  /**
+   * The only types this block may be a DIRECT child of. Omit for "anywhere".
+   *
+   * The child's half of the nesting rule, and not derivable from the parent's `allowedBlocks`:
+   * a slot naming a type must not confine that type to it, and a block meaningless outside one
+   * parent has to say so itself. Named after the same field in Gutenberg's block metadata.
+   *
+   * A core block states this on its {@link BlockStructure} and it arrives here by the spread, so
+   * the structure and the definition cannot disagree. A plugin block states it here.
+   */
+  parent?: string[];
   /** Declarative style capabilities → inspector controls + compiled CSS (spec §4.1). */
   supports?: BlockSupports;
   slots?: SlotSpec[];

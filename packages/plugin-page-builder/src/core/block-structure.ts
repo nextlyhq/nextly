@@ -18,6 +18,7 @@
  *
  * @module core/block-structure
  */
+import type { BlockRegistry } from "./registry";
 import type { BlockNode, SlotSpec } from "./types";
 
 /**
@@ -92,6 +93,27 @@ export function declaredSlotsOf(type: string): SlotSpec[] | undefined {
  */
 export function declaredParentsOf(type: string): string[] | undefined {
   return CORE_BLOCK_STRUCTURES[type]?.parent;
+}
+
+/**
+ * Where a type may sit, asking the REGISTERED definition first and structure otherwise.
+ *
+ * The same branch `declaredSlotsOf`'s callers make, and for the same reason: a registered
+ * definition is the whole answer about itself, including when it states no restriction, so a
+ * fallback to structure there would let a built-in's declaration answer for a plugin block that
+ * deliberately restricts nothing. Structure answers where no definition is registered, which is
+ * the state the config and server paths run in.
+ *
+ * One reader rather than the branch written at each call site, because the three that need it —
+ * the drop rules, the validator and the repair finder — must agree or the editor and the write
+ * path disagree about what a legal document is.
+ */
+export function parentsOf(
+  type: string,
+  registry: BlockRegistry
+): string[] | undefined {
+  const def = registry.get(type);
+  return def ? def.parent : declaredParentsOf(type);
 }
 
 /**

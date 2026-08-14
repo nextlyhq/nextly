@@ -26,7 +26,7 @@
  *
  * @module core/invalid-slots
  */
-import { declaredParentsOf, declaredSlotsOf } from "./block-structure";
+import { declaredSlotsOf, parentsOf } from "./block-structure";
 import { createNode, type BlockRegistry } from "./registry";
 import {
   dropSlots,
@@ -177,7 +177,7 @@ function soleParentWrapperFor(
   registry: BlockRegistry,
   childDepth: number
 ): string | undefined {
-  const parents = declaredParentsOf(childType);
+  const parents = parentsOf(childType, registry);
   if (!parents || parents.length !== 1) return undefined;
   const wrapperType = parents[0];
   if (spec?.allowedBlocks && !spec.allowedBlocks.includes(wrapperType)) {
@@ -216,7 +216,7 @@ function wrapperIfItHolds(
   }
   // And the CHILD's own restriction, which the inner slot's allowlist cannot express. A block that
   // may only sit under one parent is not made placeable by a wrapper that accepts everything.
-  const childParents = declaredParentsOf(childType);
+  const childParents = parentsOf(childType, registry);
   if (childParents && !childParents.includes(wrapperType)) return undefined;
   return wrapperType;
 }
@@ -295,7 +295,7 @@ export function findInvalidSlotEntries(
           // refuses the document for it exactly as it does for an undeclared slot name. Reported
           // here rather than only enforced, because this is the one fault the author can see and
           // still cannot act on: the block draws, so nothing about it says why saving fails.
-          const parents = declaredParentsOf(child.type);
+          const parents = parentsOf(child.type, registry);
           if (parents && !parents.includes(node.type)) {
             // Refused by the write path exactly as an allowlist violation is, and reported in the
             // same shape: a block the author can see, on a page that will not save, with nothing

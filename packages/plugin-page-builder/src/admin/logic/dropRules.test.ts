@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { defaultBlockRegistry } from "../../core/registry";
+import { createBlockRegistry, defaultBlockRegistry } from "../../core/registry";
+import type { BlockDefinition } from "../../core/types";
 import "../../render/blocks"; // side-effect: registers the 7 core blocks
 
 import { canDrop, insertionIndex } from "./dropRules";
@@ -120,5 +121,51 @@ describe("a child's own restriction on where it may sit", () => {
     expect(
       canDrop("core/column", "default", "core/heading", defaultBlockRegistry).ok
     ).toBe(true);
+  });
+});
+
+describe("a PLUGIN block's parent restriction", () => {
+  /**
+   * The capability has to be reachable from a `BlockDefinition`, not only from this package's
+   * private structure table. A core block states it on its structure and it arrives on the
+   * definition by the spread; a plugin block has only the definition, so if the rule were read
+   * from structure alone the field would be advertised and inert.
+   */
+  const own = createBlockRegistry();
+  const def = (type: string, extra: Partial<BlockDefinition> = {}) => ({
+    type,
+    version: 1,
+    label: type,
+    icon: "Square",
+    category: "layout" as const,
+    defaultProps: {},
+    render: () => null,
+    ...extra,
+  });
+  own.register(
+    def("ext/board", { isContainer: true, slots: [{ name: "default" }] })
+  );
+  own.register(
+    def("ext/lane", {
+      isContainer: true,
+      slots: [{ name: "default" }],
+      parent: ["ext/board"],
+    })
+  );
+  own.register(def("ext/note"));
+
+  it("refuses the plugin block outside the parent its DEFINITION names", () => {
+    const refusal = canDrop("ext/lane", "default", "ext/lane", own);
+    expect(refusal.ok).toBe(false);
+    expect(refusal.reason).toBe("wrong-parent");
+  });
+
+  it("accepts it inside that parent", () => {
+    expect(canDrop("ext/board", "default", "ext/lane", own).ok).toBe(true);
+  });
+
+  it("leaves a plugin block that restricts nothing placeable anywhere", () => {
+    // The control. A rule that refused every plugin block would pass the first case alone.
+    expect(canDrop("ext/lane", "default", "ext/note", own).ok).toBe(true);
   });
 });

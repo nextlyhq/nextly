@@ -3,7 +3,7 @@
  * human-readable error string. Used as the `pages.content` field validator (M3) and
  * defensively in the editor. Pure and React-free.
  */
-import { declaredParentsOf, declaredSlotsOf } from "./block-structure";
+import { declaredSlotsOf, parentsOf } from "./block-structure";
 import type { BlockRegistry } from "./registry";
 import type { BlockDocument, BlockNode } from "./types";
 import { MAX_DEPTH, MAX_NODES } from "./types";
@@ -31,7 +31,7 @@ export function validateDocument(
   // A root that restricts its parents has none, which is not the same as being satisfied. Checked
   // once here rather than inside the walk, because the walk only ever sees a node as somebody's
   // child — so the one node with no parent was the one node the rule never reached.
-  const rootParents = declaredParentsOf(d.root.type);
+  const rootParents = parentsOf(d.root.type, registry);
   if (rootParents) {
     return `${d.root.type} may only sit inside ${rootParents.join(" or ")}, and a document root sits inside nothing`;
   }
@@ -83,7 +83,7 @@ export function validateDocument(
           // structural rule enforced on only one of the two is a rule the write path accepts and
           // every insertion path refuses, so a stored or hand-authored document could hold a shape
           // no editor would create — and nothing would ever report it.
-          const parents = declaredParentsOf(child.type);
+          const parents = parentsOf(child.type, registry);
           if (parents && !parents.includes(n.type)) {
             return `${child.type} may only sit inside ${parents.join(" or ")}, not ${n.type}`;
           }

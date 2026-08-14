@@ -7,7 +7,7 @@
  * independent — neither is derivable from the other — and a block is only placeable where both
  * agree.
  */
-import { declaredParentsOf } from "../../core/block-structure";
+import { parentsOf } from "../../core/block-structure";
 import type { BlockRegistry } from "../../core/registry";
 
 export interface DropCheck {
@@ -38,7 +38,7 @@ export function canDrop(
   // The child's own restriction, which the parent's allowlist cannot express. A slot that takes
   // anything still may not be a home for a block that only means something under one parent, and
   // asking here rather than at each caller is what makes drag, Insert, paste and reorder agree.
-  const parents = declaredParentsOf(childType);
+  const parents = parentsOf(childType, registry);
   if (parents && !parents.includes(parentType)) {
     return { ok: false, reason: "wrong-parent" };
   }
