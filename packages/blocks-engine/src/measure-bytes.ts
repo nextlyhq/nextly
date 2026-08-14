@@ -519,11 +519,10 @@ export function surveyDocument(
   // of them overrides a field.
   //
   // Each verdict is a comparison the walk's own counters already answer, so a
-  // return site that asserted its own verdict would be a second implementation
-  // of the same question: the two agree on the day they are written, and a
-  // break in either leaves the other producing the expected result. That is not
-  // hypothetical here — a single-site break in the byte verdict left the walk
-  // returning the right answer from the other site.
+  // return site asserting its own verdict would be a second implementation of
+  // the same question. Two implementations agree on the day they are written
+  // and a break in either leaves the other producing the expected result, so
+  // the pair is untestable one site at a time.
   //
   // `deepest` and `nodes` are advanced immediately before the check that ends
   // the walk, so reading them here reports the same breach the exit detected

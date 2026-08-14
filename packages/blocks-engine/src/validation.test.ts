@@ -780,11 +780,12 @@ describe("validation never throws on adversarial input", () => {
     // Exactly one, and the message must quote the bound that was ENFORCED
     // rather than whichever value a later read produced.
     expect(reads).toBe(1);
+    // The WHOLE message, not a substring of it. `includes("10")` is satisfied
+    // by "100" and by the getter's own 1000000000, so it passes on exactly the
+    // implementation this asserts against.
     expect(
-      issues.some(
-        i => i.code === "node-count-exceeded" && i.message.includes("10")
-      )
-    ).toBe(true);
+      issues.filter(i => i.code === "node-count-exceeded").map(i => i.message)
+    ).toEqual(["Document exceeds the maximum of 10 nodes."]);
   });
 
   it("bounds the path text unknown class warnings can return", () => {

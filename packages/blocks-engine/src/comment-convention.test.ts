@@ -26,8 +26,12 @@ import { describe, expect, it } from "vitest";
  * no meaning inside a description of what the code does, so matching them
  * cannot reject a correct comment.
  *
- * There is deliberately no pattern for ordinal narration, and the reason
- * generalises. "The third instance of this shape we have found" is process
+ * ORDINAL PROCESS NARRATION IS NOT ENFORCED HERE, and that is stated rather
+ * than left to be inferred from its absence: "the third instance of this shape
+ * we have found" passes this suite, and no other check in the repository covers
+ * it. The convention still forbids it; nothing mechanical catches it.
+ *
+ * The reason generalises. "The third instance of this shape we have found" is process
  * history; "the third instance in the array owns the separator" describes a
  * parser. The difference is intent, not vocabulary, so no expression over the
  * words can separate them. Pairing the ordinal with a discovery verb does not
@@ -36,6 +40,14 @@ import { describe, expect, it } from "vitest";
  * sentences of exactly that shape which describe runtime behaviour. This file
  * matches structure and leaves intent unenforced, rather than pretending intent
  * is detectable syntax.
+ *
+ * Narrowing to first-person discovery — "we found", "I fixed" — looks like the
+ * reliable version and is not. Measured against this repository, the first
+ * expression of that shape matches `verify-credentials.ts`'s "of whether we
+ * found a user", which describes what a lookup returned. The OBJECT of the verb
+ * separates the two cases, and enumerating objects is the unbounded surface
+ * again. That sample is a negative control below, so the next attempt fails on
+ * it immediately rather than shipping and being silenced.
  */
 const FORBIDDEN: Array<{ pattern: RegExp; why: string }> = [
   {
@@ -169,6 +181,10 @@ describe("code comments describe the code", () => {
       "// the second time the cache missed, refresh the credentials",
       "// the third instance found in the pool is the one that owns the lock",
       "// on the second retry the fixed backoff is replaced by the jittered one",
+      // First-person discovery, taken verbatim from `verify-credentials.ts`. It
+      // describes what a lookup returned, so a pattern keyed on "we found"
+      // rejects working prose.
+      "// of whether we found a user. Without this branch, the miss path returns",
     ];
     for (const sample of allowed) {
       const [comment] = commentText(sample);
