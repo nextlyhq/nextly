@@ -31,6 +31,11 @@
  *   fails to create its check-runs is invisible here unless it is listed. Adding
  *   one is deliberate work; the list does not derive itself.
  *
+ * - **A retained commit status is accepted as current.** The title check runs on
+ *   `edited` as well as on a push, and GitHub keeps the previous successful
+ *   status until the rerun replaces it — so a title edited without moving the
+ *   head can be judged on the status of the title it replaced.
+ *
  * - **`refs/pull/N/merge` is resolved, not pinned.** A base branch advancing
  *   mid-run can change which revision that ref names, and the filter would then
  *   be read from a revision other than the one the checks ran on.
@@ -548,19 +553,6 @@ export function workflowApplies(pathsIgnore, changedPaths) {
 }
 
 /**
- * `integration.yml`'s `paths-ignore`, which decides whether it runs at all.
- *
- * It filters at the TRIGGER, so on a change set it ignores the workflow creates
- * no check-runs whatsoever. That is the opposite of `ci.yml`, which runs always
- * and decides inertness in a job — leaving a `skipped` check-run behind, which
- * is a report. Absence and skipped look the same to a reader and only one of
- * them is evidence.
- *
- * Mirrored rather than parsed, and pinned by a test that reads the workflow, so
- * that editing the workflow fails CI here instead of silently widening what
- * this gate will pass.
- */
-/**
  * The `paths-ignore` globs a workflow declares under one trigger.
  *
  * The gate reads the workflow itself rather than holding a copy of its filter.
@@ -693,9 +685,11 @@ let REMOTE_FOR_FETCH = "origin";
  *
  * `refs/pull/N/merge` and a squash commit belong to the base repository even
  * when the branch does not, so they are fetched from here rather than from the
- * head remote, which for a fork holds neither.
+ * head remote, which for a fork holds neither. Resolved through the same
+ * function as the head remote: from a fork checkout `origin` is the fork, so a
+ * literal here is the defect this variable exists to fix, one step along.
  */
-const BASE_REMOTE = "origin";
+let BASE_REMOTE = "origin";
 
 /**
  * `gh api`, raw. Throws on failure rather than degrading to an empty result.
@@ -816,9 +810,11 @@ export function main(argv) {
     "api",
     `repos/${REPO}/pulls/${pr}`,
     "--jq",
-    "{cross:.head.repo.full_name!=.base.repo.full_name,repo:.head.repo.full_name,branch:.head.ref,merged:.merged,mergeSha:.merge_commit_sha,head:.head.sha,state:.state,draft:.draft,changedFiles:.changed_files}",
+    "{cross:.head.repo.full_name!=.base.repo.full_name,repo:.head.repo.full_name,branch:.head.ref,merged:.merged,mergeSha:.merge_commit_sha,head:.head.sha,state:.state,draft:.draft,changedFiles:.changed_files,baseRepo:.base.repo.full_name}",
   ]);
-  REMOTE_FOR_FETCH = remoteForRepo(meta.repo, configuredRemotes());
+  const remotes = configuredRemotes();
+  REMOTE_FOR_FETCH = remoteForRepo(meta.repo, remotes);
+  BASE_REMOTE = remoteForRepo(meta.baseRepo, remotes);
   const tip = lsRemoteTip(REMOTE_FOR_FETCH, meta.branch);
 
   // `.merged`, never the presence of `.merge_commit_sha`. GitHub populates that
@@ -955,10 +951,16 @@ export function main(argv) {
     `repos/${REPO}/pulls/${pr}/reviews?per_page=100`,
   ]).flat();
   const CODEX = "chatgpt-codex-connector[bot]";
-  const reviewedSha = reviews
-    .filter(r => r?.user?.login === CODEX && r?.commit_id)
-    .map(r => r.commit_id)
-    .pop();
+  // Through the same helper the second reviewer uses. Taking the LAST record
+  // instead assumes reviews complete in the order they were requested, and an
+  // older-head review finishing after a current-head one then hides a verdict
+  // that does cover this revision behind one that does not.
+  const reviewedSha = reviewsCoveringTip(reviews, tip, CODEX).length
+    ? tip
+    : reviews
+        .filter(r => r?.user?.login === CODEX && r?.commit_id)
+        .map(r => r.commit_id)
+        .pop();
   // Scoped to THIS revision: a review of an earlier one is not coverage of it.
   const coderabbit = reviewsCoveringTip(
     reviews,
