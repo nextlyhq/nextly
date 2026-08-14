@@ -180,7 +180,7 @@ function soleWrapperFor(
   spec: SlotSpec | undefined,
   childType: string,
   registry: BlockRegistry,
-  childDepth: number,
+  childBottomDepth: number,
   roomForAWrapper: boolean
 ): string | undefined {
   // Accepts an absent spec so the caller does not have to prove one is present. A slot with no
@@ -192,7 +192,7 @@ function soleWrapperFor(
     permitted[0],
     childType,
     registry,
-    childDepth,
+    childBottomDepth,
     roomForAWrapper
   );
 }
@@ -212,7 +212,7 @@ function soleParentWrapperFor(
   spec: SlotSpec | undefined,
   childType: string,
   registry: BlockRegistry,
-  childDepth: number,
+  childBottomDepth: number,
   roomForAWrapper: boolean
 ): string | undefined {
   const parents = parentsOf(childType, registry);
@@ -228,7 +228,7 @@ function soleParentWrapperFor(
     admissible[0],
     childType,
     registry,
-    childDepth,
+    childBottomDepth,
     roomForAWrapper
   );
 }
@@ -245,13 +245,15 @@ function wrapperIfItHolds(
   wrapperType: string,
   childType: string,
   registry: BlockRegistry,
-  childDepth: number,
+  childBottomDepth: number,
   roomForAWrapper: boolean
 ): string | undefined {
-  // A wrapper adds a level. Offering one to a child already at the limit trades a slot violation
-  // for a depth violation: the banner clears, and the page still refuses to save — with the fault
-  // now somewhere the author has even less to act on.
-  if (childDepth + 1 > MAX_DEPTH) return undefined;
+  // A wrapper adds a level to the whole subtree. Offering one to a child whose DEEPEST descendant
+  // already sits at the limit trades a slot violation for a depth violation: the banner clears,
+  // and the page still refuses to save — with the fault now somewhere the author has even less to
+  // act on. Measured from the bottom of the subtree, not from the node, because the node can sit
+  // well inside the limit while what it holds does not.
+  if (childBottomDepth + 1 > MAX_DEPTH) return undefined;
   // And a NODE, which is the same trade against the other limit. A document already at MAX_NODES
   // has room for the wrapper only if something leaves, so offering one there clears the banner and
   // hands back a document refused for a count the author never chose and cannot see.
@@ -283,6 +285,23 @@ function forbidsSlotsEntirely(
 ): boolean {
   const def = registry.get(node.type);
   return def !== undefined && !def.isContainer;
+}
+
+/**
+ * Levels of nesting BELOW this node: 0 for a leaf, 1 for a node with children, and so on.
+ *
+ * A wrapper pushes the whole subtree down, not just the node it wraps, so the level that decides
+ * whether the repair fits is the DEEPEST one the subtree occupies rather than the node's own. A
+ * check reading only the node's depth clears the banner on a populated container and leaves the
+ * page refused at a depth the author cannot see and did not choose.
+ */
+function heightOf(node: BlockNode): number {
+  let tallest = 0;
+  for (const children of Object.values(node.slots ?? {})) {
+    for (const child of children)
+      tallest = Math.max(tallest, 1 + heightOf(child));
+  }
+  return tallest;
 }
 
 /** Blocks beneath this one, not counting it. */
@@ -341,7 +360,7 @@ export function findInvalidSlotEntries(
               rootParents[0],
               root.type,
               registry,
-              0,
+              heightOf(root),
               roomForAWrapper
             )
           : undefined,
@@ -397,7 +416,7 @@ export function findInvalidSlotEntries(
                 spec,
                 child.type,
                 registry,
-                here.length,
+                here.length + heightOf(child),
                 roomForAWrapper
               ),
             });
@@ -416,7 +435,7 @@ export function findInvalidSlotEntries(
                 spec,
                 child.type,
                 registry,
-                here.length,
+                here.length + heightOf(child),
                 roomForAWrapper
               ),
             });

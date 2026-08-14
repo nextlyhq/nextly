@@ -25,7 +25,8 @@ import {
   type Binding,
   type StyleValues,
 } from "../../core/types";
-import { canDrop, subtreeIsPlaceable } from "../logic/dropRules";
+import { validateDocument } from "../../core/validate";
+import { canDrop } from "../logic/dropRules";
 
 const HISTORY_LIMIT = 50;
 const BASE_BREAKPOINT = "base";
@@ -326,15 +327,31 @@ export function editorReducer(
       if (!slotAccepts(root, action.parentId, action.slot, action.node.type)) {
         return state;
       }
-      // The clipboard is the one insertion path whose payload was built somewhere else, so the
-      // destination admitting the outermost block says nothing about the relations inside it.
-      if (!subtreeIsPlaceable(action.node, defaultBlockRegistry)) return state;
       const fresh = reidSubtree(action.node);
-      return commit(
-        state,
-        insertNode(root, action.parentId, action.slot, fresh, action.index),
-        fresh.id
+      const pasted = insertNode(
+        root,
+        action.parentId,
+        action.slot,
+        fresh,
+        action.index
       );
+      // The clipboard is the one insertion path whose payload was built somewhere else, so the
+      // destination admitting the outermost block says nothing about the rest of the tree. The
+      // RESULT is checked against the same invariants the save path enforces, rather than the
+      // subtree against a narrower walk of its own: a walk over parent/child pairs cannot see a
+      // fault that is not a pair — an empty undeclared slot on a leaf carries no children to
+      // iterate, and is refused at save exactly as a misplaced block is. Asking the canonical
+      // question here means the reducer cannot produce a document the save path rejects, rather
+      // than not producing the kinds of document someone thought to enumerate.
+      if (
+        validateDocument(
+          { ...state.document, root: pasted },
+          defaultBlockRegistry
+        ) !== true
+      ) {
+        return state;
+      }
+      return commit(state, pasted, fresh.id);
     }
 
     case "PASTE_STYLE": {

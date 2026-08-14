@@ -1,3 +1,9 @@
+// Loaded at module scope, not inside the test. Importing the block library pulls React and the
+// whole catalogue, which on a cold runner costs more than a single test's time budget — the test
+// then fails as a timeout that says nothing about the property it checks. Paid once here instead.
+import "../../render/blocks";
+
+import { defaultBlockRegistry } from "../../core/registry";
 import { describe, expect, it } from "vitest";
 
 import { createBlockRegistry } from "../../core/registry";
@@ -230,10 +236,7 @@ describe("a block that restricts which parents it may sit under", () => {
    * synthetic registry above cannot carry a structural `parent`, which is declared beside the
    * block rather than on a definition handed to `createBlockRegistry`.
    */
-  it("walks past a container that would accept it, to the one it belongs in", async () => {
-    const { defaultBlockRegistry } = await import("../../core/registry");
-    await import("../../render/blocks");
-
+  it("walks past a container that would accept it, to the one it belongs in", () => {
     const column = node("core/column", { default: [] }, "col");
     const root = node(
       "core/container",

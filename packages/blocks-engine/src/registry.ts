@@ -177,6 +177,29 @@ function assertValidDefinition(def: AnyBlockDefinition): void {
       `block "${def.name}" defaultProps must be a plain object.`
     );
   }
+  // `parent` restricts where instances may sit, so a malformed one does not
+  // degrade — it forbids. A bare string is the shape to fear: it is iterable,
+  // so a reader spreading it produces one-character "block names", every real
+  // placement is refused as the wrong parent, and documents already using the
+  // block stop saving. Nothing in the failure names this declaration.
+  //
+  // Checked at REGISTRATION rather than trusted from the type. TypeScript
+  // rejects it at the authoring site, and the definitions that reach here also
+  // arrive from JavaScript plugins, from JSON, and from builds where the types
+  // were never run.
+  if (def.parent !== undefined) {
+    if (
+      !Array.isArray(def.parent) ||
+      def.parent.some(
+        name => typeof name !== "string" || !BLOCK_NAME_RE.test(name)
+      )
+    ) {
+      fail(
+        "NEXTLY_BLOCK_INVALID",
+        `block "${def.name}" parent must be an array of namespaced block names like "core/columns".`
+      );
+    }
+  }
   if (typeof def.render !== "function") {
     fail(
       "NEXTLY_BLOCK_INVALID",

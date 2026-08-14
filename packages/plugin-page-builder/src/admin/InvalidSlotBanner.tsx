@@ -64,6 +64,32 @@ function repairableEntry(entry: InvalidSlotEntry): boolean {
   return entry.kind !== "root-parent" || entry.wrapWith !== undefined;
 }
 
+/**
+ * Whether the author can actually SEE the thing this entry is about.
+ *
+ * The banner's whole wording turns on this, and it is the fact that matters most to the reader:
+ * a fault they can point at needs a different sentence from one that draws nothing. A block in a
+ * slot its parent never declared is invisible — the canvas builds the slot but the block's render
+ * places only what it declares — while a block of a type its slot refuses draws normally, and so
+ * does a restricted ROOT, which is the entire page.
+ *
+ * An exhaustive switch rather than a test for one kind, so a kind added later is a compile error
+ * here instead of silently defaulting to "not drawn". That default is what made a visible root
+ * report as a leftover from a slot that no longer exists — a sentence describing the opposite of
+ * what the author was looking at.
+ */
+function isDrawnOnCanvas(entry: InvalidSlotEntry): boolean {
+  switch (entry.kind) {
+    case "not-allowed":
+    case "root-parent":
+      return true;
+    case "block":
+    case "empty-slot":
+    case "stray-slots":
+      return false;
+  }
+}
+
 /** What a row calls the thing it acts on. */
 function labelFor(entry: InvalidSlotEntry): string {
   switch (entry.kind) {
@@ -140,7 +166,7 @@ export function InvalidSlotBanner() {
   if (entries.length === 0 || signature === dismissed) return null;
 
   const count = entries.length;
-  const misplaced = entries.filter(e => e.kind === "not-allowed").length;
+  const misplaced = entries.filter(isDrawnOnCanvas).length;
   const hidden = count - misplaced;
 
   // Three sentences rather than one with a clause, because the two families of fault differ in

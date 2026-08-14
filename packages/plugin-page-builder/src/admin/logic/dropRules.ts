@@ -14,7 +14,6 @@ import {
 } from "../../core/block-structure";
 import type { BlockRegistry } from "../../core/registry";
 import { slotAdmits } from "../../core/slot-allow";
-import type { BlockNode } from "../../core/types";
 
 export interface DropCheck {
   ok: boolean;
@@ -56,38 +55,6 @@ export function canDrop(
     return { ok: false, reason: "wrong-parent" };
   }
   return { ok: true };
-}
-
-/**
- * Whether every parent/child relation INSIDE this subtree is one `canDrop` would allow.
- *
- * `canDrop` judges one placement: this block, into that slot. That is the whole question for a
- * block being created, because a fresh node has no children — and it is not the whole question for
- * a subtree arriving from somewhere else. A container copied from a page written before its slot
- * gained an allowlist, or by a plugin that has since narrowed one, carries relations that were
- * legal when they were made; checking only its root type admits the entire tree on the strength of
- * its outermost block, and the destination is then unsaveable for a fault several levels down that
- * the author never chose and did not author.
- *
- * Deliberately independent of where the subtree is going. Its INTERNAL relations are the same
- * wherever it lands, so the caller pairs this with the placement check for the root rather than
- * this repeating it.
- *
- * Depth and node limits are NOT judged here. Both depend on the destination rather than on the
- * subtree, and `validate` reports either with a message naming the limit — where a slot violation
- * inside a pasted tree is the one fault that draws normally and explains nothing.
- */
-export function subtreeIsPlaceable(
-  node: BlockNode,
-  registry: BlockRegistry
-): boolean {
-  for (const [slotName, children] of Object.entries(node.slots ?? {})) {
-    for (const child of children) {
-      if (!canDrop(node.type, slotName, child.type, registry).ok) return false;
-      if (!subtreeIsPlaceable(child, registry)) return false;
-    }
-  }
-  return true;
 }
 
 /**
