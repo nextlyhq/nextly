@@ -13,13 +13,31 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { tabsListVariants, tabsTriggerVariants } from "../tabs";
+import {
+  tabsListVariants,
+  tabsTriggerVariants,
+  type TabsListProps,
+  type TabsTriggerProps,
+} from "../tabs";
+
+// The PUBLIC aliases, not the component signatures. A consumer typing a wrapper
+// reaches for these, and until they were derived from the components they
+// described the Radix props alone — so `variant` and `size` were rejected on
+// the very props object the component advertises. Checked at compile time
+// because that is where the defect lived; `check-types` covers this file.
+const listWithVariant: TabsListProps = { variant: "ghost" };
+const triggerWithSize: TabsTriggerProps = { value: "a", size: "sm" };
 
 /** Every class the variant resolves to, order-independent. */
 const classesOf = (value: string): Set<string> =>
   new Set(value.split(/\s+/).filter(Boolean));
 
 describe("tab variants", () => {
+  it("exposes the variants on the public prop aliases", () => {
+    expect(listWithVariant.variant).toBe("ghost");
+    expect(triggerWithSize.size).toBe("sm");
+  });
+
   it("gives the compact list its own name instead of two spellings", () => {
     const ghost = classesOf(tabsListVariants({ variant: "ghost" }));
 
@@ -53,24 +71,47 @@ describe("tab variants", () => {
     ].sort();
     expect(differences).toEqual(["text-sm", "text-xs"]);
   });
+});
 
-  it("keeps the indicator out of every variant", () => {
-    // The property `tabs-contract.test.ts` watches at call sites, asserted here
-    // at the source: no variant may repaint the underline or the corners, so
-    // adding one cannot open a route the scan is not looking at.
-    for (const resolved of [
-      tabsListVariants(),
-      tabsListVariants({ variant: "ghost" }),
-      tabsTriggerVariants(),
-      tabsTriggerVariants({ size: "sm" }),
-    ]) {
-      const classes = [...classesOf(resolved)];
-      expect(classes.filter(entry => /^rounded-(?!none$)/.test(entry))).toEqual(
-        []
-      );
-      expect(classes.filter(entry => /^border-b-\d/.test(entry))).toEqual([
-        ...(resolved.includes("border-b-2") ? ["border-b-2"] : []),
-      ]);
-    }
+/**
+ * Every class in `value` that draws the tab's edge, whatever modifier it hides
+ * behind.
+ *
+ * Matched with `(^|:)` rather than an anchor, because a Tailwind utility can
+ * sit behind any number of variant modifiers — `hover:border-b-4`,
+ * `data-[state=active]:border-b-destructive!` — and an anchored pattern reads
+ * those as unrelated classes. The base itself carries three of them, so the
+ * modifier form is the normal case here rather than an exotic one.
+ */
+const edgeClassesOf = (value: string): string[] =>
+  [...classesOf(value)]
+    .filter(entry => /(^|:)(border-b-|border-|rounded-)/.test(entry))
+    .sort();
+
+describe("the tab edge", () => {
+  // `tabs-contract.test.ts` watches CALL SITES and deliberately excludes
+  // `tabs.tsx`, so nothing but this covers the variants themselves. Stated as
+  // an equality rather than as a list of forbidden patterns: whatever the base
+  // declares is the edge, and a variant that ADDS, REMOVES or CHANGES any of it
+  // is a second way to restyle a tab regardless of how the class is spelled.
+  it.each([
+    ["list", tabsListVariants(), tabsListVariants({ variant: "ghost" })],
+    ["trigger", tabsTriggerVariants(), tabsTriggerVariants({ size: "sm" })],
+  ])("is identical across every %s variant", (_name, base, variant) => {
+    expect(edgeClassesOf(variant)).toEqual(edgeClassesOf(base));
+  });
+
+  it("is drawn by the trigger base and left alone by the list", () => {
+    // A positive control on the helper itself. An equality assertion is
+    // satisfied by two empty sets, so without this the trigger case would pass
+    // if `edgeClassesOf` silently matched nothing at all.
+    expect(edgeClassesOf(tabsTriggerVariants())).toContain("border-b-2");
+    // Behind a modifier, which is the form the anchored version of this helper
+    // could not see at all.
+    expect(edgeClassesOf(tabsTriggerVariants())).toContain(
+      "data-[state=active]:border-b-primary!"
+    );
+    // The list draws no underline; its square corners are the edge it does own.
+    expect(edgeClassesOf(tabsListVariants())).toEqual(["rounded-none"]);
   });
 });

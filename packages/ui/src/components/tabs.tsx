@@ -2,13 +2,13 @@
 
 import { Root, List, Trigger, Content } from "@radix-ui/react-tabs";
 import { cva, type VariantProps } from "class-variance-authority";
-import { forwardRef } from "react";
+import { forwardRef, type ComponentPropsWithoutRef } from "react";
 
 import { cn } from "../lib/utils";
 import type {
-  TabsListProps,
+  TabsListProps as TabsListBaseProps,
   TabsListRef,
-  TabsTriggerProps,
+  TabsTriggerProps as TabsTriggerBaseProps,
   TabsTriggerRef,
   TabsContentProps,
   TabsContentRef,
@@ -134,7 +134,7 @@ const tabsListVariants = cva(
 
 const TabsList = forwardRef<
   TabsListRef,
-  TabsListProps & VariantProps<typeof tabsListVariants>
+  TabsListBaseProps & VariantProps<typeof tabsListVariants>
 >(({ className, variant, ...props }, ref) => (
   <List
     ref={ref}
@@ -187,7 +187,7 @@ const tabsTriggerVariants = cva(
 
 const TabsTrigger = forwardRef<
   TabsTriggerRef,
-  TabsTriggerProps & VariantProps<typeof tabsTriggerVariants>
+  TabsTriggerBaseProps & VariantProps<typeof tabsTriggerVariants>
 >(({ className, size, ...props }, ref) => (
   <Trigger
     ref={ref}
@@ -228,9 +228,16 @@ TabsContent.displayName = Content.displayName;
 
 export { Tabs, TabsList, TabsTrigger, TabsContent };
 export { tabsListVariants, tabsTriggerVariants };
-export type {
-  TabsProps,
-  TabsListProps,
-  TabsTriggerProps,
-  TabsContentProps,
-} from "../types/tabs";
+export type { TabsProps, TabsContentProps } from "../types/tabs";
+
+/**
+ * The public prop types, DERIVED from the components rather than restated.
+ *
+ * `../types/tabs` describes the Radix props alone, so an alias taken from there
+ * rejects `variant` and `size` — and a consumer typing a wrapper around
+ * `TabsList` would be told the prop it can see in the signature does not exist.
+ * Reading the component's own props keeps the two from drifting: a variant
+ * added later reaches every consumer without a second edit.
+ */
+export type TabsListProps = ComponentPropsWithoutRef<typeof TabsList>;
+export type TabsTriggerProps = ComponentPropsWithoutRef<typeof TabsTrigger>;
