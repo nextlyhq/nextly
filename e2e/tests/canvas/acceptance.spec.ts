@@ -914,9 +914,7 @@ test.describe("a canvas any Nextly editor could ship", () => {
     await driver.drop();
     // POLLED, because the insert is asynchronous: the canvas re-renders after
     // the drop resolves, so a single read taken immediately sees the tree the
-    // drag started from. Read once, this control reported that a working drop
-    // had changed nothing — and it only became visible at all once the control
-    // moved out from behind the expected-failure marker.
+    // drag started from and reports a working drop as having changed nothing.
     await expect
       .poll(async () => (await driver.readTreeShape()).length, {
         message:
