@@ -770,6 +770,35 @@ describe("a field-group update refuses what it cannot deliver", () => {
     });
   });
 
+  // 🔴 The control that scopes the rule above to ENABLEMENT. On a group that is ALREADY localized
+  // the companion exists, so `buildCompanionReconcileStatements` emits a real DROP COLUMN for a
+  // removed translatable field — that is appliable, and refusing it would take working behaviour
+  // away. Without this, a rule that read the localization state wrongly and refused every drop
+  // would still satisfy the enablement case.
+  it("allows removing a translatable field from an already-localized group", async () => {
+    const registry = registryWithGroup({
+      localized: true,
+      fields: [
+        { name: "heading", type: "text", localized: true },
+        { name: "body", type: "text", localized: true },
+      ] as never,
+    });
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    await expect(
+      service.updateFieldGroup({
+        slug: "hero",
+        fields: [{ name: "heading", type: "text", localized: true }] as never,
+      })
+    ).resolves.toMatchObject({
+      record: expect.objectContaining({ slug: "hero" }),
+    });
+  });
+
   // A layout-only field has no column anywhere, so adding one cannot need DDL on any table.
   it("allows a field that produces no column at all", async () => {
     const registry = registryWithGroup({

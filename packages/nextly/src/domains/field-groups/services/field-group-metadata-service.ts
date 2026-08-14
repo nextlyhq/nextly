@@ -591,7 +591,8 @@ export class FieldGroupMetadataService {
     // stops describing the field while its data sits on a column nothing will ever read again.
     //
     // The pair rule above cannot catch it, because a removal on its own has no matching add.
-    if (!args.wasLocalized && args.localized && companionDropped.length > 0) {
+    const isEnabling = args.existing.localized !== true && args.localized;
+    if (isEnabling && companionDropped.length > 0) {
       for (const name of companionDropped) changed.add(name);
     }
 
