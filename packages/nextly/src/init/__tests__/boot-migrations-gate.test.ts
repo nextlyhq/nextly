@@ -129,6 +129,25 @@ describe("the boot-migrations gate", () => {
   });
 
   /**
+   * A refusal is FINAL for the process, and a retry must not reopen its way
+   * past one. The refusal path calls `shutdownServices()`, so the next request
+   * re-registers — and re-registration is what opens the gate. Clearing the
+   * refusal on open handed every retry a clean slate and let it migrate as
+   * though nothing had been decided.
+   */
+  it("survives the gate being reopened by a re-registration", async () => {
+    openBootMigrationsGate(true);
+    refuseBootMigrations(refusal());
+
+    // What a retry does: `registerServices` runs again and opens the gate.
+    openBootMigrationsGate(true);
+
+    await expect(awaitBootMigrations()).rejects.toMatchObject({
+      code: "NEXTLY_BOOT_MIGRATIONS_NOT_RUN",
+    });
+  });
+
+  /**
    * The positive control for the case above: an ALLOWED boot must not leave the
    * gate closed behind it, or every later request hangs. Without this, a gate
    * that simply never opened would satisfy the refusal tests.
