@@ -611,11 +611,13 @@ export interface ZoneInset {
   /**
    * Pixels of pointer movement PAST the boundary, measured rather than assumed.
    *
-   * The pointer is INSIDE `zone` at this depth in every outcome, including the
-   * refusals — a reported depth the pointer is not standing at would be a
-   * different measurement wearing this one's name.
+   * Present only when a boundary was actually found: the pointer is INSIDE
+   * `zone` at this depth, including under `too-narrow`. ABSENT for the refusals
+   * that never located an edge, because there is no boundary for a depth to be
+   * measured from and a `0` there would read as "at the boundary" — a position
+   * the pointer is not standing at.
    */
-  readonly insetPx: number;
+  readonly insetPx?: number;
   /**
    * How precisely the boundary itself is known, in pixels.
    *
@@ -660,6 +662,22 @@ const INSET_APPROACH_PX = 4;
 const EDGE_SETTLE_ATTEMPTS = 3;
 
 /**
+ * The longest a zone edge may still be moving after the pointer enters it.
+ *
+ * The canvas animates a drop zone's height and margin over 100ms when it becomes
+ * the active target, and an animation is CONTINUOUS: two brackets taken back to
+ * back can quantize to the same whole pixel while the edge is still travelling
+ * inside it. Agreement between adjacent samples is therefore necessary and not
+ * sufficient, and no purely positional method can close that — "has an animation
+ * finished" is a question about an interval.
+ *
+ * So this is a clock, deliberately, and it is the canvas's own transition
+ * duration rather than a guess. Paired with the agreement check: the wait covers
+ * the animation, the agreement confirms it is over.
+ */
+const EDGE_SETTLE_MS = 120;
+
+/**
  * The first pointer position INSIDE `zone`, found by retreating out and stepping back in.
  *
  * Returns `null` when the zone's edge is not within `retreatLimit` — the pointer
@@ -669,6 +687,11 @@ const EDGE_SETTLE_ATTEMPTS = 3;
  * Leaves the pointer where it found the boundary, and reports how far it
  * retreated so a caller that must abandon the measurement can put the drag back.
  */
+/** One wait, named for what it is, so no caller invents its own. */
+function settleMs(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 async function bracketZoneEdge(
   driver: ZoneInsetDriver,
   zone: number,
@@ -735,12 +758,7 @@ export async function dragToInsetInZone(
   const refuse = (
     zone: number,
     reason: NonNullable<ZoneInset["refused"]>
-  ): ZoneInset => ({
-    zone,
-    insetPx: 0,
-    resolutionPx: INSET_PROBE_PX,
-    refused: reason,
-  });
+  ): ZoneInset => ({ zone, resolutionPx: INSET_PROBE_PX, refused: reason });
 
   // A request this probe cannot represent is a CALLER fault, not a fact about
   // the canvas — so it throws rather than joining the refusals, which a caller
@@ -751,6 +769,16 @@ export async function dragToInsetInZone(
   if (!Number.isInteger(wantInsetPx) || wantInsetPx < 0) {
     throw new Error(
       `dragToInsetInZone needs a whole, non-negative depth in pixels; got ${wantInsetPx}`
+    );
+  }
+  // The same treatment for the budget, and each bad value fails differently:
+  // `Infinity` never terminates and hangs the run until Playwright's outer
+  // timeout — defeating the runaway guard this parameter IS — while `NaN` and a
+  // negative skip the approach entirely and report `never-entered` about a
+  // canvas that was never asked.
+  if (!Number.isInteger(maxSteps) || maxSteps < 0) {
+    throw new Error(
+      `dragToInsetInZone needs a whole, non-negative step budget; got ${maxSteps}`
     );
   }
 
@@ -789,6 +817,10 @@ export async function dragToInsetInZone(
     }
     boundaryY = found.boundaryY;
     settledRetreat = found.retreatedPx;
+    // Across the transition rather than adjacent to it. Two brackets taken back
+    // to back land inside the same animation frame and can agree on a whole
+    // pixel the edge is still travelling through.
+    await settleMs(EDGE_SETTLE_MS);
     if (attempt === EDGE_SETTLE_ATTEMPTS - 1) {
       // Still moving. Reported rather than measured through: a depth taken from
       // an edge that is in motion is a number with no referent.

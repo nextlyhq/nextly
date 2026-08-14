@@ -135,6 +135,9 @@ test("reports a boundary it never crossed as its own failure, and puts the point
   expect(result.refused).toBe("boundary-not-found");
   expect(result.zone).toBe(3);
   expect(canvas.pointer().y).toBe(5_000);
+  // No depth, because no boundary was found to measure one from. A `0` here
+  // would read as "at the boundary", which is a position the pointer is not at.
+  expect(result.insetPx).toBeUndefined();
 });
 
 test("reports never reaching a zone as a refusal, not as a depth of zero", async () => {
@@ -241,6 +244,7 @@ test("refuses rather than measuring from an edge that keeps moving", async () =>
 
   expect(result.refused).toBe("edge-moving");
   expect(result.zone).toBe(4);
+  expect(result.insetPx).toBeUndefined();
 });
 
 test("refuses a depth it cannot represent, rather than rounding to one it can", async () => {
@@ -258,5 +262,23 @@ test("refuses a depth it cannot represent, rather than rounding to one it can", 
   );
   await expect(dragToInsetInZone(canvas(), Number.NaN)).rejects.toThrow(
     /whole, non-negative depth/
+  );
+});
+
+test("refuses a step budget it cannot honour, rather than running forever", async () => {
+  // `Infinity` is the dangerous one: the approach never terminates and the run
+  // hangs until Playwright's outer timeout, defeating the runaway guard this
+  // parameter exists to be. `NaN` and a negative skip the approach entirely and
+  // would report `never-entered` about a canvas that was never asked.
+  const outside = () => bandedCanvas([{ zone: 0, from: 9_000, to: 9_010 }]);
+
+  await expect(
+    dragToInsetInZone(outside(), 4, Number.POSITIVE_INFINITY)
+  ).rejects.toThrow(/whole, non-negative step budget/);
+  await expect(dragToInsetInZone(outside(), 4, -1)).rejects.toThrow(
+    /whole, non-negative step budget/
+  );
+  await expect(dragToInsetInZone(outside(), 4, Number.NaN)).rejects.toThrow(
+    /whole, non-negative step budget/
   );
 });
