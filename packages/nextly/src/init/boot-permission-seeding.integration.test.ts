@@ -9,21 +9,33 @@
  * request-triggered cold start seeds against a database that is not ready.
  *
  * It does not, and the reason is that nothing a pending migration produces is
- * an input to seeding. TWO mechanisms put a collection's permissions in place,
- * and both run ahead of any migration step on either path:
+ * an input to seeding. THREE mechanisms put a collection's permissions in
+ * place, each covering rows the others cannot reach:
  *
- * `CollectionRegistryService` seeds them when the collection is REGISTERED,
- * which happens inside `registerServices`. And `seedAllPermissions` sweeps
- * `dynamic_collections`, which `registerServices` has already written to.
+ * 1. `CollectionRegistryService` seeds them when a collection is REGISTERED,
+ *    which for a code-first collection happens inside `registerServices`.
+ * 2. `seedAllPermissions` sweeps `dynamic_collections`, which
+ *    `registerServices` has already written to. Both boot paths call it.
+ * 3. `boot-apply.ts` calls `seedPermissionsForMigrationCollections` directly
+ *    after `registerFromMigrations` inserts metadata rows, so a collection
+ *    that exists only in a migration is seeded in the same pass.
  *
- * So the property worth holding is the OUTCOME, and it is asserted here as one
- * sequence rather than as two separate mechanisms. Pinning either mechanism on
- * its own would fail an implementation that dropped it and kept the other,
- * which is a correct implementation — the route serves requests with the
- * permissions in place either way.
+ * The first two run before either path applies a migration; the third runs as
+ * part of applying one. So the ordering difference cannot cost a collection
+ * its permissions, whichever route the collection arrived by.
  *
- * The second test covers what only the sweep can do, which is a row that
- * reached `dynamic_collections` without going through registration.
+ * WHAT IS ASSERTED, and what is deliberately not. The first test drives (1)
+ * and (2) as one sequence, in the order the request path runs them, and
+ * asserts the OUTCOME. Pinning either on its own would fail an implementation
+ * that dropped it and kept the other, which serves requests correctly.
+ *
+ * The second test covers what only the sweep reaches — a row that never went
+ * through registration. It calls the sweep DIRECTLY, so it is a test of the
+ * sweep and NOT of (3): removing `seedPermissionsForMigrationCollections`
+ * would leave it green. Covering that call means driving
+ * `registerFromMigrations` against a migrations directory, which is a fixture
+ * this file does not build. Stated rather than implied, so the green here is
+ * not read as coverage it does not have.
  */
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -98,8 +110,9 @@ describe("permission seeding across the two boot paths", () => {
   it("sweeps dynamic_collections for rows registration never saw", async () => {
     const handle = await bootRegisterServicesOnly();
 
-    // A slug that is in no config, so registration cannot have seeded it. This
-    // stands for a collection that reaches the table from migration metadata.
+    // A slug that is in no config, so registration cannot have seeded it. It
+    // exercises the sweep's own reach and is NOT a stand-in for the migration
+    // path, which has its own seeding call that this test never runs.
     expect(await permissionSlugsFor(handle, "reports")).toEqual([]);
 
     await seedAllPermissions();
