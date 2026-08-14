@@ -805,6 +805,71 @@ describe("field-group migration session", () => {
     }
   });
 
+  // Being told you lost the lock AFTER the lease already expired is not a warning, it is a report:
+  // by then a contender could have taken the row and started writing. The margin has to leave the
+  // caller time to stop, so the loss is declared while the claim is still live.
+  //
+  // 🔴 This asserts the OBSERVABLE property — the row's expiry is still in the future on the
+  // database's own clock at the moment the run is told — rather than comparing constants. A test
+  // written in terms of `LOCK_LOSS_AFTER_MS` moves with the code when that constant changes and can
+  // never fail: measured, widening the margin back to the full TTL left the whole suite green.
+  it("declares the loss while the lease still has time on it", async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createAdapter({ heldBy: null });
+      const realRunStatement = h.ctx.runStatement.getMockImplementation();
+      h.ctx.runStatement.mockImplementation(async (statement: SQL) => {
+        if (isRenewalStatement(statement)) throw new Error("connection reset");
+        await realRunStatement?.(statement);
+      });
+
+      let expiryAtLoss: number | null = null;
+      let nowAtLoss: number | null = null;
+      const run = withMigrationSession(
+        { adapter: h.adapter, dialect: "postgresql", label: "run-1" },
+        // Never settles: the callback is still working when the claim is given up, which is the
+        // whole situation the margin exists for.
+        () => new Promise<void>(() => undefined)
+      ).catch((error: unknown) => {
+        expiryAtLoss = h.expiresAt();
+        nowAtLoss = h.clock.now();
+        throw error;
+      });
+
+      // 🔴 Let the claim land BEFORE the clock starts moving. Acquisition is asynchronous, so
+      // without this it completes after the first step and writes its expiry from an
+      // already-advanced clock — measured, that put the row 15s further ahead than the run really
+      // held, which is exactly the slack that made this test pass on a broken margin.
+      await vi.advanceTimersByTimeAsync(0);
+
+      // The model database's clock is separate from the timers, so it is stepped WITH them —
+      // otherwise the row never actually ages and its expiry means nothing.
+      for (
+        let elapsed = 0;
+        elapsed < LOCK_TTL_SECONDS * 1000 && expiryAtLoss === null;
+        elapsed += LOCK_RENEW_INTERVAL_MS
+      ) {
+        // 🔴 The database's clock moves FIRST. Advancing the timers first fires the tick that
+        // declares the loss while the model row is still a step behind, so the expiry compared
+        // below is read against a stale clock and looks live whatever the margin is — measured:
+        // in that order this test passed even with the margin widened to the whole TTL.
+        h.clock.advance(LOCK_RENEW_INTERVAL_MS / 1000);
+        await vi.advanceTimersByTimeAsync(LOCK_RENEW_INTERVAL_MS);
+      }
+
+      await expect(run).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
+
+      // Positive control: the loss actually happened inside the loop above, so the comparison
+      // below is reading values a rejection wrote rather than initialisers.
+      expect(expiryAtLoss).not.toBeNull();
+      expect(expiryAtLoss as unknown as number).toBeGreaterThan(
+        nowAtLoss as unknown as number
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // `setInterval` fires on a schedule, not on completion, so a renewal slower than the interval
   // would have a second started underneath it and then a third. Two costs, and the second is the
   // one that bites: attempts pile up against the connection pool — with `pool.max: 1` each new one

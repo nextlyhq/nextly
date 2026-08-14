@@ -1664,7 +1664,7 @@ describe("a preview that meets a writer mid-run", () => {
     expect(outcome.renames.length).toBeGreaterThan(0);
   });
 
-  // 🔴 The control Codex asked for: owners rotate, storage does not. Several invocations acquiring
+  // 🔴 The control that separates the two: owners rotate, storage does not. Several invocations acquiring
   // the lock in turn and failing on ONE permanent conflict each present a fresh claim UUID, so an
   // owner folded into the movement signature makes an unmoving database look like a moving one —
   // and a persistent storage conflict is then reported as contention.
