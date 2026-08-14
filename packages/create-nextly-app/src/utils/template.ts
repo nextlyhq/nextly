@@ -391,7 +391,17 @@ async function restoreShippedNames(
     // would let a scaffold modify a file elsewhere on the machine entirely. Measured — the write
     // lands on the target and leaves the link in place, so nothing in the project directory shows
     // that it happened.
-    if (destination.isSymbolicLink()) {
+    //
+    // A HARD link is the same hazard `lstat` cannot see through: it reports a regular file,
+    // because that is exactly what a hard link is. `nlink` is what separates them, an ordinary
+    // file having one directory entry. Checked alongside rather than instead of the symlink test
+    // — a file can only be one of the two, so neither subsumes the other. Same reasoning and the
+    // same pair of checks as `writeScaffoldNpmrc`.
+    //
+    // Skipping means the project keeps whatever that file already says and does not receive the
+    // guide. That is the right trade: the developer arranged the link deliberately, and silently
+    // editing a file the project shares with something else is not this tool's decision.
+    if (destination.isSymbolicLink() || destination.nlink > 1) {
       await fs.remove(from);
       continue;
     }
