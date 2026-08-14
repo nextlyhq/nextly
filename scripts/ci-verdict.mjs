@@ -114,6 +114,12 @@ export function changesRequested(
   // approval of the earlier revision then clears an account still objecting to
   // what is being merged.
   const outstanding = new Map();
+  // Revisions each account has approved, kept because clearance runs in both
+  // directions. An approval answers the objections already on record, and it
+  // also answers one that ARRIVES later while naming an earlier revision —
+  // reviews are submitted out of order, so "already seen" is about the
+  // revision, never about which row reached us first.
+  const approvals = new Map();
   for (const review of ordered) {
     const login = review.user.login;
     // A COMMENTED review publishes feedback without withdrawing an objection,
@@ -125,10 +131,27 @@ export function changesRequested(
     // rather than the objection — and a dismissed changes-request is already
     // represented by its own row no longer reading `CHANGES_REQUESTED`.
     if (review.state === "CHANGES_REQUESTED") {
+      // Dropped rather than recorded when this account has ALREADY approved a
+      // revision that covers it. The mirror of the clearing rule below: an
+      // objection submitted after an approval but pinned to an earlier commit
+      // describes code the approval already spoke for, and recording it would
+      // report a reviewer as blocking a revision they signed off.
+      const answered = (approvals.get(login) ?? []).some(approvedAt =>
+        approvalCovers(
+          approvedAt,
+          review.commit_id,
+          revisionOrder,
+          revisionOrderComplete
+        )
+      );
+      if (answered) continue;
       const objections = outstanding.get(login) ?? new Set();
       objections.add(review.commit_id);
       outstanding.set(login, objections);
     } else if (review.state === "APPROVED") {
+      const seen = approvals.get(login) ?? [];
+      seen.push(review.commit_id);
+      approvals.set(login, seen);
       const objections = outstanding.get(login);
       if (objections === undefined) continue;
       for (const objectedAt of objections) {
