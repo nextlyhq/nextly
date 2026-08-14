@@ -18,6 +18,7 @@
  *
  * @module core/block-structure
  */
+import { contributedStructureOf } from "./contributed-structure";
 import type { BlockRegistry } from "./registry";
 import type { BlockNode, SlotSpec } from "./types";
 
@@ -71,6 +72,24 @@ export function declareStructure(structure: BlockStructure): BlockStructure {
 }
 
 /**
+ * The structure for a type: this package's own if it has one, otherwise whatever a PLUGIN
+ * contributed to the engine.
+ *
+ * The engine is consulted rather than mirrored. A copy kept here would need clearing on exactly the
+ * boots that clear the engine's registry, and a miss in either direction is silent — a stale entry
+ * enforces a removed plugin's nesting rules against blocks that no longer exist, and a missing one
+ * lets a live plugin's rules go unenforced. Reading through means there is one set, and it is the
+ * one registration wrote.
+ *
+ * Core wins a collision. The engine's registry already refuses a duplicate name, so this cannot
+ * arise from a well-formed boot; preferring the contributed side would let a plugin decide what
+ * `core/column` means, which is not a question a plugin gets to answer.
+ */
+function structureOf(type: string): BlockStructure | undefined {
+  return CORE_BLOCK_STRUCTURES[type] ?? contributedStructureOf(type);
+}
+
+/**
  * The slots a type declares, from structure ALONE — no renderer, no registry.
  *
  * `undefined` means "this build has no structure for that type", which is not the same as "that
@@ -79,7 +98,7 @@ export function declareStructure(structure: BlockStructure): BlockStructure {
  * case have to be able to tell them apart.
  */
 export function declaredSlotsOf(type: string): SlotSpec[] | undefined {
-  const structure = CORE_BLOCK_STRUCTURES[type];
+  const structure = structureOf(type);
   return structure ? (structure.slots ?? []) : undefined;
 }
 
@@ -92,7 +111,7 @@ export function declaredSlotsOf(type: string): SlotSpec[] | undefined {
  * a check that treats an unknown plugin block as forbidden everywhere.
  */
 export function declaredParentsOf(type: string): string[] | undefined {
-  return CORE_BLOCK_STRUCTURES[type]?.parent;
+  return structureOf(type)?.parent;
 }
 
 /**
@@ -270,5 +289,37 @@ for (const type of PLAIN_BLOCK_TYPES) {
 
 /** Whether a node's type is one this build has structure for. */
 export function hasStructure(node: BlockNode): boolean {
-  return CORE_BLOCK_STRUCTURES[node.type] !== undefined;
+  return structureOf(node.type) !== undefined;
+}
+
+/**
+ * The slots a type offers, asking the REGISTERED definition first and structure otherwise.
+ *
+ * The slot-side twin of {@link parentsOf}, and it exists for the same reason: a contributed block
+ * is absent from this package's registry, so a reader that only asked the registry would treat
+ * every plugin container as holding no slots at all. Structure answers for those, and for the
+ * config and server paths where no definition is registered.
+ */
+export function slotsOf(
+  type: string,
+  registry: BlockRegistry
+): SlotSpec[] | undefined {
+  const def = registry.get(type);
+  return def ? (def.slots ?? []) : declaredSlotsOf(type);
+}
+
+/**
+ * Whether a type may hold children at all, from the definition or from structure.
+ *
+ * `undefined` means neither knows the type — which is not "it holds nothing". A caller has to be
+ * able to refuse an unknown container rather than silently treat it as a leaf.
+ */
+export function isContainerType(
+  type: string,
+  registry: BlockRegistry
+): boolean | undefined {
+  const def = registry.get(type);
+  if (def) return def.isContainer === true;
+  const structure = structureOf(type);
+  return structure ? structure.isContainer === true : undefined;
 }

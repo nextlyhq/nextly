@@ -28,6 +28,7 @@
  */
 import { declaredSlotsOf, parentsOf } from "./block-structure";
 import { createNode, type BlockRegistry } from "./registry";
+import { slotAdmits } from "./slot-allow";
 import {
   dropSlots,
   findNode,
@@ -38,6 +39,7 @@ import {
 import {
   DEFAULT_SLOT,
   MAX_DEPTH,
+  MAX_NODES,
   type BlockNode,
   type SlotSpec,
 } from "./types";
@@ -121,6 +123,31 @@ export type InvalidSlotEntry =
        * choice being made on the author's behalf. `undefined` means removal is the only repair.
        */
       wrapWith?: string;
+    })
+  | (InvalidSlotLocation & {
+      /**
+       * The document ROOT, restricting the parents it may sit under.
+       *
+       * Unsatisfiable by construction rather than by anything in the document: a root sits inside
+       * nothing, so no arrangement of the page can meet the restriction, and `validate` refuses it
+       * for exactly that. It reaches a stored document through a block whose definition gained a
+       * `parent` after the page was authored, or through a page built by a plugin that has since
+       * changed its mind.
+       *
+       * `parentId` and `parentType` name the root itself. There is no containing block, and the
+       * shared location shape is what lets one list render every kind.
+       */
+      kind: "root-parent";
+      type: string;
+      descendantCount: number;
+      /**
+       * The type to put AROUND the root, becoming the new root, when exactly one is determined.
+       *
+       * `undefined` where the block names several permitted parents, or where the single one
+       * cannot hold it: the fault is still worth reporting, because the alternative is a page that
+       * refuses to save while the banner says nothing at all.
+       */
+      wrapWith?: string;
     });
 
 /**
@@ -150,14 +177,24 @@ function declaredFor(
  * the mirror below asks in the same words.
  */
 function soleWrapperFor(
-  spec: SlotSpec,
+  spec: SlotSpec | undefined,
   childType: string,
   registry: BlockRegistry,
-  childDepth: number
+  childDepth: number,
+  roomForAWrapper: boolean
 ): string | undefined {
-  const permitted = spec.allowedBlocks;
+  // Accepts an absent spec so the caller does not have to prove one is present. A slot with no
+  // declaration has no allowlist, so it refuses nothing and needs no wrapper — the same answer
+  // this returns for a slot whose allowlist names several types.
+  const permitted = spec?.allowedBlocks;
   if (!permitted || permitted.length !== 1) return undefined;
-  return wrapperIfItHolds(permitted[0], childType, registry, childDepth);
+  return wrapperIfItHolds(
+    permitted[0],
+    childType,
+    registry,
+    childDepth,
+    roomForAWrapper
+  );
 }
 
 /**
@@ -175,15 +212,25 @@ function soleParentWrapperFor(
   spec: SlotSpec | undefined,
   childType: string,
   registry: BlockRegistry,
-  childDepth: number
+  childDepth: number,
+  roomForAWrapper: boolean
 ): string | undefined {
   const parents = parentsOf(childType, registry);
-  if (!parents || parents.length !== 1) return undefined;
-  const wrapperType = parents[0];
-  if (spec?.allowedBlocks && !spec.allowedBlocks.includes(wrapperType)) {
-    return undefined;
-  }
-  return wrapperIfItHolds(wrapperType, childType, registry, childDepth);
+  if (!parents || parents.length === 0) return undefined;
+  // Narrowed by the OUTER slot before counting, rather than requiring the child to name exactly
+  // one parent. A block permitted under several parents is still unambiguous wherever the slot
+  // holding it admits only one of them — `parent: ["core/column", "core/container"]` sitting in a
+  // row leaves `core/column` as the single answer. Counting first and filtering afterwards would
+  // decline that and offer removal, discarding a block whose correct repair was fully determined.
+  const admissible = parents.filter(parent => slotAdmits(spec, parent));
+  if (admissible.length !== 1) return undefined;
+  return wrapperIfItHolds(
+    admissible[0],
+    childType,
+    registry,
+    childDepth,
+    roomForAWrapper
+  );
 }
 
 /**
@@ -198,12 +245,17 @@ function wrapperIfItHolds(
   wrapperType: string,
   childType: string,
   registry: BlockRegistry,
-  childDepth: number
+  childDepth: number,
+  roomForAWrapper: boolean
 ): string | undefined {
   // A wrapper adds a level. Offering one to a child already at the limit trades a slot violation
   // for a depth violation: the banner clears, and the page still refuses to save — with the fault
   // now somewhere the author has even less to act on.
   if (childDepth + 1 > MAX_DEPTH) return undefined;
+  // And a NODE, which is the same trade against the other limit. A document already at MAX_NODES
+  // has room for the wrapper only if something leaves, so offering one there clears the banner and
+  // hands back a document refused for a count the author never chose and cannot see.
+  if (!roomForAWrapper) return undefined;
   const def = registry.get(wrapperType);
   const slots = def ? (def.slots ?? []) : declaredSlotsOf(wrapperType);
   if (!slots) return undefined;
@@ -211,9 +263,7 @@ function wrapperIfItHolds(
 
   const inner = slots.find(s => s.name === DEFAULT_SLOT);
   if (!inner) return undefined;
-  if (inner.allowedBlocks && !inner.allowedBlocks.includes(childType)) {
-    return undefined;
-  }
+  if (!slotAdmits(inner, childType)) return undefined;
   // And the CHILD's own restriction, which the inner slot's allowlist cannot express. A block that
   // may only sit under one parent is not made placeable by a wrapper that accepts everything.
   const childParents = parentsOf(childType, registry);
@@ -262,6 +312,41 @@ export function findInvalidSlotEntries(
   registry: BlockRegistry
 ): InvalidSlotEntry[] {
   const found: InvalidSlotEntry[] = [];
+
+  // Measured once for the whole document rather than per candidate: every wrap repair adds exactly
+  // one node, so the question is the same wherever it is asked, and asking it inside the walk would
+  // recount the tree for each entry.
+  const roomForAWrapper = countDescendants(root) + 1 < MAX_NODES;
+
+  // A root that names permitted parents can satisfy none of them: it sits inside nothing, which is
+  // what `validate` refuses it for. Checked here rather than only inside the walk, because the walk
+  // examines CHILDREN — so this fault produced an unsaveable page and an empty banner, the one
+  // combination that leaves an author with no statement of what is wrong and no action to take.
+  const rootParents = parentsOf(root.type, registry);
+  if (rootParents && rootParents.length > 0) {
+    found.push({
+      key: `root-parent:${root.id}`,
+      kind: "root-parent",
+      parentId: root.id,
+      parentType: root.type,
+      path: root.type,
+      type: root.type,
+      descendantCount: countDescendants(root),
+      // No outer slot constrains a root, so the child's own list is the whole question. Exactly one
+      // permitted parent that can actually hold it is a determined repair; several is a choice the
+      // author has to make, and this entry then reports the fault without offering to guess.
+      wrapWith:
+        rootParents.length === 1
+          ? wrapperIfItHolds(
+              rootParents[0],
+              root.type,
+              registry,
+              0,
+              roomForAWrapper
+            )
+          : undefined,
+    });
+  }
 
   // `ancestry` already counts the levels above this node, so a child's depth is its length + 1 —
   // derived from the walk rather than tracked beside it, where the two would drift.
@@ -312,12 +397,13 @@ export function findInvalidSlotEntries(
                 spec,
                 child.type,
                 registry,
-                here.length
+                here.length,
+                roomForAWrapper
               ),
             });
             continue;
           }
-          if (spec?.allowedBlocks && !spec.allowedBlocks.includes(child.type)) {
+          if (!slotAdmits(spec, child.type)) {
             found.push({
               ...at,
               key: `not-allowed:${child.id}`,
@@ -326,7 +412,13 @@ export function findInvalidSlotEntries(
               node: child,
               type: child.type,
               descendantCount: countDescendants(child),
-              wrapWith: soleWrapperFor(spec, child.type, registry, here.length),
+              wrapWith: soleWrapperFor(
+                spec,
+                child.type,
+                registry,
+                here.length,
+                roomForAWrapper
+              ),
             });
             // Not descended into, for the same reason an undeclared block is not: this entry is
             // the repair target, and anything beneath it is settled by whichever repair is taken.
@@ -392,6 +484,13 @@ export function repairInvalidSlot(
       return removeSlot(root, entry.parentId, entry.slotName, declared);
     case "stray-slots":
       return dropSlots(root, entry.parentId);
+    case "root-parent":
+      // The only repair that replaces the root rather than editing inside it. Removal is not an
+      // option here — a document must have a root — so an entry with no determined wrapper is
+      // reported and left alone, and the document stays exactly as the author last saw it.
+      return entry.wrapWith
+        ? createNode(entry.wrapWith, registry, { [DEFAULT_SLOT]: [root] })
+        : root;
     case "not-allowed":
       // Wrapping keeps the block and its subtree; removal is the fallback for a slot whose
       // allowlist offers no single type that could hold it.

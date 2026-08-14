@@ -5,6 +5,7 @@
  */
 import { declaredSlotsOf, parentsOf } from "./block-structure";
 import type { BlockRegistry } from "./registry";
+import { slotAdmits } from "./slot-allow";
 import type { BlockDocument, BlockNode } from "./types";
 import { MAX_DEPTH, MAX_NODES } from "./types";
 
@@ -76,7 +77,7 @@ export function validateDocument(
           return `${n.type} has no slot "${slotName}"`;
         }
         for (const child of children) {
-          if (spec?.allowedBlocks && !spec.allowedBlocks.includes(child.type)) {
+          if (!slotAdmits(spec, child.type)) {
             return `${child.type} is not allowed in slot "${slotName}" of ${n.type}`;
           }
           // The child's own restriction, checked HERE as well as in the editor's `canDrop`. A

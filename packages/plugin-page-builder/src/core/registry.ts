@@ -5,13 +5,36 @@
  * third party adds a block with one `registerBlock()` call and no core edit.
  * Types are namespaced (`core/heading`, `acme/pricing-table`) to stay collision-free.
  */
+import { slotsOf } from "./block-structure";
 import { makeNode } from "./tree";
-import {
-  DEFAULT_SLOT,
-  type BlockDefinition,
-  type BlockNode,
-  type ControlDef,
-} from "./types";
+import { type BlockDefinition, type BlockNode, type ControlDef } from "./types";
+
+/**
+ * The empty slot map a freshly created block starts with, one key per DECLARED slot.
+ *
+ * Derived from the declaration rather than assumed, because the assumption was wrong in both
+ * directions for a block that does not open exactly one slot named `default`. A container
+ * declaring only `sidebar` was created carrying a `default` key it never declared, which the write
+ * validator rejects — so the block could be inserted and the page could then never be saved, with
+ * the fault named against a slot the author never chose. A container declaring `left` and `right`
+ * got neither.
+ *
+ * Resolved through `slotsOf` so a block a plugin CONTRIBUTED is created from its own declaration
+ * too; it is absent from this package's registry, and reading only the registry would give every
+ * contributed container the same invented `default`.
+ */
+function initialSlots(
+  type: string,
+  registry: BlockRegistry
+): Record<string, BlockNode[]> | undefined {
+  const declared = slotsOf(type, registry);
+  // A type nothing knows, and a block that declares no slots, both get none. Inventing a slot for
+  // the first would be guessing at a block this build cannot describe.
+  if (!declared || declared.length === 0) return undefined;
+  const slots: Record<string, BlockNode[]> = {};
+  for (const spec of declared) slots[spec.name] = [];
+  return slots;
+}
 
 export interface BlockRegistry {
   register(def: BlockDefinition): void;
@@ -102,7 +125,7 @@ export function createNode(
     type,
     def ? structuredClone(def.defaultProps) : {},
     def?.defaultStyle ? structuredClone(def.defaultStyle) : undefined,
-    slots ?? (def?.isContainer ? { [DEFAULT_SLOT]: [] } : undefined)
+    slots ?? initialSlots(type, registry)
   );
   // Stamped so a later migration can tell what wrote this instance. Without it every node reads
   // as version 1 and a block already past its first version re-runs migrations it never needed.

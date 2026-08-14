@@ -25,7 +25,7 @@ import {
   type Binding,
   type StyleValues,
 } from "../../core/types";
-import { canDrop } from "../logic/dropRules";
+import { canDrop, subtreeIsPlaceable } from "../logic/dropRules";
 
 const HISTORY_LIMIT = 50;
 const BASE_BREAKPOINT = "base";
@@ -326,6 +326,9 @@ export function editorReducer(
       if (!slotAccepts(root, action.parentId, action.slot, action.node.type)) {
         return state;
       }
+      // The clipboard is the one insertion path whose payload was built somewhere else, so the
+      // destination admitting the outermost block says nothing about the relations inside it.
+      if (!subtreeIsPlaceable(action.node, defaultBlockRegistry)) return state;
       const fresh = reidSubtree(action.node);
       return commit(
         state,

@@ -209,7 +209,15 @@ export type BlockCategory =
 
 export interface SlotSpec {
   name: string;
-  /** Namespaced block types allowed in this slot. Omit for "any". */
+  /**
+   * Namespaced block types allowed in this slot. Omit for "any".
+   *
+   * A trailing `*` matches a whole namespace, so `core/*` admits every core
+   * block. The wildcard binds to the `/`, which is what keeps `core/*` from
+   * admitting `coreevil/banner`. Answer it with `slotAdmits` rather than by
+   * membership: an exact-match test reading a wildcard finds no block of that
+   * name and empties a slot its author declared open.
+   */
   allowedBlocks?: string[];
   /**
    * How this slot arranges its children, when that constrains what may sit between them.

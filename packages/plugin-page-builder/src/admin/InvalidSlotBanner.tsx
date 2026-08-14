@@ -39,9 +39,29 @@ import type { EditorAction } from "./store/editorStore";
  * surface can show that a wrap is offered where a wrap is right.
  */
 export function actionLabelFor(entry: InvalidSlotEntry): string {
-  if (entry.kind !== "not-allowed" || !entry.wrapWith) return "Remove";
+  if (entry.kind !== "not-allowed" && entry.kind !== "root-parent") {
+    return "Remove";
+  }
+  if (!entry.wrapWith) {
+    // A root cannot be removed — a document must have one — so an undetermined root fault has no
+    // action at all, and `repairableEntry` keeps the button off the row rather than labelling one
+    // that would do nothing.
+    return entry.kind === "root-parent" ? "No automatic fix" : "Remove";
+  }
   const label = defaultBlockRegistry.get(entry.wrapWith)?.label;
   return label ? `Wrap in ${label}` : "Wrap";
+}
+
+/**
+ * Whether this row has an action to offer.
+ *
+ * Only a root restricting its parents can fail to: every other fault can at worst be resolved by
+ * removing the offending block, and a root has nothing above it to hold a replacement. Reporting
+ * it without a button is the honest state — the page genuinely will not save, and the author needs
+ * to be told that even where nothing can be done for them automatically.
+ */
+function repairableEntry(entry: InvalidSlotEntry): boolean {
+  return entry.kind !== "root-parent" || entry.wrapWith !== undefined;
 }
 
 /** What a row calls the thing it acts on. */
@@ -54,6 +74,8 @@ function labelFor(entry: InvalidSlotEntry): string {
       return `Empty slot "${entry.slotName}"`;
     case "stray-slots":
       return "Leftover slot data";
+    case "root-parent":
+      return entry.type;
   }
 }
 
@@ -76,6 +98,8 @@ function whereFor(entry: InvalidSlotEntry): string {
       return `${on}, which holds no slots at all`;
     case "not-allowed":
       return `in slot "${entry.slotName}" ${on}, which does not accept ${entry.type}`;
+    case "root-parent":
+      return "as the top-level block, which it may not be";
   }
 }
 
@@ -176,14 +200,20 @@ export function InvalidSlotBanner() {
                   {whereFor(entry)}
                 </span>
               </div>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => dispatch(repairFor(entry))}
-              >
-                {actionLabelFor(entry)}
-              </Button>
+              {repairableEntry(entry) ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => dispatch(repairFor(entry))}
+                >
+                  {actionLabelFor(entry)}
+                </Button>
+              ) : (
+                <span className="nx-pb-repair-item-noop">
+                  {actionLabelFor(entry)}
+                </span>
+              )}
             </li>
           ))}
         </ul>
