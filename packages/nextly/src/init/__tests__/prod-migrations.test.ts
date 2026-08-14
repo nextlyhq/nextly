@@ -1,8 +1,8 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { NextlyError } from "../../errors";
 
-const clearServices = vi.fn();
-vi.mock("../../di", () => ({ clearServices: () => clearServices() }));
+const shutdownServices = vi.fn();
+vi.mock("../../di", () => ({ shutdownServices: () => shutdownServices() }));
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -53,7 +53,7 @@ describe("runProdMigrationsIfEnabled", () => {
     // to be cleared between cases or the first refusal fails every test after.
     delete (globalThis as { __nextly_bootMigrationsRefused?: unknown })
       .__nextly_bootMigrationsRefused;
-    clearServices.mockClear();
+    shutdownServices.mockClear();
   });
 
   /**
@@ -78,7 +78,7 @@ describe("runProdMigrationsIfEnabled", () => {
    * that gate the flag is unreachable: the next request skips this helper
    * entirely, builds the dispatcher, and serves the unverified schema.
    */
-  it("clears registration so the refusal is reachable on the next request", async () => {
+  it("tears services down so the refusal is reachable without leaking a pool", async () => {
     process.env.NODE_ENV = "production";
     const a = args({
       migrateCore: vi.fn(async () => ({
@@ -92,7 +92,9 @@ describe("runProdMigrationsIfEnabled", () => {
       code: "NEXTLY_BOOT_MIGRATIONS_NOT_RUN",
     });
 
-    expect(clearServices).toHaveBeenCalled();
+    // `shutdownServices`, not `clearServices`: the latter leaves the adapter
+    // connected, so each retry would build another pool.
+    expect(shutdownServices).toHaveBeenCalled();
   });
 
   it("keeps refusing on later calls, even when migrations would now succeed", async () => {
@@ -139,6 +141,33 @@ describe("runProdMigrationsIfEnabled", () => {
     await expect(runProdMigrationsIfEnabled(a as never)).rejects.toMatchObject({
       code: "NEXTLY_BOOT_MIGRATIONS_NOT_RUN",
     });
+  });
+
+  /**
+   * `forceUnlock` deletes the Postgres lock ROW and returns immediately for
+   * every other dialect, so telling a MySQL operator to run it during an
+   * incident sends them to a no-op. MySQL's lock is session-scoped and dies
+   * with its connection, which makes restarting the holder the real recovery.
+   */
+  it("gives dialect-appropriate recovery guidance", async () => {
+    process.env.NODE_ENV = "production";
+    const notRun = () => ({ applied: 0, coreChanged: false, ran: false });
+
+    const pg = args({ migrateCore: vi.fn(async () => notRun()) });
+    await expect(runProdMigrationsIfEnabled(pg as never)).rejects.toMatchObject(
+      {
+        publicMessage: expect.stringContaining("--force-unlock"),
+      }
+    );
+
+    delete (globalThis as { __nextly_bootMigrationsRefused?: unknown })
+      .__nextly_bootMigrationsRefused;
+
+    const my = args({ migrateCore: vi.fn(async () => notRun()) });
+    my.adapter.dialect = "mysql";
+    const err = await runProdMigrationsIfEnabled(my as never).catch(e => e);
+    expect(err.publicMessage).not.toContain("--force-unlock");
+    expect(err.publicMessage).toContain("released when that connection ends");
   });
 
   it("refuses to start when the migrations did not run", async () => {
