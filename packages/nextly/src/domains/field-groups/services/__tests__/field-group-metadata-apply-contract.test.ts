@@ -427,7 +427,59 @@ describe("a field-group update refuses what it cannot deliver", () => {
       record: expect.objectContaining({ slug: "hero" }),
     });
 
+    // 🔴 Asserted on the COMPANION CALL, not on the registry write. Checking only that the row was
+    // updated leaves the control green if `reconcileCompanion` were removed or bypassed — the
+    // promise still resolves and `updateComponent` is still reached, while `subheading` is never
+    // added to `comp_hero_locales`. The claim is "the companion applies it", so the companion call
+    // is what has to be observed.
+    const { reconcileComponentCompanion } = await import(
+      "../field-group-table-provisioning"
+    );
+    expect(reconcileComponentCompanion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tableName: "comp_hero",
+        localized: true,
+        newFields: expect.arrayContaining([
+          expect.objectContaining({ name: "subheading" }),
+        ]),
+      })
+    );
     expect(registry.updateComponent).toHaveBeenCalled();
+  });
+
+  // 🔴 THE case a definition-level diff cannot see. The field keeps its name and its `type`, so a
+  // predicate comparing field definitions reports no change — while `integer` -> `decimal` alters
+  // the column on every dialect. Comparing what the DDL generator would BUILD catches it; comparing
+  // what the author wrote does not.
+  it("refuses a storage change that leaves the field definition looking the same", async () => {
+    const registry = registryWithGroup({
+      fields: [{ name: "score", type: "number", dbType: "integer" }] as never,
+    });
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    const refusal = await service
+      .updateFieldGroup({
+        slug: "hero",
+        fields: [{ name: "score", type: "number", dbType: "decimal" }] as never,
+      })
+      .catch((error: unknown) => error);
+
+    expect(refusal).toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: [
+          expect.objectContaining({
+            path: "fields.score",
+            code: "requires_schema_change",
+          }),
+        ],
+      },
+    });
+    expect(registry.updateComponent).not.toHaveBeenCalled();
   });
 
   // A layout-only field has no column anywhere, so adding one cannot need DDL on any table.

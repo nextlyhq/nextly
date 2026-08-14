@@ -378,11 +378,10 @@ export class FieldGroupMetadataService {
    * 🔴 Every question here is answered by the code that already owns it, so this guard cannot
    * disagree with what actually emits DDL:
    *
-   * - `computeFieldDiff` is the diff the PREVIEW endpoint itself computes;
-   * - `fieldProducesColumn` is documented at its definition as "the single answer" to whether a
-   *   field has a column, with the DDL generator and the field classifier both deferring to it —
-   *   it already excludes layout-only types, components (own `comp_` table) and many-to-many
-   *   (junction table);
+   * - `getColumnDescriptor` is what the DDL GENERATOR builds each column from, so comparing the
+   *   descriptors two field sets produce is comparing what would actually be emitted — it returns
+   *   null for layout-only types, components (own `comp_` table) and many-to-many (junction table),
+   *   via the same `fieldProducesColumn` documented at its definition as "the single answer";
    * - `isFieldLocalized` is the predicate `reconcileCompanion` itself filters on to decide what the
    *   companion carries, and it folds in the entity flag, so it is uniformly false for a
    *   non-localized field group and no separate branch is needed for that case.
@@ -395,44 +394,72 @@ export class FieldGroupMetadataService {
     fields: FieldDefinition[];
     localized: boolean;
   }): Promise<void> {
-    const { computeFieldDiff } = await import(
-      "../../schema/services/field-diff"
-    );
-    const { fieldProducesColumn } = await import(
+    const { getColumnDescriptor } = await import(
       "../../schema/services/field-column-descriptor"
     );
     const { isFieldLocalized } = await import("../../i18n/classify-fields");
 
-    const diff = computeFieldDiff(
-      args.existing.fields as unknown as FieldDefinition[],
-      args.fields
-    );
-    // A CHANGED entry carries only the field's name, so the definition is taken from whichever side
-    // still has it — the new one for added and changed, the old one for removed.
-    const touched: FieldDefinition[] = [
-      ...diff.added,
-      ...diff.removed,
-      ...diff.changed
-        .map(c => args.fields.find(f => f.name === c.name))
-        .filter((f): f is FieldDefinition => f !== undefined),
-    ];
+    const oldFields = args.existing.fields as unknown as FieldDefinition[];
 
-    const needsMainTable = touched.filter(
-      field =>
-        fieldProducesColumn(field) && !isFieldLocalized(field, args.localized)
-    );
-    if (needsMainTable.length === 0) return;
+    /**
+     * The column a field would occupy on the MAIN table, or null when it would occupy none.
+     *
+     * 🔴 The DESCRIPTOR, not the field definition. Comparing definitions answers "did the author
+     * change anything", which is a wider and differently-shaped question than "does the column need
+     * altering" — a `dbType` moving from integer to decimal, or a changed `precision`, `scale`,
+     * `length` or `index`, all alter the column while leaving a definition-level diff reporting no
+     * change at all. This is the same function the DDL generator builds from, so what it says about
+     * two field sets is what the generator would emit for them.
+     *
+     * A localized field returns null because its column lives in `comp_<slug>_locales`, which
+     * `reconcileCompanion` does apply — the predicate is the one that reconciler itself filters on.
+     */
+    const mainTableColumn = (
+      field: FieldDefinition
+    ): Record<string, unknown> | null => {
+      if (isFieldLocalized(field, args.localized)) return null;
+      return getColumnDescriptor(
+        field,
+        this.dialect,
+        "fieldGroup"
+      ) as unknown as Record<string, unknown> | null;
+    };
 
+    const describe = (fields: FieldDefinition[]): Map<string, string> => {
+      const out = new Map<string, string>();
+      for (const field of fields) {
+        const descriptor = mainTableColumn(field);
+        if (descriptor === null) continue;
+        // Serialised for comparison rather than compared field by field: a descriptor gaining a
+        // property would otherwise be silently excluded from the check that exists to notice it.
+        out.set(field.name, JSON.stringify(descriptor));
+      }
+      return out;
+    };
+
+    const before = describe(oldFields);
+    const after = describe(args.fields);
+
+    const changed = new Set<string>();
+    for (const [name, spec] of after) {
+      if (before.get(name) !== spec) changed.add(name);
+    }
+    for (const name of before.keys()) {
+      if (!after.has(name)) changed.add(name);
+    }
+    if (changed.size === 0) return;
+
+    const names = [...changed];
     throw NextlyError.validation({
-      errors: needsMainTable.map(field => ({
-        path: `fields.${field.name}`,
+      errors: names.map(name => ({
+        path: `fields.${name}`,
         code: "requires_schema_change",
-        message: `Changing "${field.name}" alters the field group's table. Use the schema preview and apply flow, which reviews the change and resolves renames, rather than updating the field group directly.`,
+        message: `Changing "${name}" alters the field group's table. Use the schema preview and apply flow, which reviews the change and resolves renames, rather than updating the field group directly.`,
       })),
       logContext: {
         reason: "field update requires main-table ddl",
         slug: args.existing.slug,
-        fields: needsMainTable.map(f => f.name),
+        fields: names,
       },
     });
   }
