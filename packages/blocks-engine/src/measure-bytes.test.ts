@@ -159,6 +159,45 @@ describe("the three things the writer can do", () => {
     expect(exact.bytes).toBe(JSON.stringify(plain)!.length);
   });
 
+  it("refuses what the descriptor read cannot measure the writer's way", () => {
+    // The walk reads descriptors so validating never runs document code; the
+    // writer reads through [[Get]] and applies its own rules. Where those two
+    // diverge and the walk CAN see it, the totals stop being totals rather than
+    // being reported as exact.
+    //
+    // Boxed primitives are the visible case: JSON unboxes them, so the
+    // enumerable object shape measured here is not what gets stored.
+    const boxedNumber = { a: new Number(12345) };
+    const boxedString = { a: new String("abcdef") };
+    expect(surveyDocument(boxedNumber, LIMITS).complete).toBe(false);
+    expect(surveyDocument(boxedString, LIMITS).complete).toBe(false);
+    expect(surveyDocument(boxedString, LIMITS).bytes).not.toBe(
+      JSON.stringify(boxedString)!.length
+    );
+
+    // And the control, so this cannot pass by refusing everything: an ordinary
+    // value is complete and its bytes are exact.
+    const plain = { a: 12345 };
+    const exact = surveyDocument(plain, LIMITS);
+    expect(exact.complete).toBe(true);
+    expect(exact.bytes).toBe(JSON.stringify(plain)!.length);
+  });
+
+  it("reads a setter-only property instead of refusing it", () => {
+    // Only a GETTER runs document code. A setter-only property has none, so an
+    // ordinary read returns `undefined` without invoking anything — which is
+    // what `JSON.stringify` reads before dropping the key. Calling it
+    // unreadable reported that the validator refused to look at a document it
+    // had measured exactly.
+    const doc: Record<string, unknown> = { b: 1 };
+    Object.defineProperty(doc, "a", { enumerable: true, set() {} });
+
+    const survey = surveyDocument(doc, LIMITS);
+    expect(survey.unreadable).toBe(false);
+    expect(survey.complete).toBe(true);
+    expect(survey.bytes).toBe(JSON.stringify(doc)!.length);
+  });
+
   it("separates a document JSON rewrites from one it refuses", () => {
     // The distinction the whole split exists for, asserted against the writer
     // rather than against an expectation of it.

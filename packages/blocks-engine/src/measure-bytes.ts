@@ -239,8 +239,26 @@ function readMember(container: object, key: string | number): Member {
     return { present: false, reason: "threw" };
   }
   if (descriptor === undefined) return { present: false, reason: "absent" };
-  if (descriptor.get !== undefined || descriptor.set !== undefined) {
+  // The descriptor is what makes this read safe, and it is not what makes it
+  // FAITHFUL. A Proxy's `get` trap can return something other than the target's
+  // descriptor value, so a data descriptor does not guarantee the writer sees
+  // the same value this does — and nothing available here separates the two,
+  // since the separating observation IS `[[Get]]`. `DocumentSurvey.complete`
+  // states that limit rather than pretending to guard it.
+  // A GETTER is what this refuses to run. A setter-only property has no getter,
+  // so an ordinary read returns `undefined` without invoking anything — which is
+  // exactly what `JSON.stringify` reads, and it then drops the key. Treating it
+  // as unreadable made a document the walk had read perfectly well report that
+  // the validator refused to look at it.
+  if (descriptor.get !== undefined) {
     return { present: false, reason: "accessor" };
+  }
+  if (descriptor.set !== undefined) {
+    return {
+      present: true,
+      value: undefined,
+      enumerable: descriptor.enumerable === true,
+    };
   }
   return {
     present: true,
@@ -430,7 +448,24 @@ export interface DocumentSurvey {
   unreadable: boolean;
 
   /**
-   * Whether `bytes`, `nodes` and `depth` are totals rather than lower bounds.
+   * Whether `bytes`, `nodes` and `depth` are totals rather than lower bounds,
+   * FOR ANY VALUE A BLOCK DOCUMENT CAN HOLD.
+   *
+   * The scope is load-bearing rather than a hedge. This walk reads property
+   * DESCRIPTORS so that measuring a document never runs code the document
+   * supplies; `JSON.stringify` reads through `[[Get]]`. For a value `JSON.parse`
+   * can produce — which is what storage returns and what the editor builds —
+   * those two reads agree, and every case where they diverge and this walk can
+   * SEE the divergence sets a flag that clears this field.
+   *
+   * They can also diverge invisibly. A Proxy whose `get` trap returns more than
+   * its own descriptor holds is indistinguishable from a plain record by every
+   * test available here: the descriptor reports the target's value, the
+   * prototype is `Object.prototype`, and the tag reads `[object Object]`.
+   * Measured, one claiming a single character writes 1,000,014. Separating that
+   * from an honest record requires invoking `[[Get]]`, which is the one thing
+   * this function exists not to do — so it is stated rather than guarded, and
+   * the guarantee is scoped to the values the API's own type can carry.
    *
    * The question a caller actually has before doing bounded work of its own,
    * derived here so it has one implementation. A caller re-deriving it has to
@@ -719,7 +754,14 @@ export function surveyDocument(
       // uncounted, so the totals stop being totals — while a genuinely absent
       // key is fully accounted for, as the four bytes JSON writes for an array
       // hole or as nothing at all for a missing record key.
-      if (!member.present && member.reason !== "absent") unreadable = true;
+      if (!member.present && member.reason !== "absent") {
+        unreadable = true;
+        // A descriptor read that THREW is not only the walk declining to look.
+        // `JSON.stringify` consults the same trap to decide whether the key is
+        // enumerable, so it throws too and the document has no stored form —
+        // unlike an accessor, which the writer invokes happily.
+        if (member.reason === "threw") unwritable = true;
+      }
 
       // Enumerability decides whether the writer ever LOOKS at this member, and
       // on a record it does not: `JSON.stringify` skips a non-enumerable
@@ -1108,7 +1150,16 @@ export function surveyDocument(
     }
 
     const shape = isPlainRecordSafely(value);
-    if (!shape.plain) lossy = true;
+    if (!shape.plain) {
+      lossy = true;
+      // And the bytes are not the writer's. A non-plain object is walked for the
+      // own properties it carries, while `JSON.stringify` writes whatever its
+      // own rules produce — it UNBOXES `new Number(1)` to `1` and `new
+      // String("ab")` to `"ab"`, neither of which is the enumerable shape
+      // measured here. The size a caller gets would describe an object the
+      // writer never emits, so the totals stop being totals.
+      approximate = true;
+    }
     if (shape.threw) {
       unreadable = true;
       continue;
