@@ -134,9 +134,15 @@ function localNamesOf(exported: string, file: ts.SourceFile): Set<string> {
         ts.isVariableDeclaration(node) &&
         ts.isIdentifier(node.name) &&
         node.initializer !== undefined &&
-        ts.isIdentifier(node.initializer) &&
-        names.has(node.initializer.text) &&
-        !names.has(node.name.text)
+        !names.has(node.name.text) &&
+        // An identifier OR a namespace access. `const Pager = Shared.Pagination`
+        // binds the component exactly as `const Pager = Pagination` does, and
+        // the namespace form is the one a barrel import produces — so reading
+        // only bare identifiers missed the spelling this file already tracks
+        // for tags.
+        (ts.isIdentifier(node.initializer) ||
+          ts.isPropertyAccessExpression(node.initializer)) &&
+        names.has(node.initializer.getText(file))
       ) {
         names.add(node.name.text);
         added = true;
@@ -329,6 +335,10 @@ function jsxUsesOf(
   const root = declaration ? (enclosingScope(declaration) ?? file) : file;
   const uses: ts.Node[] = [];
   const visit = (node: ts.Node): void => {
+    // A nested function that binds the same name SHADOWS this declaration, so
+    // its uses belong to that one. Descending into it attributed a helper's own
+    // `pager` to the outer const and reported a correctly placed footer.
+    if (node !== root && isScope(node) && declaresName(node, name)) return;
     if (ts.isIdentifier(node) && node.text === name && inJsxExpression(node)) {
       uses.push(node);
     }
@@ -338,15 +348,57 @@ function jsxUsesOf(
   return uses;
 }
 
-/** The function body a node sits in, or undefined at module level. */
+function isScope(node: ts.Node): boolean {
+  return (
+    ts.isFunctionDeclaration(node) ||
+    ts.isFunctionExpression(node) ||
+    ts.isArrowFunction(node) ||
+    ts.isMethodDeclaration(node)
+  );
+}
+
+/** Whether a function binds `name` itself, as a parameter or as a local. */
+function declaresName(scope: ts.Node, name: string): boolean {
+  for (const parameter of (scope as ts.SignatureDeclaration).parameters ?? []) {
+    if (ts.isIdentifier(parameter.name) && parameter.name.text === name) {
+      return true;
+    }
+    // A destructured prop binds too: `({ pager }) => ...` declares it.
+    if (ts.isObjectBindingPattern(parameter.name)) {
+      for (const element of parameter.name.elements) {
+        if (ts.isIdentifier(element.name) && element.name.text === name) {
+          return true;
+        }
+      }
+    }
+  }
+  let declares = false;
+  const look = (node: ts.Node): void => {
+    if (node !== scope && isScope(node)) return; // deeper scopes own their names
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.name.text === name
+    ) {
+      declares = true;
+    }
+    ts.forEachChild(node, look);
+  };
+  look(scope);
+  return declares;
+}
+
+/**
+ * The function body a node sits in, or undefined at module level.
+ *
+ * Asks `isScope` rather than restating its list, so "what counts as a scope"
+ * has one answer. Two copies would drift the moment a node kind is added to
+ * one of them, and the drift is silent: uses would be collected from a scope
+ * that shadowing no longer skips.
+ */
 function enclosingScope(node: ts.Node): ts.Node | undefined {
   for (let current = node.parent; current; current = current.parent) {
-    if (
-      ts.isFunctionDeclaration(current) ||
-      ts.isFunctionExpression(current) ||
-      ts.isArrowFunction(current) ||
-      ts.isMethodDeclaration(current)
-    ) {
+    if (isScope(current)) {
       return current;
     }
   }
@@ -534,7 +586,12 @@ function enclosedBy(
         initializer && ts.isStringLiteral(initializer)
           ? initializer.text
           : (initializer?.getText(file) ?? "");
-      if (text.includes(marker)) return true;
+      // Matched as a whitespace-separated TOKEN, never as a substring. Class
+      // names nest as prefixes of one another, so `table-wrapper-footer`
+      // contains `table-wrapper` and a substring check cannot tell the wrapper
+      // that draws the card from something merely named after it — which would
+      // pass this assertion for a pager moved out of the card entirely.
+      if (text.split(/\s+/).includes(marker)) return true;
     }
   }
   return false;
@@ -774,6 +831,32 @@ describe("list pagination", () => {
       "name reused in another scope"
     ).toHaveLength(0);
 
+    // A namespace access aliased locally. `const Pager = Shared.Pagination` is
+    // the spelling a barrel import produces, and reading only bare identifiers
+    // walked past it.
+    const namespaceAlias = parse(
+      "ns-alias.tsx",
+      'import * as Shared from "@admin/components/shared";\n' +
+        "const Pager = Shared.Pagination;\n" +
+        "const x = (<><DataTableView columns={c} rows={r} /><Pager page={1} /></>);"
+    );
+    expect(detachedPagers(namespaceAlias), "namespace alias").toHaveLength(1);
+
+    // A NESTED scope that binds the same name owns its own uses. Attributing a
+    // helper's `pager` to the outer declaration reported a correctly placed
+    // footer as detached.
+    const shadowed = parse(
+      "shadowed.tsx",
+      "function List() {\n" +
+        "  const pager = <Pagination page={1} />;\n" +
+        "  const Row = ({ pager }) => (<><DataTableView columns={c} rows={r} />{pager}</>);\n" +
+        "  return <DataTableView columns={c} rows={r} footer={pager} />;\n" +
+        "}"
+    );
+    expect(detachedPagers(shadowed), "shadowed in a nested scope").toHaveLength(
+      0
+    );
+
     // An ALIASED table import. The pager is matched by binding, so the owner of
     // its footer must be too -- otherwise an import refactor makes a correctly
     // placed pager look detached.
@@ -896,6 +979,27 @@ describe("list pagination", () => {
           `exempted for [${pagers.join(", ")}] (${reason})`
       ).toEqual([...pagers].sort());
     }
+  });
+
+  it("reads the enclosing class as a token, not a substring", () => {
+    // Class names nest as prefixes of one another, so a substring check cannot
+    // tell the wrapper that draws the card from something merely named after
+    // it -- and would pass for a pager moved out of the card entirely.
+    const inside = parse(
+      "c.tsx",
+      '<div className="table-wrapper rounded-md"><Pagination page={1} /></div>'
+    );
+    const [ok] = detachedPagers(inside);
+    expect(ok && enclosedBy(ok.at, "table-wrapper", inside)).toBe(true);
+
+    const lookalike = parse(
+      "c.tsx",
+      '<div className="table-wrapper-footer"><Pagination page={1} /></div>'
+    );
+    const [moved] = detachedPagers(lookalike);
+    expect(moved && enclosedBy(moved.at, "table-wrapper", lookalike)).toBe(
+      false
+    );
   });
 
   it("keeps an exempt pager inside its table's container", () => {
