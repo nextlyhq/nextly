@@ -253,7 +253,22 @@ the remedies differ, and applying the wrong one looks like diligence:
     exists at runtime. Replace it: a regex becomes a walk over the compiler's
     own AST, an AST prediction of a runtime value becomes the runtime value.
 
-  The tell is whether the fixes CONVERGE. Worked example of the second: a source
+  **Do not settle this by asking whether the fixes have converged.** A visitor
+  that has simply not yet met its next unsupported form is indistinguishable
+  from a complete one, so "no failure since the last fix" certifies
+  patch-by-example after any number of rounds — the same absence-is-not-evidence
+  trap this file is otherwise about.
+
+  What separates them is whether the reader's input domain can be ENUMERATED.
+  Ask: can you state the complete set of forms this position admits, from the
+  grammar or the schema rather than from the failures seen so far, and does the
+  reader handle each? A JSX expression admits a listable set of node kinds; a
+  database column admits a listable set of types. That question has an answer
+  and the answer is checkable. "What can appear in a template literal that
+  eventually becomes a class string" does not — which is what makes it a
+  mismatch rather than a long list.
+
+  Worked example of the second: a source
   check for a component's class names took thirteen rounds finding spellings it
   read wrongly — aliases, namespace imports, `{...{ className }}`, `+`
   concatenation, template interpolation, character references. Each fix was
@@ -282,12 +297,22 @@ the remedies differ, and applying the wrong one looks like diligence:
   symptom move without fixing anything.
 
 The controls separate them, which is why they come first. Feed the check an
-input it currently misreports and follow it all the way through: if it never
-sees the value — the token, the node, the row — the read is at fault. If it sees
-the value and reaches the wrong verdict, the classification is. If it reaches
-the right verdict and nothing comes out, the emission is — and trace the harness
-before concluding anything, since a fixture that never reaches the mechanism
-produces exactly the silence all three failures produce.
+input it currently misreports and follow it all the way through:
+
+- it never sees the value at all — then ask WHY before naming a culprit, because
+  two of the three look identical here. If the value was never in the input set
+  — an underinclusive glob, a query predicate that excludes the row, a directory
+  the scan does not walk — that is the POPULATION, and extending the reader
+  fixes nothing because the reader was never handed the thing. If the value was
+  in the input and the reader could not parse or reach it, that is the READ.
+- it sees the value and reaches the wrong verdict — the CLASSIFICATION.
+- it reaches the right verdict and nothing comes out — the EMISSION. Trace the
+  harness before concluding anything, since a fixture that never reaches the
+  mechanism produces exactly the silence all three failures produce.
+
+The first bullet is where a wrong turn costs most: "the check did not see it"
+sends people to the reader by instinct, and a selector that excluded the row
+will keep excluding it however good the reader becomes.
 
 Do not substitute a thought experiment about what a human reader would conclude.
 It misfires in both directions: a value built through an imported helper or a
@@ -309,8 +334,13 @@ Three from this repository, arriving from unrelated directions:
   that is intrinsically slower per unit of work is still load, and is invisible
   to a queue-depth check — so a test dying at a timeout was declared a hang on
   the strength of a measurement that could not see the cause it was excluding.
-- **"The marker is present" used as "the merge landed whole."** It rules out
-  one commit having gone missing, not the tail.
+- **"The marker is present" used as "the commit landed."** It confirms that
+  matching text exists in the scope searched, and nothing more. Unless the
+  marker is UNIQUE to that commit and the search is scoped to the path it
+  changed, text that was already in the base — or arrived independently —
+  satisfies it while the commit is missing. `verifying-merged-work.md` says the
+  same from the other side; the presence is evidence about the text, and the
+  claim is about a change.
 - **"The controls pass" used as "the findings are real."** It rules out the
   check being wrong on the shapes tested, not on the ones that produced the
   reports.
@@ -321,12 +351,18 @@ findings. When you notice it, do not look for a better number first. Name the
 CATEGORY, list what else is in it, and ask which members the measurement can
 actually see.
 
-What settles it is usually evidence that VARIES with the thing being claimed.
-The load case was decided by a factor that appeared only where there was real
-work to be slow at — 4ms to 11ms on a trivial test against 85ms to 5136ms on a
-rendering one. A hang does not scale with work and contention would not spare
-the trivial cases, so one measurement excluded both. A single timing at the
-ceiling, however precise, could not have.
+What narrows it is usually evidence that VARIES with the thing being claimed,
+and "narrows" is the honest verb. The load case was constrained by a factor
+appearing only where there was real work to be slow at — 4ms to 11ms on a
+trivial test against 85ms to 5136ms on a rendering one. That is strong evidence
+for per-unit-of-work slowness, and it is NOT a proof: an input-dependent
+deadlock reached only by the heavy fixture, or contention that begins above some
+concurrency threshold, produce the same curve. Excluding those needs something
+that varies workload and contention independently, or a look at the blocker
+state while it hangs. What the curve did do is rule out the SIMPLE forms of
+both — a hang that stalls regardless of input, and contention already present
+at rest — and that was enough to move a wrong diagnosis, which a single timing
+at the ceiling could not have done however precise.
 
 ## For an ADVISORY check, firing on correct code is worse than missing
 
@@ -365,12 +401,19 @@ see**, which is common and is not a failure. Do not add another exception each
 time one is found; that is the third-finding shape above, wearing the costume of
 thoroughness. Instead:
 
-- Widen the condition so it cannot have gaps, accepting misses. Prefer a PREFIX
-  or a structural property over a list of spellings — a list of Tailwind border
-  widths must keep up with `border-2`, `border-x`, the logical `border-s`,
-  arbitrary `border-[3px]` and whatever ships next, and every gap reports a
-  caller's deliberate border as dead. "Is any other border utility present"
-  cannot have that gap.
+- Widen the SUPPRESSING condition — the exemption, the evidence that a report
+  is unwarranted — so it cannot have gaps, accepting misses. Check the polarity
+  before applying this, because it inverts: widening the REPORTING predicate
+  produces more false positives, which is the opposite of the goal. "What
+  excuses a finding" is the thing to make gap-free; "what triggers one" is not.
+
+  Prefer a PREFIX or a structural property over a list of spellings — a list of
+  Tailwind border widths must keep up with `border-2`, `border-x`, the logical
+  `border-s`, arbitrary `border-[3px]` and whatever ships next, and every gap
+  reports a caller's deliberate border as dead. "Is any other border utility
+  present" cannot have that gap — and note that this IS the suppressing side:
+  finding a border is what excuses the colour, so widening it silences more.
+
 - Say in the file which direction the check errs in, and why. An
   under-reporting guard that documents itself is honest; one that silently
   drifts toward under-reporting is the same code with the reader misled.
