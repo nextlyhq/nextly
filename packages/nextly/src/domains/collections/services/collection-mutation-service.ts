@@ -4523,6 +4523,25 @@ export class CollectionMutationService extends BaseService {
       }
 
       // 1. Check collection-level access FIRST (with document for owner checks)
+      //
+      // This verdict is NOT atomic with the write it guards, and that is a known
+      // property rather than an oversight. The transaction opens several hundred
+      // lines below, after schema loads, hook dispatch and relationship
+      // resolution, so a change to this document's ownership or to the
+      // collection's access rules in between leaves the write proceeding on a
+      // verdict that has stopped being true. Exploiting it requires an actor who
+      // held legitimate access moments earlier.
+      //
+      // Closing it properly means authorizing inside the transaction with the
+      // row locked, which every access evaluator would have to accept an
+      // executor to do: they currently read through the pooled adapter, and
+      // mixing pooled reads with an open transaction is what stalls the pool.
+      //
+      // Two things follow for anyone editing this method. Work added between
+      // here and the transaction widens the window, so prefer to add it before
+      // this check or inside the transaction. And a rule that must be judged
+      // against the row as locked belongs in the under-lock re-check the publish
+      // path already uses, not here.
       const accessDenied = await this.accessService.checkCollectionAccess(
         params.collectionName,
         "update",
