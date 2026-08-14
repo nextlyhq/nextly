@@ -1,5 +1,37 @@
 /**
- * No call site may repaint the tab indicator.
+ * A BEST-EFFORT LINT over call sites that repaint the tab indicator.
+ *
+ * Read this first, because the name of the file oversells it. A pass means
+ * "no violation this scanner could see", NOT "no violation". The scan reads
+ * source syntax, and syntax has an unbounded surface: 24 review rounds
+ * produced 94 findings and not one round came back empty, with the last three
+ * finding gaps in the previous round's fixes. Treat a green here as evidence,
+ * never as a guarantee, and never as a reason to skip looking.
+ *
+ * KNOWN GAPS, left open deliberately rather than patched:
+ *
+ *   - a namespace member destructured off a shadowed namespace import
+ *     (`const { TabsTrigger: T } = UI` where a local `UI` shadows the import)
+ *   - a `className` bound through a `const` reaching the class walk without a
+ *     resolver, so a constant-bound owned class is not read
+ *   - an equal-value restatement under a DIFFERENT caller variant, where the
+ *     owned rule still wins the cascade by emission order
+ *   - `require` resolved by text rather than by binding, so a local function
+ *     named `require` is read as CommonJS
+ *
+ * WHY THEY ARE NOT FIXED. Measured across the repository: 124 files consume
+ * these primitives and NONE overrides the underline or the corners. Every real
+ * override is layout or size — `mx-3 mt-2.5`, `w-full justify-start`,
+ * `h-8 bg-transparent p-0`, `text-xs` — which the design intends to allow, and
+ * which `cn()` composition exists to serve. So this guards a violation that has
+ * not occurred, and closing four obscure spellings of it does not change that.
+ *
+ * The repeated overrides above are the real signal: `h-8/h-7 bg-transparent
+ * p-0` and `text-xs` want a named variant on the primitive, which is how the
+ * other 11 `cva` components in this package express the same thing. That is the
+ * follow-up, and it addresses the actual pressure rather than policing it.
+ *
+ * The original rationale follows, and still holds for what the scan DOES read:
  *
  * `Tabs` is an underline control: the active state is a 2px bottom border on the
  * trigger, and the trigger is square so that border runs flush to its edges. The
@@ -2771,7 +2803,7 @@ function violations(): Violation[] {
   return found;
 }
 
-describe("the tab indicator contract", () => {
+describe("the tab indicator lint", () => {
   beforeAll(async () => {
     designSystem = await loadDesignSystem();
   });
