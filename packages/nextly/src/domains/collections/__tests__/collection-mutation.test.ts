@@ -116,6 +116,26 @@ const storedHookExecute = vi.hoisted(() =>
 // stubbed wholesale, so the rest of the registry keeps its real behaviour.
 const runFieldHooksSpy = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 
+// Relationship normalisation mutates the caller's data before the write. It is a seventh door:
+// `shapeWriteParts` calls it directly, so it can move above the gate independently of every hook
+// and validator. Spied rather than stubbed, so the rest of the module keeps its real behaviour.
+const normalizeRelationshipFieldsSpy = vi.hoisted(() => vi.fn());
+
+vi.mock("../../../shared/lib/field-transform", async importActual => {
+  const actual = await importActual<Record<string, unknown>>();
+  return {
+    ...actual,
+    normalizeRelationshipFields: vi.fn(
+      (...args: Parameters<typeof normalizeRelationshipFieldsSpy>) => {
+        normalizeRelationshipFieldsSpy(...args);
+        return (
+          actual.normalizeRelationshipFields as (...inner: unknown[]) => unknown
+        )(...args);
+      }
+    ),
+  };
+});
+
 vi.mock("../../../shared/lib/field-level-registry", async importActual => {
   const actual = await importActual<Record<string, unknown>>();
   return { ...actual, runFieldHooks: runFieldHooksSpy };
@@ -557,7 +577,9 @@ describe("CollectionEntryService — Mutation Contracts", () => {
 
       await service.updateEntry(
         { collectionName: "posts", entryId: "entry-1", user: { id: "user-1" } },
-        { title: "Updated" }
+        // A relationship value shaped as the admin sends it: an object carrying display
+        // properties, which normalisation reduces to its id.
+        { title: "Updated", author: { id: "user-9", name: "Ada" } }
       );
 
       // EVERY dispatch seam, not the one that happened to be handy. Asserting only
@@ -569,6 +591,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       expect(storedHookExecute).not.toHaveBeenCalled();
       expect(titleValidate).not.toHaveBeenCalled();
       expect(titleFieldAccess).not.toHaveBeenCalled();
+      expect(normalizeRelationshipFieldsSpy).not.toHaveBeenCalled();
     });
 
     it("runs those same hooks for a caller it allows", async () => {
@@ -586,7 +609,9 @@ describe("CollectionEntryService — Mutation Contracts", () => {
 
       await service.updateEntry(
         { collectionName: "posts", entryId: "entry-1", user: { id: "user-1" } },
-        { title: "Updated" }
+        // A relationship value shaped as the admin sends it: an object carrying display
+        // properties, which normalisation reduces to its id.
+        { title: "Updated", author: { id: "user-9", name: "Ada" } }
       );
 
       expect(mockHookRegistry.executeBeforeOperation).toHaveBeenCalled();
@@ -595,6 +620,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
       expect(storedHookExecute).toHaveBeenCalled();
       expect(titleValidate).toHaveBeenCalled();
       expect(titleFieldAccess).toHaveBeenCalled();
+      expect(normalizeRelationshipFieldsSpy).toHaveBeenCalled();
     });
 
     it("should execute beforeOperation hooks", async () => {
