@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  changesRequested,
   missingReviewers,
   rateLimited,
   report,
@@ -14,10 +15,12 @@ const RABBIT = "coderabbitai[bot]";
 const HEAD = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const OLD = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
+/** A submitted review, which is the ordinary case the other fixtures vary from. */
 const review = (login, commit_id, id = 1) => ({
   id,
   user: { login },
   commit_id,
+  state: "COMMENTED",
 });
 
 /** A pull request that is otherwise clean, so one varied field decides. */
@@ -84,6 +87,86 @@ describe("reviewersAtHead", () => {
   });
 });
 
+describe("changesRequested", () => {
+  const at = (state, submitted_at, id = 1) => ({
+    id,
+    user: { login: CODEX },
+    commit_id: HEAD,
+    state,
+    submitted_at,
+  });
+
+  /**
+   * A `CHANGES_REQUESTED` review states its case in the body and need not open
+   * a thread, so thread resolution cannot observe it. Without a separate check
+   * an explicit refusal reads as coverage with nothing outstanding.
+   */
+  it("blocks a head whose review requests changes, with no threads open", () => {
+    const r = report({
+      ...BASE,
+      reviews: [at("CHANGES_REQUESTED", "2026-08-14T10:00:00Z")],
+      threads: [],
+    });
+    expect(r.unresolved_threads).toBe(0);
+    expect(r.missing_reviews).not.toContain(CODEX);
+    expect(r.verdict).toBe("CHANGES REQUESTED");
+    expect(r.exitCode).toBe(1);
+  });
+
+  /** A later submitted review from the same account settles that account's position. */
+  it("clears once the same reviewer submits a later review", () => {
+    const reviews = [
+      at("CHANGES_REQUESTED", "2026-08-14T10:00:00Z", 1),
+      at("COMMENTED", "2026-08-14T11:00:00Z", 2),
+    ];
+    expect(changesRequested(reviews, HEAD)).toEqual([]);
+    expect(report({ ...BASE, reviews, threads: [] }).verdict).toBe("CLEAN");
+  });
+
+  /**
+   * The control for the case above: an EARLIER review must not clear a later
+   * objection, which a rule reading whichever element came last in the array
+   * would allow.
+   */
+  it("still blocks when the later review is the one requesting changes", () => {
+    const reviews = [
+      at("COMMENTED", "2026-08-14T10:00:00Z", 1),
+      at("CHANGES_REQUESTED", "2026-08-14T11:00:00Z", 2),
+    ];
+    expect(changesRequested(reviews, HEAD)).toEqual([CODEX]);
+  });
+
+  it("ignores an objection recorded against an earlier commit", () => {
+    const stale = {
+      ...at("CHANGES_REQUESTED", "2026-08-14T10:00:00Z"),
+      commit_id: OLD,
+    };
+    expect(changesRequested([stale], HEAD)).toEqual([]);
+  });
+});
+
+describe("review states that are not an opinion", () => {
+  const withState = state => [{ ...review(CODEX, HEAD), state }];
+
+  it("does not count a DISMISSED review as coverage", () => {
+    expect(reviewersAtHead(withState("DISMISSED"), HEAD)).toEqual([]);
+  });
+
+  /**
+   * Coverage is granted from a known set rather than withheld from a known set,
+   * so a state this code has not seen refuses rather than counts.
+   */
+  it("does not count an unrecognised state as coverage", () => {
+    expect(reviewersAtHead(withState("SOMETHING_NEW"), HEAD)).toEqual([]);
+    expect(reviewersAtHead(withState(undefined), HEAD)).toEqual([]);
+  });
+
+  it("counts APPROVED and COMMENTED", () => {
+    expect(reviewersAtHead(withState("APPROVED"), HEAD)).toEqual([CODEX]);
+    expect(reviewersAtHead(withState("COMMENTED"), HEAD)).toEqual([CODEX]);
+  });
+});
+
 describe("unresolvedThreads", () => {
   it("counts only threads that are still open", () => {
     const threads = [
@@ -100,9 +183,8 @@ describe("unresolvedThreads", () => {
 
   /**
    * A thread whose state is absent is not evidence that it is resolved, so it
-   * counts as open. The earlier version of this case asserted the opposite of
-   * what its own comment claimed to guard, which is the shape that lets a
-   * partial response clear a gate while reading as covered.
+   * counts as open. A partial response must not be able to clear the gate while
+   * reading as covered.
    */
   it("counts a thread whose state is missing as open", () => {
     expect(unresolvedThreads([{}])).toBe(1);
@@ -171,11 +253,10 @@ describe("verdictFor", () => {
   });
 
   /**
-   * Reported through `report`, not by handing `verdictFor` a limited reviewer
-   * that is somehow not also missing. A reviewer that refused for quota
-   * reviewed nothing, so it is ALWAYS missing too — and an earlier ordering put
-   * absence first, which made this verdict unreachable for the only state that
-   * produces it while a unit test kept it green on an impossible input.
+   * Composed through `report` rather than by handing `verdictFor` a limited
+   * reviewer that is not also missing. A reviewer that refused for quota
+   * reviewed nothing, so `report` always reports it as both — and only the
+   * composed path can show which cause the verdict names.
    */
   it("names rate limiting rather than absence when a blocking reviewer refused", () => {
     const r = report({
