@@ -46,6 +46,35 @@ function markupFor(document: BlockDocument): string {
   );
 }
 
+describe("what the banner says about a parent-restricted ROOT", () => {
+  /** A `core/column` root: visible on the canvas, and unsaveable because of where it sits. */
+  const columnRoot: BlockDocument = {
+    version: 1,
+    root: makeNode("core/column", {}, undefined, { default: [heading("hi")] }),
+  };
+
+  it("is the only fault, and the page really is unsaveable", () => {
+    // The precondition. Without it the assertions below could pass on a page that saves fine, or
+    // on a banner listing something else entirely.
+    expect(validateDocument(columnRoot, defaultBlockRegistry)).not.toBe(true);
+    const entries = findInvalidSlotEntries(
+      columnRoot.root,
+      defaultBlockRegistry
+    );
+    expect(entries).toHaveLength(1);
+    expect(entries[0].kind).toBe("root-parent");
+  });
+
+  it("does not claim it is undrawn, because the author is looking at it", () => {
+    const markup = markupFor(columnRoot);
+    // The root DRAWS — it is the whole page. Telling the author nothing is on the canvas sends
+    // them looking for something invisible while the fault is the block in front of them.
+    expect(markup).not.toContain("None of it is drawn on the canvas");
+    expect(markup).not.toContain("no longer exists");
+    expect(markup).toContain("Each one is drawn on the canvas");
+  });
+});
+
 describe("the repair banner", () => {
   it("says nothing about a document that saves", () => {
     const clean = docWith({ default: [heading("Fine")] });
