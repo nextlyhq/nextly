@@ -454,20 +454,74 @@ function jsxTextRanges(source) {
  * Quotes are tracked because a `#` inside them is literal in both dialects. A shebang is skipped:
  * `#!/usr/bin/env bash` is an interpreter directive rather than prose.
  */
+/**
+ * A block-scalar header (`key: |`, `- >-`, `key: |2`) makes every line indented past it DATA.
+ *
+ * The indicator may be followed by a chomping or indentation modifier in either order, and by the
+ * header's own trailing comment - which is a real comment and still gets scanned, so this only
+ * decides where the scalar STARTS. Sequence form (`- |`) is included because a scalar introduced
+ * by a sequence entry has no `:` in front of it.
+ */
+const BLOCK_SCALAR_HEADER = /(?::|^\s*-)\s*[|>][\d+-]*\s*(?:#.*)?$/;
+
+/**
+ * The delimiter a `<<` opens, or null when the operator is not a heredoc after all.
+ *
+ * `<<-` strips leading tabs from the terminator, and a delimiter written `'EOF'`, `"EOF"` or
+ * `\\EOF` is quoted. An UNQUOTED delimiter must look like a word: a left shift inside `(( ))`
+ * reaches here as `<< 2`, and treating that as a heredoc would swallow the rest of the file.
+ */
+function heredocDelimiter(line, start) {
+  let at = start;
+  let stripTabs = false;
+  if (line[at] === "-") {
+    stripTabs = true;
+    at += 1;
+  }
+  while (line[at] === " " || line[at] === "\t") at += 1;
+
+  const quote = line[at];
+  if (quote === "'" || quote === '"') {
+    const close = line.indexOf(quote, at + 1);
+    if (close === -1) return null;
+    return { delim: line.slice(at + 1, close), stripTabs, end: close + 1 };
+  }
+
+  let end = at;
+  while (end < line.length && !/[\s;&|()<>]/.test(line[end])) end += 1;
+  const raw = line.slice(at, end).replace(/\\/g, "");
+  if (!/^[A-Za-z_][\w.-]*$/.test(raw)) return null;
+  return { delim: raw, stripTabs, end };
+}
+
 function hashLineComments(source, { shell = false } = {}) {
   const comments = [];
   const lines = source.split("\n");
   // Carried ACROSS lines: a double-quoted string may span them in shell, and resetting per line
   // reads the closing quote as an opening one, which hides the comment that follows it.
   let quote = "";
-  // While inside a YAML block scalar (`key: |`, `key: >`), every line indented past the key is
-  // DATA. A # there is content — a prompt, a generated payload, an embedded shell snippet — and
-  // reporting it fails CI on a legal document, which is the failure that gets a check switched off.
+  // Set from a block-scalar header; every line indented at least this far is scalar DATA. A # there
+  // is content - a prompt, a generated payload, an embedded shell snippet - and reporting it fails
+  // CI on a legal document, which is the failure that gets a check switched off.
   let blockIndent = null;
+  // Quote states suspended by an enclosing `$(`. Shell parses a command substitution as commands
+  // even inside double quotes, so `"$(cmd # c)"` holds a real comment: the substitution opens a
+  // fresh quoting context and restores the outer one at its `)`.
+  const substitutions = [];
+  // Delimiters opened on the current line, in the order their bodies follow it, and the one now
+  // consuming lines. A heredoc body is data the script EMITS rather than prose about the script.
+  const pending = [];
+  let heredoc = null;
 
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i];
     if (i === 0 && line.startsWith("#!")) continue;
+
+    if (heredoc) {
+      const terminator = heredoc.stripTabs ? line.replace(/^\t+/, "") : line;
+      if (terminator === heredoc.delim) heredoc = pending.shift() ?? null;
+      continue;
+    }
 
     const indent = line.search(/\S/);
     if (blockIndent !== null) {
@@ -475,26 +529,72 @@ function hashLineComments(source, { shell = false } = {}) {
       if (indent === -1 || indent >= blockIndent) continue;
       blockIndent = null;
     }
-    if (!shell && quote === "" && /:\s*[|>][+-]?\d*\s*$/.test(line)) {
+    if (!shell && quote === "" && BLOCK_SCALAR_HEADER.test(line)) {
       blockIndent = (indent === -1 ? 0 : indent) + 1;
-      continue;
+      // Deliberately no `continue`: the header's own trailing comment is authored prose.
     }
 
     let found = -1;
     for (let at = 0; at < line.length; at += 1) {
       const c = line[at];
+
+      // Checked BEFORE the quote state, because that is the whole point: `$(` opens commands even
+      // inside double quotes. `$((` is arithmetic, where `<<` is a shift rather than a heredoc.
+      if (shell && quote !== "'" && c === "$" && line[at + 1] === "(") {
+        const arithmetic = line[at + 2] === "(";
+        substitutions.push({ quote, arithmetic });
+        quote = "";
+        at += arithmetic ? 2 : 1;
+        continue;
+      }
+      if (shell && !quote && c === ")" && substitutions.length > 0) {
+        const outer = substitutions.pop();
+        if (outer.arithmetic && line[at + 1] === ")") at += 1;
+        quote = outer.quote;
+        continue;
+      }
+
       if (quote) {
         if (c === "\\" && quote === '"') at += 1;
         else if (c === quote) quote = "";
         continue;
       }
+
+      // Outside quotes a backslash escapes the next character, so `\\#` is a literal hash.
+      if (shell && c === "\\") {
+        at += 1;
+        continue;
+      }
+
       if (c === '"' || c === "'") {
         quote = c;
         continue;
       }
+
+      if (
+        shell &&
+        c === "<" &&
+        line[at + 1] === "<" &&
+        !substitutions[substitutions.length - 1]?.arithmetic
+      ) {
+        // `<<<` is a here-string: its operand is on the same line, so no body follows.
+        if (line[at + 2] === "<") {
+          at += 2;
+          continue;
+        }
+        const opened = heredocDelimiter(line, at + 2);
+        if (opened) {
+          pending.push({ delim: opened.delim, stripTabs: opened.stripTabs });
+          at = opened.end - 1;
+        } else {
+          at += 1;
+        }
+        continue;
+      }
+
       // In shell a control operator ends a word, so `x && #c` is a comment. YAML has no such
       // operators: there a # needs whitespace before it, and applying the shell rule would read
-      // `key: a;#b` — a legal scalar — as one.
+      // `key: a;#b` - a legal scalar - as one.
       const boundary = shell ? /[\s;&|()]/ : /\s/;
       if (c === "#" && (at === 0 || boundary.test(line[at - 1]))) {
         found = at;
@@ -503,9 +603,10 @@ function hashLineComments(source, { shell = false } = {}) {
     }
     if (found !== -1) comments.push(line.slice(found + 1));
     // A YAML single-quoted scalar does not continue across lines the way a shell double-quoted
-    // string does, so an unclosed one is a malformed document rather than a continuation — and
+    // string does, so an unclosed one is a malformed document rather than a continuation - and
     // carrying it would swallow every line below it.
     if (!shell && quote === "'") quote = "";
+    if (!heredoc && pending.length > 0) heredoc = pending.shift();
   }
   return comments;
 }

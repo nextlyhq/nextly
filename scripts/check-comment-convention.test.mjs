@@ -15,6 +15,7 @@ import {
   offencesIn,
   digestOffences,
   readAllowlist,
+  readOptionsFor,
   SOURCE_EXTENSIONS,
   sourceFiles,
 } from "./check-comment-convention.mjs";
@@ -326,5 +327,99 @@ describe("the command", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("the hash dialects", () => {
+  // Narration the patterns must match, so each case below turns on WHERE the text sits rather
+  // than on what it says. Asserting the offence NAMES this string keeps a case from passing on
+  // some unrelated finding in the same fixture.
+  const NARRATION = "Codex asked for this";
+  const shell = source => offencesIn(source, readOptionsFor("fixture.sh"));
+  const yaml = source => offencesIn(source, readOptionsFor("fixture.yml"));
+  const names = found => found.some(one => one.comment.includes(NARRATION));
+
+  describe("shell heredocs", () => {
+    // A heredoc body is data the script EMITS - a generated file, a payload, an embedded
+    // snippet - so a `#` there is content rather than authored prose. Reporting it fails CI on
+    // legal shell, and a gate that rejects valid input gets switched off rather than fixed.
+    it("does not read a quoted heredoc body", () => {
+      expect(names(shell(`cat <<'EOF'\n# ${NARRATION}\nEOF\n`))).toBe(false);
+    });
+
+    it("does not read an unquoted heredoc body", () => {
+      expect(names(shell(`cat <<EOF\n# ${NARRATION}\nEOF\n`))).toBe(false);
+    });
+
+    it("does not read a tab-stripped heredoc body", () => {
+      // `<<-` allows the terminator to be indented with tabs, so a body that ends `\tEOF` closes
+      // it. Matching the delimiter literally would leave the heredoc open to end of file.
+      expect(names(shell(`cat <<-EOF\n# ${NARRATION}\n\tEOF\n`))).toBe(false);
+    });
+
+    it("consumes two heredocs opened on one line in order", () => {
+      expect(names(shell(`cmd <<A <<B\n# ${NARRATION}\nA\n# ${NARRATION}\nB\n`))).toBe(false);
+    });
+
+    it("reads a comment after the heredoc closes", () => {
+      // The positive control. Without it every assertion above is satisfied by a reader that
+      // stopped at the first heredoc and never emitted anything again.
+      expect(names(shell(`cat <<'EOF'\ndata\nEOF\n# ${NARRATION}\n`))).toBe(true);
+    });
+
+    it("does not treat a here-string as opening a body", () => {
+      // `<<<` takes its operand on the same line, so no body follows. Reading it as a heredoc
+      // would swallow every line to the end of the file.
+      expect(names(shell(`grep x <<< "$var"\n# ${NARRATION}\n`))).toBe(true);
+    });
+
+    it("does not treat an arithmetic left shift as a heredoc", () => {
+      // Inside `$(( ))` a `<<` is a shift operator, and its right operand is not a delimiter.
+      expect(names(shell(`n=$(( 1 << 2 ))\n# ${NARRATION}\n`))).toBe(true);
+    });
+  });
+
+  describe("shell command substitution", () => {
+    it("reads a comment inside a substitution within double quotes", () => {
+      // Shell parses `$( )` as commands whatever encloses it, so the outer double quote does not
+      // make this data. Treating the quote as still open here is a false NEGATIVE - narration
+      // the gate exists to catch, passing because of where it sits.
+      expect(names(shell(`value="$(echo ok # ${NARRATION}\n)"\n`))).toBe(true);
+    });
+
+    it("does not read a hash inside plain double quotes", () => {
+      expect(names(shell(`value="literal # ${NARRATION}"\n`))).toBe(false);
+    });
+
+    it("does not read a substitution inside single quotes", () => {
+      // Single quotes suppress substitution entirely, so this really is literal text.
+      expect(names(shell(`value='$(echo ok # ${NARRATION})'\n`))).toBe(false);
+    });
+  });
+
+  describe("YAML block scalars", () => {
+    it("reads the header's own trailing comment", () => {
+      expect(names(yaml(`description: | # ${NARRATION}\n  body\n`))).toBe(true);
+    });
+
+    it("does not read the data under a header that carried a comment", () => {
+      // The pair to the case above: the header line holds prose AND opens a scalar, so the two
+      // must be decided separately.
+      expect(names(yaml(`description: | # plain header\n  # ${NARRATION}\n`))).toBe(false);
+    });
+
+    it("enters a scalar introduced by a sequence entry", () => {
+      // `- |` has no `:` in front of it, so a header expression anchored on the colon misses it.
+      expect(names(yaml(`steps:\n  - |\n    # ${NARRATION}\n`))).toBe(false);
+    });
+
+    it("enters a scalar carrying indentation and chomping indicators", () => {
+      expect(names(yaml(`body: |2-\n  # ${NARRATION}\n`))).toBe(false);
+    });
+
+    it("still reads an ordinary comment", () => {
+      // The positive control for the whole dialect.
+      expect(names(yaml(`key: value\n# ${NARRATION}\n`))).toBe(true);
+    });
   });
 });
