@@ -802,3 +802,32 @@ jobs:
             exit 1
           fi
           echo "Both commands produced their output, and an edit rebuilt each one."
+
+  # Advisory: reports whether the required reviewers have seen THIS head and
+  # whether anything is still open. It never fails the build.
+  #
+  # Advisory rather than required, deliberately. A required check asserting "a
+  # bot has reviewed this exact revision" blocks the repository on a third
+  # party: an outage or an exhausted per-account review quota would make every
+  # pull request unmergeable with no local remedy, and an outside contributor
+  # cannot summon either reviewer at all. Running it visibly first is what
+  # produces the false-refusal rate that decision needs.
+  review-verdict:
+    name: Review verdict (advisory)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Report the verdict
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/ci-verdict.mjs "${{ github.event.pull_request.number }}"
