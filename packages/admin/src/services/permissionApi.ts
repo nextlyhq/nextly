@@ -5,17 +5,12 @@ import { fetcher } from "../lib/api/fetcher";
 import type { MutationResponse } from "../lib/api/response-types";
 import type { Permission } from "../types/entities";
 
-/**
- * Real permission entry shape returned by the backend API.
- */
-interface ApiPermissionEntry {
-  id: string;
-  name: string;
-  slug: string;
-  action: string;
-  resource: string;
-  description: string | null;
-}
+// One declaration for one endpoint. A second copy agreed with the first on the
+// day it was written and then diverged: `owner`, `permissionGroup` and `danger`
+// cross the wire, and neither local copy admitted they existed — so a consumer
+// reading the type could not see the field that decides which plugin a
+// permission belongs to.
+import type { ApiPermissionEntry } from "./realPermissionsApi";
 
 /**
  * Map a backend permission entry to the admin Permission entity shape.

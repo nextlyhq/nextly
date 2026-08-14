@@ -12,6 +12,22 @@ export interface ApiPermissionEntry {
   action: string;
   resource: string;
   description: string | null;
+  /**
+   * The plugin that owns this permission, or null for one the seeder owns.
+   *
+   * Provenance rather than a naming convention: a plugin names its own
+   * resource, so a permission cannot be attributed by inspecting its resource
+   * string. This is the field that decides which plugin a permission belongs
+   * to, and it is what the rows record — as opposed to what a configuration
+   * declares, which cannot see Schema Builder entities at all.
+   */
+  owner?: string | null;
+  /** Heading within the owner's section, when the owner set one. */
+  permissionGroup?: string | null;
+  /** Marked by the seeder when the declaration that created it disappeared. */
+  orphanedAt?: string | null;
+  /** Declared destructive by whoever contributed it. */
+  danger?: boolean;
 }
 
 // Canonical pagination meta is { total, page, limit, totalPages, hasNext,
