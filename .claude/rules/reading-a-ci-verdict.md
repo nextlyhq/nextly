@@ -135,7 +135,14 @@ gh run list --commit "$HEAD_SHA" --workflow ci.yml --limit 5 \
 **`--branch` alone is not enough, and it fails in the reassuring direction.** It
 returns the branch's runs from EARLIER commits as well, so a workflow that was
 dropped for the current head still shows a run — the previous push's — and reads
-as present. It also sweeps in unrelated `pull_request` workflows, so the list
+as present.
+
+**`--commit` narrows that and does not close it**, because a SHA is not an
+event. Close-and-reopen — recommended below for a retargeted PR — produces a
+second run at the SAME head, so if the `reopened` event is the one that got
+dropped, the earlier run still answers and the workflow reads as present. Where
+that matters, compare the run's `createdAt` against the event you are gating on,
+or capture the run ID before the event and require a different one after. It also sweeps in unrelated `pull_request` workflows, so the list
 looks populated whatever happened to the one you care about. Pin `--commit` to
 the head you are gating, and ask per required workflow rather than eyeballing a
 mixed list.
@@ -358,37 +365,75 @@ as approval:
 #!/usr/bin/env bash
 set -euo pipefail
 REPO=nextlyhq/nextly; PR=${1:?pr}; BOT='chatgpt-codex-connector[bot]'
+d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
 
 HEAD=$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq .headRefOid)
 
-# Every query fails closed: an unavailable answer is not a clean one.
-REVIEWS=$(gh api "repos/$REPO/pulls/$PR/reviews"  --paginate --slurp)
-COMMENTS=$(gh api "repos/$REPO/pulls/$PR/comments" --paginate --slurp)
-ISSUES=$(gh api "repos/$REPO/issues/$PR/comments"  --paginate --slurp)
+# Every query fails closed: an unavailable answer is not a clean one. Payloads
+# go to files, not argv -- a busy PR's JSON exceeds ARG_MAX via --argjson.
+gh api "repos/$REPO/pulls/$PR/reviews"   --paginate --slurp > "$d/rv.json"
+gh api "repos/$REPO/pulls/$PR/comments"  --paginate --slurp > "$d/cm.json"
+gh api "repos/$REPO/issues/$PR/comments" --paginate --slurp > "$d/ic.json"
 
-jq -n --argjson rv "$REVIEWS" --argjson cm "$COMMENTS" --argjson ic "$ISSUES" \
-      --arg b "$BOT" --arg s "$HEAD" '
-  ($rv | flatten | map(select(.user.login == $b and .commit_id == $s) | .id)) as $ids
+OUT=$(jq -n --slurpfile rv "$d/rv.json" --slurpfile cm "$d/cm.json" \
+            --slurpfile ic "$d/ic.json" --arg b "$BOT" --arg s "$HEAD" '
+  # The LATEST review at this head. Re-requesting a review without pushing
+  # leaves several at one SHA, and the older ones keep their findings forever.
+  ($rv | flatten | map(select(.user.login == $b and .commit_id == $s))
+       | sort_by(.submitted_at) | last) as $r
+  | (if $r == null then [] else [$r.id] end) as $ids
   | ($cm | flatten | map(select(.pull_request_review_id as $i | $ids | index($i))) | length) as $n
   | ($ic | flatten | map(select(.user.login == "coderabbitai[bot]"
         and (.body | test("Review limit reached")))) | length) as $rl
-  | { head: $s, reviews_at_head: ($ids|length), findings: $n, coderabbit_rate_limited: $rl,
-      verdict: (if ($ids|length) == 0 then "NO REVIEW AT HEAD"
-                elif $n > 0 then "NOT CLEAN"
-                else "CLEAN" end) }'
+  | { head: $s, review_at_head: ($r.id // null), findings: $n, coderabbit_rate_limited: $rl,
+      verdict: (if   ($ids|length) == 0 then "NO REVIEW AT HEAD"
+                elif $n  > 0            then "NOT CLEAN"
+                elif $rl > 0            then "CODERABBIT RATE-LIMITED"
+                else "CLEAN" end) }')
+printf '%s\n' "$OUT"
+# The gate must REFUSE, not report. jq exits 0 for every verdict it prints.
+[ "$(printf '%s' "$OUT" | jq -r .verdict)" = "CLEAN" ] || exit 1
 ```
 
-Run against this PR at `57ba3e9c4`, which had three findings outstanding:
+Run against this PR while five findings were outstanding:
 
 ```json
 {
-  "head": "57ba3e9c4e9db81ff38b0df3a30c7348ff168d94",
-  "reviews_at_head": 1,
-  "findings": 3,
-  "coderabbit_rate_limited": 0,
+  "head": "cbc848bfc792773d7e08ce14417314dbeb66fe54",
+  "review_at_head": 4935344357,
+  "findings": 5,
+  "coderabbit_rate_limited": 1,
   "verdict": "NOT CLEAN"
 }
 ```
+
+`EXIT=1`. **That last line is the difference between a gate and a report**, and
+it was missing from the first two versions: `jq` exits 0 for every verdict it
+prints, including `NOT CLEAN`, so `set -e` does nothing and the caller walks on.
+
+**Six things in that script are there because a shorter version was wrong**,
+every one found by running it rather than by reading it:
+
+- **`--slurpfile`, not `--argjson`.** Passing the payloads through argv worked
+  on a quiet PR and died with `Argument list too long` on a busy one. It failed
+  loudly, which is the acceptable direction, but the gate was unusable exactly
+  when a PR had accumulated enough review traffic to need it.
+- **Standalone `jq`, not `gh api --jq`.** That flag takes one filter string and
+  has no `--arg`; the invocation exits `accepts 1 arg(s), received 4`, so both
+  queries took their failure branch and the gate could never return clean.
+  `--slurp` also cannot combine with `--jq`, which is what forces the pipe.
+- **The LATEST review at the head, not every review at it.** Re-requesting a
+  review without pushing — what you do after rejecting a finding — leaves
+  several review objects on one SHA, and joining to all of them lets a
+  superseded round's findings hold the verdict at NOT CLEAN permanently.
+- **The join is real.** An earlier version computed review IDs and never
+  consumed them, counting every bot comment on the PR, so findings from previous
+  rounds counted against the current head forever.
+- **`NO REVIEW AT HEAD` is its own outcome.** Zero findings because nothing
+  reviewed and zero findings because nothing was found are the same number.
+- **The rate-limit marker REJECTS rather than annotating.** It was reported in
+  its own field while the verdict ignored it, so a PR with a clean Codex review
+  and an unreviewed CodeRabbit came out `CLEAN`.
 
 **Four things in that script are there because the shorter version was wrong**,
 each found only by running it:
@@ -519,5 +564,11 @@ Note that its procedure and this one fail in opposite directions, which is why
 neither substitutes for the other. Content-verification confirmed #766 had
 landed correctly while two `Integration` jobs were red on its head; status
 verification would have passed a PR whose fix was stranded on the branch. Run
-both, from the merge commit, and require `success` from the jobs this commit's
-scope decision says should have run.
+both — but not from the same commit, which the concluding line of an earlier
+draft got wrong. **Content verification is anchored to the MERGE commit; CI and
+review verification stay anchored to the PR HEAD you captured before merging.**
+The measurement above is why: this repository's PR checks attach to the head,
+and the merge SHA returned zero rows, so asserting required jobs "from the merge
+commit" examines an empty set — or, after `main` moves, someone else's
+post-merge checks. Require `success` from the jobs that commit's scope decision
+says should have run, read at the head.
