@@ -140,11 +140,10 @@ test("takes the default for a driver that declares no dwell", async () => {
 });
 
 test("tolerates a change when the driver declares no dwell", async () => {
-  // A canvas with a distance margin declares an allowance of 0, and the PoC
-  // does. Deriving the settling budget from that allowance made it zero too, so
-  // a single asynchronous re-render between two reads — which a live canvas
-  // does routinely — raised a harness error instead of returning the settled
-  // value. The tolerance is a COUNT of changes, not a duration.
+  // The tolerance is a COUNT of changes, never a duration. A canvas whose
+  // hysteresis is a distance margin declares an allowance of zero, and it still
+  // re-renders asynchronously between two reads, so settling has to absorb a
+  // bounded number of changes at any allowance — including none.
   let reads = 0;
   const value = await settledValue(async () => {
     reads += 1;
@@ -157,9 +156,9 @@ test("tolerates a change when the driver declares no dwell", async () => {
 test("accepts a reader that changes the permitted number of times and then holds", async () => {
   // The count bounds CHANGES, so a reader that changes exactly the permitted
   // number of times and then holds perfectly still has settled — asynchronous
-  // relayout produces precisely that shape. Ending the loop on a transition
-  // rather than on an observation rejected it, and the refusal landed on the
-  // reading that finally settled.
+  // relayout produces precisely that shape. Settling therefore takes one
+  // OBSERVATION after the last permitted transition, since the value that
+  // follows the final change is the only one that can be confirmed stable.
   let reads = 0;
   const value = await settledValue(async () => {
     reads += 1;

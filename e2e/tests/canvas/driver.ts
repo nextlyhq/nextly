@@ -528,8 +528,9 @@ export async function settledTarget(driver: TargetReader): Promise<number> {
 /**
  * The dwell a driver declares, or the default when it declares none.
  *
- * Read through one helper so a driver written before this existed keeps
- * working, and so the fallback is stated once rather than at each call.
+ * The field is optional, so a driver that declares nothing still has an
+ * allowance; read through one helper so that fallback is stated once rather
+ * than at each call, where the several copies would drift.
  */
 export function dwellAllowanceOf(driver: Partial<CanvasDriver>): number {
   return driver.dwellAllowanceMs ?? DEFAULT_DWELL_ALLOWANCE_MS;
