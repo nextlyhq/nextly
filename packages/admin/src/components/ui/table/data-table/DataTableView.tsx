@@ -337,13 +337,31 @@ export function DataTableView<Row extends object>({
   // `pagination` lost that content silently, with both props public, both
   // permitted by the type, and nothing reporting the loss. A summary above its
   // pager is a real arrangement, so it is the one this renders.
-  // Nullish rather than truthy. `footer` is a ReactNode, and `0` is a valid one
-  // that React renders as "0" -- a caller passing `selectedIds.length` with
-  // nothing selected has it disappear under a truthiness test. That is the same
-  // silent content loss this resolution exists to remove, one type narrower.
-  const hasFooter = footer !== undefined && footer !== null;
+  // Whether the caller's footer will put anything on screen, decided by REACT's
+  // rule rather than by JavaScript's. The two disagree in both directions and
+  // each disagreement is a real defect:
+  //
+  //   truthiness  drops `0`, which React renders as "0" -- so a caller passing
+  //               `selectedIds.length` with nothing selected loses its footer;
+  //   nullishness keeps `false`, which React renders as nothing -- so the
+  //               ubiquitous `footer={show && <Summary />}` draws an empty
+  //               bordered surface under the table when `show` is false.
+  //
+  // React renders nothing for `null`, `undefined` and booleans, and renders
+  // numbers and strings. That set is closed and defined by React, which is what
+  // separates listing it here from guessing at values.
+  const footerRendersNothing =
+    footer === null ||
+    footer === undefined ||
+    typeof footer === "boolean" ||
+    footer === "";
+
+  // The limit worth stating rather than hiding: a component that RETURNS null
+  // still counts as content here, because no inspection of the node can know
+  // what it renders without rendering it. That case draws an empty surface, and
+  // the fix for it belongs at the caller, which knows.
   const footerContent =
-    hasFooter || pagination !== undefined ? (
+    !footerRendersNothing || pagination !== undefined ? (
       <>
         {footer}
         {pagination !== undefined && <Pagination {...pagination} />}

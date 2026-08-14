@@ -197,6 +197,33 @@ describe("DataTableView footer", () => {
     expect(tokensOf(pager.parentElement)).toContain("@md/table:border");
   });
 
+  // The two directions React and JavaScript disagree about. Kept together
+  // because fixing either one alone reintroduces the other, which is how this
+  // expression collected three rounds of findings.
+  it.each([
+    ["false", false],
+    ["true", true],
+    ["an empty string", ""],
+    ["null", null],
+  ])(
+    "draws no footer surface for %s, which React renders as nothing",
+    (_l, value) => {
+      const { container } = render(
+        <DataTableView<Row>
+          columns={[{ name: "name", header: "Name" }]}
+          rows={[]}
+          error="Request failed"
+          footer={value}
+        />
+      );
+      // The error path is where it shows: a surface built for a footer that
+      // renders nothing is an empty bordered box under the alert.
+      expect(container.querySelectorAll(".\\@md\\/table\\:border").length).toBe(
+        0
+      );
+    }
+  );
+
   it("keeps a zero-valued footer, which React renders", () => {
     // `footer` is a ReactNode and `0` is a valid one -- a caller passing
     // `selectedIds.length` with nothing selected renders "0". A truthiness test
