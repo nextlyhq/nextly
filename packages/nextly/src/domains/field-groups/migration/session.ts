@@ -729,6 +729,13 @@ export async function withMigrationSession<T>(
     // whenever this process next got scheduled, and a pause between the database's read-back and
     // that callback would start a fresh full-length window over a lease that had been ageing
     // throughout it.
+    //
+    // 🔴 UNVERIFIED by any test, said here rather than left to read as covered. Reproducing it needs
+    // the database clock and this process's clock to diverge BETWEEN a renewal's read-back and its
+    // callback, which no lever in the double reaches; and the `usable` check above already refuses
+    // the large-pause case, so what remains is the narrow band where a lease passes with little
+    // surplus and the callback is then delayed past it. The change is kept because its direction is
+    // unconditionally safe: an earlier stamp can only shorten this session's own window.
     const attemptStartedAt = performance.now();
     void renew(adapter, dialect, claim).then(
       held => {
