@@ -47,6 +47,56 @@ describe("the manifest's block-version bound", () => {
   });
 });
 
+describe("the parent names each side accepts", () => {
+  const withParent = (parent: unknown) => ({
+    name: "acme/thing",
+    version: 1,
+    description: "A block.",
+    example: { props: {} },
+    parent,
+    render: () => null,
+  });
+
+  it("both accept a namespaced name", () => {
+    // The positive control on BOTH sides. Without it, a pair that rejected everything would agree
+    // perfectly and satisfy the disagreement checks below.
+    expect(() =>
+      registerBlocks([withParent(["core/columns"])] as never, {
+        source: "acme",
+      })
+    ).not.toThrow();
+    clearBlocks();
+    const manifest = buildBlockManifest([
+      consumer(),
+      declaring([withParent(["core/columns"])]),
+    ]);
+    expect(manifest.blocks[0]?.parent).toEqual(["core/columns"]);
+  });
+
+  it("neither accepts a bare name the engine would refuse at boot", () => {
+    // Generation running ahead of the engine is the failure that matters: `nextly generate` and
+    // `--check` would succeed for a configuration that cannot boot, which is the opposite of what
+    // an artifact describing a plugin's declaration is for.
+    expect(() =>
+      registerBlocks([withParent(["shell"])] as never, { source: "acme" })
+    ).toThrow();
+    clearBlocks();
+    expect(() =>
+      buildBlockManifest([consumer(), declaring([withParent(["shell"])])])
+    ).toThrow();
+  });
+
+  it("neither accepts a bare string in place of the array", () => {
+    expect(() =>
+      registerBlocks([withParent("core/columns")] as never, { source: "acme" })
+    ).toThrow();
+    clearBlocks();
+    expect(() =>
+      buildBlockManifest([consumer(), declaring([withParent("core/columns")])])
+    ).toThrow();
+  });
+});
+
 function consumer(): PluginDefinition {
   return definePlugin({
     name: PAGE_BUILDER_PLUGIN,

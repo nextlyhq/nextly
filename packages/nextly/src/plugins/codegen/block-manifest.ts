@@ -46,6 +46,18 @@ export const PAGE_BUILDER_PLUGIN = "@nextlyhq/plugin-page-builder";
 export const BLOCK_MANIFEST_VERSION = 2;
 
 /**
+ * The namespaced form a block name takes, as the engine's registration gate requires it.
+ *
+ * Restated here rather than imported because importing a module-private constant is not
+ * available; `__tests__/block-manifest-engine-parity.test.ts` bounds the copy by exercising BOTH
+ * sides on the same inputs, which is a stronger check than comparing two patterns. Without it generation and
+ * `--check` succeed for a configuration that cannot boot: the manifest would accept
+ * `parent: ["shell"]` while `registerBlocks` rejects the same definition, which is the opposite of
+ * what an artifact describing what a plugin declared is for.
+ */
+const BLOCK_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/**
  * The highest version a declared block may carry.
  *
  * The same bound the block engine enforces at registration, restated rather
@@ -186,7 +198,7 @@ export const blockManifestEntrySchema = z
      * where a block may be placed. A malformed value here does not degrade, it forbids, so the
      * shape is pinned at the boundary rather than trusted from whoever wrote the file.
      */
-    parent: z.array(z.string()).optional(),
+    parent: z.array(z.string().regex(BLOCK_NAME_RE)).optional(),
   })
   .strict();
 
@@ -574,7 +586,15 @@ function toEntry(block: DeclaredBlock, source: string): BlockManifestDraft {
   // builds and by agents generating documents. Omitting it does not make the restriction lenient;
   // it makes every reader of this file believe there is none, so they generate placements the
   // write validator then refuses, with nothing in the manifest explaining why.
-  if (Array.isArray(block.parent)) entry.parent = [...block.parent];
+  // Passed through whatever its shape, so the SCHEMA judges it. Filtering a malformed value here
+  // would emit a manifest that validates cleanly while the engine refuses the same definition at
+  // boot — generation succeeding for a configuration that cannot run, which is the one outcome
+  // this artifact must not produce.
+  if (block.parent !== undefined) {
+    entry.parent = Array.isArray(block.parent)
+      ? [...block.parent]
+      : block.parent;
+  }
   return entry;
 }
 

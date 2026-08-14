@@ -397,6 +397,7 @@ describe("the published JSON Schema", () => {
                 },
                 "parent": {
                   "items": {
+                    "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*\\/[a-z0-9]+(?:-[a-z0-9]+)*$",
                     "type": "string",
                   },
                   "type": "array",

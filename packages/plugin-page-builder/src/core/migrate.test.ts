@@ -72,10 +72,13 @@ describe("migrateDocument", () => {
 
 describe("telling an upgraded document from an untouched one", () => {
   /**
-   * Identity, not deep equality — the editor's field mount reads it that way. It has to push a
-   * migrated document to the host form and must NOT push an unmigrated one, because a push on
-   * every mount loops through the form's own onChange. Deep-comparing whole trees on every mount
-   * is the alternative, and it is the expensive answer to a question identity already settles.
+   * Identity, not deep equality. A document that needed no upgrade must come back as the SAME
+   * object, so a caller can skip work by comparing references rather than deep-comparing whole
+   * trees on every load — the expensive answer to a question identity already settles.
+   *
+   * Not a claim about persistence. `EditorProvider` skips `onDocumentChange` on the initial
+   * render, so a load-time migration is not pushed to the host form; it persists with the
+   * author's next real edit.
    */
   const versionedRegistry = () => {
     const r = createBlockRegistry();

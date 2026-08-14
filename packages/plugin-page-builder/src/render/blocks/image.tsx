@@ -49,7 +49,11 @@ export const image = defineBlock<ImageProps>({
   // chosen" and shows as a placeholder instead of the choice the author made.
   migrate: (old, from) => {
     const props = { ...(old as ImageProps) };
-    if (from < 2 && props.aspectPreset === "") {
+    // Absent as well as empty. A node authored programmatically, or written before this prop
+    // existed, carries no `aspectPreset` at all and would keep showing the Select's placeholder
+    // rather than "Original". Setting the sentinel is render-neutral: `render` treats every value
+    // that is not `W/H` as no aspect, so this changes what the CONTROL shows and not the page.
+    if (from < 2 && !props.aspectPreset) {
       props.aspectPreset = ORIGINAL_ASPECT;
     }
     return { props };

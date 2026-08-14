@@ -54,10 +54,15 @@ function migrateNode(node: BlockNode, registry: BlockRegistry): BlockNode {
 /**
  * Upgrade a stored document to current block versions.
  *
- * Returns the SAME document when nothing needed upgrading, so a caller can tell
- * the two apart by identity. The editor's field mount depends on it: it has to
- * push a migrated document to the host form and must not push an unmigrated one,
- * because a push it makes on every mount loops through the form's own onChange.
+ * Returns the SAME document when nothing needed upgrading, so a caller can tell the two apart by
+ * identity — and a document that needed nothing is not rebuilt, which is every document saved
+ * since its blocks last changed.
+ *
+ * Identity is what a caller needs; it is NOT how the upgrade reaches storage. `EditorProvider`
+ * skips `onDocumentChange` on the initial render, so a load-time migration is not pushed to the
+ * host form and persists with the author's next real edit instead. Pushing it on mount was tried
+ * and reverted: it marked a page dirty that had only been opened, and re-fired on an incoming
+ * `reset()` to write the previous entry's tree over a different one.
  */
 export function migrateDocument(
   doc: BlockDocument,
