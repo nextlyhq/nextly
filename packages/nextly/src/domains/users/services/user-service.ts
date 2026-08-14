@@ -304,13 +304,19 @@ export class UserService {
 
     const users = result.data.map(u => this.mapToUser(u));
     const total = result.meta.total;
-    const offset = (page - 1) * limit;
+
+    // The EFFECTIVE page size, read back from the query rather than from what was asked for.
+    // `listUsers` bounds the limit it will honour, so recomputing the offset from the request
+    // would describe a different page than the one returned — a page-2 request for 1000 users
+    // would report a 1000-item page while the rows came from offset 500.
+    const effectiveLimit = result.meta.limit;
+    const offset = (page - 1) * effectiveLimit;
 
     return {
       data: users,
       pagination: {
         total,
-        limit,
+        limit: effectiveLimit,
         offset,
         hasMore: offset + users.length < total,
       },
