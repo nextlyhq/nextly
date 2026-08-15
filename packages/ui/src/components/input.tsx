@@ -17,7 +17,7 @@ import { cn } from "../lib/utils";
  * - Placeholder text for guidance (not a replacement for labels)
  *
  * Design Specs:
- * - Height: sm=32px, default=40px, lg=44px
+ * - Height: sm=36px, default=40px, lg=44px
  * - Padding: Horizontal varies by size (sm=10px, default=12px, lg=16px)
  * - Border radius: `rounded-md`, the control step of the `--radius` scale
  * - Border: 1px solid, changes on focus/error
@@ -25,7 +25,7 @@ import { cn } from "../lib/utils";
  * - Font size: sm/default=14px (text-sm), lg=16px (text-base)
  *
  * Size Variants:
- * - sm: Height 32px (h-8) - Compact forms, filters
+ * - sm: Height 36px - Compact forms and filters, matching a small Button
  * - default: Height 40px (h-10) - Standard forms
  * - lg: Height 44px (h-11) - Prominent inputs, marketing forms
  *
@@ -50,7 +50,12 @@ const inputVariants = cva(
   {
     variants: {
       size: {
-        sm: "h-[var(--nx-control-height-sm)] px-2.5 py-2 text-sm",
+        // `-md` rather than `-sm`, so that a small input is the same height as
+        // a small button standing beside it in a toolbar or a filter row.
+        // Button's `sm` has always used this step; an input reading `-sm` made
+        // `size="sm"` mean 36px on one control and 32px on another, and a form
+        // row mixing them sat 4px out of line.
+        sm: "h-[var(--nx-control-height-md)] px-2.5 py-2 text-sm",
         default: "h-[var(--nx-control-height)] px-3 py-2.5 text-sm",
         lg: "h-[var(--nx-control-height-lg)] px-4 py-3 text-base",
       },
