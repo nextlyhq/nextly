@@ -474,6 +474,33 @@ describe("eligibility, which the margin depends on", () => {
     ).toBe(true);
   });
 
+  it("does not alternate when the pointer oscillates around the cutoff", () => {
+    // The release-to-none transition is hysteretic ALREADY, and this pins the
+    // reason: the reprieve is conditioned on the target being the one currently
+    // held. Crossing the cutoff outward releases it, and coming back inside the
+    // band does NOT re-acquire it, because by then it is no longer held and the
+    // default detection is what has to admit it again. So the cutoff is a
+    // one-way edge rather than a boundary the indicator can chatter across.
+    //
+    // Simulated as the drag operation runs it: the held target is whatever the
+    // previous round returned.
+    let held = true;
+    const eligibility: boolean[] = [];
+    for (const edgeDistancePx of [9, 11, 9, 11, 9]) {
+      held = isInsertionTargetEligible({
+        hasDefaultCollision: false,
+        isCurrentTarget: held,
+        edgeDistancePx,
+        bandPx: TARGET_SWITCH_BAND_PX,
+      });
+      eligibility.push(held);
+    }
+
+    // One transition, not four. An alternating sequence would be the flicker
+    // this reprieve exists to remove, arriving at a different distance.
+    expect(eligibility).toEqual([true, false, false, false, false]);
+  });
+
   it("admits anything the default detection already admits", () => {
     // Eligibility is never NARROWED, so no target stops claiming a pointer it
     // claimed before this module existed — including well outside the band.
