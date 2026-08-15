@@ -708,12 +708,32 @@ export async function withMigrationSession<T>(
       // is no symmetric hazard to trade against, which is what makes "earlier" strictly better here
       // rather than a different bet.
       let legacyReleasedOnSignal = false;
+      // 🔴 The acquisition in flight, so the interrupt can WAIT for it instead of racing it.
+      //
+      // Registering the handlers before the claim closed one window and opened a narrower one
+      // inside it: a signal arriving while `acquireOwnerOnly` is still committing could lock the
+      // row first, release nothing because the row was not yet ours, and let the acquisition then
+      // write the claim before the re-raised signal ended the process — stranding an owner with no
+      // expiry to lapse.
+      //
+      // 🔴 That window had by then MOVED THREE TIMES under successive fixes, which is the signal
+      // that each one addressed the DIRECTION rather than the cause. The cause is that the handler
+      // and the acquisition touch the row concurrently with nothing ordering them, so this orders
+      // them rather than betting on timing again: the release runs only once the claim has DECIDED.
+      // Either it landed and the release clears it, or it did not and there is nothing to clear.
+      //
+      // The same shape the renewal path already uses further up, where an in-flight attempt is
+      // settled before the claim is released.
+      let pendingAcquisition: Promise<unknown> = Promise.resolve();
       const releaseLegacyOnSignal = (signal: NodeJS.Signals): void => {
         legacyReleasedOnSignal = true;
-        // The signal is re-raised whether or not the release succeeded, exactly as the expiry-aware
-        // path does it: a pool torn down by the same interrupt is the likely failure, and an
-        // unobserved rejection would surface instead of letting the process stop.
-        void releaseOwnerOnly(adapter, claim)
+        // SETTLED, not awaited for success: an acquisition that REJECTED must not hold up the
+        // shutdown, and its rejection is already observed by the caller's own await.
+        void Promise.allSettled([pendingAcquisition])
+          .then(() => releaseOwnerOnly(adapter, claim))
+          // The signal is re-raised whether or not the release succeeded, exactly as the
+          // expiry-aware path does it: a pool torn down by the same interrupt is the likely
+          // failure, and an unobserved rejection would surface instead of letting the process stop.
           .catch(() => undefined)
           .finally(() => {
             process.kill(process.pid, signal);
@@ -740,7 +760,11 @@ export async function withMigrationSession<T>(
       // then re-raises. Doing it twice costs nothing; not doing it at all strands a claim that has
       // no expiry to lapse.
       try {
-        const legacy = await acquireOwnerOnly(adapter, claim);
+        // Assigned BEFORE it is awaited, so an interrupt landing mid-commit has something to wait
+        // for. Awaiting it here is also what observes a rejection, so the handler's `allSettled`
+        // never leaves one unhandled.
+        pendingAcquisition = acquireOwnerOnly(adapter, claim);
+        const legacy = (await pendingAcquisition) as Acquisition;
         if (!legacy.ok) {
           // Refused for the same reason the expiry-aware path refuses, and it is a REFUSAL rather
           // than a skip: the row names a holder, and without an expiry there is no basis on which

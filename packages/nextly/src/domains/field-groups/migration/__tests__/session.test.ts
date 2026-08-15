@@ -1302,6 +1302,72 @@ describe("field-group migration session", () => {
   });
 
   /**
+   * 🔴 The interrupt must WAIT for a claim that is still committing, not race it.
+   *
+   * The handler locks the same row. Arriving mid-commit it could clear nothing — the row was not yet
+   * ours — and the acquisition would then write the claim before the re-raised signal ended the
+   * process, stranding an owner with NO EXPIRY to lapse. That strand blocks the migration which
+   * would add `expires_at`, so the repair is the thing the strand prevents.
+   *
+   * Constructed rather than hoped for: the claim statement is HELD open, the signal is emitted while
+   * it is pending, and only then is the claim allowed to finish.
+   */
+  it("waits for a claim that is still committing before releasing on a signal", async () => {
+    let releaseClaim: (() => void) | undefined;
+    const claimPending = new Promise<void>(resolve => {
+      releaseClaim = resolve;
+    });
+    let signalled = false;
+
+    const h = createAdapter({
+      heldBy: null,
+      stateReadError: Object.assign(
+        new Error('column "expires_at" does not exist'),
+        { code: "42703" }
+      ),
+      onStatement: async kind => {
+        // Holds the claim OPEN. The row is written by the interpreter before this runs, which is
+        // exactly the state the race is about: committed in the model, not yet returned to us.
+        if (kind === "owner-claim" && !signalled) {
+          signalled = true;
+          process.emit("SIGINT");
+          await claimPending;
+        }
+      },
+    });
+
+    const kill = vi
+      .spyOn(process, "kill")
+      .mockImplementation(() => true as never);
+    try {
+      const run = withMigrationSession(
+        {
+          adapter: h.adapter,
+          dialect: "postgresql",
+          label: "sync-1",
+          requireExistingLock: true,
+          releaseOnInterrupt: true,
+        },
+        async () => undefined
+      );
+
+      // Let the signal handler get as far as it can while the claim is still pending.
+      await new Promise(resolve => setImmediate(resolve));
+      releaseClaim?.();
+      await run.catch(() => undefined);
+      // Drain the detached release the handler scheduled.
+      await new Promise(resolve => setImmediate(resolve));
+      await new Promise(resolve => setImmediate(resolve));
+
+      // 🔴 The row is FREE. Releasing before the claim decided would have cleared nothing and left
+      // the claim written behind it.
+      expect(h.owner()).toBeNull();
+    } finally {
+      kill.mockRestore();
+    }
+  });
+
+  /**
    * The handlers are registered before the claim, so EVERY way out has to remove them — including
    * the one that is not a refusal. An acquisition that REJECTS (a dropped connection, an UPDATE
    * permission error) skipped the cleanup entirely, and watch mode retries often enough for two
