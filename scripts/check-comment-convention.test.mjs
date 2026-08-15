@@ -216,8 +216,8 @@ describe("the allowlist", () => {
   // the scan WIDENS to files it previously skipped, whatever those files already contained is by
   // definition pre-existing. The checker's own source came out of EXCLUDED_FILES and brought 12
   // recorded offences with it. A raise for any other reason is the silencing this guards against.
-  const EXPECTED_ENTRIES = 210;
-  const EXPECTED_TOTAL = 404;
+  const EXPECTED_ENTRIES = 209;
+  const EXPECTED_TOTAL = 402;
 
   it("matches its pinned size exactly", () => {
     expect(readAllowlist().size).toBe(EXPECTED_ENTRIES);

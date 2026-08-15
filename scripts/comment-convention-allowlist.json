@@ -430,10 +430,6 @@
     "count": 1,
     "digests": ["6f54fd99320556fb"]
   },
-  "packages/nextly/src/domains/field-groups/migration/__tests__/run.test.ts": {
-    "count": 2,
-    "digests": ["5b3ef26496ee17bf", "7986ffc62d99ef45"]
-  },
   "packages/nextly/src/domains/i18n/companion-join.integration.test.ts": {
     "count": 1,
     "digests": ["3aeb04f7ce6d720e"]
