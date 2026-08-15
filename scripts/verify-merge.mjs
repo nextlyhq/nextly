@@ -214,16 +214,28 @@ export function reviewCoverage(reviewCount) {
  * recent verdict was about something else, and `undefined` when it never spoke.
  * Those are three different answers and the caller distinguishes them.
  */
-export function reviewedRevision({ reviews, issueComments, tip, login }) {
+export function reviewedRevision({
+  reviews,
+  issueComments,
+  tip,
+  login,
+  baseChangedAt = undefined,
+  knownRevisions = undefined,
+}) {
   const records = Array.isArray(reviews) ? reviews : [];
   const comments = Array.isArray(issueComments) ? issueComments : [];
+  // The comment half is the sibling's decision, so this gate inherits its base
+  // cutoff and its refusal of an ambiguous abbreviation rather than restating
+  // either. Absent a revision set that side refuses, which is why the command
+  // supplies one.
   const coversTip =
     reviewsCoveringTip(records, tip, login).length > 0 ||
-    comments.some(
-      comment =>
-        comment?.user?.login === login &&
-        verdictCoversTip(reviewedCommitFrom(comment?.body) ?? "", tip)
-    );
+    verdictCommentReviewers(
+      comments,
+      tip,
+      baseChangedAt,
+      knownRevisions
+    ).includes(login);
   if (coversTip) return tip;
   // Falls back to records ONLY. A comment naming an older revision says which
   // tree that verdict read, and reporting it here would present a stale opinion
@@ -788,6 +800,17 @@ export const SUBMITTED_REVIEW_STATES = verdict.SUBMITTED_REVIEW_STATES;
  * only until somebody edits one of them.
  */
 export const reviewedCommitFrom = verdict.reviewedCommitFrom;
+/**
+ * The comment-coverage decision, taken whole from the sibling.
+ *
+ * Not re-implemented here. That side already scopes a verdict to the last base
+ * move and refuses an abbreviation that could identify more than one of the
+ * pull request's revisions, and a second copy of either rule would agree only
+ * until one of them was edited.
+ */
+export const verdictCommentReviewers = verdict.verdictCommentReviewers;
+/** When the base last moved, from the sibling, for the same reason. */
+export const latestBaseChange = verdict.latestBaseChange;
 
 /**
  * Whether the merge took everything the branch had.
@@ -1182,11 +1205,28 @@ export function main(argv) {
   // instead assumes reviews complete in the order they were requested, and an
   // older-head review finishing after a current-head one then hides a verdict
   // that does cover this revision behind one that does not.
+  // The pull request's own revisions, so an abbreviation that also identifies
+  // an earlier one is refused rather than trusted, and the moment the base last
+  // moved, so a verdict about a narrower diff cannot cover a wider one. Both
+  // are what the sibling's decision needs; without them it refuses.
+  const prCommits = ghJson([
+    "api",
+    "--paginate",
+    "--slurp",
+    `repos/${REPO}/pulls/${pr}/commits?per_page=100`,
+  ]).flat();
+  const knownRevisions = prCommits
+    .map(commit => commit?.sha)
+    .filter(value => typeof value === "string");
   const reviewedSha = reviewedRevision({
     reviews,
     issueComments,
     tip,
     login: CODEX,
+    baseChangedAt: latestBaseChange(timelinePages(pr)),
+    // The tip is the revision being judged and is not always the last commit
+    // the API lists, so it is named explicitly rather than assumed present.
+    knownRevisions: [...new Set([...knownRevisions, tip])],
   });
   // Scoped to THIS revision: a review of an earlier one is not coverage of it.
   const coderabbit = reviewsCoveringTip(

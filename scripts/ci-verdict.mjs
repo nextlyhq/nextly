@@ -339,10 +339,54 @@ export function reviewedCommitFrom(body) {
  * carries its `commit_id` from the server and cannot be rewritten that way, so
  * this source is the weaker of the two and is only ever additive to it.
  */
+/**
+ * When the base last moved, or `undefined` when it never has.
+ *
+ * Pure and exported so the merge-verification gate applies the SAME cutoff. A
+ * verdict predating a base move describes a `base..head` diff that no longer
+ * exists, and nothing about the revision gives that away, because the head did
+ * not move. Takes the timeline as pages, which is how both callers hold it.
+ */
+export function latestBaseChange(pages) {
+  const at = (Array.isArray(pages) ? pages : [])
+    .flat()
+    .filter(event => event?.event === "base_ref_changed")
+    .map(event => event?.created_at)
+    .filter(value => typeof value === "string")
+    .sort();
+  return at.length > 0 ? at[at.length - 1] : undefined;
+}
+
+export function abbreviationIsAmbiguous(named, head, knownRevisions) {
+  // Nothing to compare against is not the same as nothing colliding. An
+  // abbreviation is only known to identify ONE commit once something has been
+  // checked, so an absent revision set refuses rather than waving it through.
+  if (knownRevisions === undefined || knownRevisions === null) return true;
+  const target = head.toLowerCase();
+  let sawTarget = false;
+  for (const revision of knownRevisions) {
+    if (typeof revision !== "string") continue;
+    const candidate = revision.toLowerCase();
+    if (candidate === target) {
+      sawTarget = true;
+      continue;
+    }
+    // A second revision of this pull request wearing the same prefix. The
+    // author controls their own commits and a seven-digit prefix is within
+    // reach of grinding, so a stale verdict about an earlier revision would
+    // otherwise cover a head nobody read.
+    if (candidate.startsWith(named)) return true;
+  }
+  // The head must be among the revisions checked. Where it is not, the set
+  // says nothing about what this abbreviation identifies.
+  return !sawTarget;
+}
+
 export function verdictCommentReviewers(
   issueComments,
   head,
-  since = undefined
+  since = undefined,
+  knownRevisions = undefined
 ) {
   if (
     !Array.isArray(issueComments) ||
@@ -359,6 +403,7 @@ export function verdictCommentReviewers(
     if (typeof login !== "string" || typeof body !== "string") continue;
     const named = reviewedCommitFrom(body);
     if (named === undefined || !target.startsWith(named)) continue;
+    if (abbreviationIsAmbiguous(named, target, knownRevisions)) continue;
     // Same scoping rule the review objects get: a verdict predating the last
     // base move describes a diff that no longer exists, and a comment with no
     // timestamp cannot be shown to postdate it.
@@ -381,12 +426,13 @@ export function reviewersCovering(
   reviews,
   issueComments,
   head,
-  since = undefined
+  since = undefined,
+  knownRevisions = undefined
 ) {
   return [
     ...new Set([
       ...reviewersAtHead(reviews, head, since),
-      ...verdictCommentReviewers(issueComments, head, since),
+      ...verdictCommentReviewers(issueComments, head, since, knownRevisions),
     ]),
   ].sort();
 }
@@ -397,9 +443,12 @@ export function missingReviewers(
   issueComments,
   head,
   required,
-  since = undefined
+  since = undefined,
+  knownRevisions = undefined
 ) {
-  const seen = new Set(reviewersCovering(reviews, issueComments, head, since));
+  const seen = new Set(
+    reviewersCovering(reviews, issueComments, head, since, knownRevisions)
+  );
   return (required ?? []).filter(login => !seen.has(login));
 }
 
@@ -572,18 +621,24 @@ export function report({
     login => !blockingList.includes(login)
   );
   const required = [...new Set([...blockingList, ...effectiveAdvisory])];
+  // The pull request's own revisions, so an abbreviation that also identifies
+  // an earlier one of them is refused rather than trusted.
+  const knownRevisions =
+    revisionOrder instanceof Map ? [...revisionOrder.keys()] : undefined;
   const covering = reviewersCovering(
     reviews,
     issueComments,
     head,
-    coverageSince
+    coverageSince,
+    knownRevisions
   );
   const missing = missingReviewers(
     reviews,
     issueComments,
     head,
     required,
-    coverageSince
+    coverageSince,
+    knownRevisions
   );
   const unresolved = unresolvedThreads(threads, effectiveAdvisory);
   const limited = rateLimited(issueComments);
@@ -1024,20 +1079,15 @@ async function main(argv) {
   // The moment the base last moved, or `undefined` when it never has.
   // `base_ref_changed` is GitHub's own name for the event; there is no
   // structural alternative, because a review record carries no base of its own.
-  const baseChangedAt = () => {
-    const at = gh([
-      "api",
-      "--paginate",
-      "--slurp",
-      `repos/${repo}/issues/${pr}/timeline?per_page=100`,
-    ])
-      .flat()
-      .filter(event => event?.event === "base_ref_changed")
-      .map(event => event?.created_at)
-      .filter(value => typeof value === "string")
-      .sort();
-    return at.length > 0 ? at[at.length - 1] : undefined;
-  };
+  const baseChangedAt = () =>
+    latestBaseChange(
+      gh([
+        "api",
+        "--paginate",
+        "--slurp",
+        `repos/${repo}/issues/${pr}/timeline?per_page=100`,
+      ])
+    );
 
   const rewriteEvents = () =>
     gh([
