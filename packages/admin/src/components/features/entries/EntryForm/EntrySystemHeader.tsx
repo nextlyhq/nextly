@@ -99,10 +99,16 @@ export interface EntrySystemHeaderProps {
   /** Label for the preview action. Defaults to "Preview". */
   previewLabel?: string;
   /**
-   * Whether there is a saved document for a link to name. Only the caller can
-   * answer that; the `update` half of the same question is ANDed in here from
-   * the permission this header already resolved for its submit buttons, so a
-   * caller cannot ship the control while forgetting the gate.
+   * Whether there is a saved document for a link to name.
+   *
+   * Deliberately NOT ANDed with `update-{slug}` here. The mint endpoint
+   * authorizes the request against the collection's real access rules, and
+   * `update` can be granted by a code-first `access.update` rule that the flat
+   * permission list does not carry — so a client-side check on that list is a
+   * false negative for exactly the arrangement it would claim to protect,
+   * hiding the link from an author who can edit the document. This is the same
+   * reasoning the Discard Draft affordance below is built on, and the sibling
+   * Save controls are not gated on it either.
    */
   isLinkAvailable?: boolean;
   /** Mints a shareable link and copies it. */
@@ -394,7 +400,7 @@ export function EntrySystemHeader({
           isPreviewAvailable={isPreviewAvailable}
           {...(onPreview === undefined ? {} : { onPreview })}
           {...(previewLabel === undefined ? {} : { previewLabel })}
-          isLinkAvailable={isLinkAvailable && canUpdateDocument}
+          isLinkAvailable={isLinkAvailable}
           {...(onCopyLink === undefined ? {} : { onCopyLink })}
           isCopyingLink={isCopyingLink}
           disabled={isSubmitting}

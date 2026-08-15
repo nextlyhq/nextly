@@ -9,6 +9,7 @@ import {
   anyLocalePublished,
   effectiveEntryStatus,
   everPublishedOnRecord,
+  previewLinkLocale,
   useHasPublicAddress,
   type PublicAddressArgs,
 } from "../entry-address";
@@ -446,5 +447,54 @@ describe("useHasPublicAddress", () => {
     rerender(shared({ entry: entry({ status: "draft" }) }));
 
     expect(result.current).toBe(true);
+  });
+});
+
+describe("previewLinkLocale", () => {
+  it("scopes a default-language link to the default locale", () => {
+    // The editor spells the default language as `undefined`, and an absent
+    // locale claim authorizes every locale — so passing the sentinel through
+    // would hand a reviewer of the English draft every other translation too.
+    expect(
+      previewLinkLocale({
+        localized: true,
+        locale: undefined,
+        defaultLocale: "en",
+      })
+    ).toBe("en");
+  });
+
+  it("scopes a translation link to the language being edited", () => {
+    expect(
+      previewLinkLocale({ localized: true, locale: "de", defaultLocale: "en" })
+    ).toBe("de");
+  });
+
+  it("leaves a non-localized collection unscoped", () => {
+    // No locale to name and no translations to leak; scoping to an invented
+    // locale would refuse a link that should work.
+    expect(
+      previewLinkLocale({
+        localized: false,
+        locale: undefined,
+        defaultLocale: "en",
+      })
+    ).toBeUndefined();
+  });
+
+  it("never returns a locale a localized entry was not edited in", () => {
+    // The two accepted spellings of "the default language" must not disagree:
+    // an explicit default and the sentinel resolve to the same scope.
+    const sentinel = previewLinkLocale({
+      localized: true,
+      locale: undefined,
+      defaultLocale: "en",
+    });
+    const explicit = previewLinkLocale({
+      localized: true,
+      locale: "en",
+      defaultLocale: "en",
+    });
+    expect(sentinel).toBe(explicit);
   });
 });

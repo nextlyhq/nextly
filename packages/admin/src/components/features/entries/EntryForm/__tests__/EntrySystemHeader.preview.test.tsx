@@ -77,23 +77,19 @@ describe("EntrySystemHeader preview control", () => {
     expect(onCopyLink).toHaveBeenCalledTimes(1);
   });
 
-  it("withholds the link from an author who cannot update the document", () => {
-    // The permission half is ANDed in by the header rather than left to the
-    // caller, so this stays closed however the caller answers.
+  it("still offers the link when the flat permission list omits update", () => {
+    // `update` can be granted by a code-first `access.update` rule that the
+    // flat `update-{slug}` list does not carry, and the mint endpoint evaluates
+    // that rule. Gating the control on the list would hide the link from an
+    // author who can edit the document — the same reasoning the Discard Draft
+    // affordance beside it is built on. The endpoint refuses a caller who
+    // genuinely may not update.
     canMock.mockReturnValue(false);
     renderHeader();
 
     expect(
-      screen.queryByRole("button", { name: COPY_LABEL })
-    ).not.toBeInTheDocument();
-  });
-
-  it("asks about update on the document being edited", () => {
-    // A permission resolved for a different slug would gate the control on
-    // access to some other collection.
-    renderHeader({ collectionSlug: "pages" });
-
-    expect(canMock).toHaveBeenCalledWith("update-pages");
+      screen.getByRole("button", { name: COPY_LABEL })
+    ).toBeInTheDocument();
   });
 
   it("withholds the link when there is no saved document to name", () => {

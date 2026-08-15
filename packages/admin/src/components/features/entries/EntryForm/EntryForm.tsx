@@ -36,6 +36,7 @@ import { EntryLocaleProvider } from "../EntryLocaleContext";
 import {
   effectiveEntryStatus,
   isSlugPerLocale,
+  previewLinkLocale,
   useHasPublicAddress,
 } from "./entry-address";
 import { EntryFormActions } from "./EntryFormActions";
@@ -358,12 +359,15 @@ export function EntryForm({
   // hooks run unconditionally: on create the mutation is constructed and never
   // reachable, since the control that would call it is not rendered.
   const savedEntryId = entry?.id === undefined ? "" : String(entry.id);
+  const linkLocale = previewLinkLocale({
+    localized: collection.localized === true,
+    locale,
+    defaultLocale,
+  });
   const previewLink = usePreviewLink({
     collection: collection.name,
     entryId: savedEntryId,
-    // A link for a localized entry opens the language being edited. Omitted for
-    // the default language, which the mint route reads as every locale.
-    ...(locale === undefined ? {} : { locale }),
+    ...(linkLocale === undefined ? {} : { locale: linkLocale }),
   });
 
   // Only enable shortcuts in standalone mode (not embedded modals)

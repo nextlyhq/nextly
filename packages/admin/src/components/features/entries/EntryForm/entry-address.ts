@@ -259,3 +259,36 @@ export function useHasPublicAddress({
   if (publishedOnRecord) seenRef.current.add(addressKey);
   return liveNow || publishedOnRecord || seenRef.current.has(addressKey);
 }
+
+/**
+ * The locale a shareable preview link should be scoped to.
+ *
+ * The editor spells the default language as `locale === undefined`, and the
+ * mint route reads a token with no locale claim as authorizing EVERY locale
+ * (`previewTokenCovers` returns true whenever the scope names none). Passing
+ * the editor's sentinel straight through would therefore turn a link to one
+ * language's draft into a grant covering every unpublished translation of the
+ * entry, while a link minted from any NON-default language is correctly
+ * restricted — the widening applies to exactly the language most links are
+ * shared from.
+ *
+ * So the sentinel is resolved here rather than at the call site: it is one
+ * question with one answer, and a second caller deriving it again is how the
+ * two drift apart.
+ *
+ * A non-localized collection is the one case where an unscoped token is right.
+ * It has no locale to name, no translations to leak, and scoping the token to
+ * an invented locale would refuse a link that should work.
+ */
+export function previewLinkLocale({
+  localized,
+  locale,
+  defaultLocale,
+}: {
+  localized: boolean;
+  locale: string | undefined;
+  defaultLocale: string | undefined;
+}): string | undefined {
+  if (!localized) return undefined;
+  return locale ?? defaultLocale;
+}
