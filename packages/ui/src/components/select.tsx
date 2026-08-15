@@ -21,7 +21,7 @@ import { usePortalContainer } from "../providers/portal-provider";
  * - Disabled state support
  *
  * Design Specs:
- * - Height: sm=32px, default=40px, lg=44px (matches Input component)
+ * - Height: sm=36px, default=40px, lg=44px (matches Input component)
  * - Padding: Horizontal 12px, vertical varies by size
  * - Border radius: `rounded-md` on the trigger, `rounded-lg` on the panel
  * - Border: 1px solid, changes on focus/error
@@ -29,7 +29,7 @@ import { usePortalContainer } from "../providers/portal-provider";
  * - Font size: sm/default=14px (text-sm), lg=16px (text-base)
  *
  * Size Variants:
- * - sm: Height 32px (h-8) - Compact forms, filters
+ * - sm: Height 36px - Compact forms and filters, matching a small Button
  * - default: Height 40px (h-10) - Standard forms
  * - lg: Height 44px (h-11) - Prominent selects
  *
@@ -68,7 +68,10 @@ const selectTriggerVariants = cva(
   {
     variants: {
       size: {
-        sm: "h-[var(--nx-control-height-sm)] text-sm",
+        // `-md`, matching Button and Input: one height for one size name. A
+        // select sitting beside a small button in a filter row is the case that
+        // makes a 4px difference visible.
+        sm: "h-[var(--nx-control-height-md)] text-sm",
         default: "h-[var(--nx-control-height)] text-sm",
         lg: "h-[var(--nx-control-height-lg)] text-base",
       },
