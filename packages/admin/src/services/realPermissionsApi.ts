@@ -86,12 +86,23 @@ export const fetchPermissionsFromApi = async (options?: {
   action?: string;
   limit?: number;
   page?: number;
+  /**
+   * Ask for permissions nothing declares any more, so they can be shown MARKED
+   * rather than silently omitted.
+   *
+   * Off unless requested, and the parameter is omitted entirely rather than
+   * sent as `false`: the server hides them by default, so a caller offering
+   * permissions as choices needs to do nothing to keep offering only the ones
+   * that still enforce something.
+   */
+  includeOrphaned?: boolean;
 }): Promise<PermissionListResult> => {
   const params = new URLSearchParams();
 
   if (options?.search) params.set("search", options.search);
   if (options?.resource) params.set("resource", options.resource);
   if (options?.action) params.set("action", options.action);
+  if (options?.includeOrphaned) params.set("includeOrphaned", "true");
   params.set("limit", String(options?.limit ?? 200));
   params.set("page", String(options?.page ?? 1));
   params.set("sortBy", "resource");

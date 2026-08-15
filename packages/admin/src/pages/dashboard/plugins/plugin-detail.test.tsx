@@ -58,21 +58,44 @@ const permissionRows = vi.hoisted(() => ({
   current: [] as unknown[],
   pageSize: 200,
 }));
+/**
+ * Whether a row is one nothing declares any more.
+ *
+ * Reads the property off an untyped row, because the rows here are written as
+ * the seeder writes them rather than as the response DTO: a row that sets no
+ * `orphaned` column is a current one.
+ */
+function isOrphanedRow(row: unknown): boolean {
+  return (
+    typeof row === "object" &&
+    row !== null &&
+    "orphaned" in row &&
+    row.orphaned === true
+  );
+}
+
 vi.mock("@admin/services/realPermissionsApi", () => ({
-  fetchPermissionsFromApi: (options?: { page?: number }) => {
+  fetchPermissionsFromApi: (options?: {
+    page?: number;
+    includeOrphaned?: boolean;
+  }) => {
     const size = permissionRows.pageSize;
     const page = options?.page ?? 1;
     const start = (page - 1) * size;
+    // The server hides orphans in the WHERE clause unless asked, so they are
+    // absent from the page AND from the total. Serving them regardless would
+    // let a card that never requests them still render one, which is the
+    // assertion this file makes.
+    const visible = options?.includeOrphaned
+      ? permissionRows.current
+      : permissionRows.current.filter(row => !isOrphanedRow(row));
     return Promise.resolve({
-      data: permissionRows.current.slice(start, start + size),
+      data: visible.slice(start, start + size),
       meta: {
-        total: permissionRows.current.length,
+        total: visible.length,
         page,
         limit: size,
-        totalPages: Math.max(
-          1,
-          Math.ceil(permissionRows.current.length / size)
-        ),
+        totalPages: Math.max(1, Math.ceil(visible.length / size)),
       },
     });
   },
@@ -133,6 +156,20 @@ const seededRows = [
     owner: "@acme/disabled",
     danger: true,
   },
+  // Retained from a version that declared it. The row still exists and still
+  // carries its grants, so the card owes the reader its presence and its
+  // state, not its omission.
+  {
+    id: "p3",
+    name: "Import Submissions",
+    slug: "submissions.import",
+    action: "import",
+    resource: "submissions",
+    description: null,
+    owner: "@acme/forms",
+    danger: false,
+    orphaned: true,
+  },
 ];
 
 beforeEach(() => {
@@ -157,6 +194,33 @@ describe("PluginDetailPage permissions across pages", () => {
     renderPage("acme-disabled");
 
     expect(await screen.findByText("Purge Archive")).toBeInTheDocument();
+  });
+});
+
+/**
+ * A permission the plugin stopped declaring is DISCLOSED, marked, rather than
+ * hidden. The row survives in the table with its grants intact, so a card that
+ * omits it understates what the plugin left behind, and the reader has no way
+ * to tell that from a plugin that never declared it.
+ *
+ * The double applies the server's default, so this fails against a card that
+ * renders the marker without having asked for orphans.
+ */
+describe("PluginDetailPage orphaned permissions", () => {
+  it("lists a no-longer-declared permission and marks it", async () => {
+    renderPage("acme-forms");
+
+    expect(await screen.findByText("Import Submissions")).toBeInTheDocument();
+    expect(screen.getByText("no longer declared")).toBeInTheDocument();
+  });
+
+  it("leaves a current permission unmarked", async () => {
+    renderPage("acme-forms");
+
+    expect(await screen.findByText("Export Submissions")).toBeInTheDocument();
+    // One marker for the one orphaned row, so the marker tracks the row's
+    // state rather than being rendered for every entry.
+    expect(screen.getAllByText("no longer declared")).toHaveLength(1);
   });
 });
 
