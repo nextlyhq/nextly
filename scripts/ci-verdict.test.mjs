@@ -9,7 +9,9 @@ import {
   resolveReviewers,
   resolveTarget,
   reviewersAtHead,
+  reviewersCovering,
   unresolvedThreads,
+  verdictCommentReviewers,
   verdictFor,
 } from "./ci-verdict.mjs";
 
@@ -45,6 +47,112 @@ const BASE = {
   advisory: [RABBIT],
 };
 
+/**
+ * A clean verdict as its author actually posts one: an issue comment naming the
+ * commit it read, in the abbreviated form, with no review object anywhere.
+ */
+const verdictComment = (login, sha, created_at = undefined) => ({
+  user: { login },
+  body: `Codex Review: Didn't find any major issues. Keep it up!\n\n**Reviewed commit:** \`${sha.slice(0, 10)}\`\n`,
+  ...(created_at === undefined ? {} : { created_at }),
+});
+
+/**
+ * A reviewer that reports a clean pass WITHOUT opening a review object.
+ *
+ * Measured against this repository: on four pull requests, the one carrying
+ * findings produced review objects and the three clean ones produced none at
+ * all, only a comment. A gate reading the reviews endpoint alone therefore
+ * refuses forever on a revision that was reviewed and passed.
+ */
+describe("verdictCommentReviewers", () => {
+  it("grants coverage from a comment naming the head", () => {
+    expect(verdictCommentReviewers([verdictComment(CODEX, HEAD)], HEAD)).toEqual(
+      [CODEX]
+    );
+  });
+
+  it("ignores a verdict naming a different revision", () => {
+    expect(verdictCommentReviewers([verdictComment(CODEX, OLD)], HEAD)).toEqual(
+      []
+    );
+  });
+
+  it("ignores a comment with no commit named", () => {
+    const chatter = { user: { login: CODEX }, body: "Working on it." };
+    expect(verdictCommentReviewers([chatter], HEAD)).toEqual([]);
+  });
+
+  // The abbreviation is a PREFIX of the head, so a floor keeps a short string
+  // from prefixing many commits. Below it the marker must not match at all.
+  it("refuses an abbreviation shorter than seven characters", () => {
+    const stubby = {
+      user: { login: CODEX },
+      body: "**Reviewed commit:** `aaaaaa`",
+    };
+    expect(verdictCommentReviewers([stubby], HEAD)).toEqual([]);
+  });
+
+  it("matches the COMPLETE login, so a lookalike cannot self-certify", () => {
+    const seen = verdictCommentReviewers(
+      [verdictComment("codex-impersonator", HEAD)],
+      HEAD
+    );
+    expect(seen).not.toContain(CODEX);
+  });
+
+  it("excludes a verdict predating the last base move", () => {
+    const stale = verdictComment(CODEX, HEAD, "2026-08-14T09:00:00Z");
+    expect(verdictCommentReviewers([stale], HEAD, "2026-08-14T10:00:00Z")).toEqual(
+      []
+    );
+  });
+
+  it("counts a verdict after the last base move", () => {
+    const fresh = verdictComment(CODEX, HEAD, "2026-08-14T11:00:00Z");
+    expect(verdictCommentReviewers([fresh], HEAD, "2026-08-14T10:00:00Z")).toEqual(
+      [CODEX]
+    );
+  });
+
+  // A comment with no timestamp cannot be shown to postdate the base move, and
+  // unknown is not the same as covered.
+  it("excludes an undated verdict once a base move is in scope", () => {
+    expect(
+      verdictCommentReviewers(
+        [verdictComment(CODEX, HEAD)],
+        HEAD,
+        "2026-08-14T10:00:00Z"
+      )
+    ).toEqual([]);
+  });
+
+  it("survives absent or malformed input", () => {
+    expect(verdictCommentReviewers(undefined, HEAD)).toEqual([]);
+    expect(verdictCommentReviewers([verdictComment(CODEX, HEAD)], "")).toEqual(
+      []
+    );
+  });
+});
+
+describe("reviewersCovering", () => {
+  it("unions both sources without repeating a reviewer present in each", () => {
+    expect(
+      reviewersCovering(
+        [review(CODEX, HEAD)],
+        [verdictComment(CODEX, HEAD)],
+        HEAD
+      )
+    ).toEqual([CODEX]);
+  });
+
+  it("clears a required reviewer that only ever commented", () => {
+    expect(
+      missingReviewers([], [verdictComment(CODEX, HEAD)], HEAD, [CODEX])
+    ).toEqual([]);
+  });
+});
+
 describe("reviewersAtHead", () => {
   it("reports a reviewer that submitted at the head", () => {
     expect(reviewersAtHead([review(CODEX, HEAD)], HEAD)).toEqual([CODEX]);
@@ -76,7 +184,7 @@ describe("reviewersAtHead", () => {
     const seen = reviewersAtHead([review("codex-impersonator", HEAD)], HEAD);
     expect(seen).not.toContain(CODEX);
     expect(
-      missingReviewers([review("codex-impersonator", HEAD)], HEAD, [CODEX])
+      missingReviewers([review("codex-impersonator", HEAD)], [], HEAD, [CODEX])
     ).toEqual([CODEX]);
   });
 
@@ -665,7 +773,7 @@ describe("rateLimited", () => {
       { user: { login: RABBIT }, body: "Here is the review summary." },
     ];
     expect(rateLimited(comments)).toEqual([]);
-    expect(missingReviewers([], HEAD, [RABBIT])).toEqual([RABBIT]);
+    expect(missingReviewers([], comments, HEAD, [RABBIT])).toEqual([RABBIT]);
   });
 });
 
