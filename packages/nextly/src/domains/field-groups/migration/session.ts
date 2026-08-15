@@ -34,6 +34,7 @@ import { sql, type SQL } from "drizzle-orm";
 import { safeCode } from "../../../database/errors";
 import { NextlyError } from "../../../errors/nextly-error";
 import { fieldGroupLockColumnTypes } from "../../../schemas/field-group-lock";
+import type { Logger } from "../../../shared/types";
 
 /** Dialects the migration runs on. */
 export type MigrationDialect = "postgresql" | "mysql" | "sqlite";
@@ -273,6 +274,25 @@ async function readLockStateOutsideTransaction(
   return toLockState(rows[0]);
 }
 
+/**
+ * Whether this lock table is new enough to answer a liveness read.
+ *
+ * Issues the REAL state query rather than inspecting a catalogue, so it cannot drift from the
+ * statement acquisition is about to run: if this one succeeds, that one will too.
+ */
+async function lockTableUnderstandsExpiry(
+  adapter: DrizzleAdapter,
+  dialect: MigrationDialect
+): Promise<boolean> {
+  try {
+    await readLockStateOutsideTransaction(adapter, dialect);
+    return true;
+  } catch (error) {
+    if (isMissingColumn(error, dialect)) return false;
+    throw error;
+  }
+}
+
 /** Whether the single lock row is present, read outside any transaction. */
 async function lockRowExists(adapter: DrizzleAdapter): Promise<boolean> {
   const rows = await adapter.queryStatement(
@@ -444,6 +464,40 @@ export function getMigrationLockUpgradeDdl(dialect: MigrationDialect): string {
 }
 
 /**
+ * Whether a statement failed because `expires_at` is not there.
+ *
+ * A lock table created before that column existed answers every liveness read this way. Classified
+ * by the driver's own code at the specificity the claim needs, exactly as {@link isDuplicateColumn}
+ * and {@link isMissingTable} are — a message match would also catch a typo'd column name, which is
+ * a programming error that must NOT be quietly tolerated.
+ */
+function isMissingColumn(error: unknown, dialect: MigrationDialect): boolean {
+  let link: unknown = error;
+  for (
+    let depth = 0;
+    depth < 5 && link !== null && link !== undefined;
+    depth++
+  ) {
+    const code = safeCode(link);
+    const message = link instanceof Error ? link.message : "";
+
+    // 42703 undefined_column.
+    if (dialect === "postgresql" && code === "42703") return true;
+    if (
+      dialect === "mysql" &&
+      (code === "ER_BAD_FIELD_ERROR" || code === "1054" || code === "42S22")
+    ) {
+      return true;
+    }
+    // SQLite has no distinct code, and the text is unambiguous for this case.
+    if (dialect === "sqlite" && /no such column/i.test(message)) return true;
+
+    link = (link as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+/**
  * Whether a failed ALTER means the column is already there.
  *
  * Classified by the driver's own code where one exists, at the specificity the claim needs — the
@@ -505,6 +559,8 @@ export async function withMigrationSession<T>(
      * DML but not DDL would be refused outright.
      */
     requireExistingLock?: boolean;
+    /** Where a skipped lock is reported. Absent means the skip is silent, which is a caller's choice. */
+    logger?: Logger;
     /**
      * Release the claim if the process is interrupted.
      *
@@ -608,6 +664,28 @@ export async function withMigrationSession<T>(
       return fn({ ...session, lock: { kind: "not-held" } });
     }
     await seedLockRow(adapter);
+
+    // 🔴 A lock table created before `expires_at` existed cannot answer the liveness read, and THIS
+    // branch is forbidden from adding it — the upgrade ALTER runs only where DDL is allowed. So the
+    // lock is skipped rather than the caller failed: reported NOT HELD, warned about, and treated
+    // exactly as an absent table is treated four lines above.
+    //
+    // Skipping rather than refusing is the deliberate choice. This caller is a schema sync, not the
+    // migration; it was never the thing the exclusion existed to hold back, and refusing would
+    // break every `--no-auto-sync` install that has not yet run a migration under the new release.
+    // The row it would have contended for carries no expiry, so there is no live claim to respect.
+    // The remedy is a single migration run, which adds the column on the branch that may.
+    if (!(await lockTableUnderstandsExpiry(adapter, dialect))) {
+      args.logger?.warn?.(
+        "field-group migration lock predates its expiry column; continuing without it",
+        {
+          reason: "migration lock table is missing expires_at",
+          table: MIGRATION_LOCK_TABLE,
+          label,
+        }
+      );
+      return fn({ ...session, lock: { kind: "not-held" } });
+    }
   } else {
     await ensureLockRow(adapter, dialect);
   }
