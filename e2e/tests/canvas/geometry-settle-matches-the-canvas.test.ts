@@ -567,16 +567,32 @@ test.describe("the drop-zone geometry the probe waits on", () => {
     expect(await geometrySpanMs(frame, null)).toBe(100);
   });
 
-  test("the probe leaves no state behind on a real zone", async ({
+  test("the probe leaves no state behind, even on the refusing path", async ({
     page,
     request,
   }) => {
     const frame = await canvas(page, request);
 
-    await geometrySpanMs(frame, "data-drag data-active");
+    // A Web Animations effect, which is the ONE path that returns before the normal cleanup.
+    // Without it this test never reaches the branch it exists for: the ordinary path cleans up
+    // anyway, so the assertion passes whether or not the early return restores anything.
+    const started = await frame.evaluate(() => {
+      const zone = document.querySelector(".nx-pb-dropzone");
+      if (!zone) return false;
+      (zone as HTMLElement).animate([{ height: "0px" }, { height: "12px" }], {
+        duration: 300,
+        iterations: 1,
+      });
+      return true;
+    });
+    expect(started).toBe(true);
 
-    // The probe writes onto REAL canvas elements, so a missed cleanup is not a test detail: every
-    // later read in the run, and the author's canvas, would see a state the probe invented.
+    // It must refuse - that is the branch under test.
+    await expect(
+      geometrySpanMs(frame, "data-drag data-active")
+    ).rejects.toThrow(/Web Animations API/);
+
+    // And it must not have left the attributes it set on a real canvas element.
     const leftBehind = await frame.evaluate(
       () =>
         [...document.querySelectorAll(".nx-pb-dropzone")].filter(
