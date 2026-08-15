@@ -237,33 +237,64 @@ jobs:
         run: |
           mkdir -p /tmp/nextly-workspace-packs
 
-          # The earlier build step covers `create-nextly-app` and `nextly` (and, through the
-          # dependency graph, the adapters). It does NOT cover admin, ui, plugin-form-builder
-          # or plugin-sdk — and these packages publish only `dist`, so packing one unbuilt
-          # SUCCEEDS and yields a tarball of metadata with no code. The pin would then replace
-          # working registry packages with empty ones and the leg would fail to resolve an
-          # entry point, blaming the template.
+          # The set is DERIVED from the workspace, not listed here. A list was listed here,
+          # and it went stale: `nextly` and `plugin-sdk` both depend on
+          # `@nextlyhq/blocks-engine`, which was never packed — so `pnpm pack` rewrote that
+          # `workspace:*` to a concrete version and the install resolved it FROM THE REGISTRY.
+          # These legs were therefore testing the PUBLISHED blocks-engine while reporting on
+          # the workspace, and on a release PR — where the bumped version does not exist yet —
+          # the same gap fails outright with ETARGET.
           #
-          # The trailing `...` includes each package itself as well as its dependencies.
-          pnpm turbo build --filter=nextly... --filter=@nextlyhq/admin... \
-            --filter=@nextlyhq/ui... --filter=@nextlyhq/adapter-drizzle... \
-            --filter=@nextlyhq/adapter-sqlite... --filter=@nextlyhq/adapter-postgres... \
-            --filter=@nextlyhq/adapter-mysql... --filter=@nextlyhq/plugin-form-builder... \
-            --filter=@nextlyhq/plugin-sdk...
+          # `create-nextly-app` is excluded because it is the scaffolder rather than a
+          # dependency of what it scaffolds; its own pack step covers it.
+          #
+          # This is the rule `pin-workspace-packages.mjs` already states about ITSELF — the
+          # names are a question the manifests answer, and a second answer agrees only until
+          # someone adds a package. That is exactly what happened, one layer up.
+          PKGS=$(node -e '
+            const fs = require("node:fs");
+            const names = fs.readdirSync("packages").filter(dir => {
+              try {
+                const manifest = JSON.parse(
+                  fs.readFileSync(`packages/${dir}/package.json`, "utf8")
+                );
+                return manifest.private !== true && manifest.name &&
+                  manifest.name !== "create-nextly-app";
+              } catch { return false; }
+            });
+            if (names.length === 0) { throw new Error("no publishable packages found"); }
+            console.log(names.join(" "));
+          ')
+          echo "packing: $PKGS"
 
-          for dir in packages/nextly packages/admin packages/ui \
-                     packages/adapter-drizzle packages/adapter-sqlite \
-                     packages/adapter-postgres packages/adapter-mysql \
-                     packages/plugin-form-builder packages/plugin-sdk; do
-            (cd "$dir" && pnpm pack --pack-destination /tmp/nextly-workspace-packs)
+          # Built with the same list. These packages publish only `dist`, so packing one
+          # unbuilt SUCCEEDS and yields a tarball of metadata with no code — the pin would
+          # then replace working registry packages with empty ones and the leg would fail to
+          # resolve an entry point, blaming the template. The trailing `...` includes each
+          # package itself as well as its dependencies.
+          FILTERS=""
+          for dir in $PKGS; do
+            NAME=$(node -p "require('./packages/$dir/package.json').name")
+            FILTERS="$FILTERS --filter=$NAME..."
+          done
+          # shellcheck disable=SC2086
+          pnpm turbo build $FILTERS
+
+          for dir in $PKGS; do
+            (cd "packages/$dir" && pnpm pack --pack-destination /tmp/nextly-workspace-packs)
           done
 
           # Controls on that loop. Counting files is not enough: `pnpm pack` exits 0 for an
-          # unbuilt package too, so the count would be nine while the tarballs held no code.
+          # unbuilt package too, so the count would match while the tarballs held no code.
           # Each one is opened and required to contain a `dist` entry.
-          count=$(ls /tmp/nextly-workspace-packs/*.tgz 2>/dev/null | wc -l)
-          echo "packed tarballs: $count"
-          [ "$count" -ge 9 ] || { echo "expected at least 9 tarballs, got $count"; exit 1; }
+          #
+          # The expected count is DERIVED from the same list rather than a fixed number. A
+          # literal was what let the previous gap hide: nine tarballs satisfied `-ge 9` while
+          # the tenth package the scaffold needed was never packed at all.
+          expected=$(echo "$PKGS" | wc -w | tr -d ' ')
+          count=$(ls /tmp/nextly-workspace-packs/*.tgz 2>/dev/null | wc -l | tr -d ' ')
+          echo "packed tarballs: $count (expected $expected)"
+          [ "$count" -eq "$expected" ] || { echo "expected $expected tarballs, got $count"; exit 1; }
 
           for tgz in /tmp/nextly-workspace-packs/*.tgz; do
             files=$(tar -tzf "$tgz" | grep -c '^package/dist/' || true)
