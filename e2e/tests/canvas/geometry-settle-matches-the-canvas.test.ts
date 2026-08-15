@@ -158,15 +158,6 @@ async function geometrySpanMs(
         // The element and its pseudo-elements. A `::before` that animates height inside an
         // auto-sized zone moves the zone's own bottom edge, and its timing appears in no computed
         // longhand of the element itself.
-        const surfaces = [
-          getComputedStyle(el),
-          getComputedStyle(el, "::before"),
-          getComputedStyle(el, "::after"),
-        ];
-        const computed = surfaces[0];
-
-        // A running animation moves the edge for its whole duration whatever it animates, because
-        // the keyframes are not inspectable from here. Charged in full rather than skipped.
         // A JS-driven animation carries its timing in the Web Animations API and appears in no
         // computed longhand, so the measurement below cannot see it. Refused rather than ignored:
         // this file measures DECLARED CSS timing, and an effect it cannot read moves the edge
@@ -184,70 +175,75 @@ async function geometrySpanMs(
           return { zones: -1, ms: 0, unclassified: [] as string[] };
         }
 
-        if (computed.animationName !== "none") {
-          // Driven by the NAME list, because that decides how many animations run. CSS cycles a
-          // shorter timing list across every name, so iterating durations would stop at the first
-          // and miss the rest.
-          const names = computed.animationName.split(",");
-          const durations = ms(computed.animationDuration);
-          const delays = ms(computed.animationDelay);
-          // Each cycle moves the edge again, so the span is duration x ITERATIONS, not one pass.
-          // `infinite` parses as `Infinity`: an edge that never settles cannot be covered by any
-          // allowance, and the caller refuses on it.
-          //
-          // A count of ZERO is legitimate and means the animation never runs, so it is preserved
-          // rather than defaulted — `|| 1` would turn "does not move" into a full pass.
-          const counts = computed.animationIterationCount.split(",").map(v => {
-            const text = v.trim();
-            if (text === "infinite") return Infinity;
-            const parsed = Number.parseFloat(text);
-            return Number.isNaN(parsed) ? 1 : parsed;
-          });
-          names.forEach((name, i) => {
-            // `none` occupies a position in every timing list but starts no animation, so its
-            // tuple would charge movement that never happens.
-            if (name.trim() === "none") return;
-            longest = Math.max(
-              longest,
-              cycled(durations, i) * cycled(counts, i) + cycled(delays, i)
-            );
-          });
-        }
-
-        for (const pseudo of surfaces.slice(1)) {
-          if (pseudo.animationName !== "none") {
-            const pd = ms(pseudo.animationDuration);
-            const pdelay = ms(pseudo.animationDelay);
-            pseudo.animationName.split(",").forEach((name, i) => {
+        // The element and BOTH pseudo-elements, through one reader. A pseudo that animates or
+        // transitions an in-flow dimension moves an auto-sized zone's own edge, and its timing is
+        // in no computed longhand of the element. Asking the same function of each is what stops
+        // the pseudo path drifting from the element path — a second, shorter copy of this
+        // accounting is how iterations and transitions went missing from it.
+        for (const surface of [
+          getComputedStyle(el),
+          getComputedStyle(el, "::before"),
+          getComputedStyle(el, "::after"),
+        ]) {
+          if (surface.animationName !== "none") {
+            // Driven by the NAME list, because that decides how many animations run. CSS cycles a
+            // shorter timing list across every name, so iterating durations would stop at the
+            // first and miss the rest.
+            const names = surface.animationName.split(",");
+            const durations = ms(surface.animationDuration);
+            const delays = ms(surface.animationDelay);
+            // Each cycle moves the edge again, so the span is duration x ITERATIONS, not one
+            // pass. `infinite` parses as `Infinity`: an edge that never settles cannot be covered
+            // by any allowance, and the caller refuses on it. A count of ZERO is legitimate and
+            // means the animation never runs, so it survives rather than defaulting to a pass.
+            const counts = surface.animationIterationCount.split(",").map(v => {
+              const text = v.trim();
+              if (text === "infinite") return Infinity;
+              const parsed = Number.parseFloat(text);
+              return Number.isNaN(parsed) ? 1 : parsed;
+            });
+            names.forEach((name, i) => {
+              // `none` occupies a position in every timing list but starts no animation, so its
+              // tuple would charge movement that never happens.
               if (name.trim() === "none") return;
-              longest = Math.max(longest, cycled(pd, i) + cycled(pdelay, i));
+              longest = Math.max(
+                longest,
+                cycled(durations, i) * cycled(counts, i) + cycled(delays, i)
+              );
             });
           }
-        }
 
-        const properties = computed.transitionProperty
-          .split(",")
-          .map(v => v.trim());
-        const durations = ms(computed.transitionDuration);
-        const delays = ms(computed.transitionDelay);
-        const lastAll = properties.lastIndexOf("all");
-        const named = [
-          ...new Set(properties.filter(p => p !== "all" && p !== "none")),
-        ];
-        if (lastAll !== -1) {
-          longest = Math.max(
-            longest,
-            cycled(durations, lastAll) + cycled(delays, lastAll)
-          );
-        }
-        for (const property of named) {
-          if ((safe as string[]).includes(property)) continue;
-          if (!(geometry as string[]).includes(property)) {
-            unclassified.push(property);
-            continue;
+          const properties = surface.transitionProperty
+            .split(",")
+            .map(v => v.trim());
+          const durations = ms(surface.transitionDuration);
+          const delays = ms(surface.transitionDelay);
+          // `all` MATCHES every property, so it competes with each named entry rather than
+          // sitting beside it: with `height,all`, CSS gives height the `all` entry's timing
+          // because it comes later. Its own entry still counts, for the geometry properties
+          // nothing else names.
+          const lastAll = properties.lastIndexOf("all");
+          const named = [
+            ...new Set(properties.filter(p => p !== "all" && p !== "none")),
+          ];
+          if (lastAll !== -1) {
+            longest = Math.max(
+              longest,
+              cycled(durations, lastAll) + cycled(delays, lastAll)
+            );
           }
-          const i = Math.max(properties.lastIndexOf(property), lastAll);
-          longest = Math.max(longest, cycled(durations, i) + cycled(delays, i));
+          for (const property of named) {
+            if ((safe as string[]).includes(property)) continue;
+            if (!(geometry as string[]).includes(property)) {
+              unclassified.push(property);
+              continue;
+            }
+            const i = Math.max(properties.lastIndexOf(property), lastAll);
+            longest = Math.max(
+              longest,
+              cycled(durations, i) + cycled(delays, i)
+            );
+          }
         }
 
         for (const a of attrs) if (!had.includes(a)) el.removeAttribute(a);
@@ -673,6 +669,56 @@ test.describe("the drop-zone geometry the probe waits on", () => {
     expect(injected).toBe(true);
 
     expect(await geometrySpanMs(frame, null)).toBe(400);
+  });
+
+  test("a pseudo-element TRANSITION is charged like the element's own", async ({
+    page,
+    request,
+  }) => {
+    const frame = await canvas(page, request);
+
+    // The pseudo path used to handle animations only. A transition on ::before moves an
+    // auto-sized zone's edge exactly as an animation does.
+    const injected = await frame.evaluate(() => {
+      const sheet = (
+        document.getElementById("nx-pb-style") as HTMLStyleElement | null
+      )?.sheet;
+      sheet?.insertRule(
+        '.nx-pb-dropzone::after { content: ""; transition: height .35s }',
+        sheet.cssRules.length
+      );
+      return Boolean(sheet);
+    });
+    expect(injected).toBe(true);
+
+    expect(await geometrySpanMs(frame, null)).toBe(350);
+  });
+
+  test("a REPEATED pseudo-element animation is charged for every iteration", async ({
+    page,
+    request,
+  }) => {
+    const frame = await canvas(page, request);
+
+    // Iterations were applied to the element and not to its pseudo-elements, so a 100ms
+    // animation repeated three times reported 100ms - and an endless one read as finite.
+    const injected = await frame.evaluate(() => {
+      const sheet = (
+        document.getElementById("nx-pb-style") as HTMLStyleElement | null
+      )?.sheet;
+      sheet?.insertRule(
+        "@keyframes nx-ps-rep { from { height: 0 } to { height: 6px } }",
+        sheet.cssRules.length
+      );
+      sheet?.insertRule(
+        '.nx-pb-dropzone::before { content: ""; animation: nx-ps-rep .1s 3 }',
+        sheet.cssRules.length
+      );
+      return Boolean(sheet);
+    });
+    expect(injected).toBe(true);
+
+    expect(await geometrySpanMs(frame, null)).toBe(300);
   });
 
   test("it refuses rather than reporting a zero it cannot stand behind", async ({
