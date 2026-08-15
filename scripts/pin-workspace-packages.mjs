@@ -116,9 +116,14 @@ for (const [name, spec] of Object.entries(overrides)) {
 // package names: the manifests answer it, and a list would be a second answer that has to be kept
 // in step. `peerDependenciesMeta` is read alongside, so an OPTIONAL peer is never added - see the
 // note in `readPackedNames`.
-const peerOfPacked = new Set(
-  names.flatMap(name => packed[name].peers).filter(peer => names.includes(peer))
-);
+// Walked from what this manifest ACTUALLY installs, rather than unioned across every tarball.
+// A union adds a peer because SOME packed package wants it: a blank scaffold, which installs no
+// plugin, gained `@nextlyhq/plugin-sdk` because `plugin-form-builder` declares it. That is the
+// same failure as adding an optional adapter - it lets an accidental import compile in a project
+// whose real install would reject it, so the leg passes on code a user cannot run.
+//
+// Transitive, because a peer that gets added brings its own required peers with it, and stopping
+// at one level would leave the second unresolvable for exactly the reason the first was.
 const declared = name =>
   Boolean(
     manifest.dependencies?.[name] ||
@@ -126,8 +131,23 @@ const declared = name =>
       manifest.optionalDependencies?.[name]
   );
 
+const reachable = new Set(names.filter(declared));
+const frontier = [...reachable];
+const needed = new Set();
+while (frontier.length > 0) {
+  const name = frontier.pop();
+  for (const peer of packed[name]?.peers ?? []) {
+    // A peer that was not packed is left to the registry, which is where it would come from
+    // in a real install too.
+    if (!names.includes(peer)) continue;
+    if (reachable.has(peer) || needed.has(peer)) continue;
+    needed.add(peer);
+    frontier.push(peer);
+  }
+}
+
 let added = 0;
-for (const peer of peerOfPacked) {
+for (const peer of needed) {
   if (declared(peer)) continue;
   manifest.dependencies = { ...manifest.dependencies, [peer]: overrides[peer] };
   added += 1;
