@@ -129,6 +129,89 @@ describe("the lookup cache", () => {
   });
 });
 
+describe("the delegated output", () => {
+  // Stubbed links, so these assert the SHAPE this module emits rather than GitHub's availability.
+  const links = {
+    commit: "[`abc1234`](https://github.com/owner/repo/commit/abc1234)",
+    pull: "[#123](https://github.com/owner/repo/pull/123)",
+    user: "[@someone](https://github.com/someone)",
+  };
+
+  async function withInfo(run, override = links) {
+    const real = upstream.getInfo;
+    upstream.getInfo = async () => ({ links: override });
+    byCommit.clear();
+    try {
+      return await run();
+    } finally {
+      upstream.getInfo = real;
+    }
+  }
+
+  const releaseLine = (changeset, override) =>
+    withInfo(
+      () => changelog.getReleaseLine(changeset, "patch", { repo: "owner/repo" }),
+      override
+    );
+
+  it("carries the pull-request link, the commit link and the attribution", async () => {
+    // The three things this module exists to preserve. A regression that silently drops any of
+    // them produces a changelog that still looks plausible.
+    const line = await releaseLine({
+      summary: "a change",
+      commit: "abc1234abc1234abc1234abc1234abc1234abc1",
+    });
+    expect(line).toContain("[#123]");
+    expect(line).toContain("[`abc1234`]");
+    expect(line).toContain("Thanks [@someone]");
+    expect(line).toContain("a change");
+  });
+
+  it("omits the attribution when the lookup reports no user", async () => {
+    // The negative half: the assertion above must be satisfied by the user actually being there,
+    // not by the phrase appearing whatever the lookup returned.
+    const line = await releaseLine(
+      { summary: "a change", commit: "abc1234abc1234abc1234abc1234abc1234abc1" },
+      { commit: links.commit, pull: links.pull, user: null }
+    );
+    expect(line).not.toContain("Thanks");
+    expect(line).toContain("[#123]");
+  });
+
+  it("still produces a line when the changeset has no commit", async () => {
+    // A changeset added but not yet committed. It must still appear, without links.
+    const line = await releaseLine({ summary: "uncommitted" });
+    expect(line).toContain("uncommitted");
+  });
+
+  it("keeps a multiline summary's shape", async () => {
+    const line = await releaseLine({ summary: "first line\nsecond line" });
+    expect(line).toContain("first line");
+    expect(line).toContain("second line");
+  });
+
+  it("nests the updated packages under one dependency bullet", async () => {
+    // Markdown attaches a nested list to the preceding bullet, so the package versions must sit
+    // under a single `Updated dependencies` entry rather than trailing a run of empty ones.
+    const out = await withInfo(() =>
+      changelog.getDependencyReleaseLine(
+        [{ commit: "abc1234abc1234abc1234abc1234abc1234abc1" }],
+        [{ name: "@nextlyhq/ui", newVersion: "0.0.2-alpha.58" }],
+        { repo: "owner/repo" }
+      )
+    );
+    expect(out.split("\n").filter(line => line.startsWith("- "))).toHaveLength(1);
+    expect(out).toContain("  - @nextlyhq/ui@0.0.2-alpha.58");
+  });
+
+  it("returns nothing when no dependency moved", async () => {
+    const out = await withInfo(() =>
+      changelog.getDependencyReleaseLine([], [], { repo: "owner/repo" })
+    );
+    expect(out).toBe("");
+  });
+});
+
 describe("oneAtATime", () => {
   it("never runs two pieces of work concurrently", async () => {
     // THE property this module exists for. `apply-release-plan` starts every lookup in one
