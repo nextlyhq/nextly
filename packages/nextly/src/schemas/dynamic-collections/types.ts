@@ -194,8 +194,25 @@ export interface CollectionAdminConfig {
    */
   preview?: {
     /**
+     * Whether this collection previews at all, decided when the config was synced.
+     *
+     * A code-first collection declares its preview as a FUNCTION of the entry, and no column can
+     * hold one — so the admin cannot read the declaration back the way it reads every other
+     * option. What it needs from the declaration is only whether a preview button belongs on the
+     * page, and that is a boolean, so the boolean is what gets stored.
+     *
+     * Derived by `hasPreviewConfigured`, which is also what the resolver consults, so a stored
+     * `true` and a resolution that reports `notConfigured` cannot disagree. The URL itself is
+     * never stored: it depends on the entry, so it is resolved per request.
+     */
+    hasPreview?: boolean;
+
+    /**
      * URL template with field placeholders in {fieldName} format.
      * Used for UI-created collections where functions can't be stored.
+     *
+     * Read by the server when resolving a preview URL, never by the admin: interpolating it in
+     * the browser would be a second implementation of a question the resolver already answers.
      *
      * @example "/preview/{slug}", "/api/preview?id={id}"
      */

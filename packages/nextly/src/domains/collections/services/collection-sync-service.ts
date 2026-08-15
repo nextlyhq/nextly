@@ -66,6 +66,7 @@ import {
   type CodeFirstCollectionConfig,
   type SyncResult,
 } from "./collection-registry-service";
+import { hasPreviewConfigured } from "./preview-url-resolver";
 
 /**
  * Options for the sync operation.
@@ -259,12 +260,6 @@ export const ADMIN_KEYS_NOT_PERSISTED = {
    * authoring paths describe a collection in one place. See `resolveDescription`.
    */
   description: "stored on the collection row rather than under `admin`",
-  /**
-   * Carries `url`, a function of the entry, which no column can hold. Serving it needs the
-   * admin to ASK the server to evaluate it rather than to read it back, which is a change to
-   * how the panel obtains config and is deliberately not folded in here.
-   */
-  preview: "holds a function; needs server-side evaluation rather than storage",
 } as const;
 
 /**
@@ -308,6 +303,17 @@ export function toPersistedAdmin(admin: CollectionConfig["admin"]) {
       ? {
           defaultLimit: admin.pagination.defaultLimit,
           limits: admin.pagination.limits,
+        }
+      : undefined,
+    // The preview declaration minus the part no column can hold. `url` is a function of the
+    // entry, so what is stored is the ANSWER to the only question the admin asks of it — is
+    // there a preview here — plus the two presentation options the button needs to render.
+    // The URL itself depends on the entry and is resolved per request instead.
+    preview: admin.preview
+      ? {
+          hasPreview: hasPreviewConfigured(admin.preview),
+          label: admin.preview.label,
+          openInNewTab: admin.preview.openInNewTab,
         }
       : undefined,
     // Include custom components for plugins (e.g., custom Edit views)

@@ -54,6 +54,33 @@ describe("toPersistedAdmin", () => {
     });
   });
 
+  it("stores whether a preview exists, never the function that decides it", () => {
+    const persisted = toPersistedAdmin({
+      useAsTitle: "title",
+      preview: {
+        url: entry => `/posts/${String(entry.slug)}`,
+        label: "View post",
+        openInNewTab: false,
+      },
+    });
+
+    expect(persisted?.preview).toEqual({
+      hasPreview: true,
+      label: "View post",
+      openInNewTab: false,
+    });
+    // The function is the thing no column can hold. If it ever appears here the
+    // row write will either fail or silently store null, and the admin will be
+    // reading a key that cannot mean anything.
+    expect(persisted?.preview).not.toHaveProperty("url");
+  });
+
+  it("omits preview entirely when a collection declares none", () => {
+    // Distinct from hasPreview: false — nothing was declared, so there is no
+    // preview object to describe.
+    expect(toPersistedAdmin({ useAsTitle: "title" })?.preview).toBeUndefined();
+  });
+
   it("returns undefined when a collection declares no admin options", () => {
     expect(toPersistedAdmin(undefined)).toBeUndefined();
   });
