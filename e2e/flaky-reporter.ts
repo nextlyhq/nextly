@@ -78,9 +78,10 @@ function describePath(test: ObservedTestCase): string[] {
  * Derived from THIS module's own location rather than from `process.cwd()`,
  * which differs by how the suite was started: CI runs the filtered
  * `@nextlyhq/e2e` script, whose working directory is `e2e`, so stripping the
- * cwd yields `tests/...` — a path that does not exist from the repository
- * root, and GitHub anchors the annotation to nothing. This file sits in `e2e`,
- * so its own directory's parent is the root wherever the run began.
+ * cwd yields `tests/...` — a path that resolves from neither the repository
+ * root nor a checkout, leaving the summary's file column unopenable. This file
+ * sits in `e2e`, so its own directory's parent is the root wherever the run
+ * began.
  */
 export function repoRelative(absolute: string): string {
   const root = `${dirname(dirname(fileURLToPath(import.meta.url)))}/`;
