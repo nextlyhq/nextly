@@ -51,10 +51,10 @@ export type DropRefusal = DropReason | "into-itself";
  * What a drag onto a target amounts to. Four outcomes, because there are four questions and
  * collapsing any two of them loses the one thing the canvas needs.
  *
- * `null` used to stand for three of these at once, at six separate sites — a refused drop, a drop
- * that changes nothing, and a target this planner could not identify. A caller could therefore
- * never tell a rejection from a no-op, so a refusal had nowhere to put its reason and the canvas
- * had nothing to draw: the author released into dead space and the editor said nothing.
+ * A single absent value cannot carry three of them — a refused drop, a drop that changes nothing,
+ * and a target this planner cannot identify all reduce to "no action", and a caller holding that
+ * cannot tell a rejection from a no-op. A refusal then has nowhere to put its reason and the
+ * canvas has nothing to draw, so the author releases into dead space and the editor says nothing.
  */
 export type DropOutcome =
   /** Dispatch it. */
