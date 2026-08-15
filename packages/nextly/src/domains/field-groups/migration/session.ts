@@ -667,14 +667,18 @@ export async function withMigrationSession<T>(
 
     // 🔴 A lock table created before `expires_at` existed cannot answer the liveness read, and THIS
     // branch is forbidden from adding it — the upgrade ALTER runs only where DDL is allowed. So the
-    // lock is skipped rather than the caller failed: reported NOT HELD, warned about, and treated
-    // exactly as an absent table is treated four lines above.
+    // lock is taken through the `owner` column alone, which every version of this table has.
     //
-    // Skipping rather than refusing is the deliberate choice. This caller is a schema sync, not the
-    // migration; it was never the thing the exclusion existed to hold back, and refusing would
-    // break every `--no-auto-sync` install that has not yet run a migration under the new release.
-    // The row it would have contended for carries no expiry, so there is no live claim to respect.
-    // The remedy is a single migration run, which adds the column on the branch that may.
+    // Claiming rather than skipping, and rather than refusing outright. Skipping was the earlier
+    // answer and it left the sync running with NO exclusion at all, free to be overtaken by a
+    // migration that started during it. Refusing would break every `--no-auto-sync` install that has
+    // not yet run a migration under this release, which is a certain outage in place of a narrow
+    // risk. An owner-only claim is real exclusion and writes no DDL.
+    //
+    // What it gives up: no expiry means NO TAKEOVER, so an occupied legacy row refuses until an
+    // operator clears it and a killed process leaves a claim behind. That is the contract this lock
+    // had BEFORE `expires_at` existed rather than a new hazard, and the remedy is the same single
+    // migration run, which adds the column on the branch that may.
     if (!(await lockTableUnderstandsExpiry(adapter, dialect))) {
       // Describes the TABLE, which is established, rather than this session's outcome, which is not
       // known until the claim below either succeeds or is refused. Saying "holding it by owner
@@ -689,32 +693,20 @@ export async function withMigrationSession<T>(
         }
       );
 
-      const legacy = await acquireOwnerOnly(adapter, claim);
-      if (!legacy.ok) {
-        // Refused for the same reason the expiry-aware path refuses, and it is a REFUSAL rather
-        // than a skip: the row names a holder, and without an expiry there is no basis on which to
-        // call that holder dead. Proceeding would run the sync against storage a migration may be
-        // renaming, which is the outcome this whole module exists to prevent.
-        throw NextlyError.serviceUnavailable({
-          logMessage:
-            "field-group migration lock is held; another run holds a claim on a lock table that predates its expiry column",
-          logContext: {
-            reason: "migration lock is held elsewhere",
-            heldBy: legacy.heldBy,
-            table: MIGRATION_LOCK_TABLE,
-            label,
-          },
-        });
-      }
-
-      // 🔴 The interrupt handlers matter MORE on this path than on the expiry-aware one, and this is
-      // the branch that would most easily have gone without them.
+      // 🔴 Installed BEFORE the claim is attempted, not after it returns.
       //
-      // A terminated process never reaches the `finally` below, so a Ctrl+C would strand the claim —
-      // and this claim has NO EXPIRY to lapse. That does not merely block the next sync: it blocks
-      // the migration that would add `expires_at`, so the one action that permanently fixes the
-      // database is the action the stranded claim prevents. Watch mode documents Ctrl+C as the way
-      // to stop, so this is the ordinary path rather than an edge case.
+      // The database commits the claim inside `acquireOwnerOnly`; this process then has to be
+      // scheduled again before the next line runs. A signal landing in that gap would take the
+      // default termination path with the row already owned — and this claim has NO EXPIRY to lapse,
+      // so the strand does not merely block the next sync: it blocks the migration that would add
+      // `expires_at`, making the one action that permanently repairs the database the action the
+      // strand prevents. Watch mode documents Ctrl+C as the way to stop, so the window is on the
+      // ordinary path rather than an exotic one.
+      //
+      // Registering early is safe precisely because the release is OWNER-SCOPED: a signal arriving
+      // before the claim was taken clears nothing, because the row does not name this claim. There
+      // is no symmetric hazard to trade against, which is what makes "earlier" strictly better here
+      // rather than a different bet.
       let legacyReleasedOnSignal = false;
       const releaseLegacyOnSignal = (signal: NodeJS.Signals): void => {
         legacyReleasedOnSignal = true;
@@ -732,6 +724,30 @@ export async function withMigrationSession<T>(
       if (args.releaseOnInterrupt === true) {
         process.once("SIGINT", onLegacyInterrupt);
         process.once("SIGTERM", onLegacyTerminate);
+      }
+
+      const legacy = await acquireOwnerOnly(adapter, claim);
+      if (!legacy.ok) {
+        // Registered before the attempt, so they have to come off on the path that never held
+        // anything. Left on, they would outlive this call and a later interrupt would run a release
+        // for a claim this process does not own — harmless against the row, which is owner-scoped,
+        // and a leak of two process-wide listeners per refused sync.
+        process.off("SIGINT", onLegacyInterrupt);
+        process.off("SIGTERM", onLegacyTerminate);
+        // Refused for the same reason the expiry-aware path refuses, and it is a REFUSAL rather
+        // than a skip: the row names a holder, and without an expiry there is no basis on which to
+        // call that holder dead. Proceeding would run the sync against storage a migration may be
+        // renaming, which is the outcome this whole module exists to prevent.
+        throw NextlyError.serviceUnavailable({
+          logMessage:
+            "field-group migration lock is held; another run holds a claim on a lock table that predates its expiry column",
+          logContext: {
+            reason: "migration lock is held elsewhere",
+            heldBy: legacy.heldBy,
+            table: MIGRATION_LOCK_TABLE,
+            label,
+          },
+        });
       }
 
       // Held for real, so the caller is told so rather than being handed `not-held`. Nothing renews

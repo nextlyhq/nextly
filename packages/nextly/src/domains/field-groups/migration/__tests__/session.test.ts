@@ -1260,6 +1260,74 @@ describe("field-group migration session", () => {
   });
 
   /**
+   * 🔴 The window is between the database COMMITTING the claim and this process being scheduled
+   * again to register its handlers. A signal landing there takes the default termination path with
+   * the row already owned — and this claim has no expiry to lapse.
+   *
+   * Pinned as "the handlers are live BEFORE the claim statement runs", because that is the property
+   * that closes the window; the race itself cannot be exhibited once the fix removes it, and a test
+   * that waits for the gap would be waiting for something that no longer exists.
+   */
+  it("has its interrupt handlers installed before it claims the row", async () => {
+    let listenersAtClaim = 0;
+    const h = createAdapter({
+      heldBy: null,
+      stateReadError: Object.assign(
+        new Error('column "expires_at" does not exist'),
+        { code: "42703" }
+      ),
+      onStatement: kind => {
+        // Sampled AS the claim is interpreted, which is the instant the row becomes owned.
+        if (kind === "owner-claim") {
+          listenersAtClaim = process.listenerCount("SIGINT");
+        }
+      },
+    });
+
+    const before = process.listenerCount("SIGINT");
+    await withMigrationSession(
+      {
+        adapter: h.adapter,
+        dialect: "postgresql",
+        label: "sync-1",
+        requireExistingLock: true,
+        releaseOnInterrupt: true,
+      },
+      async () => undefined
+    );
+
+    // A handler was already listening when the row was claimed, and none leaked afterwards.
+    expect(listenersAtClaim).toBeGreaterThan(before);
+    expect(process.listenerCount("SIGINT")).toBe(before);
+  });
+
+  // Registered before the attempt, so the path that never held anything has to take them off again.
+  // Two process-wide listeners per refused sync is a slow leak in watch mode, which refuses often.
+  it("removes its interrupt handlers when the legacy claim is refused", async () => {
+    const h = createAdapter({
+      heldBy: "field-group-migration#other",
+      stateReadError: Object.assign(
+        new Error('column "expires_at" does not exist'),
+        { code: "42703" }
+      ),
+    });
+
+    const before = process.listenerCount("SIGINT");
+    await withMigrationSession(
+      {
+        adapter: h.adapter,
+        dialect: "postgresql",
+        label: "sync-1",
+        requireExistingLock: true,
+        releaseOnInterrupt: true,
+      },
+      async () => undefined
+    ).catch(() => undefined);
+
+    expect(process.listenerCount("SIGINT")).toBe(before);
+  });
+
+  /**
    * Completing is not the same as having been protected while completing. If an operator clears the
    * row — plausible on this path, since a claim with no expiry is exactly the thing an operator is
    * told to clear by hand — the exclusion this session promised was not held for the whole run.
