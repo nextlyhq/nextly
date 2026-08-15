@@ -831,8 +831,23 @@ export async function withMigrationSession<T>(
     // callback's value stand. Completing is not the same as having been protected while completing:
     // the exclusion promises no other run touched these tables meanwhile, and a claim that lapsed
     // or was taken over means that promise was not kept.
+    // Shared by both exits below: an attempt that is already in flight has to be allowed to finish
+    // before the row is touched, whichever way this session is ending.
+    const settle = async (
+      pending: Promise<unknown> | undefined
+    ): Promise<void> => {
+      if (pending !== undefined) await Promise.allSettled([pending]);
+    };
+
     if (!claimWasLost) {
       clearInterval(renewal);
+      // 🔴 The in-flight attempt is settled BEFORE the release, not after. `clearInterval` stops new
+      // attempts and does nothing about one already running, and that one is about to read the row
+      // this release is clearing — it would see an owner that is no longer this claim, report the
+      // claim disproved, and the completion guard below would then fail a migration that held its
+      // lock the whole way through and released it itself. A session must not be able to mistake
+      // its OWN shutdown for a contender.
+      await settle(outstandingRenewal);
       heldToTheEnd = await release(adapter, dialect, claim);
     } else {
       // 🔴 The row is still not freed HERE, for the reason above — but leaving it entirely alone is
@@ -859,9 +874,6 @@ export async function withMigrationSession<T>(
       // THEN wait for whichever attempt was already in flight, read after the stop so it is the
       // last one, because its UPDATE would otherwise land after the release and leave the row
       // extended with nobody working. Only then clear.
-      const settle = async (pending: Promise<unknown> | undefined) => {
-        if (pending !== undefined) await Promise.allSettled([pending]);
-      };
       void (async () => {
         await settle(work);
         clearInterval(renewal);

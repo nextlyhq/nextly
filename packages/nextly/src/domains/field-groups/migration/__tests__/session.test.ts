@@ -1094,6 +1094,58 @@ describe("field-group migration session", () => {
     }
   });
 
+  // A renewal already in flight when the callback finishes outlives `clearInterval`, which only
+  // stops NEW attempts. That attempt is about to read the very row the release is clearing — and a
+  // session that reads its own shutdown as a contender's takeover would fail a migration that held
+  // its lock the whole way through and released it itself. The worst kind of false alarm: it fires
+  // on the healthy path.
+  it("does not mistake its own release for a takeover", async () => {
+    vi.useFakeTimers();
+    try {
+      let releaseRenewal: (() => void) | undefined;
+      const renewalGate = new Promise<void>(resolve => {
+        releaseRenewal = resolve;
+      });
+      let renewalsSeen = 0;
+
+      const h = createAdapter({
+        heldBy: null,
+        onTransaction: async seq => {
+          // 1 is the acquisition. The next transaction is the renewal, which is held open so it is
+          // still outstanding when the callback returns.
+          if (seq === 2) {
+            renewalsSeen += 1;
+            await renewalGate;
+          }
+        },
+      });
+
+      const run = withMigrationSession(
+        { adapter: h.adapter, dialect: "postgresql", label: "run-1" },
+        async () => {
+          // Start the renewal, then finish the work without waiting for it.
+          vi.advanceTimersByTime(LOCK_RENEW_INTERVAL_MS);
+          return "migrated";
+        }
+      );
+
+      // Let the release path reach its wait, then let the queued renewal complete.
+      await vi.advanceTimersByTimeAsync(0);
+      releaseRenewal?.();
+
+      // 🔴 The migration SUCCEEDS. Without the in-flight settle it rejects with
+      // SERVICE_UNAVAILABLE, having done nothing wrong.
+      await expect(run).resolves.toBe("migrated");
+
+      // Positive controls: the renewal really was started and held (so the interleaving happened),
+      // and the row was released normally rather than left behind.
+      expect(renewalsSeen).toBe(1);
+      expect(h.owner()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // Declaring the loss tells the CALLER it is unprotected. It does nothing about the callback,
   // which nothing here can stop and which is still writing — so giving up on renewal at that moment
   // guarantees the row lapses under work that never stopped. A loss declared because renewals could
