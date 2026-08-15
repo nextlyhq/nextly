@@ -1294,6 +1294,31 @@ async function buildAdminMeta(): Promise<{
   const plugins = buildPluginAdminMeta(config?.plugins ?? [], pluginOverrides);
   if (plugins.length > 0) {
     workspace.plugins = plugins;
+
+    // A plugin may contribute components to the SIGN-IN screen, and those
+    // read their own `clientConfig` through the plugin SDK before a session
+    // exists. That channel is public by declaration — it never holds secrets
+    // — so it is projected here rather than withheld.
+    //
+    // Built by naming the two fields it carries rather than by removing the
+    // rest: a contribution field added later is then absent from this
+    // projection by construction, which is the same reason the public
+    // payload is a separate half rather than a filtered copy of the whole.
+    //
+    // Under its OWN key, never `plugins`. The client merges the two halves,
+    // so sharing a key would let these entries stand in for the installed
+    // list before the gated request answers — and a reader that finds a
+    // plugin there has already skipped the checks that would have told it
+    // the list is not available yet.
+    const publicPlugins = plugins
+      .filter(plugin => plugin.clientConfig !== undefined)
+      .map(plugin => ({
+        name: plugin.name,
+        clientConfig: plugin.clientConfig,
+      }));
+    if (publicPlugins.length > 0) {
+      branding.pluginClientConfigs = publicPlugins;
+    }
   }
 
   // Override config branding with DB values when available
@@ -1364,15 +1389,15 @@ function withSessionCacheHeaders(response: Response): Response {
  * Public — no authentication required, because the sign-in screen renders
  * before a session exists.
  *
- * Still carries the workspace half, which `GET /api/admin-meta/workspace`
- * now also serves. The duplication is deliberate and temporary: the admin
- * reads these fields from here until it is migrated to the authenticated
- * route, and removing them before then would blank the sidebar rather than
- * close anything.
+ * Branding ONLY. What an anonymous caller may read is decided by which half
+ * of `buildAdminMeta` is serialized here, rather than by a list of fields to
+ * withhold — so a contribution field added later is private by default. A
+ * filter would have to be extended by whoever adds it, and plugin authors
+ * choose those fields rather than this package.
  */
 async function handleAdminMetaRequest(): Promise<Response> {
-  const { branding, workspace } = await buildAdminMeta();
-  return respondAdminMeta({ ...branding, ...workspace });
+  const { branding } = await buildAdminMeta();
+  return respondAdminMeta(branding);
 }
 
 /**

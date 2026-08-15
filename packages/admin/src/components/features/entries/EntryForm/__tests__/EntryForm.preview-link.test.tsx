@@ -1,0 +1,131 @@
+/**
+ * The join between `EntryForm` and its header for the shareable link.
+ *
+ * The two halves are covered separately — `entry-address.test.tsx` pins the
+ * locale outcomes, `EntrySystemHeader.preview.test.tsx` pins what the header
+ * renders given props — and neither sees the conjunction that consumes them.
+ * Measured: removing the `unresolved` guard from `EntryForm` leaves all 126
+ * tests in this directory green, because the helper is unchanged when its
+ * caller stops consulting it. That is the same shape as the defect this whole
+ * change repairs, where every layer was built and nothing joined them.
+ *
+ * So these assert the PROPS the header actually receives, rather than
+ * reconstructing the decision here: a hand-copied condition keeps passing
+ * after someone edits the line it exists to watch.
+ */
+import type { ReactNode } from "react";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+import { render } from "@admin/__tests__/utils";
+
+const { headerProps, mintArgs, localization, settings } = vi.hoisted(() => ({
+  headerProps: vi.fn(),
+  mintArgs: vi.fn(),
+  localization: { current: { defaultLocale: "en" } },
+  settings: { current: { siteUrl: "https://site.example" } },
+}));
+
+vi.mock("../EntrySystemHeader", () => ({
+  EntrySystemHeader: (props: Record<string, unknown>) => {
+    headerProps(props);
+    return null;
+  },
+}));
+
+vi.mock("@admin/hooks/useLocalization", () => ({
+  useLocalization: () => ({
+    enabled: true,
+    locales: [],
+    defaultLocale: localization.current.defaultLocale,
+    fallback: true,
+    getLocale: () => undefined,
+  }),
+}));
+
+vi.mock("@admin/hooks/queries/useGeneralSettings", () => ({
+  useGeneralSettings: () => ({ data: settings.current }),
+}));
+
+vi.mock("@admin/hooks/usePreviewLink", () => ({
+  DEFAULT_PREVIEW_ROUTE: "/api/preview",
+  buildPreviewUrl: () => "https://site.example/api/preview?token=t",
+  usePreviewLink: (args: unknown) => {
+    mintArgs(args);
+    return { mutate: vi.fn(), isPending: false };
+  },
+}));
+
+import { EntryForm } from "../EntryForm";
+
+/** A localized collection with one text field, the minimum this form needs. */
+const collection = {
+  name: "posts",
+  label: "Posts",
+  localized: true,
+  fields: [{ name: "title", type: "text", label: "Title" }],
+} as never;
+
+const entry = { id: "e1", title: "Hello" } as never;
+
+function renderForm(children?: ReactNode) {
+  return render(
+    <>
+      <EntryForm collection={collection} entry={entry} mode="edit" />
+      {children}
+    </>
+  );
+}
+
+/** The most recent props the header was rendered with. */
+function lastHeaderProps(): Record<string, unknown> {
+  const calls = headerProps.mock.calls;
+  expect(calls.length, "the header was never rendered").toBeGreaterThan(0);
+  return calls[calls.length - 1]?.[0] as Record<string, unknown>;
+}
+
+describe("EntryForm wires the shareable link into its header", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localization.current = { defaultLocale: "en" };
+    settings.current = { siteUrl: "https://site.example" };
+  });
+
+  it("offers the link once the language resolves", () => {
+    renderForm();
+
+    expect(lastHeaderProps().isLinkAvailable).toBe(true);
+  });
+
+  it("withholds the link while the default locale is still blank", () => {
+    // `useLocalization` reports `""` until the config loads. Minting then is a
+    // 400, and dropping the claim to avoid that is a token covering every
+    // translation — so the control is not offered at all.
+    localization.current = { defaultLocale: "" };
+    renderForm();
+
+    expect(lastHeaderProps().isLinkAvailable).toBe(false);
+  });
+
+  it("mints against the resolved language, never the editor's sentinel", () => {
+    // The default language is `locale === undefined` in the editor, and an
+    // absent locale claim authorizes every locale.
+    renderForm();
+
+    expect(mintArgs).toHaveBeenCalledWith(
+      expect.objectContaining({
+        collection: "posts",
+        entryId: "e1",
+        locale: "en",
+        siteUrl: "https://site.example",
+      })
+    );
+  });
+
+  it("hands the header a handler rather than only a flag", () => {
+    // `PreviewActions` requires both; a flag with no handler renders nothing,
+    // which would look exactly like the feature being unavailable.
+    renderForm();
+
+    expect(typeof lastHeaderProps().onCopyLink).toBe("function");
+  });
+});

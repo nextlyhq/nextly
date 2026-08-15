@@ -33,16 +33,18 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { readRequestLocalized } from "../../../dispatcher/helpers/request-localized";
-import { NextlyError } from "../../../errors";
+import { NEXTLY_ERROR_STATUS, NextlyError } from "../../../errors";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type {
   DynamicFieldGroupInsert,
   DynamicFieldGroupRecord,
+  FieldGroupMigrationStatus as SchemaFieldGroupMigrationStatus,
 } from "../../../schemas/dynamic-field-groups/types";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { Logger } from "../../../shared/types";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
 
+import { assertNotDiverged } from "./assert-not-diverged";
 import type { FieldGroupRegistryService } from "./field-group-registry-service";
 
 /**
@@ -56,8 +58,23 @@ import type { FieldGroupRegistryService } from "./field-group-registry-service";
  * same modules, and a static import from a registration module quietly undoes that work.
  */
 
-/** How far a schema change got. The registry stores this and the admin reads it back. */
-export type FieldGroupMigrationStatus = "pending" | "applied" | "failed";
+/**
+ * How far a schema change got: the subset of migration statuses THIS SERVICE writes.
+ *
+ * 🔴 Narrower than the schema's set, and DERIVED from it rather than restated. `Extract` keeps the
+ * relationship a compiler can check: a member renamed or removed from the canonical union stops
+ * compiling here, where a hand-written copy would go on accepting a value the column no longer has.
+ * That is the rule this file already follows elsewhere — a narrower view is derived from the richer
+ * one, never computed alongside it.
+ *
+ * `diverged` is in the set because the tables were changed and the row recording it was not. It is
+ * distinct from `failed` because the two call for OPPOSITE actions: `failed` means the change did
+ * not happen and retrying is the repair; `diverged` means half of it did and retrying compounds it.
+ */
+export type FieldGroupMigrationStatus = Extract<
+  SchemaFieldGroupMigrationStatus,
+  "pending" | "applied" | "failed" | "diverged"
+>;
 
 /**
  * The registry row to create, minus the one field this service owns.
@@ -286,6 +303,36 @@ export class FieldGroupMetadataService {
     // existed would be a guard that can never fire, and a guard that cannot fire reads as coverage
     // while proving nothing.
     const existing = await this.registry.getComponent(input.slug);
+    // 🔴 A diverged field group is REFUSED for any edit that would move storage again.
+    //
+    // Recording the state is only half of it. Without this, an editor opened after the mark reads
+    // the bumped `schema_version` together with the STALE stored fields, satisfies
+    // `assertSchemaVersionMatch`, and plans its next transition from a shape the tables no longer
+    // have — the exact retry the state exists to declare unsafe. A status nothing enforces is a
+    // note, not a control.
+    //
+    // Metadata-only edits are deliberately still allowed: a label or a description moves no
+    // storage, and locking an operator out of renaming the thing they are trying to reconcile
+    // would make the state harder to get out of rather than safer.
+    // Only edits that MOVE STORAGE are refused; a label or description change is still allowed, so
+    // an operator is never locked out of renaming the thing they are trying to reconcile.
+    //
+    // 🔴 Localization is judged by whether it TOGGLES, not by whether it was sent. Presence is a
+    // proxy for "this moves storage" and it is wrong in the direction that matters here: a
+    // full-form client resends every field it renders, so `{ label, localized: false }` against a
+    // group that is already not localized asks for no transition at all and would be refused —
+    // locking an operator out of the metadata edits this contract explicitly permits, on the one
+    // path they are using to get out of the state.
+    //
+    // `fields` stays a presence check on purpose. Deciding whether a resent field array is
+    // identical is a deep comparison this has no reason to make, and refusing a no-op edit is the
+    // safe direction where refusing a rename is not.
+    const wasLocalized = existing.localized === true;
+    const togglesLocalization =
+      input.localized !== undefined && input.localized !== wasLocalized;
+    if (input.fields !== undefined || togglesLocalization) {
+      assertNotDiverged(input.slug, existing);
+    }
     if (existing.locked && input.source !== "code") {
       throw NextlyError.forbidden({
         logContext: {
@@ -302,7 +349,6 @@ export class FieldGroupMetadataService {
       assertValidPluginFieldOptions(input.fields);
     }
 
-    const wasLocalized = existing.localized === true;
     const localized = requestedLocalized ?? wasLocalized;
     const fields = (input.fields ??
       existing.fields) as unknown as FieldDefinition[];
@@ -337,39 +383,102 @@ export class FieldGroupMetadataService {
     // enabling seeds the companion from the main table and drops those columns, disabling restores
     // and archives them. A save that skipped that would persist the flag while the content stayed
     // where the runtime no longer looks for it.
-    if (input.fields !== undefined || localized !== wasLocalized) {
-      await this.reconcileCompanion({
+    // 🔴 What the reconciler DID, not what the request implied. A field-set change on a group that
+    // was and remains non-localized reaches the reconciler and moves nothing — this path emits no
+    // main-table DDL at all — so inferring a physical transition from the request shape would mark a
+    // row diverged and tell a caller not to retry an edit that changed nothing.
+    const movedSchema =
+      (input.fields !== undefined || localized !== wasLocalized) &&
+      (await this.reconcileCompanion({
         existing,
         fields,
         localized,
         wasLocalized,
-      });
-    }
+      }));
 
     // 3. RECORD, after the physical change succeeded.
-    const record = await this.registry.updateComponent(
-      input.slug,
-      {
-        ...(input.label !== undefined ? { label: input.label } : {}),
-        ...(input.description !== undefined
-          ? { description: input.description }
-          : {}),
-        ...(input.admin !== undefined ? { admin: input.admin } : {}),
-        ...(requestedLocalized !== undefined
-          ? { localized: requestedLocalized }
-          : {}),
-        ...(input.fields !== undefined
-          ? {
-              fields:
-                input.fields as unknown as DynamicFieldGroupInsert["fields"],
-              schemaHash: await this.hashFields(input.fields),
-            }
-          : {}),
-      },
-      { source: input.source ?? "ui" }
-    );
+    try {
+      const record = await this.registry.updateComponent(
+        input.slug,
+        {
+          ...(input.label !== undefined ? { label: input.label } : {}),
+          ...(input.description !== undefined
+            ? { description: input.description }
+            : {}),
+          ...(input.admin !== undefined ? { admin: input.admin } : {}),
+          ...(requestedLocalized !== undefined
+            ? { localized: requestedLocalized }
+            : {}),
+          ...(input.fields !== undefined
+            ? {
+                fields:
+                  input.fields as unknown as DynamicFieldGroupInsert["fields"],
+                schemaHash: await this.hashFields(input.fields),
+              }
+            : {}),
+        },
+        { source: input.source ?? "ui" }
+      );
 
-    return { record };
+      return { record };
+    } catch (error) {
+      // Only when the tables actually MOVED. A metadata-only edit that fails to write has changed
+      // nothing, so the row still describes the database correctly and there is no divergence to
+      // record — marking it `failed` there would invent a repair for a state that is fine.
+      if (!movedSchema) throw error;
+      // 🔴 A throw from the registry does NOT mean the row went unwritten.
+      //
+      // MySQL has no `RETURNING`, so `DrizzleAdapter.update` runs the UPDATE and then SELECTs the
+      // row back on the same executor. A failure in that second query raises out of a write that
+      // already committed — and marking a fully synchronized row as diverged, bumping its version
+      // again and telling the caller its definition is stale would all be false.
+      //
+      // Asked of the DATABASE rather than inferred from the error, because no error shape
+      // distinguishes the two: the read-back and the write raise through the same path.
+      const settled = await this.readBackSettledRow(input, requestedLocalized);
+      if (settled) {
+        this.logger.warn(
+          "[FieldGroups] The registry write raised but the row already carries the change; the error was in reading it back.",
+          { slug: input.slug }
+        );
+        return { record: settled };
+      }
+      // Returns `never`, so this is a raise rather than a value — written as a return so the
+      // compiler, not a comment, is what establishes that nothing falls out of this method.
+      return await this.recordUnrecordedTransition(input.slug, existing, error);
+    }
+  }
+
+  /**
+   * Re-read the row and answer whether it ALREADY carries this edit.
+   *
+   * Only the properties this edit actually sent are compared, and only the ones that decide the
+   * physical shape: this is reached exclusively when the tables moved, which means `fields`,
+   * `localized`, or both were present. Comparing anything else would let a concurrent label edit
+   * decide whether a schema transition was recorded.
+   *
+   * `null` on any doubt — including a re-read that itself fails, which is the likely case when the
+   * database is the reason the first write raised. Doubt has to resolve to "not settled": treating
+   * an unreadable row as written would swallow a real divergence, which is the failure this whole
+   * path exists to surface.
+   */
+  private async readBackSettledRow(
+    input: UpdateFieldGroupInput,
+    requestedLocalized: boolean | undefined
+  ): Promise<DynamicFieldGroupRecord | null> {
+    try {
+      const current = await this.registry.getComponent(input.slug);
+      if (input.fields !== undefined) {
+        if (current.schemaHash !== (await this.hashFields(input.fields)))
+          return null;
+      }
+      if (requestedLocalized !== undefined) {
+        if ((current.localized === true) !== requestedLocalized) return null;
+      }
+      return current;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -644,6 +753,87 @@ export class FieldGroupMetadataService {
     });
   }
 
+  /**
+   * The registry write failed AFTER the companion transition committed. Say so, and mark the row.
+   *
+   * 🔴 The two halves of this operation cannot be made atomic — MySQL commits DDL implicitly, which
+   * is why this service says so at the top of the file — so this is the state the ordering leaves
+   * when the second half fails. The tables have the new shape and the row still describes the old
+   * one.
+   *
+   * Raising the registry's own error would be worse than useless here: it reads as "the write did
+   * not happen", which invites a retry, and a retry re-derives `wasLocalized` from the row that
+   * still says the old value. For an enable that means seeding the companion a second time from
+   * main-table columns the first attempt already dropped. The caller has to be told the physical
+   * change stands.
+   *
+   * The status write is BEST EFFORT and its failure is not raised. It is a narrow single-column
+   * update, so it survives the failures that realistically break the full write — a rejected field
+   * list, an oversized label, a value the driver cannot encode — and if the database is genuinely
+   * unreachable it fails too, which is why the log carries everything needed to find the field
+   * group without it.
+   */
+  private async recordUnrecordedTransition(
+    slug: string,
+    existing: DynamicFieldGroupRecord,
+    cause: unknown
+  ): Promise<never> {
+    this.logger.error(
+      "[FieldGroups] Schema transition committed but its registry row was not written.",
+      {
+        slug,
+        tableName: existing.tableName,
+        wasLocalized: existing.localized === true,
+        error: cause instanceof Error ? cause.message : String(cause),
+      }
+    );
+
+    let marked = false;
+    try {
+      await this.registry.updateComponent(
+        slug,
+        { migrationStatus: "diverged" },
+        // The version advances even though this write carries no new field set: the TABLES moved,
+        // and an editor loaded before that is now describing a shape that is gone. Leaving the
+        // version alone would let such a preview pass `assertSchemaVersionMatch` and apply its
+        // stale resolutions against the tables this transition already changed.
+        { source: "code", invalidateSchemaVersion: true }
+      );
+      marked = true;
+    } catch (markError) {
+      this.logger.error(
+        "[FieldGroups] Could not mark the field group as diverged either.",
+        {
+          slug,
+          error:
+            markError instanceof Error ? markError.message : String(markError),
+        }
+      );
+    }
+
+    // Constructed rather than `NextlyError.internal`, which fixes the public message to "An
+    // unexpected error occurred." That is the one thing this caller must NOT be told: the whole
+    // point is that the edit half-happened and repeating it is harmful. The status still comes from
+    // the central mapping rather than a literal, so this cannot drift from the code it carries.
+    //
+    // 🔴 The message distinguishes whether the mark was PERSISTED. Claiming a durable record that
+    // does not exist is worse than admitting the log is the only trace: the first sends an operator
+    // looking at a row that reads normal, the second tells them where to look.
+    throw new NextlyError({
+      code: "INTERNAL_ERROR",
+      statusCode: NEXTLY_ERROR_STATUS.INTERNAL_ERROR,
+      publicMessage: marked
+        ? `The field group's tables were changed, but recording the change failed. "${slug}" is marked as diverged and its stored definition still describes the previous shape. Do not retry the same edit: check the server logs and reconcile the field group before editing it again.`
+        : `The field group's tables were changed, but neither the change nor the failure could be recorded. "${slug}" still reads as though nothing happened, and the only trace is the server log. Do not retry the same edit: reconcile the field group against its tables before editing it again.`,
+      cause: cause instanceof Error ? cause : undefined,
+      logContext: {
+        reason: "registry write failed after committed schema transition",
+        slug,
+        tableName: existing.tableName,
+      },
+    });
+  }
+
   /** The stored hash for a field set, from the one implementation the whole pipeline uses. */
   private async hashFields(fields: FieldDefinition[]): Promise<string> {
     const { calculateSchemaHash } = await import(
@@ -670,9 +860,11 @@ export class FieldGroupMetadataService {
     fields: FieldDefinition[];
     localized: boolean;
     wasLocalized: boolean;
-  }): Promise<void> {
+    // Whether DDL actually ran, carried up from the reconciler rather than re-derived. With no
+    // adapter registered nothing runs at all, which is a supported configuration and reports false.
+  }): Promise<boolean> {
     const adapter = this.adapter;
-    if (!adapter) return;
+    if (!adapter) return false;
 
     const {
       reconcileComponentCompanion,
@@ -690,7 +882,7 @@ export class FieldGroupMetadataService {
       args.existing.tableName
     );
 
-    await reconcileComponentCompanion({
+    const moved = await reconcileComponentCompanion({
       slug: args.existing.slug,
       tableName: args.existing.tableName,
       oldFields: args.existing.fields as unknown as FieldDefinition[],
@@ -711,6 +903,8 @@ export class FieldGroupMetadataService {
       typeColumn,
       args.localized
     );
+
+    return moved;
   }
 
   /**

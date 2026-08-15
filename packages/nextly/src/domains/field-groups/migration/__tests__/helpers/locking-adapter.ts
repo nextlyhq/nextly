@@ -15,7 +15,7 @@ import type { SQL } from "drizzle-orm";
 
 import {
   createLockRow,
-  interpretLockStatement,
+  createLockStatementReader,
   type LockClock,
 } from "./migration-lock-double";
 
@@ -38,6 +38,15 @@ export interface LockingAdapterOptions {
   /** The database's clock, so a suite can let a seeded claim lapse, and that claim's expiry. */
   clock?: LockClock;
   expiresAt?: number | null;
+  /**
+   * Thrown by the liveness read only, leaving every other statement working.
+   *
+   * Models a lock table created before `expires_at` existed: the row is there and seeds fine, and
+   * only the query selecting that column fails. Applied on the transaction path as well as the
+   * adapter one, because a column that is absent is absent for every reader — a fixture failing
+   * just one of them lets acquisition succeed and certifies the outcome the code exists to prevent.
+   */
+  stateReadError?: unknown;
 }
 
 /** The probe {@link createLockingAdapter} has to answer honestly. */
@@ -53,8 +62,7 @@ export function createLockingAdapter(options: LockingAdapterOptions = {}) {
   // The lock's own semantics live in one place, shared with the surface that adds them to other
   // suites' doubles. Two interpreters of the same statements would agree the day they were written
   // and drift silently afterwards, because each looks correct read on its own.
-  const interpret = (statement: SQL): Record<string, unknown>[] =>
-    interpretLockStatement(lock, statement);
+  const interpret = createLockStatementReader(lock, options);
 
   const adapter = {
     dialect: "postgresql" as const,

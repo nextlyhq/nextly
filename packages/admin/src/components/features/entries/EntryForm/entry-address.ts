@@ -259,3 +259,88 @@ export function useHasPublicAddress({
   if (publishedOnRecord) seenRef.current.add(addressKey);
   return liveNow || publishedOnRecord || seenRef.current.has(addressKey);
 }
+
+/**
+ * The locale a shareable preview link should be scoped to.
+ *
+ * The editor spells the default language as `locale === undefined`, and the
+ * mint route reads a token with no locale claim as authorizing EVERY locale
+ * (`previewTokenCovers` returns true whenever the scope names none). Passing
+ * the editor's sentinel straight through would therefore turn a link to one
+ * language's draft into a grant covering every unpublished translation of the
+ * entry, while a link minted from any NON-default language is correctly
+ * restricted — the widening applies to exactly the language most links are
+ * shared from.
+ *
+ * So the sentinel is resolved here rather than at the call site: it is one
+ * question with one answer, and a second caller deriving it again is how the
+ * two drift apart.
+ *
+ * A non-localized collection is the one case where an unscoped token is right.
+ * It has no locale to name, no translations to leak, and scoping the token to
+ * an invented locale would refuse a link that should work.
+ */
+export type PreviewLinkLocale =
+  /** Nothing to name: a non-localized collection has one document. */
+  | { kind: "unscoped" }
+  /** The language the link opens. */
+  | { kind: "scoped"; locale: string }
+  /** Localized, but which language is not known yet. */
+  | { kind: "unresolved" };
+
+export function previewLinkLocale({
+  localized,
+  locale,
+  defaultLocale,
+}: {
+  localized: boolean;
+  locale: string | undefined;
+  defaultLocale: string | undefined;
+}): PreviewLinkLocale {
+  if (!localized) return { kind: "unscoped" };
+  const resolved = locale ?? defaultLocale;
+  // `useLocalization` reports `cfg?.defaultLocale ?? ""`, so a config that has
+  // not loaded yet reads as a blank language rather than a missing one. Blank
+  // is not a locale: the mint route requires a non-empty claim and answers 400,
+  // and dropping the claim instead would mint the all-locales token this
+  // function exists to prevent. Neither is a link, so neither is offered.
+  if (resolved === undefined || resolved.trim().length === 0) {
+    return { kind: "unresolved" };
+  }
+  return { kind: "scoped", locale: resolved };
+}
+
+/**
+ * The site a shareable preview link should point at.
+ *
+ * `buildPreviewUrl` emits a site-relative path when given no site, and a
+ * relative path is not a link: pasted into email or chat it identifies nothing,
+ * and a recipient whose client resolves it does so against their own host. A
+ * control labelled "Copy shareable link" has to put something shareable on the
+ * clipboard, so the value is made absolute here.
+ *
+ * The configured site wins because it is the only source that knows where the
+ * content is actually served — an admin panel mounted on a different host from
+ * the site would otherwise hand out links to itself. A blank setting is treated
+ * as absent rather than as an empty base, since the settings form stores `""`
+ * for a field the user cleared.
+ *
+ * The browser's own origin is the fallback rather than a failure: the common
+ * deployment serves the admin and the site together, so it is usually right,
+ * and it is always better than a relative path. Returning `undefined` is the
+ * last resort for a caller with no origin at all, which leaves the existing
+ * relative behaviour rather than inventing a host.
+ */
+export function previewLinkSiteUrl({
+  configured,
+  origin,
+}: {
+  configured: string | null | undefined;
+  origin: string | undefined;
+}): string | undefined {
+  const trimmed = configured?.trim();
+  if (trimmed !== undefined && trimmed.length > 0) return trimmed;
+  const fallback = origin?.trim();
+  if (fallback !== undefined && fallback.length > 0) return fallback;
+  return undefined;
+}

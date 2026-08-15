@@ -34,6 +34,7 @@ import { sql, type SQL } from "drizzle-orm";
 import { safeCode } from "../../../database/errors";
 import { NextlyError } from "../../../errors/nextly-error";
 import { fieldGroupLockColumnTypes } from "../../../schemas/field-group-lock";
+import type { Logger } from "../../../shared/types";
 
 /** Dialects the migration runs on. */
 export type MigrationDialect = "postgresql" | "mysql" | "sqlite";
@@ -273,6 +274,25 @@ async function readLockStateOutsideTransaction(
   return toLockState(rows[0]);
 }
 
+/**
+ * Whether this lock table is new enough to answer a liveness read.
+ *
+ * Issues the REAL state query rather than inspecting a catalogue, so it cannot drift from the
+ * statement acquisition is about to run: if this one succeeds, that one will too.
+ */
+async function lockTableUnderstandsExpiry(
+  adapter: DrizzleAdapter,
+  dialect: MigrationDialect
+): Promise<boolean> {
+  try {
+    await readLockStateOutsideTransaction(adapter, dialect);
+    return true;
+  } catch (error) {
+    if (isMissingColumn(error, dialect)) return false;
+    throw error;
+  }
+}
+
 /** Whether the single lock row is present, read outside any transaction. */
 async function lockRowExists(adapter: DrizzleAdapter): Promise<boolean> {
   const rows = await adapter.queryStatement(
@@ -444,6 +464,40 @@ export function getMigrationLockUpgradeDdl(dialect: MigrationDialect): string {
 }
 
 /**
+ * Whether a statement failed because `expires_at` is not there.
+ *
+ * A lock table created before that column existed answers every liveness read this way. Classified
+ * by the driver's own code at the specificity the claim needs, exactly as {@link isDuplicateColumn}
+ * and {@link isMissingTable} are — a message match would also catch a typo'd column name, which is
+ * a programming error that must NOT be quietly tolerated.
+ */
+function isMissingColumn(error: unknown, dialect: MigrationDialect): boolean {
+  let link: unknown = error;
+  for (
+    let depth = 0;
+    depth < 5 && link !== null && link !== undefined;
+    depth++
+  ) {
+    const code = safeCode(link);
+    const message = link instanceof Error ? link.message : "";
+
+    // 42703 undefined_column.
+    if (dialect === "postgresql" && code === "42703") return true;
+    if (
+      dialect === "mysql" &&
+      (code === "ER_BAD_FIELD_ERROR" || code === "1054" || code === "42S22")
+    ) {
+      return true;
+    }
+    // SQLite has no distinct code, and the text is unambiguous for this case.
+    if (dialect === "sqlite" && /no such column/i.test(message)) return true;
+
+    link = (link as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+/**
  * Whether a failed ALTER means the column is already there.
  *
  * Classified by the driver's own code where one exists, at the specificity the claim needs — the
@@ -505,6 +559,8 @@ export async function withMigrationSession<T>(
      * DML but not DDL would be refused outright.
      */
     requireExistingLock?: boolean;
+    /** Where a skipped lock is reported. Absent means the skip is silent, which is a caller's choice. */
+    logger?: Logger;
     /**
      * Release the claim if the process is interrupted.
      *
@@ -608,6 +664,164 @@ export async function withMigrationSession<T>(
       return fn({ ...session, lock: { kind: "not-held" } });
     }
     await seedLockRow(adapter);
+
+    // 🔴 A lock table created before `expires_at` existed cannot answer the liveness read, and THIS
+    // branch is forbidden from adding it — the upgrade ALTER runs only where DDL is allowed. So the
+    // lock is taken through the `owner` column alone, which every version of this table has.
+    //
+    // Claiming rather than skipping, and rather than refusing outright. Skipping was the earlier
+    // answer and it left the sync running with NO exclusion at all, free to be overtaken by a
+    // migration that started during it. Refusing would break every `--no-auto-sync` install that has
+    // not yet run a migration under this release, which is a certain outage in place of a narrow
+    // risk. An owner-only claim is real exclusion and writes no DDL.
+    //
+    // What it gives up: no expiry means NO TAKEOVER, so an occupied legacy row refuses until an
+    // operator clears it and a killed process leaves a claim behind. That is the contract this lock
+    // had BEFORE `expires_at` existed rather than a new hazard, and the remedy is the same single
+    // migration run, which adds the column on the branch that may.
+    if (!(await lockTableUnderstandsExpiry(adapter, dialect))) {
+      // Describes the TABLE, which is established, rather than this session's outcome, which is not
+      // known until the claim below either succeeds or is refused. Saying "holding it by owner
+      // alone" here told an operator they held a lock and then, on the next line, that someone else
+      // did — and said it just as confidently when acquisition failed on a database error.
+      args.logger?.warn?.(
+        "field-group migration lock predates its expiry column; falling back to an owner-only claim",
+        {
+          reason: "migration lock table is missing expires_at",
+          table: MIGRATION_LOCK_TABLE,
+          label,
+        }
+      );
+
+      // 🔴 Installed BEFORE the claim is attempted, not after it returns.
+      //
+      // The database commits the claim inside `acquireOwnerOnly`; this process then has to be
+      // scheduled again before the next line runs. A signal landing in that gap would take the
+      // default termination path with the row already owned — and this claim has NO EXPIRY to lapse,
+      // so the strand does not merely block the next sync: it blocks the migration that would add
+      // `expires_at`, making the one action that permanently repairs the database the action the
+      // strand prevents. Watch mode documents Ctrl+C as the way to stop, so the window is on the
+      // ordinary path rather than an exotic one.
+      //
+      // Registering early is safe precisely because the release is OWNER-SCOPED: a signal arriving
+      // before the claim was taken clears nothing, because the row does not name this claim. There
+      // is no symmetric hazard to trade against, which is what makes "earlier" strictly better here
+      // rather than a different bet.
+      let legacyReleasedOnSignal = false;
+      const releaseLegacyOnSignal = (signal: NodeJS.Signals): void => {
+        legacyReleasedOnSignal = true;
+        // The signal is re-raised whether or not the release succeeded, exactly as the expiry-aware
+        // path does it: a pool torn down by the same interrupt is the likely failure, and an
+        // unobserved rejection would surface instead of letting the process stop.
+        void releaseOwnerOnly(adapter, claim)
+          .catch(() => undefined)
+          .finally(() => {
+            process.kill(process.pid, signal);
+          });
+      };
+      const onLegacyInterrupt = (): void => releaseLegacyOnSignal("SIGINT");
+      const onLegacyTerminate = (): void => releaseLegacyOnSignal("SIGTERM");
+      if (args.releaseOnInterrupt === true) {
+        process.once("SIGINT", onLegacyInterrupt);
+        process.once("SIGTERM", onLegacyTerminate);
+      }
+
+      // 🔴 ONE `try` covers the acquisition, the work and the release, and the handlers come off in
+      // its `finally` — not at three separate points.
+      //
+      // Sliding the removal earlier or later just moves the gap: taken off before the release, a
+      // signal in that window strands the claim; done only on the `!ok` branch, an acquisition that
+      // REJECTS (a dropped connection, an UPDATE permission error) skips the cleanup entirely and
+      // leaks two process-wide listeners per attempt, which watch mode repeats. Spanning everything
+      // that can throw is the answer that has no next window.
+      //
+      // Keeping them live THROUGH the release is safe: `releaseOwnerOnly` is owner-scoped and
+      // idempotent, so a signal landing mid-release clears a row that is already being cleared and
+      // then re-raises. Doing it twice costs nothing; not doing it at all strands a claim that has
+      // no expiry to lapse.
+      try {
+        const legacy = await acquireOwnerOnly(adapter, claim);
+        if (!legacy.ok) {
+          // Refused for the same reason the expiry-aware path refuses, and it is a REFUSAL rather
+          // than a skip: the row names a holder, and without an expiry there is no basis on which
+          // to call that holder dead. Proceeding would run the sync against storage a migration may
+          // be renaming, which is the outcome this whole module exists to prevent.
+          throw NextlyError.serviceUnavailable({
+            logMessage:
+              "field-group migration lock is held; another run holds a claim on a lock table that predates its expiry column",
+            logContext: {
+              reason: "migration lock is held elsewhere",
+              heldBy: legacy.heldBy,
+              table: MIGRATION_LOCK_TABLE,
+              label,
+            },
+          });
+        }
+
+        // Held for real, so the caller is told so rather than being handed `not-held`. Nothing
+        // renews it, because there is no lease to extend — see `acquireOwnerOnly` for what that
+        // gives up.
+        let heldToTheEnd = true;
+        // 🔴 Three outcomes, not two. "The row stopped being ours" and "the release could not run"
+        // are different facts with different remedies, and collapsing them into one boolean is the
+        // failure-semantics mistake this codebase keeps finding: the first means another run may
+        // have overlapped this one, the second means the claim is probably still sitting there.
+        let releaseFailure: unknown;
+        let legacyResult: T;
+        try {
+          legacyResult = await fn({
+            ...session,
+            lock: { kind: "held", owner: claim },
+          });
+        } finally {
+          // 🔴 This `finally` must not THROW. A rejection here replaces whatever `fn` raised, so a
+          // connection dropping during cleanup would hide the actual sync failure behind a cleanup
+          // failure — and the caller's own error staying primary is a promise this module makes a
+          // few lines up. The outcome is recorded and judged after the block instead.
+          heldToTheEnd = await releaseOwnerOnly(adapter, claim).then(
+            held => held,
+            error => {
+              releaseFailure = error;
+              return false;
+            }
+          );
+        }
+
+        // Reached only when `fn` RESOLVED; a rejection propagates from the block above with the
+        // caller's failure intact.
+        if (releaseFailure !== undefined) {
+          throw NextlyError.serviceUnavailable({
+            logMessage:
+              "field-group migration finished but could not release its lock; the claim may still be held",
+            logContext: {
+              reason: "migration lock release failed",
+              table: MIGRATION_LOCK_TABLE,
+              label,
+            },
+            cause: releaseFailure instanceof Error ? releaseFailure : undefined,
+          });
+        }
+        // An interrupt is an orderly shutdown that already signalled its outcome, so it is not a
+        // lost claim.
+        if (!heldToTheEnd && !legacyReleasedOnSignal) {
+          throw NextlyError.serviceUnavailable({
+            logMessage:
+              "field-group migration finished without holding its lock; another run may have overlapped it",
+            logContext: {
+              reason: "migration lock was not held at completion",
+              table: MIGRATION_LOCK_TABLE,
+              label,
+            },
+          });
+        }
+        return legacyResult;
+      } finally {
+        // The ONE removal point, reached however this branch ends: a refused claim, a rejected
+        // acquisition, a thrown callback, or an orderly return.
+        process.off("SIGINT", onLegacyInterrupt);
+        process.off("SIGTERM", onLegacyTerminate);
+      }
+    }
   } else {
     await ensureLockRow(adapter, dialect);
   }
@@ -736,6 +950,13 @@ export async function withMigrationSession<T>(
   // not step: an NTP correction mid-migration would otherwise expire or extend a claim by accident.
   let leaseConfirmedAt = claimStartedAt;
 
+  // How much of the lease is left to run without a fresh confirmation, asked in one place because
+  // two callers need the same answer: the renewal loop, which gives up when it reaches zero, and
+  // the shutdown below, which will not wait past it. Two spellings of one formula would agree today
+  // and drift the first time the margin moves.
+  const leaseRemainingMs = (): number =>
+    LOCK_LOSS_AFTER_MS - (performance.now() - leaseConfirmedAt);
+
   // Only ever one attempt in flight. `setInterval` fires on a schedule, not on completion, so a
   // renewal slower than the interval would otherwise have a second started underneath it — and with
   // a single-connection pool those queue against each other, each making the next later still.
@@ -747,9 +968,15 @@ export async function withMigrationSession<T>(
   const renewal = setInterval(() => {
     // Asked BEFORE attempting, because this is the question the attempt cannot answer: a renewal
     // that never comes back reports nothing at all, and the lease drains while it hangs.
-    if (performance.now() - leaseConfirmedAt >= LOCK_LOSS_AFTER_MS) {
+    if (leaseRemainingMs() <= 0) {
+      // Reported, and then the attempt below runs ANYWAY. Declaring the loss tells the CALLER it is
+      // no longer protected; it does nothing about the callback, which nothing here can stop and
+      // which is still writing. Renewal is owner-scoped, so an attempt after a genuine takeover is
+      // a no-op that cannot steal the row back — but where the loss came from renewals that could
+      // not reach the database, the row is still ours and a later success re-extends the lease over
+      // work that never stopped. Giving up entirely is the only option that is strictly worse than
+      // both.
       onLost();
-      return;
     }
     if (renewing) return;
     renewing = true;
@@ -811,7 +1038,6 @@ export async function withMigrationSession<T>(
     work.catch(() => undefined);
     result = await Promise.race([work, claimLost]);
   } finally {
-    clearInterval(renewal);
     // Removed before releasing, so a signal arriving during an orderly release
     // cannot start a second one.
     process.off("SIGINT", onInterrupt);
@@ -826,8 +1052,76 @@ export async function withMigrationSession<T>(
     // callback's value stand. Completing is not the same as having been protected while completing:
     // the exclusion promises no other run touched these tables meanwhile, and a claim that lapsed
     // or was taken over means that promise was not kept.
+    // Shared by both exits below: an attempt that is already in flight has to be allowed to finish
+    // before the row is touched, whichever way this session is ending.
+    const settle = async (
+      pending: Promise<unknown> | undefined
+    ): Promise<void> => {
+      if (pending !== undefined) await Promise.allSettled([pending]);
+    };
+
+    // 🔴 The same wait, BOUNDED, reporting whether it got its answer. A renewal blocked on a
+    // connection that never comes back does not reject — it simply never settles — so an unbounded
+    // wait here leaves the caller neither resolved nor rejected, which is worse than either outcome
+    // this session can report. The bound is what remains of the lease rather than a timeout invented
+    // for the occasion: while the claim could still be live, waiting may yet confirm it; once it
+    // could not, there is nothing left to confirm and nothing left to protect.
+    const settleWithin = (
+      pending: Promise<unknown>,
+      ms: number
+    ): Promise<boolean> => {
+      if (ms <= 0) return Promise.resolve(false);
+      return new Promise<boolean>(resolve => {
+        const deadline = setTimeout(() => resolve(false), ms);
+        // Never a reason for the process to stay alive, for the same reason the renewal timer is
+        // not: this waits on work that is already finished.
+        deadline.unref?.();
+        void Promise.allSettled([pending]).then(() => {
+          clearTimeout(deadline);
+          resolve(true);
+        });
+      });
+    };
+
+    // Clear the row once nothing this session started can still write to it. Shared by the two ways
+    // of ending without a confirmed claim, because they need the identical ordering: wait for the
+    // callback, since a late extension protects work that is still running; then stop the timer, so
+    // no further attempt begins; then wait for whichever attempt was in flight, read after the stop
+    // so it is the last one; only then release. Detached, because it may outlive the caller by as
+    // long as a blocked renewal takes.
+    const clearWhenQuiet = (): void => {
+      void (async () => {
+        await settle(work);
+        clearInterval(renewal);
+        await settle(outstandingRenewal);
+        await release(adapter, dialect, claim).catch(() => undefined);
+      })();
+    };
+
     if (!claimWasLost) {
-      heldToTheEnd = await release(adapter, dialect, claim);
+      clearInterval(renewal);
+      // 🔴 The in-flight attempt is settled BEFORE the release, not after. `clearInterval` stops new
+      // attempts and does nothing about one already running, and that one is about to read the row
+      // this release is clearing — it would see an owner that is no longer this claim, report the
+      // claim disproved, and the completion guard below would then fail a migration that held its
+      // lock the whole way through and released it itself. A session must not be able to mistake
+      // its OWN shutdown for a contender.
+      //
+      // 🔴 Waiting past the lease would not make the release safer, so it stops there and reports
+      // the claim unconfirmed. Releasing anyway would be the worse choice: the stalled attempt can
+      // still land afterwards and re-extend a row this session no longer watches. So the release is
+      // handed to the quiet-clear below, which waits that attempt out, and the run is failed rather
+      // than told it held a lock it could not confirm.
+      const confirmed = await settleWithin(
+        outstandingRenewal,
+        leaseRemainingMs()
+      );
+      if (confirmed) {
+        heldToTheEnd = await release(adapter, dialect, claim);
+      } else {
+        heldToTheEnd = false;
+        clearWhenQuiet();
+      }
     } else {
       // 🔴 The row is still not freed HERE, for the reason above — but leaving it entirely alone is
       // not enough either. A renewal already in flight when the claim was abandoned still runs its
@@ -843,12 +1137,17 @@ export async function withMigrationSession<T>(
       //
       // Detached deliberately: the caller has already been told the claim was lost, and this
       // clean-up may outlive the callback by as long as the blocked renewal takes.
-      const abandoned = [work, outstandingRenewal].filter(
-        (pending): pending is Promise<unknown> => pending !== undefined
-      );
-      void Promise.allSettled(abandoned).then(() =>
-        release(adapter, dialect, claim).catch(() => undefined)
-      );
+      // 🔴 The timer is NOT stopped here. Renewal keeps running for as long as the callback does,
+      // because that is the only thing still able to protect it: the row may well still be ours —
+      // a loss declared from renewals that could not reach the database says nothing about who owns
+      // it — and a later success re-extends the lease over work that never stopped.
+      //
+      // Ordering matters in three steps. Wait for the callback, because until it stops, extending
+      // is protection rather than a leak. THEN stop the timer, so no further attempt can start.
+      // THEN wait for whichever attempt was already in flight, read after the stop so it is the
+      // last one, because its UPDATE would otherwise land after the release and leave the row
+      // extended with nobody working. Only then clear.
+      clearWhenQuiet();
     }
   }
 
@@ -1040,6 +1339,99 @@ function clearClaimStatement(claim: string): SQL {
           ${sql.identifier("expires_at")} = NULL
       WHERE ${sql.identifier("id")} = ${LOCK_ROW_ID}
         AND ${sql.identifier("owner")} = ${claim}`;
+}
+
+/**
+ * Take the lock on a table that predates `expires_at`, using the `owner` column alone.
+ *
+ * ## Why this exists rather than skipping the lock
+ *
+ * A caller that may not issue DDL cannot add the missing column, and refusing outright would break
+ * every `--no-auto-sync` install that has not yet run a migration under this release. Skipping was
+ * the first answer and it is not safe enough: the sync then runs with NO exclusion at all, so a
+ * migration that starts during it — or one already in its pre-marker phase, which the marker check
+ * cannot see — is free to rename tables underneath work that has already decided what exists.
+ *
+ * The `owner` column is present on every version of this table, so exclusion does not depend on the
+ * new column at all. This claims it, holds it, and clears it, writing no DDL.
+ *
+ * ## What it gives up, stated rather than glossed
+ *
+ * No expiry means NO TAKEOVER. An occupied legacy row blocks until an operator clears it, and a
+ * process killed mid-run leaves a claim behind. That is not a new hazard introduced here — it is
+ * exactly the contract this lock had before `expires_at` existed, and the remedy is the same single
+ * migration run that permanently upgrades the row. Exclusion that occasionally needs an operator is
+ * a better trade than no exclusion at all, which is what the alternative offered.
+ *
+ * Nothing renews: there is no lease to extend, so the claim simply stands for the life of the call.
+ */
+async function acquireOwnerOnly(
+  adapter: DrizzleAdapter,
+  claim: string
+): Promise<Acquisition> {
+  return adapter.transaction(async ctx => {
+    // The same serialisation the expiry-aware path uses: contenders queue here, so the read below
+    // cannot be overtaken between reading and writing.
+    await ctx.lockRow(MIGRATION_LOCK_TABLE, LOCK_ROW_ID);
+
+    const rows = await ctx.queryStatement(ownerOnlyQuery());
+    const before = rows[0] as { owner: string | null } | undefined;
+    if (before === undefined) return { ok: false, heldBy: null };
+    // Any owner blocks, because without an expiry there is no basis on which to judge a claim dead.
+    // Guessing would mean stealing the lock from a migration that may still be writing.
+    //
+    // 🔴 This early return is BELT AND BRACES, not the guard. The `AND "owner" IS NULL` predicate on
+    // the UPDATE below is what actually enforces exclusion, and the read-back is what reports it —
+    // measured, by removing each in turn: dropping this line alone changes no behaviour and no test,
+    // while dropping the predicate lets a held row be overwritten. Said here because the opposite
+    // reading is the dangerous one: someone tidying the statement on the strength of this check
+    // would remove the only thing enforcing the claim.
+    if (before.owner !== null) return { ok: false, heldBy: before.owner };
+
+    await ctx.runStatement(
+      sql`UPDATE ${sql.identifier(MIGRATION_LOCK_TABLE)}
+          SET ${sql.identifier("owner")} = ${claim}
+          WHERE ${sql.identifier("id")} = ${LOCK_ROW_ID}
+            AND ${sql.identifier("owner")} IS NULL`
+    );
+
+    // Read back rather than trusting affected-row counts, which the dialects report inconsistently.
+    // Predicating the UPDATE on `owner IS NULL` means a contender that won the race leaves the row
+    // naming them, and this is what notices.
+    const settled = (await ctx.queryStatement(ownerOnlyQuery()))[0] as
+      | { owner: string | null }
+      | undefined;
+    if (settled?.owner === claim) return { ok: true };
+    return { ok: false, heldBy: settled?.owner ?? null };
+  });
+}
+
+/** The owner, read without touching a column this table may not have. */
+function ownerOnlyQuery(): SQL {
+  return sql`SELECT ${sql.identifier("owner")}
+      FROM ${sql.identifier(MIGRATION_LOCK_TABLE)}
+      WHERE ${sql.identifier("id")} = ${LOCK_ROW_ID}`;
+}
+
+/** Clear an owner-only claim, scoped to this claim so a late finaliser cannot free someone else's. */
+async function releaseOwnerOnly(
+  adapter: DrizzleAdapter,
+  claim: string
+): Promise<boolean> {
+  return adapter.transaction(async ctx => {
+    await ctx.lockRow(MIGRATION_LOCK_TABLE, LOCK_ROW_ID);
+    const before = (await ctx.queryStatement(ownerOnlyQuery()))[0] as
+      | { owner: string | null }
+      | undefined;
+    const heldToTheEnd = before?.owner === claim;
+    await ctx.runStatement(
+      sql`UPDATE ${sql.identifier(MIGRATION_LOCK_TABLE)}
+          SET ${sql.identifier("owner")} = NULL
+          WHERE ${sql.identifier("id")} = ${LOCK_ROW_ID}
+            AND ${sql.identifier("owner")} = ${claim}`
+    );
+    return heldToTheEnd;
+  });
 }
 
 /** Release only what we hold, so a late finaliser cannot free someone else's run. */

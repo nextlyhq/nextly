@@ -63,9 +63,19 @@ export interface UpdateComponentPayload {
   localized?: boolean;
 }
 
+/**
+ * The list filters this endpoint applies SERVER-SIDE.
+ *
+ * Named rather than forwarded wholesale: `buildQuery` would emit the whole `filters` record as one
+ * JSON parameter, and this dispatcher reads flat query params. Listing them also keeps an unknown
+ * key from being sent and silently ignored, which reads to a caller exactly like a filter that
+ * worked.
+ */
+const SERVER_FILTERS = ["source", "migrationStatus"] as const;
+
 // Build query string for pagination and search using shared utility
 const buildQuery = (params: TableParams): string => {
-  return buildQueryUtil(params, {
+  const base = buildQueryUtil(params, {
     fieldMapping: {
       slug: "slug",
       label: "label",
@@ -74,6 +84,19 @@ const buildQuery = (params: TableParams): string => {
     },
     validSortFields: ["slug", "label", "createdAt"],
   });
+
+  // Appended as flat params, matching what the dispatcher reads. Empty and "all" are omitted rather
+  // than sent: the absence of the parameter IS "do not filter", so sending a sentinel would make
+  // the server reject a selection that means no filter at all.
+  const query = new URLSearchParams(base);
+  const filters = params.filters?.filters ?? {};
+  for (const name of SERVER_FILTERS) {
+    const value = filters[name];
+    if (typeof value === "string" && value !== "" && value !== "all") {
+      query.set(name, value);
+    }
+  }
+  return query.toString();
 };
 
 /**

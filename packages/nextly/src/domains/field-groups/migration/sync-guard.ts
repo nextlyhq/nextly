@@ -138,6 +138,10 @@ export async function withMigrationExcluded<T>(
       label: args.label,
       requireExistingLock: !args.mayCreateLock,
       releaseOnInterrupt: args.releaseOnInterrupt,
+      // Without this the session has nowhere to report a lock it had to skip, and a downgrade from
+      // excluded to unexcluded happens in silence — which is the one outcome that makes skipping
+      // dangerous rather than merely tolerant. Every caller here already has a logger.
+      logger: args.logger,
     },
     async () => {
       await assertNoMigrationInFlight({

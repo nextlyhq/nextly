@@ -20,9 +20,11 @@ import { useMemo } from "react";
 
 import { historyEnabledFrom } from "@admin/components/features/versions/history-enabled";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
+import { useGeneralSettings } from "@admin/hooks/queries/useGeneralSettings";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
 import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 import { useLocalization } from "@admin/hooks/useLocalization";
+import { usePreviewLink } from "@admin/hooks/usePreviewLink";
 import {
   computeMainFields,
   takeoverControllerNames,
@@ -35,6 +37,8 @@ import { EntryLocaleProvider } from "../EntryLocaleContext";
 import {
   effectiveEntryStatus,
   isSlugPerLocale,
+  previewLinkLocale,
+  previewLinkSiteUrl,
   useHasPublicAddress,
 } from "./entry-address";
 import { EntryFormActions } from "./EntryFormActions";
@@ -352,6 +356,31 @@ export function EntryForm({
     draftsEnabled: collection.draftsEnabled === true,
   });
 
+  // A link names one saved document, so there is nothing to mint against until
+  // the entry exists. The id is read here rather than inside the hook because
+  // hooks run unconditionally: on create the mutation is constructed and never
+  // reachable, since the control that would call it is not rendered.
+  const { data: generalSettings } = useGeneralSettings();
+  const savedEntryId = entry?.id === undefined ? "" : String(entry.id);
+  const linkLocale = previewLinkLocale({
+    localized: collection.localized === true,
+    locale,
+    defaultLocale,
+  });
+  // A link that travels by email or chat has to name a host. `window` is read
+  // through a guard because this module is imported in a server render, where
+  // there is no origin and the configured site is the only source anyway.
+  const linkSiteUrl = previewLinkSiteUrl({
+    configured: generalSettings?.siteUrl,
+    origin: typeof window === "undefined" ? undefined : window.location.origin,
+  });
+  const previewLink = usePreviewLink({
+    collection: collection.name,
+    entryId: savedEntryId,
+    ...(linkLocale.kind === "scoped" ? { locale: linkLocale.locale } : {}),
+    ...(linkSiteUrl === undefined ? {} : { siteUrl: linkSiteUrl }),
+  });
+
   // Only enable shortcuts in standalone mode (not embedded modals)
   useEntryFormShortcuts({
     onSave: () => {
@@ -454,6 +483,21 @@ export function EntryForm({
                   locale={locale}
                   onLocaleChange={onLocaleChange}
                   localized={collection.localized === true}
+                  // Withheld while the language is unknown as well as while
+                  // the entry is unsaved: a link minted without a resolvable
+                  // locale is either refused by the mint route or, if the claim
+                  // were dropped to avoid that, a grant over every translation.
+                  isLinkAvailable={
+                    savedEntryId !== "" && linkLocale.kind !== "unresolved"
+                  }
+                  {...(savedEntryId === ""
+                    ? {}
+                    : {
+                        onCopyLink: () => {
+                          previewLink.mutate();
+                        },
+                      })}
+                  isCopyingLink={previewLink.isPending}
                   toolbarSlot={
                     <EntryFormToolbarSlots
                       context="collection"

@@ -137,6 +137,42 @@ describe("plugin detail, not installed", () => {
     expect(screen.queryByText("Plugin not found")).toBeNull();
   });
 
+  /**
+   * A plugin declaring a PUBLIC client config is not a plugin the project has
+   * installed, and the two arrive from different requests. Holding them under
+   * one key let the public entry answer "is it installed" before the gated
+   * request had said anything — and because the page's pending and unavailable
+   * checks sit behind "did I find it", finding it there skipped both.
+   */
+  it("does not treat a public client config as an installed plugin", async () => {
+    mockBranding = {
+      pluginClientConfigs: [
+        { name: "@nextlyhq/plugin-seo", clientConfig: { a: 1 } },
+      ],
+    } as unknown as AdminBranding;
+    mockBrandingStatus = { isPending: true, isUnavailable: false };
+
+    renderDetail("nextlyhq-plugin-seo");
+
+    expect(await screen.findByRole("status")).toBeInTheDocument();
+    expect(screen.queryByText(INSTALL_COMMAND)).toBeNull();
+  });
+
+  it("still reports the installed list unavailable despite a public config", async () => {
+    mockBranding = {
+      pluginClientConfigs: [
+        { name: "@nextlyhq/plugin-seo", clientConfig: { a: 1 } },
+      ],
+    } as unknown as AdminBranding;
+    mockBrandingStatus = { isPending: false, isUnavailable: true };
+
+    renderDetail("nextlyhq-plugin-seo");
+
+    expect(
+      await screen.findByText("Could not load your installed plugins")
+    ).toBeInTheDocument();
+  });
+
   /** Same reasoning, permanent: a failed request is not evidence of absence. */
   it("does not offer to install when the installed list could not be loaded", async () => {
     mockBrandingStatus = { isPending: false, isUnavailable: true };

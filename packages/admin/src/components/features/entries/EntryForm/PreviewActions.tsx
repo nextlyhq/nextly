@@ -35,8 +35,14 @@ import {
 export interface PreviewActionsProps {
   /** Whether the collection has a preview URL configured. */
   isPreviewAvailable?: boolean;
-  /** Opens the preview in the editor's own session. */
-  onPreview?: () => void;
+  /**
+   * Opens the preview in the editor's own session.
+   *
+   * May return a promise: resolving the URL can require a round trip. Nothing
+   * here treats the handler returning as the preview having opened, so an
+   * asynchronous implementation needs no change on this side.
+   */
+  onPreview?: () => void | Promise<void>;
   /** Label for the preview action. */
   previewLabel?: string;
   /**
@@ -50,6 +56,15 @@ export interface PreviewActionsProps {
   isCopyingLink?: boolean;
   /** Whether the surrounding form is submitting. */
   disabled?: boolean;
+  /**
+   * The button height, matching whichever action row this sits in. The two
+   * rows disagree: the standalone editor's header is a band of `sm` controls,
+   * while the embedded form's footer uses the default. A control that keeps
+   * one height in both is the wrong height in one of them, and a button a few
+   * pixels taller than the Save beside it reads as a mistake rather than as a
+   * distinction.
+   */
+  size?: "default" | "sm";
 }
 
 const COPY_LABEL = "Copy shareable link";
@@ -62,9 +77,28 @@ export function PreviewActions({
   onCopyLink,
   isCopyingLink = false,
   disabled = false,
+  size = "default",
 }: PreviewActionsProps) {
   const canPreview = isPreviewAvailable && onPreview !== undefined;
   const canCopy = isLinkAvailable && onCopyLink !== undefined;
+
+  /**
+   * Adapts a possibly-asynchronous handler to the void-returning slot a DOM
+   * event expects.
+   *
+   * Handing the promise straight to `onClick` makes a rejection invisible,
+   * which is what forbids it. It is not this control's to report either: it
+   * knows the action failed and nothing about why, so anything it rendered
+   * would be a second, vaguer error beside the handler's own. Discarding the
+   * value leaves a rejection to the runtime's unhandled-rejection reporting,
+   * where it stays visible without being claimed here.
+   */
+  const startPreview =
+    onPreview === undefined
+      ? undefined
+      : () => {
+          void onPreview();
+        };
 
   if (!canPreview && !canCopy) return null;
 
@@ -73,7 +107,8 @@ export function PreviewActions({
       <Button
         type="button"
         variant="outline"
-        onClick={onPreview}
+        size={size}
+        onClick={startPreview}
         disabled={disabled}
       >
         <Eye className="h-4 w-4" />
@@ -87,6 +122,7 @@ export function PreviewActions({
       <Button
         type="button"
         variant="outline"
+        size={size}
         onClick={onCopyLink}
         disabled={disabled || isCopyingLink}
       >
@@ -106,6 +142,7 @@ export function PreviewActions({
         <Button
           type="button"
           variant="outline"
+          size={size}
           disabled={disabled}
           // The trigger opens a menu rather than performing the preview, so it
           // says so: a control labelled only "Preview" that opens a list is a
@@ -129,7 +166,7 @@ export function PreviewActions({
          * the next opening and none of the actions inside the current one, and
          * both of these race the save they would run alongside.
          */}
-        <DropdownMenuItem onSelect={onPreview} disabled={disabled}>
+        <DropdownMenuItem onSelect={startPreview} disabled={disabled}>
           <Eye className="h-4 w-4" />
           {previewLabel}
         </DropdownMenuItem>

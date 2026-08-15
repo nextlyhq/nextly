@@ -9,6 +9,8 @@ import {
   anyLocalePublished,
   effectiveEntryStatus,
   everPublishedOnRecord,
+  previewLinkLocale,
+  previewLinkSiteUrl,
   useHasPublicAddress,
   type PublicAddressArgs,
 } from "../entry-address";
@@ -446,5 +448,141 @@ describe("useHasPublicAddress", () => {
     rerender(shared({ entry: entry({ status: "draft" }) }));
 
     expect(result.current).toBe(true);
+  });
+});
+
+describe("previewLinkLocale", () => {
+  it("scopes a default-language link to the default locale", () => {
+    // The editor spells the default language as `undefined`, and an absent
+    // locale claim authorizes every locale — so passing the sentinel through
+    // would hand a reviewer of the English draft every other translation too.
+    expect(
+      previewLinkLocale({
+        localized: true,
+        locale: undefined,
+        defaultLocale: "en",
+      })
+    ).toEqual({ kind: "scoped", locale: "en" });
+  });
+
+  it("scopes a translation link to the language being edited", () => {
+    expect(
+      previewLinkLocale({ localized: true, locale: "de", defaultLocale: "en" })
+    ).toEqual({ kind: "scoped", locale: "de" });
+  });
+
+  it("leaves a non-localized collection unscoped", () => {
+    // No locale to name and no translations to leak.
+    expect(
+      previewLinkLocale({
+        localized: false,
+        locale: undefined,
+        defaultLocale: "en",
+      })
+    ).toEqual({ kind: "unscoped" });
+  });
+
+  it("reports a blank default locale as unresolved, not as unscoped", () => {
+    // `useLocalization` reports `""` before the config loads. Treating that as
+    // unscoped would mint the all-locales token; sending it as a claim is a
+    // 400. It is a third outcome and the caller has to see it as one.
+    expect(
+      previewLinkLocale({
+        localized: true,
+        locale: undefined,
+        defaultLocale: "",
+      })
+    ).toEqual({ kind: "unresolved" });
+    expect(
+      previewLinkLocale({
+        localized: true,
+        locale: undefined,
+        defaultLocale: "   ",
+      })
+    ).toEqual({ kind: "unresolved" });
+    expect(
+      previewLinkLocale({
+        localized: true,
+        locale: undefined,
+        defaultLocale: undefined,
+      })
+    ).toEqual({ kind: "unresolved" });
+  });
+
+  it("never reports unscoped for a localized collection", () => {
+    // The property the leak turned on: `unscoped` means "no locale claim", and
+    // a localized entry must never produce one whatever the inputs are.
+    for (const args of [
+      { localized: true, locale: undefined, defaultLocale: "en" },
+      { localized: true, locale: "de", defaultLocale: "en" },
+      { localized: true, locale: undefined, defaultLocale: "" },
+      { localized: true, locale: undefined, defaultLocale: undefined },
+    ]) {
+      expect(previewLinkLocale(args).kind, JSON.stringify(args)).not.toBe(
+        "unscoped"
+      );
+    }
+  });
+
+  it("agrees on the two spellings of the default language", () => {
+    expect(
+      previewLinkLocale({
+        localized: true,
+        locale: undefined,
+        defaultLocale: "en",
+      })
+    ).toEqual(
+      previewLinkLocale({ localized: true, locale: "en", defaultLocale: "en" })
+    );
+  });
+});
+
+describe("previewLinkSiteUrl", () => {
+  it("prefers the configured site over the browser origin", () => {
+    // An admin panel mounted on a different host from the site would otherwise
+    // hand out links pointing at itself.
+    expect(
+      previewLinkSiteUrl({
+        configured: "https://site.example",
+        origin: "https://admin.example",
+      })
+    ).toBe("https://site.example");
+  });
+
+  it("falls back to the browser origin when nothing is configured", () => {
+    // Usually right, since the common deployment serves both together, and
+    // always better than a relative path that identifies no host at all.
+    expect(
+      previewLinkSiteUrl({ configured: null, origin: "https://admin.example" })
+    ).toBe("https://admin.example");
+  });
+
+  it("treats a cleared setting as absent, not as an empty base", () => {
+    // The settings form stores "" for a field the user cleared; using it as a
+    // base would rebuild the relative path this exists to prevent.
+    expect(
+      previewLinkSiteUrl({ configured: "   ", origin: "https://admin.example" })
+    ).toBe("https://admin.example");
+  });
+
+  it("returns nothing rather than inventing a host", () => {
+    // With no configured site and no origin there is no honest absolute URL,
+    // so the existing relative behaviour stands.
+    expect(
+      previewLinkSiteUrl({ configured: null, origin: undefined })
+    ).toBeUndefined();
+  });
+
+  it("never yields a relative value when either source is present", () => {
+    // The property the control depends on: "Copy shareable link" must not put
+    // a path on the clipboard whenever anything can name a host.
+    for (const args of [
+      { configured: "https://a.example", origin: undefined },
+      { configured: null, origin: "https://b.example" },
+      { configured: "https://a.example", origin: "https://b.example" },
+    ]) {
+      const result = previewLinkSiteUrl(args);
+      expect(result, JSON.stringify(args)).toMatch(/^https?:\/\//);
+    }
   });
 });

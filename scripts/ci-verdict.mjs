@@ -35,7 +35,34 @@
 // imports can be green while the program does not run at all.
 
 import { realpathSync } from "node:fs";
-import { pathToFileURL } from "node:url";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+/**
+ * The request layer, resolved through this file's REAL path.
+ *
+ * A bare `./ci-verdict-evidence.mjs` would be resolved relative to the
+ * specifier the runtime holds for this module — and under
+ * `--preserve-symlinks-main` that is the SYMLINK, so the sibling is looked
+ * for beside the link rather than beside this file and the process dies
+ * before running. The same flag is why the entry check below accepts two
+ * forms; this is its import-time half.
+ */
+const evidence = await import(
+  pathToFileURL(
+    join(
+      dirname(realpathSync(fileURLToPath(import.meta.url))),
+      "ci-verdict-evidence.mjs"
+    )
+  ).href
+);
+const {
+  countStranded,
+  createGh,
+  headRemoteFor,
+  readHeadSha,
+  setupGitCredentials,
+} = evidence;
 
 /** Reviewers whose verdict blocks a merge, and the marker text of a refusal. */
 export const RATE_LIMIT_MARKER = /Review limit reached/;
@@ -520,6 +547,71 @@ const fingerprint = (rv, th, ic) =>
   ]);
 
 /**
+ * Which repository, on which host, from the environment.
+ *
+ * Pure, and exported so the parsing can be exercised without a request. It
+ * decides where every later query is SENT, so getting it wrong describes one
+ * repository while reading another — and until now the only way to run it was
+ * to run the whole command.
+ *
+ * Returns `{ error }` rather than throwing or exiting, so the caller owns the
+ * exit status and this stays callable from a test.
+ */
+export function resolveTarget(env = {}) {
+  // `gh` defines GH_REPO as `[HOST/]OWNER/REPO`, so the owner is the
+  // second-to-last segment rather than the first.
+  const configured = env.GH_REPO ?? "nextlyhq/nextly";
+  const segments = configured.split("/").filter(Boolean);
+  if (segments.length < 2 || segments.length > 3) {
+    return { error: "ci-verdict: GH_REPO must be [HOST/]OWNER/REPO\n" };
+  }
+  const [name] = segments.slice(-1);
+  const [owner] = segments.slice(-2, -1);
+  // `GH_HOST` supplies the hostname when GH_REPO does not carry one, which is
+  // the ordinary Enterprise configuration. Defaulting straight to github.com
+  // would override that selection with the explicit `--hostname` passed later.
+  const host =
+    segments.length === 3 ? segments[0] : (env.GH_HOST ?? "github.com");
+  const repo = `${owner}/${name}`;
+  return {
+    owner,
+    name,
+    host,
+    repo,
+    // `--repo` is host-qualified off github.com, because a bare `owner/name`
+    // there resolves against the public host whatever the API calls do.
+    repoArg: host === "github.com" ? repo : `${host}/${repo}`,
+  };
+}
+
+/**
+ * The reviewer logins whose verdict blocks, and those merely reported.
+ *
+ * Trimmed: a list written with spaces after the commas yields entries that
+ * match no login, and an unmatched blocking reviewer is silently dropped — the
+ * gate then reports clean without that reviewer's coverage.
+ *
+ * An empty blocking set is returned as an error rather than as an empty array,
+ * because "nobody blocks" makes every verdict clean and is far more likely to
+ * be a mistyped variable than a decision.
+ */
+export function resolveReviewers(env = {}) {
+  const logins = value =>
+    value
+      .split(",")
+      .map(entry => entry.trim())
+      .filter(Boolean);
+  const blocking = logins(
+    env.CI_VERDICT_BLOCKING ?? "chatgpt-codex-connector[bot]"
+  );
+  const advisory = logins(env.CI_VERDICT_ADVISORY ?? "coderabbitai[bot]");
+  if (blocking.length === 0) {
+    return { error: "ci-verdict: no blocking reviewer configured\n" };
+  }
+  return { blocking, advisory };
+}
+
+/**
  * Command line entry: `node scripts/ci-verdict.mjs <pr>`.
  *
  * Kept behind the module-vs-main check so importing the decisions never
@@ -535,52 +627,15 @@ async function main(argv) {
     process.stderr.write("usage: node scripts/ci-verdict.mjs <pr-number>\n");
     return 2;
   }
-  // `gh` defines GH_REPO as `[HOST/]OWNER/REPO`, so the owner is the
-  // second-to-last segment rather than the first.
-  const configured = process.env.GH_REPO ?? "nextlyhq/nextly";
-  const segments = configured.split("/").filter(Boolean);
-  if (segments.length < 2 || segments.length > 3) {
-    process.stderr.write(`ci-verdict: GH_REPO must be [HOST/]OWNER/REPO\n`);
+  const target = resolveTarget(process.env);
+  if (target.error) {
+    process.stderr.write(target.error);
     return 2;
   }
-  const [name] = segments.slice(-1);
-  const [owner] = segments.slice(-2, -1);
-  // `GH_HOST` supplies the hostname when GH_REPO does not carry one, which is
-  // the ordinary Enterprise configuration. Defaulting straight to github.com
-  // would override that selection with the explicit `--hostname` below.
-  const host =
-    segments.length === 3 ? segments[0] : (process.env.GH_HOST ?? "github.com");
-
-  const repo = `${owner}/${name}`;
+  const { owner, name, host, repo, repoArg } = target;
   const { execFileSync } = await import("node:child_process");
-  // `git` does not read GH_TOKEN, and the workflow checks out with
-  // `persist-credentials: false`, so `ls-remote` against a private repository
-  // would fail after the API lookups had already succeeded. This points git at
-  // the same credentials `gh` is using.
-  try {
-    execFileSync("gh", ["auth", "setup-git", "--hostname", host], {
-      stdio: "ignore",
-    });
-  } catch {
-    // Unauthenticated public access still works; a private repository fails
-    // later at `ls-remote`, with a message naming the ref it could not read.
-  }
-  // Each query is its own process and its failure is its own exception: a
-  // rejected request must reach the caller as a refusal, never as empty data.
-  // `--hostname` on every API call, and a host-qualified `--repo`. Parsing the
-  // host out of GH_REPO and then letting the requests default sends them to
-  // public GitHub while claiming to describe an Enterprise repository.
-  const gh = args =>
-    JSON.parse(
-      execFileSync(
-        "gh",
-        args[0] === "api"
-          ? ["api", "--hostname", host, ...args.slice(1)]
-          : args,
-        { encoding: "utf8", maxBuffer: 64e6 }
-      )
-    );
-  const repoArg = host === "github.com" ? repo : `${host}/${repo}`;
+  setupGitCredentials({ exec: execFileSync, host });
+  const gh = createGh({ exec: execFileSync, host });
 
   // The head comes from the REF, not from the pull request object. GitHub's
   // `headRefOid` lags a push — measured a full commit behind while `ls-remote`
@@ -607,24 +662,14 @@ async function main(argv) {
   // the checkout. `origin` is whatever this working copy happens to point at,
   // which need not be the repository GH_REPO selected — the API data would then
   // describe one repository while the SHA came from another.
-  const headRemote = meta.isCrossRepository
-    ? `https://${host}/${meta.headRepositoryOwner.login}/${meta.headRepository.name}.git`
-    : `https://${host}/${repo}.git`;
+  const headRemote = headRemoteFor(meta, { host, repo });
 
-  const headOf = () => {
-    const line = execFileSync(
-      "git",
-      ["ls-remote", headRemote, `refs/heads/${meta.headRefName}`],
-      { encoding: "utf8" }
-    ).trim();
-    const sha = line.split(/\s+/)[0];
-    if (!sha) {
-      throw new Error(
-        `no such ref on ${headRemote}: refs/heads/${meta.headRefName}`
-      );
-    }
-    return sha;
-  };
+  const headOf = () =>
+    readHeadSha({
+      exec: execFileSync,
+      headRemote,
+      headRefName: meta.headRefName,
+    });
   // A pull request CLOSED WITHOUT MERGING is settled by its lifecycle alone,
   // and its branch is commonly deleted straight afterwards — so resolving the
   // ref first turned a conclusive answer into `exit 2` for a missing ref.
@@ -634,24 +679,12 @@ async function main(argv) {
   // consumer reading `head` or `missing_reviews` a different object exactly
   // where it is least expecting one. Kept for the reader who assumes `report`
   // reviews and threads that cannot change this outcome.
-  // Trimmed: a list written with spaces after the commas yields entries that
-  // match no login, and an unmatched blocking reviewer is silently dropped —
-  // the gate then reports clean without that reviewer's coverage.
-  const logins = value =>
-    value
-      .split(",")
-      .map(entry => entry.trim())
-      .filter(Boolean);
-  const blocking = logins(
-    process.env.CI_VERDICT_BLOCKING ?? "chatgpt-codex-connector[bot]"
-  );
-  const advisory = logins(
-    process.env.CI_VERDICT_ADVISORY ?? "coderabbitai[bot]"
-  );
-  if (blocking.length === 0) {
-    process.stderr.write("ci-verdict: no blocking reviewer configured\n");
+  const reviewers = resolveReviewers(process.env);
+  if (reviewers.error) {
+    process.stderr.write(reviewers.error);
     return 2;
   }
+  const { blocking, advisory } = reviewers;
 
   if (meta.state !== "OPEN" && meta.state !== "MERGED") {
     // Re-read immediately before emitting. This path takes no other remote
@@ -960,95 +993,85 @@ async function main(argv) {
   // the first, so the whole computation — the lifecycle checks, the stranded
   // count and `report()` — sits between two identical readings of everything
   // it consumed.
+  // The bracket is a FUNCTION rather than a sequence, so the ordering is
+  // structural instead of a convention. `decide` runs between the two
+  // observations because it is called between them; there is no arrangement of
+  // statements elsewhere that moves the computation outside the window while
+  // leaving this helper intact.
+  //
+  // Written this way after the ordering turned out to be untestable from
+  // outside: the verdict is identical whether it is computed inside the window
+  // or after it, so no assertion over the output can tell the two apart.
+  const bracketed = decide => {
+    const observed = snapshot();
+    const outcome = decide(observed);
+    return stamp(observed) === stamp(snapshot()) ? outcome : undefined;
+  };
+
   let accepted;
   for (
     let attempt = 0;
     attempt < STABILITY_ATTEMPTS && !accepted;
     attempt += 1
   ) {
-    const observed = snapshot();
+    let refusal;
+    accepted = bracketed(observed => {
+      if (
+        observed.head !== head ||
+        observed.state !== meta.state ||
+        observed.base !== meta.baseRefOid
+      ) {
+        refusal =
+          "ci-verdict: head, base or lifecycle moved since the first read; re-run\n";
+        return undefined;
+      }
+      // ANY rewrite event disqualifies the tail check, so this compares against
+      // zero rather than against a baseline taken earlier in the same run — a
+      // baseline could only say "it did not move while I looked", which is the
+      // weaker claim and the one an empty range already defeats.
+      if (meta.state === "MERGED" && observed.rewrites > 0) {
+        refusal = `ci-verdict: ${observed.rewrites} history-rewrite event(s); tail NOT CHECKABLE\n`;
+        return undefined;
+      }
 
-    if (
-      observed.head !== head ||
-      observed.state !== meta.state ||
-      observed.base !== meta.baseRefOid
-    ) {
-      process.stderr.write(
-        "ci-verdict: head, base or lifecycle moved since the first read; re-run\n"
-      );
-      return 2;
-    }
-    // ANY rewrite event disqualifies the tail check, so this compares against
-    // zero rather than against a baseline taken earlier in the same run — a
-    // baseline could only say "it did not move while I looked", which is the
-    // weaker claim and the one an empty range already defeats.
-    if (meta.state === "MERGED" && observed.rewrites > 0) {
-      process.stderr.write(
-        `ci-verdict: ${observed.rewrites} history-rewrite event(s); tail NOT CHECKABLE\n`
-      );
-      return 2;
-    }
-
-    // A merged pull request keeps a branch that can still be pushed to while
-    // GitHub freezes `headRefOid` at the revision that merged, so commits after
-    // that point are in neither and would otherwise go unnoticed.
-    let stranded = 0;
-    if (
-      meta.state === "MERGED" &&
-      observed.mergedHead &&
-      observed.mergedHead !== head
-    ) {
-      // Both ends fetched from the remote that HAS them: the workflow checks
-      // out shallow, and after a squash the merged head is commonly absent.
-      // A shallow checkout keeps its boundary in `.git/shallow`, and fetching
-      // two more objects does not remove it — so `rev-list` stops at the
-      // boundary and reports a SHORT count rather than failing. That is the
-      // reassuring direction: a truncated range reads as a clean tail, which is
-      // exactly what this count exists to disprove.
-      //
-      // Deepened only when the repository is actually shallow, because
-      // `--unshallow` errors on a complete one.
-      const isShallow =
-        execFileSync("git", ["rev-parse", "--is-shallow-repository"], {
-          encoding: "utf8",
-        }).trim() === "true";
-      execFileSync(
-        "git",
-        [
-          "fetch",
-          ...(isShallow ? ["--unshallow"] : []),
+      // A merged pull request keeps a branch that can still be pushed to while
+      // GitHub freezes `headRefOid` at the revision that merged, so commits after
+      // that point are in neither and would otherwise go unnoticed.
+      let stranded = 0;
+      if (
+        meta.state === "MERGED" &&
+        observed.mergedHead &&
+        observed.mergedHead !== head
+      ) {
+        // Both ends fetched from the remote that HAS them, and the checkout
+        // deepened first where it is shallow — a truncated range reads as a
+        // clean tail, which is what this count exists to disprove.
+        stranded = countStranded({
+          exec: execFileSync,
           headRemote,
+          mergedHead: observed.mergedHead,
           head,
-          observed.mergedHead,
-        ],
-        { stdio: "ignore" }
-      );
-      stranded =
-        Number(
-          execFileSync(
-            "git",
-            ["rev-list", "--count", `${observed.mergedHead}..${head}`],
-            { encoding: "utf8" }
-          ).trim()
-        ) || 0;
-    }
+        });
+      }
 
-    const candidate = report({
-      head,
-      coverageSince: observed.baseChangedAt,
-      revisionOrder,
-      revisionOrderComplete,
-      reviews: observed.reviews,
-      threads: observed.threads,
-      issueComments: observed.issueComments,
-      blocking,
-      advisory,
-      state: meta.state,
-      stranded,
+      return report({
+        head,
+        coverageSince: observed.baseChangedAt,
+        revisionOrder,
+        revisionOrderComplete,
+        reviews: observed.reviews,
+        threads: observed.threads,
+        issueComments: observed.issueComments,
+        blocking,
+        advisory,
+        state: meta.state,
+        stranded,
+      });
     });
-
-    // The closing observation. Only an unchanged world licenses the candidate.
-    if (stamp(observed) === stamp(snapshot())) accepted = candidate;
+    if (refusal !== undefined) {
+      process.stderr.write(refusal);
+      return 2;
+    }
   }
 
   if (!accepted) {

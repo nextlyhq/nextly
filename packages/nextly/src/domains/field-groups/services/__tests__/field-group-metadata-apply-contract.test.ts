@@ -27,7 +27,10 @@ vi.mock("../field-group-table-provisioning", () => ({
   registerComponentRuntimeSchema: vi.fn((_a, _d, tableName: string) => {
     bound.push(tableName);
   }),
-  reconcileComponentCompanion: vi.fn(async () => {}),
+  // Returns whether DDL actually ran. Defaulted to `true` — "a transition happened" — because that
+  // is the state the partial-failure tests below are about; the test that cares about the other
+  // answer sets it explicitly rather than letting this double decide.
+  reconcileComponentCompanion: vi.fn(async () => true),
   // The update path probes which discriminator column the existing table carries before it moves
   // anything. Stubbed to the current spelling: these tests are about which field CHANGES are
   // accepted, and a real probe would make every one of them a test of the catalog instead.
@@ -945,5 +948,396 @@ describe("a field-group update refuses what it cannot deliver", () => {
     ).resolves.toMatchObject({
       record: expect.objectContaining({ slug: "hero" }),
     });
+  });
+});
+
+describe("an update whose row write fails after the tables moved", () => {
+  /** A registry holding one field group, whose row write fails the first time it is attempted. */
+  function registryWhoseWriteFails(args: {
+    localized?: boolean;
+    failure?: unknown;
+  }) {
+    const record = {
+      id: "fg-1",
+      slug: "hero",
+      tableName: "comp_hero",
+      label: "Hero",
+      // 🔴 Localized, with a TRANSLATABLE field. These tests are about what happens when the row
+      // write fails AFTER the tables moved, so the edit has to be one this path can actually
+      // deliver: a field set change on a non-localized group needs a main-table column and is
+      // refused before it ever reaches the record step, which would make every assertion below
+      // describe the wrong rejection.
+      fields: [{ name: "heading", type: "text", localized: true }],
+      localized: args.localized ?? true,
+      locked: false,
+      schemaVersion: 1,
+    };
+    let attempts = 0;
+    return {
+      record,
+      getAllComponents: vi.fn().mockResolvedValue([]),
+      registerComponent: vi.fn(async (row: unknown) => row),
+      getComponent: vi.fn().mockResolvedValue(record),
+      // Fails the real write and accepts the narrow status mark that follows it, which is the whole
+      // reason the mark is worth attempting: a single-column update survives the failures that
+      // realistically break a full row write.
+      // The parameters are declared even though nothing here reads them: a mock with no declared
+      // parameters records its calls as an empty tuple, so indexing into one is a type error rather
+      // than the assertion it was written as.
+      updateComponent: vi.fn(
+        async (
+          _slug: string,
+          _data: Record<string, unknown>,
+          _options?: { source?: string }
+        ) => {
+          attempts += 1;
+          if (attempts === 1)
+            throw args.failure ?? new Error("row write rejected");
+          return record;
+        }
+      ),
+    };
+  }
+
+  it("tells the caller the change stands, and marks the row failed", async () => {
+    const registry = registryWhoseWriteFails({});
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    const refusal = await service
+      .updateFieldGroup({
+        slug: "hero",
+        fields: [
+          { name: "heading", type: "text", localized: true },
+          { name: "subheading", type: "text", localized: true },
+        ] as never,
+      })
+      .catch((error: unknown) => error);
+
+    // Asserted on the MESSAGE, not only the code. The registry's own failure is an internal error
+    // too, so the code alone cannot separate "the write failed and nothing happened" from "the
+    // write failed and the tables already moved" — and only the second may not be retried.
+    expect(refusal).toBeInstanceOf(NextlyError);
+    expect((refusal as NextlyError).code).toBe("INTERNAL_ERROR");
+    expect((refusal as NextlyError).publicMessage).toContain(
+      "Do not retry the same edit"
+    );
+
+    // The transition really did run, so this is describing the state it claims to describe rather
+    // than a request that failed earlier.
+    const { reconcileComponentCompanion } = await import(
+      "../field-group-table-provisioning"
+    );
+    expect(reconcileComponentCompanion).toHaveBeenCalled();
+
+    // The divergence is RECORDED, not merely raised: the raise reaches one caller once, the row is
+    // what anyone looking later can see.
+    expect(registry.updateComponent).toHaveBeenCalledTimes(2);
+    // 🔴 `diverged`, NOT `failed`. The canonical type documents `failed` as a table-creation
+    // failure whose repair is to retry, which is the exact action that compounds this one: a retry
+    // derives `wasLocalized` from a row that already describes the wrong shape. Once the one-time
+    // error response is gone, this column is the only thing telling a recovery tool which of the
+    // two it is looking at.
+    expect(registry.updateComponent.mock.calls[1]?.[1]).toEqual({
+      migrationStatus: "diverged",
+    });
+    // The optimistic lock is invalidated with it: the tables moved, so every editor loaded before
+    // this moment is describing a shape that no longer exists.
+    expect(registry.updateComponent.mock.calls[1]?.[2]).toMatchObject({
+      invalidateSchemaVersion: true,
+    });
+  });
+
+  // 🔴 THE case the request shape cannot answer. A field-set change on a group that was and remains
+  // non-localized reaches the reconciler and moves nothing — this path emits no main-table DDL — so
+  // a failed write there has changed nothing and must not be reported as a committed transition.
+  it("raises the original error when the reconciler reports nothing moved", async () => {
+    const failure = new Error("row write rejected");
+    const registry = registryWhoseWriteFails({ failure });
+    const adapter = adapterDouble(async () => true);
+    const { reconcileComponentCompanion } = await import(
+      "../field-group-table-provisioning"
+    );
+    vi.mocked(reconcileComponentCompanion).mockResolvedValueOnce(false);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    const refusal = await service
+      .updateFieldGroup({
+        slug: "hero",
+        fields: [{ name: "heading", type: "text", localized: true }] as never,
+      })
+      .catch((error: unknown) => error);
+
+    // The registry's own error, verbatim. Wrapping it would tell a caller their edit half-happened
+    // when it did not happen at all.
+    expect(refusal).toBe(failure);
+    // And no mark: a row that still describes the database correctly needs no repair recorded.
+    expect(registry.updateComponent).toHaveBeenCalledTimes(1);
+  });
+
+  // 🔴 MySQL has no `RETURNING`, so `DrizzleAdapter.update` UPDATEs and then SELECTs the row back
+  // (`adapter.ts:1339-1345`). A failure in that second query raises out of a write that already
+  // committed — and marking a synchronized row as diverged, bumping its version again and telling
+  // the caller its definition is stale would all be false.
+  it("returns the row when the write landed and only the read-back failed", async () => {
+    const registry = registryWhoseWriteFails({});
+    // The row the re-read finds: already carrying this edit's field set, which is what a committed
+    // UPDATE followed by a failed SELECT leaves behind.
+    const settledHash = await (async () => {
+      const { calculateSchemaHash } = await import(
+        "../../../schema/services/schema-hash"
+      );
+      // 🔴 The SAME field set the update below sends. Computing it from a different shape makes
+      // the service read the settled row as carrying someone else's edit, conclude the write never
+      // landed, and record a divergence — the test would then fail for a reason that has nothing to
+      // do with the read-back it is about.
+      return calculateSchemaHash([
+        { name: "heading", type: "text", localized: true },
+        { name: "subheading", type: "text", localized: true },
+      ] as never);
+    })();
+    registry.getComponent = vi.fn().mockResolvedValue({
+      ...registry.record,
+      schemaHash: settledHash,
+    });
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    const result = await service.updateFieldGroup({
+      slug: "hero",
+      fields: [
+        { name: "heading", type: "text", localized: true },
+        { name: "subheading", type: "text", localized: true },
+      ] as never,
+    });
+
+    expect(result.record).toMatchObject({ slug: "hero" });
+    // 🔴 And NOTHING was marked. Asserting only that it resolved would pass on an implementation
+    // that recorded a divergence and then returned anyway.
+    expect(registry.updateComponent).toHaveBeenCalledTimes(1);
+  });
+
+  // The control that keeps the re-read from swallowing a real divergence: a row that does NOT
+  // carry the edit still takes the diverged path.
+  it("still records the divergence when the re-read shows the old shape", async () => {
+    const registry = registryWhoseWriteFails({});
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    const refusal = await service
+      .updateFieldGroup({
+        slug: "hero",
+        fields: [
+          { name: "heading", type: "text", localized: true },
+          { name: "subheading", type: "text", localized: true },
+        ] as never,
+      })
+      .catch((error: unknown) => error);
+
+    expect((refusal as NextlyError).publicMessage).toContain(
+      "Do not retry the same edit"
+    );
+    expect(registry.updateComponent).toHaveBeenCalledTimes(2);
+  });
+
+  // 🔴 Recording `diverged` is only half a control. Without a refusal, an editor opened AFTER the
+  // mark reads the bumped `schema_version` with the STALE stored fields, satisfies
+  // `assertSchemaVersionMatch`, and plans its next transition from a shape the tables no longer
+  // have — the exact retry this state exists to declare unsafe.
+  it("refuses a schema edit on a field group already marked diverged", async () => {
+    const registry = registryWhoseWriteFails({});
+    registry.getComponent = vi
+      .fn()
+      .mockResolvedValue({ ...registry.record, migrationStatus: "diverged" });
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    const refusal = await service
+      .updateFieldGroup({
+        slug: "hero",
+        fields: [{ name: "heading", type: "text", localized: true }] as never,
+      })
+      .catch((error: unknown) => error);
+
+    // Asserted on the REASON as well as the code: a stale-version conflict is also a CONFLICT here,
+    // and its message tells the caller to refresh and retry — the opposite of what this one means.
+    expect(refusal).toMatchObject({ code: "CONFLICT" });
+    expect((refusal as NextlyError).publicMessage).toContain(
+      "Reconcile the definition against the tables"
+    );
+    // Refused BEFORE anything moved: a guard that ran after the transition would be describing a
+    // second divergence rather than preventing one.
+    const { reconcileComponentCompanion } = await import(
+      "../field-group-table-provisioning"
+    );
+    expect(reconcileComponentCompanion).not.toHaveBeenCalled();
+    expect(registry.updateComponent).not.toHaveBeenCalled();
+  });
+
+  // The control that keeps the refusal from stranding an operator. A label edit moves no storage,
+  // so locking it out would make a diverged field group harder to reconcile rather than safer.
+  it("still allows a metadata-only edit while diverged", async () => {
+    const registry = registryWhoseWriteFails({});
+    registry.getComponent = vi
+      .fn()
+      .mockResolvedValue({ ...registry.record, migrationStatus: "diverged" });
+    registry.updateComponent = vi.fn(
+      async (
+        _slug: string,
+        _data: Record<string, unknown>,
+        _options?: { source?: string }
+      ) => registry.record
+    );
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    await expect(
+      service.updateFieldGroup({ slug: "hero", label: "Hero (renamed)" })
+    ).resolves.toMatchObject({
+      record: expect.objectContaining({ slug: "hero" }),
+    });
+  });
+
+  /**
+   * The refusal asks whether an edit MOVES STORAGE, and localization moves it by TOGGLING. Judging
+   * by whether the flag was sent is a proxy, and it fails on the commonest client shape: a full form
+   * resends every field it renders, so `{ label, localized: false }` against a group that is already
+   * not localized asks for no transition and would be refused — closing the metadata edits this
+   * contract explicitly permits, on the very path an operator uses to escape the state.
+   */
+  it("allows a metadata edit that resends the current localized value", async () => {
+    const registry = registryWhoseWriteFails({});
+    registry.getComponent = vi.fn().mockResolvedValue({
+      ...registry.record,
+      localized: false,
+      migrationStatus: "diverged",
+    });
+    registry.updateComponent = vi.fn(async () => registry.record);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapterDouble(async () => true)
+    );
+
+    await expect(
+      service.updateFieldGroup({
+        slug: "hero",
+        label: "Hero (renamed)",
+        localized: false,
+      })
+    ).resolves.toMatchObject({
+      record: expect.objectContaining({ slug: "hero" }),
+    });
+  });
+
+  /**
+   * 🔴 The control that stops the case above widening into a hole. "Ignore `localized` while
+   * diverged" would satisfy that test perfectly and reopen the refusal, so a real transition has to
+   * be shown still refused — and on the REASON, because a stale-version conflict carries the same
+   * code while meaning the opposite.
+   */
+  it("still refuses a localization toggle while diverged", async () => {
+    const registry = registryWhoseWriteFails({});
+    registry.getComponent = vi.fn().mockResolvedValue({
+      ...registry.record,
+      localized: false,
+      migrationStatus: "diverged",
+    });
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapterDouble(async () => true)
+    );
+
+    const refusal = await service
+      .updateFieldGroup({ slug: "hero", label: "Hero", localized: true })
+      .catch((error: unknown) => error);
+
+    expect(refusal).toMatchObject({ code: "CONFLICT" });
+    expect((refusal as NextlyError).publicMessage).toContain(
+      "Reconcile the definition against the tables"
+    );
+    expect(registry.updateComponent).not.toHaveBeenCalled();
+  });
+
+  it("raises the original error, unmarked, when nothing physical moved", async () => {
+    // 🔴 The control that stops this becoming a blanket rewrite of every failed update. A label-only
+    // edit issues no DDL, so a failed write leaves the row describing the database correctly. There
+    // is no divergence, and marking one would invent a repair for a state that is fine.
+    const failure = new Error("row write rejected");
+    const registry = registryWhoseWriteFails({ failure });
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    const refusal = await service
+      .updateFieldGroup({ slug: "hero", label: "Hero (renamed)" })
+      .catch((error: unknown) => error);
+
+    expect(refusal).toBe(failure);
+    expect(registry.updateComponent).toHaveBeenCalledTimes(1);
+  });
+
+  it("still raises when the row could not even be marked", async () => {
+    // Best effort means the mark's own failure must not replace the diagnosis the caller needs.
+    const registry = registryWhoseWriteFails({});
+    registry.updateComponent = vi.fn(
+      async (
+        _slug: string,
+        _data: Record<string, unknown>,
+        _options?: { source?: string }
+      ) => {
+        throw new Error("database unreachable");
+      }
+    );
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    const refusal = await service
+      .updateFieldGroup({
+        slug: "hero",
+        fields: [
+          { name: "heading", type: "text", localized: true },
+          { name: "subheading", type: "text", localized: true },
+        ] as never,
+      })
+      .catch((error: unknown) => error);
+
+    expect((refusal as NextlyError).publicMessage).toContain(
+      "Do not retry the same edit"
+    );
+    // 🔴 And it must NOT claim a durable record it does not have. The mark failed too, so the only
+    // trace is the server log — telling an operator the row is marked sends them to a row that
+    // reads entirely normal.
+    expect((refusal as NextlyError).publicMessage).toContain(
+      "the only trace is the server log"
+    );
+    expect((refusal as NextlyError).publicMessage).not.toContain(
+      "is marked as diverged"
+    );
+    // The mark was attempted and refused, which is the state this describes. Asserting only the
+    // raise would pass on an implementation that never tried.
+    expect(registry.updateComponent).toHaveBeenCalledTimes(2);
   });
 });

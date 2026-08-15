@@ -82,22 +82,9 @@ const LIBRARY_ITEM = ".nx-pb-lib-item";
 const DRAG_THRESHOLD_PX = 12;
 
 export function createPocDriver(page: Page): CanvasDriver {
-  /** The canvas iframe is srcless, so it is the about:blank child frame. */
+  /** The canvas iframe, from the one place that decides which frame that is. */
   function canvasFrame(): Frame {
-    const frame = page
-      .frames()
-      .find(
-        f => f.parentFrame() === page.mainFrame() && f.url() === "about:blank"
-      );
-    if (!frame) {
-      throw new Error(
-        `canvas frame not found; frames: ${page
-          .frames()
-          .map(f => f.url())
-          .join(", ")}`
-      );
-    }
-    return frame;
+    return canvasFrameOf(page);
   }
 
   /**
@@ -659,6 +646,29 @@ export function createPocDriver(page: Page): CanvasDriver {
   };
 
   return driver;
+}
+
+/**
+ * The canvas iframe, found the same way the driver finds it.
+ *
+ * Exported so a test needing to read or measure the canvas's own document asks the same question
+ * this module already answers, instead of carrying a second copy of "which frame is the canvas".
+ */
+export function canvasFrameOf(page: Page): Frame {
+  const frame = page
+    .frames()
+    .find(
+      f => f.parentFrame() === page.mainFrame() && f.url() === "about:blank"
+    );
+  if (!frame) {
+    throw new Error(
+      `canvas frame not found; frames: ${page
+        .frames()
+        .map(f => f.url())
+        .join(", ")}`
+    );
+  }
+  return frame;
 }
 
 export { DROP_ZONES, ACTIVE_ZONE, LIBRARY_ITEM };

@@ -24,11 +24,30 @@ import type { EmailTemplateService } from "../../services/email/email-template-s
 import type { FieldGroupRegistryService } from "../../services/field-groups/field-group-registry-service";
 import type { UserExtSchemaService } from "../../services/users/user-ext-schema-service";
 import type { UserFieldDefinitionService } from "../../services/users/user-field-definition-service";
+import type { Logger } from "../../shared/types";
 
 export function getAdapterFromDI(): DrizzleAdapter | undefined {
   try {
     if (container.has("adapter")) {
       return container.get<DrizzleAdapter>("adapter");
+    }
+  } catch {
+    // DI not initialized
+  }
+  return undefined;
+}
+
+/**
+ * The application logger, for handlers that pass one to a service.
+ *
+ * Absent before `registerServices()` has run, like every accessor here. A caller that only needs
+ * somewhere to report can substitute an empty object; one that would change behaviour on its
+ * absence should say so at the call site rather than here.
+ */
+export function getLoggerFromDI(): Logger | undefined {
+  try {
+    if (container.has("logger")) {
+      return container.get<Logger>("logger");
     }
   } catch {
     // DI not initialized
