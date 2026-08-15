@@ -22,8 +22,16 @@
  * as an alternative to `transition` entirely. Each spelling handled reveals another, because the
  * surface is the whole cascade.
  *
- * `getComputedStyle` of a real drop zone has already resolved all of it. So this reads the
- * element that will actually move, and nothing here interprets CSS syntax.
+ * `getComputedStyle` of a real drop zone has already resolved all of it, so this reads the element
+ * that will actually move.
+ *
+ * What that does and does not buy is worth being exact about, because the two are easy to run
+ * together. The BROWSER resolves the cascade — which rule wins, what a shorthand expands to, what
+ * a `var()` evaluates to, whether an `@media` block applies. This helper still parses the COMPUTED
+ * VALUE it gets back: splitting comma-separated lists, reading serialized times, and recognising
+ * keywords like `none`, `infinite`, `auto` and `all`. So the edge cases it owns are those of the
+ * computed-value grammar, which is small and stable, rather than those of the cascade, which is
+ * not.
  *
  * The pin is therefore a SPAN, not a declaration. Two stylesheets can differ in every character
  * and animate identically, and one character can change the timing — pinning the measurement
@@ -195,11 +203,16 @@ async function geometrySpanMs(
         // `subtree: true` is what makes 1 and 3 visible. It is required for 1 regardless, since
         // this function charges `::before` and `::after` CSS timing a few lines below and a
         // narrower population would refuse on the element while waving the pseudo-element through.
+        // The surfaces whose longhands are actually read below. A pseudo-element's effect reports
+        // the ORIGINATING element as its target, so a target test alone accepts EVERY pseudo —
+        // including `::marker`, `::first-letter` and `::backdrop`, which this loop never reads and
+        // which can change a line box inside an auto-sized zone. `pseudoElement` is what
+        // distinguishes them, and anything outside this set is refused rather than read as zero.
+        const READ_SURFACES = new Set([null, "::before", "::after"]);
         const own = (a: Animation) => {
-          const target = (a.effect as KeyframeEffect | null)?.target;
-          // A pseudo-element's effect reports the ORIGINATING element as its target, so this keeps
-          // `::before` and `::after` on the readable side — their longhands are read below.
-          return target === el;
+          const effect = a.effect as KeyframeEffect | null;
+          if (!effect || effect.target !== el) return false;
+          return READ_SURFACES.has(effect.pseudoElement ?? null);
         };
         const unreadable = el
           .getAnimations({ subtree: true })
@@ -911,6 +924,58 @@ test.describe("the drop-zone geometry the probe waits on", () => {
     // between-item zone. A rule keyed on `[data-drag]` for an empty zone can never fire, so
     // measuring it would pin a span for movement the canvas cannot produce.
     expect(await geometrySpanMs(frame, "data-drag")).toBe(0);
+  });
+
+  test("an effect on a pseudo-element this loop never reads is refused", async ({
+    page,
+    request,
+  }) => {
+    const frame = await canvas(page, request);
+
+    // `::marker` is a real, layout-bearing pseudo-element whose effect reports the ORIGINATING
+    // element as its target — so a target test alone calls it readable while this loop reads only
+    // the element, `::before` and `::after`. That combination reports zero for movement inside an
+    // auto-sized zone's line box.
+    const planted = await frame.evaluate(() => {
+      const sheet = (
+        document.getElementById("nx-pb-style") as HTMLStyleElement | null
+      )?.sheet;
+      sheet?.insertRule(
+        "@keyframes nx-marker-grow { from { font-size: 8px } to { font-size: 40px } }",
+        sheet.cssRules.length
+      );
+      sheet?.insertRule(
+        ".nx-pb-dropzone-empty { display: list-item }",
+        sheet.cssRules.length
+      );
+      sheet?.insertRule(
+        ".nx-pb-dropzone-empty::marker { animation: nx-marker-grow .3s 100 }",
+        sheet.cssRules.length
+      );
+      const zone = document.querySelector(".nx-pb-dropzone-empty");
+      if (!zone) return null;
+      const effects = zone.getAnimations({ subtree: true });
+      return {
+        count: effects.length,
+        // The population that makes this test about `pseudoElement` rather than about `target`:
+        // the effect must belong to the ZONE and name a pseudo outside the read set.
+        onUnreadPseudo: effects.some(a => {
+          const effect = a.effect as KeyframeEffect | null;
+          return (
+            effect?.target === zone &&
+            effect.pseudoElement != null &&
+            !["::before", "::after"].includes(effect.pseudoElement)
+          );
+        }),
+      };
+    });
+    expect(planted).not.toBeNull();
+    expect(planted?.count).toBeGreaterThan(0);
+    expect(planted?.onUnreadPseudo).toBe(true);
+
+    await expect(geometrySpanMs(frame, "data-active")).rejects.toThrow(
+      /timing is not in any computed longhand this reads/
+    );
   });
 
   test("a DESCENDANT's declarative animation is refused, not reported as zero", async ({
