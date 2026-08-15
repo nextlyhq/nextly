@@ -50,11 +50,12 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   fullyParallel: false,
 
-  // `flaky-reporter` rides alongside the others and changes no verdict. CI
-  // retries once, which turns a real failure into a job conclusion of
-  // `success`; nothing downstream can distinguish that from a first-attempt
-  // pass, because `conclusion` is the field the retry overwrote. The reporter
-  // annotates those tests so the outcome is visible without being fatal.
+  // `flaky-reporter` records which tests passed only on a RETRY. It emits no
+  // annotation: the `github` reporter beside it already reports a flaky test,
+  // and two annotations for one event at different severities read worse than
+  // one. This adds the job-summary section and the count, so the SET is
+  // answerable across runs — the retry is Playwright's own, so `run_attempt`
+  // stays 1 and nothing at the workflow level distinguishes it.
   reporter: process.env.CI
     ? [
         ["github"],

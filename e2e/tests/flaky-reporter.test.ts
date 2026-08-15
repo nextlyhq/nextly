@@ -1,10 +1,8 @@
 import { expect, test } from "@playwright/test";
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
-import {
-  flakyAnnotations,
-  flakySummary,
-  recordsFlaky,
-} from "../flaky-reporter";
+import { flakySummary, recordsFlaky, repoRelative } from "../flaky-reporter";
 
 const ONE = [
   {
@@ -13,82 +11,6 @@ const ONE = [
     attempts: 2,
   },
 ];
-
-test("annotates a flaky test as a WARNING, not an error", () => {
-  // An error annotation reads as a failure in the PR UI, and this outcome
-  // passed. Reporting it as one would make the build look broken and teach
-  // people to ignore the annotation.
-  const [line] = flakyAnnotations(ONE);
-  expect(line).toContain("::warning ");
-  expect(line).not.toContain("::error");
-});
-
-test("escapes a newline in the title instead of ending the command", () => {
-  // The case the previous fixture could not reach: it had no newline, so the
-  // one-line assertion held by construction and would have kept holding with
-  // no escaping at all. A title CAN contain one — `test("a\nb")` is legal —
-  // and an unescaped one terminates the workflow command, dropping the rest of
-  // the annotation silently.
-  const [line] = flakyAnnotations([
-    {
-      title: "outer › a\nb",
-      file: "tests/canvas/checklist.spec.ts",
-      attempts: 2,
-    },
-  ]);
-  expect(line.split("\n")).toHaveLength(1);
-  expect(line).toContain("%0A");
-  expect(line).not.toContain("a\nb");
-});
-
-test("escapes % BEFORE the sequences it would corrupt", () => {
-  // `%` has to go first: replacing newlines first and percent second would
-  // rewrite the `%` of `%0A` into `%25` and produce `%250A`, which renders as
-  // the literal text rather than a line break.
-  const [line] = flakyAnnotations([
-    { title: "100%\ndone", file: "f.spec.ts", attempts: 2 },
-  ]);
-  expect(line).toContain("100%25%0Adone");
-  expect(line).not.toContain("%250A");
-});
-
-test("escapes a comma in the path, which would end the property", () => {
-  // `,` separates command properties, so an unescaped one in a filename makes
-  // GitHub read the remainder as another property and anchor the annotation to
-  // a truncated path.
-  const [line] = flakyAnnotations([
-    { title: "t", file: "tests/a,b.spec.ts", attempts: 2 },
-  ]);
-  expect(line).toContain("file=tests/a%2Cb.spec.ts");
-});
-
-test("keeps each annotation on ONE line", () => {
-  // A workflow command is terminated by a newline, so a raw newline inside the
-  // message splits one annotation into a command plus a stray line of output —
-  // the message silently loses everything after the break. This is the whole
-  // reason the text is composed rather than templated across lines.
-  for (const line of flakyAnnotations(ONE)) {
-    expect(line.split("\n")).toHaveLength(1);
-  }
-});
-
-test("names the file so the annotation lands on it", () => {
-  const [line] = flakyAnnotations(ONE);
-  expect(line).toContain("file=tests/canvas/checklist.spec.ts");
-});
-
-test("reports the attempt count that makes it flaky", () => {
-  // A test that passed on attempt 2 is the case; asserting the count separates
-  // this from a report that fires on any test at all.
-  expect(flakyAnnotations(ONE)[0]).toContain("2 attempts");
-});
-
-test("writes NOTHING when no test was flaky", () => {
-  // Both halves. A reassurance printed on every green run is output people
-  // stop reading, and an empty annotation list keeps the log honest.
-  expect(flakyAnnotations([])).toEqual([]);
-  expect(flakySummary([])).toBe("");
-});
 
 test("escapes a newline in a summary cell instead of splitting the row", () => {
   // The annotation encoder was fixed first, and this is the SAME defect one
@@ -164,4 +86,28 @@ test("ignores a test that simply passed, or simply failed", () => {
   // stay silent, or the reporter names every green test in the suite.
   expect(recordsFlaky("expected", "passed", 0)).toBe(false);
   expect(recordsFlaky("unexpected", "failed", 1)).toBe(false);
+});
+
+test("writes NOTHING when no test was flaky", () => {
+  // A reassurance printed on every green run is output people stop reading, so
+  // the summary stays empty rather than saying "no flaky tests".
+  expect(flakySummary([])).toBe("");
+});
+
+test("makes a path relative to the REPOSITORY root, not the caller's cwd", () => {
+  // CI runs the filtered `@nextlyhq/e2e` script, so `process.cwd()` is `e2e`
+  // and stripping it would yield `tests/...` — a path that does not resolve
+  // from the root. Derived from this module's own location instead, which does
+  // not vary by how the suite was started.
+  //
+  // Built from `import.meta.url` rather than a literal, so this holds wherever
+  // the repository is checked out.
+  const root = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
+  expect(repoRelative(`${root}/e2e/tests/canvas/checklist.spec.ts`)).toBe(
+    "e2e/tests/canvas/checklist.spec.ts"
+  );
+  // An unrelated absolute path comes back untouched rather than mangled.
+  expect(repoRelative("/somewhere/else/x.spec.ts")).toBe(
+    "/somewhere/else/x.spec.ts"
+  );
 });
