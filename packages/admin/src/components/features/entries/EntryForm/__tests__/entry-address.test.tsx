@@ -462,41 +462,78 @@ describe("previewLinkLocale", () => {
         locale: undefined,
         defaultLocale: "en",
       })
-    ).toBe("en");
+    ).toEqual({ kind: "scoped", locale: "en" });
   });
 
   it("scopes a translation link to the language being edited", () => {
     expect(
       previewLinkLocale({ localized: true, locale: "de", defaultLocale: "en" })
-    ).toBe("de");
+    ).toEqual({ kind: "scoped", locale: "de" });
   });
 
   it("leaves a non-localized collection unscoped", () => {
-    // No locale to name and no translations to leak; scoping to an invented
-    // locale would refuse a link that should work.
+    // No locale to name and no translations to leak.
     expect(
       previewLinkLocale({
         localized: false,
         locale: undefined,
         defaultLocale: "en",
       })
-    ).toBeUndefined();
+    ).toEqual({ kind: "unscoped" });
   });
 
-  it("never returns a locale a localized entry was not edited in", () => {
-    // The two accepted spellings of "the default language" must not disagree:
-    // an explicit default and the sentinel resolve to the same scope.
-    const sentinel = previewLinkLocale({
-      localized: true,
-      locale: undefined,
-      defaultLocale: "en",
-    });
-    const explicit = previewLinkLocale({
-      localized: true,
-      locale: "en",
-      defaultLocale: "en",
-    });
-    expect(sentinel).toBe(explicit);
+  it("reports a blank default locale as unresolved, not as unscoped", () => {
+    // `useLocalization` reports `""` before the config loads. Treating that as
+    // unscoped would mint the all-locales token; sending it as a claim is a
+    // 400. It is a third outcome and the caller has to see it as one.
+    expect(
+      previewLinkLocale({
+        localized: true,
+        locale: undefined,
+        defaultLocale: "",
+      })
+    ).toEqual({ kind: "unresolved" });
+    expect(
+      previewLinkLocale({
+        localized: true,
+        locale: undefined,
+        defaultLocale: "   ",
+      })
+    ).toEqual({ kind: "unresolved" });
+    expect(
+      previewLinkLocale({
+        localized: true,
+        locale: undefined,
+        defaultLocale: undefined,
+      })
+    ).toEqual({ kind: "unresolved" });
+  });
+
+  it("never reports unscoped for a localized collection", () => {
+    // The property the leak turned on: `unscoped` means "no locale claim", and
+    // a localized entry must never produce one whatever the inputs are.
+    for (const args of [
+      { localized: true, locale: undefined, defaultLocale: "en" },
+      { localized: true, locale: "de", defaultLocale: "en" },
+      { localized: true, locale: undefined, defaultLocale: "" },
+      { localized: true, locale: undefined, defaultLocale: undefined },
+    ]) {
+      expect(previewLinkLocale(args).kind, JSON.stringify(args)).not.toBe(
+        "unscoped"
+      );
+    }
+  });
+
+  it("agrees on the two spellings of the default language", () => {
+    expect(
+      previewLinkLocale({
+        localized: true,
+        locale: undefined,
+        defaultLocale: "en",
+      })
+    ).toEqual(
+      previewLinkLocale({ localized: true, locale: "en", defaultLocale: "en" })
+    );
   });
 });
 

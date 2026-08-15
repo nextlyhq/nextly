@@ -377,7 +377,7 @@ export function EntryForm({
   const previewLink = usePreviewLink({
     collection: collection.name,
     entryId: savedEntryId,
-    ...(linkLocale === undefined ? {} : { locale: linkLocale }),
+    ...(linkLocale.kind === "scoped" ? { locale: linkLocale.locale } : {}),
     ...(linkSiteUrl === undefined ? {} : { siteUrl: linkSiteUrl }),
   });
 
@@ -483,7 +483,13 @@ export function EntryForm({
                   locale={locale}
                   onLocaleChange={onLocaleChange}
                   localized={collection.localized === true}
-                  isLinkAvailable={savedEntryId !== ""}
+                  // Withheld while the language is unknown as well as while
+                  // the entry is unsaved: a link minted without a resolvable
+                  // locale is either refused by the mint route or, if the claim
+                  // were dropped to avoid that, a grant over every translation.
+                  isLinkAvailable={
+                    savedEntryId !== "" && linkLocale.kind !== "unresolved"
+                  }
                   {...(savedEntryId === ""
                     ? {}
                     : {

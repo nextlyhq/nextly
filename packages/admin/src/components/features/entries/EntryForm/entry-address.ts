@@ -280,6 +280,14 @@ export function useHasPublicAddress({
  * It has no locale to name, no translations to leak, and scoping the token to
  * an invented locale would refuse a link that should work.
  */
+export type PreviewLinkLocale =
+  /** Nothing to name: a non-localized collection has one document. */
+  | { kind: "unscoped" }
+  /** The language the link opens. */
+  | { kind: "scoped"; locale: string }
+  /** Localized, but which language is not known yet. */
+  | { kind: "unresolved" };
+
 export function previewLinkLocale({
   localized,
   locale,
@@ -288,9 +296,18 @@ export function previewLinkLocale({
   localized: boolean;
   locale: string | undefined;
   defaultLocale: string | undefined;
-}): string | undefined {
-  if (!localized) return undefined;
-  return locale ?? defaultLocale;
+}): PreviewLinkLocale {
+  if (!localized) return { kind: "unscoped" };
+  const resolved = locale ?? defaultLocale;
+  // `useLocalization` reports `cfg?.defaultLocale ?? ""`, so a config that has
+  // not loaded yet reads as a blank language rather than a missing one. Blank
+  // is not a locale: the mint route requires a non-empty claim and answers 400,
+  // and dropping the claim instead would mint the all-locales token this
+  // function exists to prevent. Neither is a link, so neither is offered.
+  if (resolved === undefined || resolved.trim().length === 0) {
+    return { kind: "unresolved" };
+  }
+  return { kind: "scoped", locale: resolved };
 }
 
 /**
