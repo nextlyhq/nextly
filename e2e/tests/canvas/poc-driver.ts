@@ -49,9 +49,9 @@ const DROP_ZONES = ".nx-pb-dropzone, .nx-pb-dropzone-empty";
 /**
  * How long this canvas may still be moving a zone's edge after entry, in milliseconds.
  *
- * Exported so the guard that compares it against the stylesheet reads the SAME value the driver
- * uses. A guard restating the number checks a constant against itself and passes while the driver
- * carries something else entirely.
+ * Exported so the guard that checks it against the canvas's MEASURED spans reads the SAME value
+ * the driver uses. A guard restating the number checks a constant against itself and passes while
+ * the driver carries something else entirely.
  */
 export const POC_GEOMETRY_SETTLE_MS = 120;
 
@@ -163,16 +163,25 @@ export function createPocDriver(page: Page): CanvasDriver {
     // happens, and would let a real hysteresis defect hide inside the wait.
     dwellAllowanceMs: 0,
 
-    // The zone geometry this canvas animates, plus headroom. `IframeCanvas`
-    // transitions a drop zone's height over 100ms; a probe that re-measures
-    // inside that window can read the same whole pixel twice while the edge is
-    // still travelling through it, and return a depth measured from a boundary
-    // that has already moved.
+    // How long this canvas may still be moving a zone's EDGE after entry. A
+    // probe that re-measures inside that window can read the same whole pixel
+    // twice while the edge is still travelling through it, and return a depth
+    // measured from a boundary that has already moved.
     //
-    // Stated here rather than inside the probe because the duration belongs to
-    // this canvas. `geometry-settle-matches-the-canvas.test.ts` parses the
-    // stylesheet and fails if the transition ever outgrows this number, so the
-    // two cannot drift silently.
+    // Every geometry span this canvas currently produces is ZERO. The
+    // between-item zone is `position: absolute` at a fixed `height: 6px` and
+    // transitions only `background`, which moves no edge; the empty placeholder
+    // is in flow at an auto height and declares no transition at all. So this
+    // number is not covering a known animation — it is headroom against one
+    // arriving, and against two brackets landing inside a single animation
+    // frame.
+    //
+    // Stated here rather than inside the probe because the timing belongs to
+    // this canvas. `geometry-settle-matches-the-canvas.test.ts` MEASURES the
+    // real elements through `getComputedStyle` rather than reading any
+    // stylesheet, pins each state's span, and fails if a span ever outgrows
+    // this number — so the two cannot drift silently, and a lowered allowance
+    // is checked against movement rather than against declarations.
     geometrySettleMs: POC_GEOMETRY_SETTLE_MS,
 
     async mountTree(fixture: CanvasFixture) {
