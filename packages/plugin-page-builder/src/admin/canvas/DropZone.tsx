@@ -29,6 +29,14 @@ const BLOCK_TYPE = "nx-block";
  * A context rather than a prop because the tree recurses through each block's
  * own `render`, which receives finished slot elements: there is no single call
  * path to thread a depth argument along.
+ *
+ * EVERY droppable on the canvas must carry a priority from this scale, not just
+ * the zones here. A droppable that omits `collisionPriority` keeps whatever the
+ * detector assigned — `High` (3) when the pointer is inside it, `Normal` (2)
+ * otherwise — and since priority is compared before everything else, such a
+ * target outranks any zone shallower than that number however the rectangles
+ * lie. The two scales are not comparable, so an unset priority is not a neutral
+ * default: it is a constant that wins the first three levels of the tree.
  */
 const CanvasDepthContext = createContext(0);
 
@@ -50,6 +58,35 @@ export function CanvasDepth({
 /** The depth the surrounding container renders its children at. */
 export function useCanvasDepth(): number {
   return useContext(CanvasDepthContext);
+}
+
+/**
+ * Above every priority the collision detector assigns on its own.
+ *
+ * `collisionPriority` OVERRIDES the detector's value rather than supplying one
+ * where none exists — `@dnd-kit/abstract` applies it after the detector has
+ * already decided — and the detector's own scale is `High` (3) when the pointer
+ * is inside the element and `Normal` (2) otherwise. Depths counted from zero
+ * therefore share numbers with it, so a droppable that MISSED its priority
+ * would tie with, or beat, a correctly ranked one, and which happened would
+ * depend on how deeply the document happened to nest.
+ *
+ * Basing the canvas scale above that range makes the two kinds
+ * non-overlapping: an omission then loses to every ranked droppable at any
+ * depth, which is a loud and constant failure rather than a plausible one.
+ */
+const CANVAS_PRIORITY_BASE = 10;
+
+/**
+ * The collision priority for a droppable at `depth`.
+ *
+ * Every droppable the canvas registers takes its priority from HERE. The
+ * numbers are only comparable if one place produces them: two scales in one
+ * canvas make "which target claims the pointer" depend on nesting depth, which
+ * is not a question anyone means to ask.
+ */
+export function canvasPriority(depth: number): number {
+  return CANVAS_PRIORITY_BASE + depth;
 }
 
 export function DropZone({
@@ -85,7 +122,7 @@ export function DropZone({
     // is what "the innermost container owns the drop target" asks for, and it
     // is the only thing that can settle two IDENTICAL rectangles — which is
     // exactly what a nested container's edge gap and its parent's gap are.
-    collisionPriority: depth,
+    collisionPriority: canvasPriority(depth),
   });
 
   if (empty) {

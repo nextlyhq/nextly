@@ -378,7 +378,10 @@ export type FieldGroupMigrationStatus =
   | "pending"
   | "generated"
   | "applied"
-  | "failed";
+  | "failed"
+  // Tables changed, record did not. Rendered distinctly from `failed` because the two ask the
+  // operator for opposite things: retry, versus reconcile and do not retry.
+  | "diverged";
 
 /**
  * Admin options for displaying the Component in the Admin UI.

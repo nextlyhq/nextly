@@ -395,6 +395,14 @@ describe("the published JSON Schema", () => {
                   "pattern": "^(?!(?:nextly\\/component-instance)$)[a-z0-9]+(?:-[a-z0-9]+)*\\/[a-z0-9]+(?:-[a-z0-9]+)*$",
                   "type": "string",
                 },
+                "parent": {
+                  "items": {
+                    "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*\\/[a-z0-9]+(?:-[a-z0-9]+)*$",
+                    "type": "string",
+                  },
+                  "minItems": 1,
+                  "type": "array",
+                },
                 "props": {
                   "additionalProperties": {},
                   "propertyNames": {
@@ -403,7 +411,19 @@ describe("the published JSON Schema", () => {
                   "type": "object",
                 },
                 "slots": {
-                  "additionalProperties": {},
+                  "additionalProperties": {
+                    "additionalProperties": {},
+                    "properties": {
+                      "allow": {
+                        "items": {
+                          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*\\/(?:[a-z0-9]+(?:-[a-z0-9]+)*|\\*)$",
+                          "type": "string",
+                        },
+                        "type": "array",
+                      },
+                    },
+                    "type": "object",
+                  },
                   "propertyNames": {
                     "type": "string",
                   },
@@ -438,7 +458,7 @@ describe("the published JSON Schema", () => {
             "type": "array",
           },
           "manifestVersion": {
-            "const": 1,
+            "const": 2,
             "type": "number",
           },
         },

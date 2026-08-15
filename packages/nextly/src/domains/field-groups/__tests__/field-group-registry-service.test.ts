@@ -356,6 +356,68 @@ describe("FieldGroupRegistryService", () => {
       expect(updateData.label).toBe("Renamed");
     });
 
+    // 🔴 How far a schema change GOT is not a property of the field list. Writing the status only
+    // alongside `fields` left it unwritable on its own — and the one caller who has an outcome and
+    // nothing else to say is a write that failed AFTER its DDL committed, which is exactly when the
+    // divergence needs recording.
+    it("writes migration_status on its own, with no field change", async () => {
+      ctx.adapter.selectOne.mockResolvedValue(dbRow({ locked: 0 }));
+      ctx.adapter.update.mockResolvedValue([dbRow()]);
+
+      await ctx.service.updateComponent(
+        "seo",
+        { migrationStatus: "failed" },
+        { source: "code" }
+      );
+
+      const updateData = ctx.adapter.update.mock.calls[0][1] as Record<
+        string,
+        unknown
+      >;
+      expect(updateData.migration_status).toBe("failed");
+      // The status says nothing about the shape, so neither the stored fields nor the optimistic
+      // lock may move with it. A bump here would invalidate every open editor for a row whose
+      // schema did not change.
+      expect(updateData.fields).toBeUndefined();
+      expect(updateData.schema_version).toBeUndefined();
+    });
+
+    // The control against the status becoming sticky: a later edit that says nothing about it must
+    // leave the column alone rather than resetting it.
+    it("leaves migration_status alone when the request does not carry one", async () => {
+      ctx.adapter.selectOne.mockResolvedValue(dbRow({ locked: 0 }));
+      ctx.adapter.update.mockResolvedValue([dbRow()]);
+
+      await ctx.service.updateComponent("seo", { label: "Renamed" });
+
+      const updateData = ctx.adapter.update.mock.calls[0][1] as Record<
+        string,
+        unknown
+      >;
+      expect(updateData.migration_status).toBeUndefined();
+    });
+
+    // 🔴 The optimistic lock has to move when the TABLES did, even though this write carries no new
+    // field set. `assertSchemaVersionMatch` is all that stands between an editor loaded before a
+    // partial transition and an apply against the tables that transition already moved.
+    it("advances schema_version when the caller says the shape diverged", async () => {
+      ctx.adapter.selectOne.mockResolvedValue(dbRow({ locked: 0 }));
+      ctx.adapter.update.mockResolvedValue([dbRow({ schema_version: 2 })]);
+
+      await ctx.service.updateComponent(
+        "seo",
+        { migrationStatus: "failed" },
+        { source: "code", invalidateSchemaVersion: true }
+      );
+
+      const updateData = ctx.adapter.update.mock.calls[0][1] as Record<
+        string,
+        unknown
+      >;
+      expect(updateData.schema_version).toBe(2);
+      expect(updateData.migration_status).toBe("failed");
+    });
+
     it("throws FORBIDDEN when locked and source is not 'code'", async () => {
       ctx.adapter.selectOne.mockResolvedValue(dbRow({ locked: 1 }));
 

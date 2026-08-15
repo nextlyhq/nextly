@@ -56,7 +56,6 @@ PR targets rather than the PR's own revision. On `push` it is the pushed commit.
 Do not carry a variable named `SHA` between contexts, and qualify the claim by
 event AND by base before relying on it.)
 
-
 **`set -o pipefail` is load-bearing, not tidiness.** Without it the exit status
 is `sort`'s, so an authentication failure, a rate limit or a transient 5xx from
 `gh` yields an empty list AND a success status — the precise false-clean this
@@ -274,7 +273,6 @@ then on, permanently, because a force-push can erase a tail and the surviving
 ref cannot prove otherwise. Taking a remedy from this file that disables the
 companion procedure is a bad trade for a retarget. Close-and-reopen also starts
 CI, with the caveat below.
-
 
 The check that follows depends on which you picked, and conflating them rejects
 a remedy that worked:
@@ -541,7 +539,6 @@ immediately violates, or a required check that the verdict process itself
 updates. Until one of those is configured, the honest description of everything
 above is a LOOK taken shortly before merging, not a boundary. Say which one you
 have.
-
 
 Note that its procedure and this one fail in opposite directions, which is why
 neither substitutes for the other. Content-verification confirmed #766 had

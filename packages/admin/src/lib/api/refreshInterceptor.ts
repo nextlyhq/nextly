@@ -65,13 +65,17 @@ export function setLoginRedirectPath(path: string): void {
  *   3. /admin/login mounts → PublicRoute checks setup-status,
  *      sees no users → navigateTo("/admin/setup"). Bounce.
  */
-const NO_REDIRECT_PUBLIC_PATHS = new Set([
+export const NO_REDIRECT_PUBLIC_PATHS = new Set([
   "/admin/login",
   "/admin/setup",
   "/admin/register",
   "/admin/forgot-password",
   "/admin/reset-password",
   "/admin/verify-email",
+  // An invited user reaching this page has no session yet, so a protected
+  // background query answers 401 exactly as it does on the others. Its absence
+  // bounced them to login and lost the invite token in the URL.
+  "/admin/accept-invite",
 ]);
 
 /**

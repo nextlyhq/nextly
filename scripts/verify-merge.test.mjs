@@ -67,16 +67,16 @@ const INTEGRATION_YML = readFileSync(
 const PR_IGNORE = workflowPathsIgnore(INTEGRATION_YML, "pull_request");
 const REQUIRED = requiredChecks(PR_IGNORE, { merged: false });
 
-/** Every required check present and green, which is what a pass needs. */
+/**
+ * Every required check present and green, which is what a pass needs.
+ *
+ * DERIVED from `requiredChecks` rather than listed again. A hand-written copy has to be updated
+ * by whoever adds a required check, and until they do these fixtures assert a pass over a
+ * revision that is missing one - so the suite would go red for a correct widening and green for
+ * a fixture that had silently stopped matching the thing it stands for.
+ */
 const TITLE = "Validate PR title follows Conventional Commits";
-const allGreen = () => [
-  green(CI),
-  green("gitleaks"),
-  green(TITLE),
-  green("Integration (postgres)"),
-  green("Integration (mysql)"),
-  green("Integration (sqlite)"),
-];
+const allGreen = () => REQUIRED.map(check => green(check.name));
 
 describe("countRewriteEvents", () => {
   it("counts events beyond the FIRST page", () => {
@@ -539,6 +539,7 @@ describe("missingRequired", () => {
         REQUIRED
       )
     ).toEqual([
+      "Comment convention (describes code, not process)",
       "Integration (postgres)",
       "Integration (mysql)",
       "Integration (sqlite)",
@@ -556,7 +557,7 @@ describe("missingRequired", () => {
         DOCS_CHANGE,
         REQUIRED
       )
-    ).toEqual([TITLE]);
+    ).toEqual(["Comment convention (describes code, not process)", TITLE]);
   });
 
   it("requires every check when the change set could not be read", () => {
@@ -565,6 +566,7 @@ describe("missingRequired", () => {
     // unreadable case resolves toward demanding evidence.
     expect(missingRequired([green("gitleaks")], undefined, REQUIRED)).toEqual([
       "Lint / Typecheck / Test / Build",
+      "Comment convention (describes code, not process)",
       "Integration (postgres)",
       "Integration (mysql)",
       "Integration (sqlite)",
@@ -576,6 +578,10 @@ describe("missingRequired", () => {
     expect(REQUIRED.map(c => c.name)).toEqual([
       "Lint / Typecheck / Test / Build",
       "gitleaks",
+      // An INDEPENDENT job: nothing depends on it, so deleting or renaming it
+      // produces no check-run for a failure check to reject, and the control
+      // would vanish in the same change it exists to judge.
+      "Comment convention (describes code, not process)",
       "Integration (postgres)",
       "Integration (mysql)",
       "Integration (sqlite)",

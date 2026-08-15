@@ -118,7 +118,6 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
   on a load-bearing assertion, and `pnpm --filter nextly... build` cleared it
   along with the `no-unresolved` error beside it.
 
-
   That is the dangerous half, because the two errors read differently. An
   unresolved import NAMES A PACKAGE and reads as environmental. A type-aware
   finding names YOUR EXPRESSION and reads as a correctness defect — and its

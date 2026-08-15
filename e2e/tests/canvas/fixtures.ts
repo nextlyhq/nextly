@@ -86,6 +86,42 @@ export const FLAT_LIST_FIXTURE: SeedOptions = {
 };
 
 /**
+ * A flat list PLUS an empty container, so both drop-zone shapes are on the page at once.
+ *
+ * `.nx-pb-dropzone` and `.nx-pb-dropzone-empty` are different elements with different markup and
+ * different states — the empty placeholder carries `data-active` alone — and the driver waits on
+ * both. A fixture with only one of them lets a guard read as covering the canvas while measuring
+ * half of it.
+ */
+export const BOTH_ZONE_SHAPES_FIXTURE: SeedOptions = {
+  title: "spike both zone shapes",
+  slug: "spike-both-zone-shapes",
+  content: {
+    version: DOCUMENT_VERSION,
+    kind: "page",
+    root: {
+      id: "nx-both-root",
+      type: "core/container",
+      props: { as: "div" },
+      slots: {
+        [DEFAULT_SLOT]: [
+          spacer("nx-both-0", "60px"),
+          spacer("nx-both-1", "60px"),
+          // No children, so its slot renders the empty placeholder rather than gap zones.
+          {
+            id: "nx-both-empty",
+            type: "core/container",
+            props: { as: "div" },
+            slots: { [DEFAULT_SLOT]: [] },
+          },
+        ],
+      },
+    },
+  },
+  blockIds: ["nx-both-root", "nx-both-0", "nx-both-1", "nx-both-empty"],
+};
+
+/**
  * Alternating 400px and 24px siblings, a ratio of about 16:1. dnd-kit #2088
  * reports the jitter as proportional to the ratio between the dragged element
  * and the one it moves over, so this is the condition under test.

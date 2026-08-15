@@ -68,24 +68,50 @@ function getSourceBadge(source?: FieldGroupSource): {
 }
 
 /** Migration-status badge variant + label. */
-function getMigrationBadge(status?: FieldGroupMigrationStatus): {
+type MigrationBadge = {
   variant: "success" | "warning" | "primary" | "default" | "destructive";
   label: string;
-} {
-  switch (status) {
-    case "synced":
-      return { variant: "success", label: "Synced" };
-    case "pending":
-      return { variant: "warning", label: "Pending" };
-    case "generated":
-      return { variant: "primary", label: "Generated" };
-    case "applied":
-      return { variant: "success", label: "Applied" };
-    case "failed":
-      return { variant: "destructive", label: "Failed" };
-    default:
-      return { variant: "default", label: "-" };
-  }
+};
+
+/** Every migration status this table can be handed, keyed so the compiler demands each one. */
+const MIGRATION_BADGES: Record<FieldGroupMigrationStatus, MigrationBadge> = {
+  synced: { variant: "success", label: "Synced" },
+  pending: { variant: "warning", label: "Pending" },
+  generated: { variant: "primary", label: "Generated" },
+  applied: { variant: "success", label: "Applied" },
+  failed: { variant: "destructive", label: "Failed" },
+  diverged: { variant: "destructive", label: "Diverged" },
+};
+
+function getMigrationBadge(status?: FieldGroupMigrationStatus): MigrationBadge {
+  // 🔴 An exhaustive Record rather than a switch with a `default`, and that is the control.
+  //
+  // A `default` arm silently absorbs any status added later: `diverged` rendered as `-` here — "no
+  // migration state", the opposite of what it means, and the state an operator most needs to find —
+  // while the sidebar indicator, which already keyed a Record off the same union, could not compile
+  // until it was handled. The compiler is a boundary; remembering to add a case is not.
+  //
+  // `undefined` keeps its own answer, because "this row has no status" is a real case and is not
+  // the same as an unhandled one.
+  if (!status) return { variant: "default", label: "-" };
+
+  // 🔴 A runtime fallback ON TOP of the exhaustive Record, not instead of it. The two catch
+  // different things and only one of them is a compile-time question.
+  //
+  // `migration_status` is an unconstrained `varchar(20)` and the registry casts whatever string it
+  // reads to this union, so the type is a claim about the column rather than a guarantee from it —
+  // a row written by an older release, a hand-edited row, or a future status arriving during a
+  // rolling deploy all land here as a value no entry covers. Indexing then yields `undefined` and
+  // the cell dereferences `.variant`, taking down the whole management view: the operator loses the
+  // page that would have shown them the offending row.
+  //
+  // This does NOT reopen the hole the Record closed. A new member of the union still fails to
+  // compile until it has an entry, because the Record is declared exhaustive OVER THE UNION; what
+  // this adds is an answer for values that were never in the union at all. The status is shown
+  // verbatim, so an operator sees what the column actually holds rather than a shrug.
+  return (
+    MIGRATION_BADGES[status] ?? { variant: "warning", label: String(status) }
+  );
 }
 
 /** Columns pinned as always-visible in the column toggle. */
@@ -136,10 +162,23 @@ export default function FieldGroupTable() {
     });
   };
 
+  // 🔴 Both filters go to the SERVER, and the table renders exactly what comes back.
+  //
+  // They used to be applied here, to `data.items` — one server-paginated page. A page is a window
+  // over the whole set, so narrowing it can only ever search the window: choosing "Diverged" showed
+  // an empty table whenever the diverged group sat on another page, hiding the one state an
+  // operator opens this screen to find. The counters had the same problem from the other side,
+  // since `meta.total` counts the unfiltered set.
+  //
+  // Asking the database once and rendering the answer also keeps the pager honest: `meta` now
+  // describes the filtered set, so page count, "hasNext" and the row range all agree with the rows.
   const { data, isLoading, isFetching, isError, error } = useFieldGroups({
     pagination: { page, pageSize },
     sorting: [],
-    filters: { search: debouncedSearch },
+    filters: {
+      search: debouncedSearch,
+      filters: { source: sourceFilter, migrationStatus: migrationFilter },
+    },
   });
 
   const { mutate: deleteFieldGroup, isPending: isDeleting } =
@@ -157,28 +196,21 @@ export default function FieldGroupTable() {
   // Selection is page-scoped: clear it whenever the page, search, or source
   // filter changes so a bulk action never targets rows that are no longer
   // shown/confirmed.
+  // `migrationFilter` belongs here for the same reason `sourceFilter` does, and it did not before
+  // only because the filter used to be applied after the fetch. Now that it changes which rows the
+  // SERVER returns, a selection made under one filter would otherwise survive into another result
+  // set and a bulk action would target rows the operator can no longer see.
   useEffect(() => {
     clearSelection();
-  }, [page, debouncedSearch, sourceFilter, clearSelection]);
+  }, [page, debouncedSearch, sourceFilter, migrationFilter, clearSelection]);
 
   const { mutate: bulkDeleteFieldGroups, isPending: isBulkDeleting } =
     useBulkDeleteFieldGroups();
 
-  const filteredData = useMemo(() => {
-    if (!data?.items) return [];
-    return data.items.filter(fieldGroup => {
-      if (sourceFilter !== "all" && fieldGroup.source !== sourceFilter) {
-        return false;
-      }
-      if (
-        migrationFilter !== "all" &&
-        fieldGroup.migrationStatus !== migrationFilter
-      ) {
-        return false;
-      }
-      return true;
-    });
-  }, [data?.items, sourceFilter, migrationFilter]);
+  // The rows ARE the answer to the filtered query, so there is nothing left to narrow here. A
+  // second filter over the same question is the drift this codebase has a rule about: two
+  // implementations agree the day they are written, and the one that runs last decides.
+  const filteredData = useMemo(() => data?.items ?? [], [data?.items]);
 
   // Code-first (locked) components open the same builder route; the builder
   // renders read-only when the loaded component is locked.
@@ -543,6 +575,14 @@ export default function FieldGroupTable() {
                     }
                   >
                     Failed
+                  </DropdownMenuCheckboxItem>
+                  <DropdownMenuCheckboxItem
+                    checked={migrationFilter === "diverged"}
+                    onCheckedChange={() =>
+                      handleMigrationFilterChange("diverged")
+                    }
+                  >
+                    Diverged
                   </DropdownMenuCheckboxItem>
                 </DropdownMenuContent>
               </DropdownMenu>
