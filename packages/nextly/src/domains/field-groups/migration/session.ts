@@ -1271,6 +1271,13 @@ async function acquireOwnerOnly(
     if (before === undefined) return { ok: false, heldBy: null };
     // Any owner blocks, because without an expiry there is no basis on which to judge a claim dead.
     // Guessing would mean stealing the lock from a migration that may still be writing.
+    //
+    // 🔴 This early return is BELT AND BRACES, not the guard. The `AND "owner" IS NULL` predicate on
+    // the UPDATE below is what actually enforces exclusion, and the read-back is what reports it —
+    // measured, by removing each in turn: dropping this line alone changes no behaviour and no test,
+    // while dropping the predicate lets a held row be overwritten. Said here because the opposite
+    // reading is the dangerous one: someone tidying the statement on the strength of this check
+    // would remove the only thing enforcing the claim.
     if (before.owner !== null) return { ok: false, heldBy: before.owner };
 
     await ctx.runStatement(
