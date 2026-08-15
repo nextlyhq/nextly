@@ -23,7 +23,10 @@
  * metadata service, and not the rest. Two shapes are open today:
  *
  * - a dispatcher handler that does the schema work itself instead of calling a service, which is
- *   how the Admin's confirmed apply saves both singles and field groups;
+ *   how the Admin's confirmed apply saves singles. The field-group apply took the same shape and
+ *   now takes this exclusion at the handler, because its divergence guard reads a status that a
+ *   concurrent write changes: a handler doing the work itself still has ONE depth where the read,
+ *   the DDL and the registry write meet, and that is where the lock belongs;
  * - a standalone route that writes the registry row directly, which changes what describes storage
  *   without touching storage, so nothing about it is visible in DDL.
  *
