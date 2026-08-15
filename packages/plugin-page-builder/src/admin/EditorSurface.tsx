@@ -135,39 +135,82 @@ export function EditorSurface() {
             data-refused={refusal ? "true" : undefined}
             style={{
               display: "inline-flex",
-              alignItems: "center",
-              gap: 6,
-              padding: "6px 12px",
-              borderRadius: "var(--radius)",
-              // Refusal reads as a colour AND as words. Colour alone excludes anyone who cannot
-              // distinguish these two, and the sentence is the part that says which rule stopped
-              // the drop, which no colour can carry.
-              background: refusal
-                ? "var(--nx-destructive)"
-                : "var(--nx-primary)",
-              color: refusal
-                ? "var(--nx-destructive-foreground)"
-                : "var(--nx-primary-foreground)",
-              fontSize: 13,
-              fontWeight: 600,
-              boxShadow: "0 8px 24px rgb(0 0 0 / 0.25)",
+              flexDirection: "column",
+              alignItems: "flex-start",
+              gap: 4,
               pointerEvents: "none",
-              whiteSpace: "nowrap",
             }}
           >
-            <span aria-hidden>{refusal ? "⃠" : "⠿"}</span>
-            {dragLabel(source?.data ?? {}, root, defaultBlockRegistry)}
-            {refusal ? (
-              // Announced politely rather than asserted: this text changes on every target the
-              // pointer crosses, and an assertive live region would interrupt on each one.
-              <span
-                role="status"
-                aria-live="polite"
-                style={{ fontWeight: 400, opacity: 0.9 }}
-              >
-                {dropRefusalMessage(refusal)}
-              </span>
-            ) : null}
+            <span
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "6px 12px",
+                borderRadius: "var(--radius)",
+                background: "var(--nx-primary)",
+                color: "var(--nx-primary-foreground)",
+                fontSize: 13,
+                fontWeight: 600,
+                boxShadow: "0 8px 24px rgb(0 0 0 / 0.25)",
+                whiteSpace: "nowrap",
+              }}
+            >
+              <span aria-hidden>⠿</span>
+              {dragLabel(source?.data ?? {}, root, defaultBlockRegistry)}
+            </span>
+            {/*
+             * Mounted for the WHOLE drag and only its text changes. A polite live region that
+             * enters the accessibility tree already carrying its first message is not reliably
+             * announced, so a region created at the moment of refusal can stay silent for the one
+             * case it exists to speak for. Empty, it renders nothing and occupies no space.
+             *
+             * Polite rather than assertive: this text changes on every target the pointer crosses,
+             * and an assertive region would interrupt on each one.
+             */}
+            <span
+              role="status"
+              aria-live="polite"
+              style={
+                refusal
+                  ? {
+                      // The explanation is normal-weight body text, so it needs the 4.5:1 text
+                      // ratio rather than the 3:1 allowed for UI boundaries. Painting it on the
+                      // destructive FILL cannot reach that: measured through the repository's own
+                      // resolver, `--nx-destructive-foreground` on `--nx-destructive` is 3.84:1 in
+                      // light mode. It sits on the page surface instead, where
+                      // `--nx-foreground` on `--nx-background` measures 20.41:1 light and 21:1
+                      // dark — a pairing the contrast suite already asserts.
+                      //
+                      // Refusal is then carried by the border, the mark and the words rather than
+                      // by a fill. `--nx-destructive` on `--nx-background` measures 3.73:1 light
+                      // and 6.90:1 dark, clearing the 3:1 a non-text boundary needs in both modes,
+                      // and the sentence says which rule applied where no colour could.
+                      display: "inline-flex",
+                      alignItems: "baseline",
+                      gap: 6,
+                      maxWidth: 260,
+                      padding: "5px 10px",
+                      borderRadius: "var(--radius)",
+                      border: "2px solid var(--nx-destructive)",
+                      background: "var(--nx-background)",
+                      color: "var(--nx-foreground)",
+                      fontSize: 12,
+                      fontWeight: 500,
+                      boxShadow: "0 8px 24px rgb(0 0 0 / 0.25)",
+                    }
+                  : undefined
+              }
+            >
+              {refusal ? (
+                <>
+                  <span aria-hidden style={{ color: "var(--nx-destructive)" }}>
+                    ⃠
+                  </span>
+                  {dropRefusalMessage(refusal)}
+                </>
+              ) : null}
+            </span>
           </div>
         )}
       </DragOverlay>
