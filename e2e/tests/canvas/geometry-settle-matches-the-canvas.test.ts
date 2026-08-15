@@ -310,30 +310,27 @@ async function geometrySpanMs(frame: Frame, rule: string): Promise<number> {
 /**
  * The rules that give a drop zone a transition, read from the RUNNING canvas.
  *
- * Two questions, and both are answered structurally rather than by matching text.
+ * EVERY stylesheet the canvas document carries, not one named sheet. The frame holds at least
+ * three — the admin-token mirror, the overlay, and the compiled document CSS — and the last is
+ * appended AFTER the overlay, so at equal specificity it wins the cascade. Reading only the
+ * overlay would miss a transition declared anywhere else while the pin stayed equal, which is the
+ * shape that lets the allowance pass over a zone that is still moving.
+ *
+ * Three questions, each answered structurally rather than by matching text:
+ *
+ * WHICH SHEETS: all of `document.styleSheets`, so a sheet added later is included without this
+ * reader being told about it.
  *
  * WHICH RULES APPLY: each rule's selector is tested against the probe elements with `matches`,
  * not searched for the substring `nx-pb-dropzone`. A rule can reach a drop zone without naming
- * its class — `[data-active]{transition:height .2s}` applies to one and contains no such text —
- * and a text filter drops it while the base rule keeps the pin equal, so the allowance passes
- * over a zone that moves for 200ms.
+ * its class — `[data-active]{transition:height .2s}` applies to one and contains no such text.
  *
- * WHICH DECLARE A TRANSITION: asked of the parsed declaration rather than of the rule's text, so
- * a shorthand, a longhand and a `var()` all answer the same way.
- *
- * Read from the stylesheet the browser parsed — `<style id="nx-pb-overlay">` in the canvas frame —
- * rather than from `IframeCanvas.tsx`. Reading the source would mean representing TypeScript,
- * where an array entry may be an identifier, a template literal or a call, and it cannot represent
- * the cascade at all, which is where a custom property's value is decided.
+ * WHICH DECLARE A TRANSITION: asked of the parsed declaration, so a shorthand, a longhand and a
+ * `var()` all answer alike.
  */
 async function transitionRules(frame: Frame): Promise<string[]> {
-  const rules = await frame.evaluate(
+  const result = await frame.evaluate(
     ([classes, states]) => {
-      const overlay = document.getElementById(
-        "nx-pb-overlay"
-      ) as HTMLStyleElement | null;
-      if (!overlay?.sheet) return null;
-
       const probe = document.createElement("div");
       document.body.append(probe);
       const applies = (selector: string) => {
@@ -347,8 +344,6 @@ async function transitionRules(frame: Frame): Promise<string[]> {
             try {
               if (probe.matches(selector)) return true;
             } catch {
-              // A selector this browser cannot parse matches nothing here, and the rule it came
-              // from cannot be measured either; the pin below reports it as a change.
               return false;
             }
           }
@@ -356,31 +351,54 @@ async function transitionRules(frame: Frame): Promise<string[]> {
         return false;
       };
 
-      const found = [...overlay.sheet.cssRules]
-        .filter((rule): rule is CSSStyleRule => "selectorText" in rule)
-        .filter(
-          rule =>
-            Boolean(
-              rule.style.transition ||
-                rule.style.transitionProperty ||
-                rule.style.transitionDuration
-            ) && applies(rule.selectorText)
-        )
-        .map(rule => rule.cssText);
+      const found: string[] = [];
+      const unreadable: string[] = [];
+      for (const sheet of [...document.styleSheets]) {
+        let rules: CSSRule[];
+        try {
+          rules = [...sheet.cssRules];
+        } catch {
+          // Collected, never skipped. A sheet this context may not read is "I could not look",
+          // and skipping it would report the same empty answer as a sheet with no transitions.
+          unreadable.push(sheet.href ?? "(inline)");
+          continue;
+        }
+        for (const rule of rules) {
+          if (!("selectorText" in rule)) continue;
+          const styleRule = rule as CSSStyleRule;
+          const declares = Boolean(
+            styleRule.style.transition ||
+              styleRule.style.transitionProperty ||
+              styleRule.style.transitionDuration
+          );
+          if (declares && applies(styleRule.selectorText)) {
+            found.push(styleRule.cssText);
+          }
+        }
+      }
       probe.remove();
-      return found;
+      return { found, unreadable, sheets: document.styleSheets.length };
     },
     [PROBE_CLASSES, PROBE_STATES] as const
   );
-  // An absent sheet would read as "no transitions here", which is the reassuring direction and
-  // would certify a canvas nobody looked at.
-  if (rules === null) {
+
+  // The canvas always injects at least the overlay. Zero sheets means this is not the canvas
+  // document, and an empty rule list from the wrong document reads exactly like a canvas with no
+  // transitions.
+  if (result.sheets === 0) {
     throw new Error(
-      "the canvas has no parsed #nx-pb-overlay stylesheet, so this test cannot see what the " +
-        "browser was given. It refuses rather than reporting an empty rule list."
+      "the canvas frame carries no stylesheets, so this test is not reading the canvas document. " +
+        "It refuses rather than reporting an empty rule list."
     );
   }
-  return rules;
+  if (result.unreadable.length > 0) {
+    throw new Error(
+      `these stylesheets in the canvas frame could not be read: ${result.unreadable.join(", ")}. ` +
+        "A transition declared in one would be invisible here, and an unreadable sheet reports " +
+        "the same nothing as a sheet with no transitions, so this refuses rather than guessing."
+    );
+  }
+  return result.found;
 }
 
 // The canvas iframe is only rendered above a certain width: the editor's rail, block library and
@@ -448,6 +466,33 @@ test.describe("the drop-zone geometry the probe waits on", () => {
 
     const found = await transitionRules(frame);
     expect(found.some(rule => rule.includes("data-active"))).toBe(true);
+  });
+
+  test("a transition in a DIFFERENT canvas sheet is still found", async ({
+    page,
+    request,
+  }) => {
+    const frame = await canvas(page, request);
+
+    // `#nx-pb-style` carries the compiled document CSS and is appended AFTER the overlay, so at
+    // equal specificity it wins the cascade. A reader scoped to the overlay would miss a
+    // transition declared here while the pin stayed equal — the allowance then covers a zone that
+    // is still moving.
+    const injected = await frame.evaluate(() => {
+      const page = document.getElementById(
+        "nx-pb-style"
+      ) as HTMLStyleElement | null;
+      page?.sheet?.insertRule(
+        ".nx-pb-dropzone{transition:height .25s}",
+        page.sheet.cssRules.length
+      );
+      return Boolean(page?.sheet);
+    });
+    // Observable, so the assertion below cannot pass against a sheet nobody touched.
+    expect(injected).toBe(true);
+
+    const found = await transitionRules(frame);
+    expect(found.some(rule => rule.includes("0.25s"))).toBe(true);
   });
 
   test("the driver's settle allowance covers every pinned rule", async ({
