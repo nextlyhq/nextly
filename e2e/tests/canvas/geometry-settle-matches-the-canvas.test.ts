@@ -37,7 +37,7 @@ import {
   type Page,
 } from "@playwright/test";
 
-import { FLAT_LIST_FIXTURE, seedPage } from "./fixtures";
+import { BOTH_ZONE_SHAPES_FIXTURE, seedPage } from "./fixtures";
 import {
   canvasFrameOf,
   createPocDriver,
@@ -354,10 +354,32 @@ test.describe("the drop-zone geometry the probe waits on", () => {
     request: APIRequestContext
   ): Promise<Frame> {
     await createPocDriver(page).mountTree(
-      await seedPage(request, FLAT_LIST_FIXTURE)
+      await seedPage(request, BOTH_ZONE_SHAPES_FIXTURE)
     );
     return canvasFrameOf(page);
   }
+
+  test("the fixture renders BOTH zone shapes, so the guards cover both", async ({
+    page,
+    request,
+  }) => {
+    const frame = await canvas(page, request);
+
+    // The population the pin and allowance guards below actually measure. Asserted by MEMBERSHIP
+    // rather than by a count: a fixture rendering only between-item zones lets those guards read
+    // as covering the canvas while measuring half of it, and that is invisible from their result.
+    const shapes = await frame.evaluate(() => ({
+      between: document.querySelectorAll(".nx-pb-dropzone").length,
+      empty: document.querySelectorAll(".nx-pb-dropzone-empty").length,
+    }));
+
+    expect(shapes.between).toBeGreaterThan(0);
+    expect(
+      shapes.empty,
+      "no empty placeholder rendered, so every guard in this file measures only the between-item " +
+        "zone while the driver waits on both shapes"
+    ).toBeGreaterThan(0);
+  });
 
   test("every drop-zone state still moves for as long as it did", async ({
     page,
