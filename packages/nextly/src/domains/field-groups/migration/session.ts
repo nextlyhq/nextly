@@ -676,8 +676,12 @@ export async function withMigrationSession<T>(
     // The row it would have contended for carries no expiry, so there is no live claim to respect.
     // The remedy is a single migration run, which adds the column on the branch that may.
     if (!(await lockTableUnderstandsExpiry(adapter, dialect))) {
+      // Describes the TABLE, which is established, rather than this session's outcome, which is not
+      // known until the claim below either succeeds or is refused. Saying "holding it by owner
+      // alone" here told an operator they held a lock and then, on the next line, that someone else
+      // did — and said it just as confidently when acquisition failed on a database error.
       args.logger?.warn?.(
-        "field-group migration lock predates its expiry column; holding it by owner alone",
+        "field-group migration lock predates its expiry column; falling back to an owner-only claim",
         {
           reason: "migration lock table is missing expires_at",
           table: MIGRATION_LOCK_TABLE,
@@ -703,16 +707,69 @@ export async function withMigrationSession<T>(
         });
       }
 
+      // 🔴 The interrupt handlers matter MORE on this path than on the expiry-aware one, and this is
+      // the branch that would most easily have gone without them.
+      //
+      // A terminated process never reaches the `finally` below, so a Ctrl+C would strand the claim —
+      // and this claim has NO EXPIRY to lapse. That does not merely block the next sync: it blocks
+      // the migration that would add `expires_at`, so the one action that permanently fixes the
+      // database is the action the stranded claim prevents. Watch mode documents Ctrl+C as the way
+      // to stop, so this is the ordinary path rather than an edge case.
+      let legacyReleasedOnSignal = false;
+      const releaseLegacyOnSignal = (signal: NodeJS.Signals): void => {
+        legacyReleasedOnSignal = true;
+        // The signal is re-raised whether or not the release succeeded, exactly as the expiry-aware
+        // path does it: a pool torn down by the same interrupt is the likely failure, and an
+        // unobserved rejection would surface instead of letting the process stop.
+        void releaseOwnerOnly(adapter, claim)
+          .catch(() => undefined)
+          .finally(() => {
+            process.kill(process.pid, signal);
+          });
+      };
+      const onLegacyInterrupt = (): void => releaseLegacyOnSignal("SIGINT");
+      const onLegacyTerminate = (): void => releaseLegacyOnSignal("SIGTERM");
+      if (args.releaseOnInterrupt === true) {
+        process.once("SIGINT", onLegacyInterrupt);
+        process.once("SIGTERM", onLegacyTerminate);
+      }
+
       // Held for real, so the caller is told so rather than being handed `not-held`. Nothing renews
       // it, because there is no lease to extend — see `acquireOwnerOnly` for what that gives up.
+      let heldToTheEnd = true;
+      let legacyResult: T;
       try {
-        return await fn({ ...session, lock: { kind: "held", owner: claim } });
+        legacyResult = await fn({
+          ...session,
+          lock: { kind: "held", owner: claim },
+        });
       } finally {
-        // Owner-scoped, and awaited so the row is free before this returns. A failure here leaves a
-        // claim an operator clears, which is the same residue an interrupted run leaves and is why
-        // the upgrade path exists.
-        await releaseOwnerOnly(adapter, claim).catch(() => undefined);
+        // Removed before releasing, so a signal arriving during an orderly release cannot start a
+        // second one.
+        process.off("SIGINT", onLegacyInterrupt);
+        process.off("SIGTERM", onLegacyTerminate);
+        // Owner-scoped, and its ANSWER is kept rather than discarded. Completing is not the same as
+        // having been protected while completing: if an operator or another actor cleared or took
+        // the row mid-run, the exclusion this session promised was not held, and reporting success
+        // would be the same false clean the expiry-aware path refuses at its own completion.
+        heldToTheEnd = await releaseOwnerOnly(adapter, claim);
       }
+
+      // Reached only when `fn` RESOLVED; a rejection propagates from the block above and keeps the
+      // caller's own failure primary. An interrupt is an orderly shutdown that already signalled its
+      // outcome, so it is not a lost claim.
+      if (!heldToTheEnd && !legacyReleasedOnSignal) {
+        throw NextlyError.serviceUnavailable({
+          logMessage:
+            "field-group migration finished without holding its lock; another run may have overlapped it",
+          logContext: {
+            reason: "migration lock was not held at completion",
+            table: MIGRATION_LOCK_TABLE,
+            label,
+          },
+        });
+      }
+      return legacyResult;
     }
   } else {
     await ensureLockRow(adapter, dialect);

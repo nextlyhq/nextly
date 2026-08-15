@@ -1208,6 +1208,98 @@ describe("field-group migration session", () => {
     expect(h.owner()).toBe("field-group-migration#other");
   });
 
+  /**
+   * 🔴 The interrupt matters MORE here than on the expiry-aware path, which is why it is pinned.
+   *
+   * A terminated process never reaches the `finally`, and this claim has NO EXPIRY to lapse. So a
+   * stranded claim does not merely block the next sync — it blocks the migration that would ADD
+   * `expires_at`, making the one action that permanently repairs the database the action the
+   * stranded claim prevents. Watch mode documents Ctrl+C as the way to stop, so this is the ordinary
+   * path rather than an edge case.
+   */
+  it("releases a legacy claim when the process is interrupted", async () => {
+    const h = createAdapter({
+      heldBy: null,
+      stateReadError: Object.assign(
+        new Error('column "expires_at" does not exist'),
+        { code: "42703" }
+      ),
+    });
+    const signals: string[] = [];
+    const kill = vi
+      .spyOn(process, "kill")
+      .mockImplementation((_pid: number, signal?: string | number) => {
+        signals.push(String(signal));
+        return true;
+      });
+    try {
+      let ownerWhileHeld: string | null = null;
+      await withMigrationSession(
+        {
+          adapter: h.adapter,
+          dialect: "postgresql",
+          label: "sync-1",
+          requireExistingLock: true,
+          releaseOnInterrupt: true,
+        },
+        async () => {
+          ownerWhileHeld = h.owner();
+          process.emit("SIGINT");
+          // Let the signal path settle before the callback returns, so this observes the handler
+          // rather than the ordinary release in `finally`.
+          await new Promise(resolve => setImmediate(resolve));
+          expect(h.owner()).toBeNull();
+        }
+      );
+
+      expect(ownerWhileHeld).toMatch(/^sync-1#/);
+      expect(signals).toContain("SIGINT");
+    } finally {
+      kill.mockRestore();
+    }
+  });
+
+  /**
+   * Completing is not the same as having been protected while completing. If an operator clears the
+   * row — plausible on this path, since a claim with no expiry is exactly the thing an operator is
+   * told to clear by hand — the exclusion this session promised was not held for the whole run.
+   *
+   * The expiry-aware path refuses at completion for the same reason, and the answer was already
+   * computed here and thrown away.
+   */
+  it("fails a legacy run whose claim was taken while it worked", async () => {
+    const h = createAdapter({
+      heldBy: null,
+      stateReadError: Object.assign(
+        new Error('column "expires_at" does not exist'),
+        { code: "42703" }
+      ),
+    });
+
+    const failure = await withMigrationSession(
+      {
+        adapter: h.adapter,
+        dialect: "postgresql",
+        label: "sync-1",
+        requireExistingLock: true,
+      },
+      async () => {
+        // Someone else takes the row mid-run, exactly as clearing and re-claiming it would.
+        h.takeOver("someone-else");
+        return "done";
+      }
+    ).catch((error: unknown) => error);
+
+    expect(NextlyError.is(failure)).toBe(true);
+    if (NextlyError.is(failure)) {
+      // The REASON, because "held elsewhere at acquisition" and "lost during the run" are different
+      // events with the same status code and different remedies.
+      expect(failure.logContext?.reason).toBe(
+        "migration lock was not held at completion"
+      );
+    }
+  });
+
   // A claim that outlived a failed callback would block every later sync on a table that cannot
   // expire it, so the release has to be in a `finally` rather than on the happy path.
   it("clears its legacy claim even when the work throws", async () => {
