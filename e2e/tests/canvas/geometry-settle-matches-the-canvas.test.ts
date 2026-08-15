@@ -151,8 +151,19 @@ async function geometrySpanMs(
         // once, and a rule keyed on both is invisible to either alone.
         const attrs = appliedState ? (appliedState as string).split(" ") : [];
         const had = attrs.filter(a => el.hasAttribute(a));
-        for (const a of attrs) el.setAttribute(a, "");
-        const computed = getComputedStyle(el);
+        // The VALUE React renders, not an empty string. `DropZone` passes
+        // `data-active={isDropTarget || undefined}`, so the real DOM carries `data-active="true"`
+        // and a rule keyed on that value would not match a probe that set `""`.
+        for (const a of attrs) el.setAttribute(a, "true");
+        // The element and its pseudo-elements. A `::before` that animates height inside an
+        // auto-sized zone moves the zone's own bottom edge, and its timing appears in no computed
+        // longhand of the element itself.
+        const surfaces = [
+          getComputedStyle(el),
+          getComputedStyle(el, "::before"),
+          getComputedStyle(el, "::after"),
+        ];
+        const computed = surfaces[0];
 
         // A running animation moves the edge for its whole duration whatever it animates, because
         // the keyframes are not inspectable from here. Charged in full rather than skipped.
@@ -201,6 +212,17 @@ async function geometrySpanMs(
               cycled(durations, i) * cycled(counts, i) + cycled(delays, i)
             );
           });
+        }
+
+        for (const pseudo of surfaces.slice(1)) {
+          if (pseudo.animationName !== "none") {
+            const pd = ms(pseudo.animationDuration);
+            const pdelay = ms(pseudo.animationDelay);
+            pseudo.animationName.split(",").forEach((name, i) => {
+              if (name.trim() === "none") return;
+              longest = Math.max(longest, cycled(pd, i) + cycled(pdelay, i));
+            });
+          }
         }
 
         const properties = computed.transitionProperty
@@ -600,6 +622,57 @@ test.describe("the drop-zone geometry the probe waits on", () => {
         ).length
     );
     expect(leftBehind).toBe(0);
+  });
+
+  test("a rule keyed on the attribute VALUE React renders is matched", async ({
+    page,
+    request,
+  }) => {
+    const frame = await canvas(page, request);
+
+    // `DropZone` passes `data-active={isDropTarget || undefined}`, so React renders the string
+    // "true". A probe setting `""` matches `[data-active]` but not `[data-active="true"]`, and
+    // the miss is silent - the zone reports no movement at all.
+    const injected = await frame.evaluate(() => {
+      const sheet = (
+        document.getElementById("nx-pb-style") as HTMLStyleElement | null
+      )?.sheet;
+      sheet?.insertRule(
+        '.nx-pb-dropzone[data-active="true"] { transition: height .2s }',
+        sheet.cssRules.length
+      );
+      return Boolean(sheet);
+    });
+    expect(injected).toBe(true);
+
+    expect(await geometrySpanMs(frame, "data-active")).toBe(200);
+  });
+
+  test("an animation on a zone PSEUDO-element is charged", async ({
+    page,
+    request,
+  }) => {
+    const frame = await canvas(page, request);
+
+    // A ::before animating height inside an auto-sized zone moves the zone's own bottom edge,
+    // and its timing is in no computed longhand of the element itself.
+    const injected = await frame.evaluate(() => {
+      const sheet = (
+        document.getElementById("nx-pb-style") as HTMLStyleElement | null
+      )?.sheet;
+      sheet?.insertRule(
+        "@keyframes nx-pseudo { from { height: 0 } to { height: 6px } }",
+        sheet.cssRules.length
+      );
+      sheet?.insertRule(
+        '.nx-pb-dropzone::before { content: ""; animation: nx-pseudo .4s }',
+        sheet.cssRules.length
+      );
+      return Boolean(sheet);
+    });
+    expect(injected).toBe(true);
+
+    expect(await geometrySpanMs(frame, null)).toBe(400);
   });
 
   test("it refuses rather than reporting a zero it cannot stand behind", async ({
