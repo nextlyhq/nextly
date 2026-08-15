@@ -8,54 +8,95 @@ import { createRequire } from "node:module";
 // the release actually sees.
 const changelog = createRequire(import.meta.url)("./changelog.cjs");
 
-const { oneAtATime, cachedGetInfo, byCommit } = changelog;
+const { oneAtATime, cachedGetInfo, cachedGetInfoFromPullRequest, byCommit, byPullRequest, upstream } = changelog;
 
-describe("the getInfo cache", () => {
-  it("replaces the dependency's exported lookup", async () => {
-    // The wrap works because `changelog-github` reaches its dependency through a namespace
-    // property at CALL time rather than capturing the function at import. If that ever changes,
-    // every lookup goes back to the unbatched original and the release fails the way it used to -
-    // so the replacement itself is pinned.
+describe("the lookup cache", () => {
+  /**
+   * Swap the real network call for a stub, and put it back.
+   *
+   * `async`, and it AWAITS: a synchronous `finally` restores the real function the moment `run`
+   * returns its promise, so the awaited work would run against the real lookup and the suite
+   * would become network-dependent - the state this helper exists to prevent.
+   */
+  async function withStub(name, impl, run) {
+    const real = upstream[name];
+    upstream[name] = impl;
+    try {
+      return await run();
+    } finally {
+      upstream[name] = real;
+    }
+  }
+
+  it("replaces BOTH of the dependency's exported lookups", () => {
+    // A changeset summary carrying `pr: #123` routes through `getInfoFromPullRequest` instead of
+    // `getInfo`. Wrapping one door leaves the other unbatched, which is the same oversized
+    // document arriving by a route nobody looked at.
     const live = createRequire(import.meta.url)("@changesets/get-github-info");
     expect(live.getInfo).toBe(cachedGetInfo);
+    expect(live.getInfoFromPullRequest).toBe(cachedGetInfoFromPullRequest);
   });
 
-  it("returns the SAME promise for a repeated commit", async () => {
-    // What memoisation means here, asserted without a network call: a second ask reuses the first
-    // lookup rather than starting another. `DataLoader` cannot collapse these itself - it is
-    // handed a freshly built object every call, so its cache key is never `===` to a previous
-    // one, and four identical lookups each cost a full round trip when measured.
-    //
-    // The key is read back from the map rather than spelled again here. Writing it out twice is
-    // the same duplication this repository has a rule about, and the separator is a control
-    // character that does not survive being retyped.
+  it("asks the real lookup once for a repeated commit", async () => {
+    // Counted THROUGH the wrapper, so memoisation is what is observed. `DataLoader` cannot
+    // collapse these itself - it is handed a freshly built object every call, so its key is never
+    // `===` to a previous one.
     byCommit.clear();
-    const seeded = Promise.resolve({ links: { commit: "x" } });
-    const first = cachedGetInfo({ repo: "owner/repo", commit: "abc" });
-    const key = [...byCommit.keys()][0];
-    byCommit.set(key, seeded);
-
-    expect(cachedGetInfo({ repo: "owner/repo", commit: "abc" })).toBe(seeded);
-    expect(byCommit.size).toBe(1);
-    await first.catch(() => undefined);
+    let calls = 0;
+    await withStub("getInfo", async () => ((calls += 1), { links: { commit: "x" } }), async () => {
+      await cachedGetInfo({ repo: "owner/repo", commit: "abc" });
+      await cachedGetInfo({ repo: "owner/repo", commit: "abc" });
+      await cachedGetInfo({ repo: "owner/repo", commit: "abc" });
+    });
+    expect(calls).toBe(1);
   });
 
-  it("keys on the repo as well as the commit", () => {
+  it("keys on the repo as well as the commit", async () => {
     // Two repositories can carry the same commit id, and their links differ.
     byCommit.clear();
-    cachedGetInfo({ repo: "owner/repo", commit: "abc" }).catch(() => undefined);
-    cachedGetInfo({ repo: "other/repo", commit: "abc" }).catch(() => undefined);
-    expect(byCommit.size).toBe(2);
+    let calls = 0;
+    await withStub("getInfo", async () => ((calls += 1), { links: {} }), async () => {
+      await cachedGetInfo({ repo: "owner/repo", commit: "abc" });
+      await cachedGetInfo({ repo: "other/repo", commit: "abc" });
+    });
+    expect(calls).toBe(2);
   });
 
-  it("does not cache a rejection", async () => {
-    // A cached failure would be a permanent hole in the changelog for that commit, for the rest
-    // of the run, from one transient error.
+  it("memoises pull-request lookups on their own key", async () => {
+    byPullRequest.clear();
+    let calls = 0;
+    await withStub("getInfoFromPullRequest", async () => ((calls += 1), { links: {} }), async () => {
+      await cachedGetInfoFromPullRequest({ repo: "owner/repo", pull: 12 });
+      await cachedGetInfoFromPullRequest({ repo: "owner/repo", pull: 12 });
+      await cachedGetInfoFromPullRequest({ repo: "owner/repo", pull: 13 });
+    });
+    expect(calls).toBe(2);
+  });
+
+  it("evicts a rejection so a retry can succeed", async () => {
+    // Driven THROUGH the wrapper, because the point is that the eviction RUNS. Seeding a rejected
+    // promise into the map and clearing it by hand passes whether or not the eviction exists,
+    // which is what the previous version of this test did.
     byCommit.clear();
-    byCommit.set("owner/repo bad", Promise.reject(new Error("boom")));
-    await expect(byCommit.get("owner/repo bad")).rejects.toThrow("boom");
-    byCommit.clear();
-    expect(byCommit.size).toBe(0);
+    let calls = 0;
+    await withStub(
+      "getInfo",
+      async () => {
+        calls += 1;
+        if (calls === 1) throw new Error("transient");
+        return { links: { commit: "second" } };
+      },
+      async () => {
+        await expect(cachedGetInfo({ repo: "owner/repo", commit: "abc" })).rejects.toThrow(
+          "transient"
+        );
+        // A cached failure would be a permanent hole in the changelog for that commit.
+        await expect(cachedGetInfo({ repo: "owner/repo", commit: "abc" })).resolves.toEqual({
+          links: { commit: "second" },
+        });
+      }
+    );
+    expect(calls).toBe(2);
   });
 });
 

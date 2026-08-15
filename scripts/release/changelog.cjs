@@ -62,24 +62,56 @@ function oneAtATime(work) {
  * in the changelog for that commit, for the rest of the run.
  */
 const byCommit = new Map();
+const byPullRequest = new Map();
 
-function cachedGetInfo(request) {
-  const key = `${request.repo}\u0000${request.commit}`;
-  const existing = byCommit.get(key);
-  if (existing) return existing;
+/**
+ * The real implementations, captured before the properties are replaced.
+ *
+ * Held in one object so a test can substitute them without a live GitHub request. Assigning the
+ * wrapper first and reading the property back inside it would recurse instead.
+ */
+const upstream = {
+  getInfo: getGithubInfo.getInfo,
+  getInfoFromPullRequest: getGithubInfo.getInfoFromPullRequest,
+};
 
-  const pending = oneAtATime(() => original(request)).catch(error => {
-    byCommit.delete(key);
-    throw error;
-  });
-  byCommit.set(key, pending);
-  return pending;
+function memoise(cache, keyOf, call) {
+  return request => {
+    const key = keyOf(request);
+    const existing = cache.get(key);
+    if (existing) return existing;
+
+    const pending = oneAtATime(() => call(request)).catch(error => {
+      cache.delete(key);
+      throw error;
+    });
+    cache.set(key, pending);
+    return pending;
+  };
 }
 
-// Captured before the property is replaced, so the wrapper calls the real implementation rather
-// than itself. Assigning the wrapper first and reading the property inside it would recurse.
-const original = getGithubInfo.getInfo;
+const cachedGetInfo = memoise(
+  byCommit,
+  request => `${request.repo}\u0000${request.commit}`,
+  request => upstream.getInfo(request)
+);
+
+/**
+ * The other door into the same API.
+ *
+ * A changeset summary may carry `pr: #123`, and the generator then calls
+ * `getInfoFromPullRequest` instead of `getInfo`. Wrapping only one leaves those lookups
+ * unbatched and unmemoised, which is the same oversized document arriving by a route nobody
+ * looked at.
+ */
+const cachedGetInfoFromPullRequest = memoise(
+  byPullRequest,
+  request => `${request.repo}\u0000${request.pull}`,
+  request => upstream.getInfoFromPullRequest(request)
+);
+
 getGithubInfo.getInfo = cachedGetInfo;
+getGithubInfo.getInfoFromPullRequest = cachedGetInfoFromPullRequest;
 
 const changelogFunctions = {
   getReleaseLine: (changeset, type, options) =>
@@ -92,4 +124,7 @@ module.exports = changelogFunctions;
 module.exports.default = changelogFunctions;
 module.exports.oneAtATime = oneAtATime;
 module.exports.cachedGetInfo = cachedGetInfo;
+module.exports.cachedGetInfoFromPullRequest = cachedGetInfoFromPullRequest;
 module.exports.byCommit = byCommit;
+module.exports.byPullRequest = byPullRequest;
+module.exports.upstream = upstream;
