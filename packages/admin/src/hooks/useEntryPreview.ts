@@ -70,8 +70,17 @@ export interface UseEntryPreviewOptions {
 export type PreviewUnavailableReason =
   /** Declared, but not for this entry yet — no slug, wrong status. */
   | "unavailable"
-  /** No site URL is configured, so no host can be named. */
+  /**
+   * No usable site URL is configured, so no host can be named. Covers an absent
+   * setting and one the browser would execute rather than navigate to.
+   */
   | "noSiteUrl"
+  /**
+   * The browser refused the new tab. Distinct from every other reason because
+   * nothing is wrong with the entry or the configuration — the editor can allow
+   * popups and click again.
+   */
+  | "popupBlocked"
   /** The request itself failed. */
   | "failed";
 
@@ -126,6 +135,19 @@ export function useEntryPreview({
 
     const openInNewTab = previewConfig?.openInNewTab !== false;
 
+    // BEFORE the tab is opened, because a new browsing context receives a COPY
+    // of session storage taken when it is created. A write afterwards stays in
+    // this window, the new tab never sees the key, and the preview silently
+    // renders the last saved values instead of what is on screen — the exact
+    // failure the unsaved-data path exists to prevent.
+    const previewKey = unsavedData
+      ? storePreviewData(
+          collection.name,
+          entry?.id as string | undefined,
+          dataToPreview
+        )
+      : undefined;
+
     // Opened NOW, synchronously, while the click is still on the stack. A window
     // opened after an `await` has lost the user-gesture context and Safari and
     // Firefox block it, so the tab is claimed first and navigated once the URL
@@ -137,6 +159,16 @@ export function useEntryPreview({
     // which it cannot reach back through `window.opener`.
     const target = openInNewTab ? window.open("", "_blank") : null;
     if (target) target.opener = null;
+
+    // A blocked popup is NOT the same as a collection that asked to open in
+    // place. Falling back to navigating this window would take the editor off
+    // the form they are editing and discard everything unsaved, so it is
+    // reported instead — the browser's own blocked-popup affordance is what lets
+    // them retry.
+    if (openInNewTab && !target) {
+      onUnavailable?.("popupBlocked");
+      return;
+    }
 
     const abandon = (reason: PreviewUnavailableReason) => {
       target?.close();
@@ -161,16 +193,11 @@ export function useEntryPreview({
 
       // Unsaved values travel through session storage rather than the URL, so
       // the preview renders what is on screen instead of what was last saved.
-      const url = unsavedData
-        ? generatePreviewUrlWithData(
-            resolution.url,
-            storePreviewData(
-              collection.name,
-              entry?.id as string | undefined,
-              dataToPreview
-            )
-          )
-        : resolution.url;
+      // The payload was written above; only the key is appended here.
+      const url =
+        previewKey === undefined
+          ? resolution.url
+          : generatePreviewUrlWithData(resolution.url, previewKey);
 
       if (target) target.location.href = url;
       else window.location.href = url;

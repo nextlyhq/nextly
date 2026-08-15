@@ -67,6 +67,11 @@ export type PreviewUrlResolution =
   /**
    * A path was produced and nothing can name a host for it. Distinct from every
    * case above because a guess IS available here and is wrong.
+   *
+   * Covers a site URL that is absent AND one that is unusable — a scheme the
+   * browser would execute rather than navigate to, which is refused rather than
+   * returned. Both share one remedy: an administrator sets a real site URL. They
+   * are merged for that reason and not because they are the same event.
    */
   | { status: "noSiteUrl"; path: string };
 
@@ -107,6 +112,44 @@ function asUrlSegment(value: unknown): string | null {
   if (typeof value === "boolean") return String(value);
   if (typeof value === "bigint") return value.toString();
   return null;
+}
+
+/**
+ * The schemes a resolved preview URL may carry.
+ *
+ * The result of this module is assigned to `location.href` by the admin, so what
+ * comes back is not a string — it is something the browser will EXECUTE if the
+ * scheme says so. `javascript:` and `data:` both run script in the assigning
+ * document's origin, which for the preview tab is the admin's own.
+ *
+ * An allowlist rather than a check for the two known-bad schemes: `vbscript:`,
+ * `blob:` and whatever a future engine adds would each need their own entry, and
+ * the gap would be silent. Naming what may navigate cannot develop that gap.
+ */
+const NAVIGABLE_PROTOCOLS = new Set(["http:", "https:"]);
+
+/**
+ * Parse `value` as an absolute URL that is safe to navigate to, or null.
+ *
+ * One predicate for both places an absolute URL enters this module — the site
+ * URL read from settings, and a declaration that returned a full URL itself — so
+ * the two cannot end up holding different opinions about what is navigable.
+ *
+ * The site URL is the reason this exists. It is stored through an API whose
+ * schema is `z.string().url()`, and that accepts any scheme the WHATWG parser
+ * does: `javascript:alert(1)` validates. Without this, such a value would be
+ * concatenated with a path, returned as `resolved`, and assigned to a
+ * same-origin blank tab — turning a settings write into script execution in the
+ * admin for whoever next clicks Preview.
+ */
+function asNavigableUrl(value: string): URL | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return null;
+  }
+  return NAVIGABLE_PROTOCOLS.has(parsed.protocol) ? parsed : null;
 }
 
 /**
@@ -173,14 +216,22 @@ export function resolvePreviewUrl({
 
   if (path === null || path === "") return { status: "unavailable" };
 
-  if (/^https?:\/\//i.test(path)) return { status: "resolved", url: path };
+  // An author who returned a full URL named the host deliberately, so it is not
+  // re-based against the configured site. It still has to be navigable: the
+  // declaration is user code and may compute anything.
+  const absolute = asNavigableUrl(path);
+  if (absolute) return { status: "resolved", url: path };
 
-  if (!siteUrl) return { status: "noSiteUrl", path };
+  // A relative path cannot carry a scheme, so it needs no such check — a value
+  // like `javascript:...` fails to parse as absolute above and lands here, where
+  // joining it under the site's origin makes it an ordinary path segment.
+  const base = siteUrl === null ? null : asNavigableUrl(siteUrl);
+  if (!base) return { status: "noSiteUrl", path };
 
   // Join without doubling or dropping the separator: the configured site may or
   // may not carry a trailing slash, and an authored path may or may not lead
   // with one.
-  const base = siteUrl.replace(/\/+$/, "");
+  const origin = `${base.origin}${base.pathname}`.replace(/\/+$/, "");
   const suffix = path.startsWith("/") ? path : `/${path}`;
-  return { status: "resolved", url: `${base}${suffix}` };
+  return { status: "resolved", url: `${origin}${suffix}` };
 }

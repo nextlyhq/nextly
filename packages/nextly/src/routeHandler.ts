@@ -342,6 +342,7 @@ const DIRECT_DISPATCH_SERVICES = new Set<string>([
   "webhooks",
   "generalSettings",
   "previewLinks",
+  "previewUrl",
   "imageSizes",
   "dashboard",
   "schema",

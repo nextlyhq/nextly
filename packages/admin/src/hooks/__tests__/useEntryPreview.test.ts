@@ -219,6 +219,61 @@ describe("openPreview", () => {
     expect(tab.location.href).toBe("https://s.dev/p/new?__preview=preview-key");
   });
 
+  it("stores unsaved data BEFORE opening the tab, not after", async () => {
+    const tab = fakeTab();
+    const order: string[] = [];
+    const { storePreviewData } = await import(
+      "@admin/lib/preview/preview-data"
+    );
+    vi.mocked(storePreviewData).mockImplementation(() => {
+      order.push("store");
+      return "preview-key";
+    });
+    openSpy.mockImplementation(() => {
+      order.push("open");
+      return tab as unknown as Window;
+    });
+    resolve.mockResolvedValue({ status: "resolved", url: "https://s.dev/p/1" });
+
+    const { result } = renderHook(() =>
+      useEntryPreview({
+        collection,
+        entry: { id: "1" },
+        getFormValues: () => ({ slug: "edited" }),
+      })
+    );
+    await act(async () => {
+      await result.current.openPreview();
+    });
+
+    // A new browsing context gets a COPY of session storage taken at creation.
+    // Written afterwards, the key stays in this window and the preview silently
+    // shows the last saved values instead of the edits on screen.
+    expect(order).toEqual(["store", "open"]);
+  });
+
+  it("reports a blocked popup instead of navigating the admin away", async () => {
+    // window.open returns null when the browser blocks it.
+    openSpy.mockReturnValue(null);
+    resolve.mockResolvedValue({ status: "resolved", url: "https://s.dev/p/1" });
+    const onUnavailable = vi.fn();
+    const before = window.location.href;
+
+    const { result } = renderHook(() =>
+      useEntryPreview({ collection, entry: { id: "1" }, onUnavailable })
+    );
+    await act(async () => {
+      await result.current.openPreview();
+    });
+
+    // Falling back to this window would take the editor off the form and
+    // discard every unsaved change — the opposite of what preview is for.
+    expect(window.location.href).toBe(before);
+    expect(onUnavailable).toHaveBeenCalledWith("popupBlocked");
+    // And it must not even ask: the click cannot succeed either way.
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
   it("navigates the current window when the collection opts out of a new tab", async () => {
     resolve.mockResolvedValue({ status: "resolved", url: "https://s.dev/p/1" });
 
