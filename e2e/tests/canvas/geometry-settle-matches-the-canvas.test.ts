@@ -775,10 +775,10 @@ test.describe("the drop-zone geometry the probe waits on", () => {
   }) => {
     const frame = await canvas(page, request);
 
-    // `DropZone`'s empty branch renders `data-active` only; `data-drag` appears on the
-    // between-item zone. A rule keyed on `[data-drag]` for an empty zone can never fire, so
-    // measuring it would pin a span for movement the canvas cannot produce.
-    const injected = await frame.evaluate(() => {
+    // This fixture renders no empty zones - measured: 7 `.nx-pb-dropzone`, 0
+    // `.nx-pb-dropzone-empty` - so one is created here. Without it the assertion below passes
+    // because its subject does not exist, which is coverage that is not there.
+    const present = await frame.evaluate(() => {
       const sheet = (
         document.getElementById("nx-pb-style") as HTMLStyleElement | null
       )?.sheet;
@@ -786,10 +786,17 @@ test.describe("the drop-zone geometry the probe waits on", () => {
         ".nx-pb-dropzone-empty[data-drag] { transition: height .3s }",
         sheet.cssRules.length
       );
-      return Boolean(sheet);
+      const el = document.createElement("div");
+      el.className = "nx-pb-dropzone-empty";
+      document.body.append(el);
+      return document.querySelectorAll(".nx-pb-dropzone-empty").length;
     });
-    expect(injected).toBe(true);
+    // The population, asserted before the verdict: zero here means the test measured nothing.
+    expect(present).toBeGreaterThan(0);
 
+    // `DropZone`'s empty branch renders `data-active` only; `data-drag` belongs to the
+    // between-item zone. A rule keyed on `[data-drag]` for an empty zone can never fire, so
+    // measuring it would pin a span for movement the canvas cannot produce.
     expect(await geometrySpanMs(frame, "data-drag")).toBe(0);
   });
 
