@@ -175,27 +175,39 @@ async function geometrySpanMs(
         // The element and its pseudo-elements. A `::before` that animates height inside an
         // auto-sized zone moves the zone's own bottom edge, and its timing appears in no computed
         // longhand of the element itself.
-        // Two ways an effect's real timing is not in any computed longhand, and both are REFUSED
-        // rather than ignored: this file measures DECLARED CSS timing, and an effect it cannot
-        // read moves the edge just as surely.
+        // Three ways an effect's real timing is not in any computed longhand read below, and all
+        // three are REFUSED rather than ignored: this file measures DECLARED CSS timing on the
+        // zone and its pseudo-elements, and an effect it cannot read moves the edge just as surely.
         //
         // 1. A JS-driven animation carries its timing in the Web Animations API alone.
         // 2. A DECLARATIVE animation whose playback rate has been changed through that same API is
         //    still a `CSSAnimation`, so a class test accepts it, while `animationDuration` keeps
         //    reporting the declared time. At rate 0.5 the edge moves for twice as long; at rate 0
         //    it never finishes. The declaration has stopped being a statement about the edge.
+        // 3. A declarative effect on a DESCENDANT. An in-flow child that animates its own height
+        //    or margin moves an auto-sized zone's bottom edge, and its timing is in no longhand of
+        //    the zone — so accepting it here while reading timing only from the zone reports zero
+        //    for movement that is happening. Refused rather than measured because the two are
+        //    different questions: what a descendant contributes to its ancestor's box depends on
+        //    layout, and an animation's keyframes are not inspectable from here at all, so there
+        //    is no honest number to charge.
         //
-        // `subtree: true` because this function charges `::before` and `::after` CSS timing a few
-        // lines below: reading their scripted timing off a narrower population would refuse on the
-        // element and wave the pseudo-element through. It admits descendants too, which is the
-        // conservative direction — a child cannot move the fixed-height between-item zone's edge,
-        // but it can move an auto-height empty placeholder's.
+        // `subtree: true` is what makes 1 and 3 visible. It is required for 1 regardless, since
+        // this function charges `::before` and `::after` CSS timing a few lines below and a
+        // narrower population would refuse on the element while waving the pseudo-element through.
+        const own = (a: Animation) => {
+          const target = (a.effect as KeyframeEffect | null)?.target;
+          // A pseudo-element's effect reports the ORIGINATING element as its target, so this keeps
+          // `::before` and `::after` on the readable side — their longhands are read below.
+          return target === el;
+        };
         const unreadable = el
           .getAnimations({ subtree: true })
           .filter(
             a =>
               (!(a instanceof CSSAnimation) && !(a instanceof CSSTransition)) ||
-              a.playbackRate !== 1
+              a.playbackRate !== 1 ||
+              !own(a)
           );
         if (unreadable.length > 0) {
           // Restored BEFORE returning. An early return that skips cleanup leaves the probe's
@@ -346,11 +358,12 @@ async function geometrySpanMs(
   }
   if (result.zones === -1) {
     throw new Error(
-      "a drop zone is running an effect whose real timing is not in any computed longhand: either " +
-        "an animation driven by the Web Animations API rather than declared in CSS, or a declared " +
-        "one whose playback rate was changed through that API, which leaves the declared duration " +
-        "describing something other than how long the edge moves. This measurement cannot see " +
-        "either, so it refuses instead of reporting a span that ignores it."
+      "a drop zone is running an effect whose real timing is not in any computed longhand this " +
+        "reads: an animation driven by the Web Animations API rather than declared in CSS, a " +
+        "declared one whose playback rate was changed through that API, or a declarative effect " +
+        "on a DESCENDANT — whose in-flow movement changes an auto-sized zone's own edge while its " +
+        "timing appears in no longhand of the zone. This measurement cannot see any of them, so " +
+        "it refuses instead of reporting a span that ignores one."
     );
   }
   if (result.zones === 0) {
@@ -898,6 +911,53 @@ test.describe("the drop-zone geometry the probe waits on", () => {
     // between-item zone. A rule keyed on `[data-drag]` for an empty zone can never fire, so
     // measuring it would pin a span for movement the canvas cannot produce.
     expect(await geometrySpanMs(frame, "data-drag")).toBe(0);
+  });
+
+  test("a DESCENDANT's declarative animation is refused, not reported as zero", async ({
+    page,
+    request,
+  }) => {
+    const frame = await canvas(page, request);
+
+    // The empty placeholder is in flow at an auto height, so a child growing its own height moves
+    // the zone's bottom edge. Nothing about that appears in the zone's own longhands, which is why
+    // reading only the zone reports zero while the edge is travelling.
+    const planted = await frame.evaluate(() => {
+      const sheet = (
+        document.getElementById("nx-pb-style") as HTMLStyleElement | null
+      )?.sheet;
+      sheet?.insertRule(
+        "@keyframes nx-child-grow { from { height: 0 } to { height: 40px } }",
+        sheet.cssRules.length
+      );
+      sheet?.insertRule(
+        ".nx-pb-child-probe { animation: nx-child-grow .3s 100 }",
+        sheet.cssRules.length
+      );
+      const zone = document.querySelector(".nx-pb-dropzone-empty");
+      if (!zone) return null;
+      const child = document.createElement("div");
+      child.className = "nx-pb-child-probe";
+      zone.append(child);
+      // The effect must exist and must belong to the CHILD, not to the zone — the whole point of
+      // the refusal is the target being someone else.
+      const animations = zone.getAnimations({ subtree: true });
+      return {
+        count: animations.length,
+        onChild: animations.some(
+          a => (a.effect as KeyframeEffect | null)?.target === child
+        ),
+      };
+    });
+    // Population before verdict: no empty zone, no rule, or an effect that never started would
+    // each leave the refusal below firing for some other reason, or not at all.
+    expect(planted).not.toBeNull();
+    expect(planted?.count).toBeGreaterThan(0);
+    expect(planted?.onChild).toBe(true);
+
+    await expect(geometrySpanMs(frame, "data-active")).rejects.toThrow(
+      /DESCENDANT/
+    );
   });
 
   test("an animation on a SCROLL timeline is refused, not read as its duration", async ({
