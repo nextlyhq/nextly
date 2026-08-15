@@ -54,6 +54,7 @@ export { useEntryPreview } from "./useEntryPreview";
 export type {
   PreviewConfig,
   PreviewCollection,
+  PreviewUnavailableReason,
   UseEntryPreviewOptions,
   UseEntryPreviewResult,
 } from "./useEntryPreview";
