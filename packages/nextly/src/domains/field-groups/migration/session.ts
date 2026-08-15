@@ -144,6 +144,16 @@ export const LOCK_RENEW_INTERVAL_MS = (LOCK_TTL_SECONDS / 8) * 1000;
  * threshold can sit wherever the margin needs to be. Here it leaves TWO renewal intervals of lease
  * still in hand, so the caller is told while it is still protected rather than after.
  */
+/**
+ * How long a shutdown waits for an in-flight legacy claim before giving up on releasing it.
+ *
+ * The wait exists so the release cannot run against a row whose claim has not decided. The BOUND
+ * exists because a stalled connection may never answer, and an interrupt that never re-raises means
+ * the operator's Ctrl+C silently did nothing — a worse failure than the claim it was protecting.
+ * Short, because the only thing being waited for is one single-row transaction.
+ */
+export const LEGACY_SHUTDOWN_WAIT_MS = 5_000;
+
 export const LOCK_LOSS_AFTER_MS =
   LOCK_TTL_SECONDS * 1000 - 2 * LOCK_RENEW_INTERVAL_MS;
 
@@ -708,29 +718,35 @@ export async function withMigrationSession<T>(
       // is no symmetric hazard to trade against, which is what makes "earlier" strictly better here
       // rather than a different bet.
       let legacyReleasedOnSignal = false;
-      // 🔴 The acquisition in flight, so the interrupt can WAIT for it instead of racing it.
+      // 🔴 The claim in flight, so an interrupt can WAIT for it rather than race it.
       //
-      // Registering the handlers before the claim closed one window and opened a narrower one
-      // inside it: a signal arriving while `acquireOwnerOnly` is still committing could lock the
-      // row first, release nothing because the row was not yet ours, and let the acquisition then
-      // write the claim before the re-raised signal ended the process — stranding an owner with no
-      // expiry to lapse.
+      // The handler locks the same row. Issued while `acquireOwnerOnly` is still committing, its
+      // release can clear nothing — the row is not yet ours — and the claim then lands behind it,
+      // stranding an owner with no expiry to lapse. Ordering the two removes that: the release runs
+      // only once the claim has DECIDED, so either it landed and the release clears it, or it did
+      // not and there is nothing to clear. Nothing here depends on which of them is faster.
       //
-      // 🔴 That window had by then MOVED THREE TIMES under successive fixes, which is the signal
-      // that each one addressed the DIRECTION rather than the cause. The cause is that the handler
-      // and the acquisition touch the row concurrently with nothing ordering them, so this orders
-      // them rather than betting on timing again: the release runs only once the claim has DECIDED.
-      // Either it landed and the release clears it, or it did not and there is nothing to clear.
-      //
-      // The same shape the renewal path already uses further up, where an in-flight attempt is
-      // settled before the claim is released.
+      // The same shape the renewal path uses further up, where an in-flight attempt is settled
+      // before the claim is released.
       let pendingAcquisition: Promise<unknown> = Promise.resolve();
       const releaseLegacyOnSignal = (signal: NodeJS.Signals): void => {
         legacyReleasedOnSignal = true;
-        // SETTLED, not awaited for success: an acquisition that REJECTED must not hold up the
-        // shutdown, and its rejection is already observed by the caller's own await.
-        void Promise.allSettled([pendingAcquisition])
-          .then(() => releaseOwnerOnly(adapter, claim))
+        // SETTLED, not awaited for success: a claim that REJECTED must not hold up the shutdown,
+        // and its rejection is already observed by the caller's own await.
+        //
+        // 🔴 BOUNDED, because a transaction on a stalled connection may never settle at all and a
+        // signal that never re-raises means Ctrl+C stopped working — the operator's last resort
+        // silently doing nothing. Past the bound the release is skipped rather than issued blind:
+        // the claim's outcome is unknown, so clearing the row could free one this process is about
+        // to write. A claim left behind is the recoverable side of that choice.
+        void Promise.race([
+          Promise.allSettled([pendingAcquisition]).then(() =>
+            releaseOwnerOnly(adapter, claim)
+          ),
+          new Promise(resolve =>
+            setTimeout(resolve, LEGACY_SHUTDOWN_WAIT_MS).unref?.()
+          ),
+        ])
           // The signal is re-raised whether or not the release succeeded, exactly as the
           // expiry-aware path does it: a pool torn down by the same interrupt is the likely
           // failure, and an unobserved rejection would surface instead of letting the process stop.
@@ -776,6 +792,25 @@ export async function withMigrationSession<T>(
             logContext: {
               reason: "migration lock is held elsewhere",
               heldBy: legacy.heldBy,
+              table: MIGRATION_LOCK_TABLE,
+              label,
+            },
+          });
+        }
+
+        // 🔴 Shutdown wins over starting new work, and the ordering is the reason this check is
+        // needed rather than implied. A signal arriving during acquisition schedules the handler's
+        // release, but the `await` above resumes FIRST — its continuation was registered earlier —
+        // so without this the callback starts, the handler then clears the row underneath it, and a
+        // migration is free to take the lock while a schema sync is still writing. That is the
+        // exact overlap the lock exists to prevent, reached by way of the shutdown that was meant
+        // to stop everything.
+        if (legacyReleasedOnSignal) {
+          throw NextlyError.serviceUnavailable({
+            logMessage:
+              "field-group migration lock was released for shutdown before the work began",
+            logContext: {
+              reason: "interrupted before the work started",
               table: MIGRATION_LOCK_TABLE,
               label,
             },
