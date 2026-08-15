@@ -113,6 +113,16 @@ function createAdapter(
       await options.onStatement?.(classifyLockStatement(statement));
     }),
     queryStatement: vi.fn(async (statement: SQL) => {
+      // 🔴 The same failure inside a transaction as outside it. A table without `expires_at` has no
+      // such column for ANY reader, so a fixture that only fails the adapter-level read models a
+      // database that does not exist — and lets acquisition succeed, which is precisely the outcome
+      // the code is supposed to make impossible.
+      if (
+        options.stateReadError !== undefined &&
+        classifyLockStatement(statement) === "state"
+      ) {
+        throw options.stateReadError;
+      }
       const rows = interpretLockStatement(lock, statement);
       await options.onStatement?.(classifyLockStatement(statement));
       return rows;
