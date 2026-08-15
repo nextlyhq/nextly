@@ -24,6 +24,8 @@
  * @module flaky-reporter
  */
 import { appendFileSync } from "node:fs";
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import type {
   FullResult,
@@ -40,6 +42,45 @@ export interface FlakyTest {
 }
 
 /**
+ * A workflow command's DATA section, with the characters that would END it.
+ *
+ * A command is terminated by a real newline, so one inside a test title splits
+ * the annotation into a command plus a stray line of output and silently drops
+ * everything after the break. GitHub's encoding for this is percent-escapes,
+ * and `%` must be replaced FIRST or it would corrupt the escapes introduced
+ * after it.
+ */
+function escapeCommandData(value: string): string {
+  return value.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
+}
+
+/**
+ * A command PROPERTY, which needs more escaping than the data section.
+ *
+ * `,` separates properties and `:` ends the property list, so a value carrying
+ * either is read as structure rather than as text — a path containing a comma
+ * silently truncates the file the annotation anchors to.
+ */
+function escapeCommandProperty(value: string): string {
+  return escapeCommandData(value).replace(/:/g, "%3A").replace(/,/g, "%2C");
+}
+
+/**
+ * A repository-relative path for an absolute test file.
+ *
+ * Derived from THIS module's own location rather than from `process.cwd()`,
+ * which differs by how the suite was started: CI runs the filtered
+ * `@nextlyhq/e2e` script, whose working directory is `e2e`, so stripping the
+ * cwd yields `tests/...` — a path that does not exist from the repository
+ * root, and GitHub anchors the annotation to nothing. This file sits in `e2e`,
+ * so its own directory's parent is the root wherever the run began.
+ */
+function repoRelative(absolute: string): string {
+  const root = `${dirname(dirname(fileURLToPath(import.meta.url)))}/`;
+  return absolute.startsWith(root) ? absolute.slice(root.length) : absolute;
+}
+
+/**
  * The workflow-command lines for a set of flaky tests.
  *
  * Separated from the reporter so the formatting is testable without running a
@@ -53,10 +94,11 @@ export interface FlakyTest {
 export function flakyAnnotations(tests: readonly FlakyTest[]): string[] {
   return tests.map(test => {
     const message =
-      `${test.title} passed only on retry (${String(test.attempts)} attempts). ` +
-      `A retried pass and a first-attempt pass are the same colour in the job ` +
-      `conclusion, so this is reported here rather than inferred from it.`;
-    return `::warning file=${test.file},title=Flaky test::${message}`;
+      `${escapeCommandData(test.title)} passed only on retry ` +
+      `(${String(test.attempts)} attempts). A retried pass and a first-attempt ` +
+      `pass are the same colour in the job conclusion, so this is reported ` +
+      `here rather than inferred from it.`;
+    return `::warning file=${escapeCommandProperty(test.file)},title=Flaky test::${message}`;
   });
 }
 
@@ -96,7 +138,7 @@ export default class FlakyReporter implements Reporter {
     if (test.outcome() !== "flaky") return;
     this.flaky.push({
       title: test.titlePath().slice(1).join(" › "),
-      file: test.location.file.replace(`${process.cwd()}/`, ""),
+      file: repoRelative(test.location.file),
       // `retry` is zero-based, so the run that finally passed is attempt N+1.
       attempts: result.retry + 1,
     });
