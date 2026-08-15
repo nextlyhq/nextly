@@ -1304,9 +1304,31 @@ export function main(argv) {
   // covered without editing the comparison.
   const MUTABLE = "{merged:.merged,state:.state,draft:.draft}";
   const after = ghJson(["api", `repos/${REPO}/pulls/${pr}`, "--jq", MUTABLE]);
+  // Comment evidence is MUTABLE in a way a review record is not: it can be
+  // edited or deleted after this run read it, on an unchanged head, so none of
+  // the facts above would move. Re-read and folded into the same comparison,
+  // because a verdict that has since been withdrawn must not reach a caller as
+  // GATE PASSED.
+  const reviewedShaAfter = reviewedRevision({
+    reviews,
+    issueComments: ghJson([
+      "api",
+      "--paginate",
+      "--slurp",
+      `repos/${REPO}/issues/${pr}/comments?per_page=100`,
+    ]).flat(),
+    tip,
+    login: CODEX,
+    baseChangedAt: latestBaseChange(timelinePages(pr)),
+    knownRevisions: [...new Set([...knownRevisions, tip])],
+  });
   const stale = staleVerification(
-    { merged, state: meta.state, draft: meta.draft, tip },
-    { ...after, tip: lsRemoteTip(REMOTE_FOR_FETCH, meta.branch) }
+    { merged, state: meta.state, draft: meta.draft, tip, reviewedSha },
+    {
+      ...after,
+      tip: lsRemoteTip(REMOTE_FOR_FETCH, meta.branch),
+      reviewedSha: reviewedShaAfter,
+    }
   );
   if (stale) {
     process.stdout.write(
