@@ -97,12 +97,12 @@ const cachedGetInfo = memoise(
 );
 
 /**
- * The other door into the same API.
+ * The second entry point into the same API.
  *
  * A changeset summary may carry `pr: #123`, and the generator then calls
- * `getInfoFromPullRequest` instead of `getInfo`. Wrapping only one leaves those lookups
- * unbatched and unmemoised, which is the same oversized document arriving by a route nobody
- * looked at.
+ * `getInfoFromPullRequest` instead of `getInfo`. Either entry point can build the oversized
+ * document on its own, so both need wrapping: one left unwrapped keeps its lookups unbatched and
+ * unmemoised, and the release fails exactly as it would with neither wrapped.
  */
 const cachedGetInfoFromPullRequest = memoise(
   byPullRequest,
