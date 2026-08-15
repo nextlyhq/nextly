@@ -78,6 +78,14 @@ function createAdapter(
      * this suite's own, so the double cannot disagree with itself about which statement is which.
      */
     onStatement?: (kind: LockStatementKind | undefined) => Promise<void> | void;
+    /**
+     * Thrown by the liveness read only, leaving every other statement working.
+     *
+     * Models a lock table created before `expires_at` existed: the row is there and can be seeded,
+     * and only the query that selects that column fails. `lockReadError` is the blunter neighbour —
+     * it fails every adapter-level read, which models a privilege problem rather than a shape one.
+     */
+    stateReadError?: unknown;
   } = {}
 ) {
   const clock = createLockClock();
@@ -122,6 +130,12 @@ function createAdapter(
       // Models a role that may read the marker and registry but not the lock
       // table -- the case `tableExists` cannot distinguish from absence.
       if (options.lockReadError !== undefined) throw options.lockReadError;
+      if (
+        options.stateReadError !== undefined &&
+        classifyLockStatement(statement) === "state"
+      ) {
+        throw options.stateReadError;
+      }
       return interpretLockStatement(lock, statement);
     }),
     tableExists: vi.fn(async () => options.lockTableMissing !== true),
@@ -1092,6 +1106,51 @@ describe("field-group migration session", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // A lock table created by the previous release has two columns and no `expires_at`. The no-DDL
+  // callers — `db:sync --no-auto-sync`, a role granted DML but not DDL — cannot add it, because the
+  // upgrade ALTER runs only on the branch that may issue schema changes. Failing them would break
+  // every such install that has not yet run a migration under the new release, for a lock that is
+  // not even theirs: they are schema syncs, never the thing the exclusion holds back.
+  it("skips a lock table that predates its expiry column, and says so", async () => {
+    const warn = vi.fn();
+    // The legacy shape: the row seeds fine and only the liveness read fails, exactly as a table
+    // without `expires_at` behaves. 42703 is undefined_column.
+    const h = createAdapter({
+      heldBy: null,
+      stateReadError: Object.assign(
+        new Error('column "expires_at" does not exist'),
+        { code: "42703" }
+      ),
+    });
+
+    const observed: LockObservation[] = [];
+    await withMigrationSession(
+      {
+        adapter: h.adapter,
+        dialect: "postgresql",
+        label: "sync-1",
+        requireExistingLock: true,
+        logger: { warn } as unknown as Parameters<
+          typeof withMigrationSession
+        >[0]["logger"],
+      },
+      async session => {
+        observed.push(session.lock);
+      }
+    );
+
+    // 🔴 The work RAN — the whole point is that a sync is not blocked by a lock it cannot read.
+    expect(observed).toHaveLength(1);
+    // And it is told plainly that it holds nothing, rather than the default that claims ownership.
+    expect(observed[0]).toEqual({ kind: "not-held" });
+    // 🔴 And the skip is REPORTED. A silent downgrade from excluded to unexcluded is the thing that
+    // would make this dangerous rather than merely tolerant.
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[1]).toMatchObject({
+      reason: "migration lock table is missing expires_at",
+    });
   });
 
   // A renewal already in flight when the callback finishes outlives `clearInterval`, which only
