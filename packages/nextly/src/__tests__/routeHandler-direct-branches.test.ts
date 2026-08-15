@@ -204,7 +204,11 @@ describe("handleAdminMetaRequest (GET /admin-meta)", () => {
     expect(json).not.toHaveProperty("data");
     // Bare body shape: branding fields live at the top level.
     expect(json.logoText).toBe("Test Co.");
-    expect(json.showBuilder).toBe(false);
+    // `showBuilder` describes the installation rather than its appearance, so
+    // it moved to the session-gated route with the rest of the workspace half.
+    // Asserted as absent HERE rather than dropped, so the public payload's
+    // boundary stays covered from this suite as well.
+    expect(json.showBuilder).toBeUndefined();
   });
 });
 

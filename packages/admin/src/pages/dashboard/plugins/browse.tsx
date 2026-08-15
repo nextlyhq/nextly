@@ -21,16 +21,20 @@ import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { ROUTES } from "@admin/constants/routes";
-import { publicApi } from "@admin/lib/api/publicApi";
+import {
+  useBranding,
+  useBrandingStatus,
+} from "@admin/context/providers/BrandingProvider";
 import { resolveCataloguePresentation } from "@admin/lib/plugins/registry/resolve-catalogue-presentation";
 import {
   shouldShowFeatured,
   staticRegistrySource,
 } from "@admin/lib/plugins/registry/static-source";
 import type { RegistryPlugin } from "@admin/lib/plugins/registry/types";
-import type { AdminBranding, PluginMetadata } from "@admin/types/branding";
+import type { PluginMetadata } from "@admin/types/branding";
 
 import { PluginCard } from "./components/PluginCard";
+import { PluginPageLoading } from "./components/PluginPageLoading";
 
 /**
  * Name, the RENDERED description, and tags.
@@ -79,11 +83,13 @@ function PluginGrid({
 function BrowseContent(): React.ReactElement {
   const [query, setQuery] = useState("");
 
-  const { data: branding } = useSuspenseQuery({
-    queryKey: ["admin-meta"],
-    queryFn: () => publicApi.get<AdminBranding>("/admin-meta"),
-    staleTime: 5 * 60 * 1000,
-  });
+  // Read through the provider rather than a second query of its own. The
+  // plugin list is served by the session-gated route, and a duplicate reader
+  // pointed at the public one shares the same cache key while asking a
+  // question that route no longer answers — every installed plugin would read
+  // as uninstalled.
+  const branding = useBranding();
+  const { isPending: pluginsPending } = useBrandingStatus();
   const { data: entries } = useSuspenseQuery({
     queryKey: ["plugin-registry"],
     queryFn: () => staticRegistrySource.list(),
@@ -135,6 +141,12 @@ function BrowseContent(): React.ReactElement {
     () => visible.filter(e => !featuredIdSet.has(e.id)),
     [visible, featuredIdSet]
   );
+
+  // Installed status is read from a list that arrives separately from the
+  // catalogue. Until it has, every entry looks uninstalled — which tells
+  // someone who already has a plugin to go and install it — so the directory
+  // waits rather than rendering a claim it cannot yet support.
+  if (pluginsPending) return <PluginPageLoading label="Loading directory…" />;
 
   return (
     <>

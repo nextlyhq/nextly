@@ -30,7 +30,13 @@ import type {
  */
 interface BrandingState {
   branding: AdminBranding | undefined;
-  /** True until BOTH admin-meta queries settle, either way. */
+  /**
+   * True until the WORKSPACE query settles, either way.
+   *
+   * Not the public half: this pairs with `isUnavailable` to answer whether a
+   * plugin being absent is a fact, and the plugin list is in the workspace
+   * half alone.
+   */
   isPending: boolean;
   /**
    * True when the PUBLIC half never produced an answer.
@@ -193,7 +199,6 @@ interface BrandingProviderProps {
 export function BrandingProvider({ children }: BrandingProviderProps) {
   const {
     data: brandingData,
-    isPending: brandingPending,
     // `isLoadingError`, not `isError`: the latter is also true when a
     // background refetch fails while a previous response is still cached, and
     // that cached response is a perfectly good answer.
@@ -239,7 +244,13 @@ export function BrandingProvider({ children }: BrandingProviderProps) {
         : { ...brandingData, ...workspaceData };
     return {
       branding: merged,
-      isPending: brandingPending || workspacePending,
+      // The WORKSPACE query, matching `isUnavailable`. Both answer one
+      // question — is it safe to conclude something from a plugin being
+      // absent — and the plugin list is in that half. Combining the two
+      // reports "still loading" while the only relevant query has settled, so
+      // a stalled public request would hold the reader on a loading state
+      // indefinitely and hide a definitive workspace error behind it.
+      isPending: workspacePending,
       // Reported from the WORKSPACE query. The reader this exists for treats a
       // plugin's absence from the list as a fact about the project, and the
       // plugin list lives in that half — so branding having arrived says
@@ -250,7 +261,6 @@ export function BrandingProvider({ children }: BrandingProviderProps) {
   }, [
     brandingData,
     workspaceData,
-    brandingPending,
     workspacePending,
     workspaceUnavailable,
     brandingUnavailable,

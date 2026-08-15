@@ -10,7 +10,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
-import { useSuspenseQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Columns } from "@admin/components/icons";
@@ -21,12 +20,12 @@ import type { NextlyColumn } from "@admin/components/ui/table/data-table";
 import { ListShell } from "@admin/components/ui/table/list-shell";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { UI } from "@admin/constants/ui";
+import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useDebouncedValue } from "@admin/hooks/useDebouncedValue";
 import { usePagination } from "@admin/hooks/usePagination";
-import { publicApi } from "@admin/lib/api/publicApi";
 import { categoryLabel } from "@admin/lib/plugins/plugin-categories";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
-import type { PluginMetadata, AdminBranding } from "@admin/types/branding";
+import type { PluginMetadata } from "@admin/types/branding";
 
 type PluginWithId = PluginMetadata & { id: string };
 
@@ -71,11 +70,11 @@ export function PluginStatusPill({ enabled }: { enabled: boolean }) {
  * the table exposes no mutation actions.
  */
 export default function PluginsTable() {
-  const { data: branding } = useSuspenseQuery<AdminBranding>({
-    queryKey: ["admin-meta"],
-    queryFn: () => publicApi.get<AdminBranding>("/admin-meta"),
-    staleTime: 5 * 60 * 1000,
-  });
+  // Read through the provider rather than a second query of its own. The
+  // plugin list is served by the session-gated route, and a duplicate reader
+  // pointed at the public one shares the same cache key while asking a
+  // question that route no longer answers — the table would render empty.
+  const branding = useBranding();
 
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebouncedValue(search, UI.SEARCH_DEBOUNCE_MS);
