@@ -313,6 +313,20 @@ function approvalCovers(
 const REVIEWED_COMMIT_MARKER = /reviewed commit:\**\s*`([0-9a-f]{7,40})`/i;
 
 /**
+ * The revision a comment reports having read, or `undefined`.
+ *
+ * Exported because the merge-verification gate asks the same question of the
+ * same comments, and two parsers for one format agree until one is edited. The
+ * floor of seven characters is git's own for an abbreviation that identifies a
+ * commit; below it the marker does not match at all, so a short string cannot
+ * prefix many commits.
+ */
+export function reviewedCommitFrom(body) {
+  if (typeof body !== "string") return undefined;
+  return REVIEWED_COMMIT_MARKER.exec(body)?.[1]?.toLowerCase();
+}
+
+/**
  * Reviewer logins whose comment reports having read `head`.
  *
  * The abbreviation is matched as a PREFIX of the full head, which is the
@@ -343,7 +357,7 @@ export function verdictCommentReviewers(
     const login = comment?.user?.login;
     const body = comment?.body;
     if (typeof login !== "string" || typeof body !== "string") continue;
-    const named = REVIEWED_COMMIT_MARKER.exec(body)?.[1]?.toLowerCase();
+    const named = reviewedCommitFrom(body);
     if (named === undefined || !target.startsWith(named)) continue;
     // Same scoping rule the review objects get: a verdict predating the last
     // base move describes a diff that no longer exists, and a comment with no
