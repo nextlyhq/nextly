@@ -115,7 +115,7 @@ export function isClaimUsable(lock: LockRow, marginSeconds: number): boolean {
 const TABLE = MIGRATION_LOCK_TABLE;
 
 /** Each dialect's word for "now", as the session compiles it. */
-const NOW = String.raw`(?:clock_timestamp\(\)|NOW\(\)|unixepoch\(\))`;
+const NOW = String.raw`(?:clock_timestamp\(\)|UTC_TIMESTAMP\(\)|unixepoch\(\))`;
 
 /**
  * Each dialect's expiry expression, capturing the placeholder that carries the TTL.
@@ -124,7 +124,7 @@ const NOW = String.raw`(?:clock_timestamp\(\)|NOW\(\)|unixepoch\(\))`;
  * applies the number the statement actually carried. Importing the constant would agree with a
  * statement that had stopped binding it at all.
  */
-const EXPIRY = String.raw`(?:clock_timestamp\(\) \+ make_interval\(secs => \$(?<ttlPg>\d+)\)|DATE_ADD\(NOW\(\), INTERVAL \$(?<ttlMysql>\d+) SECOND\)|unixepoch\(\) \+ \$(?<ttlSqlite>\d+))`;
+const EXPIRY = String.raw`(?:clock_timestamp\(\) \+ make_interval\(secs => \$(?<ttlPg>\d+)\)|DATE_ADD\(UTC_TIMESTAMP\(\), INTERVAL \$(?<ttlMysql>\d+) SECOND\)|unixepoch\(\) \+ \$(?<ttlSqlite>\d+))`;
 
 const LOCK_STATE = new RegExp(
   String.raw`^SELECT "owner", CASE WHEN "owner" IS NOT NULL AND \("expires_at" IS NULL OR "expires_at" > ${NOW}\) THEN 1 ELSE 0 END AS "live", CASE WHEN "owner" IS NOT NULL AND \("expires_at" IS NULL OR "expires_at" > ${EXPIRY}\) THEN 1 ELSE 0 END AS "usable" FROM "${TABLE}" WHERE "id" = \$\d+$`

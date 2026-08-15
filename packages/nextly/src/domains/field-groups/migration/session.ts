@@ -183,9 +183,14 @@ function nowExpression(dialect: MigrationDialect): SQL {
   // live by that stale reading can already have expired, and an expiry written from it can be in
   // the past before the row is even updated.
   //
-  // MySQL's `NOW()` and SQLite's `unixepoch()` are statement-time, so they already answer the
-  // question this asks and need no equivalent.
-  return dialect === "mysql" ? sql`NOW()` : sql`clock_timestamp()`;
+  // 🔴 MySQL uses `UTC_TIMESTAMP()`, NOT `NOW()`. `NOW()` returns the SESSION's local time, and
+  // `expires_at` is a `DATETIME`, which stores no zone — so a holder whose session is UTC writes an
+  // expiry a contender whose session is UTC+05 reads as five hours in the past, and takes a live
+  // claim instantly. Nothing about the row would look wrong afterwards: both runs believe they hold
+  // it. `UTC_TIMESTAMP()` is the same instant for every session whatever its `time_zone`.
+  //
+  // Both are statement-time rather than transaction-time, so neither needs Postgres's distinction.
+  return dialect === "mysql" ? sql`UTC_TIMESTAMP()` : sql`clock_timestamp()`;
 }
 
 function futureExpression(dialect: MigrationDialect, seconds: number): SQL {
@@ -193,7 +198,7 @@ function futureExpression(dialect: MigrationDialect, seconds: number): SQL {
     return sql`unixepoch() + ${seconds}`;
   }
   if (dialect === "mysql") {
-    return sql`DATE_ADD(NOW(), INTERVAL ${seconds} SECOND)`;
+    return sql`DATE_ADD(UTC_TIMESTAMP(), INTERVAL ${seconds} SECOND)`;
   }
   // The same clock as `nowExpression`, deliberately: an expiry written from transaction time and a
   // liveness test taken at statement time would disagree about when the lease ends, and the pair
@@ -624,6 +629,29 @@ export async function withMigrationSession<T>(
       logContext: {
         reason: "migration lock is held elsewhere",
         heldBy: acquired.heldBy,
+      },
+    });
+  }
+
+  // 🔴 The claim passed its checks INSIDE the transaction; getting back here is a separate step that
+  // can take arbitrarily long — the commit itself, the driver resolving, this process being
+  // scheduled again. `acquire` cannot see any of that, and the first elapsed-time check is a whole
+  // interval away, so without this the callback starts on a lease that may already have lapsed and
+  // nothing notices until a renewal disproves ownership.
+  //
+  // Refuses rather than renewing: a run that has already spent its safety margin before doing any
+  // work has nothing to lose by starting over, and re-extending here would paper over whatever
+  // stalled. The row is cleared for the same reason a refused acquisition clears it — leaving this
+  // claim behind would block contenders with nothing renewing it.
+  if (performance.now() - claimStartedAt >= LOCK_LOSS_AFTER_MS) {
+    await release(adapter, dialect, claim);
+    throw NextlyError.serviceUnavailable({
+      logMessage:
+        "field-group migration took too long to take its lock; the claim may already have lapsed",
+      logContext: {
+        reason:
+          "migration lock claim aged past its safety window during acquisition",
+        label,
       },
     });
   }

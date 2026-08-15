@@ -1,4 +1,5 @@
 import type { SQL } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it, vi } from "vitest";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
@@ -801,6 +802,82 @@ describe("field-group migration session", () => {
       // the green above cannot be a renewal that was never reached.
       expect(h.owner()).toMatch(/^run-1#/);
       expect(suspended).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // MySQL's `NOW()` is the SESSION's local time and `expires_at` is a `DATETIME`, which stores no
+  // zone. Two sessions configured with different `time_zone` therefore write and read the same
+  // column on different scales: a holder in UTC writes an expiry a contender in UTC+05 reads as
+  // hours in the past, takes the live claim, and both migrations run. Nothing about the row looks
+  // wrong afterwards, which is what makes it worth pinning.
+  it("uses a timezone-independent clock for MySQL leases", async () => {
+    const h = createAdapter({ heldBy: null });
+    await withMigrationSession(
+      { adapter: h.adapter, dialect: "mysql", label: "run-1" },
+      async () => undefined
+    );
+
+    const compiled = [
+      ...h.ctx.runStatement.mock.calls,
+      ...h.ctx.queryStatement.mock.calls,
+    ].map(([statement]) => new PgDialect().sqlToQuery(statement as SQL).sql);
+
+    // Positive control: the run has to have issued clock-bearing statements at all, or the loop
+    // below iterates over nothing and passes by vacuity.
+    const clockBearing = compiled.filter(text =>
+      /UTC_TIMESTAMP\(\)|NOW\(\)/.test(text)
+    );
+    expect(clockBearing.length).toBeGreaterThan(0);
+
+    for (const text of clockBearing) {
+      expect(text).toContain("UTC_TIMESTAMP()");
+      // Session-local `NOW()` must not survive anywhere in the statement. Stripping the UTC form
+      // first is what stops this matching the tail of `UTC_TIMESTAMP()` itself.
+      expect(text.replace(/UTC_TIMESTAMP\(\)/g, "")).not.toContain("NOW()");
+    }
+  });
+
+  // `acquire` makes its decision INSIDE the transaction. Getting back out is a separate step that
+  // can take arbitrarily long — the commit, the driver resolving, this process being scheduled
+  // again — and none of it is visible to the checks made in there. The first elapsed-time check is
+  // a whole interval away, so the callback would otherwise start on a lease that may have lapsed.
+  it("refuses when acquisition itself outlasts the safety window", async () => {
+    vi.useFakeTimers();
+    try {
+      let stalled = false;
+      const h = createAdapter({
+        heldBy: null,
+        onStatement: kind => {
+          if (kind === "claim" && !stalled) {
+            stalled = true;
+            // 🔴 Only the PROCESS clock moves. The model database clock stays put, so the row is
+            // still comfortably usable when `acquire` judges it — which is what makes this test
+            // about the post-acquisition age check rather than about the usable-lease check.
+            vi.advanceTimersByTime(LOCK_LOSS_AFTER_MS + 1000);
+          }
+        },
+      });
+
+      const ran = vi.fn();
+      await expect(
+        withMigrationSession(
+          { adapter: h.adapter, dialect: "postgresql", label: "run-1" },
+          async () => ran()
+        )
+      ).rejects.toMatchObject({
+        code: "SERVICE_UNAVAILABLE",
+        logContext: {
+          reason:
+            "migration lock claim aged past its safety window during acquisition",
+        },
+      });
+
+      expect(ran).not.toHaveBeenCalled();
+      expect(stalled).toBe(true);
+      // Cleared, so a run that refused its own claim does not block contenders.
+      expect(h.owner()).toBeNull();
     } finally {
       vi.useRealTimers();
     }
