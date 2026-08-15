@@ -59,10 +59,18 @@ function readPackedNames(dir) {
     // and a filename is the packer's spelling of it rather than the thing itself
     // (a scope becomes a dash, so `@nextlyhq/ui` and `nextlyhq-ui` differ).
     execFileSync("tar", ["-xzf", tarball, "-C", scratch, "package/package.json"]);
-    const { name, peerDependencies } = JSON.parse(
+    const { name, peerDependencies, peerDependenciesMeta } = JSON.parse(
       readFileSync(join(scratch, "package", "package.json"), "utf-8")
     );
-    map[name] = { spec: `file:${tarball}`, peers: Object.keys(peerDependencies ?? {}) };
+    // OPTIONAL peers are excluded. `nextly` declares all three database adapters as optional
+    // peers, and a scaffolded app installs exactly the one it was generated for. Adding the other
+    // two would not merely bloat the install: it would let an accidental import of an adapter the
+    // app never declared COMPILE, so the leg would pass on code a real user's install cannot run -
+    // the check weakened by the thing meant to repair it.
+    const required = Object.keys(peerDependencies ?? {}).filter(
+      peer => peerDependenciesMeta?.[peer]?.optional !== true
+    );
+    map[name] = { spec: `file:${tarball}`, peers: required };
   }
   return map;
 }
@@ -106,7 +114,8 @@ for (const [name, spec] of Object.entries(overrides)) {
 //
 // Derived from the tarballs rather than listed here, for the reason this file already gives about
 // package names: the manifests answer it, and a list would be a second answer that has to be kept
-// in step.
+// in step. `peerDependenciesMeta` is read alongside, so an OPTIONAL peer is never added - see the
+// note in `readPackedNames`.
 const peerOfPacked = new Set(
   names.flatMap(name => packed[name].peers).filter(peer => names.includes(peer))
 );
