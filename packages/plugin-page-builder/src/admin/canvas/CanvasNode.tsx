@@ -36,7 +36,6 @@ import { dragSensors } from "../logic/dragSensors";
 import { useEditor } from "../store/EditorProvider";
 
 import { QueryLoopSamplePreview } from "./CanvasQueryLoop";
-import { insertionCollisionDetector } from "./collisionPolicy";
 import {
   CanvasDepth,
   DropZone,
@@ -248,10 +247,6 @@ export function CanvasNode({ node }: { node: BlockNode }): ReactNode {
     // Targets this node's OWN slot, so it ranks with the zones INSIDE it rather
     // than with its siblings — the same `depth + 1` the slot content is rendered at.
     collisionPriority: canvasPriority(depth + 1),
-    // The same ranking every insertion target uses. A formatted slot draws no
-    // zones, so this target and its neighbouring `before:` targets ARE that
-    // slot's insertion points and need the switch margin for the same reason.
-    collisionDetector: insertionCollisionDetector,
   });
   const rootRef = appendSlot ? append.ref : undefined;
   const className = classFor(
@@ -338,10 +333,6 @@ function DraggableNode({
     // zones — it marks a position among its siblings and must compete with the
     // gap zones beside it.
     collisionPriority: canvasPriority(depth),
-    // The same ranking every insertion target uses. A formatted slot draws no
-    // zones, so this target and its neighbouring `before:` targets ARE that
-    // slot's insertion points and need the switch margin for the same reason.
-    collisionDetector: insertionCollisionDetector,
   });
 
   // A formatted container itself: "append" target for the formatted slot it declares, since that
@@ -365,10 +356,6 @@ function DraggableNode({
     // same `depth + 1` the slot content is rendered at. Without that a drag
     // over a grid nested in a container is claimed by the container holding it.
     collisionPriority: canvasPriority(depth + 1),
-    // The same ranking every insertion target uses. A formatted slot draws no
-    // zones, so this target and its neighbouring `before:` targets ARE that
-    // slot's insertion points and need the switch margin for the same reason.
-    collisionDetector: insertionCollisionDetector,
   });
 
   const className = classFor(

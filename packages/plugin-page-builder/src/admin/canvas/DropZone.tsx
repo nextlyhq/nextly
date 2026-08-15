@@ -125,11 +125,14 @@ export function DropZone({
     // is the only thing that can settle two IDENTICAL rectangles — which is
     // exactly what a nested container's edge gap and its parent's gap are.
     collisionPriority: canvasPriority(depth),
-    // Empty zones rank the same way, because "one per container" does not mean
-    // "no competitor": two adjacent containers that are both empty put their
-    // placeholders at the same depth, and those compete for the same pointer
-    // exactly as two zones in one slot do.
-    collisionDetector: insertionCollisionDetector,
+    // Only the zones interleaved between a slot's children. They all span the
+    // same container, so they share a width and an axis — which is what makes a
+    // margin measured on one axis a constant physical width for them, and makes
+    // "the pointer is inside this zone" and "this zone's centre is nearest" the
+    // same statement. Targets that hold neither property, including this
+    // component's own empty placeholder, keep the default ranking until a
+    // detector exists that resolves a REGION before it measures a distance.
+    collisionDetector: empty ? undefined : insertionCollisionDetector,
   });
 
   if (empty) {

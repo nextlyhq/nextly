@@ -1,12 +1,23 @@
 /**
  * The single place the canvas decides which insertion target wins a pointer.
  *
- * Four droppables mark insertion points — the drop zones interleaved between a
- * slot's children, the "drop here" placeholder of an empty slot, and the
- * `before:` / `append:` targets a formatted slot uses instead of zones. They
- * answer ONE question, so they rank by one rule and take their priority from
- * one scale. Anything that computes either alongside will drift, and the drift
- * is silent because both halves look correct on their own.
+ * Scoped to the zones INTERLEAVED between a slot's children, and the scope is
+ * load-bearing rather than incidental. Those zones all span the same container,
+ * so they share a width and an axis, and two things follow that this ranking
+ * depends on: a margin measured on one axis is a constant physical width for
+ * them, and "the pointer is inside this zone" and "this zone's centre is the
+ * nearest" are the same statement.
+ *
+ * The canvas's other insertion targets hold neither property. An empty slot's
+ * placeholder can sit beside a container of a different width; a formatted
+ * slot's `before:` and `append:` targets are whole blocks, arranged on either
+ * axis and sometimes staggered in both. For them a single distance cannot carry
+ * both "which target owns the pointer" and "how far is the pointer from the
+ * insertion line, in pixels" — a rotation-invariant metric stops the margin
+ * being axis-aligned, an axis-aligned one stops it being a constant width, and
+ * ranking every target on one tier loses the containment ordering that decides
+ * which container a drop belongs to. Those targets keep the default ranking
+ * until a detector exists that resolves a REGION before it measures a distance.
  *
  * `sortCollisions` in `@dnd-kit/abstract` compares `priority`, THEN `type`,
  * THEN `value`, and each of those tiers is load-bearing here:
