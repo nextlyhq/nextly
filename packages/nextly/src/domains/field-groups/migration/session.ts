@@ -144,6 +144,9 @@ export const LOCK_RENEW_INTERVAL_MS = (LOCK_TTL_SECONDS / 8) * 1000;
  * threshold can sit wherever the margin needs to be. Here it leaves TWO renewal intervals of lease
  * still in hand, so the caller is told while it is still protected rather than after.
  */
+export const LOCK_LOSS_AFTER_MS =
+  LOCK_TTL_SECONDS * 1000 - 2 * LOCK_RENEW_INTERVAL_MS;
+
 /**
  * How long a shutdown waits for an in-flight legacy claim before giving up on releasing it.
  *
@@ -151,11 +154,12 @@ export const LOCK_RENEW_INTERVAL_MS = (LOCK_TTL_SECONDS / 8) * 1000;
  * exists because a stalled connection may never answer, and an interrupt that never re-raises means
  * the operator's Ctrl+C silently did nothing — a worse failure than the claim it was protecting.
  * Short, because the only thing being waited for is one single-row transaction.
+ *
+ * Past the bound the release is SKIPPED rather than issued blind, so a claim can be left behind:
+ * the row's state is unknown at that point, and clearing it could free a claim this process is
+ * about to write. A claim an operator clears is recoverable; a row freed under a live claim is not.
  */
 export const LEGACY_SHUTDOWN_WAIT_MS = 5_000;
-
-export const LOCK_LOSS_AFTER_MS =
-  LOCK_TTL_SECONDS * 1000 - 2 * LOCK_RENEW_INTERVAL_MS;
 
 /**
  * How much lease a confirmation must actually grant for the holder to rely on it.

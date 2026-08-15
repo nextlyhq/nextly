@@ -25,4 +25,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-An interrupt during a legacy migration-lock claim now waits for the claim to settle, so it cannot strand a lock that has no expiry.
+An interrupt during a legacy migration-lock claim now waits for the claim to settle before releasing it, so a shutdown no longer clears the row while the claim is still landing.
