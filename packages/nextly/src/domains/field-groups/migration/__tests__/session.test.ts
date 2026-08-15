@@ -77,7 +77,7 @@ function createAdapter(
      * different question. Classified through {@link classifyLockStatement} rather than a regex of
      * this suite's own, so the double cannot disagree with itself about which statement is which.
      */
-    onStatement?: (kind: LockStatementKind | undefined) => void;
+    onStatement?: (kind: LockStatementKind | undefined) => Promise<void> | void;
   } = {}
 ) {
   const clock = createLockClock();
@@ -102,11 +102,11 @@ function createAdapter(
     }),
     runStatement: vi.fn(async (statement: SQL) => {
       interpretLockStatement(lock, statement);
-      options.onStatement?.(classifyLockStatement(statement));
+      await options.onStatement?.(classifyLockStatement(statement));
     }),
     queryStatement: vi.fn(async (statement: SQL) => {
       const rows = interpretLockStatement(lock, statement);
-      options.onStatement?.(classifyLockStatement(statement));
+      await options.onStatement?.(classifyLockStatement(statement));
       return rows;
     }),
   };
@@ -1095,27 +1095,27 @@ describe("field-group migration session", () => {
   });
 
   // A renewal already in flight when the callback finishes outlives `clearInterval`, which only
-  // stops NEW attempts. That attempt is about to read the very row the release is clearing — and a
+  // stops NEW attempts. That attempt is about to read the very row the release is clearing, and a
   // session that reads its own shutdown as a contender's takeover would fail a migration that held
-  // its lock the whole way through and released it itself. The worst kind of false alarm: it fires
-  // on the healthy path.
-  it("does not mistake its own release for a takeover", async () => {
+  // its lock the whole way through and released it itself — a false alarm on the healthy path.
+  //
+  // 🔴 Asserted as ORDERING rather than as the failure. The fix makes the bad interleaving
+  // impossible rather than merely unlikely, so no gate-based construction can exhibit it: any test
+  // that makes the renewal wait for the release deadlocks against the fix itself, measured at a 10s
+  // timeout. What IS observable either way is whether the release waits, so that is what this pins.
+  it("settles an in-flight renewal before releasing the claim", async () => {
     vi.useFakeTimers();
     try {
-      let releaseRenewal: (() => void) | undefined;
-      const renewalGate = new Promise<void>(resolve => {
-        releaseRenewal = resolve;
-      });
-      let renewalsSeen = 0;
-
+      const order: string[] = [];
       const h = createAdapter({
         heldBy: null,
-        onTransaction: async seq => {
-          // 1 is the acquisition. The next transaction is the renewal, which is held open so it is
-          // still outstanding when the callback returns.
-          if (seq === 2) {
-            renewalsSeen += 1;
-            await renewalGate;
+        onStatement: async kind => {
+          if (kind === undefined) return;
+          order.push(kind);
+          // Slow the renewal's READ-BACK specifically, so it is still outstanding when the callback
+          // returns. Self-resolving, so nothing here can deadlock against the code under test.
+          if (kind === "renew") {
+            for (let turn = 0; turn < 20; turn++) await Promise.resolve();
           }
         },
       });
@@ -1123,23 +1123,24 @@ describe("field-group migration session", () => {
       const run = withMigrationSession(
         { adapter: h.adapter, dialect: "postgresql", label: "run-1" },
         async () => {
-          // Start the renewal, then finish the work without waiting for it.
+          // Starts a renewal and returns without waiting for it.
           vi.advanceTimersByTime(LOCK_RENEW_INTERVAL_MS);
           return "migrated";
         }
       );
 
-      // Let the release path reach its wait, then let the queued renewal complete.
       await vi.advanceTimersByTimeAsync(0);
-      releaseRenewal?.();
-
-      // 🔴 The migration SUCCEEDS. Without the in-flight settle it rejects with
-      // SERVICE_UNAVAILABLE, having done nothing wrong.
       await expect(run).resolves.toBe("migrated");
 
-      // Positive controls: the renewal really was started and held (so the interleaving happened),
-      // and the row was released normally rather than left behind.
-      expect(renewalsSeen).toBe(1);
+      // Positive control: the interleaving this is about actually occurred — a renewal was issued
+      // and a release happened. Without it the ordering assertion below is vacuous.
+      expect(order).toContain("renew");
+      expect(order).toContain("release");
+
+      // 🔴 The renewal's read-back completes BEFORE the row is cleared. Reversed, the renewal reads
+      // an owner that is no longer this claim and reports the claim disproved.
+      const lastStateRead = order.lastIndexOf("state");
+      expect(lastStateRead).toBeLessThan(order.indexOf("release"));
       expect(h.owner()).toBeNull();
     } finally {
       vi.useRealTimers();
