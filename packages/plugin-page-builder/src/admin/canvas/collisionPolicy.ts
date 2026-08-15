@@ -11,12 +11,10 @@
  * `sortCollisions` in `@dnd-kit/abstract` compares `priority`, THEN `type`,
  * THEN `value`, and each of those tiers is load-bearing here:
  *
- *  - **`priority` is depth**, so the innermost container owns the pointer. It
- *    is the only thing that can separate two IDENTICAL rectangles, which is
- *    what a nested container's edge gap and its parent's gap between children
- *    are. Omitting it is not neutral: a droppable with no `collisionPriority`
- *    keeps the detector's own constant, which outranks every target shallower
- *    than that number however the rectangles lie.
+ *  - **`priority` is the canvas depth scale**, which this module leaves alone:
+ *    `canvasPriority` owns it, and the collision observer applies it after the
+ *    detector has returned, so nothing here can affect which container claims
+ *    the pointer.
  *  - **`type` is CONSTANT across insertion targets.** The switch margin lives
  *    in `value`, and a detector that reported pointer containment inside a
  *    target and shape overlap outside it would change tier exactly where the
@@ -54,26 +52,6 @@ export const TARGET_SWITCH_BAND_PX = 10;
  * previously demoted for not containing the pointer.
  */
 export const INSERTION_COLLISION_TYPE = CollisionType.PointerIntersection;
-
-/** Where a slot's own drop zones rank: the depth its content is rendered at. */
-export function zonePriority(depth: number): number {
-  return depth;
-}
-
-/**
- * Where a node-attached insertion target ranks.
- *
- * `before` marks a position in the slot the node SITS IN, so it ranks with that
- * slot's zones. `append` marks a position in the node's OWN slot, so it ranks
- * with the zones inside it — one level deeper, exactly where `buildSlots`
- * renders that slot's content.
- */
-export function nodeTargetPriority(
-  depth: number,
-  kind: "before" | "append"
-): number {
-  return kind === "before" ? depth : depth + 1;
-}
 
 /**
  * How far the pointer is from an insertion target, in pixels.

@@ -36,11 +36,13 @@ import { dragSensors } from "../logic/dragSensors";
 import { useEditor } from "../store/EditorProvider";
 
 import { QueryLoopSamplePreview } from "./CanvasQueryLoop";
+import { insertionCollisionDetector } from "./collisionPolicy";
 import {
-  insertionCollisionDetector,
-  nodeTargetPriority,
-} from "./collisionPolicy";
-import { CanvasDepth, DropZone, useCanvasDepth } from "./DropZone";
+  CanvasDepth,
+  DropZone,
+  canvasPriority,
+  useCanvasDepth,
+} from "./DropZone";
 
 const BLOCK_TYPE = "nx-block";
 
@@ -244,8 +246,8 @@ export function CanvasNode({ node }: { node: BlockNode }): ReactNode {
       index: appendSlot ? (node.slots?.[appendSlot]?.length ?? 0) : 0,
     },
     // Targets this node's OWN slot, so it ranks with the zones INSIDE it rather
-    // than with its siblings — the same depth the slot content is rendered at.
-    collisionPriority: nodeTargetPriority(depth, "append"),
+    // than with its siblings — the same `depth + 1` the slot content is rendered at.
+    collisionPriority: canvasPriority(depth + 1),
     // The same ranking every insertion target uses. A formatted slot draws no
     // zones, so this target and its neighbouring `before:` targets ARE that
     // slot's insertion points and need the switch margin for the same reason.
@@ -332,8 +334,13 @@ function DraggableNode({
     accept: BLOCK_TYPE,
     disabled: dropBeforeIndex == null,
     data: { kind: "dropzone", parentId, slot, index: dropBeforeIndex ?? 0 },
-    // Targets the slot this node SITS IN, so it ranks with that slot's own zones.
-    collisionPriority: nodeTargetPriority(depth, "before"),
+    // Targets the slot this node SITS IN, so it ranks with that slot's own
+    // zones — it marks a position among its siblings and must compete with the
+    // gap zones beside it.
+    collisionPriority: canvasPriority(depth),
+    // The same ranking every insertion target uses. A formatted slot draws no
+    // zones, so this target and its neighbouring `before:` targets ARE that
+    // slot's insertion points and need the switch margin for the same reason.
     collisionDetector: insertionCollisionDetector,
   });
 
@@ -353,9 +360,11 @@ function DraggableNode({
       slot: appendSlot ?? DEFAULT_SLOT,
       index: appendIndex,
     },
-    // Targets this node's OWN slot, so it ranks with the zones INSIDE it rather
-    // than with its siblings — the same depth the slot content is rendered at.
-    collisionPriority: nodeTargetPriority(depth, "append"),
+    // One level IN, unlike `before:` above: this targets this node's OWN slot,
+    // so it ranks with the zones INSIDE it rather than with its siblings — the
+    // same `depth + 1` the slot content is rendered at. Without that a drag
+    // over a grid nested in a container is claimed by the container holding it.
+    collisionPriority: canvasPriority(depth + 1),
     // The same ranking every insertion target uses. A formatted slot draws no
     // zones, so this target and its neighbouring `before:` targets ARE that
     // slot's insertion points and need the switch margin for the same reason.

@@ -63,10 +63,10 @@ describe("pasting a subtree", () => {
   });
 
   it("still inserts into a page that ALREADY has a fault elsewhere", () => {
-    // This PR creates exactly this page: a stored `core/columns` row holding an ordinary block
-    // stays that way until its author takes the repair. Judging only the result would refuse every
-    // unrelated paste while such a row exists, silently — the Paste action looking broken on
-    // precisely the pages this change affects.
+    // A stored `core/columns` row holding an ordinary block stays that way until its author takes
+    // the repair, so this page shape exists in the wild. Judging only the result would refuse
+    // every unrelated paste while such a row exists, silently — the Paste action looking broken on
+    // precisely the pages that carry one.
     const document: BlockDocument = {
       version: 1,
       root: node("core/container", {

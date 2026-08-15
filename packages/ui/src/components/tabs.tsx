@@ -1,13 +1,14 @@
 "use client";
 
 import { Root, List, Trigger, Content } from "@radix-ui/react-tabs";
-import { forwardRef } from "react";
+import { cva, type VariantProps } from "class-variance-authority";
+import { forwardRef, type ComponentPropsWithoutRef } from "react";
 
 import { cn } from "../lib/utils";
 import type {
-  TabsListProps,
+  TabsListProps as TabsListBaseProps,
   TabsListRef,
-  TabsTriggerProps,
+  TabsTriggerProps as TabsTriggerBaseProps,
   TabsTriggerRef,
   TabsContentProps,
   TabsContentRef,
@@ -95,6 +96,41 @@ import type {
 const Tabs = Root;
 
 /**
+ * The list's own appearance, as variants rather than as classes each caller
+ * repeats.
+ *
+ * `ghost` is the compact, surface-less list used where tabs sit inside another
+ * panel and must not draw a bar of their own. It was spelled `h-8 bg-transparent
+ * p-0` at one call site and `h-7 bg-transparent p-0` at another; naming it here
+ * settles the height rather than leaving two answers in the tree.
+ *
+ * Only APPEARANCE is promoted. Layout a caller chooses -- `w-full`,
+ * `justify-start`, margins, `overflow-x-auto` -- stays on `className`, because
+ * a variant names a decision this component owns and layout is the caller's.
+ *
+ * The arms are a named declaration rather than an object literal inside `cva`,
+ * because `cva` does not expose its configuration on the function it returns —
+ * so anything checking which arms exist would otherwise have to restate them,
+ * and the two drift the moment an arm is added.
+ */
+const TABS_LIST_VARIANTS = {
+  default: "h-10",
+  ghost: "h-8 bg-transparent",
+} as const;
+
+const tabsListVariants = cva(
+  // Square corners: underline tabs, so the list never draws a rounded surface.
+  // `gap-1` and `p-0` are invariant across the variants, so they belong here —
+  // repeating them in each arm gives any future adjustment two sites to change
+  // and one to forget.
+  "inline-flex items-center justify-center gap-1 rounded-none p-0 text-muted-foreground",
+  {
+    variants: { variant: TABS_LIST_VARIANTS },
+    defaultVariants: { variant: "default" },
+  }
+);
+
+/**
  * TabsList - Container for tab triggers
  *
  * Design Specs:
@@ -104,21 +140,41 @@ const Tabs = Root;
  * - Layout: inline-flex (horizontal by default, use orientation="vertical" on Tabs root for vertical)
  * @public
  */
-const TabsList = forwardRef<TabsListRef, TabsListProps>(
-  ({ className, ...props }, ref) => (
-    <List
-      ref={ref}
-      data-slot="tabs-list"
-      className={cn(
-        // Square corners: underline tabs, so the list never draws a rounded surface.
-        "inline-flex h-10 items-center justify-center gap-1 rounded-none p-0 text-muted-foreground",
-        className
-      )}
-      {...props}
-    />
-  )
-);
+const TabsList = forwardRef<
+  TabsListRef,
+  TabsListBaseProps & VariantProps<typeof tabsListVariants>
+>(({ className, variant, ...props }, ref) => (
+  <List
+    ref={ref}
+    data-slot="tabs-list"
+    className={cn(tabsListVariants({ variant }), className)}
+    {...props}
+  />
+));
 TabsList.displayName = List.displayName;
+
+/**
+ * The trigger's own appearance. `size` carries the type scale only: everything
+ * that draws the tab -- the square corners, the 2px underline, the active and
+ * hover colours, the focus ring -- is in the base and is not a caller's to
+ * choose, which is the property `tabs-contract.test.ts` watches for.
+ *
+ * Arms declared separately for the same reason as the list's.
+ */
+const TABS_TRIGGER_SIZES = {
+  default: "text-sm",
+  sm: "text-xs",
+} as const;
+
+const tabsTriggerVariants = cva(
+  // Square corners: the active state is a 2px bottom border that has to run the
+  // full width of the trigger.
+  "inline-flex items-center justify-center whitespace-nowrap rounded-none bg-transparent px-4 py-2 font-medium cursor-pointer transition-all duration-200 border-b-2 relative -mb-0.5 data-[state=active]:border-b-primary! data-[state=active]:text-primary data-[state=inactive]:border-transparent data-[state=inactive]:text-muted-foreground hover:text-primary hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 disabled:cursor-not-allowed",
+  {
+    variants: { size: TABS_TRIGGER_SIZES },
+    defaultVariants: { size: "default" },
+  }
+);
 
 /**
  * TabsTrigger - Clickable tab button
@@ -139,21 +195,17 @@ TabsList.displayName = List.displayName;
  * - Data attributes: [data-state="active|inactive"], [data-disabled]
  * @public
  */
-const TabsTrigger = forwardRef<TabsTriggerRef, TabsTriggerProps>(
-  ({ className, ...props }, ref) => (
-    <Trigger
-      ref={ref}
-      data-slot="tabs-trigger"
-      className={cn(
-        // Square corners: the active state is a 2px bottom border that has to
-        // run the full width of the trigger.
-        "inline-flex items-center justify-center whitespace-nowrap rounded-none bg-transparent px-4 py-2 text-sm font-medium cursor-pointer transition-all duration-200 border-b-2 relative -mb-0.5 data-[state=active]:border-b-primary! data-[state=active]:text-primary data-[state=inactive]:border-transparent data-[state=inactive]:text-muted-foreground hover:text-primary hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 disabled:cursor-not-allowed",
-        className
-      )}
-      {...props}
-    />
-  )
-);
+const TabsTrigger = forwardRef<
+  TabsTriggerRef,
+  TabsTriggerBaseProps & VariantProps<typeof tabsTriggerVariants>
+>(({ className, size, ...props }, ref) => (
+  <Trigger
+    ref={ref}
+    data-slot="tabs-trigger"
+    className={cn(tabsTriggerVariants({ size }), className)}
+    {...props}
+  />
+));
 TabsTrigger.displayName = Trigger.displayName;
 
 /**
@@ -185,9 +237,27 @@ const TabsContent = forwardRef<TabsContentRef, TabsContentProps>(
 TabsContent.displayName = Content.displayName;
 
 export { Tabs, TabsList, TabsTrigger, TabsContent };
-export type {
-  TabsProps,
-  TabsListProps,
-  TabsTriggerProps,
-  TabsContentProps,
-} from "../types/tabs";
+export { tabsListVariants, tabsTriggerVariants };
+export { TABS_LIST_VARIANTS, TABS_TRIGGER_SIZES };
+export type { TabsProps, TabsContentProps } from "../types/tabs";
+
+/**
+ * The public prop types, DERIVED from the components rather than restated.
+ *
+ * `../types/tabs` describes the Radix props alone, so an alias taken from there
+ * rejects `variant` and `size` — and a consumer typing a wrapper around
+ * `TabsList` would be told the prop it can see in the signature does not exist.
+ * Reading the component's own props keeps the two from drifting: a variant
+ * added later reaches every consumer without a second edit.
+ */
+/**
+ * The list's props, including its `variant`.
+ * @public
+ */
+export type TabsListProps = ComponentPropsWithoutRef<typeof TabsList>;
+
+/**
+ * The trigger's props, including its `size`.
+ * @public
+ */
+export type TabsTriggerProps = ComponentPropsWithoutRef<typeof TabsTrigger>;

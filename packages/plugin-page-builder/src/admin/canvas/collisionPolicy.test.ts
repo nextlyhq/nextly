@@ -28,8 +28,6 @@ import {
   insertionDistancePx,
   insertionEdgeDistancePx,
   isInsertionTargetEligible,
-  nodeTargetPriority,
-  zonePriority,
 } from "./collisionPolicy";
 
 /**
@@ -445,23 +443,198 @@ describe("eligibility, which the margin depends on", () => {
   });
 });
 
-describe("the one priority scale", () => {
-  // Stated as RELATIONSHIPS rather than numbers. A test that restated the
-  // arithmetic would agree with a policy that had drifted, because both sides
-  // would be wrong the same way.
-  it("ranks a container's own append target with the zones inside it", () => {
-    expect(nodeTargetPriority(3, "append")).toBe(zonePriority(4));
+describe("insertionCollisionValue", () => {
+  it("ranks the nearer zone higher", () => {
+    const near = insertionCollisionValue({
+      distancePx: 5,
+      isCurrentTarget: false,
+      bandPx: 10,
+    });
+    const far = insertionCollisionValue({
+      distancePx: 25,
+      isCurrentTarget: false,
+      bandPx: 10,
+    });
+
+    expect(near).toBeGreaterThan(far);
   });
 
-  it("ranks an insert-before target with the zones of the slot it sits in", () => {
-    expect(nodeTargetPriority(3, "before")).toBe(zonePriority(3));
+  it("credits the incumbent exactly the margin, in pixels", () => {
+    const challenger = insertionCollisionValue({
+      distancePx: 30,
+      isCurrentTarget: false,
+      bandPx: 10,
+    });
+    const incumbent = insertionCollisionValue({
+      distancePx: 30,
+      isCurrentTarget: true,
+      bandPx: 10,
+    });
+
+    // Linear and negated, so the credit reads back as a plain pixel difference
+    // rather than something that has to be inverted to be interpreted.
+    expect(incumbent - challenger).toBe(10);
+  });
+});
+
+describe("the horizontal term, which separates targets of unequal width", () => {
+  const COLUMN_WIDTH = 300;
+  const LEFT_CENTRE_X = 150;
+  const RIGHT_CENTRE_X = 450;
+  const ROW_CENTRE_Y = 200;
+  // A formatted container's `append` rectangle spans every child, so its centre
+  // sits between the columns rather than over one of them.
+  const CONTAINER_CENTRE_X = 300;
+
+  const at = (
+    pointerX: number,
+    centreX: number,
+    centreY = ROW_CENTRE_Y
+  ): number =>
+    insertionDistancePx({ pointerX, pointerY: ROW_CENTRE_Y, centreX, centreY });
+
+  it("keeps the ORDER vertical between targets that share a centre", () => {
+    // Every zone in ordinary block flow spans its container, so they share a
+    // centre x and carry an identical horizontal offset. That offset does not
+    // cancel arithmetically under a square root, and it does not need to: it is
+    // the same for both candidates, so it cannot reorder them. The comparison
+    // is decided by the vertical gap exactly as if the term were absent, which
+    // is the property the ranking actually depends on.
+    const offCentreX = POINTER_X + 380;
+    const pointerY = 200;
+    const nearerVertically = at(offCentreX, POINTER_X, pointerY - 40);
+    const furtherVertically = at(offCentreX, POINTER_X, pointerY - 100);
+
+    expect(nearerVertically).toBeLessThan(furtherVertically);
   });
 
-  it("puts a deeper zone above a shallower one", () => {
-    expect(zonePriority(4)).toBeGreaterThan(zonePriority(3));
+  it("does not tie two columns at the same height", () => {
+    expect(at(LEFT_CENTRE_X, LEFT_CENTRE_X)).toBe(0);
+    expect(
+      at(LEFT_CENTRE_X, RIGHT_CENTRE_X),
+      "the far column must not tie with the one under the pointer"
+    ).toBeGreaterThan(0);
   });
 
-  it("puts a container's append target above the zones holding the container", () => {
-    expect(nodeTargetPriority(3, "append")).toBeGreaterThan(zonePriority(3));
+  it("separates a container's append target from the child under the pointer", () => {
+    // The case a zero-inside-the-width term cannot see: the container's
+    // rectangle spans both columns, so the pointer is horizontally INSIDE it
+    // and inside the child at once. Zeroing the term there makes both reduce to
+    // the vertical gap, and with their centres aligned the two tie and
+    // registration order decides which is reachable.
+    const toChild = at(LEFT_CENTRE_X, LEFT_CENTRE_X);
+    const toContainer = at(LEFT_CENTRE_X, CONTAINER_CENTRE_X);
+
+    expect(toChild).toBeLessThan(toContainer);
+  });
+
+  it("grows with horizontal separation rather than only outside a boundary", () => {
+    expect(at(LEFT_CENTRE_X + 10, LEFT_CENTRE_X)).toBe(10);
+    expect(at(LEFT_CENTRE_X + 160, LEFT_CENTRE_X)).toBe(160);
+  });
+});
+
+describe("insertionEdgeDistancePx, which bounds the reprieve", () => {
+  const rect = { centreX: 150, centreY: 200, width: 300, height: 40 };
+
+  it("is zero anywhere inside the rectangle", () => {
+    // The property the RANKING metric deliberately does not have. Bounding the
+    // reprieve asks "how far outside the target is the pointer", which is a
+    // different question from "which target is nearest".
+    expect(
+      insertionEdgeDistancePx({ pointerX: 150, pointerY: 200, ...rect })
+    ).toBe(0);
+    expect(
+      insertionEdgeDistancePx({ pointerX: 300, pointerY: 220, ...rect })
+    ).toBe(0);
+  });
+
+  it("measures from the nearest edge once outside, on either axis", () => {
+    expect(
+      insertionEdgeDistancePx({ pointerX: 310, pointerY: 200, ...rect })
+    ).toBe(10);
+    expect(
+      insertionEdgeDistancePx({ pointerX: 150, pointerY: 230, ...rect })
+    ).toBe(10);
+  });
+});
+
+describe("eligibility, which the margin depends on", () => {
+  // The margin lives in the ranking, so it can only act on targets that are
+  // still IN the ranking. The default detection stops reporting a target once
+  // the dragged feedback no longer overlaps it, and where targets are spaced
+  // farther apart than that feedback is tall, that happens before any
+  // neighbour becomes eligible — the held target is dropped and the indicator
+  // alternates between a target and nothing, which is the flicker arriving
+  // through eligibility rather than through ranking.
+  const held = {
+    hasDefaultCollision: false,
+    isCurrentTarget: true,
+    edgeDistancePx: 0,
+    bandPx: TARGET_SWITCH_BAND_PX,
+  };
+
+  it("keeps the held target when the default detection drops it", () => {
+    expect(isInsertionTargetEligible(held)).toBe(true);
+  });
+
+  it("keeps it right up to the edge of the band", () => {
+    expect(
+      isInsertionTargetEligible({
+        ...held,
+        edgeDistancePx: TARGET_SWITCH_BAND_PX,
+      })
+    ).toBe(true);
+  });
+
+  it("releases it one pixel past the band", () => {
+    // The bound that stops the reprieve becoming unbounded stickiness. Without
+    // it the held target survives for as long as no rival happens to be
+    // eligible, which on widely spaced targets is indefinitely: the margin
+    // stops being a margin and the indicator clings to a target the pointer
+    // left long ago.
+    expect(
+      isInsertionTargetEligible({
+        ...held,
+        edgeDistancePx: TARGET_SWITCH_BAND_PX + 1,
+      })
+    ).toBe(false);
+  });
+
+  it("does not extend the reprieve to a target that is not held", () => {
+    // Otherwise every target in the document stays in the ranking forever.
+    expect(isInsertionTargetEligible({ ...held, isCurrentTarget: false })).toBe(
+      false
+    );
+  });
+
+  it("bounds the reprieve on the HORIZONTAL axis by the same band", () => {
+    // A hard "inside the width" gate would drop the held target the instant the
+    // pointer crossed a column edge, so its credit would never be compared with
+    // the challenger and a small jitter across that edge would flip the
+    // indicator. One distance covers both axes, so neither is a cliff.
+    expect(
+      isInsertionTargetEligible({
+        ...held,
+        edgeDistancePx: TARGET_SWITCH_BAND_PX - 1,
+      })
+    ).toBe(true);
+  });
+
+  it("admits anything the default detection already admits", () => {
+    // Eligibility is never NARROWED, so no target stops claiming a pointer it
+    // claimed before this module existed — including well outside the band.
+    for (const isCurrentTarget of [true, false]) {
+      {
+        expect(
+          isInsertionTargetEligible({
+            hasDefaultCollision: true,
+            isCurrentTarget,
+            edgeDistancePx: 10_000,
+            bandPx: TARGET_SWITCH_BAND_PX,
+          })
+        ).toBe(true);
+      }
+    }
   });
 });

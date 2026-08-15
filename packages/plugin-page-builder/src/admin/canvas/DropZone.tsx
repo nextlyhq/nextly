@@ -14,7 +14,7 @@
 import { useDragDropMonitor, useDroppable } from "@dnd-kit/react";
 import { createContext, useContext, useState, type ReactNode } from "react";
 
-import { insertionCollisionDetector, zonePriority } from "./collisionPolicy";
+import { insertionCollisionDetector } from "./collisionPolicy";
 
 const BLOCK_TYPE = "nx-block";
 
@@ -62,6 +62,35 @@ export function useCanvasDepth(): number {
   return useContext(CanvasDepthContext);
 }
 
+/**
+ * Above every priority the collision detector assigns on its own.
+ *
+ * `collisionPriority` OVERRIDES the detector's value rather than supplying one
+ * where none exists — `@dnd-kit/abstract` applies it after the detector has
+ * already decided — and the detector's own scale is `High` (3) when the pointer
+ * is inside the element and `Normal` (2) otherwise. Depths counted from zero
+ * therefore share numbers with it, so a droppable that MISSED its priority
+ * would tie with, or beat, a correctly ranked one, and which happened would
+ * depend on how deeply the document happened to nest.
+ *
+ * Basing the canvas scale above that range makes the two kinds
+ * non-overlapping: an omission then loses to every ranked droppable at any
+ * depth, which is a loud and constant failure rather than a plausible one.
+ */
+const CANVAS_PRIORITY_BASE = 10;
+
+/**
+ * The collision priority for a droppable at `depth`.
+ *
+ * Every droppable the canvas registers takes its priority from HERE. The
+ * numbers are only comparable if one place produces them: two scales in one
+ * canvas make "which target claims the pointer" depend on nesting depth, which
+ * is not a question anyone means to ask.
+ */
+export function canvasPriority(depth: number): number {
+  return CANVAS_PRIORITY_BASE + depth;
+}
+
 export function DropZone({
   parentId,
   slot,
@@ -95,7 +124,7 @@ export function DropZone({
     // is what "the innermost container owns the drop target" asks for, and it
     // is the only thing that can settle two IDENTICAL rectangles — which is
     // exactly what a nested container's edge gap and its parent's gap are.
-    collisionPriority: zonePriority(depth),
+    collisionPriority: canvasPriority(depth),
     // Empty zones rank the same way, because "one per container" does not mean
     // "no competitor": two adjacent containers that are both empty put their
     // placeholders at the same depth, and those compete for the same pointer
