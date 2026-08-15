@@ -1,8 +1,84 @@
 import { expect, test } from "@playwright/test";
-import { dirname } from "node:path";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { flakySummary, recordsFlaky, repoRelative } from "../flaky-reporter";
+import FlakyReporter, {
+  flakySummary,
+  recordsFlaky,
+  repoRelative,
+  type ObservedTestCase,
+  type ObservedTestResult,
+} from "../flaky-reporter";
+
+/** One attempt as the reporter sees it, with only the members it reads. */
+function attempt(
+  outcome: ReturnType<ObservedTestCase["outcome"]>,
+  status: ObservedTestResult["status"],
+  retry: number,
+  title = "the innermost container owns the drop target"
+): [ObservedTestCase, ObservedTestResult] {
+  const root = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
+  return [
+    {
+      outcome: () => outcome,
+      // Playwright's first entry is the project name, which the reporter drops.
+      titlePath: () => ["chromium", "canvas", title],
+      location: {
+        file: join(root, "e2e/tests/canvas/checklist.spec.ts"),
+        line: 1,
+        column: 1,
+      },
+    },
+    { status, retry },
+  ];
+}
+
+/**
+ * Runs the reporter over `attempts` with a throwaway step-summary file, and
+ * returns what it wrote to each destination.
+ */
+function runReporter(
+  attempts: readonly [ObservedTestCase, ObservedTestResult][]
+): {
+  summary: string;
+  stdout: string;
+} {
+  const dir = mkdtempSync(join(tmpdir(), "nextly-flaky-"));
+  const summaryPath = join(dir, "step-summary.md");
+  const previousSummaryPath = process.env.GITHUB_STEP_SUMMARY;
+  const originalWrite = process.stdout.write.bind(process.stdout);
+  let stdout = "";
+  try {
+    process.env.GITHUB_STEP_SUMMARY = summaryPath;
+    // The count is written to the real stdout, so reading it back means
+    // standing in for the stream the reporter chose rather than asking the
+    // reporter to write somewhere a test can see.
+    const capture: typeof process.stdout.write = chunk => {
+      stdout += typeof chunk === "string" ? chunk : chunk.toString();
+      return true;
+    };
+    process.stdout.write = capture;
+    const reporter = new FlakyReporter();
+    for (const [testCase, result] of attempts)
+      reporter.onTestEnd(testCase, result);
+    reporter.onEnd({ status: "passed", startTime: new Date(0), duration: 0 });
+  } finally {
+    process.stdout.write = originalWrite;
+    if (previousSummaryPath === undefined)
+      delete process.env.GITHUB_STEP_SUMMARY;
+    else process.env.GITHUB_STEP_SUMMARY = previousSummaryPath;
+  }
+  let summary = "";
+  try {
+    summary = readFileSync(summaryPath, "utf8");
+  } catch {
+    // Absent is a result: the reporter writes nothing when nothing was flaky.
+  }
+  rmSync(dir, { recursive: true, force: true });
+  return { summary, stdout };
+}
 
 const ONE = [
   {
@@ -110,4 +186,42 @@ test("makes a path relative to the REPOSITORY root, not the caller's cwd", () =>
   expect(repoRelative("/somewhere/else/x.spec.ts")).toBe(
     "/somewhere/else/x.spec.ts"
   );
+});
+
+test("carries a failed-then-passed test through to the summary and the count", () => {
+  // The end-to-end control. Every test above calls a helper directly, so all of
+  // them stay green if the reporter stops calling those helpers: with no case
+  // that drives `onTestEnd` and `onEnd`, removing the callbacks, the record it
+  // pushes, or the file write is invisible.
+  const { summary, stdout } = runReporter([
+    attempt("flaky", "failed", 0),
+    attempt("flaky", "passed", 1),
+  ]);
+  expect(summary).toContain("1 test(s) passed only on retry");
+  expect(summary).toContain("the innermost container owns the drop target");
+  // Repository-relative, so the path resolves for a reader of the summary.
+  expect(summary).toContain("e2e/tests/canvas/checklist.spec.ts");
+  // The project name is dropped and the remaining path is joined.
+  expect(summary).toContain("canvas › the innermost container");
+  // Attempt 2, from a zero-based retry of 1 — and one row, not one per attempt.
+  expect(summary).toContain("| 2 |");
+  expect(summary.split("\n").filter(l => l.startsWith("| `"))).toHaveLength(1);
+  expect(stdout).toContain("flaky-count=1\n");
+});
+
+test("leaves the terminal reporter to Playwright", () => {
+  // Playwright prepends `dot` (CI) or `line` (local) only while no configured
+  // reporter claims the terminal, and it reads a MISSING `printsToStdio` as a
+  // claim. Dropping this method therefore removes the run's per-test terminal
+  // output — a change with no failing test anywhere else in the suite, since
+  // the tests themselves still pass either way.
+  expect(new FlakyReporter().printsToStdio()).toBe(false);
+});
+
+test("stays silent end to end when every test passed first time", () => {
+  // The negative control for the same path: a reporter that recorded every
+  // result would still satisfy the test above.
+  const { summary, stdout } = runReporter([attempt("expected", "passed", 0)]);
+  expect(summary).toBe("");
+  expect(stdout).toBe("");
 });

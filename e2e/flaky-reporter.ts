@@ -34,6 +34,21 @@ export interface FlakyTest {
 }
 
 /**
+ * The parts of Playwright's own types this reporter reads.
+ *
+ * Narrowed rather than taken whole so that the reporter states its inputs, and
+ * so a caller can supply them: `TestCase` and `TestResult` carry back-references
+ * to the whole suite and cannot be constructed outside a run.
+ * `onTestEnd` still satisfies `Reporter` — a full `TestCase` is assignable to
+ * this, and method parameters are compared bivariantly.
+ */
+export type ObservedTestCase = Pick<
+  TestCase,
+  "outcome" | "titlePath" | "location"
+>;
+export type ObservedTestResult = Pick<TestResult, "status" | "retry">;
+
+/**
  * A repository-relative path for an absolute test file.
  *
  * Derived from THIS module's own location rather than from `process.cwd()`,
@@ -120,7 +135,18 @@ export function recordsFlaky(
 export default class FlakyReporter implements Reporter {
   private readonly flaky: FlakyTest[] = [];
 
-  onTestEnd(test: TestCase, result: TestResult): void {
+  /**
+   * Playwright adds `dot` (or `line`) only when NO configured reporter claims
+   * the terminal, and a reporter that omits this method counts as claiming it.
+   * This one writes a single line at the very end and renders no progress, so
+   * answering `true` by omission would silently remove the run's only
+   * per-test terminal output.
+   */
+  printsToStdio(): boolean {
+    return false;
+  }
+
+  onTestEnd(test: ObservedTestCase, result: ObservedTestResult): void {
     // `outcome()` is Playwright's own classification and already accounts for
     // expected failures, so a `test.fail()` that fails and then passes is not
     // reported here as flaky. Recomputing it from `result.status` would be a
