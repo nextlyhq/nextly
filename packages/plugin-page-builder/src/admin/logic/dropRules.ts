@@ -16,16 +16,34 @@ import {
 import type { BlockRegistry } from "../../core/registry";
 import { slotAdmits } from "../../core/slot-allow";
 
-export interface DropCheck {
-  ok: boolean;
-  reason?:
-    | "unknown-parent"
-    | "not-a-container"
-    | "unknown-slot"
-    | "not-allowed-in-slot"
-    /** The CHILD restricts which parents it may sit under, and this is not one. */
-    | "wrong-parent";
-}
+/**
+ * Which rule refused a drop.
+ *
+ * Named rather than inlined because the reason travels: the canvas has to tell the author WHICH
+ * rule stopped the drop, and a caller that only reads `ok` throws that away at the one point where
+ * it is still known.
+ */
+export type DropReason =
+  | "unknown-parent"
+  | "not-a-container"
+  | "unknown-slot"
+  | "not-allowed-in-slot"
+  /** The CHILD restricts which parents it may sit under, and this is not one. */
+  | "wrong-parent";
+
+/**
+ * A refusal carries its reason by construction.
+ *
+ * As two members rather than one shape with an optional field: `{ ok: false }` on its own used to
+ * type-check, so a refusal with nothing to say about itself was expressible, and a caller wanting
+ * the reason had to handle an absence that no code path actually produces.
+ *
+ * `reason?: undefined` on the accepting member keeps `canDrop(...).reason` readable without first
+ * narrowing on `ok` — the reason is `undefined` there because an accepted drop has none.
+ */
+export type DropCheck =
+  | { ok: true; reason?: undefined }
+  | { ok: false; reason: DropReason };
 
 export function canDrop(
   parentType: string,
