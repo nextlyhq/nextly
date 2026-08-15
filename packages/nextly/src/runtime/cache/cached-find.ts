@@ -98,11 +98,20 @@ export interface CachedFindOptions {
  * );
  *
  * @example
- * // Per-user list — access rules evaluated AS the caller, and the caller's id in
- * // the key so the entry never leaks to another reader.
+ * // Per-user list — access rules evaluated AS the caller, and EVERY dimension
+ * // those rules read in the key, not merely who the caller is.
+ * //
+ * // `roles` is in the key because the identity outlives the permission: tags bust
+ * // on CONTENT changes and a role change is not one, so keying on the id alone
+ * // lets the same person fill an entry while privileged and read it back after
+ * // being downgraded. Sort them, because the key is compared as text and two
+ * // orderings of one role set would otherwise be two entries.
  * const mine = await cachedFind(
  *   () => nextly.find({ collection: "orders", user, overrideAccess: false }),
- *   { tags: nextlyTags("orders"), keyParts: ["orders", "list", user.id] }
+ *   {
+ *     tags: nextlyTags("orders"),
+ *     keyParts: ["orders", "list", user.id, [...user.roles].sort().join(",")],
+ *   }
  * );
  */
 export function cachedFind<T>(
