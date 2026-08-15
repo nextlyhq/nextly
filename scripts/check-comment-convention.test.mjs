@@ -255,8 +255,10 @@ describe("the allowlist", () => {
 
 describe("actors that can be runtime concepts", () => {
   it("allows a reviewer or maintainer as a runtime actor in review tooling", () => {
-    // Code that models review behaviour describes what a reviewer REQUESTED as a state, not as
-    // something someone told the author. Outside review tooling the same words are a conversation.
+    // Code that models review behaviour treats a change request from one of these actors as a
+    // state, not as something someone told the author. Outside review tooling the same wording is
+    // a conversation. Phrased to describe the shape rather than instantiate it: the fixtures below
+    // carry the literal forms, and a comment that spells one out is itself an offence.
     expect(
       offencesIn(
         "// The reviewer requested changes, so the verdict stays blocked",
