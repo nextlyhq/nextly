@@ -21,6 +21,9 @@ vi.mock("../../helpers/di", () => ({
   getComponentRegistryFromDI: vi.fn(),
   getFieldGroupMetadataServiceFromDI: vi.fn(),
   getAdapterFromDI: vi.fn(),
+  // The apply route takes the schema-change exclusion, which reports a skipped lock through this.
+  // Omitted, the mocked module supplies no such export and the handler throws before it starts.
+  getLoggerFromDI: vi.fn(() => undefined),
   // Reached by the companion reconciliation a localized create runs. Omitted, calling it throws and
   // the handler catches that as a companion-provisioning failure — so the assertions below would
   // describe a FAILED migration while passing.
@@ -72,7 +75,10 @@ vi.mock("../../../di/container", () => ({
   },
 }));
 
-import { withMigrationLockSurface } from "../../../domains/field-groups/migration/__tests__/helpers/migration-lock-double";
+import {
+  isMigrationLockStatement,
+  withMigrationLockSurface,
+} from "../../../domains/field-groups/migration/__tests__/helpers/migration-lock-double";
 import { FieldGroupMetadataService } from "../../../domains/field-groups/services/field-group-metadata-service";
 import type { FieldGroupRegistryService } from "../../../services/field-groups/field-group-registry-service";
 import type { Logger } from "../../../shared/types";
@@ -278,9 +284,60 @@ describe("a diverged field group and the routes that move its storage", () => {
       logContext: { migrationStatus: "diverged" },
     });
 
-    // 🔴 And it refused BEFORE touching the database. Asserting only the rejection would pass on a
-    // handler that ran the DDL and then threw, which is the outcome this guard exists to prevent.
-    expect(executed).toHaveLength(0);
+    // 🔴 And it refused BEFORE touching the field group's storage. Asserting only the rejection
+    // would pass on a handler that ran the DDL and then threw, which is the outcome this guard
+    // exists to prevent.
+    //
+    // The lock's OWN table is excluded rather than counted: taking the exclusion is what lets the
+    // guard read a status nothing can change underneath it, so its DDL is the refusal working. It
+    // is separated with the shared identifier, so this cannot disagree with what the lock considers
+    // its own.
+    expect(executed.filter(sql => !isMigrationLockStatement(sql))).toEqual([]);
+    // Positive control: the lock WAS taken, so the exclusion above is a real one rather than an
+    // empty list that would satisfy the assertion just as well.
+    expect(executed.some(isMigrationLockStatement)).toBe(true);
+  });
+
+  /**
+   * Refusing is only half of it. `updateFieldGroup` commits its companion DDL, then persists the
+   * row and the divergence marker as separate steps, so a status read taken OUTSIDE the exclusion
+   * answers for an instant that has already passed: it can see the old value, pass the guard, and
+   * start a second apply from a definition the tables have moved past.
+   *
+   * 🔴 Pinned as ORDERING rather than as the race. Holding the lock removes the interleaving
+   * instead of detecting it, so no fixture can exhibit the bad outcome with the fix in place — the
+   * observable difference is whether the exclusion is held AT THE MOMENT the status is read.
+   */
+  it("reads the status while holding the exclusion, not before taking it", async () => {
+    executed.length = 0;
+    adapter = makeAdapter("postgresql");
+    vi.mocked(getAdapterFromDI).mockReturnValue(
+      adapter as unknown as ReturnType<typeof getAdapterFromDI>
+    );
+    const registry = wireRegistry();
+
+    // Sampled INSIDE the read the guard decides on, which is the only place the question means
+    // anything. Asserting after the request would pass on a handler that read the status first and
+    // took the lock afterwards.
+    let ownerWhenStatusRead: string | null = null;
+    registry.getComponent.mockImplementation(() => {
+      ownerWhenStatusRead = adapter.migrationLock.ownerNow();
+      return Promise.resolve(diverged);
+    });
+
+    await expect(
+      dispatchComponents(
+        "applyComponentSchemaChanges",
+        { slug: "hero" },
+        { fields: [], confirmed: true, schemaVersion: 3 }
+      )
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+
+    // Positive control: the read the assertion is about actually happened. Without it a handler
+    // that never reached `getComponent` would leave the sample at its initial value and satisfy
+    // nothing while appearing to.
+    expect(registry.getComponent).toHaveBeenCalledTimes(1);
+    expect(ownerWhenStatusRead).toMatch(/^apply schema changes to field group/);
   });
 
   it("still lets an operator READ one, because that is how it gets reconciled", async () => {
