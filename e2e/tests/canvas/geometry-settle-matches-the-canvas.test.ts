@@ -2,31 +2,32 @@
  * The drop-zone timing the probe's settle allowance is chosen against.
  *
  * `poc-driver` declares `geometrySettleMs` — how long the canvas may still be moving a zone edge
- * after the pointer enters it — while the canvas animates that geometry in its own stylesheet.
- * Two statements of one fact, in files that do not refer to each other, so this holds them
- * together.
+ * after the pointer enters it — while the canvas decides that timing in its own stylesheets. Two
+ * statements of one fact, in files that do not refer to each other, so this holds them together.
  *
- * It asserts two things, and needs both:
+ * It asserts two things and needs both:
  *
- * - the stylesheet declaration is UNCHANGED, so a timing edit cannot pass unnoticed;
- * - the driver's allowance still covers the span that declaration produces.
+ * - each drop-zone state still moves for as long as {@link PINNED_SPANS_MS} records;
+ * - the driver's allowance still covers every one of those spans.
  *
- * Either alone is satisfiable while the pair is wrong. Pinning only the text passes when the
- * allowance is lowered underneath it; checking only the allowance passes when the transition is
- * lengthened.
+ * Either alone is satisfiable while the pair is wrong. Pinning only the spans passes when the
+ * allowance is lowered underneath them; checking only the allowance passes when a transition is
+ * lengthened and the pin is updated without anyone re-deriving the wait.
  *
- * ## Why the declaration is PINNED rather than parsed
+ * ## Why this MEASURES rather than reads CSS
  *
- * Computing a span from CSS source means representing CSS: comma-separated entries whose commas
- * may belong to a timing function, times that may be signed or written as `calc()` or resolved
- * through a variable, properties that may appear last or be implicit, longhand declarations that
- * override the shorthand, and only some properties moving the edge this probe measures. A regex
- * cannot represent that, and each spelling handled reveals another.
+ * Deciding from CSS means representing CSS, and then representing the cascade around it: rules
+ * split across sheets, `@media` and `@supports` groups, ancestry selectors, inline styles, a
+ * delay declared apart from its duration, a later rule overriding an earlier one, and `animation`
+ * as an alternative to `transition` entirely. Each spelling handled reveals another, because the
+ * surface is the whole cascade.
  *
- * Pinning makes no semantic claim, which is what makes it complete: every one of those spellings
- * changes the text, so every one trips this, and none requires the test to understand what it
- * changed to. The cost is that a cosmetic edit trips it as well — which is the direction to want,
- * because whoever edits that line is who should re-derive the allowance.
+ * `getComputedStyle` of a real drop zone has already resolved all of it. So this reads the
+ * element that will actually move, and nothing here interprets CSS syntax.
+ *
+ * The pin is therefore a SPAN, not a declaration. Two stylesheets can differ in every character
+ * and animate identically, and one character can change the timing — pinning the measurement
+ * makes a cosmetic edit free and a timing edit visible, which is the direction to want.
  */
 import {
   expect,
@@ -155,8 +156,21 @@ async function geometrySpanMs(
         if (computed.animationName !== "none") {
           const durations = ms(computed.animationDuration);
           const delays = ms(computed.animationDelay);
-          durations.forEach((d, i) => {
-            longest = Math.max(longest, d + cycled(delays, i));
+          // Each cycle moves the edge again, so the span is duration x ITERATIONS, not one pass.
+          // `infinite` parses as `Infinity`, which is the honest answer: an edge that never
+          // settles cannot be covered by any allowance, and the caller refuses on it below.
+          const counts = computed.animationIterationCount
+            .split(",")
+            .map(v =>
+              v.trim() === "infinite"
+                ? Infinity
+                : Number.parseFloat(v.trim()) || 1
+            );
+          durations.forEach((duration, i) => {
+            longest = Math.max(
+              longest,
+              duration * cycled(counts, i) + cycled(delays, i)
+            );
           });
         }
 
@@ -203,6 +217,12 @@ async function geometrySpanMs(
     throw new Error(
       `no elements matched "${DROP_ZONES}" in the canvas frame, so nothing was measured. A zero ` +
         "span here would be indistinguishable from a canvas whose zones do not move."
+    );
+  }
+  if (!Number.isFinite(result.ms)) {
+    throw new Error(
+      "a drop zone runs an animation that never ends, so its edge never settles and no allowance " +
+        "can cover it. Reporting a number here would certify a wait that cannot be long enough."
     );
   }
   if (result.unclassified.length > 0) {
@@ -353,6 +373,60 @@ test.describe("the drop-zone geometry the probe waits on", () => {
     expect(injected).toBe(true);
 
     expect(await geometrySpanMs(frame, null)).toBe(300);
+  });
+
+  test("a REPEATED animation is charged for every iteration", async ({
+    page,
+    request,
+  }) => {
+    const frame = await canvas(page, request);
+
+    // One pass is 100ms; three passes move the edge for 300ms. Counting a single pass would pin
+    // 100, and the allowance would then cover a third of the movement.
+    const injected = await frame.evaluate(() => {
+      const sheet = (
+        document.getElementById("nx-pb-style") as HTMLStyleElement | null
+      )?.sheet;
+      sheet?.insertRule(
+        "@keyframes nx-test-rep { from { height: 0 } to { height: 12px } }",
+        sheet.cssRules.length
+      );
+      sheet?.insertRule(
+        ".nx-pb-dropzone { animation: nx-test-rep .1s 3 }",
+        sheet.cssRules.length
+      );
+      return Boolean(sheet);
+    });
+    expect(injected).toBe(true);
+
+    expect(await geometrySpanMs(frame, null)).toBe(300);
+  });
+
+  test("an ENDLESS animation is refused, not certified finite", async ({
+    page,
+    request,
+  }) => {
+    const frame = await canvas(page, request);
+
+    // An edge that never settles cannot be covered by any allowance. Reporting its per-pass
+    // duration would pin a number and certify a wait that can never be long enough.
+    const injected = await frame.evaluate(() => {
+      const sheet = (
+        document.getElementById("nx-pb-style") as HTMLStyleElement | null
+      )?.sheet;
+      sheet?.insertRule(
+        "@keyframes nx-test-inf { from { height: 0 } to { height: 12px } }",
+        sheet.cssRules.length
+      );
+      sheet?.insertRule(
+        ".nx-pb-dropzone { animation: nx-test-inf .1s infinite }",
+        sheet.cssRules.length
+      );
+      return Boolean(sheet);
+    });
+    expect(injected).toBe(true);
+
+    await expect(geometrySpanMs(frame, null)).rejects.toThrow(/never ends/);
   });
 
   test("it refuses rather than reporting a zero it cannot stand behind", async ({
