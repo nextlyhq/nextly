@@ -194,29 +194,59 @@ const review = (login, commitId) => ({
 });
 
 /**
+ * The environment the command runs under, with every variable it READS pinned.
+ *
+ * Inheriting the runner's environment is not neutral here. `GH_HOST` is an
+ * ordinary Enterprise setting, and the command derives its request host and its
+ * git remote from it — so an inherited value sends the subprocess at a host the
+ * `insteadOf` rewrite below does not intercept, and the cases either fail or
+ * reach the network. `CI_VERDICT_BLOCKING` and `CI_VERDICT_ADVISORY` rename the
+ * reviewers the verdict is computed from, which changes the expected answer
+ * without changing the fixture.
+ *
+ * `NODE_OPTIONS` is pinned for the same reason in the opposite direction: the
+ * symlink case SETS it, so leaving it inherited elsewhere would let a runner
+ * supply the flag to every other case and quietly remove the contrast that one
+ * is demonstrating.
+ */
+const cliEnv = ({ nodeOptions } = {}) => {
+  const env = {
+    ...process.env,
+    PATH: `${join(root, "bin")}:${process.env.PATH}`,
+    GH_REPO: "nextlyhq/nextly",
+    NODE_OPTIONS: nodeOptions ?? "",
+    // Real git, aimed at the throwaway repository. Supplied through the
+    // environment so no config file anywhere is written or read.
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: `url.${origin}.insteadOf`,
+    GIT_CONFIG_VALUE_0: "https://github.com/nextlyhq/nextly.git",
+  };
+  // Deleted rather than blanked: the command falls back to its own default
+  // when these are absent, and an empty string is a configured value that
+  // would override it.
+  delete env.GH_HOST;
+  delete env.CI_VERDICT_BLOCKING;
+  delete env.CI_VERDICT_ADVISORY;
+  delete env.GH_STUB_FIXTURE;
+  return env;
+};
+
+/**
  * Start the command and return its status and parsed report.
  *
  * `stdout` is returned unparsed as well, because a case that exits without
  * emitting has to be able to assert on the absence rather than on a parse
  * failure that would look identical to malformed output.
  */
-const runCli = ({ cwd, routes, entry = ENTRY, nodeOptions }) => {
+const runCli = ({ cwd, routes, entry = ENTRY, nodeOptions, args = ["1"] }) => {
   const fixture = join(root, "fixture.json");
   writeFileSync(fixture, JSON.stringify({ routes }));
-  const result = spawnSync(process.execPath, [entry, "1"], {
+  const result = spawnSync(process.execPath, [entry, ...args], {
     cwd,
     encoding: "utf8",
     env: {
-      ...process.env,
-      PATH: `${join(root, "bin")}:${process.env.PATH}`,
+      ...cliEnv({ nodeOptions }),
       GH_STUB_FIXTURE: fixture,
-      GH_REPO: "nextlyhq/nextly",
-      ...(nodeOptions ? { NODE_OPTIONS: nodeOptions } : {}),
-      // Real git, aimed at the throwaway repository. Supplied through the
-      // environment so no config file anywhere is written or read.
-      GIT_CONFIG_COUNT: "1",
-      GIT_CONFIG_KEY_0: `url.${origin}.insteadOf`,
-      GIT_CONFIG_VALUE_0: "https://github.com/nextlyhq/nextly.git",
     },
   });
   let report;
@@ -233,7 +263,11 @@ const runCli = ({ cwd, routes, entry = ENTRY, nodeOptions }) => {
   };
 };
 
-describe("ci-verdict as a command", () => {
+// Each case spawns a clone, the command, and the several `gh` and `git`
+// subprocesses it makes — measured near 4.3s against a 5s default, which is a
+// margin a loaded runner erases. Raised so a slow machine reports slowness
+// rather than a failure of the behaviour under test.
+describe("ci-verdict as a command", { timeout: 60_000 }, () => {
   it("counts the whole tail from a shallow clone", () => {
     // The branch carries three commits the merge does not. A shallow checkout
     // stops `rev-list` at its own boundary and answers 1 — the reassuring
@@ -307,6 +341,12 @@ describe("ci-verdict as a command", () => {
   it("answers for a pull request closed without merging", () => {
     // Its branch is commonly deleted straight after, so resolving the ref
     // first turned this conclusive lifecycle into a failure to answer.
+    //
+    // `headRefName` names a ref the throwaway origin does NOT have, which is
+    // what makes this case able to fail. Pointing it at the existing branch
+    // lets an early `ls-remote` succeed and produce the same verdict, so the
+    // fixture would never reach the mechanism and the case would pass on the
+    // broken ordering it exists to reject.
     const run = runCli({
       cwd: shallowClone("closed"),
       routes: [
@@ -318,7 +358,7 @@ describe("ci-verdict as a command", () => {
             "headRefName,isCrossRepository,headRepositoryOwner,headRepository,state,headRefOid,baseRefOid",
           ],
           stdout: {
-            headRefName: "feature/x",
+            headRefName: "feature/deleted-after-closing",
             isCrossRepository: false,
             headRepositoryOwner: { login: "nextlyhq" },
             headRepository: { name: "nextly" },
@@ -451,11 +491,17 @@ describe("ci-verdict as a command", () => {
   });
 
   it("rejects a pull request argument that would rewrite the request path", () => {
-    const run = spawnSync(process.execPath, [ENTRY, "1/../2"], {
+    // Asserted on the USAGE message rather than on the status. Exit 2 is also
+    // what every later failure produces, so a weakened validation that let the
+    // value through would reach `gh` and still exit 2 with empty stdout — the
+    // case would stay green with the request-path protection gone. The usage
+    // line is emitted only by the argument check.
+    const run = runCli({
       cwd: root,
-      encoding: "utf8",
-      env: { ...process.env, PATH: `${join(root, "bin")}:${process.env.PATH}` },
+      args: ["1/../2"],
+      routes: [{ when: ["auth", "setup-git"] }],
     });
+    expect(run.stderr).toMatch(/^usage: /);
     expect(run.status).toBe(2);
     expect(run.stdout).toBe("");
   });
