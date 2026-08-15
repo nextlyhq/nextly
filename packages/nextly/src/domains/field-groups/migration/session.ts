@@ -656,13 +656,13 @@ export async function withMigrationSession<T>(
     });
   }
 
-  // A terminated process never reaches `finally`, and this lock has no expiry by
-  // design, so an interrupted holder would leave a claim that only an operator
-  // could clear. That is the right trade for a migration, which is rare and
-  // deliberate; it is the wrong one for a schema sync, where the documented way
-  // to stop watch mode is Ctrl+C and a stuck claim would block every later sync.
-  // Releasing on the signal keeps the durable-claim design and removes its cost
-  // on the path people actually interrupt — but only for callers that opt in.
+  // A terminated process never reaches `finally`, so an interrupted holder leaves a claim behind.
+  // The expiry means that claim now LAPSES on its own rather than waiting for an operator — but it
+  // takes the whole TTL to do so, because nothing is renewing it and nothing knows it is dead.
+  // That wait is the right trade for a migration, which is rare and deliberate; it is the wrong one
+  // for a schema sync, where the documented way to stop watch mode is Ctrl+C and a stale claim would
+  // stall every later sync for two minutes. Releasing on the signal removes that wait on the path
+  // people actually interrupt — but only for callers that opt in.
   // Set by the signal path so the completion check below can tell a claim this run GAVE UP
   // deliberately from one a contender took. Both leave the row not-ours at the end and only the
   // second is a failure — an interrupt is an orderly shutdown that already signalled its outcome.

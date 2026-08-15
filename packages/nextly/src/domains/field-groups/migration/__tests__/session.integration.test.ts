@@ -162,6 +162,12 @@ describe.each(DIALECTS)(
        * expression the code under test uses would agree with a broken one — the two would be wrong
        * together and the comparison would still look correct. The offset is applied by the database
        * so no client clock enters the fixture either.
+       *
+       * 🔴 Independently SPELLED, on the same SCALE. MySQL's `NOW()` is session-local and
+       * `expires_at` is a zone-less `DATETIME`, so a fixture written with `NOW()` and a lease
+       * written with `UTC_TIMESTAMP()` differ by the session's offset — and every TTL comparison
+       * here inverts on any connection that is not UTC. Independence has to be in the expression,
+       * never in the frame of reference.
        */
       async function seedClaim(
         owner: string | null,
@@ -179,7 +185,7 @@ describe.each(DIALECTS)(
             : dialect === "sqlite"
               ? `unixepoch() + (${expiresInSeconds})`
               : dialect === "mysql"
-                ? `DATE_ADD(NOW(), INTERVAL ${expiresInSeconds} SECOND)`
+                ? `DATE_ADD(UTC_TIMESTAMP(), INTERVAL ${expiresInSeconds} SECOND)`
                 : `now() + (${expiresInSeconds} * interval '1 second')`;
         await adapter.executeQuery(
           `UPDATE ${MIGRATION_LOCK_TABLE} SET owner = ${owner === null ? "NULL" : `'${owner}'`}, expires_at = ${expiry} WHERE id = 1`
@@ -238,7 +244,7 @@ describe.each(DIALECTS)(
         let liveDuringRun: unknown;
         await session("expiring", async () => {
           const rows = await adapter.executeQuery<{ live: unknown }>(
-            `SELECT CASE WHEN expires_at > ${dialect === "sqlite" ? "unixepoch()" : dialect === "mysql" ? "NOW()" : "now()"} THEN 1 ELSE 0 END AS live FROM ${MIGRATION_LOCK_TABLE} WHERE id = 1`
+            `SELECT CASE WHEN expires_at > ${dialect === "sqlite" ? "unixepoch()" : dialect === "mysql" ? "UTC_TIMESTAMP()" : "now()"} THEN 1 ELSE 0 END AS live FROM ${MIGRATION_LOCK_TABLE} WHERE id = 1`
           );
           liveDuringRun = rows[0]?.live;
         });
