@@ -296,11 +296,36 @@ jobs:
           echo "packed tarballs: $count (expected $expected)"
           [ "$count" -eq "$expected" ] || { echo "expected $expected tarballs, got $count"; exit 1; }
 
-          for tgz in /tmp/nextly-workspace-packs/*.tgz; do
-            files=$(tar -tzf "$tgz" | grep -c '^package/dist/' || true)
-            echo "$(basename "$tgz"): $files dist entries"
-            [ "$files" -gt 0 ] || {
-              echo "$(basename "$tgz") contains no dist/ — it was packed unbuilt"
+          # Each tarball is opened and required to contain the FIRST path its own manifest
+          # declares under `files`. `pnpm pack` exits 0 for an unbuilt package too, so a
+          # count alone would be satisfied by tarballs of metadata with no code — the pin
+          # would then replace working registry packages with empty ones and the leg would
+          # fail to resolve an entry point, blaming the template.
+          #
+          # Read from the manifest rather than assuming `dist`. Not every publishable
+          # package builds: `@nextlyhq/admin-css` has no build script and publishes `src`
+          # and `bin`, so a hardcoded `dist` assertion fails it forever — which is the same
+          # mistake as the hardcoded package list this step just stopped making, one level
+          # down. Negation entries (`!dist/metafile-*.json`) are skipped: they subtract from
+          # a set rather than naming something that must be present.
+          for dir in $PKGS; do
+            NAME=$(node -p "require('./packages/$dir/package.json').name")
+            WANT=$(node -p "
+              (require('./packages/$dir/package.json').files || [])
+                .filter(entry => !entry.startsWith('!'))[0] || ''
+            ")
+            [ -n "$WANT" ] || { echo "$NAME declares no files[] — cannot verify its tarball"; exit 1; }
+
+            TGZ=$(ls /tmp/nextly-workspace-packs/*.tgz | while read -r f; do
+              tar -xzOf "$f" package/package.json 2>/dev/null \
+                | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{try{if(JSON.parse(d).name===process.argv[1])console.log(process.argv[2])}catch{}})" "$NAME" "$f"
+            done | head -1)
+            [ -n "$TGZ" ] || { echo "no tarball found for $NAME"; exit 1; }
+
+            entries=$(tar -tzf "$TGZ" | grep -c "^package/$WANT" || true)
+            echo "$(basename "$TGZ"): $entries entries under $WANT"
+            [ "$entries" -gt 0 ] || {
+              echo "$(basename "$TGZ") contains nothing under $WANT — it was packed unbuilt"
               exit 1
             }
           done
