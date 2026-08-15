@@ -126,12 +126,24 @@ export const FORBIDDEN = [
   },
   {
     // The ACTOR carries the verdict, not the verb. "the operator asked", "the caller asked" and
-    // "the probe asked" are ordinary descriptions of a query; the same verb after a review actor
-    // is a conversation. Anchoring on the verb alone would reject the first three, and anchoring
-    // on neither would miss "the control Codex asked for".
+    // "the probe asked" are ordinary descriptions of a query; the same verb after one of these
+    // actors is a conversation. Anchoring on the verb alone would reject the first three, and
+    // anchoring on neither would miss "the control Codex asked for".
+    //
+    // A tool or a founder is never a RUNTIME actor, so these stay forbidden everywhere.
     pattern:
-      /\b(?:reviewer|reviewers|founder|maintainer|codex|coderabbit|greptile)\s+(?:said|asked|requested|wanted|suggested|flagged|found)\b/i,
+      /\b(?:founder|codex|coderabbit|greptile)\s+(?:said|asked|requested|wanted|suggested|flagged|found)\b/i,
     why: "quotes a conversation",
+  },
+  {
+    // Split from the pattern above because a REVIEWER and a MAINTAINER can both be runtime
+    // actors: code that models review behaviour describes what a reviewer requested as a state,
+    // not as something someone told the author. Outside review tooling the same words are a
+    // conversation, so the file's role decides, exactly as it does for pull-request vocabulary.
+    pattern:
+      /\b(?:reviewer|reviewers|maintainer|maintainers)\s+(?:said|asked|requested|wanted|suggested|flagged|found)\b/i,
+    why: "quotes a conversation",
+    domainVocabulary: true,
   },
 ];
 
@@ -213,6 +225,11 @@ const REVIEW_DOMAIN_PATHS = [
   "scripts/verify-merge",
   "scripts/release/",
   ".claude/rules/",
+  // GitHub review automation: these files read pull requests, post reviews and dispatch on bot
+  // logins, so pull-request vocabulary is what they OPERATE on rather than narration about them.
+  ".github/workflows/nextly-review-bot.yml",
+  ".github/workflows/nextly-bot-mention.yml",
+  ".github/scripts/review-bot",
 ];
 
 /** True when `file` sits in tooling whose subject matter is the review or release process. */

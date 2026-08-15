@@ -215,8 +215,8 @@ describe("the allowlist", () => {
   // the scan WIDENS to files it previously skipped, whatever those files already contained is by
   // definition pre-existing. The checker's own source came out of EXCLUDED_FILES and brought 12
   // recorded offences with it. A raise for any other reason is the silencing this guards against.
-  const EXPECTED_ENTRIES = 212;
-  const EXPECTED_TOTAL = 417;
+  const EXPECTED_ENTRIES = 210;
+  const EXPECTED_TOTAL = 413;
 
   it("matches its pinned size exactly", () => {
     expect(readAllowlist().size).toBe(EXPECTED_ENTRIES);
@@ -250,6 +250,50 @@ describe("the allowlist", () => {
     // Degrading to an empty allowlist would turn every pre-existing comment into a failure and
     // present a parse error as a wave of unrelated findings.
     expect(() => readAllowlist("/nonexistent-root-for-this-test")).toThrow();
+  });
+});
+
+describe("actors that can be runtime concepts", () => {
+  it("allows a reviewer or maintainer as a runtime actor in review tooling", () => {
+    // Code that models review behaviour describes what a reviewer REQUESTED as a state, not as
+    // something someone told the author. Outside review tooling the same words are a conversation.
+    expect(
+      offencesIn(
+        "// The reviewer requested changes, so the verdict stays blocked",
+        readOptionsFor("scripts/verify-merge.mjs")
+      )
+    ).toEqual([]);
+    expect(
+      offencesIn(
+        "// The reviewer requested changes",
+        readOptionsFor("packages/nextly/src/x.ts")
+      ).length
+    ).toBeGreaterThan(0);
+  });
+
+  it("still forbids a founder or a tool even in review tooling", () => {
+    // Neither is ever a runtime actor, so the domain exemption must not reach them - that was the
+    // hole an earlier, broader exemption opened.
+    for (const line of ["// The founder asked for this", "// Codex asked for this"]) {
+      expect(
+        offencesIn(line, readOptionsFor("scripts/verify-merge.mjs")).length
+      ).toBeGreaterThan(0);
+    }
+  });
+
+  it("treats the GitHub review automation as review domain", () => {
+    expect(
+      offencesIn(
+        "# The pull request head is checked out here",
+        readOptionsFor(".github/workflows/nextly-review-bot.yml")
+      )
+    ).toEqual([]);
+    expect(
+      offencesIn(
+        "# The pull request head is checked out here",
+        readOptionsFor(".github/workflows/ci.yml")
+      ).length
+    ).toBeGreaterThan(0);
   });
 });
 

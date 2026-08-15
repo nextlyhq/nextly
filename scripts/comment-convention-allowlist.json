@@ -21,14 +21,6 @@
     "count": 2,
     "digests": ["84381fd424963009", "84381fd424963009"]
   },
-  ".github/workflows/nextly-bot-mention.yml": {
-    "count": 2,
-    "digests": ["8ee6ff2c43e6467f", "a906ea64831f2e75"]
-  },
-  ".github/workflows/nextly-review-bot.yml": {
-    "count": 3,
-    "digests": ["29b9a53b7a82e140", "37bb0b25f03980c3", "70397ee950c6a764"]
-  },
   ".github/workflows/package-smoke.yml": {
     "count": 2,
     "digests": ["4a52eb35ec67f7ec", "c8af348842e7280a"]
@@ -1041,18 +1033,19 @@
     "digests": ["14a03e4440a2cda4"]
   },
   "scripts/check-comment-convention.mjs": {
-    "count": 13,
+    "count": 14,
     "digests": [
       "0e5f116f2cd25dac",
+      "1d96a703ff67f6d2",
       "2421cd2ab9b9214b",
       "3233b1edbe93293f",
       "4d4b53c6d370830e",
+      "6adb1afdc61796ee",
       "8358497c94b73384",
-      "84a19e8a40a5ed0b",
       "91e112e4507fb8ee",
+      "acffb86d1394bf95",
       "b604a9886a0e33b6",
       "c300a9c484d60448",
-      "d1e9a94113a47158",
       "dc84b3f296521a00",
       "e0768a0365e686d2",
       "f1a123b3835b41ba"
