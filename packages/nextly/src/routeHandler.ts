@@ -55,6 +55,7 @@ import {
   deleteImageSize,
 } from "./api/image-sizes";
 import { mintPreviewLink, revokePreviewLinks } from "./api/preview-links";
+import { resolveEntryPreviewUrl } from "./api/preview-url";
 import { readOrGenerateRequestId, withRequestIdHeader } from "./api/request-id";
 // canonical respondX wire shapes (spec §5.1) instead of the
 // hand-rolled `{ data: <payload> }` envelope.
@@ -939,6 +940,13 @@ async function handleServiceRequest(
     return method === "revokePreviewLinks"
       ? revokePreviewLinks(req)
       : mintPreviewLink(req);
+  }
+
+  // ==================== PREVIEW URL DIRECT DISPATCH ====================
+  // Beside the handlers above and for the same reason: it parses its own JSON,
+  // and the shared body read below would leave the stream empty.
+  if (service === "previewUrl") {
+    return resolveEntryPreviewUrl(req);
   }
 
   // ==================== GENERAL SETTINGS DIRECT DISPATCH ====================

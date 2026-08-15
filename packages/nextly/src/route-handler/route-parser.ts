@@ -1770,6 +1770,32 @@ function parsePreviewLinkRoutes(
   return null;
 }
 
+/**
+ * `POST /api/nextly/preview-url` resolves where one entry previews.
+ *
+ * The entry travels in the body rather than the path, because an editor
+ * previews what is on screen — including values not yet saved — so there is no
+ * id that identifies what is being asked about.
+ *
+ * Anything deeper is refused rather than folded in. A trailing segment here
+ * would otherwise be ignored, and a caller who mistyped a longer path would get
+ * a confident answer to a route they did not ask for.
+ */
+function parsePreviewUrlRoutes(
+  id: string | undefined,
+  subresource: string | undefined,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  if (id !== undefined || subresource !== undefined) return null;
+
+  return {
+    service: "previewUrl",
+    operation: "create",
+    method: "resolveEntryPreviewUrl",
+    routeParams,
+  };
+}
+
 function parseApiKeyRoutes(
   id: string | undefined,
   httpMethod: string,
@@ -2365,6 +2391,12 @@ export function parseRestRoute(
       httpMethod,
       routeParams
     );
+    if (result) return result;
+  }
+
+  // Handle resolving where an entry previews
+  if (resource === "preview-url") {
+    const result = parsePreviewUrlRoutes(id, subresource, routeParams);
     if (result) return result;
   }
 
