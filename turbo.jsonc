@@ -182,7 +182,25 @@
     //
     // Note: Uses incremental compilation (.tsbuildinfo) for speed
     "check-types": {
-      "dependsOn": [], // Optimized: No build dependency for faster parallel execution
+      // A package's TypeScript PROGRAM crosses workspace boundaries, so its
+      // hash has to as well. `packages/admin` maps the bare `nextly` specifier
+      // at its own source, and its program therefore compiles
+      // `packages/nextly/src/schemas/_zod/rbac.ts`. Inputs are package-scoped
+      // however they are written — `$TURBO_DEFAULT$` included — so with no edge
+      // here, editing that file left `@nextlyhq/admin#check-types` on the
+      // identical hash `4ce01f04aee7b9ee` and a cross-package type
+      // incompatibility replayed a stale green. This edge folds each
+      // dependency's hash into the dependent's, which moves it.
+      //
+      // It costs the full parallelism the note above describes: `check-types`
+      // now follows the dependency graph rather than starting everywhere at
+      // once. That is the trade a gate should take — a missed break reaches
+      // `main`, a redundant run costs minutes — and turbo still runs
+      // independent packages concurrently.
+      //
+      // NOT `^build`: this needs the dependency's HASH, not its `dist`, and
+      // requiring artifacts would make every typecheck wait on a build.
+      "dependsOn": ["^check-types"],
       // Every extension TypeScript follows, not only `.ts`/`.tsx`. A task input
       // glob decides what turbo HASHES: a change confined to an extension
       // missing here leaves the hash unmoved, so CI replays a cached green

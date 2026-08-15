@@ -92,6 +92,23 @@ describe("turbo hashes every TypeScript module it type-checks", () => {
       // and CSS, and all four still declare `check-types`. So emptiness is a
       // valid answer HERE, and the population is asserted once above instead,
       // where an empty read cannot be mistaken for a clean one.
+      // A task appears in the dry run whether or not the package defines the
+      // script: turbo marks the missing case `<NONEXISTENT>` and skips it,
+      // while a filtered run exits 0 with `Tasks: 0 successful, 0 total`. So
+      // membership in this list is not evidence that anything is checked, and
+      // deleting a package's `check-types` script would otherwise leave every
+      // assertion here green while its gate quietly stopped existing.
+      //
+      // Only required of packages that SHIP TypeScript. `tsconfig`,
+      // `eslint-config`, `prettier-config` and `admin-css` are configuration
+      // and CSS, and are legitimately `<NONEXISTENT>`.
+      if (tracked.length > 0) {
+        expect(
+          String(task.command),
+          `${task.package} ships TypeScript but has no runnable check-types command, so nothing type-checks it`
+        ).not.toContain("NONEXISTENT");
+      }
+
       const unhashed = tracked.filter(file => !hashed.has(file));
       // Worded as SHIPS rather than type-checks, because that is what this
       // measures. Whether a given module is inside the package's `tsc` program
@@ -105,6 +122,30 @@ describe("turbo hashes every TypeScript module it type-checks", () => {
       ).toEqual([]);
     }
   );
+});
+
+describe("a package's hash covers the program it actually compiles", () => {
+  // The package-scoped assertion above cannot see this axis. A tsconfig `paths`
+  // entry pointing at a sibling's SOURCE puts that sibling's files in this
+  // package's program, and no per-package input glob reaches them — measured:
+  // `packages/admin` compiles `packages/nextly/src/schemas/_zod/rbac.ts`, and
+  // before this edge existed, editing it left admin's hash unmoved.
+  //
+  // Asserted as the EDGE rather than by re-deriving each program, because the
+  // edge is what makes the property hold for every pair, including ones no
+  // `paths` entry has created yet.
+  it("folds each dependency's hash in via ^check-types", () => {
+    const withCommand = resolvedTasks().filter(
+      task => !String(task.command).includes("NONEXISTENT")
+    );
+    expect(withCommand.length).toBeGreaterThan(15);
+    for (const task of withCommand) {
+      expect(
+        task.resolvedTaskDefinition.dependsOn,
+        `${task.package} does not depend on its dependencies' check-types, so a change in one cannot move its hash`
+      ).toContain("^check-types");
+    }
+  });
 });
 
 describe("the shared TypeScript config is hashed", () => {
