@@ -23,6 +23,7 @@ import {
   respondMutation,
 } from "../../api/response-shapes";
 import type { FieldConfig } from "../../collections/fields/types";
+import { assertNotDiverged } from "../../domains/field-groups/services/assert-not-diverged";
 import {
   reconcileComponentCompanion,
   registerComponentRuntimeSchema,
@@ -48,18 +49,25 @@ import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detect
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredFieldGroup } from "../../domains/schema/pipeline/types";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
+import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { NextlyError } from "../../errors";
 import { getProductionNotifier } from "../../runtime/notifications/index";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
+import {
+  FIELD_GROUP_MIGRATION_STATUSES,
+  type FieldGroupMigrationStatus,
+} from "../../schemas/dynamic-field-groups";
 import type { FieldGroupRegistryService } from "../../services/field-groups/field-group-registry-service";
+import type { Logger } from "../../shared/types";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
   getComponentRegistryFromDI,
   getFieldGroupMetadataServiceFromDI,
+  getLoggerFromDI,
   getMigrationJournalFromDI,
 } from "../helpers/di";
 import { readRequestLocalized } from "../helpers/request-localized";
@@ -106,6 +114,58 @@ function offsetPaginationToMeta(args: {
 // schema service, so each transport reaches the same provisioning rather than only the one that
 // happened to hold it privately.
 
+/**
+ * Where log lines go when DI has registered no logger.
+ *
+ * Every method is present, so a caller that logs cannot fail on a missing one — which is the whole
+ * difference between this and an empty object, and the reason it is a named value rather than a
+ * fallback written inline at the call site.
+ */
+const DISCARDED_LOG: Logger = {
+  debug: () => undefined,
+  info: () => undefined,
+  warn: () => undefined,
+  error: () => undefined,
+};
+
+/**
+ * Read a `migrationStatus` filter off the query string.
+ *
+ * 🔴 REJECTED rather than ignored when it is not a status this system has. Both silent alternatives
+ * are worse and in different ways: passing it through returns an empty list, which a caller cannot
+ * tell from "no field groups are in that state"; dropping it returns the UNFILTERED list, which is
+ * worse still, because the caller asked to narrow and got everything back looking narrowed. A
+ * refusal that names the accepted values is the only answer a client can act on.
+ *
+ * The accepted set is `FIELD_GROUP_MIGRATION_STATUSES`, the same list the schema declares, so this
+ * cannot drift into accepting a status the column never holds.
+ */
+function readMigrationStatus(
+  raw: string | undefined
+): FieldGroupMigrationStatus | undefined {
+  if (raw === undefined || raw === "") return undefined;
+  if (
+    !FIELD_GROUP_MIGRATION_STATUSES.includes(raw as FieldGroupMigrationStatus)
+  ) {
+    // The canonical validation envelope rather than a bespoke message, so the admin's existing
+    // `parseApiError` maps it like every other field error instead of needing a special case.
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "migrationStatus",
+          code: "INVALID_VALUE",
+          message: `Must be one of: ${FIELD_GROUP_MIGRATION_STATUSES.join(", ")}.`,
+        },
+      ],
+      logContext: {
+        reason: "unknown migration status filter",
+        migrationStatus: raw,
+      },
+    });
+  }
+  return raw as FieldGroupMigrationStatus;
+}
+
 const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
   listComponents: {
     // Registry returns BaseListResult `{data,total}` with limit/offset
@@ -116,6 +176,11 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
       const offset = toNumber(p.offset);
       const result = await svc.registry.listComponents({
         source: p.source as "code" | "ui" | undefined,
+        // 🔴 Filtered by the DATABASE, not by the caller narrowing a page it was already sent.
+        // A page is a window over the whole set, so a client-side filter can only ever search the
+        // window: selecting "diverged" would show an empty table while a diverged group sat on
+        // page two — hiding precisely the state an operator opened this screen to find.
+        migrationStatus: readMigrationStatus(p.migrationStatus),
         search: p.search,
         limit,
         offset,
@@ -345,14 +410,28 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
   applyComponentSchemaChanges: {
     execute: async (svc, p, body) => {
       const slug = requireParam(p, "slug", "Component slug");
-      const component = await svc.registry.getComponent(slug);
-      if (!component) throw new Error("Component not found");
-      if (component.locked) {
-        throw new Error(
-          "This component is managed via code and cannot be modified in the UI"
-        );
-      }
-
+      // 🔴 The exclusion opens BEFORE the component is read, because the guard below decides on
+      // what that read returns. Reading the status outside it answers only whether the group was
+      // diverged at the instant of the read: `updateFieldGroup` commits its companion DDL and
+      // persists the row and the divergence marker as separate steps, so a read landing between
+      // them sees the OLD status, passes the guard, and starts a second apply from a definition
+      // the database has already moved past.
+      //
+      // This handler does the schema work itself rather than calling the metadata service, which
+      // is why the service-level exclusion did not reach it. Taking the lock here puts the read,
+      // the check, the DDL and the registry write inside one exclusion — the depth the exclusion
+      // was always meant to be held at.
+      // 🔴 Everything decidable from the REQUEST ALONE is decided before the lock is taken, because
+      // taking it is not free: with `issuesDdl` the exclusion may CREATE and seed the lock table on
+      // a database that has never had one, and it can refuse outright when a migration holds the
+      // row or the role lacks DDL rights. A malformed request would then be answered with a
+      // permission error, a contention error, or a new table — none of which is "this payload is
+      // invalid", and the last of which is a write performed on the way to rejecting a request.
+      //
+      // The split is what each check READS, not how cheap it is. These three read the body and
+      // nothing else, so no concurrent writer can change their answer and holding the lock buys
+      // them nothing. Every check below the exclusion reads the database, and that is exactly why
+      // it belongs inside.
       const {
         fields,
         confirmed,
@@ -380,181 +459,221 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
       // the DB and the committed manifest diverge silently.
       assertValidFieldsPayload(fields);
 
-      // i18n: prefer the request's localized flag over the persisted one (stale on a
-      // simultaneous toggle+field-change save); fall back to the registry value.
-      const wasLocalized =
-        (component as { localized?: boolean }).localized === true;
-      const isLocalized =
-        requestLocalized !== undefined
-          ? requestLocalized === true
-          : wasLocalized;
-      // i18n: gate the Internationalization enable on the app-level
-      // `localization` config (false→true transition only).
-      if (!wasLocalized && isLocalized) {
-        assertLocalizationConfigured("component", slug);
-      }
+      return withSchemaChangeExcluded(
+        {
+          adapter: getAdapterFromDI(),
+          // An app whose DI has not registered a logger still runs its schema changes, so the
+          // absence is not a reason to refuse — it only costs the report of a lock that was
+          // skipped. Discarding those lines is the caller's position, stated here rather than
+          // left to a partial object the exclusion would call methods on.
+          logger: getLoggerFromDI() ?? DISCARDED_LOG,
+          label: `apply schema changes to field group "${slug}"`,
+          // This path runs the push pipeline, so it issues DDL and may create the lock table.
+          issuesDdl: true,
+        },
+        async () => {
+          const component = await svc.registry.getComponent(slug);
+          if (!component) throw new Error("Component not found");
+          if (component.locked) {
+            throw new Error(
+              "This component is managed via code and cannot be modified in the UI"
+            );
+          }
 
-      const currentVersion = component.schemaVersion ?? 1;
-      // Reject a stale UI save before any DDL runs so two admins editing the
-      // same component cannot silently overwrite each other (last-write-wins).
-      assertSchemaVersionMatch(schemaVersion, currentVersion, slug);
-      const tableName = component.tableName;
+          // 🔴 The same refusal the metadata service makes, from the same function rather than a copy.
+          // This route moves storage exactly as `updateFieldGroup` does and reaches the registry by a
+          // different path, so a guard living only there left this door open: an operator refused in
+          // the admin could compound the very edit that was refused by coming through the builder.
+          //
+          // Deliberately NOT applied to `getComponent` or `previewComponentSchemaChanges` above. Those
+          // read; they move no storage, and they are how an operator inspects a diverged group in order
+          // to reconcile it. Refusing them would make the state harder to escape rather than safer,
+          // which is the same reason metadata-only edits stay allowed.
+          assertNotDiverged(slug, component);
 
-      const legacyBundle = resolutions
-        ? { tableName, byFieldName: resolutions }
-        : undefined;
+          // i18n: prefer the request's localized flag over the persisted one (stale on a
+          // simultaneous toggle+field-change save); fall back to the registry value.
+          const wasLocalized =
+            (component as { localized?: boolean }).localized === true;
+          const isLocalized =
+            requestLocalized !== undefined
+              ? requestLocalized === true
+              : wasLocalized;
+          // i18n: gate the Internationalization enable on the app-level
+          // `localization` config (false→true transition only).
+          if (!wasLocalized && isLocalized) {
+            assertLocalizationConfigured("component", slug);
+          }
 
-      const adapter = getAdapterFromDI();
-      if (!adapter) throw new Error("Database adapter not initialized");
-      // 🔴 Resolved BEFORE the apply. The runtime refresh at the end of this
-      // handler suppresses its own failures by design, so a probe placed there
-      // could let the handler report success over an unregistered or stale
-      // table. The apply only alters user columns, so this answer is the same
-      // either side of it — and asking now means a probe that cannot answer
-      // fails the request before anything commits.
-      const componentTypeColumn = await resolveComponentTypeColumn(
-        adapter,
-        tableName
-      );
+          const currentVersion = component.schemaVersion ?? 1;
+          // Reject a stale UI save before any DDL runs so two admins editing the
+          // same component cannot silently overwrite each other (last-write-wins).
+          assertSchemaVersionMatch(schemaVersion, currentVersion, slug);
+          const tableName = component.tableName;
 
-      const dialect = adapter.dialect;
-      const db = adapter.getDrizzle();
-      const databaseName =
-        dialect === "mysql"
-          ? extractDatabaseNameFromUrl(process.env.DATABASE_URL)
-          : undefined;
+          const legacyBundle = resolutions
+            ? { tableName, byFieldName: resolutions }
+            : undefined;
 
-      const desired = await buildFullDesiredSchema();
-      desired.components[slug] = {
-        slug,
-        tableName,
-        fields: fields as DesiredFieldGroup["fields"],
-        // i18n: carry the localized flag so the push diff omits translatable columns
-        // from the component's main table (they live in comp_<slug>_locales, reconciled
-        // out-of-band below) — mirrors the collection/single apply path.
-        localized: isLocalized,
-        // Authored in the Schema Builder: this is the Builder's own save path.
-        builderOwned: true,
-      };
+          const adapter = getAdapterFromDI();
+          if (!adapter) throw new Error("Database adapter not initialized");
+          // 🔴 Resolved BEFORE the apply. The runtime refresh at the end of this
+          // handler suppresses its own failures by design, so a probe placed there
+          // could let the handler report success over an unregistered or stale
+          // table. The apply only alters user columns, so this answer is the same
+          // either side of it — and asking now means a probe that cannot answer
+          // fails the request before anything commits.
+          const componentTypeColumn = await resolveComponentTypeColumn(
+            adapter,
+            tableName
+          );
 
-      const promptDispatcher = new BrowserPromptDispatcher(
-        renameResolutions ?? [],
-        eventResolutions ?? [],
-        legacyBundle
-      );
+          const dialect = adapter.dialect;
+          const db = adapter.getDrizzle();
+          const databaseName =
+            dialect === "mysql"
+              ? extractDatabaseNameFromUrl(process.env.DATABASE_URL)
+              : undefined;
 
-      const migrationJournal =
-        getMigrationJournalFromDI() ?? noopMigrationJournal;
-      const pipeline = new PushSchemaPipeline({
-        executor: new DrizzleStatementExecutor(dialect, db),
-        renameDetector: new RegexRenameDetector(),
-        classifier: new RealClassifier(),
-        promptDispatcher,
-        preRenameExecutor: noopPreRenameExecutor,
-        preCleanupExecutor: new RealPreCleanupExecutor(),
-        migrationJournal,
-        notifier: getProductionNotifier(),
-      });
-
-      const result = await pipeline.apply({
-        desired,
-        db,
-        dialect,
-        source: "ui",
-        promptChannel: "browser",
-        databaseName,
-        uiTargetSlug: slug,
-        // Named, not defaulted: the scope defaults to a collection, and a field group recorded under
-        // that kind is invisible to every history query filtered by its own.
-        uiTargetKind: "component" as const,
-      });
-
-      if (!result.success) {
-        throw new Error(
-          result.error?.message ?? "Failed to apply schema changes"
-        );
-      }
-
-      // i18n: the push pipeline excludes companion tables, so reconcile the component's companion
-      // comp_<slug>_locales out-of-band — create on the first translatable field, then ADD/DROP
-      // columns as the field set changes. Uses the request's `isLocalized`.
-      try {
-        await reconcileComponentCompanion({
-          slug,
-          tableName,
-          oldFields: component.fields as unknown as FieldDefinition[],
-          newFields: fields as unknown as FieldDefinition[],
-          localized: isLocalized,
-          // Detect an enable/disable transition against the persisted state so this apply
-          // seeds/restores existing rows rather than only creating an empty companion.
-          wasLocalized:
-            (component as { localized?: boolean }).localized === true,
-          adapter,
-        });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        throw NextlyError.internal({
-          cause: err instanceof Error ? err : undefined,
-          logContext: { op: "componentCompanionReconcile", slug, detail: msg },
-        });
-      }
-
-      const newSchemaVersion = currentVersion + 1;
-
-      // Post-apply: update dynamic_components fields JSON + schema_hash directly
-      // (not via the registry helper, whose auto-bump would also reset
-      // migration_status). Advance schema_version here so the optimistic-lock
-      // check above sees a new value on the next save (without the bump the
-      // stored version never changes and a second stale save would pass), and
-      // persist `localized` so a simultaneous toggle+field-change save keeps the
-      // flag. The write is non-fatal (the DDL already succeeded), but track
-      // whether it landed so the response never reports a version the DB did not
-      // persist.
-      let versionPersisted = true;
-      try {
-        await adapter.update(
-          // The registry this database holds. The failure is otherwise silent
-          // in the worst way: the DDL has already committed, this write is
-          // treated as non-fatal, and the stale row rebuilds the pre-change
-          // runtime schema on the next restart.
-          await resolveFieldGroupRegistryName(adapter),
-          {
-            fields: JSON.stringify(fields),
-            schema_hash: calculateSchemaHash(fields as FieldConfig[]),
-            migration_status: "applied",
+          const desired = await buildFullDesiredSchema();
+          desired.components[slug] = {
+            slug,
+            tableName,
+            fields: fields as DesiredFieldGroup["fields"],
+            // i18n: carry the localized flag so the push diff omits translatable columns
+            // from the component's main table (they live in comp_<slug>_locales, reconciled
+            // out-of-band below) — mirrors the collection/single apply path.
             localized: isLocalized,
-            schema_version: newSchemaVersion,
-            updated_at: new Date(),
-          },
-          { and: [{ column: "slug", op: "=", value: slug }] }
-        );
-      } catch (err) {
-        versionPersisted = false;
-        const msg = err instanceof Error ? err.message : String(err);
-        console.warn(
-          `[applyComponentSchemaChanges] Post-apply metadata write failed for '${slug}': ${msg}. ` +
-            `schema_version was not advanced; the save is reported at the current version so a retry re-attempts the bump.`
-        );
-      }
+            // Authored in the Schema Builder: this is the Builder's own save path.
+            builderOwned: true,
+          };
 
-      // Post-apply: refresh in-memory runtime schema so CRUD paths reflect
-      // the new column layout without requiring a server restart.
-      // Must use registerComponentRuntimeSchema (not generateRuntimeSchema)
-      // so the registered table includes component system columns
-      // (_parent_id, _parent_table, _parent_field, _order, _component_type)
-      // instead of collection columns (title, slug).
-      registerComponentRuntimeSchema(
-        adapter,
-        dialect,
-        tableName,
-        fields as FieldConfig[],
-        componentTypeColumn,
-        isLocalized
+          const promptDispatcher = new BrowserPromptDispatcher(
+            renameResolutions ?? [],
+            eventResolutions ?? [],
+            legacyBundle
+          );
+
+          const migrationJournal =
+            getMigrationJournalFromDI() ?? noopMigrationJournal;
+          const pipeline = new PushSchemaPipeline({
+            executor: new DrizzleStatementExecutor(dialect, db),
+            renameDetector: new RegexRenameDetector(),
+            classifier: new RealClassifier(),
+            promptDispatcher,
+            preRenameExecutor: noopPreRenameExecutor,
+            preCleanupExecutor: new RealPreCleanupExecutor(),
+            migrationJournal,
+            notifier: getProductionNotifier(),
+          });
+
+          const result = await pipeline.apply({
+            desired,
+            db,
+            dialect,
+            source: "ui",
+            promptChannel: "browser",
+            databaseName,
+            uiTargetSlug: slug,
+            // Named, not defaulted: the scope defaults to a collection, and a field group recorded under
+            // that kind is invisible to every history query filtered by its own.
+            uiTargetKind: "component" as const,
+          });
+
+          if (!result.success) {
+            throw new Error(
+              result.error?.message ?? "Failed to apply schema changes"
+            );
+          }
+
+          // i18n: the push pipeline excludes companion tables, so reconcile the component's companion
+          // comp_<slug>_locales out-of-band — create on the first translatable field, then ADD/DROP
+          // columns as the field set changes. Uses the request's `isLocalized`.
+          try {
+            await reconcileComponentCompanion({
+              slug,
+              tableName,
+              oldFields: component.fields as unknown as FieldDefinition[],
+              newFields: fields as unknown as FieldDefinition[],
+              localized: isLocalized,
+              // Detect an enable/disable transition against the persisted state so this apply
+              // seeds/restores existing rows rather than only creating an empty companion.
+              wasLocalized:
+                (component as { localized?: boolean }).localized === true,
+              adapter,
+            });
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            throw NextlyError.internal({
+              cause: err instanceof Error ? err : undefined,
+              logContext: {
+                op: "componentCompanionReconcile",
+                slug,
+                detail: msg,
+              },
+            });
+          }
+
+          const newSchemaVersion = currentVersion + 1;
+
+          // Post-apply: update dynamic_components fields JSON + schema_hash directly
+          // (not via the registry helper, whose auto-bump would also reset
+          // migration_status). Advance schema_version here so the optimistic-lock
+          // check above sees a new value on the next save (without the bump the
+          // stored version never changes and a second stale save would pass), and
+          // persist `localized` so a simultaneous toggle+field-change save keeps the
+          // flag. The write is non-fatal (the DDL already succeeded), but track
+          // whether it landed so the response never reports a version the DB did not
+          // persist.
+          let versionPersisted = true;
+          try {
+            await adapter.update(
+              // The registry this database holds. The failure is otherwise silent
+              // in the worst way: the DDL has already committed, this write is
+              // treated as non-fatal, and the stale row rebuilds the pre-change
+              // runtime schema on the next restart.
+              await resolveFieldGroupRegistryName(adapter),
+              {
+                fields: JSON.stringify(fields),
+                schema_hash: calculateSchemaHash(fields as FieldConfig[]),
+                migration_status: "applied",
+                localized: isLocalized,
+                schema_version: newSchemaVersion,
+                updated_at: new Date(),
+              },
+              { and: [{ column: "slug", op: "=", value: slug }] }
+            );
+          } catch (err) {
+            versionPersisted = false;
+            const msg = err instanceof Error ? err.message : String(err);
+            console.warn(
+              `[applyComponentSchemaChanges] Post-apply metadata write failed for '${slug}': ${msg}. ` +
+                `schema_version was not advanced; the save is reported at the current version so a retry re-attempts the bump.`
+            );
+          }
+
+          // Post-apply: refresh in-memory runtime schema so CRUD paths reflect
+          // the new column layout without requiring a server restart.
+          // Must use registerComponentRuntimeSchema (not generateRuntimeSchema)
+          // so the registered table includes component system columns
+          // (_parent_id, _parent_table, _parent_field, _order, _component_type)
+          // instead of collection columns (title, slug).
+          registerComponentRuntimeSchema(
+            adapter,
+            dialect,
+            tableName,
+            fields as FieldConfig[],
+            componentTypeColumn,
+            isLocalized
+          );
+
+          return respondAction(`Schema applied for component '${slug}'`, {
+            newSchemaVersion: versionPersisted
+              ? newSchemaVersion
+              : currentVersion,
+          });
+        }
       );
-
-      return respondAction(`Schema applied for component '${slug}'`, {
-        newSchemaVersion: versionPersisted ? newSchemaVersion : currentVersion,
-      });
     },
   },
 

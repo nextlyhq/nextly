@@ -113,11 +113,15 @@ export async function reconcileComponentCompanion(args: {
   /** Localization state BEFORE this save (persisted). Drives enable/disable detection. */
   wasLocalized: boolean;
   adapter: DrizzleAdapter;
-}): Promise<void> {
+  // Whether any DDL actually ran. The caller cannot derive this from the request: a field-set
+  // change on a group that was and remains non-localized reaches here and moves nothing, and a
+  // caller that inferred "the tables changed" from the request shape would report a physical
+  // transition that never happened.
+}): Promise<boolean> {
   const { slug, tableName, oldFields, newFields, localized, adapter } = args;
   const wasLocalized = args.wasLocalized;
   // Nothing to do when the component was and remains non-localized.
-  if (!wasLocalized && !localized) return;
+  if (!wasLocalized && !localized) return false;
 
   const dialect = adapter.dialect;
   const defaultLocale = getConfigFromDI()?.localization?.defaultLocale ?? "en";
@@ -207,6 +211,10 @@ export async function reconcileComponentCompanion(args: {
   }
   // Runtime registration of the companion is handled by registerComponentRuntimeSchema(localized)
   // in the calling handlers, so no separate registration is needed here.
+
+  // The archive DDL is excluded on purpose: it provisions a shared framework table and is
+  // idempotent, so it says nothing about whether THIS field group's storage moved.
+  return plan.statements.length > 0;
 }
 
 /**
