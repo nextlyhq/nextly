@@ -45,21 +45,6 @@ import {
 } from "./poc-driver";
 
 /**
- * The drop-zone rule carrying the transition, exactly as the canvas writes it.
- *
- * The only thing here maintained by hand, and deliberately so: an exact-text comparison is what
- * makes a timing edit VISIBLE rather than silently absorbed. How long that timing lasts is not
- * written down — {@link geometrySpanMs} computes it in a browser — so there is no second value to
- * keep in step.
- *
- * Do not edit this to clear a failure without reading what changed. The failure is the
- * notification that the geometry timing moved.
- */
-const PINNED_RULES: readonly string[] = [
-  ".nx-pb-dropzone { position: absolute; left: 0px; right: 0px; top: -3px; height: 6px; border-radius: 3px; background: transparent; pointer-events: none; z-index: 3; transition: background 0.1s; }",
-];
-
-/**
  * Properties whose transition moves the vertical edge this probe measures, so its timing counts.
  *
  * Paired with {@link NON_GEOMETRY_PROPERTIES}, and the pairing is the point: a property on
@@ -125,292 +110,140 @@ const NON_GEOMETRY_PROPERTIES = new Set([
 ]);
 
 /**
- * States a drop zone is drawn in, so a rule qualified by one is still measurable.
+ * How long a REAL drop zone's geometry keeps moving, read off the element itself.
  *
- * The canvas carries its geometry on the unqualified rule today and declares `[data-drag]` and
- * `[data-active]` beside it, so a transition moved onto one of those is an ordinary edit rather
- * than an exotic one. A probe element that only ever wears the class would match nothing, compute
- * a zero span, and report that the geometry had stopped moving.
+ * This asks the browser for the resolved answer rather than reconstructing it. Everything that
+ * decides whether a zone animates — which sheet a rule lives in, its position in the cascade, an
+ * `@media` or `@supports` wrapper, an ancestry selector, a `transition-delay` declared separately
+ * from its duration, an inline `style` prop, or an `animation` instead of a `transition` — is
+ * already resolved in `getComputedStyle` of the element that will actually move.
+ *
+ * Enumerating RULES cannot be made complete: each spelling handled reveals another, and the list
+ * is the whole cascade. Reading the computed style of the real element has no such list.
+ *
+ * Both `transition` and `animation` are read, because either can move an edge and the probe waits
+ * on the edge rather than on a mechanism.
  */
-const PROBE_STATES = [null, "data-drag", "data-active"];
-
-/**
- * Every class the driver measures, DERIVED from the driver's own selector.
- *
- * `nx-pb-dropzone-empty` does not carry `nx-pb-dropzone` — they are two classes, not a class and
- * a modifier — and the driver waits on both. A probe that only ever wore the first could not
- * measure a transition added to the empty placeholder, so the allowance for a target the driver
- * really does wait on would have no maintenance path at all.
- *
- * Split from `DROP_ZONES` rather than restated here, so a third zone shape added to the driver is
- * measurable by this test without anyone remembering to come back.
- */
-const PROBE_CLASSES = DROP_ZONES.split(",").map(part =>
-  part.trim().replace(/^\./, "")
-);
-
-/**
- * How long the geometry in a rule keeps moving, measured INSIDE THE CANVAS.
- *
- * The rule is injected into the canvas frame and the resulting `transition-*` longhands are read
- * off a matching element there. Everything that decides those values is already correct in that
- * document: the cascade, the selector scope, the theme tokens the canvas inherits, and `var()`
- * with or without a fallback. Nothing here interprets CSS or TypeScript syntax.
- *
- * Measuring anywhere else means REBUILDING that context, and the context is not reconstructible —
- * a custom property's value is decided by the cascade rather than by any one declaration.
- */
-async function geometrySpanMs(frame: Frame, rule: string): Promise<number> {
+async function geometrySpanMs(
+  frame: Frame,
+  state: string | null
+): Promise<number> {
   const result = await frame.evaluate(
-    ([css, safe, states, geometry, classes]) => {
-      const style = document.createElement("style");
-      style.textContent = css as string;
-      document.head.append(style);
-      const el = document.createElement("div");
-      document.body.append(el);
-      const cleanup = () => {
-        el.remove();
-        style.remove();
-      };
+    ([zoneSelector, geometry, safe, appliedState]) => {
+      const zones = [...document.querySelectorAll(zoneSelector as string)];
+      if (zones.length === 0)
+        return { zones: 0, ms: 0, unclassified: [] as string[] };
 
-      // The rule must actually apply to the probe, or every timing read below is the browser's
-      // initial value and the span comes out zero — indistinguishable from a transition that was
-      // deliberately removed. The selector is handed to `matches` as text, so nothing here
-      // interprets it; class and state are tried in turn because a rule on the empty placeholder,
-      // or qualified by a drag state, is an ordinary edit rather than a strange one.
-      const selector = (css as string)
-        .slice(0, (css as string).indexOf("{"))
-        .trim();
-      let matched = false;
-      for (const cls of classes as string[]) {
-        for (const state of states as (string | null)[]) {
-          el.className = cls;
-          for (const attr of states as (string | null)[]) {
-            if (attr) el.removeAttribute(attr);
-          }
-          if (state) el.setAttribute(state, "");
-          if (el.matches(selector)) {
-            matched = true;
-            break;
-          }
-        }
-        if (matched) break;
-      }
-      if (!matched) {
-        cleanup();
-        return {
-          matched: false,
-          ms: 0,
-          unclassified: [] as string[],
-          discarded: false,
-        };
-      }
-
-      // Whether the declaration survived PARSING. A value the browser cannot parse is dropped and
-      // the rule stands, leaving the computed style at the initial `all 0s` — a silent zero that
-      // covers any allowance.
-      const parsed = (style.sheet?.cssRules[0] as CSSStyleRule | undefined)
-        ?.style;
-      const declared = parsed
-        ? parsed.transition ||
-          parsed.transitionProperty ||
-          parsed.transitionDuration
-        : "";
-
-      const computed = getComputedStyle(el);
-      const properties = computed.transitionProperty
-        .split(",")
-        .map(v => v.trim());
-      const durations = computed.transitionDuration
-        .split(",")
-        .map(v => Number.parseFloat(v.trim()) * 1000);
-      const delays = computed.transitionDelay
-        .split(",")
-        .map(v => Number.parseFloat(v.trim()) * 1000);
-
-      // Declared something, computed the INITIAL value: the declaration was discarded after
-      // parsing — an unresolved `var()` with no fallback is the way that happens. Asked as
-      // "declared but not applied" rather than by scanning the text for `var(`, because a
-      // fallback makes an undefined property perfectly valid and a name scan cannot see that.
-      const isInitial =
-        properties.length === 1 &&
-        properties[0] === "all" &&
-        durations.every(d => d === 0);
-      const discarded =
-        Boolean(declared) && isInitial && !declared.includes("all");
-      if (!declared || discarded) {
-        cleanup();
-        return { matched: true, ms: 0, unclassified: [], discarded: true };
-      }
-
-      // CSS CYCLES a timing list shorter than `transition-property`: with three properties and one
-      // duration, all three take that duration. Reading a missing index as zero would report a
-      // geometry transition as instant.
+      const ms = (value: string) =>
+        value.split(",").map(v => Number.parseFloat(v.trim()) * 1000 || 0);
       const cycled = (list: number[], i: number) =>
         list.length === 0 ? 0 : list[i % list.length];
-      const spanAt = (i: number) => cycled(durations, i) + cycled(delays, i);
 
-      // `all` MATCHES every property, so it competes with each named entry rather than sitting
-      // beside it: with `height,all`, CSS gives height the `all` entry's timing because it comes
-      // later. Its own entry still counts, for the geometry properties nothing else names.
-      const lastAll = properties.lastIndexOf("all");
-      const named = [
-        ...new Set(properties.filter(p => p !== "all" && p !== "none")),
-      ];
       const unclassified: string[] = [];
-      let longest = lastAll === -1 ? 0 : spanAt(lastAll);
-      for (const property of named) {
-        if ((safe as string[]).includes(property)) continue;
-        if (!(geometry as string[]).includes(property)) {
-          unclassified.push(property);
-          continue;
+      let longest = 0;
+
+      for (const zone of zones) {
+        const el = zone as HTMLElement;
+        const had = appliedState
+          ? el.hasAttribute(appliedState as string)
+          : false;
+        if (appliedState) el.setAttribute(appliedState as string, "");
+        const computed = getComputedStyle(el);
+
+        // A running animation moves the edge for its whole duration whatever it animates, because
+        // the keyframes are not inspectable from here. Charged in full rather than skipped.
+        if (computed.animationName !== "none") {
+          const durations = ms(computed.animationDuration);
+          const delays = ms(computed.animationDelay);
+          durations.forEach((d, i) => {
+            longest = Math.max(longest, d + cycled(delays, i));
+          });
         }
-        longest = Math.max(
-          longest,
-          spanAt(Math.max(properties.lastIndexOf(property), lastAll))
-        );
+
+        const properties = computed.transitionProperty
+          .split(",")
+          .map(v => v.trim());
+        const durations = ms(computed.transitionDuration);
+        const delays = ms(computed.transitionDelay);
+        const lastAll = properties.lastIndexOf("all");
+        const named = [
+          ...new Set(properties.filter(p => p !== "all" && p !== "none")),
+        ];
+        if (lastAll !== -1) {
+          longest = Math.max(
+            longest,
+            cycled(durations, lastAll) + cycled(delays, lastAll)
+          );
+        }
+        for (const property of named) {
+          if ((safe as string[]).includes(property)) continue;
+          if (!(geometry as string[]).includes(property)) {
+            unclassified.push(property);
+            continue;
+          }
+          const i = Math.max(properties.lastIndexOf(property), lastAll);
+          longest = Math.max(longest, cycled(durations, i) + cycled(delays, i));
+        }
+
+        if (appliedState && !had) el.removeAttribute(appliedState as string);
       }
-      cleanup();
-      return { matched: true, ms: longest, unclassified, discarded: false };
+      return { zones: zones.length, ms: longest, unclassified };
     },
     [
-      rule,
-      [...NON_GEOMETRY_PROPERTIES],
-      PROBE_STATES,
+      DROP_ZONES,
       [...GEOMETRY_PROPERTIES],
-      PROBE_CLASSES,
+      [...NON_GEOMETRY_PROPERTIES],
+      state,
     ] as const
   );
 
-  if (!result.matched) {
+  // No zones means this is not the canvas, or the document rendered none — and a zero span from
+  // an empty query reads exactly like a canvas that animates nothing.
+  if (result.zones === 0) {
     throw new Error(
-      `the rule "${rule}" matches no drop-zone probe element, so its timing cannot be read and a ` +
-        `zero span would be indistinguishable from a removed transition. Add the state it is ` +
-        `qualified by to PROBE_STATES.`
-    );
-  }
-  if (result.discarded) {
-    throw new Error(
-      `the browser did not apply the transition in "${rule}" — it parsed to nothing, or was ` +
-        `discarded at computed-value time. Either way the computed style is the initial 0s, which ` +
-        `covers any allowance, so this refuses rather than reporting zero.`
+      `no elements matched "${DROP_ZONES}" in the canvas frame, so nothing was measured. A zero ` +
+        "span here would be indistinguishable from a canvas whose zones do not move."
     );
   }
   if (result.unclassified.length > 0) {
     throw new Error(
-      `the transition names ${result.unclassified.join(", ")}, which this test cannot place. Add ` +
-        `each to GEOMETRY_PROPERTIES if it can move the zone's vertical edge, or to ` +
-        `NON_GEOMETRY_PROPERTIES if it changes only paint. It is refused rather than skipped ` +
-        `because skipping charges it as zero and passes the allowance over an edge still moving.`
+      `a drop zone transitions ${result.unclassified.join(", ")}, which this test cannot place. ` +
+        "Add each to GEOMETRY_PROPERTIES if it can move the zone's vertical edge, or to " +
+        "NON_GEOMETRY_PROPERTIES if it changes only paint. Refused rather than skipped, because " +
+        "skipping charges it as zero and passes the allowance over an edge still moving."
     );
   }
   return result.ms;
 }
 
 /**
- * The rules that give a drop zone a transition, read from the RUNNING canvas.
+ * How long each drop-zone state keeps its geometry moving, in ms, as the canvas behaves TODAY.
  *
- * EVERY stylesheet the canvas document carries, not one named sheet. The frame holds at least
- * three — the admin-token mirror, the overlay, and the compiled document CSS — and the last is
- * appended AFTER the overlay, so at equal specificity it wins the cascade. Reading only the
- * overlay would miss a transition declared anywhere else while the pin stayed equal, which is the
- * shape that lets the allowance pass over a zone that is still moving.
+ * The value rather than the CSS text, because the value is the fact the probe depends on: two
+ * stylesheets can differ in every character and animate identically, and one character can change
+ * the timing. Pinning the measurement makes a cosmetic edit free and a timing edit visible, which
+ * is the direction that matters.
  *
- * Three questions, each answered structurally rather than by matching text:
- *
- * WHICH SHEETS: all of `document.styleSheets`, so a sheet added later is included without this
- * reader being told about it.
- *
- * WHICH RULES APPLY: each rule's selector is tested against the probe elements with `matches`,
- * not searched for the substring `nx-pb-dropzone`. A rule can reach a drop zone without naming
- * its class — `[data-active]{transition:height .2s}` applies to one and contains no such text.
- *
- * WHICH DECLARE A TRANSITION: asked of the parsed declaration, so a shorthand, a longhand and a
- * `var()` all answer alike.
+ * All zero because #813 took the geometry out of flow at a fixed height, leaving only a
+ * `background` transition. Do not edit these to clear a failure without reading what changed:
+ * a nonzero value here is the canvas moving an edge the probe is about to measure.
  */
-async function transitionRules(frame: Frame): Promise<string[]> {
-  const result = await frame.evaluate(
-    ([classes, states]) => {
-      const probe = document.createElement("div");
-      document.body.append(probe);
-      const applies = (selector: string) => {
-        for (const cls of classes as string[]) {
-          for (const state of states as (string | null)[]) {
-            probe.className = cls;
-            for (const attr of states as (string | null)[]) {
-              if (attr) probe.removeAttribute(attr);
-            }
-            if (state) probe.setAttribute(state, "");
-            try {
-              if (probe.matches(selector)) return true;
-            } catch {
-              return false;
-            }
-          }
-        }
-        return false;
-      };
-
-      const found: string[] = [];
-      const unreadable: string[] = [];
-      for (const sheet of [...document.styleSheets]) {
-        let rules: CSSRule[];
-        try {
-          rules = [...sheet.cssRules];
-        } catch {
-          // Collected, never skipped. A sheet this context may not read is "I could not look",
-          // and skipping it would report the same empty answer as a sheet with no transitions.
-          unreadable.push(sheet.href ?? "(inline)");
-          continue;
-        }
-        for (const rule of rules) {
-          if (!("selectorText" in rule)) continue;
-          const styleRule = rule as CSSStyleRule;
-          const declares = Boolean(
-            styleRule.style.transition ||
-              styleRule.style.transitionProperty ||
-              styleRule.style.transitionDuration
-          );
-          if (declares && applies(styleRule.selectorText)) {
-            found.push(styleRule.cssText);
-          }
-        }
-      }
-      probe.remove();
-      return { found, unreadable, sheets: document.styleSheets.length };
-    },
-    [PROBE_CLASSES, PROBE_STATES] as const
-  );
-
-  // The canvas always injects at least the overlay. Zero sheets means this is not the canvas
-  // document, and an empty rule list from the wrong document reads exactly like a canvas with no
-  // transitions.
-  if (result.sheets === 0) {
-    throw new Error(
-      "the canvas frame carries no stylesheets, so this test is not reading the canvas document. " +
-        "It refuses rather than reporting an empty rule list."
-    );
-  }
-  if (result.unreadable.length > 0) {
-    throw new Error(
-      `these stylesheets in the canvas frame could not be read: ${result.unreadable.join(", ")}. ` +
-        "A transition declared in one would be invisible here, and an unreadable sheet reports " +
-        "the same nothing as a sheet with no transitions, so this refuses rather than guessing."
-    );
-  }
-  return result.found;
-}
-
 // The canvas iframe is only rendered above a certain width: the editor's rail, block library and
 // inspector claim the row first, and below roughly 1280px the preview is dropped rather than
-// squeezed. At the default viewport `mountTree` therefore waits out its full timeout on an iframe
-// that is present but never sized, which reads as a broken canvas rather than a narrow window.
-// The same width `acceptance.spec.ts` uses, so every canvas spec measures the same layout.
+// squeezed. At the default viewport the mount waits out its timeout on an iframe that is present
+// and never sized, which reads as a broken canvas rather than a narrow window. The same width
+// every other canvas spec uses.
 test.use({ viewport: { width: 2560, height: 1400 } });
 
-// Booting the editor once per test is minutes of work across this file, and the default 30s
-// budget is a per-test timeout rather than a per-action one.
+// Booting the editor once per test is minutes across this file, and the default 30s budget is a
+// per-test timeout rather than a per-action one.
 test.describe.configure({ timeout: 240_000 });
+
+const PINNED_SPANS_MS: Record<string, number> = {
+  rest: 0,
+  "data-drag": 0,
+  "data-active": 0,
+};
 
 test.describe("the drop-zone geometry the probe waits on", () => {
   /** Boots the canvas and hands back its frame, which is where every read below happens. */
@@ -424,228 +257,138 @@ test.describe("the drop-zone geometry the probe waits on", () => {
     return canvasFrameOf(page);
   }
 
-  test("the pinned rules are what the canvas still applies", async ({
+  test("every drop-zone state still moves for as long as it did", async ({
     page,
     request,
   }) => {
     const frame = await canvas(page, request);
-    const found = await transitionRules(frame);
 
-    // A read that found nothing would satisfy an equality against an empty expectation and
-    // certify a stylesheet it never saw.
-    expect(found.length).toBeGreaterThan(0);
+    const measured: Record<string, number> = {};
+    for (const state of Object.keys(PINNED_SPANS_MS)) {
+      measured[state] = await geometrySpanMs(
+        frame,
+        state === "rest" ? null : state
+      );
+    }
 
     expect(
-      found,
-      "the canvas drop-zone transition rules changed. Update PINNED_RULES here; each rule's span " +
-        "is computed by the browser, so nothing else needs recalculating — but raise " +
-        "POC_GEOMETRY_SETTLE_MS in poc-driver.ts if the new spans exceed it."
-    ).toEqual([...PINNED_RULES]);
+      measured,
+      "a drop zone's geometry timing changed. Update PINNED_SPANS_MS here after reading what " +
+        "moved, and raise POC_GEOMETRY_SETTLE_MS in poc-driver.ts if any span now exceeds it."
+    ).toEqual(PINNED_SPANS_MS);
   });
 
-  test("a rule reaching a zone without naming its class is still found", async ({
+  test("the driver's settle allowance covers every state", async ({
     page,
     request,
   }) => {
     const frame = await canvas(page, request);
 
-    // `[data-active]` applies to a drop zone and contains none of its class text, which is the
-    // shape a substring filter drops. Appended to the canvas's OWN sheet so the reader meets it
-    // exactly as it would meet a future canvas edit, rather than through a second fixture.
-    const added = await frame.evaluate(() => {
-      const overlay = document.getElementById(
-        "nx-pb-overlay"
-      ) as HTMLStyleElement | null;
-      const rule = "[data-active]{transition:height .2s}";
-      overlay?.sheet?.insertRule(rule, overlay.sheet.cssRules.length);
-      return Boolean(overlay?.sheet);
-    });
-    // The injection itself has to be observable: without this the assertion below is satisfied by
-    // a sheet that was never touched.
-    expect(added).toBe(true);
-
-    const found = await transitionRules(frame);
-    expect(found.some(rule => rule.includes("data-active"))).toBe(true);
-  });
-
-  test("a transition in a DIFFERENT canvas sheet is still found", async ({
-    page,
-    request,
-  }) => {
-    const frame = await canvas(page, request);
-
-    // `#nx-pb-style` carries the compiled document CSS and is appended AFTER the overlay, so at
-    // equal specificity it wins the cascade. A reader scoped to the overlay would miss a
-    // transition declared here while the pin stayed equal — the allowance then covers a zone that
-    // is still moving.
-    const injected = await frame.evaluate(() => {
-      const page = document.getElementById(
-        "nx-pb-style"
-      ) as HTMLStyleElement | null;
-      page?.sheet?.insertRule(
-        ".nx-pb-dropzone{transition:height .25s}",
-        page.sheet.cssRules.length
+    for (const state of Object.keys(PINNED_SPANS_MS)) {
+      const spanMs = await geometrySpanMs(
+        frame,
+        state === "rest" ? null : state
       );
-      return Boolean(page?.sheet);
-    });
-    // Observable, so the assertion below cannot pass against a sheet nobody touched.
-    expect(injected).toBe(true);
-
-    const found = await transitionRules(frame);
-    expect(found.some(rule => rule.includes("0.25s"))).toBe(true);
-  });
-
-  test("the driver's settle allowance covers every pinned rule", async ({
-    page,
-    request,
-  }) => {
-    const frame = await canvas(page, request);
-    // EVERY rule, not just the first. A second drop-zone rule declaring a transition is a normal
-    // edit, and pinning one rule while measuring one span would leave the other unmeasured while
-    // the driver waits on both shapes.
-    for (const rule of PINNED_RULES) {
-      const spanMs = await geometrySpanMs(frame, rule);
-
-      // No `spanMs > 0` guard, deliberately. An unmatched selector, a discarded declaration and an
-      // unclassifiable property all THROW, so the only way to reach here with 0 is a rule that
-      // genuinely moves no geometry — which is exactly what the canvas declares today, since the
-      // zone is out of flow at a fixed height and only `background` transitions. Asserting a
-      // positive span would fail a correct canvas.
+      // No `> 0` guard, deliberately: an empty zone query and an unclassifiable property both
+      // THROW, so reaching here with 0 means the geometry genuinely does not move — which is what
+      // this canvas declares today. Asserting a positive span would fail a correct canvas.
       expect(
         POC_GEOMETRY_SETTLE_MS,
-        `geometrySettleMs is ${String(POC_GEOMETRY_SETTLE_MS)}ms and "${rule}" moves geometry for ` +
-          `${String(spanMs)}ms, so the probe can re-measure an edge that is still travelling. ` +
-          "Raise it in poc-driver.ts."
+        `geometrySettleMs is ${String(POC_GEOMETRY_SETTLE_MS)}ms and a drop zone in state ` +
+          `"${state}" moves geometry for ${String(spanMs)}ms, so the probe can re-measure an edge ` +
+          "that is still travelling. Raise it in poc-driver.ts."
       ).toBeGreaterThanOrEqual(spanMs);
     }
   });
 
-  test("the span derivation reads geometry and ignores the rest", async ({
+  test("a transition added anywhere the cascade reaches is measured", async ({
     page,
     request,
   }) => {
     const frame = await canvas(page, request);
-    const span = (rule: string) =>
-      geometrySpanMs(frame, `.nx-pb-dropzone{${rule}}`);
 
-    expect(await span("transition:height .1s ease")).toBe(100);
-    expect(await span("transition:height .1s ease .05s")).toBe(150);
-    // A colour moves no edge this probe measures, so its longer timing is not charged.
-    expect(await span("transition:height .1s ease,background .3s ease")).toBe(
-      100
-    );
-    // The browser evaluates what a regex could not.
-    expect(await span("transition:height calc(.04s + .03s) ease")).toBe(70);
-    // A timing list SHORTER than the property list is cycled by CSS, not padded with zeros.
-    expect(
-      await span(
-        "transition-property:color,background,height;transition-duration:.15s"
-      )
-    ).toBe(150);
-    // An individual transform property moves the box: skipped, it reads as 0.
-    expect(await span("transition:translate .2s ease")).toBe(200);
-    // CSS resolves a repeated property to its LAST entry, not its longest.
-    expect(
-      await span(
-        "transition-property:height,height;transition-duration:.3s,.1s"
-      )
-    ).toBe(100);
-    // The same rule reversed, which separates "reads the last" from "reads the first".
-    expect(
-      await span(
-        "transition-property:height,height;transition-duration:.1s,.3s"
-      )
-    ).toBe(300);
-    // `all` competes with a named entry rather than sitting beside it.
-    expect(
-      await span("transition-property:height,all;transition-duration:.3s,.1s")
-    ).toBe(100);
-    // And with `all` EARLIER, height keeps its own timing while `all` still governs the rest.
-    expect(
-      await span("transition-property:all,height;transition-duration:.3s,.1s")
-    ).toBe(300);
-    // A rule that deliberately disables movement is a real answer of zero.
-    expect(await span("transition:height 0s")).toBe(0);
+    // Every shape that defeated a rule-enumerating reader, applied at once: a DIFFERENT sheet
+    // than the overlay, an ancestry selector, an `@media` wrapper, and a delay declared apart
+    // from its duration. Reading the computed style of the real element resolves all four without
+    // knowing about any of them.
+    const injected = await frame.evaluate(() => {
+      const sheet = (
+        document.getElementById("nx-pb-style") as HTMLStyleElement | null
+      )?.sheet;
+      sheet?.insertRule(
+        "@media all { body .nx-pb-dropzone { transition-property: height; transition-duration: .2s; transition-delay: .05s } }",
+        sheet.cssRules.length
+      );
+      return Boolean(sheet);
+    });
+    expect(injected).toBe(true);
+
+    // 200ms duration + 50ms delay, resolved through a media query, an ancestry selector, a
+    // non-overlay sheet and split longhands.
+    expect(await geometrySpanMs(frame, null)).toBe(250);
   });
 
-  test("the span derivation refuses what it cannot answer", async ({
+  test("an ANIMATION that moves the edge is charged too", async ({
     page,
     request,
   }) => {
     const frame = await canvas(page, request);
-    const span = (rule: string) =>
-      geometrySpanMs(frame, `.nx-pb-dropzone{${rule}}`);
 
-    // A property on neither list stops the test and names itself rather than being charged as 0.
-    await expect(span("transition:font-size .2s ease")).rejects.toThrow(
-      /cannot place/
-    );
+    // A keyframe animation moves the edge without any transition being declared. Its keyframes
+    // are not inspectable from here, so it is charged in full rather than skipped.
+    const injected = await frame.evaluate(() => {
+      const sheet = (
+        document.getElementById("nx-pb-style") as HTMLStyleElement | null
+      )?.sheet;
+      sheet?.insertRule(
+        "@keyframes nx-test-grow { from { height: 0 } to { height: 12px } }",
+        sheet.cssRules.length
+      );
+      sheet?.insertRule(
+        ".nx-pb-dropzone { animation: nx-test-grow .3s }",
+        sheet.cssRules.length
+      );
+      return Boolean(sheet);
+    });
+    expect(injected).toBe(true);
 
-    // A rule the probe never matches.
-    await expect(
-      geometrySpanMs(
-        frame,
-        ".nx-pb-dropzone[data-nonexistent]{transition:height .2s}"
-      )
-    ).rejects.toThrow(/matches no drop-zone probe element/);
-
-    // A value the browser cannot parse is DROPPED, leaving the initial 0s.
-    await expect(
-      geometrySpanMs(frame, ".nx-pb-dropzone{transition:height notatime}")
-    ).rejects.toThrow(/did not apply/);
-
-    // An undefined property with NO fallback discards the declaration at computed-value time.
-    await expect(
-      geometrySpanMs(
-        frame,
-        ".nx-pb-dropzone{transition:height var(--nx-nope-undefined)}"
-      )
-    ).rejects.toThrow(/did not apply/);
+    expect(await geometrySpanMs(frame, null)).toBe(300);
   });
 
-  test("the span derivation measures what the canvas context supplies", async ({
+  test("it refuses rather than reporting a zero it cannot stand behind", async ({
     page,
     request,
   }) => {
     const frame = await canvas(page, request);
-    // The positive controls that keep the refusals above from being blanket rejections.
 
-    // A state the canvas really declares IS measured.
-    expect(
-      await geometrySpanMs(
-        frame,
-        ".nx-pb-dropzone[data-drag]{transition:height .2s}"
-      )
-    ).toBe(200);
+    // A property on neither list stops the test and names itself.
+    const injected = await frame.evaluate(() => {
+      const sheet = (
+        document.getElementById("nx-pb-style") as HTMLStyleElement | null
+      )?.sheet;
+      sheet?.insertRule(
+        ".nx-pb-dropzone { transition: font-size .2s }",
+        sheet.cssRules.length
+      );
+      return Boolean(sheet);
+    });
+    expect(injected).toBe(true);
 
-    // The EMPTY placeholder, the driver's other target, which carries no `nx-pb-dropzone` class.
-    expect(
-      await geometrySpanMs(
-        frame,
-        ".nx-pb-dropzone-empty{transition:height .2s}"
-      )
-    ).toBe(200);
+    await expect(geometrySpanMs(frame, null)).rejects.toThrow(/cannot place/);
+  });
 
-    // A `var()` FALLBACK is valid CSS and must be measured, not refused. This is what a name-scan
-    // for `var(` could never get right: the property is undefined and the rule is still correct.
-    expect(
-      await geometrySpanMs(
-        frame,
-        ".nx-pb-dropzone{transition:height var(--nx-nope-undefined,.15s)}"
-      )
-    ).toBe(150);
+  test("it measures in the canvas document, not the host", async ({
+    page,
+    request,
+  }) => {
+    const frame = await canvas(page, request);
 
-    // A theme token the CANVAS inherits resolves here because this runs in the canvas document.
-    // Reading the source could never do this: the value is not in that file.
-    const themed = await frame.evaluate(() =>
-      getComputedStyle(document.documentElement)
-        .getPropertyValue("--nx-pb-ed-primary")
-        .trim()
+    // The host page has no drop zones, so measuring there would find nothing and report zero.
+    // This is what separates "the canvas does not move" from "I looked in the wrong document".
+    await expect(geometrySpanMs(page.mainFrame(), null)).rejects.toThrow(
+      /no elements matched/
     );
-    expect(
-      themed,
-      "the canvas frame should carry the admin theme tokens; if this is empty the probe is not " +
-        "running in the canvas document and every measurement above is of the wrong context"
-    ).not.toBe("");
+    // And the control: the canvas frame DOES have them.
+    expect(await geometrySpanMs(frame, null)).toBe(0);
   });
 });
