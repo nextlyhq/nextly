@@ -24,6 +24,7 @@ import {
   chmodSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -53,9 +54,14 @@ let chain;
  * fixture into a passing test.
  */
 const STUB = `#!/usr/bin/env node
-import { readFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 const argv = process.argv.slice(2);
 const fixture = JSON.parse(readFileSync(process.env.GH_STUB_FIXTURE, "utf8"));
+// Every invocation is recorded, so a case can assert that a request was MADE
+// rather than only that its answer was accepted. Validating each call
+// independently cannot see a request the command skipped: the remaining calls
+// return the same fixture data either way.
+appendFileSync(process.env.GH_STUB_CALLS, JSON.stringify(argv) + "\\n");
 const tokens = [];
 for (let i = 0; i < argv.length; i += 1) {
   // Inserted on every api request by the caller, so it does not identify one.
@@ -87,6 +93,11 @@ beforeAll(() => {
   git(["init", "-q", "-b", "feature/x", "."]);
   git(["config", "user.email", "test@example.com"]);
   git(["config", "user.name", "test"]);
+  // A developer with `commit.gpgSign=true` in their user configuration has no
+  // signing key for this synthetic identity, so the fixture would fail to
+  // build before any case ran. Set in the throwaway repository rather than
+  // passed per commit, so it also covers any commit added here later.
+  git(["config", "commit.gpgSign", "false"]);
   chain = [];
   for (let i = 0; i < 5; i += 1) {
     writeFileSync(join(origin, "f.txt"), `${i}\n`);
@@ -120,6 +131,19 @@ const shallowClone = name => {
 };
 
 /**
+ * A clone whose local `HEAD` sits at `sha` while the remote branch stays put.
+ *
+ * Full rather than shallow, because the commit being checked out is behind the
+ * boundary a `--depth 1` clone would draw.
+ */
+const detachedClone = (name, sha) => {
+  const path = join(root, name);
+  execFileSync("git", ["clone", "-q", `file://${origin}`, path]);
+  execFileSync("git", ["checkout", "-q", "--detach", sha], { cwd: path });
+  return path;
+};
+
+/**
  * The routes every lifecycle needs, so a case states only what it varies.
  *
  * `--slurp` hands back one array per page, which the command flattens; the
@@ -135,9 +159,17 @@ const baseRoutes = ({
 }) => [
   { when: ["auth", "setup-git"] },
   {
+    // The PR number and `--repo` value are REQUIRED here, not decoration.
+    // `gh pr view` with no argument resolves the current branch's pull
+    // request and `--repo` selects the repository, so a route matching on the
+    // command words alone accepts a call that reads lifecycle and head
+    // metadata from a different pull request than the API requests use.
     when: [
       "pr",
       "view",
+      "1",
+      "--repo",
+      "nextlyhq/nextly",
       "headRefName,isCrossRepository,headRepositoryOwner,headRepository,state,headRefOid,baseRefOid",
     ],
     stdout: {
@@ -151,7 +183,14 @@ const baseRoutes = ({
     },
   },
   {
-    when: ["pr", "view", "state,headRefOid,baseRefOid"],
+    when: [
+      "pr",
+      "view",
+      "1",
+      "--repo",
+      "nextlyhq/nextly",
+      "state,headRefOid,baseRefOid",
+    ],
     stdout: { state, headRefOid, baseRefOid: "base000" },
   },
   { when: ["repos/nextlyhq/nextly/pulls/1/reviews"], stdout: [reviews] },
@@ -240,13 +279,16 @@ const cliEnv = ({ nodeOptions } = {}) => {
  */
 const runCli = ({ cwd, routes, entry = ENTRY, nodeOptions, args = ["1"] }) => {
   const fixture = join(root, "fixture.json");
+  const calls = join(root, "calls.log");
   writeFileSync(fixture, JSON.stringify({ routes }));
+  writeFileSync(calls, "");
   const result = spawnSync(process.execPath, [entry, ...args], {
     cwd,
     encoding: "utf8",
     env: {
       ...cliEnv({ nodeOptions }),
       GH_STUB_FIXTURE: fixture,
+      GH_STUB_CALLS: calls,
     },
   });
   let report;
@@ -260,8 +302,17 @@ const runCli = ({ cwd, routes, entry = ENTRY, nodeOptions, args = ["1"] }) => {
     stdout: result.stdout,
     stderr: result.stderr,
     report,
+    /** Every `gh` invocation, in order, as its argv array. */
+    calls: readFileSync(calls, "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map(line => JSON.parse(line)),
   };
 };
+
+/** How many recorded invocations carry every one of `tokens`. */
+const callsMatching = (calls, tokens) =>
+  calls.filter(argv => tokens.every(token => argv.includes(token))).length;
 
 // Each case spawns a clone, the command, and the several `gh` and `git`
 // subprocesses it makes — measured near 4.3s against a 5s default, which is a
@@ -307,8 +358,14 @@ describe("ci-verdict as a command", { timeout: 60_000 }, () => {
 
   it("clears an open pull request reviewed at its current head", () => {
     const tip = chain[4];
+    // The checkout's local HEAD is moved OFF the branch tip while the remote
+    // ref stays where it is. Every clone otherwise leaves the two equal, so
+    // `git rev-parse HEAD` would answer identically and the case could not
+    // tell the local checkout from the configured repository's branch — which
+    // is the whole thing the command has to get right, since it may run from
+    // a stale or unrelated working copy.
     const run = runCli({
-      cwd: shallowClone("clean"),
+      cwd: detachedClone("clean", chain[0]),
       routes: baseRoutes({
         state: "OPEN",
         headRefOid: tip,
@@ -317,7 +374,16 @@ describe("ci-verdict as a command", { timeout: 60_000 }, () => {
       }),
     });
     expect(run.report?.verdict).toBe("CLEAN");
+    expect(run.report?.head).toBe(tip);
     expect(run.status).toBe(0);
+    // The verdict is computed BETWEEN two identical observations, so the
+    // evidence cannot have moved while it was being decided. Every route
+    // answers the same data whichever way that goes, so only counting the
+    // requests can see the closing observation happen: asserting on the
+    // report alone leaves the recheck removable with the suite green.
+    expect(
+      callsMatching(run.calls, ["pr", "view", "state,headRefOid,baseRefOid"])
+    ).toBeGreaterThanOrEqual(2);
     // An advisory reviewer's absence is REPORTED but does not hold the merge,
     // so a gap stays visible without a reviewer outside the blocking set being
     // able to block on quota it never spent.
@@ -355,6 +421,9 @@ describe("ci-verdict as a command", { timeout: 60_000 }, () => {
           when: [
             "pr",
             "view",
+            "1",
+            "--repo",
+            "nextlyhq/nextly",
             "headRefName,isCrossRepository,headRepositoryOwner,headRepository,state,headRefOid,baseRefOid",
           ],
           stdout: {
@@ -367,7 +436,10 @@ describe("ci-verdict as a command", { timeout: 60_000 }, () => {
             baseRefOid: "base000",
           },
         },
-        { when: ["pr", "view", "state"], stdout: { state: "CLOSED" } },
+        {
+          when: ["pr", "view", "1", "--repo", "nextlyhq/nextly", "state"],
+          stdout: { state: "CLOSED" },
+        },
       ],
     });
     expect(run.report?.verdict).toBe("CLOSED WITHOUT MERGING");
