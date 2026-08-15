@@ -307,7 +307,21 @@ export class FieldGroupMetadataService {
     // would make the state harder to get out of rather than safer.
     // Only edits that MOVE STORAGE are refused; a label or description change is still allowed, so
     // an operator is never locked out of renaming the thing they are trying to reconcile.
-    if (input.fields !== undefined || input.localized !== undefined) {
+    //
+    // 🔴 Localization is judged by whether it TOGGLES, not by whether it was sent. Presence is a
+    // proxy for "this moves storage" and it is wrong in the direction that matters here: a
+    // full-form client resends every field it renders, so `{ label, localized: false }` against a
+    // group that is already not localized asks for no transition at all and would be refused —
+    // locking an operator out of the metadata edits this contract explicitly permits, on the one
+    // path they are using to get out of the state.
+    //
+    // `fields` stays a presence check on purpose. Deciding whether a resent field array is
+    // identical is a deep comparison this has no reason to make, and refusing a no-op edit is the
+    // safe direction where refusing a rename is not.
+    const wasLocalized = existing.localized === true;
+    const togglesLocalization =
+      input.localized !== undefined && input.localized !== wasLocalized;
+    if (input.fields !== undefined || togglesLocalization) {
       assertNotDiverged(input.slug, existing);
     }
     if (existing.locked && input.source !== "code") {
@@ -326,7 +340,6 @@ export class FieldGroupMetadataService {
       assertValidPluginFieldOptions(input.fields);
     }
 
-    const wasLocalized = existing.localized === true;
     const localized = requestedLocalized ?? wasLocalized;
     const fields = (input.fields ??
       existing.fields) as unknown as FieldDefinition[];

@@ -1216,6 +1216,66 @@ describe("an update whose row write fails after the tables moved", () => {
     });
   });
 
+  /**
+   * The refusal asks whether an edit MOVES STORAGE, and localization moves it by TOGGLING. Judging
+   * by whether the flag was sent is a proxy, and it fails on the commonest client shape: a full form
+   * resends every field it renders, so `{ label, localized: false }` against a group that is already
+   * not localized asks for no transition and would be refused — closing the metadata edits this
+   * contract explicitly permits, on the very path an operator uses to escape the state.
+   */
+  it("allows a metadata edit that resends the current localized value", async () => {
+    const registry = registryWhoseWriteFails({});
+    registry.getComponent = vi.fn().mockResolvedValue({
+      ...registry.record,
+      localized: false,
+      migrationStatus: "diverged",
+    });
+    registry.updateComponent = vi.fn(async () => registry.record);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapterDouble(async () => true)
+    );
+
+    await expect(
+      service.updateFieldGroup({
+        slug: "hero",
+        label: "Hero (renamed)",
+        localized: false,
+      })
+    ).resolves.toMatchObject({
+      record: expect.objectContaining({ slug: "hero" }),
+    });
+  });
+
+  /**
+   * 🔴 The control that stops the case above widening into a hole. "Ignore `localized` while
+   * diverged" would satisfy that test perfectly and reopen the refusal, so a real transition has to
+   * be shown still refused — and on the REASON, because a stale-version conflict carries the same
+   * code while meaning the opposite.
+   */
+  it("still refuses a localization toggle while diverged", async () => {
+    const registry = registryWhoseWriteFails({});
+    registry.getComponent = vi.fn().mockResolvedValue({
+      ...registry.record,
+      localized: false,
+      migrationStatus: "diverged",
+    });
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapterDouble(async () => true)
+    );
+
+    const refusal = await service
+      .updateFieldGroup({ slug: "hero", label: "Hero", localized: true })
+      .catch((error: unknown) => error);
+
+    expect(refusal).toMatchObject({ code: "CONFLICT" });
+    expect((refusal as NextlyError).publicMessage).toContain(
+      "Reconcile the definition against the tables"
+    );
+    expect(registry.updateComponent).not.toHaveBeenCalled();
+  });
+
   it("raises the original error, unmarked, when nothing physical moved", async () => {
     // 🔴 The control that stops this becoming a blanket rewrite of every failed update. A label-only
     // edit issues no DDL, so a failed write leaves the row describing the database correctly. There
