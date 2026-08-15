@@ -20,6 +20,7 @@ import { useMemo } from "react";
 
 import { historyEnabledFrom } from "@admin/components/features/versions/history-enabled";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
+import { useGeneralSettings } from "@admin/hooks/queries/useGeneralSettings";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
 import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 import { useLocalization } from "@admin/hooks/useLocalization";
@@ -37,6 +38,7 @@ import {
   effectiveEntryStatus,
   isSlugPerLocale,
   previewLinkLocale,
+  previewLinkSiteUrl,
   useHasPublicAddress,
 } from "./entry-address";
 import { EntryFormActions } from "./EntryFormActions";
@@ -358,16 +360,25 @@ export function EntryForm({
   // the entry exists. The id is read here rather than inside the hook because
   // hooks run unconditionally: on create the mutation is constructed and never
   // reachable, since the control that would call it is not rendered.
+  const { data: generalSettings } = useGeneralSettings();
   const savedEntryId = entry?.id === undefined ? "" : String(entry.id);
   const linkLocale = previewLinkLocale({
     localized: collection.localized === true,
     locale,
     defaultLocale,
   });
+  // A link that travels by email or chat has to name a host. `window` is read
+  // through a guard because this module is imported in a server render, where
+  // there is no origin and the configured site is the only source anyway.
+  const linkSiteUrl = previewLinkSiteUrl({
+    configured: generalSettings?.siteUrl,
+    origin: typeof window === "undefined" ? undefined : window.location.origin,
+  });
   const previewLink = usePreviewLink({
     collection: collection.name,
     entryId: savedEntryId,
     ...(linkLocale === undefined ? {} : { locale: linkLocale }),
+    ...(linkSiteUrl === undefined ? {} : { siteUrl: linkSiteUrl }),
   });
 
   // Only enable shortcuts in standalone mode (not embedded modals)

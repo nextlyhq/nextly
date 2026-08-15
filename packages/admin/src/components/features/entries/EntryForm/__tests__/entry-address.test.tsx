@@ -10,6 +10,7 @@ import {
   effectiveEntryStatus,
   everPublishedOnRecord,
   previewLinkLocale,
+  previewLinkSiteUrl,
   useHasPublicAddress,
   type PublicAddressArgs,
 } from "../entry-address";
@@ -496,5 +497,55 @@ describe("previewLinkLocale", () => {
       defaultLocale: "en",
     });
     expect(sentinel).toBe(explicit);
+  });
+});
+
+describe("previewLinkSiteUrl", () => {
+  it("prefers the configured site over the browser origin", () => {
+    // An admin panel mounted on a different host from the site would otherwise
+    // hand out links pointing at itself.
+    expect(
+      previewLinkSiteUrl({
+        configured: "https://site.example",
+        origin: "https://admin.example",
+      })
+    ).toBe("https://site.example");
+  });
+
+  it("falls back to the browser origin when nothing is configured", () => {
+    // Usually right, since the common deployment serves both together, and
+    // always better than a relative path that identifies no host at all.
+    expect(
+      previewLinkSiteUrl({ configured: null, origin: "https://admin.example" })
+    ).toBe("https://admin.example");
+  });
+
+  it("treats a cleared setting as absent, not as an empty base", () => {
+    // The settings form stores "" for a field the user cleared; using it as a
+    // base would rebuild the relative path this exists to prevent.
+    expect(
+      previewLinkSiteUrl({ configured: "   ", origin: "https://admin.example" })
+    ).toBe("https://admin.example");
+  });
+
+  it("returns nothing rather than inventing a host", () => {
+    // With no configured site and no origin there is no honest absolute URL,
+    // so the existing relative behaviour stands.
+    expect(
+      previewLinkSiteUrl({ configured: null, origin: undefined })
+    ).toBeUndefined();
+  });
+
+  it("never yields a relative value when either source is present", () => {
+    // The property the control depends on: "Copy shareable link" must not put
+    // a path on the clipboard whenever anything can name a host.
+    for (const args of [
+      { configured: "https://a.example", origin: undefined },
+      { configured: null, origin: "https://b.example" },
+      { configured: "https://a.example", origin: "https://b.example" },
+    ]) {
+      const result = previewLinkSiteUrl(args);
+      expect(result, JSON.stringify(args)).toMatch(/^https?:\/\//);
+    }
   });
 });

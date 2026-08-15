@@ -292,3 +292,38 @@ export function previewLinkLocale({
   if (!localized) return undefined;
   return locale ?? defaultLocale;
 }
+
+/**
+ * The site a shareable preview link should point at.
+ *
+ * `buildPreviewUrl` emits a site-relative path when given no site, and a
+ * relative path is not a link: pasted into email or chat it identifies nothing,
+ * and a recipient whose client resolves it does so against their own host. A
+ * control labelled "Copy shareable link" has to put something shareable on the
+ * clipboard, so the value is made absolute here.
+ *
+ * The configured site wins because it is the only source that knows where the
+ * content is actually served — an admin panel mounted on a different host from
+ * the site would otherwise hand out links to itself. A blank setting is treated
+ * as absent rather than as an empty base, since the settings form stores `""`
+ * for a field the user cleared.
+ *
+ * The browser's own origin is the fallback rather than a failure: the common
+ * deployment serves the admin and the site together, so it is usually right,
+ * and it is always better than a relative path. Returning `undefined` is the
+ * last resort for a caller with no origin at all, which leaves the existing
+ * relative behaviour rather than inventing a host.
+ */
+export function previewLinkSiteUrl({
+  configured,
+  origin,
+}: {
+  configured: string | null | undefined;
+  origin: string | undefined;
+}): string | undefined {
+  const trimmed = configured?.trim();
+  if (trimmed !== undefined && trimmed.length > 0) return trimmed;
+  const fallback = origin?.trim();
+  if (fallback !== undefined && fallback.length > 0) return fallback;
+  return undefined;
+}
