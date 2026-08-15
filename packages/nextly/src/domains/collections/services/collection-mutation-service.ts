@@ -4523,6 +4523,59 @@ export class CollectionMutationService extends BaseService {
       }
 
       // 1. Check collection-level access FIRST (with document for owner checks)
+      //
+      // This verdict is NOT atomic with the write it guards, and that is a known
+      // property rather than an oversight. The transaction opens several hundred
+      // lines below, after schema loads, hook dispatch and relationship
+      // resolution, so a change to this document's ownership or to the
+      // collection's access rules in between leaves the write proceeding on a
+      // verdict that has stopped being true. Exploiting it requires an actor who
+      // held legitimate access moments earlier.
+      //
+      // Two facts about closing it, and no remedy: a remedy stated here would
+      // have to name a path, and every path this method could take differs from
+      // it in ways the next two paragraphs make concrete.
+      //
+      // The evaluator can already read inside a transaction:
+      // `checkCollectionAccess` takes a transaction-bound `executor` so its RBAC
+      // and metadata reads run on that connection. So the missing piece is not
+      // the evaluator.
+      //
+      // And a transaction alone would not close the window anyway. Locking the
+      // content row leaves the role, permission and collection-metadata rows the
+      // verdict also depends on unlocked, and the transaction is not
+      // serializable, so a grant revoked concurrently still races.
+      //
+      // `updateEntryInTransaction` is NOT the path to delegate to: it accepts
+      // none of `locale`, `context`, `sourceVersionNo` or `authenticatedScope`,
+      // and it performs neither the localized companion writes nor the
+      // working-draft promotion this method owns.
+      //
+      // One rule for anyone editing this method: do NOT move validation,
+      // relationship resolution or hook dispatch ahead of this check to shorten
+      // the gap. Authorization is a precondition, so work placed before it runs
+      // for callers about to be refused, and hooks reach outside this process.
+      // `collection-mutation.test.ts` holds that ordering for hooks, with an
+      // authorized positive control so it cannot pass by nothing dispatching.
+      //
+      // Moving such work INTO the transaction is not the general answer either,
+      // and this method is already evidence: component-registry and
+      // webhook-field resolution are deliberately resolved outside it, and
+      // `assertLocalizedFieldGroupsWritable` warms its verdicts beforehand
+      // because resolving inside would issue a query that aborts the whole
+      // transaction on PostgreSQL. Work that uses a pooled helper stays where
+      // it is. Accepting an executor is necessary for work to move but not
+      // sufficient: the transaction runs inside `withVersionConflictRetry`,
+      // which re-runs its closure up to three attempts, so only work whose
+      // repetition is harmless belongs there. Database writes qualify, because
+      // a rolled-back attempt leaves nothing behind. Hook dispatch does not,
+      // whatever its signature accepts: `CollectionHookService.runBeforeChange`
+      // takes an executor and still runs handlers that reach outside this
+      // process, so a retried attempt re-fires effects no rollback can
+      // withdraw. External dispatch stays outside the retrying closure.
+      //
+      // A rule that must be judged against the row as locked belongs in the
+      // under-lock re-check the publish path already uses, not here.
       const accessDenied = await this.accessService.checkCollectionAccess(
         params.collectionName,
         "update",

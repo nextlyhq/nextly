@@ -61,7 +61,9 @@ export function EntryFormProvider({
     <FormProvider {...form}>
       <form
         id={formId}
-        onSubmit={(e) => { void onSubmit(e); }}
+        onSubmit={e => {
+          void onSubmit(e);
+        }}
         className={className}
         noValidate // Use Zod validation instead of browser validation
       >

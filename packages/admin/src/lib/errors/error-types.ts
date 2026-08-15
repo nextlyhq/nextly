@@ -14,9 +14,7 @@ function isError(error: unknown): error is Error {
 /**
  * Type guard to check if value is an object with a message property
  */
-function isErrorWithMessage(
-  error: unknown
-): error is { message: unknown } {
+function isErrorWithMessage(error: unknown): error is { message: unknown } {
   return (
     typeof error === "object" &&
     error !== null &&

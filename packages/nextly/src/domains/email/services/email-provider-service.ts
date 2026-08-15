@@ -1232,8 +1232,7 @@ export class EmailProviderService extends BaseService {
       // every save whose parser normalises anything — a trimmed credential
       // differs from its own stored form on the way in, and never after.
       configurationChanged =
-        !existing.readable ||
-        JSON.stringify(existingConfig) !== JSON.stringify(parsedMerged);
+        !existing.readable || !isDeepStrictEqual(existingConfig, parsedMerged);
 
       updateData.configuration = this.encryptConfiguration(parsedMerged);
     }

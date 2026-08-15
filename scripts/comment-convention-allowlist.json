@@ -1,0 +1,1041 @@
+{
+  ".coderabbit.yaml": {
+    "count": 2,
+    "digests": ["05c09a571697ee95", "52f2d463194d1c18"]
+  },
+  ".github/scripts/review-bot-gh.sh": {
+    "count": 2,
+    "digests": ["3cd09c48248600d7", "d4423203d14275ee"]
+  },
+  ".github/workflows/ci.yml": {
+    "count": 5,
+    "digests": [
+      "84381fd424963009",
+      "84381fd424963009",
+      "a409947c830b980d",
+      "baee72557fb1d870",
+      "e02630891b827e51"
+    ]
+  },
+  ".github/workflows/integration.yml": {
+    "count": 2,
+    "digests": ["84381fd424963009", "84381fd424963009"]
+  },
+  ".github/workflows/package-smoke.yml": {
+    "count": 2,
+    "digests": ["4a52eb35ec67f7ec", "c8af348842e7280a"]
+  },
+  ".github/workflows/preview.yml": {
+    "count": 5,
+    "digests": [
+      "2d6e72a7717a6764",
+      "84381fd424963009",
+      "bb32dd7ce75b6efe",
+      "e8eb4d88bf282454",
+      "fce341b343f71810"
+    ]
+  },
+  ".github/workflows/release.yml": {
+    "count": 1,
+    "digests": ["84381fd424963009"]
+  },
+  ".github/workflows/scaffold-build.yml": {
+    "count": 1,
+    "digests": ["4466be5c8d0ef87e"]
+  },
+  ".github/workflows/secret-scan.yml": {
+    "count": 2,
+    "digests": ["7aab1e73e1bbee0b", "abe25d9f5bce2423"]
+  },
+  "packages/admin/src/components/features/entries/EntryForm/EntryForm.tsx": {
+    "count": 2,
+    "digests": ["69eafeb47e136856", "92043ca6e49d929a"]
+  },
+  "packages/admin/src/components/features/entries/fields/structured/__tests__/RepeaterRowLabel.test.tsx": {
+    "count": 1,
+    "digests": ["9fc276c0d3021f58"]
+  },
+  "packages/admin/src/components/features/notifications/NotificationBell.tsx": {
+    "count": 1,
+    "digests": ["1156f0555aca5390"]
+  },
+  "packages/admin/src/components/features/notifications/NotificationDropdown.tsx": {
+    "count": 1,
+    "digests": ["fd78f6ffd60069a9"]
+  },
+  "packages/admin/src/components/features/notifications/NotificationRow.tsx": {
+    "count": 1,
+    "digests": ["b1842d77b2e88a12"]
+  },
+  "packages/admin/src/components/features/notifications/__tests__/NotificationBell.test.tsx": {
+    "count": 1,
+    "digests": ["b2ca9803ac6209b7"]
+  },
+  "packages/admin/src/components/features/notifications/__tests__/NotificationDropdown.test.tsx": {
+    "count": 1,
+    "digests": ["75cf4f32ce0734cc"]
+  },
+  "packages/admin/src/components/features/notifications/__tests__/NotificationRow.test.tsx": {
+    "count": 1,
+    "digests": ["f46d06b621150851"]
+  },
+  "packages/admin/src/components/features/notifications/__tests__/formatters.test.ts": {
+    "count": 1,
+    "digests": ["7d410180b33b1f37"]
+  },
+  "packages/admin/src/components/features/notifications/__tests__/relative-time.test.ts": {
+    "count": 1,
+    "digests": ["40e40b48a7a663ce"]
+  },
+  "packages/admin/src/components/features/notifications/__tests__/useUnreadCount.test.ts": {
+    "count": 1,
+    "digests": ["638a9b7e749ee8b2"]
+  },
+  "packages/admin/src/components/features/notifications/formatters.ts": {
+    "count": 1,
+    "digests": ["71a920e3115a6caf"]
+  },
+  "packages/admin/src/components/features/notifications/index.ts": {
+    "count": 1,
+    "digests": ["f20897ddd89574e4"]
+  },
+  "packages/admin/src/components/features/notifications/relative-time.ts": {
+    "count": 1,
+    "digests": ["ea94903affb20e33"]
+  },
+  "packages/admin/src/components/features/notifications/useUnreadCount.ts": {
+    "count": 1,
+    "digests": ["2293271bc6e7025c"]
+  },
+  "packages/admin/src/components/features/schema-builder/BuilderFieldList.tsx": {
+    "count": 2,
+    "digests": ["17d61c92b33a9638", "89362e16da0f185e"]
+  },
+  "packages/admin/src/components/features/schema-builder/SchemaChangeDialog.tsx": {
+    "count": 2,
+    "digests": ["1ad02fe4ea919816", "743c006b5a84b828"]
+  },
+  "packages/admin/src/components/features/schema-builder/builder-settings-modal/IconPicker.tsx": {
+    "count": 1,
+    "digests": ["ed8e1e591593b44d"]
+  },
+  "packages/admin/src/components/features/schema-builder/field-editor-sheet/GeneralTab.tsx": {
+    "count": 1,
+    "digests": ["435202709028602e"]
+  },
+  "packages/admin/src/components/features/schema-builder/field-editor-sheet/TypeSpecificEditor.tsx": {
+    "count": 3,
+    "digests": ["0894647024e30cb3", "a625d70befa5a8b8", "ad761c020a630a22"]
+  },
+  "packages/admin/src/components/features/schema-builder/field-editor-sheet/__tests__/GeneralTab.test.tsx": {
+    "count": 1,
+    "digests": ["0d8eb790d66fd949"]
+  },
+  "packages/admin/src/components/features/schema-builder/index.ts": {
+    "count": 1,
+    "digests": ["b70fc43076d40eb9"]
+  },
+  "packages/admin/src/components/features/schema-builder/types.ts": {
+    "count": 1,
+    "digests": ["61129b7c21924c28"]
+  },
+  "packages/admin/src/components/shared/search-bar/call-site-classes.test.ts": {
+    "count": 1,
+    "digests": ["845ab2f96f9874fe"]
+  },
+  "packages/admin/src/hooks/queries/useJournal.ts": {
+    "count": 1,
+    "digests": ["df5c00e784446f44"]
+  },
+  "packages/admin/src/lib/builder/to-manifest-entity.test.ts": {
+    "count": 1,
+    "digests": ["84404c4f29f8bc78"]
+  },
+  "packages/admin/src/lib/builder/to-manifest-entity.ts": {
+    "count": 1,
+    "digests": ["15e5ef0115f09e35"]
+  },
+  "packages/admin/src/lib/builder/ui-schema-mode.ts": {
+    "count": 1,
+    "digests": ["ef94d21f7c9d8bbb"]
+  },
+  "packages/admin/src/services/journalApi.ts": {
+    "count": 1,
+    "digests": ["2eaefbdc15d3091b"]
+  },
+  "packages/admin/src/services/schemaApi.ts": {
+    "count": 4,
+    "digests": [
+      "35af098b366277f1",
+      "745836b2578fe3e1",
+      "7ccd6d6fbb622ae9",
+      "9d78fd9200a9a8b9"
+    ]
+  },
+  "packages/admin/src/services/schemaFileApi.ts": {
+    "count": 1,
+    "digests": ["409164596183ac6b"]
+  },
+  "packages/admin/src/types/entities.ts": {
+    "count": 1,
+    "digests": ["513d8eab1ebde6a2"]
+  },
+  "packages/nextly/eslint.config.js": {
+    "count": 2,
+    "digests": ["bb3c9d25cf31add3", "e33b7f20fdbfeb37"]
+  },
+  "packages/nextly/scripts/phase-gate.sh": {
+    "count": 1,
+    "digests": ["7bd26145a3c95304"]
+  },
+  "packages/nextly/src/__tests__/database/_fixture-schema/index.ts": {
+    "count": 1,
+    "digests": ["6e1b0023936ba687"]
+  },
+  "packages/nextly/src/cli/commands/db-sync-demote.ts": {
+    "count": 1,
+    "digests": ["ee90ab86da247792"]
+  },
+  "packages/nextly/src/cli/commands/dev-server.ts": {
+    "count": 13,
+    "digests": [
+      "12563415c9b024ff",
+      "1ad7e8f68a9a05ee",
+      "1ad7e8f68a9a05ee",
+      "413a600b7835a1b5",
+      "4c19204e10a150f0",
+      "61259388e21ddfa9",
+      "70982cda2dadf277",
+      "93021c5733489373",
+      "9b9e40a130108084",
+      "b203ab49c8607061",
+      "e0aac2e7ea355702",
+      "ee638b7243897d9a",
+      "efb4bab56ba352c7"
+    ]
+  },
+  "packages/nextly/src/cli/commands/index.ts": {
+    "count": 1,
+    "digests": ["56c5af3c8ee88673"]
+  },
+  "packages/nextly/src/cli/commands/migrate-check.test.ts": {
+    "count": 1,
+    "digests": ["a532c6cee9e6e280"]
+  },
+  "packages/nextly/src/cli/commands/migrate-check.ts": {
+    "count": 6,
+    "digests": [
+      "1e69da4e9a7faed6",
+      "ac4363b1f74caedb",
+      "b0fd26dbfaf30d0a",
+      "ba2c3801c52945d7",
+      "c7a32540bd4bec8c",
+      "f373ffe8aadde1d6"
+    ]
+  },
+  "packages/nextly/src/cli/commands/migrate-create.ts": {
+    "count": 7,
+    "digests": [
+      "18f2238cc394bca5",
+      "3225700ed3a040a4",
+      "57013c2b13f997f7",
+      "73fba5789fd7e691",
+      "8b4c17691b8fc012",
+      "9ba1974417946f2c",
+      "e32f4b19899564b1"
+    ]
+  },
+  "packages/nextly/src/cli/commands/migrate-fresh.ts": {
+    "count": 1,
+    "digests": ["b0b804313a52a1df"]
+  },
+  "packages/nextly/src/cli/commands/migrate-resolve.test.ts": {
+    "count": 1,
+    "digests": ["b6f524f34e423244"]
+  },
+  "packages/nextly/src/cli/commands/migrate-resolve.ts": {
+    "count": 1,
+    "digests": ["35f32f8b7ce0a0c3"]
+  },
+  "packages/nextly/src/cli/commands/migrate-status.ts": {
+    "count": 1,
+    "digests": ["6635bac063cd6e8f"]
+  },
+  "packages/nextly/src/cli/commands/migrate.test.ts": {
+    "count": 1,
+    "digests": ["0c437c660cd38450"]
+  },
+  "packages/nextly/src/cli/commands/migrate.ts": {
+    "count": 1,
+    "digests": ["952b3b5c1ea2151e"]
+  },
+  "packages/nextly/src/cli/commands/upgrade.test.ts": {
+    "count": 1,
+    "digests": ["d51aa38e85147b44"]
+  },
+  "packages/nextly/src/cli/program.ts": {
+    "count": 5,
+    "digests": [
+      "03225c4da212e24a",
+      "8b4c27c63c426d80",
+      "9c1223242e53ce47",
+      "bd797d3c2c715045",
+      "e856be7535bc97a2"
+    ]
+  },
+  "packages/nextly/src/cli/utils/ui-schema-writer.test.ts": {
+    "count": 1,
+    "digests": ["30d77fb5ceba4a7c"]
+  },
+  "packages/nextly/src/cli/utils/ui-schema-writer.ts": {
+    "count": 1,
+    "digests": ["194c2f963af5a202"]
+  },
+  "packages/nextly/src/database/__tests__/integration/schema-push.integration.test.ts": {
+    "count": 2,
+    "digests": ["7080783a5968f070", "f366817c001b80f7"]
+  },
+  "packages/nextly/src/database/seeders/permissions.ts": {
+    "count": 1,
+    "digests": ["faaf34b96fa2f808"]
+  },
+  "packages/nextly/src/database/seeders/super-admin.ts": {
+    "count": 3,
+    "digests": ["202fb776bc7235ef", "51498eb452728c01", "d1a527e93e649033"]
+  },
+  "packages/nextly/src/di/register.ts": {
+    "count": 6,
+    "digests": [
+      "3b36a36d5b6266c4",
+      "691778b66139a8a0",
+      "7e5c57aa1fbd7a0f",
+      "c37909a17b34d363",
+      "c4704b07cd3f3890",
+      "ee95597826b5b80e"
+    ]
+  },
+  "packages/nextly/src/direct-api/__tests__/auth.test.ts": {
+    "count": 10,
+    "digests": [
+      "05268e3a30c83f33",
+      "072a512bdacac7fb",
+      "1572252e05cc138a",
+      "2f77258d87fe2311",
+      "41feae1cea0304a9",
+      "44519882ef8f5264",
+      "867a92ea0ea57e9a",
+      "8803535024a474f9",
+      "afbf7e697af2008d",
+      "fc9f1737308a2997"
+    ]
+  },
+  "packages/nextly/src/direct-api/namespaces/auth.ts": {
+    "count": 5,
+    "digests": [
+      "39d114adc4e0ca3e",
+      "b2e0f30cfdc4774b",
+      "cb849a09b49a9cb0",
+      "d2f077ca3570fd83",
+      "dcf49dbd7b270e57"
+    ]
+  },
+  "packages/nextly/src/direct-api/namespaces/rbac.ts": {
+    "count": 11,
+    "digests": [
+      "1b61426b43e91ec0",
+      "51498eb452728c01",
+      "558917c7f971a408",
+      "77e59410123e6eb5",
+      "8684ed4371921742",
+      "8fd5494b29ad35d9",
+      "a64e74badc6c1430",
+      "a8b8eb6af43c3be6",
+      "ae2c9e4eb26e99c9",
+      "b609cab752ed8624",
+      "c024ed5dea05081d"
+    ]
+  },
+  "packages/nextly/src/domains/auth/__tests__/role-service.test.ts": {
+    "count": 1,
+    "digests": ["b6ed241c9ccbdc6f"]
+  },
+  "packages/nextly/src/domains/auth/services/api-key-service.ts": {
+    "count": 1,
+    "digests": ["3ebf8a8d220b1238"]
+  },
+  "packages/nextly/src/domains/auth/services/auth-service.ts": {
+    "count": 5,
+    "digests": [
+      "445bf7e553d11d28",
+      "498d0681437dadc5",
+      "9ba269bff8220b6d",
+      "a872b4a1b09ec8d6",
+      "be5d13815d7095fc"
+    ]
+  },
+  "packages/nextly/src/domains/auth/services/permission-seed-service.ts": {
+    "count": 4,
+    "digests": [
+      "378b13e85babb214",
+      "9a21faca767951a1",
+      "9a21faca767951a1",
+      "b486b6c5af6f71d7"
+    ]
+  },
+  "packages/nextly/src/domains/auth/services/permission-service.ts": {
+    "count": 1,
+    "digests": ["2980ce907661deeb"]
+  },
+  "packages/nextly/src/domains/auth/services/role-service.ts": {
+    "count": 1,
+    "digests": ["eb5780431a1820ed"]
+  },
+  "packages/nextly/src/domains/auth/services/role/role-mutation-service.ts": {
+    "count": 1,
+    "digests": ["2980ce907661deeb"]
+  },
+  "packages/nextly/src/domains/auth/services/role/role-query-service.ts": {
+    "count": 1,
+    "digests": ["61664007979ad08e"]
+  },
+  "packages/nextly/src/domains/collections/__tests__/collection-registry-service.status-persist.test.ts": {
+    "count": 1,
+    "digests": ["7698623a3310b0bd"]
+  },
+  "packages/nextly/src/domains/collections/services/collection-metadata-service.ts": {
+    "count": 1,
+    "digests": ["d5997ab8d4023315"]
+  },
+  "packages/nextly/src/domains/collections/services/collection-mutation-service.ts": {
+    "count": 3,
+    "digests": ["09e9b38cef55f0e2", "cb715ac79bb0afd0", "d6e13c0d15edf168"]
+  },
+  "packages/nextly/src/domains/collections/services/collection-registry-service.ts": {
+    "count": 1,
+    "digests": ["0be665a130c86d73"]
+  },
+  "packages/nextly/src/domains/collections/services/collection-service.ts": {
+    "count": 1,
+    "digests": ["0be665a130c86d73"]
+  },
+  "packages/nextly/src/domains/dynamic-collections/__tests__/dynamic-collection-schema-service.status-column.test.ts": {
+    "count": 1,
+    "digests": ["bc7f85c3751edb4e"]
+  },
+  "packages/nextly/src/domains/dynamic-collections/services/dynamic-collection-validation-service.ts": {
+    "count": 1,
+    "digests": ["007e99db7dc1923d"]
+  },
+  "packages/nextly/src/domains/email/__tests__/stored-configuration-round-trips.test.ts": {
+    "count": 1,
+    "digests": ["6f54fd99320556fb"]
+  },
+  "packages/nextly/src/domains/i18n/companion-join.integration.test.ts": {
+    "count": 1,
+    "digests": ["3aeb04f7ce6d720e"]
+  },
+  "packages/nextly/src/domains/i18n/migration/__tests__/companion-lifecycle.integration.test.ts": {
+    "count": 1,
+    "digests": ["1ecb7b4926538ca9"]
+  },
+  "packages/nextly/src/domains/media/services/media-service.ts": {
+    "count": 1,
+    "digests": ["86d58760d7633eec"]
+  },
+  "packages/nextly/src/domains/schema/events/schema-events-repository.test.ts": {
+    "count": 1,
+    "digests": ["75128bd83284799f"]
+  },
+  "packages/nextly/src/domains/schema/index.ts": {
+    "count": 4,
+    "digests": [
+      "369c1d6ea0e38154",
+      "961769c14cf1ffa9",
+      "d9f7b42a88b2a6fc",
+      "f69e097f064025ab"
+    ]
+  },
+  "packages/nextly/src/domains/schema/journal/__tests__/migration-journal.test.ts": {
+    "count": 1,
+    "digests": ["7b527a7442e0f996"]
+  },
+  "packages/nextly/src/domains/schema/journal/migration-journal.ts": {
+    "count": 1,
+    "digests": ["26b1dedf25e76332"]
+  },
+  "packages/nextly/src/domains/schema/legacy-preview/__tests__/translate.test.ts": {
+    "count": 1,
+    "digests": ["6c1a54197305e411"]
+  },
+  "packages/nextly/src/domains/schema/legacy-preview/translate.ts": {
+    "count": 2,
+    "digests": ["0978648f64091f91", "680c7c3d3336fd24"]
+  },
+  "packages/nextly/src/domains/schema/migrate-create/__tests__/format-file.test.ts": {
+    "count": 1,
+    "digests": ["2af35d0fbf0e41ef"]
+  },
+  "packages/nextly/src/domains/schema/migrate-create/__tests__/generate.localized-companion.test.ts": {
+    "count": 1,
+    "digests": ["0807c0923902d7fc"]
+  },
+  "packages/nextly/src/domains/schema/migrate-create/__tests__/generate.test.ts": {
+    "count": 1,
+    "digests": ["c313b100375dae38"]
+  },
+  "packages/nextly/src/domains/schema/migrate-create/__tests__/snapshot-io.test.ts": {
+    "count": 1,
+    "digests": ["7741f48f95cf157c"]
+  },
+  "packages/nextly/src/domains/schema/migrate-create/format-file.ts": {
+    "count": 1,
+    "digests": ["e8838f11906c806e"]
+  },
+  "packages/nextly/src/domains/schema/migrate-create/generate.ts": {
+    "count": 4,
+    "digests": [
+      "17f0655986bf0777",
+      "22bdeef8b108fa89",
+      "40a73a66250cbdba",
+      "90205d6af96dc8ee"
+    ]
+  },
+  "packages/nextly/src/domains/schema/migrate-create/prompt-renames.ts": {
+    "count": 2,
+    "digests": ["5274a93d8eead25f", "f119f5f1b50b086c"]
+  },
+  "packages/nextly/src/domains/schema/migrate-create/snapshot-io.ts": {
+    "count": 4,
+    "digests": [
+      "2efafc2b94078bed",
+      "55a4447fc144eb06",
+      "6554d7afacf900de",
+      "8a5e7bbe26fd9ddf"
+    ]
+  },
+  "packages/nextly/src/domains/schema/migrate/core-reconcile.test.ts": {
+    "count": 1,
+    "digests": ["a9aff7289c549111"]
+  },
+  "packages/nextly/src/domains/schema/migrate/core-reconcile.ts": {
+    "count": 1,
+    "digests": ["676a1c1e6d6bca3c"]
+  },
+  "packages/nextly/src/domains/schema/migrate/drift-error.test.ts": {
+    "count": 1,
+    "digests": ["088e3b6a79b746a5"]
+  },
+  "packages/nextly/src/domains/schema/migrate/drift-error.ts": {
+    "count": 1,
+    "digests": ["6a7814dd11e053f8"]
+  },
+  "packages/nextly/src/domains/schema/migrate/drift-reconcile.test.ts": {
+    "count": 1,
+    "digests": ["d8e7346d47ae180c"]
+  },
+  "packages/nextly/src/domains/schema/migrate/drift-reconcile.ts": {
+    "count": 1,
+    "digests": ["5a2c10adf9bc403c"]
+  },
+  "packages/nextly/src/domains/schema/migrate/resolve.test.ts": {
+    "count": 1,
+    "digests": ["1e062c7b8286b543"]
+  },
+  "packages/nextly/src/domains/schema/migrate/resolve.ts": {
+    "count": 1,
+    "digests": ["3ef9f5d5c2d843b7"]
+  },
+  "packages/nextly/src/domains/schema/pipeline/__tests__/f8-matrix.integration.test.ts": {
+    "count": 2,
+    "digests": ["892da76a2e84e1c9", "b71e3b17c7bf8978"]
+  },
+  "packages/nextly/src/domains/schema/pipeline/__tests__/journal-summary-and-scope.test.ts": {
+    "count": 1,
+    "digests": ["305dc16ed7a1c5b0"]
+  },
+  "packages/nextly/src/domains/schema/pipeline/__tests__/preview.test.ts": {
+    "count": 1,
+    "digests": ["b1912c2039fd0fe1"]
+  },
+  "packages/nextly/src/domains/schema/pipeline/__tests__/pushschema-pipeline.integration.test.ts": {
+    "count": 1,
+    "digests": ["035e9d902b81adc3"]
+  },
+  "packages/nextly/src/domains/schema/pipeline/__tests__/pushschema-pipeline.test.ts": {
+    "count": 12,
+    "digests": [
+      "0481fc6f2800e927",
+      "274352b3e2eac8a2",
+      "274352b3e2eac8a2",
+      "6369365885bce6b2",
+      "76fe5716aebd53e2",
+      "ca0a54fa1a778e93",
+      "ca0a54fa1a778e93",
+      "ca0a54fa1a778e93",
+      "ca0a54fa1a778e93",
+      "ca0a54fa1a778e93",
+      "cc57ecb0b8e09c14",
+      "d63e0fe46a8a82ac"
+    ]
+  },
+  "packages/nextly/src/domains/schema/pipeline/__tests__/wiring.test.ts": {
+    "count": 2,
+    "digests": ["7255a9639c61e1e9", "e8fb3334580748d6"]
+  },
+  "packages/nextly/src/domains/schema/pipeline/_internal/run-statement.ts": {
+    "count": 1,
+    "digests": ["5bb7af3fb2c41de4"]
+  },
+  "packages/nextly/src/domains/schema/pipeline/apply.ts": {
+    "count": 4,
+    "digests": [
+      "0b0ed022df71c084",
+      "4fb4341953ac8793",
+      "8b1ad346150a21a7",
+      "b707afd1e687a0a2"
+    ]
+  },
+  "packages/nextly/src/domains/schema/pipeline/classifier/__tests__/modes.test.ts": {
+    "count": 1,
+    "digests": ["94c5ecef6e0db2b6"]
+  },
+  "packages/nextly/src/domains/schema/pipeline/classifier/classifier.ts": {
+    "count": 1,
+    "digests": ["a0fefef08f027ac5"]
+  },
+  "packages/nextly/src/domains/schema/pipeline/classifier/modes.ts": {
+    "count": 1,
+    "digests": ["78566b1572ffd905"]
+  },
+  "packages/nextly/src/domains/schema/pipeline/classifier/type-widening.ts": {
+    "count": 1,
+    "digests": ["30f09dfa7d772835"]
+  },
+  "packages/nextly/src/domains/schema/pipeline/diff/__tests__/fixtures.test.ts": {
+    "count": 1,
+    "digests": ["0645b0e4f9c104b8"]
+  },
+  "packages/nextly/src/domains/schema/pipeline/diff/diff.ts": {
+    "count": 1,
+    "digests": ["63527447cf5a2eeb"]
+  },
+  "packages/nextly/src/domains/schema/pipeline/diff/introspect-live.ts": {
+    "count": 2,
+    "digests": ["3685ea60f4db11e3", "f258ac80346a9e2e"]
+  },
+  "packages/nextly/src/domains/schema/pipeline/diff/types.ts": {
+    "count": 1,
+    "digests": ["4536046719505a44"]
+  },
+  "packages/nextly/src/domains/schema/pipeline/index.ts": {
+    "count": 4,
+    "digests": [
+      "20521fdde97e8192",
+      "2f537bb231ed8bf2",
+      "d441cdb91647542d",
+      "f79b33933ee0a3d0"
+    ]
+  },
+  "packages/nextly/src/domains/schema/pipeline/pre-cleanup/executor.ts": {
+    "count": 1,
+    "digests": ["5e2afe465ea9dae4"]
+  },
+  "packages/nextly/src/domains/schema/pipeline/pre-resolution/executor.ts": {
+    "count": 2,
+    "digests": ["74d08e7ca7b929de", "e86ddaf86b4ed7ae"]
+  },
+  "packages/nextly/src/domains/schema/pipeline/preview.ts": {
+    "count": 1,
+    "digests": ["ff20c927408382b3"]
+  },
+  "packages/nextly/src/domains/schema/pipeline/prompt-dispatcher/browser.ts": {
+    "count": 2,
+    "digests": ["9633a9ff265d1807", "baa40beac929816b"]
+  },
+  "packages/nextly/src/domains/schema/pipeline/prompt-dispatcher/clack-terminal.ts": {
+    "count": 2,
+    "digests": ["49116782aad1e877", "557e8bada7458d04"]
+  },
+  "packages/nextly/src/domains/schema/pipeline/pushschema-pipeline-interfaces.ts": {
+    "count": 8,
+    "digests": [
+      "0450cbb2ab162389",
+      "1121d49b1aa94920",
+      "1a87d96df5e26d74",
+      "3aac08e075bf8be8",
+      "7f72a928dc32fb47",
+      "7fcc2a69d474e46d",
+      "91633e46f8762ac5",
+      "f58eacd60184feba"
+    ]
+  },
+  "packages/nextly/src/domains/schema/pipeline/pushschema-pipeline-stubs.ts": {
+    "count": 5,
+    "digests": [
+      "18b7cca5f36de505",
+      "1e321d582b3e261b",
+      "43afd721fe736c9c",
+      "df02da5ee52e8ad7",
+      "eb2f08e1746ba91c"
+    ]
+  },
+  "packages/nextly/src/domains/schema/pipeline/pushschema-pipeline.ts": {
+    "count": 17,
+    "digests": [
+      "00a5cefac278b0fd",
+      "077f00e0bdcbe8ad",
+      "085251152ec8ad68",
+      "1e2abbc0ec891be7",
+      "24e7853e8474c77e",
+      "34b7e425726096a9",
+      "3d1ae40991937a9e",
+      "619d412ced2d9900",
+      "6e8d0bbb38970bfc",
+      "7b097fd3267e95e8",
+      "7b4af6bc0c93c87e",
+      "987a5e8de215a15c",
+      "a014b0b8b9b13040",
+      "a94e6317e1fa7335",
+      "b911efe66658433c",
+      "baa932afd2bce748",
+      "d2064dc0004d630f"
+    ]
+  },
+  "packages/nextly/src/domains/schema/pipeline/rename-detector.ts": {
+    "count": 2,
+    "digests": ["6fb9515ecc23053a", "d15d462078f8f9c6"]
+  },
+  "packages/nextly/src/domains/schema/pipeline/resolution/__tests__/types.test.ts": {
+    "count": 1,
+    "digests": ["8ea516c6f783ec8b"]
+  },
+  "packages/nextly/src/domains/schema/pipeline/resolution/types.ts": {
+    "count": 2,
+    "digests": ["257f99e849dd7da1", "afff73bd0c6bdc92"]
+  },
+  "packages/nextly/src/domains/schema/pipeline/sql-templates/__tests__/identifier-quoting.test.ts": {
+    "count": 1,
+    "digests": ["432c72ad364e1839"]
+  },
+  "packages/nextly/src/domains/schema/pipeline/sql-templates/__tests__/mysql.test.ts": {
+    "count": 1,
+    "digests": ["ee1e29dab0315fa9"]
+  },
+  "packages/nextly/src/domains/schema/pipeline/sql-templates/__tests__/postgres.test.ts": {
+    "count": 1,
+    "digests": ["f5a304a9f46de498"]
+  },
+  "packages/nextly/src/domains/schema/pipeline/sql-templates/__tests__/sqlite.test.ts": {
+    "count": 1,
+    "digests": ["7209ba43bd3ee407"]
+  },
+  "packages/nextly/src/domains/schema/pipeline/sql-templates/identifier-quoting.ts": {
+    "count": 1,
+    "digests": ["4b091578444642d1"]
+  },
+  "packages/nextly/src/domains/schema/pipeline/sql-templates/index.ts": {
+    "count": 1,
+    "digests": ["25002c3ba120fba9"]
+  },
+  "packages/nextly/src/domains/schema/pipeline/sql-templates/mysql.ts": {
+    "count": 3,
+    "digests": ["19c12265a710aea5", "cac57e68d5fd3ea1", "d0a2921b02b12c00"]
+  },
+  "packages/nextly/src/domains/schema/pipeline/sql-templates/postgres.ts": {
+    "count": 1,
+    "digests": ["0d325483d17b897b"]
+  },
+  "packages/nextly/src/domains/schema/pipeline/sql-templates/sqlite.ts": {
+    "count": 1,
+    "digests": ["b80e5adbaec7abce"]
+  },
+  "packages/nextly/src/domains/schema/services/__tests__/schema-change-exclusion.test.ts": {
+    "count": 1,
+    "digests": ["1a0f99fe3d15ad57"]
+  },
+  "packages/nextly/src/domains/schema/services/schema-change-types.ts": {
+    "count": 1,
+    "digests": ["1d665b4f2993f5ca"]
+  },
+  "packages/nextly/src/domains/schema/ui-schema/cross-file.test.ts": {
+    "count": 1,
+    "digests": ["8023c6b29843db9b"]
+  },
+  "packages/nextly/src/domains/schema/ui-schema/cross-file.ts": {
+    "count": 1,
+    "digests": ["068e4df8d13f3ab0"]
+  },
+  "packages/nextly/src/domains/schema/ui-schema/loader.test.ts": {
+    "count": 1,
+    "digests": ["e0a3a3d84b80a1c9"]
+  },
+  "packages/nextly/src/domains/schema/ui-schema/loader.ts": {
+    "count": 1,
+    "digests": ["cf1cfc9a09c3da2a"]
+  },
+  "packages/nextly/src/domains/schema/ui-schema/merge.test.ts": {
+    "count": 1,
+    "digests": ["ea63757531f0736d"]
+  },
+  "packages/nextly/src/domains/schema/ui-schema/merge.ts": {
+    "count": 1,
+    "digests": ["75f6db39532857ef"]
+  },
+  "packages/nextly/src/domains/schema/ui-schema/mutate.test.ts": {
+    "count": 1,
+    "digests": ["29f0e17c9ffe8940"]
+  },
+  "packages/nextly/src/domains/schema/ui-schema/mutate.ts": {
+    "count": 1,
+    "digests": ["c3ad016d6780f2be"]
+  },
+  "packages/nextly/src/domains/schema/ui-schema/to-snapshot.test.ts": {
+    "count": 1,
+    "digests": ["58a9c63621a5428e"]
+  },
+  "packages/nextly/src/domains/schema/ui-schema/to-snapshot.ts": {
+    "count": 1,
+    "digests": ["ff2041772dca3666"]
+  },
+  "packages/nextly/src/domains/schema/utils/__tests__/missing-columns.test.ts": {
+    "count": 1,
+    "digests": ["f6bbd8d3d9ccef20"]
+  },
+  "packages/nextly/src/domains/schema/utils/missing-columns.ts": {
+    "count": 2,
+    "digests": ["dbbfcea2ed1153fe", "edfca15de43647eb"]
+  },
+  "packages/nextly/src/domains/schema/utils/resolve-table-name.ts": {
+    "count": 1,
+    "digests": ["a65bf2b9922315d5"]
+  },
+  "packages/nextly/src/domains/singles/services/single-registry-service.ts": {
+    "count": 1,
+    "digests": ["b7985ff3fa413e68"]
+  },
+  "packages/nextly/src/domains/users/__tests__/user-account-service.test.ts": {
+    "count": 1,
+    "digests": ["e8186f72572f1d03"]
+  },
+  "packages/nextly/src/domains/users/__tests__/user-mutation-service.transaction.integration.test.ts": {
+    "count": 1,
+    "digests": ["c57a4ce3d5155886"]
+  },
+  "packages/nextly/src/domains/users/__tests__/user-query-service.test.ts": {
+    "count": 2,
+    "digests": ["13bc44bce999cb7a", "56699e933aa510fd"]
+  },
+  "packages/nextly/src/domains/users/index.ts": {
+    "count": 2,
+    "digests": ["77c95c975dc54c26", "e0bc57d896269aab"]
+  },
+  "packages/nextly/src/domains/users/services/user-account-service.ts": {
+    "count": 1,
+    "digests": ["3c9e5c01eef319b2"]
+  },
+  "packages/nextly/src/domains/users/services/user-field-definition-service.ts": {
+    "count": 1,
+    "digests": ["607d53b54502eea9"]
+  },
+  "packages/nextly/src/domains/users/services/user-mutation-service.ts": {
+    "count": 2,
+    "digests": ["3c9e5c01eef319b2", "68cd60f5c8f171b2"]
+  },
+  "packages/nextly/src/domains/users/services/user-query-service.ts": {
+    "count": 3,
+    "digests": ["0f2759b4689b7f52", "3c9e5c01eef319b2", "ee059998232e4c24"]
+  },
+  "packages/nextly/src/domains/users/services/user-service.ts": {
+    "count": 2,
+    "digests": ["a43b9d1985522ed4", "ffe729f044021282"]
+  },
+  "packages/nextly/src/domains/users/types.ts": {
+    "count": 2,
+    "digests": ["77c95c975dc54c26", "8e84cd814927078a"]
+  },
+  "packages/nextly/src/errors/__tests__/error-codes.c2.test.ts": {
+    "count": 1,
+    "digests": ["d98558575ac7896b"]
+  },
+  "packages/nextly/src/index.ts": {
+    "count": 1,
+    "digests": ["6dc3c9fa99a95657"]
+  },
+  "packages/nextly/src/init.ts": {
+    "count": 4,
+    "digests": [
+      "05b49cb181d380dd",
+      "48dcc79a1634abd7",
+      "581f713057345e77",
+      "f44def8bb8099406"
+    ]
+  },
+  "packages/nextly/src/init/__tests__/drift-check.test.ts": {
+    "count": 1,
+    "digests": ["b74215e1d1259c19"]
+  },
+  "packages/nextly/src/init/__tests__/first-run.test.ts": {
+    "count": 1,
+    "digests": ["e238ab6c02d080ef"]
+  },
+  "packages/nextly/src/init/__tests__/reload-config.test.ts": {
+    "count": 1,
+    "digests": ["6a0954923a9c8109"]
+  },
+  "packages/nextly/src/init/drift-check.ts": {
+    "count": 4,
+    "digests": [
+      "6c06b4b9ee58f7b6",
+      "c400f7aab45a38cc",
+      "d006ea0743f28222",
+      "d78ce4c7699f22a1"
+    ]
+  },
+  "packages/nextly/src/init/first-run.ts": {
+    "count": 1,
+    "digests": ["c29530eb35de7967"]
+  },
+  "packages/nextly/src/init/reload-config.ts": {
+    "count": 5,
+    "digests": [
+      "16e40f5c4402dae9",
+      "2b5865a0badfa47a",
+      "2feaf3d7c6dcf306",
+      "6c86503df244a581",
+      "e1c0ea5953e19fa4"
+    ]
+  },
+  "packages/nextly/src/plugins/codegen/typed-slugs.test-d.ts": {
+    "count": 1,
+    "digests": ["cc8b8d9dc919ac1d"]
+  },
+  "packages/nextly/src/route-handler/dev-schema-handler.test.ts": {
+    "count": 1,
+    "digests": ["ad704353796fe3d6"]
+  },
+  "packages/nextly/src/route-handler/dev-schema-handler.ts": {
+    "count": 1,
+    "digests": ["75133300085c5b1d"]
+  },
+  "packages/nextly/src/route-handler/route-parser.ts": {
+    "count": 2,
+    "digests": ["618413b00a8fa802", "d1938ae75e12cb5f"]
+  },
+  "packages/nextly/src/routeHandler.ts": {
+    "count": 3,
+    "digests": ["4b8a85bc737116f6", "88cc9af4e10532f7", "c2df31454df025bd"]
+  },
+  "packages/nextly/src/runtime/__tests__/hmr-listener.test.ts": {
+    "count": 1,
+    "digests": ["fca8604933acb121"]
+  },
+  "packages/nextly/src/runtime/hmr-listener.ts": {
+    "count": 1,
+    "digests": ["7711896dcaa838e7"]
+  },
+  "packages/nextly/src/runtime/notifications/__tests__/build-event.test.ts": {
+    "count": 1,
+    "digests": ["fae09c6df2b1ab48"]
+  },
+  "packages/nextly/src/runtime/notifications/__tests__/dispatcher.test.ts": {
+    "count": 1,
+    "digests": ["10dd4978397141d6"]
+  },
+  "packages/nextly/src/runtime/notifications/__tests__/ndjson.test.ts": {
+    "count": 1,
+    "digests": ["0eb1a7070d99f024"]
+  },
+  "packages/nextly/src/runtime/notifications/__tests__/notifications-pipeline.integration.test.ts": {
+    "count": 1,
+    "digests": ["e39356e546c1d88e"]
+  },
+  "packages/nextly/src/runtime/notifications/__tests__/terminal.test.ts": {
+    "count": 1,
+    "digests": ["b9dd376b84895aa5"]
+  },
+  "packages/nextly/src/runtime/notifications/build-event.ts": {
+    "count": 1,
+    "digests": ["5a3f74dbff9a4fba"]
+  },
+  "packages/nextly/src/runtime/notifications/channels/ndjson.ts": {
+    "count": 1,
+    "digests": ["f79106072fc96302"]
+  },
+  "packages/nextly/src/runtime/notifications/channels/terminal.ts": {
+    "count": 1,
+    "digests": ["0a43a7bd69914c27"]
+  },
+  "packages/nextly/src/runtime/notifications/dispatcher.ts": {
+    "count": 1,
+    "digests": ["db8086c2e860340d"]
+  },
+  "packages/nextly/src/runtime/notifications/index.ts": {
+    "count": 1,
+    "digests": ["6d698e529ed63ee0"]
+  },
+  "packages/nextly/src/runtime/notifications/production.ts": {
+    "count": 1,
+    "digests": ["675669e2876838cf"]
+  },
+  "packages/nextly/src/runtime/notifications/types.ts": {
+    "count": 2,
+    "digests": ["666a96f798818991", "caea56fe939092cf"]
+  },
+  "packages/nextly/src/schemas/_zod/ui-schema.test.ts": {
+    "count": 1,
+    "digests": ["d9224401b282594a"]
+  },
+  "packages/nextly/src/schemas/_zod/ui-schema.ts": {
+    "count": 1,
+    "digests": ["f5f700e664b1c588"]
+  },
+  "packages/nextly/src/services/dashboard/activity-log-service.ts": {
+    "count": 2,
+    "digests": ["3dbce00600c3785d", "c643dd986b9518e4"]
+  },
+  "packages/nextly/src/services/users.ts": {
+    "count": 10,
+    "digests": [
+      "02c7870b83bd1c45",
+      "21d9cf12d1b865cc",
+      "509c8651c65f3f34",
+      "592658a0b2045773",
+      "9fe33c0125cf2c95",
+      "c1b6252c72de6d7d",
+      "ce763e7fe72f1ead",
+      "d8124ff27ceb8cd1",
+      "dd811d65e80e9e25",
+      "f186a7be729ee259"
+    ]
+  },
+  "packages/nextly/src/shared/base-registry-service.ts": {
+    "count": 2,
+    "digests": ["607d53b54502eea9", "dea34fdfb21a1851"]
+  },
+  "packages/nextly/src/shared/types/config.ts": {
+    "count": 3,
+    "digests": ["11a7a27094cd37de", "13cbcea40d907b03", "b1d738515c522c67"]
+  },
+  "packages/nextly/src/singles/config/validate-single.ts": {
+    "count": 1,
+    "digests": ["6229e98b309d2978"]
+  },
+  "packages/plugin-sdk/src/block-exports.test-d.ts": {
+    "count": 1,
+    "digests": ["60e14a2b22612b00"]
+  },
+  "packages/ui/src/components/__tests__/tabs-contract.test.ts": {
+    "count": 1,
+    "digests": ["92615760254a3a7f"]
+  },
+  "scripts/check-comment-convention.mjs": {
+    "count": 5,
+    "digests": [
+      "1d96a703ff67f6d2",
+      "2421cd2ab9b9214b",
+      "91e112e4507fb8ee",
+      "bdbe7173f0ca3a3f",
+      "dc84b3f296521a00"
+    ]
+  }
+}

@@ -3,8 +3,9 @@
  * human-readable error string. Used as the `pages.content` field validator (M3) and
  * defensively in the editor. Pure and React-free.
  */
-import { declaredSlotsOf } from "./block-structure";
+import { declaredSlotsOf, parentsOf } from "./block-structure";
 import type { BlockRegistry } from "./registry";
+import { slotAdmits } from "./slot-allow";
 import type { BlockDocument, BlockNode } from "./types";
 import { MAX_DEPTH, MAX_NODES } from "./types";
 
@@ -27,6 +28,20 @@ export function validateDocument(
 
   const seen = new Set<string>();
   let count = 0;
+
+  // A root that restricts its parents has none, which is not the same as being satisfied. Checked
+  // once here rather than inside the walk, because the walk only ever sees a node as somebody's
+  // child — so the one node with no parent was the one node the rule never reached.
+  //
+  // Guarded on the type being a STRING first. `check` below is what reports a malformed type, and
+  // it runs after this — so unguarded, a root whose `type` merely COERCES to a restricted name is
+  // described as sitting in the wrong place, which is a confident answer to the wrong question.
+  if (typeof d.root.type === "string") {
+    const rootParents = parentsOf(d.root.type, registry);
+    if (rootParents) {
+      return `${d.root.type} may only sit inside ${rootParents.join(" or ")}, and a document root sits inside nothing`;
+    }
+  }
 
   const check = (n: BlockNode, depth: number): string | null => {
     if (depth > MAX_DEPTH) return `tree exceeds max depth ${MAX_DEPTH}`;
@@ -68,8 +83,16 @@ export function validateDocument(
           return `${n.type} has no slot "${slotName}"`;
         }
         for (const child of children) {
-          if (spec?.allowedBlocks && !spec.allowedBlocks.includes(child.type)) {
+          if (!slotAdmits(spec, child.type)) {
             return `${child.type} is not allowed in slot "${slotName}" of ${n.type}`;
+          }
+          // The child's own restriction, checked HERE as well as in the editor's `canDrop`. A
+          // structural rule enforced on only one of the two is a rule the write path accepts and
+          // every insertion path refuses, so a stored or hand-authored document could hold a shape
+          // no editor would create — and nothing would ever report it.
+          const parents = parentsOf(child.type, registry);
+          if (parents && !parents.includes(n.type)) {
+            return `${child.type} may only sit inside ${parents.join(" or ")}, not ${n.type}`;
           }
           const e = check(child, depth + 1);
           if (e) return e;

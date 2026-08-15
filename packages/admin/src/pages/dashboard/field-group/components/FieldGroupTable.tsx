@@ -22,7 +22,6 @@ import { BulkActionBar } from "@admin/components/features/entries/EntryList/Bulk
 import * as Icons from "@admin/components/icons";
 import { Lock } from "@admin/components/icons";
 import { BulkDeleteDialog } from "@admin/components/shared/bulk-action-dialogs";
-import { Pagination } from "@admin/components/shared/pagination";
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { toast } from "@admin/components/ui";
 import { DataTableView } from "@admin/components/ui/table/data-table";
@@ -31,6 +30,7 @@ import type {
   NextlyColumn,
   RowAction,
 } from "@admin/components/ui/table/data-table";
+import { PAGINATION } from "@admin/constants/pagination";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { UI } from "@admin/constants/ui";
 import {
@@ -39,6 +39,7 @@ import {
   useBulkDeleteFieldGroups,
 } from "@admin/hooks/queries";
 import { useDebouncedValue } from "@admin/hooks/useDebouncedValue";
+import { usePagination } from "@admin/hooks/usePagination";
 import { useRowSelection } from "@admin/hooks/useRowSelection";
 import { formatDateTime } from "@admin/lib/dates/format";
 import { navigateTo } from "@admin/lib/navigation";
@@ -108,16 +109,15 @@ const ALWAYS_VISIBLE = new Set(["label", "createdAt"]);
  * rendering is delegated to the unified DataTableView.
  */
 export default function FieldGroupTable() {
-  const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState(10);
+  const { page, pageSize, setPage, setPageSize, resetPage } = usePagination();
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebouncedValue(search, UI.SEARCH_DEBOUNCE_MS);
 
   // Reset to the first page when the search term changes so a later page does not
   // request out-of-range results and show a false empty state.
   useEffect(() => {
-    setPage(0);
-  }, [debouncedSearch]);
+    resetPage();
+  }, [debouncedSearch, resetPage]);
 
   const [sourceFilter, setSourceFilter] = useState<FieldGroupSource | "all">(
     "all"
@@ -386,19 +386,14 @@ export default function FieldGroupTable() {
     [allColumns]
   );
 
-  const handlePageSizeChange = (newPageSize: number) => {
-    setPageSize(newPageSize);
-    setPage(0);
-  };
-
   const handleSourceFilterChange = (value: string) => {
     setSourceFilter(value as FieldGroupSource | "all");
-    setPage(0);
+    resetPage();
   };
 
   const handleMigrationFilterChange = (value: string) => {
     setMigrationFilter(value as FieldGroupMigrationStatus | "all");
-    setPage(0);
+    resetPage();
   };
 
   const selection = useMemo<DataTableSelection<ApiFieldGroup>>(
@@ -620,19 +615,27 @@ export default function FieldGroupTable() {
             registryKey="components"
             ariaLabel="Field Groups table"
             emptyMessage="No field groups found. Try adjusting your search or filters."
+            // The table owns the pager, so it is placed for whichever view is
+            // showing. Gated on `data` rather than on a page
+            // count because this list filters client-side after fetching, so
+            // the server's total is the only reliable signal that a response
+            // has arrived at all.
+            pagination={
+              data
+                ? {
+                    currentPage: page,
+                    totalPages:
+                      data.meta.totalPages > 0 ? data.meta.totalPages : 1,
+                    pageSize,
+                    pageSizeOptions: PAGINATION.TABLE_PAGE_SIZE_OPTIONS,
+                    onPageChange: setPage,
+                    onPageSizeChange: setPageSize,
+                    isLoading: isFetching,
+                    totalItems: data.meta.total,
+                  }
+                : undefined
+            }
           />
-          {data && (
-            <Pagination
-              currentPage={page}
-              totalPages={data.meta.totalPages > 0 ? data.meta.totalPages : 1}
-              pageSize={pageSize}
-              pageSizeOptions={[10, 25, 50]}
-              onPageChange={setPage}
-              onPageSizeChange={handlePageSizeChange}
-              isLoading={isFetching}
-              totalItems={data.meta.total}
-            />
-          )}
         </>
       )}
 

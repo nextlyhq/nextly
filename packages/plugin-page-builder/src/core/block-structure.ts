@@ -18,6 +18,8 @@
  *
  * @module core/block-structure
  */
+import { contributedStructureOf } from "./contributed-structure";
+import type { BlockRegistry } from "./registry";
 import type { BlockNode, SlotSpec } from "./types";
 
 /**
@@ -33,6 +35,19 @@ export interface BlockStructure {
   isContainer?: boolean;
   /** The slots it declares, in the order it declares them. */
   slots?: SlotSpec[];
+  /**
+   * The only types this block may be a DIRECT child of. Omit for "anywhere".
+   *
+   * The other half of `allowedBlocks`, and not derivable from it. A slot's allowlist is the
+   * parent's statement about what it will hold; this is the child's statement about where it makes
+   * sense. Both are needed because neither implies the other: a slot naming `core/heading` must not
+   * confine headings to it, and a block that is meaningless outside one parent has to say so
+   * itself.
+   *
+   * Named after the same field in Gutenberg's block metadata, which solves this case identically —
+   * its `core/column` declares `parent: ["core/columns"]`.
+   */
+  parent?: string[];
 }
 
 /**
@@ -57,6 +72,24 @@ export function declareStructure(structure: BlockStructure): BlockStructure {
 }
 
 /**
+ * The structure for a type: this package's own if it has one, otherwise whatever a PLUGIN
+ * contributed to the engine.
+ *
+ * The engine is consulted rather than mirrored. A copy kept here would need clearing on exactly the
+ * boots that clear the engine's registry, and a miss in either direction is silent — a stale entry
+ * enforces a removed plugin's nesting rules against blocks that no longer exist, and a missing one
+ * lets a live plugin's rules go unenforced. Reading through means there is one set, and it is the
+ * one registration wrote.
+ *
+ * Core wins a collision. The engine's registry already refuses a duplicate name, so this cannot
+ * arise from a well-formed boot; preferring the contributed side would let a plugin decide what
+ * `core/column` means, which is not a question a plugin gets to answer.
+ */
+function structureOf(type: string): BlockStructure | undefined {
+  return CORE_BLOCK_STRUCTURES[type] ?? contributedStructureOf(type);
+}
+
+/**
  * The slots a type declares, from structure ALONE — no renderer, no registry.
  *
  * `undefined` means "this build has no structure for that type", which is not the same as "that
@@ -65,8 +98,41 @@ export function declareStructure(structure: BlockStructure): BlockStructure {
  * case have to be able to tell them apart.
  */
 export function declaredSlotsOf(type: string): SlotSpec[] | undefined {
-  const structure = CORE_BLOCK_STRUCTURES[type];
+  const structure = structureOf(type);
   return structure ? (structure.slots ?? []) : undefined;
+}
+
+/**
+ * The parents a type restricts itself to, from structure ALONE — no renderer, no registry.
+ *
+ * `undefined` means the type states no restriction, which is the common case and is NOT the same
+ * as "this build has no structure for it". Both answer "put it anywhere", so the two are collapsed
+ * here deliberately: a caller cannot act differently on them, and pretending it could would invite
+ * a check that treats an unknown plugin block as forbidden everywhere.
+ */
+export function declaredParentsOf(type: string): string[] | undefined {
+  return structureOf(type)?.parent;
+}
+
+/**
+ * Where a type may sit, asking the REGISTERED definition first and structure otherwise.
+ *
+ * The same branch `declaredSlotsOf`'s callers make, and for the same reason: a registered
+ * definition is the whole answer about itself, including when it states no restriction, so a
+ * fallback to structure there would let a built-in's declaration answer for a plugin block that
+ * deliberately restricts nothing. Structure answers where no definition is registered, which is
+ * the state the config and server paths run in.
+ *
+ * One reader rather than the branch written at each call site, because the three that need it —
+ * the drop rules, the validator and the repair finder — must agree or the editor and the write
+ * path disagree about what a legal document is.
+ */
+export function parentsOf(
+  type: string,
+  registry: BlockRegistry
+): string[] | undefined {
+  const def = registry.get(type);
+  return def ? def.parent : declaredParentsOf(type);
 }
 
 /**
@@ -86,13 +152,45 @@ export const containerStructure = declareStructure({
 export const columnsStructure = declareStructure({
   type: "core/columns",
   isContainer: true,
+  // The only container that restricts what its slot takes, and the restriction
+  // is what makes a column addressable. A row could hold any block directly and
+  // lay each one out as a column, but then a column is a shape the renderer
+  // draws rather than a thing in the document — nothing to select, and nowhere
+  // to put a width, a background or an alignment. Naming the child makes each
+  // column a block an author can reach, which is the same split Gutenberg,
+  // Elementor and Bricks all arrived at.
+  slots: [
+    {
+      name: "default",
+      allowedBlocks: ["core/column"],
+      childLayout: "formatted",
+    },
+  ],
+});
+
+/**
+ * One cell of a {@link columnsStructure} row.
+ *
+ * A container so it can hold anything, and unrestricted so that "what may go in
+ * a column" stays the same question as "what may go on a page" — a column that
+ * accepted less than the canvas would be a rule authors have to learn for no
+ * gain.
+ */
+export const columnStructure = declareStructure({
+  type: "core/column",
+  isContainer: true,
   slots: [{ name: "default" }],
+  // A column draws a flex ITEM: its width and alignment are instructions to a flex container, and
+  // the only block that provides one is the row. Sitting anywhere else — including inside another
+  // column, which is where a nearest-accepting search would otherwise put it — it renders as an
+  // ordinary div and the author does not get the column they asked for.
+  parent: ["core/columns"],
 });
 
 export const gridStructure = declareStructure({
   type: "core/grid",
   isContainer: true,
-  slots: [{ name: "default" }],
+  slots: [{ name: "default", childLayout: "formatted" }],
 });
 
 export const coverStructure = declareStructure({
@@ -113,16 +211,18 @@ export const queryLoopStructure = declareStructure({
   slots: [{ name: "default" }],
 });
 
+// A row is flex in both orientations, so its children are flex items whichever way it is
+// pointing — the orientation decides the direction, not whether the layout is formatted.
 export const rowStructure = declareStructure({
   type: "core/row",
   isContainer: true,
-  slots: [{ name: "default" }],
+  slots: [{ name: "default", childLayout: "formatted" }],
 });
 
 export const contentCarouselStructure = declareStructure({
   type: "core/content-carousel",
   isContainer: true,
-  slots: [{ name: "default" }],
+  slots: [{ name: "default", childLayout: "formatted" }],
 });
 
 /**
@@ -187,7 +287,51 @@ for (const type of PLAIN_BLOCK_TYPES) {
   declareStructure({ type, slots: [] });
 }
 
+/**
+ * Whether this package itself declares the type, as opposed to a plugin contributing it.
+ *
+ * The distinction matters wherever something is BUILT rather than merely judged. A contributed
+ * block is known well enough to enforce its nesting rules, and not well enough to construct: its
+ * defaults, its version and its renderer live in the engine registry, which `createNode` and the
+ * canvas do not read.
+ */
+export function isDeclaredHere(type: string): boolean {
+  return CORE_BLOCK_STRUCTURES[type] !== undefined;
+}
+
 /** Whether a node's type is one this build has structure for. */
 export function hasStructure(node: BlockNode): boolean {
-  return CORE_BLOCK_STRUCTURES[node.type] !== undefined;
+  return structureOf(node.type) !== undefined;
+}
+
+/**
+ * The slots a type offers, asking the REGISTERED definition first and structure otherwise.
+ *
+ * The slot-side twin of {@link parentsOf}, and it exists for the same reason: a contributed block
+ * is absent from this package's registry, so a reader that only asked the registry would treat
+ * every plugin container as holding no slots at all. Structure answers for those, and for the
+ * config and server paths where no definition is registered.
+ */
+export function slotsOf(
+  type: string,
+  registry: BlockRegistry
+): SlotSpec[] | undefined {
+  const def = registry.get(type);
+  return def ? (def.slots ?? []) : declaredSlotsOf(type);
+}
+
+/**
+ * Whether a type may hold children at all, from the definition or from structure.
+ *
+ * `undefined` means neither knows the type — which is not "it holds nothing". A caller has to be
+ * able to refuse an unknown container rather than silently treat it as a leaf.
+ */
+export function isContainerType(
+  type: string,
+  registry: BlockRegistry
+): boolean | undefined {
+  const def = registry.get(type);
+  if (def) return def.isContainer === true;
+  const structure = structureOf(type);
+  return structure ? structure.isContainer === true : undefined;
 }

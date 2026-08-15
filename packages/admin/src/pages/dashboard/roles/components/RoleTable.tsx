@@ -18,7 +18,6 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import { BulkActionBar } from "@admin/components/features/entries/EntryList/BulkActionBar";
 import { RoleDeleteDialog } from "@admin/components/features/role-management/RoleDeleteDialog";
 import { BulkDeleteDialog } from "@admin/components/shared/bulk-action-dialogs";
-import { Pagination } from "@admin/components/shared/pagination";
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { toast } from "@admin/components/ui";
 import { DataTableView } from "@admin/components/ui/table/data-table";
@@ -28,6 +27,7 @@ import type {
   RowAction,
 } from "@admin/components/ui/table/data-table";
 import { ListShell } from "@admin/components/ui/table/list-shell";
+import { PAGINATION } from "@admin/constants/pagination";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import {
   useRoles,
@@ -35,6 +35,7 @@ import {
   useBulkDeleteRoles,
 } from "@admin/hooks/queries/useRoles";
 import { useDebouncedValue } from "@admin/hooks/useDebouncedValue";
+import { usePagination } from "@admin/hooks/usePagination";
 import { useRowSelection } from "@admin/hooks/useRowSelection";
 import { navigateTo } from "@admin/lib/navigation";
 import type { Role } from "@admin/types/entities";
@@ -52,8 +53,7 @@ const ALWAYS_VISIBLE = new Set(["roleName"]);
  * delegated to the unified DataTableView.
  */
 export default function RoleTable() {
-  const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState(10);
+  const { page, pageSize, setPage, setPageSize, resetPage } = usePagination();
   const [search, setSearch] = useState("");
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
 
@@ -79,8 +79,8 @@ export default function RoleTable() {
   // Reset to the first page when the search term changes so a later page does not
   // request out-of-range results and show a false empty state.
   useEffect(() => {
-    setPage(0);
-  }, [debouncedSearch]);
+    resetPage();
+  }, [debouncedSearch, resetPage]);
 
   // Selection is page-scoped: clear it whenever the page or search changes so a
   // bulk action never targets rows that are no longer shown/confirmed.
@@ -287,11 +287,6 @@ export default function RoleTable() {
     });
   }, []);
 
-  const handlePageSizeChange = useCallback((newPageSize: number) => {
-    setPageSize(newPageSize);
-    setPage(0);
-  }, []);
-
   const selection = useMemo<DataTableSelection<Role>>(
     () => ({
       selectedIds,
@@ -406,19 +401,19 @@ export default function RoleTable() {
           rowActions={rowActions}
           registryKey="roles"
           ariaLabel="Roles table"
-          footer={
-            data && data.meta.totalPages > 0 ? (
-              <Pagination
-                currentPage={page}
-                totalPages={data.meta.totalPages}
-                pageSize={pageSize}
-                pageSizeOptions={[10, 25, 50]}
-                onPageChange={setPage}
-                onPageSizeChange={handlePageSizeChange}
-                isLoading={isLoading}
-                totalItems={data.meta.total}
-              />
-            ) : undefined
+          pagination={
+            data && data.meta.totalPages > 0
+              ? {
+                  currentPage: page,
+                  totalPages: data.meta.totalPages,
+                  pageSize,
+                  pageSizeOptions: PAGINATION.TABLE_PAGE_SIZE_OPTIONS,
+                  onPageChange: setPage,
+                  onPageSizeChange: setPageSize,
+                  isLoading,
+                  totalItems: data.meta.total,
+                }
+              : undefined
           }
           emptyMessage={
             search

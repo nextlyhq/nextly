@@ -144,12 +144,17 @@ export type {
 /** @public */
 export { Tabs, TabsList, TabsTrigger, TabsContent } from "./components/tabs";
 /** @public */
-export type {
-  TabsProps,
-  TabsListProps,
-  TabsTriggerProps,
-  TabsContentProps,
-} from "./types/tabs";
+export type { TabsProps, TabsContentProps } from "./types/tabs";
+/**
+ * From the COMPONENT module, not from `./types/tabs`.
+ *
+ * `./types/tabs` describes the Radix props alone, so an alias taken from there
+ * rejects `variant` and `size` — and this barrel is what a consumer imports, so
+ * exporting the derived aliases from the component file alone leaves them
+ * unreachable.
+ * @public
+ */
+export type { TabsListProps, TabsTriggerProps } from "./components/tabs";
 
 /** @public */
 export { Tooltip, TooltipTrigger, TooltipContent } from "./components/tooltip";

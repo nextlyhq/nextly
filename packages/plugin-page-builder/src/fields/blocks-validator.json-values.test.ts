@@ -49,6 +49,22 @@ describe("unserializable values in a document", () => {
     );
   });
 
+  it("reports one verdict per defect, not a summary beside the precise one", () => {
+    // The precise walk names the KEY, so the engine's document-level summary of
+    // the same defect is redundant. Both summaries are superseded, because that
+    // walk covers every value the writer mishandles rather than only the ones
+    // it refuses: a bigint is the unwritable case, a function or symbol the
+    // lossy one. Leaving either in place spends the issue allowance twice on
+    // one repair and hands the caller a generic verdict next to an actionable
+    // one.
+    for (const props of [{ count: 1n }, { fn: () => 1 }, { s: Symbol("x") }]) {
+      const reported = codes(withProps(props));
+      expect(reported).toContain("UNSERIALIZABLE_VALUE");
+      expect(reported).not.toContain("document-unwritable");
+      expect(reported).not.toContain("document-lossy");
+    }
+  });
+
   it("names every offending key rather than stopping at the first", () => {
     const issues = validateBlocksValue(
       withProps({ a: 1n, b: 2n }),

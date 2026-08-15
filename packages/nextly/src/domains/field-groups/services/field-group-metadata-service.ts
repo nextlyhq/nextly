@@ -340,7 +340,24 @@ export class FieldGroupMetadataService {
       assertLocalizationConfigured("component", input.slug);
     }
 
-    // 1. MOVE the physical schema, when this edit implies one. A `localized` toggle alone does:
+    // 1. REFUSE a field set this path cannot deliver.
+    //
+    // 🔴 This method changes the COMPANION table and nothing else. A field whose column lives on the
+    // main table therefore needs DDL that only `applySchemaChanges` emits — and without this guard
+    // the request SUCCEEDED, wrote the new fields and a matching `schema_hash`, and left the table
+    // without the columns the registry now claims it has. The registry marks
+    // `migration_status: "pending"` and a preview still introspects the truth, so the drift is
+    // recorded rather than silent; it is still a success answered to a caller whose change did not
+    // happen.
+    //
+    // Refusing rather than applying the pipeline here is deliberate. `applySchemaChanges` carries a
+    // version guard, rename detection and an interactive resolution step — a rename is ambiguous
+    // (rename versus drop-and-add) and a PATCH has no way to ask. Duplicating that inside a metadata
+    // edit would be a second implementation of "apply a schema change"; refusing keeps one, and
+    // turns a silent wrong result into an actionable error.
+    await this.assertNoUnappliableSchemaChange({ existing, fields, localized });
+
+    // 2. MOVE the physical schema, when this edit implies one. A `localized` toggle alone does:
     // enabling seeds the companion from the main table and drops those columns, disabling restores
     // and archives them. A save that skipped that would persist the flag while the content stayed
     // where the runtime no longer looks for it.
@@ -357,7 +374,7 @@ export class FieldGroupMetadataService {
         wasLocalized,
       }));
 
-    // 2. RECORD, after the physical change succeeded.
+    // 3. RECORD, after the physical change succeeded.
     try {
       const record = await this.registry.updateComponent(
         input.slug,
@@ -440,6 +457,278 @@ export class FieldGroupMetadataService {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Refuse a field change whose physical consequence this path cannot carry out.
+   *
+   * 🔴 Two tables, and exactly one of them can be moved from here:
+   *
+   * - the MAIN `comp_<slug>` table receives no DDL at all on this path, so ANY difference in the
+   *   table it should have — a column added, dropped or reshaped, an index created or removed — is
+   *   unappliable and has to be refused;
+   * - the companion `comp_<slug>_locales` IS reconciled, but only by ADDING and DROPPING columns by
+   *   NAME. A localized field that keeps its name while its column changes shape emits no statement
+   *   there either, so that case is refused too.
+   *
+   * Every question is answered by the code that already owns it, so this guard cannot disagree with
+   * what actually emits DDL:
+   *
+   * - `buildDesiredTableFromComponentFields` is the desired-state builder the diff engine runs for a
+   *   field group. It renders each column for the dialect, injects the same system columns both
+   *   sides get, carries the `idx_`/`uq_` indexes the schema service creates, and omits translatable
+   *   columns when the group is localized. Comparing the table it describes for the old fields
+   *   against the one it describes for the new is comparing what the generator would build;
+   * - `fieldToLocalizedColumnSpec` and `ddlType` are what the companion reconciler renders its
+   *   `ADD COLUMN` from, so the text they produce is the companion column itself;
+   * - `isFieldLocalized` is the predicate `reconcileCompanion` filters on, and it folds in the
+   *   entity flag, so a non-localized field group needs no separate branch.
+   *
+   * Both sides are built at the SAME localization state, deliberately. A `localized` toggle moves
+   * columns between the two tables and `reconcileCompanion` performs exactly that move, so holding
+   * the flag constant asks the question this guard is for — does the FIELD SET edit need DDL — and
+   * leaves the transition to the code that applies it.
+   *
+   * A fourth opinion about where a column lives, or about what shape it takes, is exactly how the
+   * three transports came to disagree in the first place.
+   */
+  private async assertNoUnappliableSchemaChange(args: {
+    existing: DynamicFieldGroupRecord;
+    fields: FieldDefinition[];
+    localized: boolean;
+  }): Promise<void> {
+    const { buildDesiredTableFromComponentFields } = await import(
+      "../../schema/pipeline/diff/build-from-fields"
+    );
+    const { getColumnDescriptor } = await import(
+      "../../schema/services/field-column-descriptor"
+    );
+    const { isFieldLocalized } = await import("../../i18n/classify-fields");
+    const { fieldToLocalizedColumnSpec } = await import(
+      "../../i18n/migration/field-to-column-spec"
+    );
+    const { ddlType } = await import("../../i18n/migration/ddl-types");
+
+    const oldFields = args.existing.fields as unknown as FieldDefinition[];
+    const dialect = this.dialect;
+
+    const desiredTable = (fields: FieldDefinition[]) =>
+      buildDesiredTableFromComponentFields(
+        args.existing.tableName,
+        fields,
+        dialect,
+        { localized: args.localized, builtBy: "fieldGroup" }
+      );
+
+    const before = desiredTable(oldFields);
+    const after = desiredTable(args.fields);
+
+    /**
+     * Which field a column belongs to, for the error path only.
+     *
+     * The comparison above has already decided; this just names the field so the caller is told
+     * WHICH one to take through the apply flow. It reads the same `getColumnDescriptor(...).name`
+     * the builder resolves its own column names with, and falls back to the raw column name when a
+     * column belongs to no field — the system columns, which are identical on both sides and so
+     * never appear here.
+     */
+    const fieldNameByColumn = new Map<string, string>();
+    for (const field of [...oldFields, ...args.fields]) {
+      const column = getColumnDescriptor(field, dialect, "fieldGroup");
+      if (column) fieldNameByColumn.set(column.name, field.name);
+    }
+    const attribute = (column: string): string =>
+      fieldNameByColumn.get(column) ?? column;
+
+    const changed = new Set<string>();
+
+    // Columns, by name: a serialised ColumnSpec so a spec gaining a property is not silently
+    // excluded from the check that exists to notice it.
+    const columnsOf = (table: typeof before): Map<string, string> =>
+      new Map(
+        table.columns.map(column => [column.name, JSON.stringify(column)])
+      );
+    const columnsBefore = columnsOf(before);
+    const columnsAfter = columnsOf(after);
+    for (const [name, spec] of columnsAfter) {
+      if (columnsBefore.get(name) !== spec) changed.add(attribute(name));
+    }
+    for (const name of columnsBefore.keys()) {
+      if (!columnsAfter.has(name)) changed.add(attribute(name));
+    }
+
+    // Indexes, by name. A field toggling `unique` or `index` leaves its COLUMN identical and moves
+    // only this list, which is why the column comparison alone let it through. An index is
+    // attributed to every field it covers, so a composite one names all of them.
+    const indexesOf = (table: typeof before) =>
+      new Map((table.indexes ?? []).map(index => [index.name, index]));
+    const indexesBefore = indexesOf(before);
+    const indexesAfter = indexesOf(after);
+    for (const [name, index] of indexesAfter) {
+      const was = indexesBefore.get(name);
+      if (was && JSON.stringify(was) === JSON.stringify(index)) continue;
+      for (const column of index.columns) changed.add(attribute(column));
+    }
+    for (const [name, index] of indexesBefore) {
+      if (indexesAfter.has(name)) continue;
+      for (const column of index.columns) changed.add(attribute(column));
+    }
+
+    // What the CREATOR would write for the main table, line by line.
+    //
+    // 🔴 The desired-table builder answers "which columns and indexes exist", which is what the diff
+    // engine compares against introspection — and it deliberately carries no DEFAULT for a user
+    // column, because a live database reports defaults in a form that would make every reconcile
+    // propose changing them. `FieldGroupSchemaService` is the thing that actually creates a field
+    // group's table, and it DOES emit a checkbox's `DEFAULT`. So a `defaultValue` edit changes the
+    // column the creator writes while leaving the desired table identical, and rows inserted without
+    // the field would keep taking the old default.
+    //
+    // Each user column is one line beginning with its quoted name, so a changed line still names the
+    // field it belongs to.
+    const { FieldGroupSchemaService } = await import(
+      "../../../services/field-groups/field-group-schema-service"
+    );
+    const creatorLines = (fields: FieldDefinition[]): Map<string, string> => {
+      const sql = new FieldGroupSchemaService(dialect).generateMigrationSQL(
+        args.existing.tableName,
+        // The stored field list and the config field list are two representations of one thing, and
+        // this service already crosses between them where it writes the registry row and where it
+        // reconciles the companion. Crossed here for the same reason: the creator is declared
+        // against the config shape, and it is the creator's answer this needs.
+        fields as unknown as Parameters<
+          InstanceType<typeof FieldGroupSchemaService>["generateMigrationSQL"]
+        >[1],
+        { localized: args.localized }
+      );
+      const out = new Map<string, string>();
+      for (const line of sql.split("\n")) {
+        // A column definition, and nothing else: INDENTED and QUOTED, which the statements are
+        // not. Matching an unquoted leading word instead picked up `CREATE TABLE ...` and reported
+        // a field called "CREATE". The index statements are excluded on purpose — they are already
+        // compared, by name and uniqueness, from the desired table above.
+        const column = /^\s+["`]([A-Za-z0-9_]+)["`]\s+\S/.exec(line);
+        if (column) out.set(column[1], line.trim());
+      }
+      return out;
+    };
+    const creatorBefore = creatorLines(oldFields);
+    const creatorAfter = creatorLines(args.fields);
+    for (const [column, line] of creatorAfter) {
+      if (creatorBefore.get(column) !== line) changed.add(attribute(column));
+    }
+    for (const column of creatorBefore.keys()) {
+      if (!creatorAfter.has(column)) changed.add(attribute(column));
+    }
+
+    // The companion, for a field localized on both sides. Compared as the rendered DDL type rather
+    // than the spec object, because that string IS the column the reconciler would write: on SQLite
+    // a `maxLength` change moves the spec and renders to the same TEXT, which needs no statement and
+    // must not be refused.
+    // Not a valid rendering of any column, so it can never equal one.
+    const NO_COMPANION_COLUMN = "\u0000none";
+    const companionOf = (fields: FieldDefinition[]): Map<string, string> => {
+      const out = new Map<string, string>();
+      for (const field of fields) {
+        if (!isFieldLocalized(field, args.localized)) continue;
+        const column = fieldToLocalizedColumnSpec(field, dialect, "fieldGroup");
+        // 🔴 Recorded even when it materialises NO column, rather than skipped.
+        //
+        // Skipping made a field that gains or loses its column invisible: a `component` or
+        // many-to-many field stores its data elsewhere and produces none, so changing it to `text`
+        // under the same name left this map without a "before" entry and the change without a
+        // common name to compare. `buildCompanionReconcileStatements` then diffs the raw localized
+        // NAMES, sees the name already present, and emits no ADD — so the registry and the runtime
+        // advance to a companion column nothing created. The reverse leaves the old one behind.
+        //
+        // A sentinel keeps the name in the map with a value that cannot collide with a rendered
+        // column, so the transition reads as what it is: a change on a name present in both.
+        out.set(
+          field.name,
+          column
+            ? `${column.name} ${ddlType(column, dialect)}`
+            : NO_COMPANION_COLUMN
+        );
+      }
+      return out;
+    };
+    const companionBefore = companionOf(oldFields);
+    const companionAfter = companionOf(args.fields);
+    for (const [name, column] of companionAfter) {
+      // Only a field present on BOTH sides: an add or a drop is the delta the reconciler applies.
+      const was = companionBefore.get(name);
+      if (was !== undefined && was !== column) changed.add(name);
+    }
+
+    // 🔴 A companion that both GAINS and LOSES a column in one edit is a rename the reconciler
+    // cannot see, and the consequence is destroyed content rather than a stale shape.
+    //
+    // Neither companion path resolves it. While the group STAYS localized,
+    // `buildCompanionReconcileStatements` diffs by name alone, so a rename becomes ADD the new
+    // column, DROP the old — and every stored translation goes with the drop. While localization is
+    // being ENABLED, `buildCompanionTransitionStatements` seeds only the new columns whose name
+    // already exists on main, so a renamed field is seeded from nothing and its old column is left
+    // behind on the main table.
+    //
+    // A drop-and-add pair is the ambiguity the apply pipeline exists to resolve — its rename
+    // detector asks which of the two a caller meant, and a PATCH has no way to ask. So this refuses
+    // only the PAIR: a pure add is a new translatable field and a pure drop is a removed one, and
+    // the reconciler applies both correctly.
+    // 🔴 Only fields that actually RENDER a column, which is narrower than the map's keys.
+    //
+    // The map deliberately records every localized field, sentinel included, so that a field
+    // GAINING or LOSING its column shows up as a change on a common name. That is the right domain
+    // for the value comparison above and the wrong one here: two columnless fields swapped for each
+    // other — a `component` removed and a differently named `component` added — are one add and one
+    // drop by key, which reads as a rename pair, while neither materialises a companion column and
+    // `buildCompanionReconcileStatements` emits nothing for either. Refusing that would reject a
+    // safe metadata-only edit.
+    //
+    // The same narrowing is correct for the enablement rule below: a columnless field removed during
+    // an enable leaves no column behind on the main table, so there is nothing stranded to refuse.
+    const rendersColumn = (map: Map<string, string>, name: string): boolean =>
+      map.get(name) !== NO_COMPANION_COLUMN;
+    const companionAdded = [...companionAfter.keys()].filter(
+      name => !companionBefore.has(name) && rendersColumn(companionAfter, name)
+    );
+    const companionDropped = [...companionBefore.keys()].filter(
+      name => !companionAfter.has(name) && rendersColumn(companionBefore, name)
+    );
+    if (companionAdded.length > 0 && companionDropped.length > 0) {
+      for (const name of [...companionAdded, ...companionDropped])
+        changed.add(name);
+    }
+
+    // 🔴 A DROP is only appliable when the companion already exists, which an ENABLE means it does
+    // not.
+    //
+    // Both main-table snapshots are built at the requested state, so a field that is translatable
+    // under it never appears on either — including one this edit REMOVES, whose column is still
+    // physically on the main table because the group is not localized yet. The enable planner then
+    // derives its companion from the NEW fields alone, so nothing drops that column: the registry
+    // stops describing the field while its data sits on a column nothing will ever read again.
+    //
+    // The pair rule above cannot catch it, because a removal on its own has no matching add.
+    const isEnabling = args.existing.localized !== true && args.localized;
+    if (isEnabling && companionDropped.length > 0) {
+      for (const name of companionDropped) changed.add(name);
+    }
+
+    if (changed.size === 0) return;
+
+    const names = [...changed];
+    throw NextlyError.validation({
+      errors: names.map(name => ({
+        path: `fields.${name}`,
+        code: "requires_schema_change",
+        message: `Changing "${name}" alters the field group's table. Use the schema preview and apply flow, which reviews the change and resolves renames, rather than updating the field group directly.`,
+      })),
+      logContext: {
+        reason: "field update requires ddl this path does not emit",
+        slug: args.existing.slug,
+        fields: names,
+      },
+    });
   }
 
   /**

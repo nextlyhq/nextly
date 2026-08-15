@@ -24,6 +24,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import {
+  getMigrationLockDdl,
   MIGRATION_LOCK_TABLE,
   withMigrationSession,
   type MigrationSession,
@@ -152,6 +153,103 @@ describe.each(DIALECTS)(
           session("failing", () => Promise.reject(new Error("boom")))
         ).rejects.toThrow();
         expect(await ownerNow()).toBeNull();
+      });
+
+      /**
+       * Put the row in a chosen state, with the expiry computed by the SERVER.
+       *
+       * 🔴 Spelled independently of `expiryExpression` on purpose. A fixture built from the same
+       * expression the code under test uses would agree with a broken one — the two would be wrong
+       * together and the comparison would still look correct. The offset is applied by the database
+       * so no client clock enters the fixture either.
+       *
+       * 🔴 Independently SPELLED, on the same SCALE. MySQL's `NOW()` is session-local and
+       * `expires_at` is a zone-less `DATETIME`, so a fixture written with `NOW()` and a lease
+       * written with `UTC_TIMESTAMP()` differ by the session's offset — and every TTL comparison
+       * here inverts on any connection that is not UTC. Independence has to be in the expression,
+       * never in the frame of reference.
+       */
+      async function seedClaim(
+        owner: string | null,
+        expiresInSeconds: number | null
+      ): Promise<void> {
+        for (const statement of getMigrationLockDdl(dialect)) {
+          await adapter.executeQuery(statement);
+        }
+        await adapter.executeQuery(
+          `INSERT INTO ${MIGRATION_LOCK_TABLE} (id, owner) SELECT 1, NULL WHERE NOT EXISTS (SELECT 1 FROM ${MIGRATION_LOCK_TABLE} WHERE id = 1)`
+        );
+        const expiry =
+          expiresInSeconds === null
+            ? "NULL"
+            : dialect === "sqlite"
+              ? `unixepoch() + (${expiresInSeconds})`
+              : dialect === "mysql"
+                ? `DATE_ADD(UTC_TIMESTAMP(), INTERVAL ${expiresInSeconds} SECOND)`
+                : `now() + (${expiresInSeconds} * interval '1 second')`;
+        await adapter.executeQuery(
+          `UPDATE ${MIGRATION_LOCK_TABLE} SET owner = ${owner === null ? "NULL" : `'${owner}'`}, expires_at = ${expiry} WHERE id = 1`
+        );
+      }
+
+      // 🔴 The two tests below are each other's control, and BOTH are needed on EVERY dialect. The
+      // column is a different type on each — `timestamptz`, `datetime`, and an integer of unix
+      // seconds — so `expires_at > now()` is a different comparison every time. A predicate that
+      // always answered "expired" would let two runs migrate at once and would pass the takeover
+      // test alone; one that always answered "live" would wedge every database forever and would
+      // pass the refusal test alone. Only the pair separates a working comparison from either.
+      it("takes over a claim whose expiry has passed", async () => {
+        await seedClaim("dead-run", -1);
+
+        let ownerDuringRun: string | null = null;
+        await session("takeover", async () => {
+          ownerDuringRun = await ownerNow();
+        });
+
+        expect(ownerDuringRun).toContain("takeover");
+        expect(await ownerNow()).toBeNull();
+      });
+
+      it("refuses a claim whose expiry has not passed", async () => {
+        await seedClaim("live-run", 600);
+
+        const error = await session("contender", () =>
+          Promise.resolve("should not run")
+        ).catch((caught: unknown) => caught);
+
+        expect(NextlyError.is(error)).toBe(true);
+        // Untouched: the refusal must not disturb a claim that is still live.
+        expect(await ownerNow()).toBe("live-run");
+      });
+
+      // The row a release before this column existed left behind. Its writer may still be running,
+      // so age alone never makes it claimable — an operator clears it.
+      it("refuses a claim whose expiry is null", async () => {
+        await seedClaim("legacy-run", null);
+
+        const error = await session("contender", () =>
+          Promise.resolve("should not run")
+        ).catch((caught: unknown) => caught);
+
+        expect(NextlyError.is(error)).toBe(true);
+        expect(await ownerNow()).toBe("legacy-run");
+      });
+
+      // The claim has to WRITE an expiry for any of the above to mean anything: a claim that left
+      // the column NULL would read as a lock that never lapses, and every takeover test would then
+      // be exercising a state the code cannot actually produce.
+      it("writes an expiry that the server reads as still ahead", async () => {
+        await seedClaim(null, null);
+
+        let liveDuringRun: unknown;
+        await session("expiring", async () => {
+          const rows = await adapter.executeQuery<{ live: unknown }>(
+            `SELECT CASE WHEN expires_at > ${dialect === "sqlite" ? "unixepoch()" : dialect === "mysql" ? "UTC_TIMESTAMP()" : "now()"} THEN 1 ELSE 0 END AS live FROM ${MIGRATION_LOCK_TABLE} WHERE id = 1`
+          );
+          liveDuringRun = rows[0]?.live;
+        });
+
+        expect(Number(liveDuringRun)).toBe(1);
       });
     });
   }

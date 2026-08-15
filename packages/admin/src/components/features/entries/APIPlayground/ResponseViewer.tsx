@@ -117,11 +117,11 @@ export function ResponseViewer({
   return (
     <Tabs defaultValue="body" className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-muted/30 px-6 py-1.5">
-        <TabsList className="h-8 bg-transparent p-0">
-          <TabsTrigger value="body" className="text-xs">
+        <TabsList variant="ghost">
+          <TabsTrigger value="body" size="sm">
             Body
           </TabsTrigger>
-          <TabsTrigger value="headers" className="text-xs">
+          <TabsTrigger value="headers" size="sm">
             Headers
             {headerEntries.length > 0 && (
               <span className="ml-1.5 font-mono text-xs text-muted-foreground">
@@ -129,7 +129,7 @@ export function ResponseViewer({
               </span>
             )}
           </TabsTrigger>
-          <TabsTrigger value="code" className="text-xs">
+          <TabsTrigger value="code" size="sm">
             Code
           </TabsTrigger>
         </TabsList>

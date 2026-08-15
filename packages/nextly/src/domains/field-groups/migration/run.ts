@@ -400,9 +400,11 @@ export async function runFieldGroupMigration(
   /**
    * What the last attempt saw, so the next one can tell whether anything moved.
    *
-   * 🔴 A held lock is NOT evidence of a live writer. This lock has no TTL and no auto-steal by
-   * design — a process that dies holding it leaves it held until an operator clears it — so
-   * `{ kind: "held" }` proves that ownership was once RECORDED, not that anyone is moving now.
+   * 🔴 A held lock is NOT evidence of a live writer. A claim outlives the process that made it: it
+   * is only reported held until its expiry passes, and a run that dies stops renewing rather than
+   * releasing, so for that whole window a dead holder is indistinguishable from a working one by
+   * the row alone. `{ kind: "held" }` proves that ownership was once RECORDED, not that anyone is
+   * moving now — and every attempt of a retry cycle falls well inside that window.
    * Judging contention on that alone lets a stale row plus a genuinely permanent mismatch (a
    * restored marker whose rename was never applied) spend three attempts and then be reported as
    * contention, which is precisely the storage-conflict-as-traffic answer this path exists to
@@ -619,9 +621,11 @@ export async function runFieldGroupMigration(
               // 🔴 A preview REPORTS this, a run that writes refuses it — but reporting it requires
               // the same evidence every other contended answer does: that something MOVED.
               //
-              // Answering on the first look was wrong. This lock has no TTL and survives process
-              // death, so a CRASHED `down` run leaves both its migrating marker and its held row
-              // behind. Read once, that is indistinguishable from a live one, and a preview would
+              // Answering on the first look was wrong. A claim survives the process that made it
+              // until its expiry passes, so a CRASHED `down` run leaves both its migrating marker
+              // and a still-live row behind — and the marker outlives the claim, so the stranded
+              // state remains long after the row frees. Read once, that is indistinguishable from
+              // a live run, and a preview would
               // describe a stranded migration awaiting recovery as ordinary traffic — the operator
               // most needing to act being told to wait.
               //

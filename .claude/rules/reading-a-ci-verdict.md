@@ -38,12 +38,23 @@ response, including one whose rows are all `queued`, and including an empty
 clean this file is about. Read it, then assert `success` on each job the scope
 decision requires, and exit nonzero otherwise.
 
-**Query the PR HEAD sha, not the merge sha.** They are different commits and
-only one carries the checks: measured on this PR, `commits/<head>/check-runs`
-returned 31 rows and `commits/<merge_commit_sha>/check-runs` returned 0. For an
-open PR that `merge_commit_sha` is GitHub's own test-merge, which nothing runs
-against. (Inside a workflow the relationship inverts — `github.sha` IS the merge
-commit — so do not carry a variable named `SHA` between the two contexts.)
+**Query the PR HEAD sha, not the merge sha.** Measured on this PR,
+`commits/<head>/check-runs` returned 31 rows and
+`commits/<merge_commit_sha>/check-runs` returned 0.
+
+**That is about where the check RECORDS are attached, not about what CI
+executed.** The two are easy to run together and they are different: those
+workflows check out `refs/pull/N/merge`, so what was BUILT AND TESTED is your
+branch merged with the base, while the resulting check-runs are attached to the
+PR HEAD. So the head is where to look them up, and "the head tree passed" is
+not what a green check means — it means the merge of head and base passed.
+(Inside a workflow the relationship inverts, but only for `pull_request`:
+there `github.sha` IS the synthetic merge commit. On `pull_request_target` it is
+the tip of the BASE branch — `main` for an ordinary PR, and the PARENT FEATURE
+BRANCH for a stacked one, so `labeler.yml` and `pr-title.yml` see whichever the
+PR targets rather than the PR's own revision. On `push` it is the pushed commit.
+Do not carry a variable named `SHA` between contexts, and qualify the claim by
+event AND by base before relying on it.)
 
 **`set -o pipefail` is load-bearing, not tidiness.** Without it the exit status
 is `sort`'s, so an authentication failure, a rate limit or a transient 5xx from
@@ -165,7 +176,15 @@ because three different things produce it and only one is a defect:
   trigger still being dropped.
 
 Settle it by reading that workflow's `on:` block against this commit's diff, not
-by looking harder at the run list. All three return the same nothing.
+by looking harder at the run list. All four return the same nothing.
+
+**Reading the diff LOCALLY is not the same comparison GitHub made**, and on a
+large change it disagrees. Path filters are evaluated against the first 300
+files of the generated diff, so a matching path beyond that boundary does not
+trigger the workflow — while a local `git diff` sees it and says the run should
+exist. That reads as a dropped trigger and invites a push that changes nothing.
+Above 300 files, treat the discriminator as INDETERMINATE and say so, rather
+than reporting a defect the evidence cannot support.
 
 **Measured on this very PR**, which is the cheapest available demonstration:
 `integration.yml` declares `paths-ignore: ["docs/**", "**/*.md"]`, the diff is
@@ -228,8 +247,57 @@ workflows declares `types:`, so none subscribes to `edited`. Retargeting makes
 the branch filter eligible and emits an event nothing is listening for, leaving
 a PR that now LOOKS main-targeting with still no substantive run against it.
 
-Follow it with a push or a rebase, which emits `synchronize`, or close and
-reopen. Then gate on the run, never on the base having been changed.
+Follow it with an operation that DEMONSTRABLY moves the head, then confirm a
+new run exists. A plain `git rebase main` is not that: when the branch is
+already a descendant of `main` it reports the branch up to date and changes
+nothing, so the push that follows emits no `synchronize` and the four
+main-filtered workflows stay absent — having done exactly what the instruction
+said. **Prefer an EMPTY COMMIT**, then PUSH it:
+
+```bash
+git commit --allow-empty -m "chore: retrigger ci after retarget"
+git push
+```
+
+The commit moves the local head and nothing else; `synchronize` is emitted by
+the PUSH, and until then GitHub has seen no event and started no workflow. The
+same applies to a rebase — a local history rewrite that is never pushed leaves
+the pull request exactly as it was, while looking done from the terminal it was
+run in. An empty commit is preferred because it pushes fast-forward.
+
+`git rebase --force-rebase` also replays, and it is the worse choice HERE
+despite doing the job: the rewritten commits need a non-fast-forward push, so
+GitHub records `head_ref_force_pushed`, and `verifying-merged-work.md` treats
+any such event as disqualifying — its tail check reports NOT CHECKABLE from
+then on, permanently, because a force-push can erase a tail and the surviving
+ref cannot prove otherwise. Taking a remedy from this file that disables the
+companion procedure is a bad trade for a retarget. Close-and-reopen also starts
+CI, with the caveat below.
+
+The check that follows depends on which you picked, and conflating them rejects
+a remedy that worked:
+
+- **rebase, push, empty commit** — the head SHA must DIFFER afterwards, and
+  `gh run list --commit <new head> --workflow ci.yml` must return a run.
+- **close and reopen** — the head cannot differ, by construction. Require a run
+  whose identity is NEW instead: capture the run ID before reopening and require
+  a different one after, or compare `createdAt` against the reopen.
+
+Either way something must be confirmed to have started. A remedy that is
+believed to have worked is how a stacked PR sits for a day looking retargeted.
+
+**Close-and-reopen carries a cost the other remedies do not**, which is the
+caveat promised above: it leaves the head SHA unchanged, so the diff expands to
+include the parent stack while every existing review still points at that same
+SHA — and a coverage check keyed on the head reuses reviews taken when those
+commits were not in scope. Moving the head is what invalidates them. Gate on the
+run, never on the base having been changed.
+
+**Retargeting changes what a review MEANS, not just what CI runs.** A review is
+evidence about a diff, and the diff is `base..head`; moving the base moves the
+diff underneath a head that has not moved. Where a stacked PR is retargeted
+without a rebase, treat every review predating the retarget as stale regardless
+of the SHA it names.
 
 ## A failed job takes its dependents with it, silently
 
@@ -369,6 +437,19 @@ The properties a verdict gate has to hold are below. **They are implemented in
 `scripts/ci-verdict.mjs` with a `.test.mjs` neighbour**, run by
 `pnpm test:scripts` in CI, rather than written out here as shell.
 
+**Moving the decisions into testable code does not move the RISK there with
+them, and that is worth knowing before treating the split as the end of the
+work.** The pure functions became coverable and were covered; the defect that
+survived longest afterwards was in the I/O seam the split deliberately left
+outside them — the gate read its head from the pull request object rather than
+from the ref, so it judged a revision that was no longer current. Measured on
+this document's own pull request: same PR, same minute, `CLEAN` from the stale
+source and `MISSING REVIEW AT HEAD` from the ref.
+
+A seam with no tests is where the next defect lives, and separating concerns
+tells you exactly where that seam is. Test what you can, then go and look at
+what is left.
+
 That placement is the finding, not a filing preference. This section originally
 carried the gate as a runnable snippet, and it was wrong in eight successive
 ways that each read as working code — `gh api --jq --arg`, which that endpoint
@@ -398,10 +479,27 @@ The properties, each earned by a version that got it wrong:
   at a single commit. "The latest review" is a whole round for one and a single
   finding for the other, so no per-object rule is right for both.
 - **Ask the two questions directly instead.** COVERAGE: did each required
-  reviewer submit any review at this head? OUTSTANDING WORK: how many review
+  reviewer submit a review at this head that still stands? A `DISMISSED` review
+  is one GitHub explicitly invalidated and it opens no thread, so counting it
+  clears the gate on a review that no longer says anything. Grant coverage from
+  a NAMED set of states rather than withholding it from one, so a state this
+  code has not met refuses instead of counting. OUTSTANDING WORK: how many review
   threads are UNRESOLVED? GitHub already tracks the second, it is bot-agnostic,
   and it survives several reviews at one SHA. Counting findings was always a
   proxy for it.
+- **Resolve the head from the REF, not from the pull request object.**
+  `gh pr view --json headRefOid` lags a push — measured a full commit behind
+  while `git ls-remote origin refs/heads/<branch>` was already correct. A gate
+  reading it certifies the revision BEFORE the one you are about to merge, and
+  a recheck that also reads `headRefOid` compares one stale value to another
+  and never fires. Resolve `headRefName` from `gh`, then the SHA from
+  `ls-remote`, after a fetch — and for a CROSS-REPOSITORY pull request, against
+  the fork rather than `origin`. The base repository does not own a
+  contributor's head ref, so `ls-remote origin` there returns nothing, or worse
+  returns an unrelated branch of the same name and the gate inspects a revision
+  belonging to somebody else. Resolve `headRepositoryOwner` and
+  `headRepository`, as `verifying-merged-work.md` already does for its tail
+  check.
 - **Fail closed, and REFUSE rather than report.** Every query failing means the
   answer is unavailable, which is not a clean one; and a verdict that is printed
   but not connected to an exit status lets the caller walk on.
@@ -413,6 +511,34 @@ the first. `verifying-merged-work.md` carries the merge gate itself —
 `gh pr merge --match-head-commit "$VERIFIED"`, which makes the check and the
 merge one atomic operation — along with the stranded-tail screen and everything
 about verifying by content.
+
+**Its "was the job green?" step reads the MERGE commit's check-runs and this
+file reads the PR head. Both are right, and the difference is the phase rather
+than a disagreement.** Before merging there is no merge commit — the
+`merge_commit_sha` an open PR reports is GitHub's own test-merge, which nothing
+runs against and which returned zero rows when measured. After merging, the
+squash lands on `main` and `push: branches: [main]` runs against it, so the
+merge commit is the one carrying the verdict. Read the head to decide whether to
+merge; read the merge commit to decide whether `main` is healthy.
+
+**`--match-head-commit` is not a boundary around the VERDICT, and this file
+should not let it read as one.** The flag makes the server refuse when the head
+has moved, which closes the push race. It says nothing about review or check
+state: a bot posting a finding between the last verdict query and the merge
+leaves the head untouched, so the merge succeeds with an unresolved thread
+seconds old. The window is narrow and it is real, and every gate described here
+sits inside it.
+
+The mechanism has to invalidate on the event that actually occurs, and the
+obvious candidate does not. **Required approval with stale approvals dismissed
+on push does NOT close this**: a late bot finding arrives as a `COMMENTED`
+review, which is neither a new commit nor an approval, so it dismisses nothing
+and the merge proceeds carrying it. Two settings do cover it — requiring
+CONVERSATION RESOLUTION before merging, which a new unresolved thread
+immediately violates, or a required check that the verdict process itself
+updates. Until one of those is configured, the honest description of everything
+above is a LOOK taken shortly before merging, not a boundary. Say which one you
+have.
 
 Note that its procedure and this one fail in opposite directions, which is why
 neither substitutes for the other. Content-verification confirmed #766 had
