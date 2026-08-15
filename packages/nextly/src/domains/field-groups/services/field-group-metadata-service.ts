@@ -38,6 +38,7 @@ import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type {
   DynamicFieldGroupInsert,
   DynamicFieldGroupRecord,
+  FieldGroupMigrationStatus as SchemaFieldGroupMigrationStatus,
 } from "../../../schemas/dynamic-field-groups/types";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { Logger } from "../../../shared/types";
@@ -57,15 +58,23 @@ import type { FieldGroupRegistryService } from "./field-group-registry-service";
  * same modules, and a static import from a registration module quietly undoes that work.
  */
 
-/** How far a schema change got. The registry stores this and the admin reads it back. */
-export type FieldGroupMigrationStatus =
-  | "pending"
-  | "applied"
-  | "failed"
-  // The tables were changed and the row recording it was not written. Distinct from `failed`
-  // because the two call for opposite actions: `failed` means the change did not happen and
-  // retrying is the repair, `diverged` means half of it did and retrying compounds it.
-  | "diverged";
+/**
+ * How far a schema change got: the subset of migration statuses THIS SERVICE writes.
+ *
+ * 🔴 Narrower than the schema's set, and DERIVED from it rather than restated. `Extract` keeps the
+ * relationship a compiler can check: a member renamed or removed from the canonical union stops
+ * compiling here, where a hand-written copy would go on accepting a value the column no longer has.
+ * That is the rule this file already follows elsewhere — a narrower view is derived from the richer
+ * one, never computed alongside it.
+ *
+ * `diverged` is in the set because the tables were changed and the row recording it was not. It is
+ * distinct from `failed` because the two call for OPPOSITE actions: `failed` means the change did
+ * not happen and retrying is the repair; `diverged` means half of it did and retrying compounds it.
+ */
+export type FieldGroupMigrationStatus = Extract<
+  SchemaFieldGroupMigrationStatus,
+  "pending" | "applied" | "failed" | "diverged"
+>;
 
 /**
  * The registry row to create, minus the one field this service owns.

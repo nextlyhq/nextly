@@ -69,13 +69,20 @@ export type FieldGroupSource = "code" | "ui";
  * }
  * ```
  */
+/**
+ * 🔴 DERIVED from the runtime list below, which is the single declaration of this set.
+ *
+ * The two used to be written out separately, and that is not a stylistic point: the list was
+ * annotated `readonly FieldGroupMigrationStatus[]`, and an array missing an element still satisfies
+ * that annotation — so a status added to the type and forgotten in the list compiled cleanly and
+ * silently stopped being accepted anywhere the list is used to validate.
+ *
+ * Deriving the type from the value makes the value the source. Add a status in one place and every
+ * union, every validator and every exhaustive switch sees it at once; there is no second place that
+ * can be forgotten, because there is no second place.
+ */
 export type FieldGroupMigrationStatus =
-  | "synced"
-  | "pending"
-  | "generated"
-  | "applied"
-  | "failed"
-  | "diverged";
+  (typeof FIELD_GROUP_MIGRATION_STATUSES)[number];
 
 // ============================================================
 // Dynamic Component Types
@@ -300,5 +307,11 @@ export const FIELD_GROUP_SOURCE_TYPES: readonly FieldGroupSource[] = [
  * }
  * ```
  */
-export const FIELD_GROUP_MIGRATION_STATUSES: readonly FieldGroupMigrationStatus[] =
-  ["synced", "pending", "generated", "applied", "failed", "diverged"] as const;
+export const FIELD_GROUP_MIGRATION_STATUSES = [
+  "synced",
+  "pending",
+  "generated",
+  "applied",
+  "failed",
+  "diverged",
+] as const;

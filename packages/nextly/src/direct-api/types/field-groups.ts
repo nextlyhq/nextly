@@ -7,6 +7,8 @@
  * @packageDocumentation
  */
 
+import type { FieldGroupMigrationStatus } from "../../schemas/dynamic-field-groups";
+
 import type { DirectAPIConfig, GeneratedTypes } from "./shared";
 
 /**
@@ -118,13 +120,7 @@ export interface FieldGroupDefinition {
   schemaVersion: number;
 
   /** Migration status */
-  migrationStatus:
-    | "synced"
-    | "pending"
-    | "generated"
-    | "applied"
-    | "failed"
-    | "diverged";
+  migrationStatus: FieldGroupMigrationStatus;
 
   /** Last applied migration ID */
   lastMigrationId?: string;
@@ -159,14 +155,14 @@ export interface FindFieldGroupsArgs extends DirectAPIConfig {
   /** Filter by source type */
   source?: "code" | "ui";
 
-  /** Filter by migration status */
-  migrationStatus?:
-    | "synced"
-    | "pending"
-    | "generated"
-    | "applied"
-    | "failed"
-    | "diverged";
+  /**
+   * Filter by migration status.
+   *
+   * The SAME union the definition above carries, so a status this API can return is always a status
+   * it can be asked for. Spelled out separately, the two drifted silently: a new status could come
+   * back from `find()` while being impossible to filter on, with nothing to compile against.
+   */
+  migrationStatus?: FieldGroupMigrationStatus;
 
   /** Include only locked or unlocked field groups */
   locked?: boolean;
