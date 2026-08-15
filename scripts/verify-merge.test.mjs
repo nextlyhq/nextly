@@ -37,6 +37,7 @@ import {
   repoFromRemoteUrl,
   requiredChecks,
   reviewCoverage,
+  reviewedRevision,
   SUBMITTED_REVIEW_STATES,
   reviewsCoveringTip,
   runCli,
@@ -221,6 +222,122 @@ describe("blockingJobs", () => {
 
   it("returns nothing when every job passes", () => {
     expect(blockingJobs([green("a"), green("b")])).toEqual([]);
+  });
+});
+
+/**
+ * A reviewer that reports a clean pass WITHOUT opening a review record.
+ *
+ * This gate required a record, on the reasoning that only a record states which
+ * tree was read. Measured across four pull requests here, the one carrying
+ * findings produced records and the three CLEAN ones produced none: the pass
+ * existed only as a comment naming the commit. Requiring a record therefore
+ * made a clean verdict permanently invisible.
+ */
+describe("reviewedRevision", () => {
+  const CODEX = "chatgpt-codex-connector[bot]";
+  const cleanComment = (login, sha) => ({
+    user: { login },
+    body: `Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** \`${sha.slice(0, 10)}\`\n`,
+  });
+  const record = (login, commit_id) => ({
+    user: { login },
+    commit_id,
+    state: "COMMENTED",
+  });
+
+  it("reports the tip when only a comment covers it", () => {
+    expect(
+      reviewedRevision({
+        reviews: [],
+        issueComments: [cleanComment(CODEX, FULL_TIP)],
+        tip: FULL_TIP,
+        login: CODEX,
+      })
+    ).toBe(FULL_TIP);
+  });
+
+  it("still prefers the record when one exists", () => {
+    expect(
+      reviewedRevision({
+        reviews: [record(CODEX, FULL_TIP)],
+        issueComments: [],
+        tip: FULL_TIP,
+        login: CODEX,
+      })
+    ).toBe(FULL_TIP);
+  });
+
+  // The comment path goes through the SAME prefix rule, so it cannot clear a
+  // revision a record could not: this reviewer comments every round, and an
+  // older one would otherwise certify whatever was pushed after it.
+  it("does not let a comment about an earlier revision cover the tip", () => {
+    const older = "0000000000000000000000000000000000000000";
+    expect(
+      reviewedRevision({
+        reviews: [],
+        issueComments: [cleanComment(CODEX, older)],
+        tip: FULL_TIP,
+        login: CODEX,
+      })
+    ).toBeUndefined();
+  });
+
+  it("ignores a comment from a lookalike account", () => {
+    expect(
+      reviewedRevision({
+        reviews: [],
+        issueComments: [cleanComment("codex-impersonator", FULL_TIP)],
+        tip: FULL_TIP,
+        login: CODEX,
+      })
+    ).toBeUndefined();
+  });
+
+  it("ignores prose that merely mentions a sha", () => {
+    const prose = {
+      user: { login: CODEX },
+      body: `Looking at ${FULL_TIP} now.`,
+    };
+    expect(
+      reviewedRevision({
+        reviews: [],
+        issueComments: [prose],
+        tip: FULL_TIP,
+        login: CODEX,
+      })
+    ).toBeUndefined();
+  });
+
+  it("reports never-spoke and covered-an-earlier-revision differently", () => {
+    const older = "0000000000000000000000000000000000000000";
+    expect(
+      reviewedRevision({
+        reviews: [],
+        issueComments: [],
+        tip: FULL_TIP,
+        login: CODEX,
+      })
+    ).toBeUndefined();
+    expect(
+      reviewedRevision({
+        reviews: [record(CODEX, older)],
+        issueComments: [],
+        tip: FULL_TIP,
+        login: CODEX,
+      })
+    ).toBe(older);
+  });
+
+  it("survives absent input rather than throwing", () => {
+    expect(
+      reviewedRevision({
+        reviews: undefined,
+        issueComments: undefined,
+        tip: FULL_TIP,
+        login: CODEX,
+      })
+    ).toBeUndefined();
   });
 });
 

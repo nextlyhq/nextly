@@ -203,6 +203,43 @@ export function reviewCoverage(reviewCount) {
 }
 
 /**
+ * The revision a reviewer is known to have read, from either source.
+ *
+ * Pure, and exported, because it is the judgement the merge verdict rests on
+ * and the command around it cannot be handed the awkward cases. The record path
+ * decides wherever a record exists; a comment is consulted only through the
+ * same prefix rule, so it can never clear a revision a record could not.
+ *
+ * Returns the tip when the reviewer covered it, an EARLIER sha when its most
+ * recent verdict was about something else, and `undefined` when it never spoke.
+ * Those are three different answers and the caller distinguishes them.
+ */
+export function reviewedRevision({ reviews, issueComments, tip, login }) {
+  const records = Array.isArray(reviews) ? reviews : [];
+  const comments = Array.isArray(issueComments) ? issueComments : [];
+  const coversTip =
+    reviewsCoveringTip(records, tip, login).length > 0 ||
+    comments.some(
+      comment =>
+        comment?.user?.login === login &&
+        verdictCoversTip(reviewedCommitFrom(comment?.body) ?? "", tip)
+    );
+  if (coversTip) return tip;
+  // Falls back to records ONLY. A comment naming an older revision says which
+  // tree that verdict read, and reporting it here would present a stale opinion
+  // in the same field a current one occupies.
+  return records
+    .filter(
+      r =>
+        SUBMITTED_REVIEW_STATES.includes(r?.state) &&
+        r?.user?.login === login &&
+        r?.commit_id
+    )
+    .map(r => r.commit_id)
+    .pop();
+}
+
+/**
  * The merge gate: every blocker, or an empty list.
  *
  * Returns them all rather than the first, so one round of fixing clears the
@@ -743,6 +780,14 @@ const verdict = await import(
   ).href
 );
 export const SUBMITTED_REVIEW_STATES = verdict.SUBMITTED_REVIEW_STATES;
+/**
+ * The revision a reviewer's comment reports having read.
+ *
+ * Taken from the sibling rather than re-implemented, for the reason its own
+ * export note gives: one comment format parsed in two places stays consistent
+ * only until somebody edits one of them.
+ */
+export const reviewedCommitFrom = verdict.reviewedCommitFrom;
 
 /**
  * Whether the merge took everything the branch had.
@@ -1103,11 +1148,21 @@ export function main(argv) {
     cursor = page.cur;
   }
 
-  // From the review RECORD's own `commit_id`, never from a comment body. An
-  // issue comment is not evidence that a review covered a commit: prose naming
-  // a sha may be progress text rather than a verdict, and a real review whose
-  // sha never appears in its body carries none. Only the record states which
-  // tree was read.
+  // PREFERRED from the review RECORD's own `commit_id`, because only the record
+  // carries a sha the server assigned and nobody can edit afterwards.
+  //
+  // This once read from the record ALONE, on the reasoning that prose naming a
+  // sha may be progress text rather than a verdict. That reasoning still holds
+  // for prose, and it rested on a premise measurement has since refuted: that a
+  // review record exists to be read. It does not always. Across four pull
+  // requests here, the one carrying findings produced review records and the
+  // three CLEAN ones produced none at all — the pass arrived only as a comment
+  // naming the commit it read. Requiring a record therefore made a clean verdict
+  // permanently invisible, which is not caution; it is a gate that cannot open.
+  //
+  // So the record still decides wherever there is one, and a comment is
+  // consulted only when it carries the reviewer's own structured marker naming a
+  // revision. Prose that merely mentions a sha still counts for nothing.
   // `--slurp` returns an array of PAGES and cannot be combined with `--jq`,
   // so the flattening happens here rather than in the query.
   const reviews = ghJson([
@@ -1116,20 +1171,23 @@ export function main(argv) {
     "--slurp",
     `repos/${REPO}/pulls/${pr}/reviews?per_page=100`,
   ]).flat();
+  const issueComments = ghJson([
+    "api",
+    "--paginate",
+    "--slurp",
+    `repos/${REPO}/issues/${pr}/comments?per_page=100`,
+  ]).flat();
   const CODEX = "chatgpt-codex-connector[bot]";
   // Through the same helper the second reviewer uses. Taking the LAST record
   // instead assumes reviews complete in the order they were requested, and an
   // older-head review finishing after a current-head one then hides a verdict
   // that does cover this revision behind one that does not.
-  const submitted = reviews.filter(r =>
-    SUBMITTED_REVIEW_STATES.includes(r?.state)
-  );
-  const reviewedSha = reviewsCoveringTip(reviews, tip, CODEX).length
-    ? tip
-    : submitted
-        .filter(r => r?.user?.login === CODEX && r?.commit_id)
-        .map(r => r.commit_id)
-        .pop();
+  const reviewedSha = reviewedRevision({
+    reviews,
+    issueComments,
+    tip,
+    login: CODEX,
+  });
   // Scoped to THIS revision: a review of an earlier one is not coverage of it.
   const coderabbit = reviewsCoveringTip(
     reviews,
