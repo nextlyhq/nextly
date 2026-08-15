@@ -340,6 +340,45 @@ describe("a diverged field group and the routes that move its storage", () => {
     expect(ownerWhenStatusRead).toMatch(/^apply schema changes to field group/);
   });
 
+  /**
+   * Taking the exclusion is not free: with `issuesDdl` it may CREATE and seed the lock table on a
+   * database that has never had one, and it can refuse outright when a migration holds the row or
+   * the role has no DDL rights. A request that is invalid on its face must not buy any of that —
+   * the operator would be handed a permission or contention error instead of "this payload is
+   * invalid", and a rejected request would have written a table on its way out.
+   */
+  it.each([
+    ["unconfirmed", { fields: [], confirmed: false }, /must be confirmed/],
+    ["missing fields", { confirmed: true }, /fields is required/],
+  ])(
+    "rejects an %s request without taking the lock",
+    async (_name, payload, reason) => {
+      executed.length = 0;
+      adapter = makeAdapter("postgresql");
+      vi.mocked(getAdapterFromDI).mockReturnValue(
+        adapter as unknown as ReturnType<typeof getAdapterFromDI>
+      );
+      const registry = wireRegistry();
+
+      await expect(
+        dispatchComponents(
+          "applyComponentSchemaChanges",
+          { slug: "hero" },
+          payload
+        )
+      ).rejects.toThrow(reason);
+
+      // 🔴 The REASON, not merely that it threw. Entering the exclusion first would still reject
+      // this request on a database with no lock table — with a DDL-permission or contention error
+      // that names nothing about the payload.
+      //
+      // Nothing was issued and nothing was read: no lock DDL, and the component was never fetched.
+      expect(executed).toEqual([]);
+      expect(adapter.migrationLock.ownerNow()).toBeNull();
+      expect(registry.getComponent).not.toHaveBeenCalled();
+    }
+  );
+
   it("still lets an operator READ one, because that is how it gets reconciled", async () => {
     adapter = makeAdapter("postgresql");
     vi.mocked(getAdapterFromDI).mockReturnValue(

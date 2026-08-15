@@ -374,6 +374,44 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
       // is why the service-level exclusion did not reach it. Taking the lock here puts the read,
       // the check, the DDL and the registry write inside one exclusion — the depth the exclusion
       // was always meant to be held at.
+      // 🔴 Everything decidable from the REQUEST ALONE is decided before the lock is taken, because
+      // taking it is not free: with `issuesDdl` the exclusion may CREATE and seed the lock table on
+      // a database that has never had one, and it can refuse outright when a migration holds the
+      // row or the role lacks DDL rights. A malformed request would then be answered with a
+      // permission error, a contention error, or a new table — none of which is "this payload is
+      // invalid", and the last of which is a write performed on the way to rejecting a request.
+      //
+      // The split is what each check READS, not how cheap it is. These three read the body and
+      // nothing else, so no concurrent writer can change their answer and holding the lock buys
+      // them nothing. Every check below the exclusion reads the database, and that is exactly why
+      // it belongs inside.
+      const {
+        fields,
+        confirmed,
+        schemaVersion,
+        resolutions,
+        renameResolutions,
+        eventResolutions,
+        localized: requestLocalized,
+      } = body as {
+        fields: unknown[];
+        confirmed: boolean;
+        schemaVersion?: number;
+        resolutions?: Record<string, FieldResolution>;
+        renameResolutions?: BrowserRenameResolution[];
+        eventResolutions?: Resolution[];
+        // i18n: the builder sends the current toggle so a save that flips i18n AND changes fields
+        // provisions the companion in the same apply. Undefined = leave the persisted value.
+        localized?: boolean;
+      };
+
+      if (!confirmed) throw new Error("Schema changes must be confirmed");
+      if (!fields) throw new Error("fields is required in request body");
+      // Same rules as the ui-schema.json mirror (see api/fields-payload):
+      // an invalid field must fail HERE, not only at the file write, or
+      // the DB and the committed manifest diverge silently.
+      assertValidFieldsPayload(fields);
+
       return withSchemaChangeExcluded(
         {
           adapter: getAdapterFromDI(),
@@ -405,33 +443,6 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
           // to reconcile it. Refusing them would make the state harder to escape rather than safer,
           // which is the same reason metadata-only edits stay allowed.
           assertNotDiverged(slug, component);
-
-          const {
-            fields,
-            confirmed,
-            schemaVersion,
-            resolutions,
-            renameResolutions,
-            eventResolutions,
-            localized: requestLocalized,
-          } = body as {
-            fields: unknown[];
-            confirmed: boolean;
-            schemaVersion?: number;
-            resolutions?: Record<string, FieldResolution>;
-            renameResolutions?: BrowserRenameResolution[];
-            eventResolutions?: Resolution[];
-            // i18n: the builder sends the current toggle so a save that flips i18n AND changes fields
-            // provisions the companion in the same apply. Undefined = leave the persisted value.
-            localized?: boolean;
-          };
-
-          if (!confirmed) throw new Error("Schema changes must be confirmed");
-          if (!fields) throw new Error("fields is required in request body");
-          // Same rules as the ui-schema.json mirror (see api/fields-payload):
-          // an invalid field must fail HERE, not only at the file write, or
-          // the DB and the committed manifest diverge silently.
-          assertValidFieldsPayload(fields);
 
           // i18n: prefer the request's localized flag over the persisted one (stale on a
           // simultaneous toggle+field-change save); fall back to the registry value.
