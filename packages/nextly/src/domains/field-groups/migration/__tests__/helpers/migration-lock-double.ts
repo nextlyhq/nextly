@@ -22,26 +22,193 @@ import { PgDialect } from "drizzle-orm/pg-core";
 import { NextlyError } from "../../../../../errors/nextly-error";
 import { MIGRATION_LOCK_TABLE } from "../../session";
 
-/** The single row the lock is: whether it has been seeded at all, and who holds it. */
+/**
+ * The database's clock, in seconds, under the test's control.
+ *
+ * 🔴 A model clock rather than the real one, and that is the whole reason this can test expiry at
+ * all. The session asks the DATABASE for the time in every statement it issues, so the model has to
+ * own a clock for the same reason the database does — and a test that had to wait two minutes for a
+ * claim to lapse would simply never be written. Advancing it is the only way time passes here, so
+ * every liveness outcome in a suite is one the test asked for rather than one the machine happened
+ * to produce.
+ */
+export interface LockClock {
+  now: () => number;
+  /** Move the database's clock forward, so live claims can genuinely lapse. */
+  advance: (seconds: number) => void;
+}
+
+/** Starts at a fixed instant: a model whose results depend on when it ran is not a model. */
+export function createLockClock(startSeconds = 1_000_000): LockClock {
+  let current = startSeconds;
+  return {
+    now: () => current,
+    advance: (seconds: number) => {
+      current += seconds;
+    },
+  };
+}
+
+/** The single row the lock is: whether it has been seeded at all, who holds it, and until when. */
 export interface LockRow {
   seeded: boolean;
   owner: string | null;
+  /**
+   * When this claim lapses, on {@link LockRow.clock}'s scale, or `null` for a claim that never does.
+   *
+   * `null` is the row a release before this column existed left behind, and the session treats it as
+   * LIVE. Modelled rather than normalised away, because "an old row blocks forever" is the
+   * behaviour, and a double that quietly expired it would certify a takeover the real lock refuses.
+   */
+  expiresAt: number | null;
+  readonly clock: LockClock;
+}
+
+export interface LockRowOptions {
+  /** Shared with the suite so a test can advance it; its own by default. */
+  clock?: LockClock;
+  /** The seeded claim's expiry. Absent means `null`, which the session reads as never expiring. */
+  expiresAt?: number | null;
 }
 
 /**
  * `heldBy` absent means the row has never been seeded, which is what a database that has never run
  * a migration has. Passing `null` seeds it free, and a string seeds it held by someone else.
  */
-export function createLockRow(heldBy?: string | null): LockRow {
-  return { seeded: heldBy !== undefined, owner: heldBy ?? null };
+export function createLockRow(
+  heldBy?: string | null,
+  options: LockRowOptions = {}
+): LockRow {
+  return {
+    seeded: heldBy !== undefined,
+    owner: heldBy ?? null,
+    expiresAt: options.expiresAt ?? null,
+    clock: options.clock ?? createLockClock(),
+  };
 }
 
-const SELECT_OWNER =
-  /^SELECT "\w+" FROM "nextly_field_group_lock" WHERE "id" = \$1$/;
-const CLAIM =
-  /^UPDATE "nextly_field_group_lock" SET "owner" = \$1 WHERE "id" = \$2$/;
-const RELEASE =
-  /^UPDATE "nextly_field_group_lock" SET "owner" = NULL WHERE "id" = \$1 AND "owner" = \$2$/;
+/** Whether the claim in the row would still exclude a contender, on the model's clock. */
+export function isClaimLive(lock: LockRow): boolean {
+  return (
+    lock.owner !== null &&
+    (lock.expiresAt === null || lock.expiresAt > lock.clock.now())
+  );
+}
+
+/**
+ * Whether the claim would still be there when its next renewal falls due.
+ *
+ * The stricter of the two questions the real statement answers: a lease can be live at the instant
+ * it is read and gone before anything renews it, so a claimant needs this one rather than
+ * {@link isClaimLive}. The margin is READ FROM THE STATEMENT rather than restated here — a copy
+ * would keep agreeing with the session's constant right up until someone retuned it.
+ */
+export function isClaimUsable(lock: LockRow, marginSeconds: number): boolean {
+  return (
+    lock.owner !== null &&
+    (lock.expiresAt === null ||
+      lock.expiresAt > lock.clock.now() + marginSeconds)
+  );
+}
+
+// Built from the constant rather than spelled out, so a rename of the table moves these with it.
+const TABLE = MIGRATION_LOCK_TABLE;
+
+/** Each dialect's word for "now", as the session compiles it. */
+const NOW = String.raw`(?:clock_timestamp\(\)|UTC_TIMESTAMP\(\)|unixepoch\(\))`;
+
+/**
+ * Each dialect's expiry expression, capturing the placeholder that carries the TTL.
+ *
+ * The TTL is read from the BOUND PARAMETER rather than imported from the session, so the model
+ * applies the number the statement actually carried. Importing the constant would agree with a
+ * statement that had stopped binding it at all.
+ */
+const EXPIRY = String.raw`(?:clock_timestamp\(\) \+ make_interval\(secs => \$(?<ttlPg>\d+)\)|DATE_ADD\(UTC_TIMESTAMP\(\), INTERVAL \$(?<ttlMysql>\d+) SECOND\)|unixepoch\(\) \+ \$(?<ttlSqlite>\d+))`;
+
+const LOCK_STATE = new RegExp(
+  String.raw`^SELECT "owner", CASE WHEN "owner" IS NOT NULL AND \("expires_at" IS NULL OR "expires_at" > ${NOW}\) THEN 1 ELSE 0 END AS "live", CASE WHEN "owner" IS NOT NULL AND \("expires_at" IS NULL OR "expires_at" > ${EXPIRY}\) THEN 1 ELSE 0 END AS "usable" FROM "${TABLE}" WHERE "id" = \$\d+$`
+);
+const ROW_EXISTS = new RegExp(
+  String.raw`^SELECT "id" FROM "${TABLE}" WHERE "id" = \$\d+$`
+);
+const CLAIM = new RegExp(
+  String.raw`^UPDATE "${TABLE}" SET "owner" = \$(?<claim>\d+), "expires_at" = ${EXPIRY} WHERE "id" = \$\d+$`
+);
+const RENEW = new RegExp(
+  String.raw`^UPDATE "${TABLE}" SET "expires_at" = ${EXPIRY} WHERE "id" = \$\d+ AND "owner" = \$(?<owner>\d+)$`
+);
+const RELEASE = new RegExp(
+  String.raw`^UPDATE "${TABLE}" SET "owner" = NULL, "expires_at" = NULL WHERE "id" = \$\d+ AND "owner" = \$(?<owner>\d+)$`
+);
+
+type Groups = Record<string, string | undefined> | undefined;
+
+/** The statements this module issues, named. */
+export type LockStatementKind =
+  | "exists"
+  | "state"
+  | "claim"
+  | "renew"
+  | "release";
+
+/**
+ * What a statement IS, separately from what it DOES.
+ *
+ * One matcher for both questions. A suite that needs to observe a particular statement — count the
+ * reads, fail only the renewal — asks this rather than carrying a regex of its own, so there is
+ * exactly one place that can be wrong about which statement is which.
+ */
+function matchLockStatement(
+  flat: string
+): { kind: LockStatementKind; groups: Groups } | undefined {
+  for (const [kind, pattern] of [
+    ["exists", ROW_EXISTS],
+    ["state", LOCK_STATE],
+    ["claim", CLAIM],
+    ["renew", RENEW],
+    ["release", RELEASE],
+  ] as const) {
+    const match = pattern.exec(flat);
+    if (match) return { kind, groups: match.groups };
+  }
+  return undefined;
+}
+
+/** Compile a statement and say which of the lock's statements it is, if any. */
+export function classifyLockStatement(
+  statement: SQL
+): LockStatementKind | undefined {
+  const { sql: text } = new PgDialect().sqlToQuery(statement);
+  return matchLockStatement(text.replace(/\s+/g, " ").trim())?.kind;
+}
+
+/** The value a captured `$n` placeholder was bound to. */
+function bound(
+  groups: Groups,
+  params: readonly unknown[],
+  ...names: string[]
+): unknown {
+  for (const name of names) {
+    const placeholder = groups?.[name];
+    if (placeholder !== undefined) return params[Number(placeholder) - 1];
+  }
+  return undefined;
+}
+
+/** The TTL the statement bound, refusing anything that is not a number of seconds. */
+function boundTtl(groups: Groups, params: readonly unknown[]): number {
+  const ttl = bound(groups, params, "ttlPg", "ttlMysql", "ttlSqlite");
+  if (typeof ttl !== "number") {
+    throw NextlyError.internal({
+      logContext: {
+        reason: "migration lock expiry did not bind a numeric ttl",
+        bound: String(ttl),
+      },
+    });
+  }
+  return ttl;
+}
 
 /**
  * Apply one statement to the lock row and answer as the database would.
@@ -57,16 +224,47 @@ export function interpretLockStatement(
   const { sql: text, params } = new PgDialect().sqlToQuery(statement);
   const flat = text.replace(/\s+/g, " ").trim();
 
-  if (SELECT_OWNER.test(flat)) {
-    return lock.seeded ? [{ id: 1, owner: lock.owner }] : [];
+  const matched = matchLockStatement(flat);
+  const groups = matched?.groups;
+
+  if (matched?.kind === "exists") {
+    return lock.seeded ? [{ id: 1 }] : [];
   }
-  if (CLAIM.test(flat)) {
-    // An occupied row refuses a new claim, exactly as the real one does.
-    if (lock.owner === null) lock.owner = params[0] as string | null;
+  if (matched?.kind === "state") {
+    // Liveness is answered here because the real query answers it in the database, and the owner is
+    // reported whether or not the claim has lapsed — the row still holds the name of whoever wrote
+    // it last, and it is the flag rather than the absence of a name that says the claim is dead.
+    return lock.seeded
+      ? [
+          {
+            owner: lock.owner,
+            live: isClaimLive(lock) ? 1 : 0,
+            usable: isClaimUsable(lock, boundTtl(groups, params)) ? 1 : 0,
+          },
+        ]
+      : [];
+  }
+  if (matched?.kind === "claim") {
+    // 🔴 Unconditional, because the real statement is: `acquire` decides under a row lock and then
+    // writes without naming an owner, so a takeover of a lapsed claim overwrites an occupied row.
+    // A model that refused an occupied row would agree with the real one on the day it was written
+    // and would then quietly certify that no takeover is possible.
+    if (!lock.seeded) return [];
+    lock.owner = bound(groups, params, "claim") as string | null;
+    lock.expiresAt = lock.clock.now() + boundTtl(groups, params);
     return [];
   }
-  if (RELEASE.test(flat)) {
-    if (lock.owner === params[1]) lock.owner = null;
+  if (matched?.kind === "renew") {
+    if (lock.seeded && lock.owner === bound(groups, params, "owner")) {
+      lock.expiresAt = lock.clock.now() + boundTtl(groups, params);
+    }
+    return [];
+  }
+  if (matched?.kind === "release") {
+    if (lock.owner === bound(groups, params, "owner")) {
+      lock.owner = null;
+      lock.expiresAt = null;
+    }
     return [];
   }
   // `NextlyError.internal` rather than a bare `Error`: this fires only when the statements the
@@ -78,6 +276,18 @@ export function interpretLockStatement(
       statement: flat,
     },
   });
+}
+
+/**
+ * Whether a statement is the renewal a holder issues while it works.
+ *
+ * Exported so a suite can fail exactly that statement and nothing else. Selecting it by shape,
+ * through the same regex the interpreter uses, is what keeps such a test honest: failing every write
+ * for a window would also fail the claim or the release, and the run would then abort for a reason
+ * that has nothing to do with renewal.
+ */
+export function isRenewalStatement(statement: SQL): boolean {
+  return classifyLockStatement(statement) === "renew";
 }
 
 /**
@@ -102,6 +312,9 @@ export interface MigrationLockSurfaceOptions {
   heldBy?: string | null;
   /** Whether the lock table is already there. */
   lockTableExists?: boolean;
+  /** The seeded claim's expiry, and the clock it is measured against. */
+  clock?: LockClock;
+  expiresAt?: number | null;
 }
 
 /** The adapter methods this composes with; anything else the double declares is carried through. */
@@ -129,9 +342,17 @@ export function withMigrationLockSurface<T extends AdapterDoubleBase>(
 ): T & {
   queryStatement: (statement: SQL) => Promise<Record<string, unknown>[]>;
   transaction: (work: (ctx: unknown) => Promise<unknown>) => Promise<unknown>;
-  migrationLock: { ownerNow: () => string | null };
+  migrationLock: {
+    ownerNow: () => string | null;
+    /** The database's clock in this model; advance it to let a claim lapse. */
+    clock: LockClock;
+    expiresAtNow: () => number | null;
+  };
 } {
-  const lock = createLockRow(options.heldBy);
+  const lock = createLockRow(options.heldBy, {
+    clock: options.clock,
+    expiresAt: options.expiresAt,
+  });
 
   const readMarker = (): Promise<Record<string, unknown>[]> =>
     Promise.resolve(
@@ -160,6 +381,9 @@ export function withMigrationLockSurface<T extends AdapterDoubleBase>(
         insert: (_table: string, data: { owner: string | null }) => {
           lock.seeded = true;
           lock.owner = data.owner;
+          // The seed names no expiry, so the column takes its default: a free row with nothing to
+          // expire. Writing a live one here would seed a lock nobody could take.
+          lock.expiresAt = null;
           return Promise.resolve(data);
         },
         runStatement: (statement: SQL) => {
@@ -169,6 +393,10 @@ export function withMigrationLockSurface<T extends AdapterDoubleBase>(
         queryStatement: (statement: SQL) =>
           Promise.resolve(interpretLockStatement(lock, statement)),
       }),
-    migrationLock: { ownerNow: () => lock.owner },
+    migrationLock: {
+      ownerNow: () => lock.owner,
+      clock: lock.clock,
+      expiresAtNow: () => lock.expiresAt,
+    },
   };
 }

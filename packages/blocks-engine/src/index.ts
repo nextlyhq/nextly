@@ -81,7 +81,13 @@ export { measureBytes, surveyDocument } from "./measure-bytes";
 // reach for `ReturnType`, and a hand-rebuilt copy is the second statement of a
 // contract that then drifts from the first.
 export type { ByteMeasurement } from "./measure-bytes";
-export { validate, ISSUE_CODES } from "./validation";
+export {
+  validate,
+  validateDocument,
+  ISSUE_CODES,
+  DOCUMENT_VERDICT_CODES,
+  INCOMPLETE_SURVEY_CODES,
+} from "./validation";
 /**
  * The registry-independent facts about a node, exported so a caller holding no
  * block registry can still refuse a malformed one. The editor's op layer is the
@@ -104,6 +110,7 @@ export type {
   BlockTypeLookup,
   ClassLookup,
   IssueCode,
+  ValidationResult,
   IssueSeverity,
   TokenLookup,
   ValidationContext,
