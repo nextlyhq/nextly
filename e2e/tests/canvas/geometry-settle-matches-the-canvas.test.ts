@@ -767,8 +767,9 @@ test.describe("the drop-zone geometry the probe waits on", () => {
   }) => {
     const frame = await canvas(page, request);
 
-    // Iterations were applied to the element and not to its pseudo-elements, so a 100ms
-    // animation repeated three times reported 100ms - and an endless one read as finite.
+    // A pseudo-element's span is charged for every iteration, exactly as the element's is: each
+    // cycle moves the edge again, so a 100ms animation repeated three times keeps it travelling
+    // for 300ms, and an endless one never settles at all.
     const injected = await frame.evaluate(() => {
       const sheet = (
         document.getElementById("nx-pb-style") as HTMLStyleElement | null
