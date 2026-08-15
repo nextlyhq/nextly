@@ -26,6 +26,7 @@ import {
   TARGET_SWITCH_BAND_PX,
   insertionCollisionValue,
   insertionDistancePx,
+  insertionEdgeDistancePx,
   isInsertionTargetEligible,
   nodeTargetPriority,
   zonePriority,
@@ -45,7 +46,6 @@ function distanceInColumn(pointerY: number, centreY: number): number {
     pointerY,
     centreX: POINTER_X,
     centreY,
-    width: ZONE_WIDTH_PX,
   });
 }
 
@@ -283,56 +283,85 @@ describe("insertionCollisionValue", () => {
   });
 });
 
-describe("the horizontal term, which separates columns", () => {
-  // Targets in different columns of a formatted slot share a depth and a
-  // vertical band. Ranking them by `y` alone makes equal-height targets TIE,
-  // and a tie is settled by registration order rather than by where the pointer
-  // is — so the wrong column wins while the pointer sits inside the right one.
+describe("the horizontal term, which separates targets of unequal width", () => {
   const COLUMN_WIDTH = 300;
   const LEFT_CENTRE_X = 150;
   const RIGHT_CENTRE_X = 450;
   const ROW_CENTRE_Y = 200;
+  // A formatted container's `append` rectangle spans every child, so its centre
+  // sits between the columns rather than over one of them.
+  const CONTAINER_CENTRE_X = 300;
 
-  function columnDistances(pointerX: number): { left: number; right: number } {
-    const at = (centreX: number): number =>
-      insertionDistancePx({
-        pointerX,
-        pointerY: ROW_CENTRE_Y,
-        centreX,
-        centreY: ROW_CENTRE_Y,
-        width: COLUMN_WIDTH,
-      });
-    return { left: at(LEFT_CENTRE_X), right: at(RIGHT_CENTRE_X) };
-  }
+  const at = (
+    pointerX: number,
+    centreX: number,
+    centreY = ROW_CENTRE_Y
+  ): number =>
+    insertionDistancePx({ pointerX, pointerY: ROW_CENTRE_Y, centreX, centreY });
+
+  it("keeps the ORDER vertical between targets that share a centre", () => {
+    // Every zone in ordinary block flow spans its container, so they share a
+    // centre x and carry an identical horizontal offset. That offset does not
+    // cancel arithmetically under a square root, and it does not need to: it is
+    // the same for both candidates, so it cannot reorder them. The comparison
+    // is decided by the vertical gap exactly as if the term were absent, which
+    // is the property the ranking actually depends on.
+    const offCentreX = POINTER_X + 380;
+    const pointerY = 200;
+    const nearerVertically = at(offCentreX, POINTER_X, pointerY - 40);
+    const furtherVertically = at(offCentreX, POINTER_X, pointerY - 100);
+
+    expect(nearerVertically).toBeLessThan(furtherVertically);
+  });
 
   it("does not tie two columns at the same height", () => {
-    // Inside the left column. Pure vertical distance would report 0 for BOTH.
-    const { left, right } = columnDistances(LEFT_CENTRE_X);
-
-    expect(left).toBe(0);
+    expect(at(LEFT_CENTRE_X, LEFT_CENTRE_X)).toBe(0);
     expect(
-      right,
+      at(LEFT_CENTRE_X, RIGHT_CENTRE_X),
       "the far column must not tie with the one under the pointer"
     ).toBeGreaterThan(0);
   });
 
-  it("is zero anywhere inside a target's width, not only at its centre", () => {
-    // The property that keeps ordinary block flow ranking purely on `y`: a
-    // full-width zone contains the pointer horizontally wherever it is, so the
-    // horizontal term contributes nothing and cannot distort the comparison.
-    const atCentre = columnDistances(LEFT_CENTRE_X).left;
-    const atEdge = columnDistances(LEFT_CENTRE_X + COLUMN_WIDTH / 2).left;
+  it("separates a container's append target from the child under the pointer", () => {
+    // The case a zero-inside-the-width term cannot see: the container's
+    // rectangle spans both columns, so the pointer is horizontally INSIDE it
+    // and inside the child at once. Zeroing the term there makes both reduce to
+    // the vertical gap, and with their centres aligned the two tie and
+    // registration order decides which is reachable.
+    const toChild = at(LEFT_CENTRE_X, LEFT_CENTRE_X);
+    const toContainer = at(LEFT_CENTRE_X, CONTAINER_CENTRE_X);
 
-    expect(atCentre).toBe(0);
-    expect(atEdge).toBe(0);
+    expect(toChild).toBeLessThan(toContainer);
   });
 
-  it("grows only once the pointer leaves the target", () => {
-    const justOutside = columnDistances(
-      LEFT_CENTRE_X + COLUMN_WIDTH / 2 + 10
-    ).left;
+  it("grows with horizontal separation rather than only outside a boundary", () => {
+    expect(at(LEFT_CENTRE_X + 10, LEFT_CENTRE_X)).toBe(10);
+    expect(at(LEFT_CENTRE_X + 160, LEFT_CENTRE_X)).toBe(160);
+  });
+});
 
-    expect(justOutside).toBe(10);
+describe("insertionEdgeDistancePx, which bounds the reprieve", () => {
+  const rect = { centreX: 150, centreY: 200, width: 300, height: 40 };
+
+  it("is zero anywhere inside the rectangle", () => {
+    // The property the RANKING metric deliberately does not have. Bounding the
+    // reprieve asks "how far outside the target is the pointer", which is a
+    // different question from "which target is nearest".
+    expect(
+      insertionEdgeDistancePx({ pointerX: 150, pointerY: 200, ...rect })
+    ).toBe(0);
+    expect(
+      insertionEdgeDistancePx({ pointerX: 300, pointerY: 220, ...rect })
+    ).toBe(0);
+  });
+
+  it("measures from the nearest edge once outside, on either axis", () => {
+    expect(
+      insertionEdgeDistancePx({ pointerX: 310, pointerY: 200, ...rect })
+    ).toBe(10);
+    expect(
+      insertionEdgeDistancePx({ pointerX: 150, pointerY: 230, ...rect })
+    ).toBe(10);
   });
 });
 
@@ -347,8 +376,7 @@ describe("eligibility, which the margin depends on", () => {
   const held = {
     hasDefaultCollision: false,
     isCurrentTarget: true,
-    pointerWithinWidth: true,
-    pointerBeyondEdgePx: 0,
+    edgeDistancePx: 0,
     bandPx: TARGET_SWITCH_BAND_PX,
   };
 
@@ -360,7 +388,7 @@ describe("eligibility, which the margin depends on", () => {
     expect(
       isInsertionTargetEligible({
         ...held,
-        pointerBeyondEdgePx: TARGET_SWITCH_BAND_PX,
+        edgeDistancePx: TARGET_SWITCH_BAND_PX,
       })
     ).toBe(true);
   });
@@ -374,7 +402,7 @@ describe("eligibility, which the margin depends on", () => {
     expect(
       isInsertionTargetEligible({
         ...held,
-        pointerBeyondEdgePx: TARGET_SWITCH_BAND_PX + 1,
+        edgeDistancePx: TARGET_SWITCH_BAND_PX + 1,
       })
     ).toBe(false);
   });
@@ -386,23 +414,29 @@ describe("eligibility, which the margin depends on", () => {
     );
   });
 
-  it("releases the held target once the pointer leaves its width", () => {
+  it("bounds the reprieve on the HORIZONTAL axis by the same band", () => {
+    // A hard "inside the width" gate would drop the held target the instant the
+    // pointer crossed a column edge, so its credit would never be compared with
+    // the challenger and a small jitter across that edge would flip the
+    // indicator. One distance covers both axes, so neither is a cliff.
     expect(
-      isInsertionTargetEligible({ ...held, pointerWithinWidth: false })
-    ).toBe(false);
+      isInsertionTargetEligible({
+        ...held,
+        edgeDistancePx: TARGET_SWITCH_BAND_PX - 1,
+      })
+    ).toBe(true);
   });
 
   it("admits anything the default detection already admits", () => {
     // Eligibility is never NARROWED, so no target stops claiming a pointer it
     // claimed before this module existed — including well outside the band.
     for (const isCurrentTarget of [true, false]) {
-      for (const pointerWithinWidth of [true, false]) {
+      {
         expect(
           isInsertionTargetEligible({
             hasDefaultCollision: true,
             isCurrentTarget,
-            pointerWithinWidth,
-            pointerBeyondEdgePx: 10_000,
+            edgeDistancePx: 10_000,
             bandPx: TARGET_SWITCH_BAND_PX,
           })
         ).toBe(true);

@@ -78,33 +78,66 @@ export function nodeTargetPriority(
 /**
  * How far the pointer is from an insertion target, in pixels.
  *
- * Vertical distance to the target's centre, plus however far the pointer sits
- * OUTSIDE it horizontally. The horizontal term is zero whenever the pointer is
- * within the target's width, which is every zone in ordinary block flow — those
- * span their container, so a shared horizontal offset would only add the same
- * quantity to every candidate and, under a square root, would stop cancelling
- * and start distorting the vertical comparison it is irrelevant to.
+ * Straight-line distance to the target's centre, both axes counted in full.
  *
- * It stops being zero exactly where it must: targets in different columns of a
- * formatted slot share a depth and a vertical band, so ranking them by `y`
- * alone makes equal-height targets tie and lets registration order pick the
- * column. The horizontal term is what separates them.
+ * The horizontal term does NOT vanish inside the target's width, and that is
+ * the whole point. Zones in ordinary block flow all span their container, so
+ * they share a centre `x` and carry an IDENTICAL horizontal offset. It does not
+ * cancel arithmetically under a square root, and it does not need to: being the
+ * same for every candidate, it cannot reorder them, so the comparison is
+ * decided by the vertical gap exactly as if the term were absent. Order is the
+ * only thing `sortCollisions` reads, so order is the property to preserve.
+ *
+ * Where widths DIFFER it must not cancel, and zeroing it inside each target's
+ * width is exactly what stops it. A formatted container's `append` rectangle
+ * spans all of its children while a child's `before` rectangle spans one
+ * column; both then report zero horizontally, both reduce to the vertical gap,
+ * and in an equal-height row their centres align and the two TIE — leaving
+ * registration order to choose, which can make one of them unreachable. Full
+ * distance separates a wide container from the narrow child under the pointer,
+ * because their centres are genuinely in different places.
  */
 export function insertionDistancePx({
   pointerX,
   pointerY,
   centreX,
   centreY,
+}: {
+  pointerX: number;
+  pointerY: number;
+  centreX: number;
+  centreY: number;
+}): number {
+  return Math.hypot(pointerX - centreX, pointerY - centreY);
+}
+
+/**
+ * How far the pointer is from a target's RECTANGLE, in pixels. Zero inside it.
+ *
+ * Distinct from {@link insertionDistancePx}, which measures to the insertion
+ * line and is what RANKS targets. This one measures to the boundary and is what
+ * bounds the reprieve below, because "how far outside the target is the pointer"
+ * is a different question from "which target is nearest".
+ */
+export function insertionEdgeDistancePx({
+  pointerX,
+  pointerY,
+  centreX,
+  centreY,
   width,
+  height,
 }: {
   pointerX: number;
   pointerY: number;
   centreX: number;
   centreY: number;
   width: number;
+  height: number;
 }): number {
-  const outsideX = Math.max(0, Math.abs(pointerX - centreX) - width / 2);
-  return Math.hypot(outsideX, pointerY - centreY);
+  return Math.hypot(
+    Math.max(0, Math.abs(pointerX - centreX) - width / 2),
+    Math.max(0, Math.abs(pointerY - centreY) - height / 2)
+  );
 }
 
 /**
@@ -139,8 +172,14 @@ export function insertionCollisionValue({
  * and nothing — the same flicker the margin exists to remove, arriving through
  * eligibility instead of through ranking.
  *
- * The reprieve is bounded by the SAME band, in both axes: the pointer must stay
- * within the target's width, and within one band of its edge. Bounding it
+ * The reprieve is bounded by the SAME band, in BOTH axes at once: the pointer
+ * must stay within one band of the target's rectangle, measured by
+ * {@link insertionEdgeDistancePx}. One distance rather than a per-axis pair,
+ * because a hard boundary on either axis is a cliff the margin cannot smooth:
+ * gating horizontally on "inside the width" drops the held target the instant
+ * the pointer crosses a column edge, so its credit is never compared with the
+ * challenger and a small jitter across that edge flips the indicator - the same
+ * defect this reprieve exists to remove, rotated ninety degrees. Bounding it
  * matters more than it looks. An unbounded reprieve holds the target for as
  * long as no rival happens to be eligible, which on widely spaced targets is
  * indefinitely — so the margin stops being a margin and the drop indicator
@@ -153,18 +192,16 @@ export function insertionCollisionValue({
 export function isInsertionTargetEligible({
   hasDefaultCollision,
   isCurrentTarget,
-  pointerWithinWidth,
-  pointerBeyondEdgePx,
+  edgeDistancePx,
   bandPx,
 }: {
   hasDefaultCollision: boolean;
   isCurrentTarget: boolean;
-  pointerWithinWidth: boolean;
-  pointerBeyondEdgePx: number;
+  edgeDistancePx: number;
   bandPx: number;
 }): boolean {
   if (hasDefaultCollision) return true;
-  return isCurrentTarget && pointerWithinWidth && pointerBeyondEdgePx <= bandPx;
+  return isCurrentTarget && edgeDistancePx <= bandPx;
 }
 
 /**
@@ -199,19 +236,21 @@ export function createInsertionCollisionDetector(
     if (!shape || !pointer) return eligible;
 
     const centre = shape.center;
-    const { width } = shape.boundingRectangle;
+    const { width, height } = shape.boundingRectangle;
     const isCurrentTarget = dragOperation.target?.id === droppable.id;
-    const withinWidth = Math.abs(pointer.x - centre.x) <= width / 2;
 
     if (
       !isInsertionTargetEligible({
         hasDefaultCollision: eligible !== null,
         isCurrentTarget,
-        pointerWithinWidth: withinWidth,
-        pointerBeyondEdgePx: Math.max(
-          0,
-          Math.abs(pointer.y - centre.y) - shape.boundingRectangle.height / 2
-        ),
+        edgeDistancePx: insertionEdgeDistancePx({
+          pointerX: pointer.x,
+          pointerY: pointer.y,
+          centreX: centre.x,
+          centreY: centre.y,
+          width,
+          height,
+        }),
         bandPx,
       })
     ) {
@@ -228,7 +267,6 @@ export function createInsertionCollisionDetector(
           pointerY: pointer.y,
           centreX: centre.x,
           centreY: centre.y,
-          width,
         }),
         isCurrentTarget,
         bandPx,
