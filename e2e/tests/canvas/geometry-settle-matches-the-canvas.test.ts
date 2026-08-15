@@ -870,8 +870,13 @@ test.describe("the drop-zone geometry the probe waits on", () => {
         "@keyframes nx-slowed { from { height: 0 } to { height: 6px } }",
         sheet.cssRules.length
       );
+      // FINITE, and long enough to still be running when the probe reads it. `infinite` would be
+      // the obvious choice for the second property and it destroys the first: an endless animation
+      // is already refused for being endless, so this control would pass with the playback-rate
+      // clause removed and prove nothing about it. At 100 iterations the span is a measurable
+      // 20000ms, so without that clause the probe RETURNS a number instead of refusing.
       sheet?.insertRule(
-        ".nx-pb-dropzone { animation: nx-slowed .2s infinite }",
+        ".nx-pb-dropzone { animation: nx-slowed .2s 100 }",
         sheet.cssRules.length
       );
       const zone = document.querySelector(".nx-pb-dropzone");
