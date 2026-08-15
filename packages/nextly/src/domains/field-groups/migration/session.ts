@@ -148,6 +148,20 @@ export const LOCK_LOSS_AFTER_MS =
   LOCK_TTL_SECONDS * 1000 - 2 * LOCK_RENEW_INTERVAL_MS;
 
 /**
+ * How long a shutdown waits for an in-flight legacy claim before giving up on releasing it.
+ *
+ * The wait exists so the release cannot run against a row whose claim has not decided. The BOUND
+ * exists because a stalled connection may never answer, and an interrupt that never re-raises means
+ * the operator's Ctrl+C silently did nothing — a worse failure than the claim it was protecting.
+ * Short, because the only thing being waited for is one single-row transaction.
+ *
+ * Past the bound the release is SKIPPED rather than issued blind, so a claim can be left behind:
+ * the row's state is unknown at that point, and clearing it could free a claim this process is
+ * about to write. A claim an operator clears is recoverable; a row freed under a live claim is not.
+ */
+export const LEGACY_SHUTDOWN_WAIT_MS = 5_000;
+
+/**
  * How much lease a confirmation must actually grant for the holder to rely on it.
  *
  * 🔴 "Not yet expired" is not the same as "safe to work on", and neither is "lasts until the next
@@ -708,12 +722,38 @@ export async function withMigrationSession<T>(
       // is no symmetric hazard to trade against, which is what makes "earlier" strictly better here
       // rather than a different bet.
       let legacyReleasedOnSignal = false;
+      // 🔴 The claim in flight, so an interrupt can WAIT for it rather than race it.
+      //
+      // The handler locks the same row. Issued while `acquireOwnerOnly` is still committing, its
+      // release can clear nothing — the row is not yet ours — and the claim then lands behind it,
+      // stranding an owner with no expiry to lapse. Ordering the two removes that: the release runs
+      // only once the claim has DECIDED, so either it landed and the release clears it, or it did
+      // not and there is nothing to clear. Nothing here depends on which of them is faster.
+      //
+      // The same shape the renewal path uses further up, where an in-flight attempt is settled
+      // before the claim is released.
+      let pendingAcquisition: Promise<unknown> = Promise.resolve();
       const releaseLegacyOnSignal = (signal: NodeJS.Signals): void => {
         legacyReleasedOnSignal = true;
-        // The signal is re-raised whether or not the release succeeded, exactly as the expiry-aware
-        // path does it: a pool torn down by the same interrupt is the likely failure, and an
-        // unobserved rejection would surface instead of letting the process stop.
-        void releaseOwnerOnly(adapter, claim)
+        // SETTLED, not awaited for success: a claim that REJECTED must not hold up the shutdown,
+        // and its rejection is already observed by the caller's own await.
+        //
+        // 🔴 BOUNDED, because a transaction on a stalled connection may never settle at all and a
+        // signal that never re-raises means Ctrl+C stopped working — the operator's last resort
+        // silently doing nothing. Past the bound the release is skipped rather than issued blind:
+        // the claim's outcome is unknown, so clearing the row could free one this process is about
+        // to write. A claim left behind is the recoverable side of that choice.
+        void Promise.race([
+          Promise.allSettled([pendingAcquisition]).then(() =>
+            releaseOwnerOnly(adapter, claim)
+          ),
+          new Promise(resolve =>
+            setTimeout(resolve, LEGACY_SHUTDOWN_WAIT_MS).unref?.()
+          ),
+        ])
+          // The signal is re-raised whether or not the release succeeded, exactly as the
+          // expiry-aware path does it: a pool torn down by the same interrupt is the likely
+          // failure, and an unobserved rejection would surface instead of letting the process stop.
           .catch(() => undefined)
           .finally(() => {
             process.kill(process.pid, signal);
@@ -740,7 +780,11 @@ export async function withMigrationSession<T>(
       // then re-raises. Doing it twice costs nothing; not doing it at all strands a claim that has
       // no expiry to lapse.
       try {
-        const legacy = await acquireOwnerOnly(adapter, claim);
+        // Assigned BEFORE it is awaited, so an interrupt landing mid-commit has something to wait
+        // for. Awaiting it here is also what observes a rejection, so the handler's `allSettled`
+        // never leaves one unhandled.
+        pendingAcquisition = acquireOwnerOnly(adapter, claim);
+        const legacy = (await pendingAcquisition) as Acquisition;
         if (!legacy.ok) {
           // Refused for the same reason the expiry-aware path refuses, and it is a REFUSAL rather
           // than a skip: the row names a holder, and without an expiry there is no basis on which
@@ -752,6 +796,25 @@ export async function withMigrationSession<T>(
             logContext: {
               reason: "migration lock is held elsewhere",
               heldBy: legacy.heldBy,
+              table: MIGRATION_LOCK_TABLE,
+              label,
+            },
+          });
+        }
+
+        // 🔴 Shutdown wins over starting new work, and the ordering is the reason this check is
+        // needed rather than implied. A signal arriving during acquisition schedules the handler's
+        // release, but the `await` above resumes FIRST — its continuation was registered earlier —
+        // so without this the callback starts, the handler then clears the row underneath it, and a
+        // migration is free to take the lock while a schema sync is still writing. That is the
+        // exact overlap the lock exists to prevent, reached by way of the shutdown that was meant
+        // to stop everything.
+        if (legacyReleasedOnSignal) {
+          throw NextlyError.serviceUnavailable({
+            logMessage:
+              "field-group migration lock was released for shutdown before the work began",
+            logContext: {
+              reason: "interrupted before the work started",
               table: MIGRATION_LOCK_TABLE,
               label,
             },
