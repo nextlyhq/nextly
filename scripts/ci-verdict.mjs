@@ -8,6 +8,15 @@
 // object proves a reviewer saw a commit whether or not it carried findings,
 // and GitHub's own thread resolution state says what is still open.
 //
+// That first source is INCOMPLETE on its own, which is not obvious and cost
+// this gate its usefulness for a while. A reviewer may open a review object
+// only when it has something to report and post a clean verdict as an ordinary
+// issue comment naming the commit it read. Asking the reviews endpoint alone
+// then yields nothing for a revision that was reviewed and passed, so the gate
+// refuses permanently on exactly the pull requests that are ready, and whoever
+// needs to merge learns to go around it. Coverage is therefore read from both
+// places, and a verdict counts only when it NAMES the revision it read.
+//
 // Counting a reviewer's findings would be a proxy for the second question and a
 // worse one, because reviewers do not agree on what a review object is: one
 // posts a single object per round carrying many comments, another posts one
@@ -287,9 +296,96 @@ function approvalCovers(
   return strict ? at > objected : at >= objected;
 }
 
-/** Required reviewers with no review at `head`, in the order they were required. */
-export function missingReviewers(reviews, head, required, since = undefined) {
-  const seen = new Set(reviewersAtHead(reviews, head, since));
+/**
+ * A verdict posted as an ISSUE COMMENT that names the commit it read.
+ *
+ * Some reviewers only open a review object when they have something to say. A
+ * clean pass from one of those arrives as an ordinary comment, so a gate asking
+ * the reviews endpoint alone sees nothing and cannot distinguish "read it and
+ * found nothing" from "never looked" — refusing forever on exactly the
+ * revisions that are ready.
+ *
+ * Coverage is granted only when the comment NAMES a revision and that revision
+ * is the head. A comment that merely exists proves nothing: the reviewer
+ * comments on every round, and an older one would otherwise certify whatever
+ * was pushed after it.
+ */
+const REVIEWED_COMMIT_MARKER = /reviewed commit:\**\s*`([0-9a-f]{7,40})`/i;
+
+/**
+ * Reviewer logins whose comment reports having read `head`.
+ *
+ * The abbreviation is matched as a PREFIX of the full head, which is the
+ * relationship git's short form actually has. A floor of seven characters keeps
+ * a short string from prefixing many commits; the marker must also be present,
+ * so a comment quoting a SHA in passing does not count.
+ *
+ * Known boundary: a comment can be edited after the fact, so this trusts the
+ * reviewer's account not to restate a revision it did not read. A review object
+ * carries its `commit_id` from the server and cannot be rewritten that way, so
+ * this source is the weaker of the two and is only ever additive to it.
+ */
+export function verdictCommentReviewers(
+  issueComments,
+  head,
+  since = undefined
+) {
+  if (
+    !Array.isArray(issueComments) ||
+    typeof head !== "string" ||
+    head === ""
+  ) {
+    return [];
+  }
+  const target = head.toLowerCase();
+  const seen = new Set();
+  for (const comment of issueComments) {
+    const login = comment?.user?.login;
+    const body = comment?.body;
+    if (typeof login !== "string" || typeof body !== "string") continue;
+    const named = REVIEWED_COMMIT_MARKER.exec(body)?.[1]?.toLowerCase();
+    if (named === undefined || !target.startsWith(named)) continue;
+    // Same scoping rule the review objects get: a verdict predating the last
+    // base move describes a diff that no longer exists, and a comment with no
+    // timestamp cannot be shown to postdate it.
+    const withinScope =
+      since === undefined ||
+      (typeof comment?.created_at === "string" && comment.created_at > since);
+    if (withinScope) seen.add(login);
+  }
+  return [...seen].sort();
+}
+
+/**
+ * Every reviewer that has covered `head`, from either source.
+ *
+ * One implementation, because the reported list and the missing list are the
+ * same question asked twice: computing them apart lets a gate name a reviewer
+ * as covering the head while still holding the merge for them.
+ */
+export function reviewersCovering(
+  reviews,
+  issueComments,
+  head,
+  since = undefined
+) {
+  return [
+    ...new Set([
+      ...reviewersAtHead(reviews, head, since),
+      ...verdictCommentReviewers(issueComments, head, since),
+    ]),
+  ].sort();
+}
+
+/** Required reviewers with no verdict at `head`, in the order they were required. */
+export function missingReviewers(
+  reviews,
+  issueComments,
+  head,
+  required,
+  since = undefined
+) {
+  const seen = new Set(reviewersCovering(reviews, issueComments, head, since));
   return (required ?? []).filter(login => !seen.has(login));
 }
 
@@ -462,7 +558,19 @@ export function report({
     login => !blockingList.includes(login)
   );
   const required = [...new Set([...blockingList, ...effectiveAdvisory])];
-  const missing = missingReviewers(reviews, head, required, coverageSince);
+  const covering = reviewersCovering(
+    reviews,
+    issueComments,
+    head,
+    coverageSince
+  );
+  const missing = missingReviewers(
+    reviews,
+    issueComments,
+    head,
+    required,
+    coverageSince
+  );
   const unresolved = unresolvedThreads(threads, effectiveAdvisory);
   const limited = rateLimited(issueComments);
   // Coverage is asked at the head; a standing objection is asked of the whole
@@ -517,7 +625,7 @@ export function report({
     // Named for what the range establishes — absence from the merge — rather
     // than for the conclusion only a content comparison can reach.
     unmerged_candidates: stranded,
-    reviewed_head: reviewersAtHead(reviews, head, coverageSince),
+    reviewed_head: covering,
     missing_reviews: missing,
     // JSON has no infinity, so an unavailable count would serialise as `null`
     // and read like a zero to anything consuming the report as data.
