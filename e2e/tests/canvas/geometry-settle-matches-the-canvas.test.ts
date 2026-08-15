@@ -300,10 +300,19 @@ async function geometrySpanMs(
               // begins.
               const count = cycled(counts, i);
               if (count === 0) return;
-              longest = Math.max(
-                longest,
-                cycled(durations, i) * count + cycled(delays, i)
-              );
+              // A zero-DURATION entry settles before the iteration count is even consulted, and it
+              // has to be handled first: `0 * Infinity` is `NaN`, which the caller refuses as an
+              // unparseable time. `animation: grow 0s infinite` is valid CSS whose edge never
+              // travels, so refusing it would name the wrong cause and send someone looking for a
+              // malformed value that is not there. Its DELAY still counts, because a delayed
+              // instantaneous animation applies its end state at the end of the delay under the
+              // default fill mode.
+              const duration = cycled(durations, i);
+              if (duration === 0) {
+                longest = Math.max(longest, cycled(delays, i));
+                return;
+              }
+              longest = Math.max(longest, duration * count + cycled(delays, i));
             });
           }
 
@@ -930,6 +939,44 @@ test.describe("the drop-zone geometry the probe waits on", () => {
     // between-item zone. A rule keyed on `[data-drag]` for an empty zone can never fire, so
     // measuring it would pin a span for movement the canvas cannot produce.
     expect(await geometrySpanMs(frame, "data-drag")).toBe(0);
+  });
+
+  test("an ENDLESS animation of zero duration settles rather than refusing", async ({
+    page,
+    request,
+  }) => {
+    const frame = await canvas(page, request);
+
+    // Valid CSS whose edge never travels. The endless neighbour a few tests up is refused for
+    // never settling; this one settles instantly, and the two must not be confused — `0 * Infinity`
+    // is `NaN`, which the caller reports as an unparseable time and sends someone hunting a
+    // malformed value that does not exist.
+    const injected = await frame.evaluate(() => {
+      const sheet = (
+        document.getElementById("nx-pb-style") as HTMLStyleElement | null
+      )?.sheet;
+      sheet?.insertRule(
+        "@keyframes nx-instant { from { height: 0 } to { height: 6px } }",
+        sheet.cssRules.length
+      );
+      sheet?.insertRule(
+        ".nx-pb-dropzone { animation: nx-instant 0s infinite }",
+        sheet.cssRules.length
+      );
+      const zone = document.querySelector(".nx-pb-dropzone");
+      if (!zone) return null;
+      const style = getComputedStyle(zone as HTMLElement);
+      // The population: the rule must have applied AND still be endless, or this measures an
+      // ordinary finite animation and says nothing about the multiplication.
+      return {
+        duration: style.animationDuration,
+        iterations: style.animationIterationCount,
+      };
+    });
+    expect(injected?.duration).toBe("0s");
+    expect(injected?.iterations).toBe("infinite");
+
+    expect(await geometrySpanMs(frame, "data-drag data-active")).toBe(0);
   });
 
   test("an effect on a pseudo-element this loop never reads is refused", async ({
