@@ -56,15 +56,25 @@ export const INSERTION_COLLISION_TYPE = CollisionType.PointerIntersection;
 /**
  * How far the pointer is from an insertion target, in pixels.
  *
- * Straight-line distance to the target's centre, both axes counted in full.
+ * The two axes SUMMED, not combined under a square root.
  *
- * The horizontal term does NOT vanish inside the target's width, and that is
- * the whole point. Zones in ordinary block flow all span their container, so
- * they share a centre `x` and carry an IDENTICAL horizontal offset. It does not
- * cancel arithmetically under a square root, and it does not need to: being the
- * same for every candidate, it cannot reorder them, so the comparison is
- * decided by the vertical gap exactly as if the term were absent. Order is the
- * only thing `sortCollisions` reads, so order is the property to preserve.
+ * Additive is what keeps the switch margin meaning what it says. The margin is
+ * subtracted from this number, so if the axes were combined by `hypot` it would
+ * come off the HYPOTENUSE: a pointer 100px from a full-width zone's centre
+ * turns a 10px credit into roughly a 36px vertical band, and further out the
+ * challenger cannot overtake the incumbent at all before eligibility ends it.
+ * The margin would then be a different size everywhere, which is precisely what
+ * "8-12px of pointer travel" rules out.
+ *
+ * Summed, the horizontal term is a constant added to both candidates whenever
+ * they share a centre `x` — every zone in ordinary block flow, since they span
+ * their container — so it cancels EXACTLY out of the subtraction and the band
+ * stays 10px of vertical travel at any horizontal offset.
+ *
+ * It stops cancelling exactly where it should: a formatted container's `append`
+ * rectangle is centred between its children while a child's `before` rectangle
+ * is centred on one column, so their horizontal terms differ and the child
+ * under the pointer wins instead of the two tying on the vertical gap alone.
  *
  * Where widths DIFFER it must not cancel, and zeroing it inside each target's
  * width is exactly what stops it. A formatted container's `append` rectangle
@@ -86,7 +96,7 @@ export function insertionDistancePx({
   centreX: number;
   centreY: number;
 }): number {
-  return Math.hypot(pointerX - centreX, pointerY - centreY);
+  return Math.abs(pointerY - centreY) + Math.abs(pointerX - centreX);
 }
 
 /**
