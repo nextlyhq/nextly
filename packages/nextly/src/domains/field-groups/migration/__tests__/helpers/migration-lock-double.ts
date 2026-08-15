@@ -279,6 +279,38 @@ export function interpretLockStatement(
 }
 
 /**
+ * One reader per double, used on EVERY path that reads the lock.
+ *
+ * A double serves the same row through several seams — the adapter, the transaction context, and
+ * each of those separately for reads and writes — and a fixture modelling a schema fault has to
+ * appear on all of them. That is not a matter of care: a table without `expires_at` has no such
+ * column for any reader, so a copy of the gate on one seam and not another models a database that
+ * cannot exist, and it lets the code under test succeed at exactly the point the fixture was
+ * written to stop it. Measured here: an earlier version failed only the adapter-level read while
+ * acquisition reads inside a transaction, and the broken code passed.
+ *
+ * Building the reader ONCE and handing it to every seam is what removes that, rather than three
+ * copies of a predicate with a comment asking them to agree.
+ *
+ * `stateReadError` fails the liveness read alone, leaving every other statement working — the shape
+ * of a lock table that predates its expiry column.
+ */
+export function createLockStatementReader(
+  lock: LockRow,
+  options: { stateReadError?: unknown } = {}
+): (statement: SQL) => Record<string, unknown>[] {
+  return statement => {
+    if (
+      options.stateReadError !== undefined &&
+      classifyLockStatement(statement) === "state"
+    ) {
+      throw options.stateReadError;
+    }
+    return interpretLockStatement(lock, statement);
+  };
+}
+
+/**
  * Whether a statement is the renewal a holder issues while it works.
  *
  * Exported so a suite can fail exactly that statement and nothing else. Selecting it by shape,
