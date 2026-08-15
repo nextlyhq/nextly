@@ -84,6 +84,29 @@ describe("admin-meta split over HTTP", () => {
     expect(await response.text()).not.toContain("Acme");
   });
 
+  it("marks the workspace response as belonging to one session", async () => {
+    const response = await handlers().GET(
+      request("admin-meta/workspace"),
+      ctx(["admin-meta", "workspace"])
+    );
+
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(response.headers.get("vary")).toBe("Cookie");
+  });
+
+  it("leaves the public route cacheable", async () => {
+    // The separating half. Setting the headers unconditionally would satisfy
+    // the case above while telling every cache to skip the one response that
+    // is the same for everyone and is fetched before every sign-in.
+    const response = await handlers().GET(
+      request("admin-meta"),
+      ctx(["admin-meta"])
+    );
+
+    expect(response.headers.get("cache-control")).toBeNull();
+    expect(response.headers.get("vary")).toBeNull();
+  });
+
   it("keeps the workspace fields on the public route for now", async () => {
     // The admin still reads these from the public payload. Removing them
     // before it is migrated would blank the sidebar rather than close

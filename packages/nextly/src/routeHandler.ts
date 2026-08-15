@@ -1341,6 +1341,24 @@ function respondAdminMeta(payload: Record<string, unknown>): Response {
 }
 
 /**
+ * Mark a response as belonging to one session.
+ *
+ * A session-gated GET is otherwise an ordinary cacheable response, so a shared
+ * proxy may retain one caller's payload and serve it to the next request
+ * without the authentication check running again. `Vary: Cookie` states what
+ * the response depends on, for any cache that stores it regardless.
+ *
+ * Applied to the REFUSAL as well as the answer. A cached 401 replayed to a
+ * request that does carry a session is the same defect pointing the other way,
+ * and it is the direction that looks like a working gate.
+ */
+function withSessionCacheHeaders(response: Response): Response {
+  response.headers.set("Cache-Control", "private, no-store");
+  response.headers.set("Vary", "Cookie");
+  return response;
+}
+
+/**
  * GET /api/admin-meta
  *
  * Public — no authentication required, because the sign-in screen renders
@@ -1378,10 +1396,20 @@ async function handleAdminMetaWorkspaceRequest(
   req: Request
 ): Promise<Response> {
   const auth = await requireAuthentication(req);
-  if (isErrorResponse(auth)) return createJsonErrorResponse(auth);
+  if (isErrorResponse(auth)) {
+    return withSessionCacheHeaders(createJsonErrorResponse(auth));
+  }
+
+  // After the authentication precondition, never before it. Service
+  // initialisation is lazy, so on the first authenticated request of a process
+  // booted through `createDynamicHandlers` the container is still empty — and
+  // `buildAdminMeta` would then silently skip the persisted sidebar groups and
+  // branding overrides and describe the pre-boot plugin configuration instead
+  // of the running one.
+  await ensureServicesInitialized();
 
   const { workspace } = await buildAdminMeta();
-  return respondAdminMeta(workspace);
+  return withSessionCacheHeaders(respondAdminMeta(workspace));
 }
 
 /**
