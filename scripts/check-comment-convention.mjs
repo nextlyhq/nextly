@@ -247,6 +247,12 @@ const EXCLUDED_DIRS = new Set(["node_modules", "dist", ".next", ".turbo", "cover
  */
 const REVIEW_DOMAIN_PATHS = [
   "scripts/ci-verdict",
+  // The gate's request layer, named separately because the match above is at a
+  // path BOUNDARY: "scripts/ci-verdict" covers `ci-verdict.mjs` and anything
+  // under `ci-verdict/`, and deliberately not a sibling whose name merely
+  // starts with it. It reads pull requests and refs, so the vocabulary is what
+  // it operates on rather than narration about a change.
+  "scripts/ci-verdict-evidence",
   "scripts/verify-merge",
   "scripts/release/",
   ".claude/rules/",
