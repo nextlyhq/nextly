@@ -209,8 +209,28 @@ export type BlockCategory =
 
 export interface SlotSpec {
   name: string;
-  /** Namespaced block types allowed in this slot. Omit for "any". */
+  /**
+   * Namespaced block types allowed in this slot. Omit for "any".
+   *
+   * A trailing `*` matches a whole namespace, so `core/*` admits every core
+   * block. The wildcard binds to the `/`, which is what keeps `core/*` from
+   * admitting `coreevil/banner`. Answer it with `slotAdmits` rather than by
+   * membership: an exact-match test reading a wildcard finds no block of that
+   * name and empties a slot its author declared open.
+   */
   allowedBlocks?: string[];
+  /**
+   * How this slot arranges its children, when that constrains what may sit between them.
+   *
+   * `"flow"` (the default) is normal block flow, where an extra zero-height element between two
+   * children costs nothing. `"formatted"` is a flex or grid container, where any element between
+   * two children becomes a flex item or a grid cell of its own — so it takes a gap, shifts every
+   * following cell, and the canvas no longer matches the published page.
+   *
+   * Declared rather than inferred because only the block knows: the layout lives in the style its
+   * `render` applies, which nothing outside it can read.
+   */
+  childLayout?: "flow" | "formatted";
 }
 
 /** A reference from a block definition to a style control + the style key it edits. */
@@ -255,6 +275,17 @@ export interface BlockDefinition<P = Record<string, unknown>> {
   icon: string;
   category: BlockCategory;
   isContainer?: boolean;
+  /**
+   * The only types this block may be a DIRECT child of. Omit for "anywhere".
+   *
+   * The child's half of the nesting rule, and not derivable from the parent's `allowedBlocks`:
+   * a slot naming a type must not confine that type to it, and a block meaningless outside one
+   * parent has to say so itself. Named after the same field in Gutenberg's block metadata.
+   *
+   * A core block states this on its {@link BlockStructure} and it arrives here by the spread, so
+   * the structure and the definition cannot disagree. A plugin block states it here.
+   */
+  parent?: string[];
   /** Declarative style capabilities → inspector controls + compiled CSS (spec §4.1). */
   supports?: BlockSupports;
   slots?: SlotSpec[];

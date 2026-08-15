@@ -197,23 +197,77 @@ describe("DataTableView footer", () => {
     expect(tokensOf(pager.parentElement)).toContain("@md/table:border");
   });
 
-  it("prefers pagination over a footer rather than rendering both", () => {
-    // Two pagers in one slot is not a composition anyone wants, and stacking
-    // them would answer a caller's mistake with a layout instead of letting it
-    // be seen. Asserted so the precedence is a decision rather than whichever
-    // order the JSX happened to be written in.
+  // The two directions React and JavaScript disagree about, asserted together
+  // because they pull opposite ways: a slot that keeps every non-nullish value
+  // draws a surface for these, and a slot that keeps only truthy values drops
+  // the `0` asserted below. Either predicate alone satisfies one case and
+  // breaks the other, so a control for one is not evidence about the other.
+  it.each([
+    ["false", false],
+    ["true", true],
+    ["an empty string", ""],
+    ["null", null],
+  ])(
+    "draws no footer surface for %s, which React renders as nothing",
+    (_l, value) => {
+      const { container } = render(
+        <DataTableView<Row>
+          columns={[{ name: "name", header: "Name" }]}
+          rows={[]}
+          error="Request failed"
+          footer={value}
+        />
+      );
+      // The error path is where it shows: a surface built for a footer that
+      // renders nothing is an empty bordered box under the alert.
+      expect(container.querySelectorAll(".\\@md\\/table\\:border").length).toBe(
+        0
+      );
+    }
+  );
+
+  it("keeps a zero-valued footer, which React renders", () => {
+    // `footer` is a ReactNode and `0` is a valid one -- a caller passing
+    // `selectedIds.length` with nothing selected renders "0". A truthiness test
+    // on the slot drops it, which is content loss wearing a falsy value.
     render(
       <DataTableView<Row>
         columns={[{ name: "name", header: "Name" }]}
         rows={ROWS}
-        footer={<div data-testid="footer">custom</div>}
+        footer={0}
+      />
+    );
+    expect(screen.getByText("0")).toBeInTheDocument();
+  });
+
+  it("renders a custom footer alongside the pager, not instead of it", () => {
+    // `footer` is an arbitrary node rather than a pager, so a caller using it
+    // for a selection summary or bulk actions and then adopting `pagination`
+    // must not lose it. Both props are public and both are permitted by the
+    // type, so dropping one silently is content loss with nothing reporting it.
+    render(
+      <DataTableView<Row>
+        columns={[{ name: "name", header: "Name" }]}
+        rows={ROWS}
+        footer={<div data-testid="footer">3 selected</div>}
         pagination={PAGER}
       />
     );
 
-    expect(
-      screen.getByRole("navigation", { name: "Test pagination" })
-    ).toBeInTheDocument();
-    expect(screen.queryByTestId("footer")).toBeNull();
+    const custom = screen.getByTestId("footer");
+    const pager = screen.getByRole("navigation", { name: "Test pagination" });
+    expect(custom).toBeInTheDocument();
+    expect(pager).toBeInTheDocument();
+
+    // Both inside the one surface, since the placement guarantee is what this
+    // file exists for and it has to hold for the composed case too.
+    expect(tokensOf(custom.parentElement)).toContain("@md/table:border");
+    expect(custom.parentElement).toBe(pager.parentElement);
+
+    // Footer first: a summary describes the rows above it, and the pager moves
+    // between pages, so the reading order is summary then controls.
+    expect(custom.compareDocumentPosition(pager)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    );
   });
 });

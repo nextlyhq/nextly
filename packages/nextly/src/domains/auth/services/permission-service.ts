@@ -209,22 +209,32 @@ export class PermissionService extends BaseService {
       const whereClause =
         conditions.length > 0 ? and(...conditions) : undefined;
 
-      let orderByClause;
+      let sortColumn;
       const orderFn = sortOrder === "asc" ? asc : desc;
 
       switch (sortBy) {
         case "name":
-          orderByClause = orderFn(permissions.name);
+          sortColumn = permissions.name;
           break;
         case "action":
-          orderByClause = orderFn(permissions.action);
+          sortColumn = permissions.action;
           break;
         case "resource":
-          orderByClause = orderFn(permissions.resource);
+          sortColumn = permissions.resource;
           break;
         default:
-          orderByClause = orderFn(permissions.resource);
+          sortColumn = permissions.resource;
       }
+
+      // `id` breaks ties, and it is what makes OFFSET paging sound rather than
+      // tidy. None of the sortable columns is unique, so rows sharing a value
+      // have no defined order between pages: the engine may place a tied row
+      // after the boundary on one request and before it on the next, which
+      // DUPLICATES that row on one page and DROPS a different one from the
+      // other. A caller walking every page then sees neither the total it was
+      // promised nor a stable set, and the loss is silent because each page is
+      // individually well formed.
+      const orderByClause = [orderFn(sortColumn), asc(permissions.id)];
 
       const offset = (page - 1) * limit;
 
@@ -250,7 +260,7 @@ export class PermissionService extends BaseService {
         })
         .from(permissions)
         .where(whereClause)
-        .orderBy(orderByClause)
+        .orderBy(...orderByClause)
         .limit(limit)
         .offset(offset);
 

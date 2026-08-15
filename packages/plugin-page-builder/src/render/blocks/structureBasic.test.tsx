@@ -97,13 +97,37 @@ describe("structure & basic blocks", () => {
     expect(out).toContain("Plain");
   });
 
-  it("columns wraps each child in a flex column", () => {
+  it("columns lays its columns out in a flex row", () => {
     const node = makeNode("core/columns", {}, undefined, {
-      default: [makeNode("core/heading", { text: "col-a" })],
+      default: [
+        makeNode("core/column", {}, undefined, {
+          default: [makeNode("core/heading", { text: "col-a" })],
+        }),
+      ],
     });
     const out = html(node);
     expect(out).toContain("col-a");
     expect(out).toContain("display:flex");
+  });
+
+  it("a column shares the row when it is given no width", () => {
+    // The property that makes the row usable with no configuration: a column with nothing set
+    // takes an equal share, so adding columns divides the row rather than collapsing them.
+    const out = html(
+      makeNode("core/column", {}, undefined, {
+        default: [makeNode("core/heading", { text: "share" })],
+      })
+    );
+    expect(out).toContain("flex:1 1 240px");
+    // `min-width:0` in every case, because a flex item defaults to `min-width:auto` and one long
+    // unbroken string would otherwise push the whole row past its container.
+    expect(out).toContain("min-width:0");
+  });
+
+  it("a column with a width holds it exactly", () => {
+    const out = html(makeNode("core/column", { width: "320px" }));
+    expect(out).toContain("flex:0 0 320px");
+    expect(out).toContain("width:320px");
   });
 
   it("heading wraps text in an anchor when a link is set", () => {

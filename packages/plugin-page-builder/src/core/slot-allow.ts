@@ -1,0 +1,75 @@
+/**
+ * Whether a slot's allow-list admits a block type.
+ *
+ * One reader for a question five call sites were each answering with their own
+ * `allowedBlocks.includes(type)`: the drop rules, the write validator, and the
+ * repair finder in three places. Five copies of a membership test agree on the
+ * day they are written, and the drift is silent because each looks correct on
+ * its own — the editor would offer a drop the write path then refuses, or the
+ * repair finder would advertise a wrapper that cannot hold what it is offered.
+ *
+ * The list is not plain membership, which is the other reason it cannot stay
+ * inlined. A trailing `*` matches a NAMESPACE, so `core/*` admits every core
+ * block, and that syntax is not this package's invention: it is what
+ * `@nextlyhq/blocks-engine` declares on its own `SlotSpec.allow`, so a
+ * contributed block's slot arrives already written in it. An exact-match test
+ * reading `core/*` finds no block named that and refuses everything the slot
+ * was declared to accept — an empty container with no stated reason.
+ *
+ * @module core/slot-allow
+ */
+import { isBlockName } from "@nextlyhq/blocks-engine";
+
+/**
+ * Whether a value is a well-formed allow-list: an array of block names and namespace wildcards.
+ *
+ * Lives beside {@link slotAdmits} because the two answer halves of one question — what the syntax
+ * MEANS and what counts as that syntax — and a registration gate that spelled the grammar out
+ * again could accept an entry this reader then ignores. `core/columns/` is the shape that makes
+ * that concrete: a bare `includes("/")` admits it, no block can be named it, and the slot
+ * silently matches nothing.
+ *
+ * A wildcard is checked by substituting a placeholder segment so the name grammar is asked ONCE,
+ * which is also how the engine's own gate does it.
+ */
+export function isAllowList(value: unknown): value is readonly string[] {
+  return (
+    Array.isArray(value) &&
+    value.every(entry => {
+      if (typeof entry !== "string") return false;
+      return isBlockName(
+        entry.endsWith("/*") ? `${entry.slice(0, -2)}/x` : entry
+      );
+    })
+  );
+}
+
+/**
+ * Whether `childType` may sit in a slot declared with this allow-list.
+ *
+ * An absent list means "any block": a slot that states nothing is unrestricted
+ * rather than closed. Callers pass the spec itself, including when they do not
+ * have one, so the "no spec" and "no list" cases cannot be answered differently
+ * by different callers.
+ */
+export function slotAdmits(
+  spec: { allowedBlocks?: readonly string[] } | undefined,
+  childType: string
+): boolean {
+  const allow = spec?.allowedBlocks;
+  if (!allow) return true;
+  // A stored document is untrusted input, and validation reaches this before it has checked that
+  // every node carries a string `type` — so a hand-authored or corrupted node would reach
+  // `startsWith` on a number and throw a TypeError where a validation MESSAGE was owed. Refusing
+  // is the right answer as well as the safe one: a type that is not a name matches no allowlist.
+  if (typeof childType !== "string") return false;
+  return allow.some(pattern => {
+    // The wildcard binds to the namespace separator rather than to raw
+    // characters: `core/*` matches `core/heading` and never `coreevil/banner`.
+    // A bare prefix test would quietly admit any namespace that merely starts
+    // with the same letters, which is a wider policy than the declaration reads
+    // as.
+    if (!pattern.endsWith("/*")) return childType === pattern;
+    return childType.startsWith(pattern.slice(0, -1));
+  });
+}
