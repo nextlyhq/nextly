@@ -814,6 +814,13 @@ export async function withMigrationSession<T>(
   // not step: an NTP correction mid-migration would otherwise expire or extend a claim by accident.
   let leaseConfirmedAt = claimStartedAt;
 
+  // How much of the lease is left to run without a fresh confirmation, asked in one place because
+  // two callers need the same answer: the renewal loop, which gives up when it reaches zero, and
+  // the shutdown below, which will not wait past it. Two spellings of one formula would agree today
+  // and drift the first time the margin moves.
+  const leaseRemainingMs = (): number =>
+    LOCK_LOSS_AFTER_MS - (performance.now() - leaseConfirmedAt);
+
   // Only ever one attempt in flight. `setInterval` fires on a schedule, not on completion, so a
   // renewal slower than the interval would otherwise have a second started underneath it — and with
   // a single-connection pool those queue against each other, each making the next later still.
@@ -825,7 +832,7 @@ export async function withMigrationSession<T>(
   const renewal = setInterval(() => {
     // Asked BEFORE attempting, because this is the question the attempt cannot answer: a renewal
     // that never comes back reports nothing at all, and the lease drains while it hangs.
-    if (performance.now() - leaseConfirmedAt >= LOCK_LOSS_AFTER_MS) {
+    if (leaseRemainingMs() <= 0) {
       // Reported, and then the attempt below runs ANYWAY. Declaring the loss tells the CALLER it is
       // no longer protected; it does nothing about the callback, which nothing here can stop and
       // which is still writing. Renewal is owner-scoped, so an attempt after a genuine takeover is
@@ -917,6 +924,44 @@ export async function withMigrationSession<T>(
       if (pending !== undefined) await Promise.allSettled([pending]);
     };
 
+    // 🔴 The same wait, BOUNDED, reporting whether it got its answer. A renewal blocked on a
+    // connection that never comes back does not reject — it simply never settles — so an unbounded
+    // wait here leaves the caller neither resolved nor rejected, which is worse than either outcome
+    // this session can report. The bound is what remains of the lease rather than a timeout invented
+    // for the occasion: while the claim could still be live, waiting may yet confirm it; once it
+    // could not, there is nothing left to confirm and nothing left to protect.
+    const settleWithin = (
+      pending: Promise<unknown>,
+      ms: number
+    ): Promise<boolean> => {
+      if (ms <= 0) return Promise.resolve(false);
+      return new Promise<boolean>(resolve => {
+        const deadline = setTimeout(() => resolve(false), ms);
+        // Never a reason for the process to stay alive, for the same reason the renewal timer is
+        // not: this waits on work that is already finished.
+        deadline.unref?.();
+        void Promise.allSettled([pending]).then(() => {
+          clearTimeout(deadline);
+          resolve(true);
+        });
+      });
+    };
+
+    // Clear the row once nothing this session started can still write to it. Shared by the two ways
+    // of ending without a confirmed claim, because they need the identical ordering: wait for the
+    // callback, since a late extension protects work that is still running; then stop the timer, so
+    // no further attempt begins; then wait for whichever attempt was in flight, read after the stop
+    // so it is the last one; only then release. Detached, because it may outlive the caller by as
+    // long as a blocked renewal takes.
+    const clearWhenQuiet = (): void => {
+      void (async () => {
+        await settle(work);
+        clearInterval(renewal);
+        await settle(outstandingRenewal);
+        await release(adapter, dialect, claim).catch(() => undefined);
+      })();
+    };
+
     if (!claimWasLost) {
       clearInterval(renewal);
       // 🔴 The in-flight attempt is settled BEFORE the release, not after. `clearInterval` stops new
@@ -925,8 +970,22 @@ export async function withMigrationSession<T>(
       // claim disproved, and the completion guard below would then fail a migration that held its
       // lock the whole way through and released it itself. A session must not be able to mistake
       // its OWN shutdown for a contender.
-      await settle(outstandingRenewal);
-      heldToTheEnd = await release(adapter, dialect, claim);
+      //
+      // 🔴 Waiting past the lease would not make the release safer, so it stops there and reports
+      // the claim unconfirmed. Releasing anyway would be the worse choice: the stalled attempt can
+      // still land afterwards and re-extend a row this session no longer watches. So the release is
+      // handed to the quiet-clear below, which waits that attempt out, and the run is failed rather
+      // than told it held a lock it could not confirm.
+      const confirmed = await settleWithin(
+        outstandingRenewal,
+        leaseRemainingMs()
+      );
+      if (confirmed) {
+        heldToTheEnd = await release(adapter, dialect, claim);
+      } else {
+        heldToTheEnd = false;
+        clearWhenQuiet();
+      }
     } else {
       // 🔴 The row is still not freed HERE, for the reason above — but leaving it entirely alone is
       // not enough either. A renewal already in flight when the claim was abandoned still runs its
@@ -952,12 +1011,7 @@ export async function withMigrationSession<T>(
       // THEN wait for whichever attempt was already in flight, read after the stop so it is the
       // last one, because its UPDATE would otherwise land after the release and leave the row
       // extended with nobody working. Only then clear.
-      void (async () => {
-        await settle(work);
-        clearInterval(renewal);
-        await settle(outstandingRenewal);
-        await release(adapter, dialect, claim).catch(() => undefined);
-      })();
+      clearWhenQuiet();
     }
   }
 

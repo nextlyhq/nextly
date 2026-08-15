@@ -1216,6 +1216,54 @@ describe("field-group migration session", () => {
     }
   });
 
+  // A renewal blocked on a connection that never comes back does not fail — it never answers at
+  // all. Waiting for it without a bound leaves the caller neither resolved nor rejected, which is
+  // worse than either outcome this session can report: a run that hangs holds its claim, blocks
+  // every contender, and gives an operator nothing to act on.
+  it("gives up on a renewal that never answers, rather than hanging the caller", async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createAdapter({
+        heldBy: null,
+        // The statement reaches the row and the answer never comes back — a driver that has stopped
+        // responding, not one that reports a failure. Never rejects, so nothing here can be mistaken
+        // for the already-covered error path.
+        onStatement: kind =>
+          kind === "renew" ? new Promise<never>(() => undefined) : undefined,
+      });
+
+      const run = withMigrationSession(
+        { adapter: h.adapter, dialect: "postgresql", label: "run-1" },
+        async () => {
+          // Starts a renewal and returns without waiting for it, so the shutdown below meets an
+          // attempt that is still outstanding.
+          vi.advanceTimersByTime(LOCK_RENEW_INTERVAL_MS);
+          return "migrated";
+        }
+      );
+      const settled = run.then(
+        () => "resolved",
+        (error: unknown) => error
+      );
+
+      // 🔴 The whole lease, because the wait is bounded by what remains of it. Without the bound
+      // this advance settles nothing and the test times out, which is the caller's experience.
+      await vi.advanceTimersByTimeAsync(LOCK_LOSS_AFTER_MS);
+
+      expect(await settled).toMatchObject({
+        code: "SERVICE_UNAVAILABLE",
+        logContext: { reason: "migration lock was not held at completion" },
+      });
+
+      // 🔴 And the row was NOT cleared while that attempt is still outstanding. Releasing under a
+      // stalled renewal is the failure the wait exists to prevent: the UPDATE lands afterwards and
+      // re-extends a row nothing is watching any more.
+      expect(h.owner()).toMatch(/^run-1#/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // Declaring the loss tells the CALLER it is unprotected. It does nothing about the callback,
   // which nothing here can stop and which is still writing — so giving up on renewal at that moment
   // guarantees the row lapses under work that never stopped. A loss declared because renewals could
