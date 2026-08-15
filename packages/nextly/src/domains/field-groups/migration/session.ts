@@ -741,6 +741,9 @@ export async function withMigrationSession<T>(
   // a single-connection pool those queue against each other, each making the next later still.
   let renewing = false;
 
+  // The attempt currently in flight, or a settled placeholder when there is none.
+  let outstandingRenewal: Promise<unknown> = Promise.resolve();
+
   const renewal = setInterval(() => {
     // Asked BEFORE attempting, because this is the question the attempt cannot answer: a renewal
     // that never comes back reports nothing at all, and the lease drains while it hangs.
@@ -765,7 +768,10 @@ export async function withMigrationSession<T>(
     // surplus and the callback is then delayed past it. The change is kept because its direction is
     // unconditionally safe: an earlier stamp can only shorten this session's own window.
     const attemptStartedAt = performance.now();
-    void renew(adapter, dialect, claim).then(
+    // Kept rather than discarded: a renewal blocked on the connection or the row lock can land long
+    // after this session gave up, and its UPDATE re-extends the row whether or not anyone is still
+    // waiting for it. The abandonment path below needs to know when that attempt has finished.
+    outstandingRenewal = renew(adapter, dialect, claim).then(
       held => {
         renewing = false;
         // Ownership DISPROVED is not a margin question. The row names someone else, so no amount of
@@ -783,6 +789,7 @@ export async function withMigrationSession<T>(
         renewing = false;
       }
     );
+    void outstandingRenewal;
   }, LOCK_RENEW_INTERVAL_MS);
   // Never a reason for the process to stay alive: this timer exists to protect work that is already
   // running, so if nothing else is pending there is nothing left to protect.
@@ -794,8 +801,15 @@ export async function withMigrationSession<T>(
   // instead, which is the hazard `no-unsafe-finally` names.
   let heldToTheEnd = true;
   let result: T;
+  let work: Promise<T> | undefined;
   try {
-    result = await Promise.race([fn(session), claimLost]);
+    // Held in its own binding so the abandonment path can wait for it. Its rejection is claimed
+    // here as well: when `claimLost` wins the race nothing else is awaiting `work`, and an
+    // unobserved rejection there would surface as an unhandled rejection rather than as this
+    // session's failure.
+    work = fn(session);
+    work.catch(() => undefined);
+    result = await Promise.race([work, claimLost]);
   } finally {
     clearInterval(renewal);
     // Removed before releasing, so a signal arriving during an orderly release
@@ -812,7 +826,30 @@ export async function withMigrationSession<T>(
     // callback's value stand. Completing is not the same as having been protected while completing:
     // the exclusion promises no other run touched these tables meanwhile, and a claim that lapsed
     // or was taken over means that promise was not kept.
-    if (!claimWasLost) heldToTheEnd = await release(adapter, dialect, claim);
+    if (!claimWasLost) {
+      heldToTheEnd = await release(adapter, dialect, claim);
+    } else {
+      // 🔴 The row is still not freed HERE, for the reason above — but leaving it entirely alone is
+      // not enough either. A renewal already in flight when the claim was abandoned still runs its
+      // UPDATE when the connection frees up, re-extending the row by a whole TTL; and because
+      // nothing renews it afterwards, the next run sees a live claim owned by a process that gave
+      // up, with no way to tell it from a healthy one.
+      //
+      // So the row is cleared once BOTH the callback and that outstanding attempt have settled.
+      // Waiting for the callback is what keeps the original guarantee: while `fn` is still writing,
+      // a late extension is protecting it and must stand. Once it has finished, an extended row
+      // protects nobody. The release is owner-scoped, so a claim a contender has since taken is
+      // left untouched.
+      //
+      // Detached deliberately: the caller has already been told the claim was lost, and this
+      // clean-up may outlive the callback by as long as the blocked renewal takes.
+      const abandoned = [work, outstandingRenewal].filter(
+        (pending): pending is Promise<unknown> => pending !== undefined
+      );
+      void Promise.allSettled(abandoned).then(() =>
+        release(adapter, dialect, claim).catch(() => undefined)
+      );
+    }
   }
 
   // Reached only when `fn` RESOLVED — a rejection propagated out of the block above and never gets

@@ -1094,12 +1094,16 @@ describe("field-group migration session", () => {
     }
   });
 
-  // 🔴 THE case a renewal makes worse if the exit path is naive. A renewal that fails on a blip
-  // leaves the row STILL OWNED by this claim, so an owner-scoped release matches and frees it —
-  // while `fn`, which nothing here can stop, carries on rewriting tables. The next contender would
-  // then start against a database this run is still writing to, which is worse than never having
-  // renewed at all. The claim is left to lapse instead.
-  it("does not free a row it still owns after losing the claim", async () => {
+  // 🔴 THE case a renewal makes worse if the exit path is naive, in BOTH directions. A renewal that
+  // failed on a blip leaves the row still owned by this claim, so an owner-scoped release matches
+  // and frees it — while `fn`, which nothing here can stop, carries on rewriting tables. Freeing it
+  // there hands the next contender a database this run is still writing to. But leaving it alone
+  // forever is the opposite failure: a renewal that was blocked when the claim was abandoned still
+  // runs its UPDATE when the connection frees up, re-extending the row by a whole TTL with nobody
+  // renewing it afterwards — a live claim owned by a process that gave up.
+  //
+  // The row is therefore held for exactly as long as the work runs, and cleared once it stops.
+  it("holds a lost claim while the work runs, then clears it", async () => {
     vi.useFakeTimers();
     try {
       const h = createAdapter({ heldBy: null });
@@ -1111,19 +1115,37 @@ describe("field-group migration session", () => {
         await realRunStatement?.(statement);
       });
 
+      // The callback stays pending until this test says otherwise, which is what lets the two
+      // halves below be observed as separate moments rather than inferred from one.
+      let finishWork: (() => void) | undefined;
+      const working = new Promise<void>(resolve => {
+        finishWork = resolve;
+      });
+
       const run = withMigrationSession(
         { adapter: h.adapter, dialect: "postgresql", label: "run-1" },
-        async () => {
-          await vi.advanceTimersByTimeAsync(LOCK_LOSS_AFTER_MS);
-        }
+        () => working
       );
-      await expect(run).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
-      await vi.advanceTimersByTimeAsync(0);
+      // Attached before the timers move: the rejection lands during the advance below, and with no
+      // handler yet in place it would be an unhandled rejection that exits the suite non-zero.
+      const settled = run.then(
+        () => undefined,
+        (error: unknown) => error
+      );
 
-      // Still claimed by this run, because the work it protects has not stopped. Left to expire on
-      // its own rather than handed over while that work is in flight.
+      await vi.advanceTimersByTimeAsync(LOCK_LOSS_AFTER_MS);
+      expect(await settled).toMatchObject({ code: "SERVICE_UNAVAILABLE" });
+
+      // Half one: the caller has been told, and the row is STILL OURS, because the callback it
+      // protects has not stopped. Handing it over here is the outcome the lock exists to prevent.
       expect(h.owner()).toMatch(/^run-1#/);
       expect(h.expiresAt()).not.toBeNull();
+
+      // Half two: once the work actually stops, the claim is cleared rather than left to sit as a
+      // phantom holder that later runs cannot distinguish from a healthy one.
+      finishWork?.();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.owner()).toBeNull();
     } finally {
       vi.useRealTimers();
     }
