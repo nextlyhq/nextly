@@ -951,6 +951,13 @@ test.describe("the drop-zone geometry the probe waits on", () => {
     // never settling; this one settles instantly, and the two must not be confused — `0 * Infinity`
     // is `NaN`, which the caller reports as an unparseable time and sends someone hunting a
     // malformed value that does not exist.
+    //
+    // The DELAY is nonzero deliberately, and it is what makes this a test rather than a
+    // demonstration. With a zero delay the expected span is zero, which an implementation that
+    // simply returned on `duration === 0` would also produce — so the control could not tell the
+    // delay accounting from its absence. At 400ms the three candidate implementations separate:
+    // charging the delay reports 400, dropping it reports 0, and multiplying by `Infinity` first
+    // refuses on a `NaN` that no malformed value produced.
     const injected = await frame.evaluate(() => {
       const sheet = (
         document.getElementById("nx-pb-style") as HTMLStyleElement | null
@@ -960,23 +967,28 @@ test.describe("the drop-zone geometry the probe waits on", () => {
         sheet.cssRules.length
       );
       sheet?.insertRule(
-        ".nx-pb-dropzone { animation: nx-instant 0s infinite }",
+        ".nx-pb-dropzone { animation: nx-instant 0s .4s infinite }",
         sheet.cssRules.length
       );
       const zone = document.querySelector(".nx-pb-dropzone");
       if (!zone) return null;
       const style = getComputedStyle(zone as HTMLElement);
-      // The population: the rule must have applied AND still be endless, or this measures an
-      // ordinary finite animation and says nothing about the multiplication.
+      // The population: the rule must have applied, still be endless, AND carry the delay this
+      // test is about. A browser that normalised any of the three would leave the assertion below
+      // measuring something else entirely.
       return {
         duration: style.animationDuration,
+        delay: style.animationDelay,
         iterations: style.animationIterationCount,
       };
     });
     expect(injected?.duration).toBe("0s");
+    expect(injected?.delay).toBe("0.4s");
     expect(injected?.iterations).toBe("infinite");
 
-    expect(await geometrySpanMs(frame, "data-drag data-active")).toBe(0);
+    // The DELAY, not zero: under the default fill mode an instantaneous animation still applies its
+    // end state when the delay elapses, so the edge is settled at 400ms rather than at 0.
+    expect(await geometrySpanMs(frame, "data-drag data-active")).toBe(400);
   });
 
   test("an effect on a pseudo-element this loop never reads is refused", async ({
