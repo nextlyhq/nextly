@@ -103,6 +103,23 @@ export function flakyAnnotations(tests: readonly FlakyTest[]): string[] {
 }
 
 /**
+ * A value safe inside a Markdown TABLE CELL.
+ *
+ * A cell is delimited by `|` and a row by a line break, so either character
+ * taken from a test title or a path is read as structure rather than as text:
+ * a `|` invents a column and a newline splits the row, truncating the record
+ * before its file and attempt count. `\\` first, or it would escape the pipes
+ * introduced after it. Line breaks become `<br>` because a cell cannot contain
+ * a real one at all.
+ */
+function escapeTableCell(value: string): string {
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/\|/g, "\\|")
+    .replace(/\r\n?|\n/g, "<br>");
+}
+
+/**
  * The job-summary table, or an empty string when nothing was flaky.
  *
  * Empty rather than a "no flaky tests" note on purpose: the summary is read to
@@ -112,7 +129,10 @@ export function flakyAnnotations(tests: readonly FlakyTest[]): string[] {
 export function flakySummary(tests: readonly FlakyTest[]): string {
   if (tests.length === 0) return "";
   const rows = tests
-    .map(t => `| \`${t.title}\` | ${t.file} | ${String(t.attempts)} |`)
+    .map(
+      t =>
+        `| \`${escapeTableCell(t.title)}\` | ${escapeTableCell(t.file)} | ${String(t.attempts)} |`
+    )
     .join("\n");
   return [
     `### ${String(tests.length)} test(s) passed only on retry`,
@@ -127,6 +147,30 @@ export function flakySummary(tests: readonly FlakyTest[]): string {
   ].join("\n");
 }
 
+/**
+ * Whether this attempt is the one that makes a test worth reporting.
+ *
+ * Pure, so the rule is testable without constructing Playwright's own types —
+ * the classification alone is not sufficient and the reason is easy to lose.
+ *
+ * A `test.fail()` that unexpectedly PASSES on attempt 1 and returns to its
+ * expected failure on the retry is ALSO classified `flaky`, and this suite
+ * carries several expected failures. Reporting on the classification alone
+ * would name a test that ended red as having "passed only on retry", which is
+ * the opposite of true.
+ *
+ * Requiring the passing retry also yields exactly one record per test:
+ * `onTestEnd` fires once per attempt, so keying on the classification would
+ * report the same test twice.
+ */
+export function recordsFlaky(
+  outcome: string,
+  status: string,
+  retry: number
+): boolean {
+  return outcome === "flaky" && status === "passed" && retry > 0;
+}
+
 export default class FlakyReporter implements Reporter {
   private readonly flaky: FlakyTest[] = [];
 
@@ -135,7 +179,16 @@ export default class FlakyReporter implements Reporter {
     // expected failures, so a `test.fail()` that fails and then passes is not
     // reported here as flaky. Recomputing it from `result.status` would be a
     // second implementation of a question Playwright already answers.
-    if (test.outcome() !== "flaky") return;
+    // `outcome()` alone is not enough. A `test.fail()` that unexpectedly PASSES
+    // on attempt 1 and returns to its expected failure on the retry is also
+    // classified `flaky`, and this suite carries several expected failures — so
+    // reporting on the classification alone would name tests that ended red as
+    // having "passed only on retry", which is the opposite of true.
+    //
+    // Requiring the passing retry itself gives one record per flaky test, on
+    // the attempt that decided it: `onTestEnd` fires once per attempt, so
+    // keying on the classification would also record the same test twice.
+    if (!recordsFlaky(test.outcome(), result.status, result.retry)) return;
     this.flaky.push({
       title: test.titlePath().slice(1).join(" › "),
       file: repoRelative(test.location.file),
