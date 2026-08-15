@@ -6,6 +6,8 @@ import {
   missingReviewers,
   rateLimited,
   report,
+  resolveReviewers,
+  resolveTarget,
   reviewersAtHead,
   unresolvedThreads,
   verdictFor,
@@ -831,5 +833,105 @@ describe("report", () => {
     const r = report({ ...base, reviews: [review(CODEX, OLD)] });
     expect(r.verdict).toBe("MISSING REVIEW AT HEAD");
     expect(r.exitCode).toBe(EXIT_NOT_CLEAN);
+  });
+});
+
+
+/**
+ * Where the queries are SENT.
+ *
+ * Every later request derives from this, so a wrong answer here describes one
+ * repository while reading another — and the whole parsing was previously
+ * reachable only by running the command.
+ */
+describe("resolveTarget", () => {
+  it("defaults to the public host when nothing is configured", () => {
+    expect(resolveTarget({})).toMatchObject({
+      owner: "nextlyhq",
+      name: "nextly",
+      host: "github.com",
+      repo: "nextlyhq/nextly",
+      // Bare on github.com: host-qualifying it there is accepted but says
+      // nothing, and the two forms should not both be in circulation.
+      repoArg: "nextlyhq/nextly",
+    });
+  });
+
+  it("reads the owner as the second-to-last segment", () => {
+    // `gh` defines GH_REPO as `[HOST/]OWNER/REPO`, so taking the FIRST segment
+    // as the owner is correct only for the two-segment form and silently wrong
+    // for the Enterprise one.
+    expect(resolveTarget({ GH_REPO: "ghe.example.com/acme/site" })).toMatchObject(
+      {
+        owner: "acme",
+        name: "site",
+        host: "ghe.example.com",
+        repoArg: "ghe.example.com/acme/site",
+      }
+    );
+  });
+
+  it("takes the host from GH_HOST when GH_REPO carries none", () => {
+    expect(
+      resolveTarget({ GH_REPO: "acme/site", GH_HOST: "ghe.example.com" })
+    ).toMatchObject({ host: "ghe.example.com" });
+  });
+
+  it("lets an explicit host in GH_REPO win over GH_HOST", () => {
+    // Both are set and they disagree. Preferring GH_HOST would send the
+    // requests somewhere other than the repository that was named.
+    expect(
+      resolveTarget({
+        GH_REPO: "ghe.example.com/acme/site",
+        GH_HOST: "other.example.com",
+      })
+    ).toMatchObject({ host: "ghe.example.com" });
+  });
+
+  it("refuses a value that is not [HOST/]OWNER/REPO", () => {
+    expect(resolveTarget({ GH_REPO: "nextly" }).error).toMatch(/GH_REPO/);
+    expect(resolveTarget({ GH_REPO: "a/b/c/d" }).error).toMatch(/GH_REPO/);
+  });
+
+  it("ignores empty segments from a trailing or doubled slash", () => {
+    expect(resolveTarget({ GH_REPO: "acme/site/" })).toMatchObject({
+      owner: "acme",
+      name: "site",
+      host: "github.com",
+    });
+  });
+});
+
+describe("resolveReviewers", () => {
+  it("defaults to the configured blocking and advisory reviewers", () => {
+    expect(resolveReviewers({})).toEqual({
+      blocking: [CODEX],
+      advisory: [RABBIT],
+    });
+  });
+
+  it("trims a list written with spaces after the commas", () => {
+    // An untrimmed entry matches no login, so the reviewer is silently dropped
+    // and the gate reports clean without that reviewer's coverage.
+    expect(
+      resolveReviewers({ CI_VERDICT_BLOCKING: `${CODEX}, ${RABBIT}` })
+    ).toMatchObject({ blocking: [CODEX, RABBIT] });
+  });
+
+  it("refuses when the blocking set is empty", () => {
+    // Nobody blocking makes every verdict clean, which is far more likely to be
+    // a mistyped variable than a decision — so it refuses rather than passing.
+    expect(resolveReviewers({ CI_VERDICT_BLOCKING: " , " }).error).toMatch(
+      /no blocking reviewer/
+    );
+  });
+
+  it("accepts an empty advisory set", () => {
+    // Advisory reviewers cannot hold a merge, so having none is a valid
+    // configuration rather than the misconfiguration above.
+    expect(resolveReviewers({ CI_VERDICT_ADVISORY: "" })).toEqual({
+      blocking: [CODEX],
+      advisory: [],
+    });
   });
 });

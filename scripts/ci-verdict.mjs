@@ -520,6 +520,71 @@ const fingerprint = (rv, th, ic) =>
   ]);
 
 /**
+ * Which repository, on which host, from the environment.
+ *
+ * Pure, and exported so the parsing can be exercised without a request. It
+ * decides where every later query is SENT, so getting it wrong describes one
+ * repository while reading another — and until now the only way to run it was
+ * to run the whole command.
+ *
+ * Returns `{ error }` rather than throwing or exiting, so the caller owns the
+ * exit status and this stays callable from a test.
+ */
+export function resolveTarget(env = {}) {
+  // `gh` defines GH_REPO as `[HOST/]OWNER/REPO`, so the owner is the
+  // second-to-last segment rather than the first.
+  const configured = env.GH_REPO ?? "nextlyhq/nextly";
+  const segments = configured.split("/").filter(Boolean);
+  if (segments.length < 2 || segments.length > 3) {
+    return { error: "ci-verdict: GH_REPO must be [HOST/]OWNER/REPO\n" };
+  }
+  const [name] = segments.slice(-1);
+  const [owner] = segments.slice(-2, -1);
+  // `GH_HOST` supplies the hostname when GH_REPO does not carry one, which is
+  // the ordinary Enterprise configuration. Defaulting straight to github.com
+  // would override that selection with the explicit `--hostname` passed later.
+  const host =
+    segments.length === 3 ? segments[0] : (env.GH_HOST ?? "github.com");
+  const repo = `${owner}/${name}`;
+  return {
+    owner,
+    name,
+    host,
+    repo,
+    // `--repo` is host-qualified off github.com, because a bare `owner/name`
+    // there resolves against the public host whatever the API calls do.
+    repoArg: host === "github.com" ? repo : `${host}/${repo}`,
+  };
+}
+
+/**
+ * The reviewer logins whose verdict blocks, and those merely reported.
+ *
+ * Trimmed: a list written with spaces after the commas yields entries that
+ * match no login, and an unmatched blocking reviewer is silently dropped — the
+ * gate then reports clean without that reviewer's coverage.
+ *
+ * An empty blocking set is returned as an error rather than as an empty array,
+ * because "nobody blocks" makes every verdict clean and is far more likely to
+ * be a mistyped variable than a decision.
+ */
+export function resolveReviewers(env = {}) {
+  const logins = value =>
+    value
+      .split(",")
+      .map(entry => entry.trim())
+      .filter(Boolean);
+  const blocking = logins(
+    env.CI_VERDICT_BLOCKING ?? "chatgpt-codex-connector[bot]"
+  );
+  const advisory = logins(env.CI_VERDICT_ADVISORY ?? "coderabbitai[bot]");
+  if (blocking.length === 0) {
+    return { error: "ci-verdict: no blocking reviewer configured\n" };
+  }
+  return { blocking, advisory };
+}
+
+/**
  * Command line entry: `node scripts/ci-verdict.mjs <pr>`.
  *
  * Kept behind the module-vs-main check so importing the decisions never
@@ -535,23 +600,12 @@ async function main(argv) {
     process.stderr.write("usage: node scripts/ci-verdict.mjs <pr-number>\n");
     return 2;
   }
-  // `gh` defines GH_REPO as `[HOST/]OWNER/REPO`, so the owner is the
-  // second-to-last segment rather than the first.
-  const configured = process.env.GH_REPO ?? "nextlyhq/nextly";
-  const segments = configured.split("/").filter(Boolean);
-  if (segments.length < 2 || segments.length > 3) {
-    process.stderr.write(`ci-verdict: GH_REPO must be [HOST/]OWNER/REPO\n`);
+  const target = resolveTarget(process.env);
+  if (target.error) {
+    process.stderr.write(target.error);
     return 2;
   }
-  const [name] = segments.slice(-1);
-  const [owner] = segments.slice(-2, -1);
-  // `GH_HOST` supplies the hostname when GH_REPO does not carry one, which is
-  // the ordinary Enterprise configuration. Defaulting straight to github.com
-  // would override that selection with the explicit `--hostname` below.
-  const host =
-    segments.length === 3 ? segments[0] : (process.env.GH_HOST ?? "github.com");
-
-  const repo = `${owner}/${name}`;
+  const { owner, name, host, repo, repoArg } = target;
   const { execFileSync } = await import("node:child_process");
   // `git` does not read GH_TOKEN, and the workflow checks out with
   // `persist-credentials: false`, so `ls-remote` against a private repository
@@ -580,7 +634,6 @@ async function main(argv) {
         { encoding: "utf8", maxBuffer: 64e6 }
       )
     );
-  const repoArg = host === "github.com" ? repo : `${host}/${repo}`;
 
   // The head comes from the REF, not from the pull request object. GitHub's
   // `headRefOid` lags a push — measured a full commit behind while `ls-remote`
@@ -634,24 +687,12 @@ async function main(argv) {
   // consumer reading `head` or `missing_reviews` a different object exactly
   // where it is least expecting one. Kept for the reader who assumes `report`
   // reviews and threads that cannot change this outcome.
-  // Trimmed: a list written with spaces after the commas yields entries that
-  // match no login, and an unmatched blocking reviewer is silently dropped —
-  // the gate then reports clean without that reviewer's coverage.
-  const logins = value =>
-    value
-      .split(",")
-      .map(entry => entry.trim())
-      .filter(Boolean);
-  const blocking = logins(
-    process.env.CI_VERDICT_BLOCKING ?? "chatgpt-codex-connector[bot]"
-  );
-  const advisory = logins(
-    process.env.CI_VERDICT_ADVISORY ?? "coderabbitai[bot]"
-  );
-  if (blocking.length === 0) {
-    process.stderr.write("ci-verdict: no blocking reviewer configured\n");
+  const reviewers = resolveReviewers(process.env);
+  if (reviewers.error) {
+    process.stderr.write(reviewers.error);
     return 2;
   }
+  const { blocking, advisory } = reviewers;
 
   if (meta.state !== "OPEN" && meta.state !== "MERGED") {
     // Re-read immediately before emitting. This path takes no other remote
