@@ -1304,6 +1304,12 @@ async function buildAdminMeta(): Promise<{
     // rest: a contribution field added later is then absent from this
     // projection by construction, which is the same reason the public
     // payload is a separate half rather than a filtered copy of the whole.
+    //
+    // Under its OWN key, never `plugins`. The client merges the two halves,
+    // so sharing a key would let these entries stand in for the installed
+    // list before the gated request answers — and a reader that finds a
+    // plugin there has already skipped the checks that would have told it
+    // the list is not available yet.
     const publicPlugins = plugins
       .filter(plugin => plugin.clientConfig !== undefined)
       .map(plugin => ({
@@ -1311,7 +1317,7 @@ async function buildAdminMeta(): Promise<{
         clientConfig: plugin.clientConfig,
       }));
     if (publicPlugins.length > 0) {
-      branding.plugins = publicPlugins;
+      branding.pluginClientConfigs = publicPlugins;
     }
   }
 

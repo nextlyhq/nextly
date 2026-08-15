@@ -153,7 +153,7 @@ describe("admin-meta split over HTTP", () => {
         "logoUrlLight",
         // Permitted, and narrowed by its own pair of cases below: the entries
         // carry a name and a public client config and nothing else.
-        "plugins",
+        "pluginClientConfigs",
       ].filter(key => key in payload)
     );
     // The population clause: a payload that happened to be empty would satisfy
@@ -172,9 +172,12 @@ describe("admin-meta split over HTTP", () => {
     );
     const payload = (await response.json()) as Record<string, unknown>;
 
-    expect(payload.plugins).toEqual([
+    expect(payload.pluginClientConfigs).toEqual([
       { name: "@acme/p", clientConfig: { providerId: "acme-sso" } },
     ]);
+    // Under its OWN key. Sharing `plugins` would let these entries stand in
+    // for the installed list on the client, where the two halves are merged.
+    expect(payload.plugins).toBeUndefined();
   });
 
   it("withholds everything else about that plugin from the public route", async () => {
@@ -187,7 +190,9 @@ describe("admin-meta split over HTTP", () => {
       ctx(["admin-meta"])
     );
     const payload = (await response.json()) as Record<string, unknown>;
-    const plugins = payload.plugins as Array<Record<string, unknown>>;
+    const plugins = payload.pluginClientConfigs as Array<
+      Record<string, unknown>
+    >;
 
     expect(Object.keys(plugins[0] ?? {}).sort()).toEqual([
       "clientConfig",
