@@ -56,6 +56,10 @@ import { resolveComponentTableName } from "../../domains/schema/utils/resolve-ta
 import { NextlyError } from "../../errors";
 import { getProductionNotifier } from "../../runtime/notifications/index";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
+import {
+  FIELD_GROUP_MIGRATION_STATUSES,
+  type FieldGroupMigrationStatus,
+} from "../../schemas/dynamic-field-groups";
 import type { FieldGroupRegistryService } from "../../services/field-groups/field-group-registry-service";
 import type { Logger } from "../../shared/types";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
@@ -124,6 +128,44 @@ const DISCARDED_LOG: Logger = {
   error: () => undefined,
 };
 
+/**
+ * Read a `migrationStatus` filter off the query string.
+ *
+ * 🔴 REJECTED rather than ignored when it is not a status this system has. Both silent alternatives
+ * are worse and in different ways: passing it through returns an empty list, which a caller cannot
+ * tell from "no field groups are in that state"; dropping it returns the UNFILTERED list, which is
+ * worse still, because the caller asked to narrow and got everything back looking narrowed. A
+ * refusal that names the accepted values is the only answer a client can act on.
+ *
+ * The accepted set is `FIELD_GROUP_MIGRATION_STATUSES`, the same list the schema declares, so this
+ * cannot drift into accepting a status the column never holds.
+ */
+function readMigrationStatus(
+  raw: string | undefined
+): FieldGroupMigrationStatus | undefined {
+  if (raw === undefined || raw === "") return undefined;
+  if (
+    !FIELD_GROUP_MIGRATION_STATUSES.includes(raw as FieldGroupMigrationStatus)
+  ) {
+    // The canonical validation envelope rather than a bespoke message, so the admin's existing
+    // `parseApiError` maps it like every other field error instead of needing a special case.
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "migrationStatus",
+          code: "INVALID_VALUE",
+          message: `Must be one of: ${FIELD_GROUP_MIGRATION_STATUSES.join(", ")}.`,
+        },
+      ],
+      logContext: {
+        reason: "unknown migration status filter",
+        migrationStatus: raw,
+      },
+    });
+  }
+  return raw as FieldGroupMigrationStatus;
+}
+
 const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
   listComponents: {
     // Registry returns BaseListResult `{data,total}` with limit/offset
@@ -134,6 +176,11 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
       const offset = toNumber(p.offset);
       const result = await svc.registry.listComponents({
         source: p.source as "code" | "ui" | undefined,
+        // 🔴 Filtered by the DATABASE, not by the caller narrowing a page it was already sent.
+        // A page is a window over the whole set, so a client-side filter can only ever search the
+        // window: selecting "diverged" would show an empty table while a diverged group sat on
+        // page two — hiding precisely the state an operator opened this screen to find.
+        migrationStatus: readMigrationStatus(p.migrationStatus),
         search: p.search,
         limit,
         offset,

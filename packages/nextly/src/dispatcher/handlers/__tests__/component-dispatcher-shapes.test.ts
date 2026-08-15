@@ -87,6 +87,78 @@ beforeEach(() => {
   vi.mocked(getAdapterFromDI).mockReturnValue(undefined);
 });
 
+describe("listComponents, the migrationStatus filter", () => {
+  /**
+   * The filter has to reach the DATABASE. Applied client-side to one page it can only search that
+   * page, so selecting "diverged" shows an empty table whenever the diverged group sits on another
+   * one — hiding the state an operator opened the screen to find.
+   *
+   * Observed on the registry call rather than reconstructed in the test, so it keeps watching the
+   * line it is about: a handler that stopped forwarding the filter would still satisfy any
+   * assertion built from a hand-copied argument list.
+   */
+  it("forwards the status to the registry rather than filtering a page", async () => {
+    const listComponents = vi.fn().mockResolvedValue({ data: [], total: 0 });
+    wireRegistry(makeRegistry({ listComponents }));
+
+    await dispatchComponents(
+      "listComponents",
+      { limit: "10", offset: "0", migrationStatus: "diverged" },
+      undefined
+    );
+
+    expect(listComponents).toHaveBeenCalledTimes(1);
+    expect(listComponents.mock.calls[0]?.[0]).toMatchObject({
+      migrationStatus: "diverged",
+    });
+  });
+
+  // Absence of the parameter IS "do not filter", so it must not become a value the query narrows on.
+  it("omits the filter entirely when none was asked for", async () => {
+    const listComponents = vi.fn().mockResolvedValue({ data: [], total: 0 });
+    wireRegistry(makeRegistry({ listComponents }));
+
+    await dispatchComponents("listComponents", { limit: "10" }, undefined);
+
+    expect(listComponents.mock.calls[0]?.[0]?.migrationStatus).toBeUndefined();
+  });
+
+  /**
+   * 🔴 Rejected rather than ignored. Passing an unknown value through returns an empty list, which a
+   * caller cannot tell from "nothing is in that state"; dropping it returns everything while looking
+   * filtered. Both are silent, and only a refusal is actionable.
+   */
+  it("refuses a status this system does not have, and says which are valid", async () => {
+    const listComponents = vi.fn().mockResolvedValue({ data: [], total: 0 });
+    wireRegistry(makeRegistry({ listComponents }));
+
+    const failure = await dispatchComponents(
+      "listComponents",
+      { migrationStatus: "bogus" },
+      undefined
+    ).catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: [
+          expect.objectContaining({
+            path: "migrationStatus",
+            code: "INVALID_VALUE",
+          }),
+        ],
+      },
+    });
+    // The message NAMES the accepted values; "invalid" alone leaves a caller guessing.
+    expect(
+      (failure as { publicData?: { errors?: { message?: string }[] } })
+        .publicData?.errors?.[0]?.message
+    ).toContain("diverged");
+    // And it refused before querying at all.
+    expect(listComponents).not.toHaveBeenCalled();
+  });
+});
+
 describe("dispatchComponents, paginated lists (respondList)", () => {
   it("listComponents returns Response with { items, meta } body and 200 status", async () => {
     const fakeComponents = [

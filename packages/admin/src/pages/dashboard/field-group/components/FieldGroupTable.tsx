@@ -162,10 +162,23 @@ export default function FieldGroupTable() {
     });
   };
 
+  // 🔴 Both filters go to the SERVER, and the table renders exactly what comes back.
+  //
+  // They used to be applied here, to `data.items` — one server-paginated page. A page is a window
+  // over the whole set, so narrowing it can only ever search the window: choosing "Diverged" showed
+  // an empty table whenever the diverged group sat on another page, hiding the one state an
+  // operator opens this screen to find. The counters had the same problem from the other side,
+  // since `meta.total` counts the unfiltered set.
+  //
+  // Asking the database once and rendering the answer also keeps the pager honest: `meta` now
+  // describes the filtered set, so page count, "hasNext" and the row range all agree with the rows.
   const { data, isLoading, isFetching, isError, error } = useFieldGroups({
     pagination: { page, pageSize },
     sorting: [],
-    filters: { search: debouncedSearch },
+    filters: {
+      search: debouncedSearch,
+      filters: { source: sourceFilter, migrationStatus: migrationFilter },
+    },
   });
 
   const { mutate: deleteFieldGroup, isPending: isDeleting } =
@@ -183,28 +196,21 @@ export default function FieldGroupTable() {
   // Selection is page-scoped: clear it whenever the page, search, or source
   // filter changes so a bulk action never targets rows that are no longer
   // shown/confirmed.
+  // `migrationFilter` belongs here for the same reason `sourceFilter` does, and it did not before
+  // only because the filter used to be applied after the fetch. Now that it changes which rows the
+  // SERVER returns, a selection made under one filter would otherwise survive into another result
+  // set and a bulk action would target rows the operator can no longer see.
   useEffect(() => {
     clearSelection();
-  }, [page, debouncedSearch, sourceFilter, clearSelection]);
+  }, [page, debouncedSearch, sourceFilter, migrationFilter, clearSelection]);
 
   const { mutate: bulkDeleteFieldGroups, isPending: isBulkDeleting } =
     useBulkDeleteFieldGroups();
 
-  const filteredData = useMemo(() => {
-    if (!data?.items) return [];
-    return data.items.filter(fieldGroup => {
-      if (sourceFilter !== "all" && fieldGroup.source !== sourceFilter) {
-        return false;
-      }
-      if (
-        migrationFilter !== "all" &&
-        fieldGroup.migrationStatus !== migrationFilter
-      ) {
-        return false;
-      }
-      return true;
-    });
-  }, [data?.items, sourceFilter, migrationFilter]);
+  // The rows ARE the answer to the filtered query, so there is nothing left to narrow here. A
+  // second filter over the same question is the drift this codebase has a rule about: two
+  // implementations agree the day they are written, and the one that runs last decides.
+  const filteredData = useMemo(() => data?.items ?? [], [data?.items]);
 
   // Code-first (locked) components open the same builder route; the builder
   // renders read-only when the loaded component is locked.
