@@ -169,16 +169,29 @@ async function geometrySpanMs(
         // The element and its pseudo-elements. A `::before` that animates height inside an
         // auto-sized zone moves the zone's own bottom edge, and its timing appears in no computed
         // longhand of the element itself.
-        // A JS-driven animation carries its timing in the Web Animations API and appears in no
-        // computed longhand, so the measurement below cannot see it. Refused rather than ignored:
-        // this file measures DECLARED CSS timing, and an effect it cannot read moves the edge
-        // just as surely.
-        const scripted = el
-          .getAnimations()
+        // Two ways an effect's real timing is not in any computed longhand, and both are REFUSED
+        // rather than ignored: this file measures DECLARED CSS timing, and an effect it cannot
+        // read moves the edge just as surely.
+        //
+        // 1. A JS-driven animation carries its timing in the Web Animations API alone.
+        // 2. A DECLARATIVE animation whose playback rate has been changed through that same API is
+        //    still a `CSSAnimation`, so a class test accepts it, while `animationDuration` keeps
+        //    reporting the declared time. At rate 0.5 the edge moves for twice as long; at rate 0
+        //    it never finishes. The declaration has stopped being a statement about the edge.
+        //
+        // `subtree: true` because this function charges `::before` and `::after` CSS timing a few
+        // lines below: reading their scripted timing off a narrower population would refuse on the
+        // element and wave the pseudo-element through. It admits descendants too, which is the
+        // conservative direction — a child cannot move the fixed-height between-item zone's edge,
+        // but it can move an auto-height empty placeholder's.
+        const unreadable = el
+          .getAnimations({ subtree: true })
           .filter(
-            a => !(a instanceof CSSAnimation) && !(a instanceof CSSTransition)
+            a =>
+              (!(a instanceof CSSAnimation) && !(a instanceof CSSTransition)) ||
+              a.playbackRate !== 1
           );
-        if (scripted.length > 0) {
+        if (unreadable.length > 0) {
           // Restored BEFORE returning. An early return that skips cleanup leaves the probe's
           // attributes on a real canvas element, so every later read in this run — and the
           // author's own canvas — sees a state the probe invented.
@@ -188,9 +201,10 @@ async function geometrySpanMs(
 
         // The element and BOTH pseudo-elements, through one reader. A pseudo that animates or
         // transitions an in-flow dimension moves an auto-sized zone's own edge, and its timing is
-        // in no computed longhand of the element. Asking the same function of each is what stops
-        // the pseudo path drifting from the element path — a second, shorter copy of this
-        // accounting is how iterations and transitions went missing from it.
+        // in no computed longhand of the element. One loop over all three rather than a separate
+        // pseudo path: every mechanism charged here — iteration counts, delays, transitions —
+        // applies identically to a pseudo-element, so a second accounting could only be a shorter
+        // copy of this one.
         for (const surface of [
           getComputedStyle(el),
           getComputedStyle(el, "::before"),
@@ -286,9 +300,11 @@ async function geometrySpanMs(
   }
   if (result.zones === -1) {
     throw new Error(
-      "a drop zone is running an animation driven by the Web Animations API rather than declared " +
-        "in CSS. Its timing is in no computed longhand, so this measurement cannot see it and " +
-        "refuses instead of reporting a span that ignores it."
+      "a drop zone is running an effect whose real timing is not in any computed longhand: either " +
+        "an animation driven by the Web Animations API rather than declared in CSS, or a declared " +
+        "one whose playback rate was changed through that API, which leaves the declared duration " +
+        "describing something other than how long the edge moves. This measurement cannot see " +
+        "either, so it refuses instead of reporting a span that ignores it."
     );
   }
   if (result.zones === 0) {
@@ -322,9 +338,18 @@ async function geometrySpanMs(
  * the timing. Pinning the measurement makes a cosmetic edit free and a timing edit visible, which
  * is the direction that matters.
  *
- * All zero because the zone sits out of flow at a fixed height and only its `background`
- * transitions. Do not edit these to clear a failure without reading what changed:
- * a nonzero value here is the canvas moving an edge the probe is about to measure.
+ * All zero, and the two zone shapes are zero for DIFFERENT reasons — which is why one sentence
+ * cannot stand for both, and why the shape that is easier to disturb is worth naming:
+ *
+ * - `.nx-pb-dropzone` is `position: absolute` at a fixed `height: 6px`, and the only property it
+ *   transitions is `background`. Out of flow and fixed, so nothing it animates can move an edge.
+ * - `.nx-pb-dropzone-empty` is IN FLOW at an auto height, sized by its own padding and border. It
+ *   is zero only because it declares no transition at all and its `[data-active]` rule changes
+ *   `border-color`, `background` and `color` — paint alone. A transition added to its padding,
+ *   border-width or margin WOULD move its edge, and this pin is what would report that.
+ *
+ * Do not edit these to clear a failure without reading what changed: a nonzero value here is the
+ * canvas moving an edge the probe is about to measure.
  */
 // The canvas iframe is only rendered above a certain width: the editor's rail, block library and
 // inspector claim the row first, and below roughly 1280px the preview is dropped rather than
@@ -719,8 +744,8 @@ test.describe("the drop-zone geometry the probe waits on", () => {
   }) => {
     const frame = await canvas(page, request);
 
-    // The pseudo path used to handle animations only. A transition on ::before moves an
-    // auto-sized zone's edge exactly as an animation does.
+    // A transition on a pseudo-element moves an auto-sized zone's edge exactly as an animation
+    // does, so both mechanisms are charged on both pseudo-elements.
     const injected = await frame.evaluate(() => {
       const sheet = (
         document.getElementById("nx-pb-style") as HTMLStyleElement | null
@@ -826,6 +851,51 @@ test.describe("the drop-zone geometry the probe waits on", () => {
     // between-item zone. A rule keyed on `[data-drag]` for an empty zone can never fire, so
     // measuring it would pin a span for movement the canvas cannot produce.
     expect(await geometrySpanMs(frame, "data-drag")).toBe(0);
+  });
+
+  test("a DECLARED animation that was slowed through the API is refused", async ({
+    page,
+    request,
+  }) => {
+    const frame = await canvas(page, request);
+
+    // The case a class test cannot see: still a `CSSAnimation`, so it is not "scripted", while its
+    // declared 200ms now describes 400ms of movement. Charging the declaration would UNDER-report,
+    // which is the direction that lets the allowance pass over an edge still travelling.
+    const applied = await frame.evaluate(async () => {
+      const sheet = (
+        document.getElementById("nx-pb-style") as HTMLStyleElement | null
+      )?.sheet;
+      sheet?.insertRule(
+        "@keyframes nx-slowed { from { height: 0 } to { height: 6px } }",
+        sheet.cssRules.length
+      );
+      sheet?.insertRule(
+        ".nx-pb-dropzone { animation: nx-slowed .2s infinite }",
+        sheet.cssRules.length
+      );
+      const zone = document.querySelector(".nx-pb-dropzone");
+      if (!zone) return null;
+      const animation = zone
+        .getAnimations()
+        .find(a => a instanceof CSSAnimation);
+      if (!animation) return null;
+      // `updatePlaybackRate` sets a PENDING rate that lands when the animation is next ready, so
+      // reading it back immediately would report the old one — and this control would then be
+      // measuring an animation still running at rate 1.
+      animation.updatePlaybackRate(0.5);
+      await animation.ready;
+      return { isCssAnimation: true, rate: animation.playbackRate };
+    });
+    // The population, before the verdict: no rule, no animation, or a rate that never applied all
+    // leave the refusal below firing for some other reason, or not firing at all.
+    expect(applied).not.toBeNull();
+    expect(applied?.isCssAnimation).toBe(true);
+    expect(applied?.rate).toBe(0.5);
+
+    await expect(
+      geometrySpanMs(frame, "data-drag data-active")
+    ).rejects.toThrow(/playback rate/);
   });
 
   test("it refuses rather than reporting a zero it cannot stand behind", async ({
