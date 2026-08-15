@@ -1220,42 +1220,43 @@ async function handleServiceRequest(
 // ============================================================================
 
 /**
- * GET /api/admin-meta
+ * The admin metadata, separated by the audience each half is answerable to.
  *
- * Returns the admin branding configuration to the admin UI.
- * Public — no authentication required.
- * Colors are converted from user-supplied hex to complete CSS colors here on
- * the server so the client only has to inject them as CSS variables. They must
- * be complete colors: the `--nx-*` tokens are consumed directly by the theme,
- * so a bare "H S% L%" triplet would be an invalid value and get dropped.
+ * `branding` is what the sign-in screen draws with, so it has to be readable
+ * before a session exists. `workspace` describes the authenticated admin —
+ * which plugins are mounted, what they contribute, the configured locales and
+ * the sidebar groups — and none of it is needed to render a login form.
+ *
+ * Built together and returned apart so each field has ONE implementation. A
+ * second builder for the authenticated route would agree on the day it was
+ * written and drift afterwards, and the drift is invisible because both halves
+ * look correct alone.
  */
-async function handleAdminMetaRequest(): Promise<Response> {
+async function buildAdminMeta(): Promise<{
+  branding: Record<string, unknown>;
+  workspace: Record<string, unknown>;
+}> {
   const config = getHandlerConfig();
-  const branding = config?.admin?.branding;
+  const configuredBranding = config?.admin?.branding;
 
-  const payload: Record<string, unknown> = {};
+  const branding: Record<string, unknown> = {};
+  const workspace: Record<string, unknown> = {};
 
-  if (branding?.logoUrl) payload.logoUrl = branding.logoUrl;
-  if (branding?.logoUrlLight) payload.logoUrlLight = branding.logoUrlLight;
-  if (branding?.logoUrlDark) payload.logoUrlDark = branding.logoUrlDark;
-  if (branding?.logoText) payload.logoText = branding.logoText;
-  if (branding?.favicon?.trim()) payload.favicon = branding.favicon.trim();
+  if (configuredBranding?.logoUrl)
+    branding.logoUrl = configuredBranding.logoUrl;
+  if (configuredBranding?.logoUrlLight)
+    branding.logoUrlLight = configuredBranding.logoUrlLight;
+  if (configuredBranding?.logoUrlDark)
+    branding.logoUrlDark = configuredBranding.logoUrlDark;
+  if (configuredBranding?.logoText)
+    branding.logoText = configuredBranding.logoText;
+  if (configuredBranding?.favicon?.trim())
+    branding.favicon = configuredBranding.favicon.trim();
 
-  // Same resolver the schema-mutation endpoints enforce with, so what the
-  // admin renders and what the API accepts can never disagree.
-  payload.showBuilder = isBuilderEnabled();
-
-  // Content-localization config for the admin (present only when i18n is enabled).
-  const localization = config?.localization;
-  if (localization) {
-    payload.locales = {
-      defaultLocale: localization.defaultLocale,
-      fallback: localization.fallback,
-      locales: localization.locales,
-    };
-  }
-
-  const colors = branding?.colors;
+  // Colors are resolved to complete CSS colors here rather than in the client,
+  // because the `--nx-*` tokens are consumed directly by the theme: a bare
+  // "H S% L%" triplet is an invalid value and gets dropped.
+  const colors = configuredBranding?.colors;
   if (colors) {
     const resolved: Record<string, string> = {};
 
@@ -1269,8 +1270,22 @@ async function handleAdminMetaRequest(): Promise<Response> {
     }
 
     if (Object.keys(resolved).length > 0) {
-      payload.colors = resolved;
+      branding.colors = resolved;
     }
+  }
+
+  // Same resolver the schema-mutation endpoints enforce with, so what the
+  // admin renders and what the API accepts can never disagree.
+  workspace.showBuilder = isBuilderEnabled();
+
+  // Content-localization config for the admin (present only when i18n is enabled).
+  const localization = config?.localization;
+  if (localization) {
+    workspace.locales = {
+      defaultLocale: localization.defaultLocale,
+      fallback: localization.fallback,
+      locales: localization.locales,
+    };
   }
 
   // Collect plugin metadata from registered plugins with host override
@@ -1278,7 +1293,7 @@ async function handleAdminMetaRequest(): Promise<Response> {
   const pluginOverrides = config?.admin?.pluginOverrides;
   const plugins = buildPluginAdminMeta(config?.plugins ?? [], pluginOverrides);
   if (plugins.length > 0) {
-    payload.plugins = plugins;
+    workspace.plugins = plugins;
   }
 
   // Override config branding with DB values when available
@@ -1288,17 +1303,14 @@ async function handleAdminMetaRequest(): Promise<Response> {
         "generalSettingsService"
       );
       const settings = await svc.getSettings();
-      if (settings.applicationName) payload.logoText = settings.applicationName;
-      if (settings.logoUrl) payload.logoUrl = settings.logoUrl;
+      if (settings.applicationName)
+        branding.logoText = settings.applicationName;
+      if (settings.logoUrl) branding.logoUrl = settings.logoUrl;
 
       // Include custom sidebar groups for admin navigation
       const customGroups = svc.getCustomSidebarGroups(settings);
-      console.log(
-        "[ADMIN-META] customGroups from DB:",
-        JSON.stringify(customGroups)
-      );
       if (customGroups.length > 0) {
-        payload.customGroups = customGroups;
+        workspace.customGroups = customGroups;
       }
 
       // Plugin placement overrides removed — placement is now author-defined
@@ -1310,15 +1322,66 @@ async function handleAdminMetaRequest(): Promise<Response> {
     console.error("[ADMIN-META] Error fetching settings from DB:", err);
   }
 
-  // respondData (bare object). The admin-meta payload is
-  // a non-CRUD read; the admin client already consumes a bare body via the
-  // migrated fetcher. `respondData` requires a Record-shaped argument and
-  // `payload` is built as `Record<string, unknown>` above so the bound is
-  // satisfied without a cast.
+  return { branding, workspace };
+}
+
+/**
+ * Serialize an admin-meta payload.
+ *
+ * `respondData` (bare object): this is a non-CRUD read and the admin client
+ * consumes a bare body via the migrated fetcher. It requires a Record-shaped
+ * argument, which both halves are built as, so the bound is satisfied without
+ * a cast.
+ */
+function respondAdminMeta(payload: Record<string, unknown>): Response {
   const response = respondData(payload);
   // Configuration, not content: see `SKIP_DATE_FORMATTING_HEADER`.
   response.headers.set(SKIP_DATE_FORMATTING_HEADER, "1");
   return response;
+}
+
+/**
+ * GET /api/admin-meta
+ *
+ * Public — no authentication required, because the sign-in screen renders
+ * before a session exists.
+ *
+ * Still carries the workspace half, which `GET /api/admin-meta/workspace`
+ * now also serves. The duplication is deliberate and temporary: the admin
+ * reads these fields from here until it is migrated to the authenticated
+ * route, and removing them before then would blank the sidebar rather than
+ * close anything.
+ */
+async function handleAdminMetaRequest(): Promise<Response> {
+  const { branding, workspace } = await buildAdminMeta();
+  return respondAdminMeta({ ...branding, ...workspace });
+}
+
+/**
+ * GET /api/admin-meta/workspace
+ *
+ * The admin metadata that describes the installation rather than its
+ * appearance: mounted plugins and everything they contribute, the configured
+ * locales, the custom sidebar groups, and whether the builder is available.
+ *
+ * Gated on a SESSION rather than on a permission. Every signed-in role needs
+ * its sidebar and its plugin routes to render, so requiring an administrative
+ * permission here would leave a read-only editor with an empty navigation
+ * rather than a restricted one. What each role may then DO with a contributed
+ * page is decided by that page's own `requiredPermission`.
+ *
+ * Named for the workspace rather than for plugins because it carries three
+ * non-plugin fields; naming it after one of its members is how the next
+ * addition ends up on the public route by default.
+ */
+async function handleAdminMetaWorkspaceRequest(
+  req: Request
+): Promise<Response> {
+  const auth = await requireAuthentication(req);
+  if (isErrorResponse(auth)) return createJsonErrorResponse(auth);
+
+  const { workspace } = await buildAdminMeta();
+  return respondAdminMeta(workspace);
 }
 
 /**
@@ -1381,6 +1444,12 @@ async function handleAdminMetaSidebarGroups(req: Request): Promise<Response> {
 // ============================================================================
 
 async function handleGet(req: Request, params: string[]) {
+  // Matched before the bare `admin-meta` branch, which would otherwise answer
+  // for every path beneath it and serve the public payload from the
+  // authenticated route's URL.
+  if (params[0] === "admin-meta" && params[1] === "workspace") {
+    return handleAdminMetaWorkspaceRequest(req);
+  }
   if (params[0] === "admin-meta") {
     return handleAdminMetaRequest();
   }
