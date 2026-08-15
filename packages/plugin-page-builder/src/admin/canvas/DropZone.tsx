@@ -14,17 +14,9 @@
 import { useDragDropMonitor, useDroppable } from "@dnd-kit/react";
 import { createContext, useContext, useState, type ReactNode } from "react";
 
-import { createZoneCollisionDetector } from "./zoneCollision";
+import { insertionCollisionDetector, zonePriority } from "./collisionPolicy";
 
 const BLOCK_TYPE = "nx-block";
-
-/**
- * Shared by every interleaved zone, and built once at module scope because it
- * closes over nothing per-zone: the detector reads the incumbent target from
- * the drag operation it is handed, so there is no state to keep and no reason
- * to give each zone its own instance.
- */
-const zoneCollisionDetector = createZoneCollisionDetector();
 
 /**
  * How deeply nested the container owning these zones is.
@@ -103,12 +95,12 @@ export function DropZone({
     // is what "the innermost container owns the drop target" asks for, and it
     // is the only thing that can settle two IDENTICAL rectangles — which is
     // exactly what a nested container's edge gap and its parent's gap are.
-    collisionPriority: depth,
-    // Only the interleaved zones rank this way. They are the ones that compete
-    // with a sibling zone for the same pointer, so they are the ones a switch
-    // margin means anything for; a container's single "drop here" zone has no
-    // sibling to flip to, and keeps the default ranking.
-    collisionDetector: empty ? undefined : zoneCollisionDetector,
+    collisionPriority: zonePriority(depth),
+    // Empty zones rank the same way, because "one per container" does not mean
+    // "no competitor": two adjacent containers that are both empty put their
+    // placeholders at the same depth, and those compete for the same pointer
+    // exactly as two zones in one slot do.
+    collisionDetector: insertionCollisionDetector,
   });
 
   if (empty) {

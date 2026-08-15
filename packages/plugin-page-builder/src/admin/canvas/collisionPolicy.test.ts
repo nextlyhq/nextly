@@ -22,11 +22,32 @@ import {
 import { describe, expect, it } from "vitest";
 
 import {
+  INSERTION_COLLISION_TYPE,
   TARGET_SWITCH_BAND_PX,
-  ZONE_COLLISION_TYPE,
-  zoneCollisionValue,
-  zoneDistancePx,
-} from "./zoneCollision";
+  insertionCollisionValue,
+  insertionDistancePx,
+  isInsertionTargetEligible,
+  nodeTargetPriority,
+  zonePriority,
+} from "./collisionPolicy";
+
+/**
+ * Zones interleaved in block flow span their container, so the pointer is always
+ * horizontally inside them and only `y` varies. Fixing that half here keeps the
+ * margin measurements below about the axis the margin acts on; the horizontal
+ * term gets its own tests further down.
+ */
+const ZONE_WIDTH_PX = 800;
+const POINTER_X = 400;
+function distanceInColumn(pointerY: number, centreY: number): number {
+  return insertionDistancePx({
+    pointerX: POINTER_X,
+    pointerY,
+    centreX: POINTER_X,
+    centreY,
+    width: ZONE_WIDTH_PX,
+  });
+}
 
 /** Two adjacent zones from the flat-list geometry: 60px apart, centred on the
  *  insertion line each one marks. */
@@ -46,7 +67,7 @@ function winnerAt({
   pointerY,
   currentTargetId,
   bandPx = TARGET_SWITCH_BAND_PX,
-  typeFor = () => ZONE_COLLISION_TYPE,
+  typeFor = () => INSERTION_COLLISION_TYPE,
 }: {
   pointerY: number;
   currentTargetId: string | null;
@@ -60,8 +81,8 @@ function winnerAt({
     id: zone.id,
     priority: 1,
     type: typeFor(zone.id),
-    value: zoneCollisionValue({
-      distancePx: zoneDistancePx(pointerY, zone.centre),
+    value: insertionCollisionValue({
+      distancePx: distanceInColumn(pointerY, zone.centre),
       isCurrentTarget: currentTargetId === zone.id,
       bandPx,
     }),
@@ -111,11 +132,11 @@ function firstSwitchY({
   return null;
 }
 
-describe("zoneDistancePx", () => {
-  it("is the vertical gap to the zone centre, unsigned", () => {
-    expect(zoneDistancePx(100, 120)).toBe(20);
-    expect(zoneDistancePx(140, 120)).toBe(20);
-    expect(zoneDistancePx(120, 120)).toBe(0);
+describe("insertionDistancePx", () => {
+  it("is the vertical gap to the target centre when horizontally inside", () => {
+    expect(distanceInColumn(100, 120)).toBe(20);
+    expect(distanceInColumn(140, 120)).toBe(20);
+    expect(distanceInColumn(120, 120)).toBe(0);
   });
 });
 
@@ -224,18 +245,18 @@ describe("what the uniform collision tier is load-bearing for", () => {
   });
 
   it("is the tier a zone already reports with the pointer inside it", () => {
-    expect(ZONE_COLLISION_TYPE).toBe(CollisionType.PointerIntersection);
+    expect(INSERTION_COLLISION_TYPE).toBe(CollisionType.PointerIntersection);
   });
 });
 
-describe("zoneCollisionValue", () => {
+describe("insertionCollisionValue", () => {
   it("ranks the nearer zone higher", () => {
-    const near = zoneCollisionValue({
+    const near = insertionCollisionValue({
       distancePx: 5,
       isCurrentTarget: false,
       bandPx: 10,
     });
-    const far = zoneCollisionValue({
+    const far = insertionCollisionValue({
       distancePx: 25,
       isCurrentTarget: false,
       bandPx: 10,
@@ -245,12 +266,12 @@ describe("zoneCollisionValue", () => {
   });
 
   it("credits the incumbent exactly the margin, in pixels", () => {
-    const challenger = zoneCollisionValue({
+    const challenger = insertionCollisionValue({
       distancePx: 30,
       isCurrentTarget: false,
       bandPx: 10,
     });
-    const incumbent = zoneCollisionValue({
+    const incumbent = insertionCollisionValue({
       distancePx: 30,
       isCurrentTarget: true,
       bandPx: 10,
@@ -259,5 +280,137 @@ describe("zoneCollisionValue", () => {
     // Linear and negated, so the credit reads back as a plain pixel difference
     // rather than something that has to be inverted to be interpreted.
     expect(incumbent - challenger).toBe(10);
+  });
+});
+
+describe("the horizontal term, which separates columns", () => {
+  // Targets in different columns of a formatted slot share a depth and a
+  // vertical band. Ranking them by `y` alone makes equal-height targets TIE,
+  // and a tie is settled by registration order rather than by where the pointer
+  // is — so the wrong column wins while the pointer sits inside the right one.
+  const COLUMN_WIDTH = 300;
+  const LEFT_CENTRE_X = 150;
+  const RIGHT_CENTRE_X = 450;
+  const ROW_CENTRE_Y = 200;
+
+  function columnDistances(pointerX: number): { left: number; right: number } {
+    const at = (centreX: number): number =>
+      insertionDistancePx({
+        pointerX,
+        pointerY: ROW_CENTRE_Y,
+        centreX,
+        centreY: ROW_CENTRE_Y,
+        width: COLUMN_WIDTH,
+      });
+    return { left: at(LEFT_CENTRE_X), right: at(RIGHT_CENTRE_X) };
+  }
+
+  it("does not tie two columns at the same height", () => {
+    // Inside the left column. Pure vertical distance would report 0 for BOTH.
+    const { left, right } = columnDistances(LEFT_CENTRE_X);
+
+    expect(left).toBe(0);
+    expect(
+      right,
+      "the far column must not tie with the one under the pointer"
+    ).toBeGreaterThan(0);
+  });
+
+  it("is zero anywhere inside a target's width, not only at its centre", () => {
+    // The property that keeps ordinary block flow ranking purely on `y`: a
+    // full-width zone contains the pointer horizontally wherever it is, so the
+    // horizontal term contributes nothing and cannot distort the comparison.
+    const atCentre = columnDistances(LEFT_CENTRE_X).left;
+    const atEdge = columnDistances(LEFT_CENTRE_X + COLUMN_WIDTH / 2).left;
+
+    expect(atCentre).toBe(0);
+    expect(atEdge).toBe(0);
+  });
+
+  it("grows only once the pointer leaves the target", () => {
+    const justOutside = columnDistances(
+      LEFT_CENTRE_X + COLUMN_WIDTH / 2 + 10
+    ).left;
+
+    expect(justOutside).toBe(10);
+  });
+});
+
+describe("eligibility, which the margin depends on", () => {
+  // The margin lives in the ranking, so it can only act on targets that are
+  // still IN the ranking. The default detection stops reporting a target once
+  // the dragged feedback no longer overlaps it, and where targets are spaced
+  // farther apart than that feedback is tall, that happens before any
+  // neighbour becomes eligible — the held target is dropped and the indicator
+  // alternates between a target and nothing, which is the flicker arriving
+  // through eligibility rather than through ranking.
+  it("keeps the held target when the default detection drops it", () => {
+    expect(
+      isInsertionTargetEligible({
+        hasDefaultCollision: false,
+        isCurrentTarget: true,
+        pointerWithinWidth: true,
+      })
+    ).toBe(true);
+  });
+
+  it("does not extend that reprieve to a target that is not held", () => {
+    // Otherwise every target in the document stays in the ranking forever.
+    expect(
+      isInsertionTargetEligible({
+        hasDefaultCollision: false,
+        isCurrentTarget: false,
+        pointerWithinWidth: true,
+      })
+    ).toBe(false);
+  });
+
+  it("releases the held target once the pointer leaves its width", () => {
+    // The bound on the reprieve. Without it, leaving the column, the container
+    // or the canvas entirely would still show its indicator.
+    expect(
+      isInsertionTargetEligible({
+        hasDefaultCollision: false,
+        isCurrentTarget: true,
+        pointerWithinWidth: false,
+      })
+    ).toBe(false);
+  });
+
+  it("admits anything the default detection already admits", () => {
+    // Eligibility is never NARROWED, so no target stops claiming a pointer it
+    // claimed before this module existed.
+    for (const isCurrentTarget of [true, false]) {
+      for (const pointerWithinWidth of [true, false]) {
+        expect(
+          isInsertionTargetEligible({
+            hasDefaultCollision: true,
+            isCurrentTarget,
+            pointerWithinWidth,
+          })
+        ).toBe(true);
+      }
+    }
+  });
+});
+
+describe("the one priority scale", () => {
+  // Stated as RELATIONSHIPS rather than numbers. A test that restated the
+  // arithmetic would agree with a policy that had drifted, because both sides
+  // would be wrong the same way.
+  it("ranks a container's own append target with the zones inside it", () => {
+    expect(nodeTargetPriority(3, "append")).toBe(zonePriority(4));
+  });
+
+  it("ranks an insert-before target with the zones of the slot it sits in", () => {
+    expect(nodeTargetPriority(3, "before")).toBe(zonePriority(3));
+  });
+
+  it("puts a deeper zone above a shallower one", () => {
+    expect(zonePriority(4)).toBeGreaterThan(zonePriority(3));
+  });
+
+  it("puts a container's append target above the zones holding the container", () => {
+    expect(nodeTargetPriority(3, "append")).toBeGreaterThan(zonePriority(3));
   });
 });

@@ -36,6 +36,10 @@ import { dragSensors } from "../logic/dragSensors";
 import { useEditor } from "../store/EditorProvider";
 
 import { QueryLoopSamplePreview } from "./CanvasQueryLoop";
+import {
+  insertionCollisionDetector,
+  nodeTargetPriority,
+} from "./collisionPolicy";
 import { CanvasDepth, DropZone, useCanvasDepth } from "./DropZone";
 
 const BLOCK_TYPE = "nx-block";
@@ -240,8 +244,12 @@ export function CanvasNode({ node }: { node: BlockNode }): ReactNode {
       index: appendSlot ? (node.slots?.[appendSlot]?.length ?? 0) : 0,
     },
     // Targets this node's OWN slot, so it ranks with the zones INSIDE it rather
-    // than with its siblings — the same `depth + 1` the slot content is rendered at.
-    collisionPriority: depth + 1,
+    // than with its siblings — the same depth the slot content is rendered at.
+    collisionPriority: nodeTargetPriority(depth, "append"),
+    // The same ranking every insertion target uses. A formatted slot draws no
+    // zones, so this target and its neighbouring `before:` targets ARE that
+    // slot's insertion points and need the switch margin for the same reason.
+    collisionDetector: insertionCollisionDetector,
   });
   const rootRef = appendSlot ? append.ref : undefined;
   const className = classFor(
@@ -325,7 +333,8 @@ function DraggableNode({
     disabled: dropBeforeIndex == null,
     data: { kind: "dropzone", parentId, slot, index: dropBeforeIndex ?? 0 },
     // Targets the slot this node SITS IN, so it ranks with that slot's own zones.
-    collisionPriority: depth,
+    collisionPriority: nodeTargetPriority(depth, "before"),
+    collisionDetector: insertionCollisionDetector,
   });
 
   // A formatted container itself: "append" target for the formatted slot it declares, since that
@@ -345,8 +354,12 @@ function DraggableNode({
       index: appendIndex,
     },
     // Targets this node's OWN slot, so it ranks with the zones INSIDE it rather
-    // than with its siblings — the same `depth + 1` the slot content is rendered at.
-    collisionPriority: depth + 1,
+    // than with its siblings — the same depth the slot content is rendered at.
+    collisionPriority: nodeTargetPriority(depth, "append"),
+    // The same ranking every insertion target uses. A formatted slot draws no
+    // zones, so this target and its neighbouring `before:` targets ARE that
+    // slot's insertion points and need the switch margin for the same reason.
+    collisionDetector: insertionCollisionDetector,
   });
 
   const className = classFor(
