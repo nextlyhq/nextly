@@ -10,6 +10,7 @@
  */
 import { DragDropProvider, DragOverlay } from "@dnd-kit/react";
 import { type LucideIcon } from "lucide-react";
+import { useState } from "react";
 
 import { defaultBlockRegistry } from "../core/registry";
 
@@ -17,7 +18,8 @@ import { Canvas } from "./canvas/Canvas";
 import { Monitor, Smartphone, Tablet } from "./icons";
 import { InvalidSlotBanner } from "./InvalidSlotBanner";
 import { dragLabel } from "./logic/dragLabel";
-import { planDrop } from "./logic/dropPlan";
+import { planDrop, type DropOutcome, type DropRefusal } from "./logic/dropPlan";
+import { dropRefusalMessage } from "./logic/dropRefusal";
 import { BlockLibrary } from "./panels/BlockLibrary";
 import { Inspector } from "./panels/Inspector";
 import { useEditor } from "./store/EditorProvider";
@@ -28,31 +30,59 @@ const BREAKPOINTS: { id: string; label: string; Icon: LucideIcon }[] = [
   { id: "mobile", label: "Mobile", Icon: Smartphone },
 ];
 
+/** The source and target a drag event carries, which is all either handler below reads. */
+interface DragOperation {
+  source: { id: string | number; data?: unknown } | null;
+  target: { id: string | number; data?: unknown } | null;
+}
+
 export function EditorSurface() {
   const { state, dispatch } = useEditor();
   const root = state.document.root;
+  /**
+   * Why the CURRENT target refuses this block, while the drag is still in the air.
+   *
+   * Held here rather than derived at render: the overlay renders on every pointer move and
+   * planning is a tree walk, so it is computed when the target CHANGES — which is exactly when
+   * `dragover` fires.
+   */
+  const [refusal, setRefusal] = useState<DropRefusal | null>(null);
 
-  const onDragEnd = (event: {
-    operation: {
-      source: { id: string | number; data?: unknown } | null;
-      target: { id: string | number; data?: unknown } | null;
-    };
-    canceled: boolean;
-  }) => {
-    if (event.canceled) return;
-    const { source, target } = event.operation;
-    if (!source || !target) return;
-    const action = planDrop(
+  const outcomeOf = (operation: DragOperation): DropOutcome => {
+    const { source, target } = operation;
+    if (!source || !target) return { kind: "unresolved" };
+    return planDrop(
       source.data ?? {},
       target.data ?? {},
       root,
       defaultBlockRegistry
     );
-    if (action) dispatch(action);
+  };
+
+  /**
+   * Feedback lands DURING the drag, not on release. A refusal the author only discovers after
+   * letting go is the failure this is here to remove: they aim at a container, nothing happens,
+   * and nothing says why.
+   */
+  const onDragOver = (event: { operation: DragOperation }) => {
+    const outcome = outcomeOf(event.operation);
+    setRefusal(outcome.kind === "refused" ? outcome.reason : null);
+  };
+
+  const onDragEnd = (event: {
+    operation: DragOperation;
+    canceled: boolean;
+  }) => {
+    // Cleared on EVERY end, cancels included: the overlay unmounts but this state does not, and a
+    // refusal left behind would be the message shown at the start of the next drag.
+    setRefusal(null);
+    if (event.canceled) return;
+    const outcome = outcomeOf(event.operation);
+    if (outcome.kind === "action") dispatch(outcome.action);
   };
 
   return (
-    <DragDropProvider onDragEnd={onDragEnd}>
+    <DragDropProvider onDragOver={onDragOver} onDragEnd={onDragEnd}>
       <div className="nx-pb-editor">
         <div className="nx-pb-toolbar">
           <div className="nx-pb-seg" role="group" aria-label="Preview device">
@@ -102,14 +132,22 @@ export function EditorSurface() {
       <DragOverlay>
         {source => (
           <div
+            data-refused={refusal ? "true" : undefined}
             style={{
               display: "inline-flex",
               alignItems: "center",
               gap: 6,
               padding: "6px 12px",
               borderRadius: "var(--radius)",
-              background: "var(--nx-primary)",
-              color: "var(--nx-primary-foreground)",
+              // Refusal reads as a colour AND as words. Colour alone excludes anyone who cannot
+              // distinguish these two, and the sentence is the part that says which rule stopped
+              // the drop, which no colour can carry.
+              background: refusal
+                ? "var(--nx-destructive)"
+                : "var(--nx-primary)",
+              color: refusal
+                ? "var(--nx-destructive-foreground)"
+                : "var(--nx-primary-foreground)",
               fontSize: 13,
               fontWeight: 600,
               boxShadow: "0 8px 24px rgb(0 0 0 / 0.25)",
@@ -117,8 +155,19 @@ export function EditorSurface() {
               whiteSpace: "nowrap",
             }}
           >
-            <span aria-hidden>⠿</span>
+            <span aria-hidden>{refusal ? "⃠" : "⠿"}</span>
             {dragLabel(source?.data ?? {}, root, defaultBlockRegistry)}
+            {refusal ? (
+              // Announced politely rather than asserted: this text changes on every target the
+              // pointer crosses, and an assertive live region would interrupt on each one.
+              <span
+                role="status"
+                aria-live="polite"
+                style={{ fontWeight: 400, opacity: 0.9 }}
+              >
+                {dropRefusalMessage(refusal)}
+              </span>
+            ) : null}
           </div>
         )}
       </DragOverlay>
