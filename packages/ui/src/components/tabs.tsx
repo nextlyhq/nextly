@@ -107,17 +107,25 @@ const Tabs = Root;
  * Only APPEARANCE is promoted. Layout a caller chooses -- `w-full`,
  * `justify-start`, margins, `overflow-x-auto` -- stays on `className`, because
  * a variant names a decision this component owns and layout is the caller's.
+ *
+ * The arms are a named declaration rather than an object literal inside `cva`,
+ * because `cva` does not expose its configuration on the function it returns —
+ * so anything checking which arms exist would otherwise have to restate them,
+ * and the two drift the moment an arm is added.
  */
+const TABS_LIST_VARIANTS = {
+  default: "h-10",
+  ghost: "h-8 bg-transparent",
+} as const;
+
 const tabsListVariants = cva(
   // Square corners: underline tabs, so the list never draws a rounded surface.
-  "inline-flex items-center justify-center rounded-none text-muted-foreground",
+  // `gap-1` and `p-0` are invariant across the variants, so they belong here —
+  // repeating them in each arm gives any future adjustment two sites to change
+  // and one to forget.
+  "inline-flex items-center justify-center gap-1 rounded-none p-0 text-muted-foreground",
   {
-    variants: {
-      variant: {
-        default: "h-10 gap-1 p-0",
-        ghost: "h-8 gap-1 bg-transparent p-0",
-      },
-    },
+    variants: { variant: TABS_LIST_VARIANTS },
     defaultVariants: { variant: "default" },
   }
 );
@@ -150,18 +158,20 @@ TabsList.displayName = List.displayName;
  * that draws the tab -- the square corners, the 2px underline, the active and
  * hover colours, the focus ring -- is in the base and is not a caller's to
  * choose, which is the property `tabs-contract.test.ts` watches for.
+ *
+ * Arms declared separately for the same reason as the list's.
  */
+const TABS_TRIGGER_SIZES = {
+  default: "text-sm",
+  sm: "text-xs",
+} as const;
+
 const tabsTriggerVariants = cva(
   // Square corners: the active state is a 2px bottom border that has to run the
   // full width of the trigger.
   "inline-flex items-center justify-center whitespace-nowrap rounded-none bg-transparent px-4 py-2 font-medium cursor-pointer transition-all duration-200 border-b-2 relative -mb-0.5 data-[state=active]:border-b-primary! data-[state=active]:text-primary data-[state=inactive]:border-transparent data-[state=inactive]:text-muted-foreground hover:text-primary hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 disabled:cursor-not-allowed",
   {
-    variants: {
-      size: {
-        default: "text-sm",
-        sm: "text-xs",
-      },
-    },
+    variants: { size: TABS_TRIGGER_SIZES },
     defaultVariants: { size: "default" },
   }
 );
@@ -228,6 +238,7 @@ TabsContent.displayName = Content.displayName;
 
 export { Tabs, TabsList, TabsTrigger, TabsContent };
 export { tabsListVariants, tabsTriggerVariants };
+export { TABS_LIST_VARIANTS, TABS_TRIGGER_SIZES };
 export type { TabsProps, TabsContentProps } from "../types/tabs";
 
 /**
