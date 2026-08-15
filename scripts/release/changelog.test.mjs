@@ -28,13 +28,42 @@ describe("the lookup cache", () => {
     }
   }
 
-  it("replaces BOTH of the dependency's exported lookups", () => {
-    // A changeset summary carrying `pr: #123` routes through `getInfoFromPullRequest` instead of
-    // `getInfo`. Wrapping one door leaves the other unbatched, which is the same oversized
-    // document arriving by a route nobody looked at.
-    const live = createRequire(import.meta.url)("@changesets/get-github-info");
-    expect(live.getInfo).toBe(cachedGetInfo);
-    expect(live.getInfoFromPullRequest).toBe(cachedGetInfoFromPullRequest);
+  it("routes the DELEGATED changelog call through the wrapper", async () => {
+    // Asserted by invoking `getReleaseLine`, not by comparing the dependency's exported property.
+    // A property comparison passes even if the generator captured the function during its own
+    // initialisation, or resolves a separate copy of the dependency under pnpm's isolated layout -
+    // and in both of those cases the delegated call bypasses the cache and rebuilds the oversized
+    // batch. Only reaching the stub through the real path rules that out.
+    byCommit.clear();
+    let calls = 0;
+    const line = await withStub(
+      "getInfo",
+      async () => ((calls += 1), { links: { commit: "[`abc`](c)", pull: "[#1](p)", user: "[@u](x)" } }),
+      () =>
+        changelog.getReleaseLine(
+          { summary: "a change", commit: "abcdefabcdefabcdefabcdefabcdefabcdefabcd" },
+          "patch",
+          { repo: "owner/repo" }
+        )
+    );
+    expect(calls).toBe(1);
+    expect(line).toContain("a change");
+  });
+
+  it("routes a pull-request summary through the other wrapper", async () => {
+    // `pr: #123` in the summary selects `getInfoFromPullRequest`, so this is the second entry
+    // point reached through the same delegated call.
+    byPullRequest.clear();
+    let calls = 0;
+    await withStub(
+      "getInfoFromPullRequest",
+      async () => ((calls += 1), { links: { commit: "[`abc`](c)", pull: "[#123](p)", user: "[@u](x)" } }),
+      () =>
+        changelog.getReleaseLine({ summary: "pr: #123\na change" }, "patch", {
+          repo: "owner/repo",
+        })
+    );
+    expect(calls).toBe(1);
   });
 
   it("asks the real lookup once for a repeated commit", async () => {
@@ -74,9 +103,9 @@ describe("the lookup cache", () => {
   });
 
   it("evicts a rejection so a retry can succeed", async () => {
-    // Driven THROUGH the wrapper, because the point is that the eviction RUNS. Seeding a rejected
-    // promise into the map and clearing it by hand passes whether or not the eviction exists,
-    // which is what the previous version of this test did.
+    // Driven THROUGH the wrapper, because the eviction is what has to run. Manipulating the map
+    // directly would assert the setup rather than the code: seeding a rejected entry and removing
+    // it by hand passes identically whether or not the eviction at the catch exists.
     byCommit.clear();
     let calls = 0;
     await withStub(
