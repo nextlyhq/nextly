@@ -1094,6 +1094,62 @@ describe("field-group migration session", () => {
     }
   });
 
+  // Declaring the loss tells the CALLER it is unprotected. It does nothing about the callback,
+  // which nothing here can stop and which is still writing — so giving up on renewal at that moment
+  // guarantees the row lapses under work that never stopped. A loss declared because renewals could
+  // not REACH the database says nothing about who owns the row, and the UPDATE is owner-scoped, so
+  // continuing to try can only ever re-protect work in flight or no-op against a real takeover.
+  it("keeps renewing a lost claim while the work is still running", async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createAdapter({ heldBy: null });
+      const realRunStatement = h.ctx.runStatement.getMockImplementation();
+      let renewalsFail = true;
+      h.ctx.runStatement.mockImplementation(async (statement: SQL) => {
+        if (renewalsFail && isRenewalStatement(statement)) {
+          throw new Error("connection reset");
+        }
+        await realRunStatement?.(statement);
+      });
+
+      let finishWork: (() => void) | undefined;
+      const working = new Promise<void>(resolve => {
+        finishWork = resolve;
+      });
+
+      const run = withMigrationSession(
+        { adapter: h.adapter, dialect: "postgresql", label: "run-1" },
+        () => working
+      );
+      const settled = run.then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      await vi.advanceTimersByTimeAsync(LOCK_LOSS_AFTER_MS);
+      expect(await settled).toMatchObject({ code: "SERVICE_UNAVAILABLE" });
+      const expiryAtLoss = h.expiresAt() as number;
+
+      // The database comes back while the callback is still writing. The clock moves so a fresh
+      // lease is distinguishable from the one already in the row.
+      renewalsFail = false;
+      h.clock.advance(1);
+      await vi.advanceTimersByTimeAsync(LOCK_RENEW_INTERVAL_MS);
+
+      // 🔴 The lease was RE-EXTENDED over work that never stopped — the property this exists for.
+      // Asserted as a MOVEMENT rather than "not null", which the pre-existing expiry satisfies.
+      expect(h.owner()).toMatch(/^run-1#/);
+      expect(h.expiresAt() as number).toBeGreaterThan(expiryAtLoss);
+
+      // And it still stops once the work does, rather than renewing an abandoned row forever.
+      finishWork?.();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.owner()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // 🔴 THE case a renewal makes worse if the exit path is naive, in BOTH directions. A renewal that
   // failed on a blip leaves the row still owned by this claim, so an owner-scoped release matches
   // and frees it — while `fn`, which nothing here can stop, carries on rewriting tables. Freeing it
