@@ -34,15 +34,41 @@ const TYPESCRIPT_EXTENSIONS = /\.(?:ts|tsx|mts|cts)$/;
  * answer accounts for `$TURBO_DEFAULT$`, negations and per-package overrides
  * that a pattern-by-pattern re-implementation here would have to model.
  */
-function resolvedTasks() {
+function dryRun() {
   const raw = execFileSync(
     "pnpm",
     ["exec", "turbo", "run", "check-types", "--dry=json"],
     { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }
   );
-  // Turbo prints its own preamble before the document on some terminals, so the
-  // parse starts at the first brace rather than at byte zero.
-  return JSON.parse(raw.slice(raw.indexOf("{"))).tasks;
+  // Turbo's document is pretty-printed from column zero, while the tools around
+  // it are not silent: pnpm emits config warnings and turbo a version banner,
+  // and which stream each uses varies between a terminal and a runner. So the
+  // document is located by the first line that OPENS it, rather than by the
+  // first `{` anywhere — a brace inside a warning would otherwise start the
+  // parse mid-sentence and fail on the character after it.
+  const lines = raw.split("\n");
+  const start = lines.findIndex(line => line.startsWith("{"));
+  if (start === -1) {
+    throw new Error(
+      `turbo --dry=json produced no JSON document. First 400 chars:\n${raw.slice(0, 400)}`
+    );
+  }
+  const document = lines.slice(start).join("\n");
+  try {
+    return JSON.parse(document);
+  } catch (cause) {
+    // Naming what was actually received, because the parser's own message
+    // ("Expected property name at position 1") describes the text and not
+    // where it came from, which leaves the next reader with nothing to act on.
+    throw new Error(
+      `turbo --dry=json did not parse. First 400 chars of the document:\n${document.slice(0, 400)}`,
+      { cause }
+    );
+  }
+}
+
+function resolvedTasks() {
+  return dryRun().tasks;
 }
 
 /** The TypeScript modules git tracks inside a package. */
@@ -155,14 +181,7 @@ describe("the shared TypeScript config is hashed", () => {
   // setting leaves every hash in the repository unmoved at once, which is the
   // same defect as above with the blast radius of the whole monorepo.
   it("counts packages/tsconfig among the global dependencies", () => {
-    const raw = execFileSync(
-      "pnpm",
-      ["exec", "turbo", "run", "check-types", "--dry=json"],
-      { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }
-    );
-    const globalFiles = Object.keys(
-      JSON.parse(raw.slice(raw.indexOf("{"))).globalCacheInputs.files
-    );
+    const globalFiles = Object.keys(dryRun().globalCacheInputs.files);
     expect(globalFiles).toContain("packages/tsconfig/base.json");
   });
 });
