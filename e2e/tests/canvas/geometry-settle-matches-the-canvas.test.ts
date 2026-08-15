@@ -597,9 +597,12 @@ test.describe("the drop-zone geometry the probe waits on", () => {
     const started = await frame.evaluate(() => {
       const zone = document.querySelector(".nx-pb-dropzone");
       if (!zone) return false;
+      // Endless, so it cannot finish during the round trip before `getAnimations()` is asked. A
+      // finite one makes this control pass on a fast worker and quietly stop testing anything on
+      // a loaded one - coverage that evaporates exactly when CI needs it most.
       (zone as HTMLElement).animate([{ height: "0px" }, { height: "12px" }], {
         duration: 300,
-        iterations: 1,
+        iterations: Infinity,
       });
       return true;
     });

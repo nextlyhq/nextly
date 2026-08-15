@@ -651,9 +651,8 @@ export function createPocDriver(page: Page): CanvasDriver {
 /**
  * The canvas iframe, found the same way the driver finds it.
  *
- * Exported so a test needing the canvas's own document — to read the stylesheet the browser was
- * actually given, rather than the TypeScript that produced it — asks the same question this
- * module already answers instead of carrying a second copy of "which frame is the canvas".
+ * Exported so a test needing to read or measure the canvas's own document asks the same question
+ * this module already answers, instead of carrying a second copy of "which frame is the canvas".
  */
 export function canvasFrameOf(page: Page): Frame {
   const frame = page
