@@ -1301,6 +1301,76 @@ describe("field-group migration session", () => {
     expect(process.listenerCount("SIGINT")).toBe(before);
   });
 
+  /**
+   * The handlers are registered before the claim, so EVERY way out has to remove them — including
+   * the one that is not a refusal. An acquisition that REJECTS (a dropped connection, an UPDATE
+   * permission error) skipped the cleanup entirely, and watch mode retries often enough for two
+   * process-wide listeners per attempt to accumulate.
+   */
+  it("removes its interrupt handlers when the legacy acquisition throws", async () => {
+    const h = createAdapter({
+      heldBy: null,
+      stateReadError: Object.assign(
+        new Error('column "expires_at" does not exist'),
+        { code: "42703" }
+      ),
+      onStatement: kind => {
+        // Fails the claim itself rather than the whole transaction layer, so the session reaches
+        // acquisition and dies there — which is the path the cleanup was missing.
+        if (kind === "owner-claim") throw new Error("connection reset");
+      },
+    });
+
+    const before = process.listenerCount("SIGINT");
+    await withMigrationSession(
+      {
+        adapter: h.adapter,
+        dialect: "postgresql",
+        label: "sync-1",
+        requireExistingLock: true,
+        releaseOnInterrupt: true,
+      },
+      async () => undefined
+    ).catch(() => undefined);
+
+    expect(process.listenerCount("SIGINT")).toBe(before);
+  });
+
+  /**
+   * 🔴 A `finally` that throws REPLACES whatever the callback raised, and this module promises a few
+   * lines above that the caller's own failure stays primary. A connection dropping during cleanup
+   * would otherwise hide the actual sync error behind a cleanup error.
+   */
+  it("keeps the callback's failure when the legacy release also fails", async () => {
+    const h = createAdapter({
+      heldBy: null,
+      stateReadError: Object.assign(
+        new Error('column "expires_at" does not exist'),
+        { code: "42703" }
+      ),
+      onStatement: kind => {
+        if (kind === "owner-release") throw new Error("connection dropped");
+      },
+    });
+
+    const failure = await withMigrationSession(
+      {
+        adapter: h.adapter,
+        dialect: "postgresql",
+        label: "sync-1",
+        requireExistingLock: true,
+      },
+      async () => {
+        throw new Error("the sync itself failed");
+      }
+    ).catch((error: unknown) => error);
+
+    // 🔴 The CALLBACK's message, not the release's. Asserting only that it threw would pass on the
+    // very substitution this exists to prevent, since both paths reject.
+    expect(String(failure)).toContain("the sync itself failed");
+    expect(String(failure)).not.toContain("connection dropped");
+  });
+
   // Registered before the attempt, so the path that never held anything has to take them off again.
   // Two process-wide listeners per refused sync is a slow leak in watch mode, which refuses often.
   it("removes its interrupt handlers when the legacy claim is refused", async () => {

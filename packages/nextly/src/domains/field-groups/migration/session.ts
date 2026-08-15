@@ -726,66 +726,101 @@ export async function withMigrationSession<T>(
         process.once("SIGTERM", onLegacyTerminate);
       }
 
-      const legacy = await acquireOwnerOnly(adapter, claim);
-      if (!legacy.ok) {
-        // Registered before the attempt, so they have to come off on the path that never held
-        // anything. Left on, they would outlive this call and a later interrupt would run a release
-        // for a claim this process does not own — harmless against the row, which is owner-scoped,
-        // and a leak of two process-wide listeners per refused sync.
-        process.off("SIGINT", onLegacyInterrupt);
-        process.off("SIGTERM", onLegacyTerminate);
-        // Refused for the same reason the expiry-aware path refuses, and it is a REFUSAL rather
-        // than a skip: the row names a holder, and without an expiry there is no basis on which to
-        // call that holder dead. Proceeding would run the sync against storage a migration may be
-        // renaming, which is the outcome this whole module exists to prevent.
-        throw NextlyError.serviceUnavailable({
-          logMessage:
-            "field-group migration lock is held; another run holds a claim on a lock table that predates its expiry column",
-          logContext: {
-            reason: "migration lock is held elsewhere",
-            heldBy: legacy.heldBy,
-            table: MIGRATION_LOCK_TABLE,
-            label,
-          },
-        });
-      }
-
-      // Held for real, so the caller is told so rather than being handed `not-held`. Nothing renews
-      // it, because there is no lease to extend — see `acquireOwnerOnly` for what that gives up.
-      let heldToTheEnd = true;
-      let legacyResult: T;
+      // 🔴 ONE `try` covers the acquisition, the work and the release, and the handlers come off in
+      // its `finally` — not at three separate points.
+      //
+      // Sliding the removal earlier or later just moves the gap: taken off before the release, a
+      // signal in that window strands the claim; done only on the `!ok` branch, an acquisition that
+      // REJECTS (a dropped connection, an UPDATE permission error) skips the cleanup entirely and
+      // leaks two process-wide listeners per attempt, which watch mode repeats. Spanning everything
+      // that can throw is the answer that has no next window.
+      //
+      // Keeping them live THROUGH the release is safe: `releaseOwnerOnly` is owner-scoped and
+      // idempotent, so a signal landing mid-release clears a row that is already being cleared and
+      // then re-raises. Doing it twice costs nothing; not doing it at all strands a claim that has
+      // no expiry to lapse.
       try {
-        legacyResult = await fn({
-          ...session,
-          lock: { kind: "held", owner: claim },
-        });
+        const legacy = await acquireOwnerOnly(adapter, claim);
+        if (!legacy.ok) {
+          // Refused for the same reason the expiry-aware path refuses, and it is a REFUSAL rather
+          // than a skip: the row names a holder, and without an expiry there is no basis on which
+          // to call that holder dead. Proceeding would run the sync against storage a migration may
+          // be renaming, which is the outcome this whole module exists to prevent.
+          throw NextlyError.serviceUnavailable({
+            logMessage:
+              "field-group migration lock is held; another run holds a claim on a lock table that predates its expiry column",
+            logContext: {
+              reason: "migration lock is held elsewhere",
+              heldBy: legacy.heldBy,
+              table: MIGRATION_LOCK_TABLE,
+              label,
+            },
+          });
+        }
+
+        // Held for real, so the caller is told so rather than being handed `not-held`. Nothing
+        // renews it, because there is no lease to extend — see `acquireOwnerOnly` for what that
+        // gives up.
+        let heldToTheEnd = true;
+        // 🔴 Three outcomes, not two. "The row stopped being ours" and "the release could not run"
+        // are different facts with different remedies, and collapsing them into one boolean is the
+        // failure-semantics mistake this codebase keeps finding: the first means another run may
+        // have overlapped this one, the second means the claim is probably still sitting there.
+        let releaseFailure: unknown;
+        let legacyResult: T;
+        try {
+          legacyResult = await fn({
+            ...session,
+            lock: { kind: "held", owner: claim },
+          });
+        } finally {
+          // 🔴 This `finally` must not THROW. A rejection here replaces whatever `fn` raised, so a
+          // connection dropping during cleanup would hide the actual sync failure behind a cleanup
+          // failure — and the caller's own error staying primary is a promise this module makes a
+          // few lines up. The outcome is recorded and judged after the block instead.
+          heldToTheEnd = await releaseOwnerOnly(adapter, claim).then(
+            held => held,
+            error => {
+              releaseFailure = error;
+              return false;
+            }
+          );
+        }
+
+        // Reached only when `fn` RESOLVED; a rejection propagates from the block above with the
+        // caller's failure intact.
+        if (releaseFailure !== undefined) {
+          throw NextlyError.serviceUnavailable({
+            logMessage:
+              "field-group migration finished but could not release its lock; the claim may still be held",
+            logContext: {
+              reason: "migration lock release failed",
+              table: MIGRATION_LOCK_TABLE,
+              label,
+            },
+            cause: releaseFailure instanceof Error ? releaseFailure : undefined,
+          });
+        }
+        // An interrupt is an orderly shutdown that already signalled its outcome, so it is not a
+        // lost claim.
+        if (!heldToTheEnd && !legacyReleasedOnSignal) {
+          throw NextlyError.serviceUnavailable({
+            logMessage:
+              "field-group migration finished without holding its lock; another run may have overlapped it",
+            logContext: {
+              reason: "migration lock was not held at completion",
+              table: MIGRATION_LOCK_TABLE,
+              label,
+            },
+          });
+        }
+        return legacyResult;
       } finally {
-        // Removed before releasing, so a signal arriving during an orderly release cannot start a
-        // second one.
+        // The ONE removal point, reached however this branch ends: a refused claim, a rejected
+        // acquisition, a thrown callback, or an orderly return.
         process.off("SIGINT", onLegacyInterrupt);
         process.off("SIGTERM", onLegacyTerminate);
-        // Owner-scoped, and its ANSWER is kept rather than discarded. Completing is not the same as
-        // having been protected while completing: if an operator or another actor cleared or took
-        // the row mid-run, the exclusion this session promised was not held, and reporting success
-        // would be the same false clean the expiry-aware path refuses at its own completion.
-        heldToTheEnd = await releaseOwnerOnly(adapter, claim);
       }
-
-      // Reached only when `fn` RESOLVED; a rejection propagates from the block above and keeps the
-      // caller's own failure primary. An interrupt is an orderly shutdown that already signalled its
-      // outcome, so it is not a lost claim.
-      if (!heldToTheEnd && !legacyReleasedOnSignal) {
-        throw NextlyError.serviceUnavailable({
-          logMessage:
-            "field-group migration finished without holding its lock; another run may have overlapped it",
-          logContext: {
-            reason: "migration lock was not held at completion",
-            table: MIGRATION_LOCK_TABLE,
-            label,
-          },
-        });
-      }
-      return legacyResult;
     }
   } else {
     await ensureLockRow(adapter, dialect);
