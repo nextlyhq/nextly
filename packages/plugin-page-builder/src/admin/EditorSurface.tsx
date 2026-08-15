@@ -69,6 +69,21 @@ export function EditorSurface() {
     setRefusal(outcome.kind === "refused" ? outcome.reason : null);
   };
 
+  /**
+   * The first target needs its own read, because `dragover` cannot report it.
+   *
+   * `setDropTarget` returns early when the identifier is unchanged, and dispatches only once the
+   * operation is already `dragging`. A target resolved while the drag is still initialising
+   * therefore sets the identifier WITHOUT emitting — and every later resolution of that same
+   * target takes the early return. So a drag that begins over a refusing container would say
+   * nothing until the pointer left and came back, which is exactly the case a node dragged inside
+   * its own formatted parent hits first.
+   */
+  const onDragStart = (event: { operation: DragOperation }) => {
+    const outcome = outcomeOf(event.operation);
+    setRefusal(outcome.kind === "refused" ? outcome.reason : null);
+  };
+
   const onDragEnd = (event: {
     operation: DragOperation;
     canceled: boolean;
@@ -82,7 +97,11 @@ export function EditorSurface() {
   };
 
   return (
-    <DragDropProvider onDragOver={onDragOver} onDragEnd={onDragEnd}>
+    <DragDropProvider
+      onDragStart={onDragStart}
+      onDragOver={onDragOver}
+      onDragEnd={onDragEnd}
+    >
       <div className="nx-pb-editor">
         <div className="nx-pb-toolbar">
           <div className="nx-pb-seg" role="group" aria-label="Preview device">
@@ -152,7 +171,8 @@ export function EditorSurface() {
                 color: "var(--nx-primary-foreground)",
                 fontSize: 13,
                 fontWeight: 600,
-                boxShadow: "0 8px 24px rgb(0 0 0 / 0.25)",
+                boxShadow:
+                  "0 8px 24px color-mix(in srgb, var(--nx-shadow-color) 25%, transparent)",
                 whiteSpace: "nowrap",
               }}
             >
@@ -197,7 +217,8 @@ export function EditorSurface() {
                       color: "var(--nx-foreground)",
                       fontSize: 12,
                       fontWeight: 500,
-                      boxShadow: "0 8px 24px rgb(0 0 0 / 0.25)",
+                      boxShadow:
+                        "0 8px 24px color-mix(in srgb, var(--nx-shadow-color) 25%, transparent)",
                     }
                   : undefined
               }
