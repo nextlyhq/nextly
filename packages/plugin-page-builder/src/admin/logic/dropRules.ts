@@ -34,9 +34,9 @@ export type DropReason =
 /**
  * A refusal carries its reason by construction.
  *
- * As two members rather than one shape with an optional field: `{ ok: false }` on its own used to
- * type-check, so a refusal with nothing to say about itself was expressible, and a caller wanting
- * the reason had to handle an absence that no code path actually produces.
+ * As two members rather than one shape with an optional field, because an optional `reason` makes
+ * `{ ok: false }` on its own type-check: a refusal with nothing to say about itself becomes
+ * expressible, and every caller wanting the reason has to handle an absence no code path produces.
  *
  * `reason?: undefined` on the accepting member keeps `canDrop(...).reason` readable without first
  * narrowing on `ok` — the reason is `undefined` there because an accepted drop has none.

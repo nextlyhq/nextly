@@ -1,10 +1,10 @@
 /**
  * Every assertion here reads the outcome's KIND, and a refusal also reads its REASON.
  *
- * These cases used to assert `toBeNull()`, and three of them still would: a refused drop, a
- * no-op and an unresolvable target all returned the same `null`. So each test passed on an
- * implementation that had confused it with the other two, and the property they were written to
- * separate was the one thing they could not see.
+ * Asserting only that no action came back would not separate these cases: a refused drop, a no-op
+ * and an unresolvable target are all "nothing to dispatch", so a test written that way passes on
+ * an implementation that has confused any one of them with the other two — and the distinction
+ * each case exists to pin is the one thing it cannot see.
  */
 import { describe, expect, it } from "vitest";
 
