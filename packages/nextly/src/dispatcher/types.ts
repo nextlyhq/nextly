@@ -25,6 +25,7 @@ export type ServiceType =
   | "webhooks"
   | "generalSettings"
   | "previewLinks"
+  | "previewUrl"
   | "imageSizes"
   | "dashboard"
   | "email"
