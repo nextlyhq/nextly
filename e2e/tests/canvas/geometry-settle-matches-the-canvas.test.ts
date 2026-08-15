@@ -133,7 +133,12 @@ async function geometrySpanMs(
     ([zoneSelector, geometry, safe, appliedState]) => {
       const zones = [...document.querySelectorAll(zoneSelector as string)];
       if (zones.length === 0)
-        return { zones: 0, ms: 0, unclassified: [] as string[] };
+        return {
+          zones: 0,
+          ms: 0,
+          unclassified: [] as string[],
+          nonDocumentTimelines: [] as string[],
+        };
 
       // A value that is not a time cannot be measured, and `|| 0` would report it as instant —
       // the silent zero this file exists to remove. `NaN` is preserved and refused by the caller.
@@ -143,6 +148,7 @@ async function geometrySpanMs(
         list.length === 0 ? 0 : list[i % list.length];
 
       const unclassified: string[] = [];
+      const nonDocumentTimelines: string[] = [];
       let longest = 0;
 
       for (const zone of zones) {
@@ -196,7 +202,12 @@ async function geometrySpanMs(
           // attributes on a real canvas element, so every later read in this run — and the
           // author's own canvas — sees a state the probe invented.
           for (const a of attrs) if (!had.includes(a)) el.removeAttribute(a);
-          return { zones: -1, ms: 0, unclassified: [] as string[] };
+          return {
+            zones: -1,
+            ms: 0,
+            unclassified: [] as string[],
+            nonDocumentTimelines: [] as string[],
+          };
         }
 
         // The element and BOTH pseudo-elements, through one reader. A pseudo that animates or
@@ -227,10 +238,31 @@ async function geometrySpanMs(
               const parsed = Number.parseFloat(text);
               return Number.isNaN(parsed) ? 1 : parsed;
             });
+            // Which CLOCK each animation runs on. `auto` is the document timeline, where a
+            // duration is the wall-clock time this probe assumes. A scroll or view timeline drives
+            // progress from scroll position instead, so a perfectly ordinary `.1s` describes no
+            // elapsed time at all and the edge keeps moving on the next scroll — the declared
+            // number is not wrong, it is about something else. Refused rather than charged.
+            //
+            // Read through `??` because a browser without timeline support exposes no such
+            // longhand; there the value is correctly `auto`, since nothing can be driven by a
+            // timeline the engine does not implement.
+            const timelines = (surface.animationTimeline ?? "auto").split(",");
             names.forEach((name, i) => {
               // `none` occupies a position in every timing list but starts no animation, so its
               // tuple would charge movement that never happens.
               if (name.trim() === "none") return;
+              const timeline =
+                timelines.length === 0
+                  ? ""
+                  : timelines[i % timelines.length].trim();
+              // An empty entry is not treated as `auto`: it means the longhand could not be read,
+              // and defaulting an unreadable clock to the one this probe can measure is the silent
+              // pass the file exists to remove.
+              if (timeline !== "auto") {
+                nonDocumentTimelines.push(timeline || "(unreadable)");
+                return;
+              }
               // Nor does a zero-iteration entry, and its DELAY is equally irrelevant: under the
               // default fill mode nothing is applied before the first iteration, and there is no
               // first iteration. Charging the delay would report a wait for movement that never
@@ -279,7 +311,12 @@ async function geometrySpanMs(
 
         for (const a of attrs) if (!had.includes(a)) el.removeAttribute(a);
       }
-      return { zones: zones.length, ms: longest, unclassified };
+      return {
+        zones: zones.length,
+        ms: longest,
+        unclassified,
+        nonDocumentTimelines,
+      };
     },
     [
       DROP_ZONES,
@@ -296,6 +333,15 @@ async function geometrySpanMs(
       "a drop zone declares an animation or transition whose duration is not a time this test " +
         "could parse, so its span is unknown. Reporting a number would certify an allowance " +
         "against a movement nobody measured."
+    );
+  }
+  if (result.nonDocumentTimelines.length > 0) {
+    throw new Error(
+      "a drop-zone animation runs on a non-document timeline (" +
+        [...new Set(result.nonDocumentTimelines)].join(", ") +
+        "). Its progress is driven by scroll position rather than by elapsed time, so its " +
+        "duration is not a wall-clock span and a later scroll moves the edge again. Charging " +
+        "that duration would pin a number this probe cannot stand behind."
     );
   }
   if (result.zones === -1) {
@@ -852,6 +898,44 @@ test.describe("the drop-zone geometry the probe waits on", () => {
     // between-item zone. A rule keyed on `[data-drag]` for an empty zone can never fire, so
     // measuring it would pin a span for movement the canvas cannot produce.
     expect(await geometrySpanMs(frame, "data-drag")).toBe(0);
+  });
+
+  test("an animation on a SCROLL timeline is refused, not read as its duration", async ({
+    page,
+    request,
+  }) => {
+    const frame = await canvas(page, request);
+
+    // A perfectly ordinary `.2s` that describes no elapsed time: `scroll()` drives progress from
+    // scroll position, so the edge moves again on the next scroll and no allowance covers it.
+    // 200ms is chosen deliberately — it EXCEEDS the driver's allowance, so a probe that read it as
+    // wall-clock would produce a span, not a refusal, and this test's rejection can only come from
+    // the timeline being recognised.
+    const injected = await frame.evaluate(() => {
+      const sheet = (
+        document.getElementById("nx-pb-style") as HTMLStyleElement | null
+      )?.sheet;
+      sheet?.insertRule(
+        "@keyframes nx-scrolled { from { height: 0 } to { height: 6px } }",
+        sheet.cssRules.length
+      );
+      sheet?.insertRule(
+        ".nx-pb-dropzone { animation: nx-scrolled .2s; animation-timeline: scroll() }",
+        sheet.cssRules.length
+      );
+      const zone = document.querySelector(".nx-pb-dropzone");
+      return zone
+        ? getComputedStyle(zone as HTMLElement).animationTimeline
+        : null;
+    });
+    // The population, before the verdict. A browser without scroll-timeline support resolves this
+    // to `auto`, and the refusal below would then be firing for some other reason — or the rule
+    // never applied at all. Neither is this test passing.
+    expect(injected).toContain("scroll");
+
+    await expect(
+      geometrySpanMs(frame, "data-drag data-active")
+    ).rejects.toThrow(/non-document timeline/);
   });
 
   test("a DECLARED animation that was slowed through the API is refused", async ({
