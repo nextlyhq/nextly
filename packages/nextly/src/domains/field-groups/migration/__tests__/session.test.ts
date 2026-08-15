@@ -1326,9 +1326,17 @@ describe("field-group migration session", () => {
         { code: "42703" }
       ),
       onStatement: async kind => {
-        // Holds the claim OPEN. The row is written by the interpreter before this runs, which is
-        // exactly the state the race is about: committed in the model, not yet returned to us.
-        if (kind === "owner-claim" && !signalled) {
+        // 🔴 Gated on the READ that PRECEDES the claim, not on the claim itself.
+        //
+        // The double writes the row while interpreting the claim statement, so pausing on
+        // `owner-claim` would pause with the row ALREADY ours — a state in which any release
+        // succeeds and the test passes whether or not the ordering holds. Measured: the break
+        // control passed against that version, which is what exposed it.
+        //
+        // Pausing on the first `owner-read` reproduces the real pending state: the acquisition is
+        // in flight and the row is still UNOWNED, so a release that does not wait clears nothing
+        // and the claim lands behind it.
+        if (kind === "owner-read" && !signalled) {
           signalled = true;
           process.emit("SIGINT");
           await claimPending;
