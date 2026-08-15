@@ -36,7 +36,12 @@ import { dragSensors } from "../logic/dragSensors";
 import { useEditor } from "../store/EditorProvider";
 
 import { QueryLoopSamplePreview } from "./CanvasQueryLoop";
-import { CanvasDepth, DropZone, useCanvasDepth } from "./DropZone";
+import {
+  CanvasDepth,
+  DropZone,
+  canvasPriority,
+  useCanvasDepth,
+} from "./DropZone";
 
 const BLOCK_TYPE = "nx-block";
 
@@ -241,7 +246,7 @@ export function CanvasNode({ node }: { node: BlockNode }): ReactNode {
     },
     // Targets this node's OWN slot, so it ranks with the zones INSIDE it rather
     // than with its siblings — the same `depth + 1` the slot content is rendered at.
-    collisionPriority: depth + 1,
+    collisionPriority: canvasPriority(depth + 1),
   });
   const rootRef = appendSlot ? append.ref : undefined;
   const className = classFor(
@@ -324,8 +329,10 @@ function DraggableNode({
     accept: BLOCK_TYPE,
     disabled: dropBeforeIndex == null,
     data: { kind: "dropzone", parentId, slot, index: dropBeforeIndex ?? 0 },
-    // Targets the slot this node SITS IN, so it ranks with that slot's own zones.
-    collisionPriority: depth,
+    // Targets the slot this node SITS IN, so it ranks with that slot's own
+    // zones — it marks a position among its siblings and must compete with the
+    // gap zones beside it.
+    collisionPriority: canvasPriority(depth),
   });
 
   // A formatted container itself: "append" target for the formatted slot it declares, since that
@@ -344,9 +351,11 @@ function DraggableNode({
       slot: appendSlot ?? DEFAULT_SLOT,
       index: appendIndex,
     },
-    // Targets this node's OWN slot, so it ranks with the zones INSIDE it rather
-    // than with its siblings — the same `depth + 1` the slot content is rendered at.
-    collisionPriority: depth + 1,
+    // One level IN, unlike `before:` above: this targets this node's OWN slot,
+    // so it ranks with the zones INSIDE it rather than with its siblings — the
+    // same `depth + 1` the slot content is rendered at. Without that a drag
+    // over a grid nested in a container is claimed by the container holding it.
+    collisionPriority: canvasPriority(depth + 1),
   });
 
   const className = classFor(
