@@ -363,9 +363,9 @@ export function editorReducer(
       // on a leaf.
       //
       // Compared against the document as it WAS, not judged on its own. `validateDocument` reports
-      // the FIRST fault anywhere in the tree, and this PR creates pages that already have one: a
-      // stored `core/columns` row holding ordinary blocks stays that way until its author takes
-      // the repair. Judging only the result would refuse every unrelated paste while such a row
+      // the FIRST fault anywhere in the tree, and pages in the wild already have one: a stored
+      // `core/columns` row holding ordinary blocks stays that way until its author takes the
+      // repair. Judging only the result would refuse every unrelated paste while such a row
       // exists, silently, so the Paste action would look broken on exactly the pages this change
       // affects.
       //

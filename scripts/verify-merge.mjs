@@ -675,6 +675,12 @@ export function requiredChecks(integrationPathsIgnore, { merged = false } = {}) 
     { name: "Lint / Typecheck / Test / Build", pathsIgnore: [] },
     // Its own workflow, unfiltered, on every pull request.
     { name: "gitleaks", pathsIgnore: [] },
+    // Listed for the reason this whole list exists: it is an INDEPENDENT job in
+    // `ci.yml`, hanging off nothing, so removing or renaming it produces no
+    // check-run for a failure check to reject - the control would disappear in
+    // the same change it exists to judge, and the verdict would stay green.
+    // Ungated and unfiltered, on both triggers, so it is always due to report.
+    { name: "Comment convention (describes code, not process)", pathsIgnore: [] },
     // The only coverage any dialect-specific behaviour has: the unit suites
     // mock the drivers and the browser tests run on sqlite alone.
     { name: "Integration (postgres)", pathsIgnore: integrationPathsIgnore },
