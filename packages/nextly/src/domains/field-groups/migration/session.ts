@@ -748,8 +748,14 @@ export async function withMigrationSession<T>(
     // Asked BEFORE attempting, because this is the question the attempt cannot answer: a renewal
     // that never comes back reports nothing at all, and the lease drains while it hangs.
     if (performance.now() - leaseConfirmedAt >= LOCK_LOSS_AFTER_MS) {
+      // Reported, and then the attempt below runs ANYWAY. Declaring the loss tells the CALLER it is
+      // no longer protected; it does nothing about the callback, which nothing here can stop and
+      // which is still writing. Renewal is owner-scoped, so an attempt after a genuine takeover is
+      // a no-op that cannot steal the row back — but where the loss came from renewals that could
+      // not reach the database, the row is still ours and a later success re-extends the lease over
+      // work that never stopped. Giving up entirely is the only option that is strictly worse than
+      // both.
       onLost();
-      return;
     }
     if (renewing) return;
     renewing = true;
@@ -811,7 +817,6 @@ export async function withMigrationSession<T>(
     work.catch(() => undefined);
     result = await Promise.race([work, claimLost]);
   } finally {
-    clearInterval(renewal);
     // Removed before releasing, so a signal arriving during an orderly release
     // cannot start a second one.
     process.off("SIGINT", onInterrupt);
@@ -827,6 +832,7 @@ export async function withMigrationSession<T>(
     // the exclusion promises no other run touched these tables meanwhile, and a claim that lapsed
     // or was taken over means that promise was not kept.
     if (!claimWasLost) {
+      clearInterval(renewal);
       heldToTheEnd = await release(adapter, dialect, claim);
     } else {
       // 🔴 The row is still not freed HERE, for the reason above — but leaving it entirely alone is
@@ -843,12 +849,25 @@ export async function withMigrationSession<T>(
       //
       // Detached deliberately: the caller has already been told the claim was lost, and this
       // clean-up may outlive the callback by as long as the blocked renewal takes.
-      const abandoned = [work, outstandingRenewal].filter(
-        (pending): pending is Promise<unknown> => pending !== undefined
-      );
-      void Promise.allSettled(abandoned).then(() =>
-        release(adapter, dialect, claim).catch(() => undefined)
-      );
+      // 🔴 The timer is NOT stopped here. Renewal keeps running for as long as the callback does,
+      // because that is the only thing still able to protect it: the row may well still be ours —
+      // a loss declared from renewals that could not reach the database says nothing about who owns
+      // it — and a later success re-extends the lease over work that never stopped.
+      //
+      // Ordering matters in three steps. Wait for the callback, because until it stops, extending
+      // is protection rather than a leak. THEN stop the timer, so no further attempt can start.
+      // THEN wait for whichever attempt was already in flight, read after the stop so it is the
+      // last one, because its UPDATE would otherwise land after the release and leave the row
+      // extended with nobody working. Only then clear.
+      const settle = async (pending: Promise<unknown> | undefined) => {
+        if (pending !== undefined) await Promise.allSettled([pending]);
+      };
+      void (async () => {
+        await settle(work);
+        clearInterval(renewal);
+        await settle(outstandingRenewal);
+        await release(adapter, dialect, claim).catch(() => undefined);
+      })();
     }
   }
 
