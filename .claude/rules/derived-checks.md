@@ -656,3 +656,50 @@ the unit to audit is the call site. The live risk for a well-documented shared
 helper is gaining a second caller with the opposite polarity, where the
 comment above it still reads correctly and nothing at the definition looks
 wrong.
+
+## An observable the DEFECT and the FIX both satisfy
+
+Distinct from the category error above, and easy to confuse with it. There the
+measurement was correct but answered a NARROWER question than the claim. Here
+the measurement is correctly scoped, correctly taken, and about exactly the
+right thing — and it returns the same value whether the code is broken or
+fixed. Re-running it, widening it, or taking it more carefully cannot help,
+because the two states are not distinguishable in that observable at all.
+
+It is worth separating because the remedy is different. A narrow measurement is
+repaired by measuring the wider thing. A non-discriminating one is repaired by
+measuring a DIFFERENT PROPERTY, and until someone names that property the check
+is decoration however rigorously it is run.
+
+Three instances, two of them found on the same day in one subsystem:
+
+- **Ordering, standing in for a switch margin.** A drop-target ranking was
+  asserted by checking that the nearer target ranks higher. Every candidate
+  metric orders correctly — that is what makes them candidates — so the
+  assertion stayed green across two successive metrics whose margin WIDTH was
+  wrong, one of them turning a 10px requirement into roughly 36px once the
+  pointer sat 100px off-centre. Order was never the property under test; width
+  was, and nothing measured it.
+- **A bracketed edge, standing in for a compliant resolver.** An end-to-end
+  probe reported `bracketed: false` when it could not locate a target-switch
+  boundary to within a pixel, and its own comment said this distinguished a
+  resolver "sticky in one direction only" from a working one. A correct
+  BIDIRECTIONAL margin puts the two crossings a full margin apart, so it emits
+  the identical signal. The guard could not separate the defect it was written
+  for from the fix.
+- **An unresolved-thread count, standing in for a clean review.** Findings that
+  cannot be anchored to a line are written into a review SUMMARY, which opens no
+  thread. A stated P1 therefore leaves the count at zero, which is
+  byte-identical to a review that found nothing.
+
+**The tell is a question, and it is cheap: what would this check report if the
+bug were present?** Not "does it pass now" — run it, in your head, against the
+broken state you are worried about. If the answer is the same as the passing
+state, you have not tested the property yet. The B-7 margin work reached its
+third wrong implementation before anyone asked it.
+
+**Then make the failing case real before trusting the repair.** Break the code
+deliberately, confirm the NEW assertion fails, and restore. A width assertion
+added after a wrong metric shipped is only evidence once it has been seen to
+reject that metric; assuming it would have is the same act of faith that let the
+ordering assertion stand.
