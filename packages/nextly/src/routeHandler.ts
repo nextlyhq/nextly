@@ -1364,15 +1364,15 @@ function withSessionCacheHeaders(response: Response): Response {
  * Public — no authentication required, because the sign-in screen renders
  * before a session exists.
  *
- * Still carries the workspace half, which `GET /api/admin-meta/workspace`
- * now also serves. The duplication is deliberate and temporary: the admin
- * reads these fields from here until it is migrated to the authenticated
- * route, and removing them before then would blank the sidebar rather than
- * close anything.
+ * Branding ONLY. What an anonymous caller may read is decided by which half
+ * of `buildAdminMeta` is serialized here, rather than by a list of fields to
+ * withhold — so a contribution field added later is private by default. A
+ * filter would have to be extended by whoever adds it, and plugin authors
+ * choose those fields rather than this package.
  */
 async function handleAdminMetaRequest(): Promise<Response> {
-  const { branding, workspace } = await buildAdminMeta();
-  return respondAdminMeta({ ...branding, ...workspace });
+  const { branding } = await buildAdminMeta();
+  return respondAdminMeta(branding);
 }
 
 /**

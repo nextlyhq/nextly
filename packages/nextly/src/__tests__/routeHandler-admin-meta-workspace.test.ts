@@ -107,16 +107,44 @@ describe("admin-meta split over HTTP", () => {
     expect(response.headers.get("vary")).toBeNull();
   });
 
-  it("keeps the workspace fields on the public route for now", async () => {
-    // The admin still reads these from the public payload. Removing them
-    // before it is migrated would blank the sidebar rather than close
-    // anything, so this asserts the duplication is intact and is expected to
-    // be inverted once the client reads the authenticated route.
+  it("serves no field outside the branding vocabulary to an anonymous caller", async () => {
+    // An ALLOWLIST, deliberately. A list of fields to withhold has to be
+    // extended by whoever adds the next one, and plugin authors choose what a
+    // contribution carries — so the next sensitive field would be public by
+    // default and nothing here would notice. Asserting the whole key set
+    // instead means any addition to the public half fails this until someone
+    // decides it belongs there.
     const response = await handlers().GET(
       request("admin-meta"),
       ctx(["admin-meta"])
     );
+    const payload = (await response.json()) as Record<string, unknown>;
 
-    expect(await response.json()).toMatchObject({ showBuilder: true });
+    expect(Object.keys(payload).sort()).toEqual(
+      [
+        "colors",
+        "favicon",
+        "logoText",
+        "logoUrl",
+        "logoUrlDark",
+        "logoUrlLight",
+      ].filter(key => key in payload)
+    );
+    // The population clause: a payload that happened to be empty would satisfy
+    // the subset assertion above without proving anything was read.
+    expect(payload.logoText).toBe("Acme");
+  });
+
+  it("withholds plugin contributions from the public route", async () => {
+    const response = await handlers().GET(
+      request("admin-meta"),
+      ctx(["admin-meta"])
+    );
+    const payload = (await response.json()) as Record<string, unknown>;
+
+    expect(payload.plugins).toBeUndefined();
+    expect(payload.showBuilder).toBeUndefined();
+    expect(payload.locales).toBeUndefined();
+    expect(payload.customGroups).toBeUndefined();
   });
 });

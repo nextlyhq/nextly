@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import type React from "react";
 import { createContext, useContext, useEffect, useMemo } from "react";
 
+import { protectedApi } from "../../lib/api/protectedApi";
 import { publicApi } from "../../lib/api/publicApi";
 import {
   DEFAULT_MARK_PATHS,
@@ -29,8 +30,16 @@ import type {
  */
 interface BrandingState {
   branding: AdminBranding | undefined;
-  /** True until the admin-meta query settles, either way. */
+  /** True until BOTH admin-meta queries settle, either way. */
   isPending: boolean;
+  /**
+   * True when the PUBLIC half never produced an answer.
+   *
+   * Separate from `isUnavailable` because the two halves fail independently
+   * and for different reasons: the workspace half fails routinely before
+   * sign-in, which says nothing about branding being readable.
+   */
+  isBrandingUnavailable: boolean;
   /**
    * True when admin-meta has never produced an answer, so absence proves
    * nothing.
@@ -66,6 +75,7 @@ export function useBrandingStatus(): Omit<BrandingState, "branding"> {
   return {
     isPending: state?.isPending ?? false,
     isUnavailable: state?.isUnavailable ?? false,
+    isBrandingUnavailable: state?.isBrandingUnavailable ?? false,
   };
 }
 
@@ -182,12 +192,12 @@ interface BrandingProviderProps {
 
 export function BrandingProvider({ children }: BrandingProviderProps) {
   const {
-    data: fetchedData,
-    isPending,
+    data: brandingData,
+    isPending: brandingPending,
     // `isLoadingError`, not `isError`: the latter is also true when a
     // background refetch fails while a previous response is still cached, and
     // that cached response is a perfectly good answer.
-    isLoadingError,
+    isLoadingError: brandingUnavailable,
   } = useQuery<AdminBranding>({
     queryKey: ["admin-meta"],
     queryFn: () => publicApi.get<AdminBranding>("/admin-meta"),
@@ -197,16 +207,54 @@ export function BrandingProvider({ children }: BrandingProviderProps) {
     retry: false,
   });
 
-  useColorInjection(fetchedData?.colors);
-  useFaviconInjection(fetchedData?.favicon);
+  // The half that describes the installation rather than its appearance. It
+  // comes from a session-gated route, so before sign-in this query fails and
+  // contributes nothing — which is correct, since no pre-session surface reads
+  // these fields.
+  const {
+    data: workspaceData,
+    isPending: workspacePending,
+    isLoadingError: workspaceUnavailable,
+  } = useQuery<AdminBranding>({
+    queryKey: ["admin-meta", "workspace"],
+    queryFn: () => protectedApi.get<AdminBranding>("/admin-meta/workspace"),
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  });
 
-  // Memoized because the value is now an object built here rather than the
-  // query's own stable `data` reference: without this every consumer of the
+  useColorInjection(brandingData?.colors);
+  useFaviconInjection(brandingData?.favicon);
+
+  // Memoized because the value is an object built here rather than either
+  // query's stable `data` reference: without this every consumer of the
   // context re-renders on each render of this provider.
-  const value = useMemo(
-    () => ({ branding: fetchedData, isPending, isUnavailable: isLoadingError }),
-    [fetchedData, isPending, isLoadingError]
-  );
+  //
+  // The two halves are merged so the shape consumers read is unchanged; the
+  // boundary that matters is the one on the server, which decides what an
+  // anonymous caller can be served at all.
+  const value = useMemo(() => {
+    const merged =
+      brandingData === undefined && workspaceData === undefined
+        ? undefined
+        : { ...brandingData, ...workspaceData };
+    return {
+      branding: merged,
+      isPending: brandingPending || workspacePending,
+      // Reported from the WORKSPACE query. The reader this exists for treats a
+      // plugin's absence from the list as a fact about the project, and the
+      // plugin list lives in that half — so branding having arrived says
+      // nothing about whether that conclusion is safe to draw.
+      isUnavailable: workspaceUnavailable,
+      isBrandingUnavailable: brandingUnavailable,
+    };
+  }, [
+    brandingData,
+    workspaceData,
+    brandingPending,
+    workspacePending,
+    workspaceUnavailable,
+    brandingUnavailable,
+  ]);
 
   return (
     <BrandingContext.Provider value={value}>
