@@ -139,19 +139,32 @@ export function insertionCollisionValue({
  * and nothing — the same flicker the margin exists to remove, arriving through
  * eligibility instead of through ranking.
  *
- * The reprieve is bounded by the pointer staying within the target's width, so
- * leaving the column, the container or the canvas still releases it.
+ * The reprieve is bounded by the SAME band, in both axes: the pointer must stay
+ * within the target's width, and within one band of its edge. Bounding it
+ * matters more than it looks. An unbounded reprieve holds the target for as
+ * long as no rival happens to be eligible, which on widely spaced targets is
+ * indefinitely — so the margin stops being a margin and the drop indicator
+ * sticks to a target the pointer left long ago. Measured on a fixture whose
+ * targets sit 400px apart, the unbounded form never released within 27px of
+ * reversing. Reusing `bandPx` rather than introducing a second constant keeps
+ * one quantity answering "how far does the pointer move before the target
+ * changes", which is the thing the requirement actually names.
  */
 export function isInsertionTargetEligible({
   hasDefaultCollision,
   isCurrentTarget,
   pointerWithinWidth,
+  pointerBeyondEdgePx,
+  bandPx,
 }: {
   hasDefaultCollision: boolean;
   isCurrentTarget: boolean;
   pointerWithinWidth: boolean;
+  pointerBeyondEdgePx: number;
+  bandPx: number;
 }): boolean {
-  return hasDefaultCollision || (isCurrentTarget && pointerWithinWidth);
+  if (hasDefaultCollision) return true;
+  return isCurrentTarget && pointerWithinWidth && pointerBeyondEdgePx <= bandPx;
 }
 
 /**
@@ -195,6 +208,11 @@ export function createInsertionCollisionDetector(
         hasDefaultCollision: eligible !== null,
         isCurrentTarget,
         pointerWithinWidth: withinWidth,
+        pointerBeyondEdgePx: Math.max(
+          0,
+          Math.abs(pointer.y - centre.y) - shape.boundingRectangle.height / 2
+        ),
+        bandPx,
       })
     ) {
       return null;

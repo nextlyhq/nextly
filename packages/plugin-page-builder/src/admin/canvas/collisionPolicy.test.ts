@@ -344,42 +344,57 @@ describe("eligibility, which the margin depends on", () => {
   // neighbour becomes eligible — the held target is dropped and the indicator
   // alternates between a target and nothing, which is the flicker arriving
   // through eligibility rather than through ranking.
+  const held = {
+    hasDefaultCollision: false,
+    isCurrentTarget: true,
+    pointerWithinWidth: true,
+    pointerBeyondEdgePx: 0,
+    bandPx: TARGET_SWITCH_BAND_PX,
+  };
+
   it("keeps the held target when the default detection drops it", () => {
+    expect(isInsertionTargetEligible(held)).toBe(true);
+  });
+
+  it("keeps it right up to the edge of the band", () => {
     expect(
       isInsertionTargetEligible({
-        hasDefaultCollision: false,
-        isCurrentTarget: true,
-        pointerWithinWidth: true,
+        ...held,
+        pointerBeyondEdgePx: TARGET_SWITCH_BAND_PX,
       })
     ).toBe(true);
   });
 
-  it("does not extend that reprieve to a target that is not held", () => {
-    // Otherwise every target in the document stays in the ranking forever.
+  it("releases it one pixel past the band", () => {
+    // The bound that stops the reprieve becoming unbounded stickiness. Without
+    // it the held target survives for as long as no rival happens to be
+    // eligible, which on widely spaced targets is indefinitely: the margin
+    // stops being a margin and the indicator clings to a target the pointer
+    // left long ago.
     expect(
       isInsertionTargetEligible({
-        hasDefaultCollision: false,
-        isCurrentTarget: false,
-        pointerWithinWidth: true,
+        ...held,
+        pointerBeyondEdgePx: TARGET_SWITCH_BAND_PX + 1,
       })
     ).toBe(false);
   });
 
+  it("does not extend the reprieve to a target that is not held", () => {
+    // Otherwise every target in the document stays in the ranking forever.
+    expect(isInsertionTargetEligible({ ...held, isCurrentTarget: false })).toBe(
+      false
+    );
+  });
+
   it("releases the held target once the pointer leaves its width", () => {
-    // The bound on the reprieve. Without it, leaving the column, the container
-    // or the canvas entirely would still show its indicator.
     expect(
-      isInsertionTargetEligible({
-        hasDefaultCollision: false,
-        isCurrentTarget: true,
-        pointerWithinWidth: false,
-      })
+      isInsertionTargetEligible({ ...held, pointerWithinWidth: false })
     ).toBe(false);
   });
 
   it("admits anything the default detection already admits", () => {
     // Eligibility is never NARROWED, so no target stops claiming a pointer it
-    // claimed before this module existed.
+    // claimed before this module existed — including well outside the band.
     for (const isCurrentTarget of [true, false]) {
       for (const pointerWithinWidth of [true, false]) {
         expect(
@@ -387,6 +402,8 @@ describe("eligibility, which the margin depends on", () => {
             hasDefaultCollision: true,
             isCurrentTarget,
             pointerWithinWidth,
+            pointerBeyondEdgePx: 10_000,
+            bandPx: TARGET_SWITCH_BAND_PX,
           })
         ).toBe(true);
       }
