@@ -374,15 +374,20 @@ jobs:
           # The scope line is not redundant with the registry line. A `@scope:registry` entry
           # outranks even an explicit `--registry` argument, so without it every `@nextlyhq`
           # request goes to npmjs and the leg silently tests the last release.
+          # STARTED BEFORE the redirect below, and the order is load-bearing. `verdaccio` is not a
+          # repository dependency, so this fetches it, and a redirect written first would point that
+          # fetch at a port nothing is listening on yet. It currently survives only because this
+          # step runs from the repository root, whose own `.npmrc` names npmjs and outranks the
+          # user-level file being written below — a working directory away from failing.
+          npx --yes verdaccio@6 --config /tmp/local-registry/config.yaml --listen 4873 \
+            > /tmp/local-registry/server.log 2>&1 &
+
           {
             echo "registry=http://localhost:4873/"
             echo "@nextlyhq:registry=http://localhost:4873/"
             echo "//localhost:4873/:_authToken=local-registry"
             echo "provenance=false"
           } >> "$HOME/.npmrc"
-
-          npx --yes verdaccio@6 --config /tmp/local-registry/config.yaml --listen 4873 \
-            > /tmp/local-registry/server.log 2>&1 &
 
           for _ in $(seq 1 90); do
             curl -sf http://localhost:4873/-/ping > /dev/null 2>&1 && break
@@ -410,11 +415,23 @@ jobs:
           # alone: the flag is what overrides each package's own `publishConfig.registry`, and
           # the config entry is what wins for a scoped name where the flag does not.
           # `--tag` is required because every version here is a prerelease.
+          #
+          # Every published version also carries the `alpha` tag. The generator resolves a version
+          # by asking npmjs for a package's dist-tags, and for a package whose only published
+          # artifact is its `0.0.0` name-claiming placeholder there is no `alpha` tag to find — so
+          # it writes the literal string `alpha` as the spec rather than a range. A local registry
+          # carrying only `latest` cannot satisfy that, and the leg would fail on an unavailable
+          # tag instead of testing the new package.
           published=0
           for f in /tmp/nextly-workspace-packs/*.tgz; do
             (cd /tmp && npm publish "$f" \
               --registry http://localhost:4873 --tag latest --provenance=false) \
               >> /tmp/local-registry/publish.log 2>&1 && published=$((published + 1))
+
+            meta=$(tar -xzOf "$f" package/package.json)
+            spec=$(node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{const m=JSON.parse(d);console.log(m.name+'@'+m.version)})" <<<"$meta")
+            (cd /tmp && npm dist-tag add "$spec" alpha --registry http://localhost:4873) \
+              >> /tmp/local-registry/publish.log 2>&1
           done
 
           expected=$(ls /tmp/nextly-workspace-packs/*.tgz | wc -l | tr -d ' ')
