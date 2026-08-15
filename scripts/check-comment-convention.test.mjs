@@ -24,6 +24,8 @@ import {
   EXCLUDED_FILES,
   FORBIDDEN,
   commentText,
+  isAdvisory,
+  ADVISORY_EXTENSIONS,
   isReviewDomain,
   offencesIn,
   digestOffences,
@@ -254,6 +256,28 @@ describe("the allowlist", () => {
   });
 });
 
+describe("advisory dialects", () => {
+  it("classifies the hand-rolled dialects and only those", () => {
+    // The split is by READER quality, not by file kind: the JS family and CSS go through
+    // TypeScript's scanner with the regex decision taken from the parser, while shell and YAML go
+    // through a line scan that has reported against valid input.
+    for (const path of ["a/b.yml", "a/b.yaml", "x.sh"]) {
+      expect(isAdvisory(path)).toBe(true);
+    }
+    for (const path of ["x.ts", "x.tsx", "x.mjs", "x.css"]) {
+      expect(isAdvisory(path)).toBe(false);
+    }
+  });
+
+  it("names every advisory extension in SOURCE_EXTENSIONS", () => {
+    // An advisory extension the walk never reads would be silently unchecked rather than
+    // advisory, and the two states print the same nothing.
+    for (const ext of ADVISORY_EXTENSIONS) {
+      expect(SOURCE_EXTENSIONS).toContain(ext);
+    }
+  });
+});
+
 describe("normalised comment text", () => {
   it("is stable across reflow of a block comment", () => {
     // A block comment carries a `*` on every continuation line, so collapsing whitespace alone is
@@ -410,6 +434,28 @@ describe("the command", () => {
       const result = run(root);
       expect(result.status, result.stderr + result.stdout).toBe(1);
       expect(result.stderr).toContain("packages/offender.ts");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("exits ZERO for an offence in an advisory dialect", () => {
+    // The property the split exists for, asserted through the PROCESS rather than the classifier:
+    // a shell or YAML finding is printed and does not fail the run. Asserting `isAdvisory` alone
+    // would pass even if the verdict never consulted it.
+    const root = fixture({});
+    try {
+      // The shared fixture ships a BLOCKING `.ts` offender, which would fail this run for the
+      // wrong reason and make the assertion read as a working advisory split when it is not.
+      rmSync(joinPath(root, "packages", "offender.ts"));
+      writeFileSync(
+        joinPath(root, "packages", "flow.yml"),
+        "steps:\n  # " + "Codex" + " asked for this\n"
+      );
+      spawnSync("git", ["add", "-A"], { cwd: root });
+      const result = run(root);
+      expect(result.status, result.stderr + result.stdout).toBe(0);
+      expect(result.stderr + result.stdout).toContain("ADVISORY");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -169,6 +169,25 @@ export const EXCLUDED_FILES = new Set([]);
  * config files, scripts, template sources — and a comment in one is as invisible to every other
  * check as a comment in a `.ts`.
  */
+/**
+ * Dialects whose findings REPORT without failing the run.
+ *
+ * The JS family and CSS are read by TypeScript's own scanner, with the one decision a lexer
+ * cannot make alone taken from the parser, so their answers are as good as the compiler's. Shell
+ * and YAML are read by a hand-rolled line scan carrying quote state, block-scalar indent, heredoc
+ * delimiters and a substitution stack - an unbounded surface, and one that has produced several
+ * reports against VALID input.
+ *
+ * A false positive costs more than a miss here: a gate that rejects correct code gets switched
+ * off, taking its true positives with it. So these two dialects are advisory until their reader
+ * is replaced by a real parser, and the run says so rather than leaving the difference implicit.
+ */
+export const ADVISORY_EXTENSIONS = [".yml", ".yaml", ".sh"];
+
+export function isAdvisory(path) {
+  return ADVISORY_EXTENSIONS.some(ext => path.endsWith(ext));
+}
+
 export const SOURCE_EXTENSIONS = [
   ".ts",
   ".tsx",
@@ -963,9 +982,23 @@ function main() {
     }
   }
 
-  if (failures.length > 0) {
-    console.error(`${failures.length} file(s) disagree with ${ALLOWLIST_FILE}:\n`);
-    for (const failure of failures) console.error(`  ${failure}\n`);
+  // Split by dialect BEFORE deciding the exit status. Advisory findings are printed with the
+  // blocking ones - they are real and worth fixing - but they cannot fail the run.
+  const blocking = failures.filter(one => !isAdvisory(one.split(" — ")[0]));
+  const advisory = failures.filter(one => isAdvisory(one.split(" — ")[0]));
+
+  if (advisory.length > 0) {
+    console.warn(
+      `${advisory.length} shell/YAML file(s) disagree with ${ALLOWLIST_FILE}. ` +
+        "ADVISORY: these do not fail the run, because that reader is a line scan rather than a " +
+        "parser and has reported against valid input.\n"
+    );
+    for (const one of advisory) console.warn(`  ${one}\n`);
+  }
+
+  if (blocking.length > 0) {
+    console.error(`${blocking.length} file(s) disagree with ${ALLOWLIST_FILE}:\n`);
+    for (const failure of blocking) console.error(`  ${failure}\n`);
     console.error(
       "Comments describe the code only: state what the code does and why, with no reference to " +
         "reviews, tools, or the change itself.\n" +
