@@ -28,6 +28,9 @@ import {
   insertionDistancePx,
   insertionEdgeDistancePx,
   isInsertionTargetEligible,
+  isSameInsertionRun,
+  governsRanking,
+  reprieveOrigin,
 } from "./collisionPolicy";
 
 /**
@@ -409,6 +412,116 @@ describe("insertionEdgeDistancePx, which bounds the reprieve", () => {
     expect(
       insertionEdgeDistancePx({ pointerX: 150, pointerY: 230, ...rect })
     ).toBe(10);
+  });
+});
+
+describe("which targets the margin governs", () => {
+  // Two populated containers side by side hold zones at the SAME depth with
+  // different widths and different horizontal centres. Crediting the held
+  // target across that boundary lets a narrow neighbour keep the pointer while
+  // it sits inside the wider container, and the drop takes the wrong parent.
+  const inA0 = { kind: "dropzone", parentId: "a", slot: "default", index: 0 };
+  const inA1 = { kind: "dropzone", parentId: "a", slot: "default", index: 1 };
+  const inB0 = { kind: "dropzone", parentId: "b", slot: "default", index: 0 };
+  const otherSlot = {
+    kind: "dropzone",
+    parentId: "a",
+    slot: "aside",
+    index: 0,
+  };
+
+  it("treats two zones of one slot as alternatives", () => {
+    expect(isSameInsertionRun(inA0, inA1)).toBe(true);
+  });
+
+  it("does not treat zones of different containers as alternatives", () => {
+    expect(isSameInsertionRun(inA0, inB0)).toBe(false);
+  });
+
+  it("does not treat different slots of one container as alternatives", () => {
+    // Same parent, different slot: still not a run, because they mark positions
+    // in separate lists that happen to share an owner.
+    expect(isSameInsertionRun(inA0, otherSlot)).toBe(false);
+  });
+
+  it("refuses when either side is missing or unshaped", () => {
+    // A droppable with no data, or a drag with no target yet, must not be
+    // treated as sharing a run with everything.
+    expect(isSameInsertionRun(inA0, null)).toBe(false);
+    expect(isSameInsertionRun(undefined, inA0)).toBe(false);
+    expect(isSameInsertionRun({}, {})).toBe(false);
+    expect(
+      isSameInsertionRun(
+        { parentId: 1, slot: "default" },
+        { parentId: 1, slot: "default" }
+      )
+    ).toBe(false);
+  });
+});
+
+describe("governsRanking", () => {
+  const inA0 = { kind: "dropzone", parentId: "a", slot: "default", index: 0 };
+  const inA1 = { kind: "dropzone", parentId: "a", slot: "default", index: 1 };
+  const inB0 = { kind: "dropzone", parentId: "b", slot: "default", index: 0 };
+
+  it("governs the held target itself", () => {
+    expect(
+      governsRanking({
+        isCurrentTarget: true,
+        droppableData: inA0,
+        currentTargetData: inA0,
+      })
+    ).toBe(true);
+  });
+
+  it("governs a rival in the held target's run", () => {
+    expect(
+      governsRanking({
+        isCurrentTarget: false,
+        droppableData: inA1,
+        currentTargetData: inA0,
+      })
+    ).toBe(true);
+  });
+
+  it("leaves a target in another container to the default ranking", () => {
+    // The wrong-parent drop. Without this, a narrow neighbour's centre can beat
+    // the wider container the pointer is actually inside.
+    expect(
+      governsRanking({
+        isCurrentTarget: false,
+        droppableData: inB0,
+        currentTargetData: inA0,
+      })
+    ).toBe(false);
+  });
+
+  it("leaves acquisition to the default ranking when nothing is held", () => {
+    expect(
+      governsRanking({
+        isCurrentTarget: false,
+        droppableData: inA0,
+        currentTargetData: null,
+      })
+    ).toBe(false);
+  });
+});
+
+describe("reprieveOrigin", () => {
+  const pointer = { x: 900, y: 100 };
+  const draggedCentre = { x: 400, y: 220 };
+
+  it("measures from the dragged shape when one is measured", () => {
+    // The eligibility being extended was granted by the SHAPE overlapping the
+    // target. A block grabbed far from its edge puts the pointer hundreds of
+    // pixels away, so a pointer-measured bound is already spent when the
+    // overlap stops: released instantly, reacquired on the way back, flicker.
+    expect(reprieveOrigin({ draggedCentre, pointer })).toBe(draggedCentre);
+  });
+
+  it("falls back to the pointer when the drag carries no shape", () => {
+    expect(reprieveOrigin({ draggedCentre: null, pointer })).toBe(pointer);
+    expect(reprieveOrigin({ draggedCentre: undefined, pointer })).toBe(pointer);
   });
 });
 

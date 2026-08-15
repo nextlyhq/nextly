@@ -160,6 +160,31 @@ export function insertionCollisionValue({
 }
 
 /**
+ * Whether two insertion targets belong to the same slot of the same container.
+ *
+ * The switch margin is a statement about ONE run of insertion points: it resists
+ * moving off the target already held to the one beside it. Applied between runs
+ * it means something else entirely — two populated containers side by side hold
+ * zones at the same depth with different widths and different horizontal
+ * centres, and crediting across that boundary lets a narrow neighbour hold the
+ * pointer while it sits inside the wider one, so the drop takes the wrong
+ * parent. Outside a run the targets are not alternatives to each other and the
+ * credit does not apply.
+ */
+export function isSameInsertionRun(
+  a: { parentId?: unknown; slot?: unknown } | null | undefined,
+  b: { parentId?: unknown; slot?: unknown } | null | undefined
+): boolean {
+  if (!a || !b) return false;
+  return (
+    typeof a.parentId === "string" &&
+    a.parentId === b.parentId &&
+    typeof a.slot === "string" &&
+    a.slot === b.slot
+  );
+}
+
+/**
  * Whether a target is in play at all.
  *
  * The default detection decides it for every target EXCEPT the one currently
@@ -204,6 +229,53 @@ export function isInsertionTargetEligible({
 }
 
 /**
+ * Whether this module's ranking replaces the default one for a target.
+ *
+ * Only within the run the held target belongs to. Against a target in another
+ * run — a populated container beside this one, holding zones at the same depth
+ * with a different width and centre — this metric would rank a narrow neighbour
+ * ahead of the wider container the pointer is inside, and the drop would take
+ * the wrong parent. Those comparisons keep the default detection, which puts a
+ * target CONTAINING the pointer ahead of one the dragged shape merely reaches.
+ * Before any target exists there is nothing to be sticky about, so acquisition
+ * is the default's decision too.
+ */
+export function governsRanking({
+  isCurrentTarget,
+  droppableData,
+  currentTargetData,
+}: {
+  isCurrentTarget: boolean;
+  droppableData: { parentId?: unknown; slot?: unknown } | null | undefined;
+  currentTargetData: { parentId?: unknown; slot?: unknown } | null | undefined;
+}): boolean {
+  return (
+    isCurrentTarget || isSameInsertionRun(droppableData, currentTargetData)
+  );
+}
+
+/**
+ * The point the reprieve is measured from.
+ *
+ * The dragged feedback's centre where one is measured, because that is the
+ * geometry whose overlap granted the eligibility the reprieve extends. A block
+ * grabbed far from its edge puts the pointer hundreds of pixels from the target
+ * the shape is holding, so a pointer-based bound is already spent at the moment
+ * the overlap stops: the target is released instantly, reacquired on the way
+ * back, and flickers. The pointer is the fallback for a drag carrying no
+ * measured shape at all.
+ */
+export function reprieveOrigin({
+  draggedCentre,
+  pointer,
+}: {
+  draggedCentre: { x: number; y: number } | null | undefined;
+  pointer: { x: number; y: number };
+}): { x: number; y: number } {
+  return draggedCentre ?? pointer;
+}
+
+/**
  * Rank insertion targets by pointer distance, holding the current one across a
  * margin.
  *
@@ -217,8 +289,14 @@ export function isInsertionTargetEligible({
  * alternates between a target and nothing — the same flicker the margin exists
  * to remove, arriving through eligibility instead of through ranking.
  *
- * The incumbent's reprieve is bounded by the pointer staying within its width,
- * so leaving the column, the container or the canvas still releases it.
+ * The reprieve is bounded by `bandPx` measured from the target's RECTANGLE, and
+ * measured from the DRAGGED SHAPE rather than the pointer. That pairing is the
+ * point: the eligibility it extends was granted by the shape overlapping the
+ * target, so extending it by a pointer distance stretches a different geometry
+ * than the one that ends. A block grabbed far from its edge puts the pointer
+ * hundreds of pixels from the target the shape is holding, and a pointer-based
+ * bound is already spent at the moment the overlap stops — the target is
+ * released instantly, reacquired on the way back, and flickers.
  */
 export function createInsertionCollisionDetector(
   bandPx: number = TARGET_SWITCH_BAND_PX
@@ -238,13 +316,28 @@ export function createInsertionCollisionDetector(
     const { width, height } = shape.boundingRectangle;
     const isCurrentTarget = dragOperation.target?.id === droppable.id;
 
+    const from = reprieveOrigin({
+      draggedCentre: dragOperation.shape?.current.center,
+      pointer,
+    });
+
+    if (
+      !governsRanking({
+        isCurrentTarget,
+        droppableData: droppable.data,
+        currentTargetData: dragOperation.target?.data,
+      })
+    ) {
+      return eligible;
+    }
+
     if (
       !isInsertionTargetEligible({
         hasDefaultCollision: eligible !== null,
         isCurrentTarget,
         edgeDistancePx: insertionEdgeDistancePx({
-          pointerX: pointer.x,
-          pointerY: pointer.y,
+          pointerX: from.x,
+          pointerY: from.y,
           centreX: centre.x,
           centreY: centre.y,
           width,
