@@ -1,11 +1,7 @@
 "use client";
 
 import { Badge } from "@nextlyhq/ui";
-import {
-  useQuery,
-  useQueryClient,
-  useSuspenseQuery,
-} from "@tanstack/react-query";
+import { useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { Suspense } from "react";
 
 import {
@@ -24,10 +20,7 @@ import {
 } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { Breadcrumbs } from "@admin/components/shared";
-import {
-  PageErrorFallback,
-  SectionErrorFallback,
-} from "@admin/components/shared/error-fallbacks";
+import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { PluginIcon } from "@admin/components/shared/plugin-icon";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { Link } from "@admin/components/ui/link";
@@ -46,6 +39,7 @@ import {
 } from "@admin/services/realPermissionsApi";
 import type { PluginMetadata } from "@admin/types/branding";
 
+import { InstalledPluginsUnavailable } from "./components/InstalledPluginsUnavailable";
 import { NotInstalledPlugin } from "./components/NotInstalledPlugin";
 import { PluginPageLoading } from "./components/PluginPageLoading";
 import { PluginStatusPill } from "./components/PluginsTable";
@@ -146,27 +140,6 @@ function UninstalledOrMissing({ activeSlug }: { activeSlug?: string }) {
         </p>
       </div>
     </div>
-  );
-}
-
-/**
- * Shown when admin-meta failed, so whether this plugin is installed is
- * unknown.
- *
- * Not the catalogue view: that one states the plugin is absent, which is a
- * claim this page cannot make when the request that would have told it failed.
- */
-function InstalledPluginsUnavailable() {
-  const queryClient = useQueryClient();
-
-  return (
-    <SectionErrorFallback
-      title="Could not load your installed plugins"
-      description="This page cannot tell whether the plugin is installed until the admin metadata loads."
-      reset={() => {
-        void queryClient.invalidateQueries({ queryKey: ["admin-meta"] });
-      }}
-    />
   );
 }
 

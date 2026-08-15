@@ -14,8 +14,17 @@ import type { AdminBranding } from "@admin/types/branding";
 
 let mockBranding: AdminBranding = { plugins: [] } as unknown as AdminBranding;
 
-vi.mock("@admin/lib/api/publicApi", () => ({
-  publicApi: { get: () => Promise.resolve(mockBranding) },
+// The provider, not the transport. Installed status comes from the
+// session-gated half of admin-meta, which the page reads through this hook
+// rather than by fetching for itself — mocking the public client would supply
+// a payload the page no longer asks for and leave every entry uninstalled.
+vi.mock("@admin/context/providers/BrandingProvider", () => ({
+  useBranding: () => mockBranding,
+  useBrandingStatus: () => ({
+    isPending: false,
+    isUnavailable: false,
+    isBrandingUnavailable: false,
+  }),
 }));
 
 import PluginBrowsePage from "./browse";

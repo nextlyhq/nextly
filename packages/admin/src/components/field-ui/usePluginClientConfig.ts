@@ -26,8 +26,15 @@ export function usePluginClientConfig(
   pluginName: string
 ): Record<string, unknown> | undefined {
   const branding = useBranding();
-  return useMemo(
-    () => branding.plugins?.find(p => p.name === pluginName)?.clientConfig,
-    [branding.plugins, pluginName]
-  );
+  return useMemo(() => {
+    // The installed list when it has arrived, the public channel otherwise.
+    // Both carry `clientConfig`, and the gated one is the richer record — so
+    // this prefers it rather than reading two sources and reconciling them.
+    //
+    // The fallback is what a plugin contributing to the SIGN-IN screen depends
+    // on: there is no session yet, so the installed list cannot exist, and its
+    // absence says nothing about whether the plugin declared a config.
+    const declared = branding.plugins ?? branding.pluginClientConfigs;
+    return declared?.find(p => p.name === pluginName)?.clientConfig;
+  }, [branding.plugins, branding.pluginClientConfigs, pluginName]);
 }
