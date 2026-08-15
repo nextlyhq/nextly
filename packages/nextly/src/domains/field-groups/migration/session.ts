@@ -677,14 +677,42 @@ export async function withMigrationSession<T>(
     // The remedy is a single migration run, which adds the column on the branch that may.
     if (!(await lockTableUnderstandsExpiry(adapter, dialect))) {
       args.logger?.warn?.(
-        "field-group migration lock predates its expiry column; continuing without it",
+        "field-group migration lock predates its expiry column; holding it by owner alone",
         {
           reason: "migration lock table is missing expires_at",
           table: MIGRATION_LOCK_TABLE,
           label,
         }
       );
-      return fn({ ...session, lock: { kind: "not-held" } });
+
+      const legacy = await acquireOwnerOnly(adapter, claim);
+      if (!legacy.ok) {
+        // Refused for the same reason the expiry-aware path refuses, and it is a REFUSAL rather
+        // than a skip: the row names a holder, and without an expiry there is no basis on which to
+        // call that holder dead. Proceeding would run the sync against storage a migration may be
+        // renaming, which is the outcome this whole module exists to prevent.
+        throw NextlyError.serviceUnavailable({
+          logMessage:
+            "field-group migration lock is held; another run holds a claim on a lock table that predates its expiry column",
+          logContext: {
+            reason: "migration lock is held elsewhere",
+            heldBy: legacy.heldBy,
+            table: MIGRATION_LOCK_TABLE,
+            label,
+          },
+        });
+      }
+
+      // Held for real, so the caller is told so rather than being handed `not-held`. Nothing renews
+      // it, because there is no lease to extend — see `acquireOwnerOnly` for what that gives up.
+      try {
+        return await fn({ ...session, lock: { kind: "held", owner: claim } });
+      } finally {
+        // Owner-scoped, and awaited so the row is free before this returns. A failure here leaves a
+        // claim an operator clears, which is the same residue an interrupted run leaves and is why
+        // the upgrade path exists.
+        await releaseOwnerOnly(adapter, claim).catch(() => undefined);
+      }
     }
   } else {
     await ensureLockRow(adapter, dialect);
@@ -1203,6 +1231,92 @@ function clearClaimStatement(claim: string): SQL {
           ${sql.identifier("expires_at")} = NULL
       WHERE ${sql.identifier("id")} = ${LOCK_ROW_ID}
         AND ${sql.identifier("owner")} = ${claim}`;
+}
+
+/**
+ * Take the lock on a table that predates `expires_at`, using the `owner` column alone.
+ *
+ * ## Why this exists rather than skipping the lock
+ *
+ * A caller that may not issue DDL cannot add the missing column, and refusing outright would break
+ * every `--no-auto-sync` install that has not yet run a migration under this release. Skipping was
+ * the first answer and it is not safe enough: the sync then runs with NO exclusion at all, so a
+ * migration that starts during it — or one already in its pre-marker phase, which the marker check
+ * cannot see — is free to rename tables underneath work that has already decided what exists.
+ *
+ * The `owner` column is present on every version of this table, so exclusion does not depend on the
+ * new column at all. This claims it, holds it, and clears it, writing no DDL.
+ *
+ * ## What it gives up, stated rather than glossed
+ *
+ * No expiry means NO TAKEOVER. An occupied legacy row blocks until an operator clears it, and a
+ * process killed mid-run leaves a claim behind. That is not a new hazard introduced here — it is
+ * exactly the contract this lock had before `expires_at` existed, and the remedy is the same single
+ * migration run that permanently upgrades the row. Exclusion that occasionally needs an operator is
+ * a better trade than no exclusion at all, which is what the alternative offered.
+ *
+ * Nothing renews: there is no lease to extend, so the claim simply stands for the life of the call.
+ */
+async function acquireOwnerOnly(
+  adapter: DrizzleAdapter,
+  claim: string
+): Promise<Acquisition> {
+  return adapter.transaction(async ctx => {
+    // The same serialisation the expiry-aware path uses: contenders queue here, so the read below
+    // cannot be overtaken between reading and writing.
+    await ctx.lockRow(MIGRATION_LOCK_TABLE, LOCK_ROW_ID);
+
+    const rows = await ctx.queryStatement(ownerOnlyQuery());
+    const before = rows[0] as { owner: string | null } | undefined;
+    if (before === undefined) return { ok: false, heldBy: null };
+    // Any owner blocks, because without an expiry there is no basis on which to judge a claim dead.
+    // Guessing would mean stealing the lock from a migration that may still be writing.
+    if (before.owner !== null) return { ok: false, heldBy: before.owner };
+
+    await ctx.runStatement(
+      sql`UPDATE ${sql.identifier(MIGRATION_LOCK_TABLE)}
+          SET ${sql.identifier("owner")} = ${claim}
+          WHERE ${sql.identifier("id")} = ${LOCK_ROW_ID}
+            AND ${sql.identifier("owner")} IS NULL`
+    );
+
+    // Read back rather than trusting affected-row counts, which the dialects report inconsistently.
+    // Predicating the UPDATE on `owner IS NULL` means a contender that won the race leaves the row
+    // naming them, and this is what notices.
+    const settled = (await ctx.queryStatement(ownerOnlyQuery()))[0] as
+      | { owner: string | null }
+      | undefined;
+    if (settled?.owner === claim) return { ok: true };
+    return { ok: false, heldBy: settled?.owner ?? null };
+  });
+}
+
+/** The owner, read without touching a column this table may not have. */
+function ownerOnlyQuery(): SQL {
+  return sql`SELECT ${sql.identifier("owner")}
+      FROM ${sql.identifier(MIGRATION_LOCK_TABLE)}
+      WHERE ${sql.identifier("id")} = ${LOCK_ROW_ID}`;
+}
+
+/** Clear an owner-only claim, scoped to this claim so a late finaliser cannot free someone else's. */
+async function releaseOwnerOnly(
+  adapter: DrizzleAdapter,
+  claim: string
+): Promise<boolean> {
+  return adapter.transaction(async ctx => {
+    await ctx.lockRow(MIGRATION_LOCK_TABLE, LOCK_ROW_ID);
+    const before = (await ctx.queryStatement(ownerOnlyQuery()))[0] as
+      | { owner: string | null }
+      | undefined;
+    const heldToTheEnd = before?.owner === claim;
+    await ctx.runStatement(
+      sql`UPDATE ${sql.identifier(MIGRATION_LOCK_TABLE)}
+          SET ${sql.identifier("owner")} = NULL
+          WHERE ${sql.identifier("id")} = ${LOCK_ROW_ID}
+            AND ${sql.identifier("owner")} = ${claim}`
+    );
+    return heldToTheEnd;
+  });
 }
 
 /** Release only what we hold, so a late finaliser cannot free someone else's run. */

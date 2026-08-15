@@ -1126,6 +1126,7 @@ describe("field-group migration session", () => {
     });
 
     const observed: LockObservation[] = [];
+    let ownerDuringWork: string | null = null;
     await withMigrationSession(
       {
         adapter: h.adapter,
@@ -1138,19 +1139,101 @@ describe("field-group migration session", () => {
       },
       async session => {
         observed.push(session.lock);
+        ownerDuringWork = h.owner();
       }
     );
 
-    // 🔴 The work RAN — the whole point is that a sync is not blocked by a lock it cannot read.
+    // 🔴 The work RAN — a sync must not be blocked by a column its table happens to lack.
     expect(observed).toHaveLength(1);
-    // And it is told plainly that it holds nothing, rather than the default that claims ownership.
-    expect(observed[0]).toEqual({ kind: "not-held" });
-    // 🔴 And the skip is REPORTED. A silent downgrade from excluded to unexcluded is the thing that
-    // would make this dangerous rather than merely tolerant.
+    // 🔴 And it ran HOLDING the lock, by owner alone. Reporting `not-held` here was the earlier
+    // behaviour and it meant the sync proceeded with no exclusion at all, so a migration starting
+    // during it could rename tables underneath work that had already decided what exists.
+    expect(observed[0]).toEqual({ kind: "held", owner: expect.any(String) });
+    // The row actually named this claim while the callback ran — asserted on the DATABASE, because
+    // the reported observation is this session's own claim about itself.
+    expect(ownerDuringWork).toMatch(/^sync-1#/);
+    // And it was cleared afterwards, so the next sync is not blocked by this one.
+    expect(h.owner()).toBeNull();
+    // Still reported: the operator needs to know this database is on the older shape, because the
+    // claim it just took has no expiry and a killed process would leave it behind.
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0]?.[1]).toMatchObject({
       reason: "migration lock table is missing expires_at",
     });
+  });
+
+  /**
+   * 🔴 The property the owner-only claim exists to buy, and the one no assertion above can show.
+   *
+   * A test that only proves the claim is TAKEN passes just as well against a fallback that takes it
+   * unconditionally — which would be worse than skipping, since it would overwrite a live
+   * migration's claim. Exclusion means someone else's claim REFUSES this one.
+   *
+   * Refused rather than waited out, because without `expires_at` there is no basis on which to call
+   * a holder dead: guessing would mean stealing the lock from a run that may still be writing.
+   */
+  it("refuses a legacy lock that another run already holds", async () => {
+    const h = createAdapter({
+      heldBy: "field-group-migration#other",
+      stateReadError: Object.assign(
+        new Error('column "expires_at" does not exist'),
+        { code: "42703" }
+      ),
+    });
+    const ran = vi.fn();
+
+    const refusal = await withMigrationSession(
+      {
+        adapter: h.adapter,
+        dialect: "postgresql",
+        label: "sync-1",
+        requireExistingLock: true,
+      },
+      async () => {
+        ran();
+      }
+    ).catch((error: unknown) => error);
+
+    expect(NextlyError.is(refusal)).toBe(true);
+    if (NextlyError.is(refusal)) {
+      // The REASON, not just the code: a lock this session could not READ and a lock another run
+      // HOLDS are different situations with different remedies, and both surface as unavailable.
+      expect(refusal.logContext?.reason).toBe(
+        "migration lock is held elsewhere"
+      );
+      expect(refusal.logContext?.heldBy).toBe("field-group-migration#other");
+    }
+    // The work never ran, and the other run's claim is untouched.
+    expect(ran).not.toHaveBeenCalled();
+    expect(h.owner()).toBe("field-group-migration#other");
+  });
+
+  // A claim that outlived a failed callback would block every later sync on a table that cannot
+  // expire it, so the release has to be in a `finally` rather than on the happy path.
+  it("clears its legacy claim even when the work throws", async () => {
+    const h = createAdapter({
+      heldBy: null,
+      stateReadError: Object.assign(
+        new Error('column "expires_at" does not exist'),
+        { code: "42703" }
+      ),
+    });
+
+    await expect(
+      withMigrationSession(
+        {
+          adapter: h.adapter,
+          dialect: "postgresql",
+          label: "sync-1",
+          requireExistingLock: true,
+        },
+        async () => {
+          throw new Error("sync failed");
+        }
+      )
+    ).rejects.toThrowError();
+
+    expect(h.owner()).toBeNull();
   });
 
   // A renewal already in flight when the callback finishes outlives `clearInterval`, which only
