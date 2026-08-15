@@ -240,6 +240,11 @@ const RBAC_METHODS: Record<string, MethodHandler<RbacContainer>> = {
         resource: p.resource,
         sortBy: p.sortBy as "action" | "resource" | "name" | undefined,
         sortOrder: p.sortOrder as "asc" | "desc" | undefined,
+        // Forwarded so a caller that DISCLOSES orphaned rows can ask for them.
+        // Absent, the service applies its own default and hides them, which is
+        // what the permission matrix needs: a permission nothing declares any
+        // more enforces nothing, so it must not be offered as a choice.
+        includeOrphaned: toBoolean(p.includeOrphaned),
       });
       return respondList(result.data, toPaginationMeta(result.meta));
     },

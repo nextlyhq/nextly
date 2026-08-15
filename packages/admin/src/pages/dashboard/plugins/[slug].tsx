@@ -390,11 +390,17 @@ function isAccessDenial(error: unknown): boolean {
  * rather than grouped — a single page filtered by owner therefore omits rows
  * silently, and reports "none" for a plugin whose rows all sort late. Paging is
  * what makes the owner filter answer about the whole set.
+ *
+ * Orphans are requested because this card DISCLOSES what a plugin owns rather
+ * than offering permissions to grant. A row the plugin no longer declares is
+ * still attributed to it and still carries whatever grants it was given, so
+ * omitting it would understate what the plugin left behind.
  */
 async function fetchAllPermissions(): Promise<ApiPermissionEntry[]> {
   const first = await fetchPermissionsFromApi({
     limit: PERMISSION_PAGE_SIZE,
     page: 1,
+    includeOrphaned: true,
   });
   const rows = [...first.data];
   // Bounded by the total the server reported, and re-read from each response,
@@ -403,6 +409,7 @@ async function fetchAllPermissions(): Promise<ApiPermissionEntry[]> {
     const next = await fetchPermissionsFromApi({
       limit: PERMISSION_PAGE_SIZE,
       page,
+      includeOrphaned: true,
     });
     if (next.data.length === 0) break;
     rows.push(...next.data);
@@ -451,9 +458,7 @@ function PluginPermissions({ pluginName }: { pluginName: string }) {
       )}
       {!isPending && !isError && owned.length === 0 && (
         <p className="text-xs text-muted-foreground">
-          No current permission rows are attributed to this plugin. Rows
-          retained from a version that no longer declares them are not listed
-          here.
+          No permission rows are attributed to this plugin.
         </p>
       )}
       {!isPending && !isError && owned.length > 0 && (
@@ -464,6 +469,15 @@ function PluginPermissions({ pluginName }: { pluginName: string }) {
               {entry.danger === true && (
                 <span className="ml-2 text-xs text-muted-foreground">
                   danger
+                </span>
+              )}
+              {/* Marked rather than omitted: the row still exists and still
+                  carries its grants, so hiding it would understate what this
+                  plugin left behind. It enforces nothing until the plugin
+                  declares it again. */}
+              {entry.orphaned === true && (
+                <span className="ml-2 text-xs text-muted-foreground">
+                  no longer declared
                 </span>
               )}
             </li>
