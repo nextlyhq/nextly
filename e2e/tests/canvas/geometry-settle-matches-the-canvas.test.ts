@@ -145,31 +145,51 @@ async function geometrySpanMs(
 
       for (const zone of zones) {
         const el = zone as HTMLElement;
-        const had = appliedState
-          ? el.hasAttribute(appliedState as string)
-          : false;
-        if (appliedState) el.setAttribute(appliedState as string, "");
+        // A state may be a SET of attributes: the canvas can carry data-drag and data-active at
+        // once, and a rule keyed on both is invisible to either alone.
+        const attrs = appliedState ? (appliedState as string).split(" ") : [];
+        const had = attrs.filter(a => el.hasAttribute(a));
+        for (const a of attrs) el.setAttribute(a, "");
         const computed = getComputedStyle(el);
 
         // A running animation moves the edge for its whole duration whatever it animates, because
         // the keyframes are not inspectable from here. Charged in full rather than skipped.
+        // A JS-driven animation carries its timing in the Web Animations API and appears in no
+        // computed longhand, so the measurement below cannot see it. Refused rather than ignored:
+        // this file measures DECLARED CSS timing, and an effect it cannot read moves the edge
+        // just as surely.
+        const scripted = el
+          .getAnimations()
+          .filter(
+            a => !(a instanceof CSSAnimation) && !(a instanceof CSSTransition)
+          );
+        if (scripted.length > 0) {
+          return { zones: -1, ms: 0, unclassified: [] as string[] };
+        }
+
         if (computed.animationName !== "none") {
+          // Driven by the NAME list, because that decides how many animations run. CSS cycles a
+          // shorter timing list across every name, so iterating durations would stop at the first
+          // and miss the rest.
+          const names = computed.animationName.split(",");
           const durations = ms(computed.animationDuration);
           const delays = ms(computed.animationDelay);
           // Each cycle moves the edge again, so the span is duration x ITERATIONS, not one pass.
-          // `infinite` parses as `Infinity`, which is the honest answer: an edge that never
-          // settles cannot be covered by any allowance, and the caller refuses on it below.
-          const counts = computed.animationIterationCount
-            .split(",")
-            .map(v =>
-              v.trim() === "infinite"
-                ? Infinity
-                : Number.parseFloat(v.trim()) || 1
-            );
-          durations.forEach((duration, i) => {
+          // `infinite` parses as `Infinity`: an edge that never settles cannot be covered by any
+          // allowance, and the caller refuses on it.
+          //
+          // A count of ZERO is legitimate and means the animation never runs, so it is preserved
+          // rather than defaulted — `|| 1` would turn "does not move" into a full pass.
+          const counts = computed.animationIterationCount.split(",").map(v => {
+            const text = v.trim();
+            if (text === "infinite") return Infinity;
+            const parsed = Number.parseFloat(text);
+            return Number.isNaN(parsed) ? 1 : parsed;
+          });
+          names.forEach((_name, i) => {
             longest = Math.max(
               longest,
-              duration * cycled(counts, i) + cycled(delays, i)
+              cycled(durations, i) * cycled(counts, i) + cycled(delays, i)
             );
           });
         }
@@ -199,7 +219,7 @@ async function geometrySpanMs(
           longest = Math.max(longest, cycled(durations, i) + cycled(delays, i));
         }
 
-        if (appliedState && !had) el.removeAttribute(appliedState as string);
+        for (const a of attrs) if (!had.includes(a)) el.removeAttribute(a);
       }
       return { zones: zones.length, ms: longest, unclassified };
     },
@@ -213,6 +233,13 @@ async function geometrySpanMs(
 
   // No zones means this is not the canvas, or the document rendered none — and a zero span from
   // an empty query reads exactly like a canvas that animates nothing.
+  if (result.zones === -1) {
+    throw new Error(
+      "a drop zone is running an animation driven by the Web Animations API rather than declared " +
+        "in CSS. Its timing is in no computed longhand, so this measurement cannot see it and " +
+        "refuses instead of reporting a span that ignores it."
+    );
+  }
   if (result.zones === 0) {
     throw new Error(
       `no elements matched "${DROP_ZONES}" in the canvas frame, so nothing was measured. A zero ` +
@@ -244,8 +271,8 @@ async function geometrySpanMs(
  * the timing. Pinning the measurement makes a cosmetic edit free and a timing edit visible, which
  * is the direction that matters.
  *
- * All zero because #813 took the geometry out of flow at a fixed height, leaving only a
- * `background` transition. Do not edit these to clear a failure without reading what changed:
+ * All zero because the zone sits out of flow at a fixed height and only its `background`
+ * transitions. Do not edit these to clear a failure without reading what changed:
  * a nonzero value here is the canvas moving an edge the probe is about to measure.
  */
 // The canvas iframe is only rendered above a certain width: the editor's rail, block library and
@@ -263,6 +290,10 @@ const PINNED_SPANS_MS: Record<string, number> = {
   rest: 0,
   "data-drag": 0,
   "data-active": 0,
+  // Both at once. `DropZone` sets `data-drag` for the whole drag and `data-active` on top when the
+  // zone is the target, so the combined state is what an author sees as a drop lands — and a rule
+  // keyed on both is invisible to either alone.
+  "data-drag data-active": 0,
 };
 
 test.describe("the drop-zone geometry the probe waits on", () => {
@@ -427,6 +458,68 @@ test.describe("the drop-zone geometry the probe waits on", () => {
     expect(injected).toBe(true);
 
     await expect(geometrySpanMs(frame, null)).rejects.toThrow(/never ends/);
+  });
+
+  test("an animation set to run ZERO times moves nothing", async ({
+    page,
+    request,
+  }) => {
+    const frame = await canvas(page, request);
+
+    // `iteration-count: 0` is valid CSS and means the animation never runs. Defaulting a falsy
+    // parse to 1 would charge a full pass for an edge that never moves - over-reporting, which
+    // reads as safe and is how a wrong pin gets written down.
+    const injected = await frame.evaluate(() => {
+      const sheet = (
+        document.getElementById("nx-pb-style") as HTMLStyleElement | null
+      )?.sheet;
+      sheet?.insertRule(
+        "@keyframes nx-test-zero { from { height: 0 } to { height: 12px } }",
+        sheet.cssRules.length
+      );
+      sheet?.insertRule(
+        ".nx-pb-dropzone { animation: nx-test-zero .2s 0 }",
+        sheet.cssRules.length
+      );
+      return Boolean(sheet);
+    });
+    expect(injected).toBe(true);
+
+    expect(await geometrySpanMs(frame, null)).toBe(0);
+  });
+
+  test("a SECOND animation name is charged when the timing list is shorter", async ({
+    page,
+    request,
+  }) => {
+    const frame = await canvas(page, request);
+
+    // Two names, one duration: CSS cycles the duration across both. Iterating the DURATION list
+    // stops after one entry and never reaches the second animation.
+    const injected = await frame.evaluate(() => {
+      const sheet = (
+        document.getElementById("nx-pb-style") as HTMLStyleElement | null
+      )?.sheet;
+      sheet?.insertRule(
+        "@keyframes nx-a { from { height: 0 } to { height: 4px } }",
+        sheet.cssRules.length
+      );
+      sheet?.insertRule(
+        "@keyframes nx-b { from { height: 0 } to { height: 8px } }",
+        sheet.cssRules.length
+      );
+      // One duration, one delay list of two: the SECOND name carries the longer delay, so it is
+      // only reachable by walking the names.
+      sheet?.insertRule(
+        ".nx-pb-dropzone { animation-name: nx-a, nx-b; animation-duration: .1s; animation-delay: 0s, .4s }",
+        sheet.cssRules.length
+      );
+      return Boolean(sheet);
+    });
+    expect(injected).toBe(true);
+
+    // 100ms cycled onto the second name, plus its own 400ms delay.
+    expect(await geometrySpanMs(frame, null)).toBe(500);
   });
 
   test("it refuses rather than reporting a zero it cannot stand behind", async ({
