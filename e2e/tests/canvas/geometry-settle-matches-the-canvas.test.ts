@@ -135,8 +135,10 @@ async function geometrySpanMs(
       if (zones.length === 0)
         return { zones: 0, ms: 0, unclassified: [] as string[] };
 
+      // A value that is not a time cannot be measured, and `|| 0` would report it as instant —
+      // the silent zero this file exists to remove. `NaN` is preserved and refused by the caller.
       const ms = (value: string) =>
-        value.split(",").map(v => Number.parseFloat(v.trim()) * 1000 || 0);
+        value.split(",").map(v => Number.parseFloat(v.trim()) * 1000);
       const cycled = (list: number[], i: number) =>
         list.length === 0 ? 0 : list[i % list.length];
 
@@ -164,6 +166,10 @@ async function geometrySpanMs(
             a => !(a instanceof CSSAnimation) && !(a instanceof CSSTransition)
           );
         if (scripted.length > 0) {
+          // Restored BEFORE returning. An early return that skips cleanup leaves the probe's
+          // attributes on a real canvas element, so every later read in this run — and the
+          // author's own canvas — sees a state the probe invented.
+          for (const a of attrs) if (!had.includes(a)) el.removeAttribute(a);
           return { zones: -1, ms: 0, unclassified: [] as string[] };
         }
 
@@ -186,7 +192,10 @@ async function geometrySpanMs(
             const parsed = Number.parseFloat(text);
             return Number.isNaN(parsed) ? 1 : parsed;
           });
-          names.forEach((_name, i) => {
+          names.forEach((name, i) => {
+            // `none` occupies a position in every timing list but starts no animation, so its
+            // tuple would charge movement that never happens.
+            if (name.trim() === "none") return;
             longest = Math.max(
               longest,
               cycled(durations, i) * cycled(counts, i) + cycled(delays, i)
@@ -233,6 +242,13 @@ async function geometrySpanMs(
 
   // No zones means this is not the canvas, or the document rendered none — and a zero span from
   // an empty query reads exactly like a canvas that animates nothing.
+  if (Number.isNaN(result.ms)) {
+    throw new Error(
+      "a drop zone declares an animation or transition whose duration is not a time this test " +
+        "could parse, so its span is unknown. Reporting a number would certify an allowance " +
+        "against a movement nobody measured."
+    );
+  }
   if (result.zones === -1) {
     throw new Error(
       "a drop zone is running an animation driven by the Web Animations API rather than declared " +
@@ -520,6 +536,54 @@ test.describe("the drop-zone geometry the probe waits on", () => {
 
     // 100ms cycled onto the second name, plus its own 400ms delay.
     expect(await geometrySpanMs(frame, null)).toBe(500);
+  });
+
+  test("`none` among animation names charges nothing for that slot", async ({
+    page,
+    request,
+  }) => {
+    const frame = await canvas(page, request);
+
+    // `none` holds a position in every timing list but starts no animation. Charging its tuple
+    // would report movement that never happens - conservative, but wrong, and a wrong number here
+    // gets pinned and then trusted.
+    const injected = await frame.evaluate(() => {
+      const sheet = (
+        document.getElementById("nx-pb-style") as HTMLStyleElement | null
+      )?.sheet;
+      sheet?.insertRule(
+        "@keyframes nx-real { from { height: 0 } to { height: 4px } }",
+        sheet.cssRules.length
+      );
+      sheet?.insertRule(
+        ".nx-pb-dropzone { animation-name: none, nx-real; animation-duration: .9s, .1s }",
+        sheet.cssRules.length
+      );
+      return Boolean(sheet);
+    });
+    expect(injected).toBe(true);
+
+    // Only the real animation is charged; the 900ms belonging to `none` is not movement.
+    expect(await geometrySpanMs(frame, null)).toBe(100);
+  });
+
+  test("the probe leaves no state behind on a real zone", async ({
+    page,
+    request,
+  }) => {
+    const frame = await canvas(page, request);
+
+    await geometrySpanMs(frame, "data-drag data-active");
+
+    // The probe writes onto REAL canvas elements, so a missed cleanup is not a test detail: every
+    // later read in the run, and the author's canvas, would see a state the probe invented.
+    const leftBehind = await frame.evaluate(
+      () =>
+        [...document.querySelectorAll(".nx-pb-dropzone")].filter(
+          el => el.hasAttribute("data-drag") || el.hasAttribute("data-active")
+        ).length
+    );
+    expect(leftBehind).toBe(0);
   });
 
   test("it refuses rather than reporting a zero it cannot stand behind", async ({
