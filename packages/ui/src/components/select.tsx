@@ -68,7 +68,10 @@ const selectTriggerVariants = cva(
   {
     variants: {
       size: {
-        sm: "h-[var(--nx-control-height-sm)] text-sm",
+        // `-md`, matching Button and Input: one height for one size name. A
+        // select sitting beside a small button in a filter row is the case that
+        // makes a 4px difference visible.
+        sm: "h-[var(--nx-control-height-md)] text-sm",
         default: "h-[var(--nx-control-height)] text-sm",
         lg: "h-[var(--nx-control-height-lg)] text-base",
       },

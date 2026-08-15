@@ -50,7 +50,12 @@ const inputVariants = cva(
   {
     variants: {
       size: {
-        sm: "h-[var(--nx-control-height-sm)] px-2.5 py-2 text-sm",
+        // `-md` rather than `-sm`, so that a small input is the same height as
+        // a small button standing beside it in a toolbar or a filter row.
+        // Button's `sm` has always used this step; an input reading `-sm` made
+        // `size="sm"` mean 36px on one control and 32px on another, and a form
+        // row mixing them sat 4px out of line.
+        sm: "h-[var(--nx-control-height-md)] px-2.5 py-2 text-sm",
         default: "h-[var(--nx-control-height)] px-3 py-2.5 text-sm",
         lg: "h-[var(--nx-control-height-lg)] px-4 py-3 text-base",
       },
