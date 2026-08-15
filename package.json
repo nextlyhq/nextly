@@ -26,6 +26,7 @@
     "check:drizzle-v1-legacy": "node scripts/check-drizzle-v1-legacy.cjs",
     "check:storage-format-literals": "node scripts/check-storage-format-literals.cjs",
     "check:dev-concurrency": "node scripts/check-dev-concurrency.mjs",
+    "check:comments": "node scripts/check-comment-convention.mjs",
     "format": "prettier --write \"**/*.{ts,tsx,md}\"",
     "lint": "turbo run lint",
     "lint:design": "node scripts/lint-design.mjs",

@@ -3,17 +3,17 @@
 /**
  * The block library (spec §9). Lists every registered block grouped by category, with a
  * search box and collapsible categories. Each entry is BOTH a @dnd-kit draggable source
- * (drag into the canvas) AND an "Insert" button (click / keyboard-accessible path). Inserts
- * land in the selected container's default slot, else at the end of the page root.
+ * (drag into the canvas) AND an "Insert" button (click / keyboard-accessible path). Where an
+ * insert lands is decided by `planInsert`, which applies the same drop rules a drag does.
  */
 import { useDraggable } from "@dnd-kit/react";
 import { useMemo, useState } from "react";
 
 import { defaultBlockRegistry } from "../../core/registry";
-import { findNode } from "../../core/tree";
-import { DEFAULT_SLOT, type BlockDefinition } from "../../core/types";
+import { type BlockDefinition } from "../../core/types";
 import { blockIcon, ChevronDown, ChevronRight, Search } from "../icons";
 import { dragSensors } from "../logic/dragSensors";
+import { planInsert } from "../logic/insertPlan";
 import { useEditor } from "../store/EditorProvider";
 
 const CATEGORY_ORDER = [
@@ -35,23 +35,24 @@ function LibraryItem({ def }: { def: BlockDefinition }) {
   });
   const Icon = blockIcon(def.icon);
 
+  // Resolved for the CURRENT selection, so the button reflects where this block would actually
+  // land — and reports that there is nowhere rather than adding it somewhere the author has to
+  // go looking for. `null` is the same verdict a refused drag reaches, from the same rule.
+  const target = planInsert(
+    state.document.root,
+    state.selectedId ?? undefined,
+    def.type,
+    defaultBlockRegistry
+  );
+
   const insert = () => {
-    const root = state.document.root;
-    const selected = state.selectedId
-      ? findNode(root, state.selectedId)
-      : undefined;
-    const container =
-      selected && defaultBlockRegistry.get(selected.type)?.isContainer
-        ? selected
-        : root;
-    const slot = DEFAULT_SLOT;
-    const index = container.slots?.[slot]?.length ?? 0;
+    if (!target) return;
     dispatch({
       type: "ADD",
-      parentId: container.id,
-      slot,
+      parentId: target.parentId,
+      slot: target.slot,
       nodeType: def.type,
-      index,
+      index: target.index,
     });
   };
 
@@ -68,7 +69,13 @@ function LibraryItem({ def }: { def: BlockDefinition }) {
         type="button"
         className="nx-pb-lib-item-insert"
         onClick={insert}
+        disabled={!target}
         aria-label={`Insert ${def.label}`}
+        title={
+          target
+            ? undefined
+            : `${def.label} is not allowed inside the selected block or anything around it`
+        }
       >
         Insert
       </button>

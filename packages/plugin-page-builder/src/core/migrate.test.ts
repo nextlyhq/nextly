@@ -3,7 +3,7 @@ import { describe, it, expect } from "vitest";
 import { migrateDocument } from "./migrate";
 import { createBlockRegistry } from "./registry";
 import { makeNode } from "./tree";
-import type { BlockNode } from "./types";
+import type { BlockDocument, BlockNode } from "./types";
 
 const reg = createBlockRegistry();
 // heading v2: renames prop `size` (old) → `level`.
@@ -67,5 +67,71 @@ describe("migrateDocument", () => {
     const root = makeNode("core/container", {}, undefined, { default: [cur] });
     const out = migrateDocument({ version: 1, root }, reg);
     expect(out.root.slots!.default![0].props.level).toBe("h3");
+  });
+});
+
+describe("telling an upgraded document from an untouched one", () => {
+  /**
+   * Identity, not deep equality. A document that needed no upgrade must come back as the SAME
+   * object, so a caller can skip work by comparing references rather than deep-comparing whole
+   * trees on every load — the expensive answer to a question identity already settles.
+   *
+   * Not a claim about persistence. `EditorProvider` skips `onDocumentChange` on the initial
+   * render, so a load-time migration is not pushed to the host form; it persists with the
+   * author's next real edit.
+   */
+  const versionedRegistry = () => {
+    const r = createBlockRegistry();
+    r.register({
+      type: "t/box",
+      version: 2,
+      label: "Box",
+      icon: "Square",
+      category: "basic",
+      isContainer: true,
+      slots: [{ name: "default" }],
+      defaultProps: {},
+      migrate: () => ({ props: { upgraded: true } }),
+      render: () => null,
+    });
+    return r;
+  };
+
+  it("returns the SAME document when nothing needed upgrading", () => {
+    const doc: BlockDocument = {
+      version: 1,
+      root: {
+        id: "r",
+        type: "t/box",
+        definitionVersion: 2,
+        props: {},
+        slots: { default: [] },
+      },
+    };
+    expect(migrateDocument(doc, versionedRegistry())).toBe(doc);
+  });
+
+  it("returns a NEW document when a nested block was upgraded", () => {
+    // Nested, because the interesting case is a root that needed nothing while a descendant did:
+    // an implementation that only checked the root would report no change and drop the upgrade.
+    const stale: BlockNode = {
+      id: "c",
+      type: "t/box",
+      definitionVersion: 1,
+      props: {},
+    };
+    const doc: BlockDocument = {
+      version: 1,
+      root: {
+        id: "r",
+        type: "t/box",
+        definitionVersion: 2,
+        props: {},
+        slots: { default: [stale] },
+      },
+    };
+    const out = migrateDocument(doc, versionedRegistry());
+    expect(out).not.toBe(doc);
+    expect(out.root.slots?.default?.[0]?.props).toEqual({ upgraded: true });
   });
 });

@@ -77,9 +77,9 @@ export function CodePanel({ code }: CodePanelProps) {
     // the default should be the answer rather than the fallback.
     <Tabs defaultValue="sdk" className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 items-center justify-between gap-2 px-6 py-2">
-        <TabsList className="h-7 bg-transparent p-0">
+        <TabsList variant="ghost">
           {FLAVOURS.map(f => (
-            <TabsTrigger key={f.value} value={f.value} className="text-xs">
+            <TabsTrigger key={f.value} value={f.value} size="sm">
               {f.label}
             </TabsTrigger>
           ))}
