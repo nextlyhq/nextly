@@ -93,7 +93,25 @@ function getMigrationBadge(status?: FieldGroupMigrationStatus): MigrationBadge {
   //
   // `undefined` keeps its own answer, because "this row has no status" is a real case and is not
   // the same as an unhandled one.
-  return status ? MIGRATION_BADGES[status] : { variant: "default", label: "-" };
+  if (!status) return { variant: "default", label: "-" };
+
+  // 🔴 A runtime fallback ON TOP of the exhaustive Record, not instead of it. The two catch
+  // different things and only one of them is a compile-time question.
+  //
+  // `migration_status` is an unconstrained `varchar(20)` and the registry casts whatever string it
+  // reads to this union, so the type is a claim about the column rather than a guarantee from it —
+  // a row written by an older release, a hand-edited row, or a future status arriving during a
+  // rolling deploy all land here as a value no entry covers. Indexing then yields `undefined` and
+  // the cell dereferences `.variant`, taking down the whole management view: the operator loses the
+  // page that would have shown them the offending row.
+  //
+  // This does NOT reopen the hole the Record closed. A new member of the union still fails to
+  // compile until it has an entry, because the Record is declared exhaustive OVER THE UNION; what
+  // this adds is an answer for values that were never in the union at all. The status is shown
+  // verbatim, so an operator sees what the column actually holds rather than a shrug.
+  return (
+    MIGRATION_BADGES[status] ?? { variant: "warning", label: String(status) }
+  );
 }
 
 /** Columns pinned as always-visible in the column toggle. */
