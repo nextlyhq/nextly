@@ -35,7 +35,34 @@
 // imports can be green while the program does not run at all.
 
 import { realpathSync } from "node:fs";
-import { pathToFileURL } from "node:url";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+/**
+ * The request layer, resolved through this file's REAL path.
+ *
+ * A bare `./ci-verdict-evidence.mjs` would be resolved relative to the
+ * specifier the runtime holds for this module — and under
+ * `--preserve-symlinks-main` that is the SYMLINK, so the sibling is looked
+ * for beside the link rather than beside this file and the process dies
+ * before running. The same flag is why the entry check below accepts two
+ * forms; this is its import-time half.
+ */
+const evidence = await import(
+  pathToFileURL(
+    join(
+      dirname(realpathSync(fileURLToPath(import.meta.url))),
+      "ci-verdict-evidence.mjs"
+    )
+  ).href
+);
+const {
+  countStranded,
+  createGh,
+  headRemoteFor,
+  readHeadSha,
+  setupGitCredentials,
+} = evidence;
 
 /** Reviewers whose verdict blocks a merge, and the marker text of a refusal. */
 export const RATE_LIMIT_MARKER = /Review limit reached/;
@@ -607,33 +634,8 @@ async function main(argv) {
   }
   const { owner, name, host, repo, repoArg } = target;
   const { execFileSync } = await import("node:child_process");
-  // `git` does not read GH_TOKEN, and the workflow checks out with
-  // `persist-credentials: false`, so `ls-remote` against a private repository
-  // would fail after the API lookups had already succeeded. This points git at
-  // the same credentials `gh` is using.
-  try {
-    execFileSync("gh", ["auth", "setup-git", "--hostname", host], {
-      stdio: "ignore",
-    });
-  } catch {
-    // Unauthenticated public access still works; a private repository fails
-    // later at `ls-remote`, with a message naming the ref it could not read.
-  }
-  // Each query is its own process and its failure is its own exception: a
-  // rejected request must reach the caller as a refusal, never as empty data.
-  // `--hostname` on every API call, and a host-qualified `--repo`. Parsing the
-  // host out of GH_REPO and then letting the requests default sends them to
-  // public GitHub while claiming to describe an Enterprise repository.
-  const gh = args =>
-    JSON.parse(
-      execFileSync(
-        "gh",
-        args[0] === "api"
-          ? ["api", "--hostname", host, ...args.slice(1)]
-          : args,
-        { encoding: "utf8", maxBuffer: 64e6 }
-      )
-    );
+  setupGitCredentials({ exec: execFileSync, host });
+  const gh = createGh({ exec: execFileSync, host });
 
   // The head comes from the REF, not from the pull request object. GitHub's
   // `headRefOid` lags a push — measured a full commit behind while `ls-remote`
@@ -660,24 +662,14 @@ async function main(argv) {
   // the checkout. `origin` is whatever this working copy happens to point at,
   // which need not be the repository GH_REPO selected — the API data would then
   // describe one repository while the SHA came from another.
-  const headRemote = meta.isCrossRepository
-    ? `https://${host}/${meta.headRepositoryOwner.login}/${meta.headRepository.name}.git`
-    : `https://${host}/${repo}.git`;
+  const headRemote = headRemoteFor(meta, { host, repo });
 
-  const headOf = () => {
-    const line = execFileSync(
-      "git",
-      ["ls-remote", headRemote, `refs/heads/${meta.headRefName}`],
-      { encoding: "utf8" }
-    ).trim();
-    const sha = line.split(/\s+/)[0];
-    if (!sha) {
-      throw new Error(
-        `no such ref on ${headRemote}: refs/heads/${meta.headRefName}`
-      );
-    }
-    return sha;
-  };
+  const headOf = () =>
+    readHeadSha({
+      exec: execFileSync,
+      headRemote,
+      headRefName: meta.headRefName,
+    });
   // A pull request CLOSED WITHOUT MERGING is settled by its lifecycle alone,
   // and its branch is commonly deleted straight afterwards — so resolving the
   // ref first turned a conclusive answer into `exit 2` for a missing ref.
@@ -1051,39 +1043,15 @@ async function main(argv) {
         observed.mergedHead &&
         observed.mergedHead !== head
       ) {
-        // Both ends fetched from the remote that HAS them: the workflow checks
-        // out shallow, and after a squash the merged head is commonly absent.
-        // A shallow checkout keeps its boundary in `.git/shallow`, and fetching
-        // two more objects does not remove it — so `rev-list` stops at the
-        // boundary and reports a SHORT count rather than failing. That is the
-        // reassuring direction: a truncated range reads as a clean tail, which is
-        // exactly what this count exists to disprove.
-        //
-        // Deepened only when the repository is actually shallow, because
-        // `--unshallow` errors on a complete one.
-        const isShallow =
-          execFileSync("git", ["rev-parse", "--is-shallow-repository"], {
-            encoding: "utf8",
-          }).trim() === "true";
-        execFileSync(
-          "git",
-          [
-            "fetch",
-            ...(isShallow ? ["--unshallow"] : []),
-            headRemote,
-            head,
-            observed.mergedHead,
-          ],
-          { stdio: "ignore" }
-        );
-        stranded =
-          Number(
-            execFileSync(
-              "git",
-              ["rev-list", "--count", `${observed.mergedHead}..${head}`],
-              { encoding: "utf8" }
-            ).trim()
-          ) || 0;
+        // Both ends fetched from the remote that HAS them, and the checkout
+        // deepened first where it is shallow — a truncated range reads as a
+        // clean tail, which is what this count exists to disprove.
+        stranded = countStranded({
+          exec: execFileSync,
+          headRemote,
+          mergedHead: observed.mergedHead,
+          head,
+        });
       }
 
       return report({
