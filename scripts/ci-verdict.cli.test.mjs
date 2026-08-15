@@ -376,6 +376,19 @@ describe("ci-verdict as a command", { timeout: 60_000 }, () => {
     expect(run.report?.verdict).toBe("CLEAN");
     expect(run.report?.head).toBe(tip);
     expect(run.status).toBe(0);
+    // Listing a route does not require the command to CALL it — the stub
+    // permits unused routes, so an omitted request is invisible in the
+    // verdict. `git` does not read `GH_TOKEN`, and the workflow checks out
+    // without persisted credentials, so dropping this leaves `ls-remote`
+    // unable to authenticate against a private repository.
+    expect(
+      callsMatching(run.calls, [
+        "auth",
+        "setup-git",
+        "--hostname",
+        "github.com",
+      ])
+    ).toBeGreaterThanOrEqual(1);
     // The verdict is computed BETWEEN two identical observations, so the
     // evidence cannot have moved while it was being decided. Every route
     // answers the same data whichever way that goes, so only counting the
@@ -449,6 +462,49 @@ describe("ci-verdict as a command", { timeout: 60_000 }, () => {
     // "nothing outstanding".
     expect(run.report?.unresolved_threads).toBe("unavailable");
     expect(run.report?.missing_reviews).toBe("unavailable");
+    // Supplying the recheck's response does not prove it was consumed. This
+    // path takes no other remote observation, so without the re-read the
+    // verdict rests on a lifecycle sampled earlier in the run.
+    expect(
+      callsMatching(run.calls, ["pr", "view", "1", "state"])
+    ).toBeGreaterThanOrEqual(1);
+  });
+
+  it("refuses when a closed pull request was reopened mid-run", () => {
+    // The positive control for the re-read above: the second lifecycle
+    // response DIFFERS, and only a command that consumes it can notice.
+    // Reopening is precisely the transition that makes the shortcut wrong.
+    const routes = [
+      { when: ["auth", "setup-git"] },
+      {
+        when: [
+          "pr",
+          "view",
+          "1",
+          "--repo",
+          "nextlyhq/nextly",
+          "headRefName,isCrossRepository,headRepositoryOwner,headRepository,state,headRefOid,baseRefOid",
+        ],
+        stdout: {
+          headRefName: "feature/deleted-after-closing",
+          isCrossRepository: false,
+          headRepositoryOwner: { login: "nextlyhq" },
+          headRepository: { name: "nextly" },
+          state: "CLOSED",
+          headRefOid: chain[4],
+          baseRefOid: "base000",
+        },
+      },
+      {
+        when: ["pr", "view", "1", "--repo", "nextlyhq/nextly", "state"],
+        stdout: { state: "OPEN" },
+      },
+    ];
+    const run = runCli({ cwd: shallowClone("reopened"), routes });
+
+    expect(run.status).toBe(2);
+    expect(run.stdout).toBe("");
+    expect(run.stderr).toContain("lifecycle changed");
   });
 
   it("runs when invoked through a symlink that the runtime does not resolve", () => {
@@ -460,19 +516,29 @@ describe("ci-verdict as a command", { timeout: 60_000 }, () => {
     const link = join(root, "linked-ci-verdict.mjs");
     rmSync(link, { force: true });
     symlinkSync(ENTRY, link);
-    const run = runCli({
-      cwd: shallowClone("symlink"),
-      entry: link,
-      nodeOptions: "--preserve-symlinks-main",
-      routes: baseRoutes({
-        state: "OPEN",
-        headRefOid: chain[4],
-        reviews: [review(CODEX, chain[4])],
-        commits: [chain[4]],
-      }),
+    const routes = baseRoutes({
+      state: "OPEN",
+      headRefOid: chain[4],
+      reviews: [review(CODEX, chain[4])],
+      commits: [chain[4]],
     });
-    expect(run.report?.verdict).toBe("CLEAN");
-    expect(run.status).toBe(0);
+
+    // BOTH modes, through the same link. The guard accepts the raw entry and
+    // its resolved form, and each covers one of these: with the flag,
+    // `import.meta.url` keeps the link while `realpathSync` resolves it away;
+    // without it, the runtime resolves `import.meta.url` while `process.argv[1]`
+    // still holds the link. Exercising one mode leaves the other's half of the
+    // guard removable with the case green.
+    for (const nodeOptions of ["--preserve-symlinks-main", ""]) {
+      const run = runCli({
+        cwd: shallowClone(`symlink-${nodeOptions === "" ? "resolved" : "raw"}`),
+        entry: link,
+        nodeOptions,
+        routes,
+      });
+      expect(run.report?.verdict).toBe("CLEAN");
+      expect(run.status).toBe(0);
+    }
   });
 
   it("refuses to answer when a request fails", () => {
