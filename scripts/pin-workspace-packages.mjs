@@ -59,16 +59,19 @@ function readPackedNames(dir) {
     // and a filename is the packer's spelling of it rather than the thing itself
     // (a scope becomes a dash, so `@nextlyhq/ui` and `nextlyhq-ui` differ).
     execFileSync("tar", ["-xzf", tarball, "-C", scratch, "package/package.json"]);
-    const { name } = JSON.parse(
+    const { name, peerDependencies } = JSON.parse(
       readFileSync(join(scratch, "package", "package.json"), "utf-8")
     );
-    map[name] = `file:${tarball}`;
+    map[name] = { spec: `file:${tarball}`, peers: Object.keys(peerDependencies ?? {}) };
   }
   return map;
 }
 
-const overrides = readPackedNames(packsDir);
-const names = Object.keys(overrides);
+const packed = readPackedNames(packsDir);
+const names = Object.keys(packed);
+const overrides = Object.fromEntries(
+  names.map(name => [name, packed[name].spec])
+);
 
 if (names.length === 0) {
   console.error(`No .tgz files in ${packsDir} — nothing was packed.`);
@@ -79,15 +82,46 @@ const manifestPath = join(projectDir, "package.json");
 const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
 
 let pinned = 0;
+// `optionalDependencies` is listed with the other two because it is the third place a manifest
+// can name a package, and a spec left unpinned there resolves from the registry exactly as an
+// unpinned dependency would.
 for (const [name, spec] of Object.entries(overrides)) {
-  if (manifest.dependencies?.[name]) {
-    manifest.dependencies[name] = spec;
-    pinned += 1;
+  for (const field of ["dependencies", "devDependencies", "optionalDependencies"]) {
+    if (manifest[field]?.[name]) {
+      manifest[field][name] = spec;
+      pinned += 1;
+    }
   }
-  if (manifest.devDependencies?.[name]) {
-    manifest.devDependencies[name] = spec;
-    pinned += 1;
-  }
+}
+
+// A packed package that is only ever a PEER of another packed package is named by neither the
+// manifest nor the pin loop above, and an override alone does not put it in the tree. Under npm's
+// hoisted layout that goes unnoticed; under pnpm's isolated one the dependent cannot resolve it,
+// which is a build failure that reads as a missing export rather than as a missing install.
+//
+// The override makes it worse rather than better: it rewrites the peer RANGE to the `file:` spec,
+// and no resolved semver version satisfies one, so pnpm reports the peer unmet even when a correct
+// copy is present. Adding a direct dependency is what puts the package in the tree regardless of
+// whether its range can ever be satisfied.
+//
+// Derived from the tarballs rather than listed here, for the reason this file already gives about
+// package names: the manifests answer it, and a list would be a second answer that has to be kept
+// in step.
+const peerOfPacked = new Set(
+  names.flatMap(name => packed[name].peers).filter(peer => names.includes(peer))
+);
+const declared = name =>
+  Boolean(
+    manifest.dependencies?.[name] ||
+      manifest.devDependencies?.[name] ||
+      manifest.optionalDependencies?.[name]
+  );
+
+let added = 0;
+for (const peer of peerOfPacked) {
+  if (declared(peer)) continue;
+  manifest.dependencies = { ...manifest.dependencies, [peer]: overrides[peer] };
+  added += 1;
 }
 
 if (packageManager === "pnpm") {
