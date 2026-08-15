@@ -14,9 +14,8 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SQL } from "drizzle-orm";
 
 import {
-  classifyLockStatement,
   createLockRow,
-  interpretLockStatement,
+  createLockStatementReader,
   type LockClock,
 } from "./migration-lock-double";
 
@@ -63,15 +62,7 @@ export function createLockingAdapter(options: LockingAdapterOptions = {}) {
   // The lock's own semantics live in one place, shared with the surface that adds them to other
   // suites' doubles. Two interpreters of the same statements would agree the day they were written
   // and drift silently afterwards, because each looks correct read on its own.
-  const interpret = (statement: SQL): Record<string, unknown>[] => {
-    if (
-      options.stateReadError !== undefined &&
-      classifyLockStatement(statement) === "state"
-    ) {
-      throw options.stateReadError;
-    }
-    return interpretLockStatement(lock, statement);
-  };
+  const interpret = createLockStatementReader(lock, options);
 
   const adapter = {
     dialect: "postgresql" as const,

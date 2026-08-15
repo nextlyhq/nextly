@@ -21,6 +21,7 @@ import {
   classifyLockStatement,
   createLockClock,
   createLockRow,
+  createLockStatementReader,
   interpretLockStatement,
   isRenewalStatement,
   type LockStatementKind,
@@ -95,6 +96,9 @@ function createAdapter(
       options.expiresIn === undefined ? null : clock.now() + options.expiresIn,
   });
   const ddl: string[] = [];
+  // Built once and handed to every seam below, so a schema fault this fixture models cannot be
+  // present on one read path and absent from another.
+  const readLock = createLockStatementReader(lock, options);
   let open = 0;
   let peakOpen = 0;
   let transactions = 0;
@@ -109,21 +113,11 @@ function createAdapter(
       return data;
     }),
     runStatement: vi.fn(async (statement: SQL) => {
-      interpretLockStatement(lock, statement);
+      readLock(statement);
       await options.onStatement?.(classifyLockStatement(statement));
     }),
     queryStatement: vi.fn(async (statement: SQL) => {
-      // 🔴 The same failure inside a transaction as outside it. A table without `expires_at` has no
-      // such column for ANY reader, so a fixture that only fails the adapter-level read models a
-      // database that does not exist — and lets acquisition succeed, which is precisely the outcome
-      // the code is supposed to make impossible.
-      if (
-        options.stateReadError !== undefined &&
-        classifyLockStatement(statement) === "state"
-      ) {
-        throw options.stateReadError;
-      }
-      const rows = interpretLockStatement(lock, statement);
+      const rows = readLock(statement);
       await options.onStatement?.(classifyLockStatement(statement));
       return rows;
     }),
@@ -138,15 +132,11 @@ function createAdapter(
     // adapter rather than the transaction context.
     queryStatement: vi.fn(async (statement: SQL) => {
       // Models a role that may read the marker and registry but not the lock
-      // table -- the case `tableExists` cannot distinguish from absence.
+      // table -- the case `tableExists` cannot distinguish from absence. Asked
+      // before the reader because it denies the whole table rather than one
+      // column, so nothing below it could answer either.
       if (options.lockReadError !== undefined) throw options.lockReadError;
-      if (
-        options.stateReadError !== undefined &&
-        classifyLockStatement(statement) === "state"
-      ) {
-        throw options.stateReadError;
-      }
-      return interpretLockStatement(lock, statement);
+      return readLock(statement);
     }),
     tableExists: vi.fn(async () => options.lockTableMissing !== true),
     transaction: vi.fn(async (work: (c: unknown) => Promise<unknown>) => {
