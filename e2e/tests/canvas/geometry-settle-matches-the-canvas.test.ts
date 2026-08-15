@@ -308,25 +308,70 @@ async function geometrySpanMs(frame: Frame, rule: string): Promise<number> {
 }
 
 /**
- * The drop-zone rules carrying a transition, read from the RUNNING canvas.
+ * The rules that give a drop zone a transition, read from the RUNNING canvas.
  *
- * Taken from the stylesheet the browser PARSED — `<style id="nx-pb-overlay">` in the canvas frame
- * — rather than from `IframeCanvas.tsx`. That is the difference between an instrument that can
- * answer this question and one that cannot: a reader of the SOURCE has to represent TypeScript,
+ * Two questions, and both are answered structurally rather than by matching text.
+ *
+ * WHICH RULES APPLY: each rule's selector is tested against the probe elements with `matches`,
+ * not searched for the substring `nx-pb-dropzone`. A rule can reach a drop zone without naming
+ * its class — `[data-active]{transition:height .2s}` applies to one and contains no such text —
+ * and a text filter drops it while the base rule keeps the pin equal, so the allowance passes
+ * over a zone that moves for 200ms.
+ *
+ * WHICH DECLARE A TRANSITION: asked of the parsed declaration rather than of the rule's text, so
+ * a shorthand, a longhand and a `var()` all answer the same way.
+ *
+ * Read from the stylesheet the browser parsed — `<style id="nx-pb-overlay">` in the canvas frame —
+ * rather than from `IframeCanvas.tsx`. Reading the source would mean representing TypeScript,
  * where an array entry may be an identifier, a template literal or a call, and it cannot represent
- * the cascade at all. Four review rounds found four such spellings, each fix correct and each
- * followed by another, because the surface being modelled is two whole languages.
- *
- * By the time the browser has parsed this sheet every one of those questions is already answered.
+ * the cascade at all, which is where a custom property's value is decided.
  */
 async function transitionRules(frame: Frame): Promise<string[]> {
-  const rules = await frame.evaluate(() => {
-    const overlay = document.getElementById(
-      "nx-pb-overlay"
-    ) as HTMLStyleElement | null;
-    if (!overlay?.sheet) return null;
-    return [...overlay.sheet.cssRules].map(rule => rule.cssText);
-  });
+  const rules = await frame.evaluate(
+    ([classes, states]) => {
+      const overlay = document.getElementById(
+        "nx-pb-overlay"
+      ) as HTMLStyleElement | null;
+      if (!overlay?.sheet) return null;
+
+      const probe = document.createElement("div");
+      document.body.append(probe);
+      const applies = (selector: string) => {
+        for (const cls of classes as string[]) {
+          for (const state of states as (string | null)[]) {
+            probe.className = cls;
+            for (const attr of states as (string | null)[]) {
+              if (attr) probe.removeAttribute(attr);
+            }
+            if (state) probe.setAttribute(state, "");
+            try {
+              if (probe.matches(selector)) return true;
+            } catch {
+              // A selector this browser cannot parse matches nothing here, and the rule it came
+              // from cannot be measured either; the pin below reports it as a change.
+              return false;
+            }
+          }
+        }
+        return false;
+      };
+
+      const found = [...overlay.sheet.cssRules]
+        .filter((rule): rule is CSSStyleRule => "selectorText" in rule)
+        .filter(
+          rule =>
+            Boolean(
+              rule.style.transition ||
+                rule.style.transitionProperty ||
+                rule.style.transitionDuration
+            ) && applies(rule.selectorText)
+        )
+        .map(rule => rule.cssText);
+      probe.remove();
+      return found;
+    },
+    [PROBE_CLASSES, PROBE_STATES] as const
+  );
   // An absent sheet would read as "no transitions here", which is the reassuring direction and
   // would certify a canvas nobody looked at.
   if (rules === null) {
@@ -335,9 +380,7 @@ async function transitionRules(frame: Frame): Promise<string[]> {
         "browser was given. It refuses rather than reporting an empty rule list."
     );
   }
-  return rules.filter(
-    rule => rule.includes("nx-pb-dropzone") && rule.includes("transition")
-  );
+  return rules;
 }
 
 // The canvas iframe is only rendered above a certain width: the editor's rail, block library and
@@ -380,6 +423,31 @@ test.describe("the drop-zone geometry the probe waits on", () => {
         "is computed by the browser, so nothing else needs recalculating — but raise " +
         "POC_GEOMETRY_SETTLE_MS in poc-driver.ts if the new spans exceed it."
     ).toEqual([...PINNED_RULES]);
+  });
+
+  test("a rule reaching a zone without naming its class is still found", async ({
+    page,
+    request,
+  }) => {
+    const frame = await canvas(page, request);
+
+    // `[data-active]` applies to a drop zone and contains none of its class text, which is the
+    // shape a substring filter drops. Appended to the canvas's OWN sheet so the reader meets it
+    // exactly as it would meet a future canvas edit, rather than through a second fixture.
+    const added = await frame.evaluate(() => {
+      const overlay = document.getElementById(
+        "nx-pb-overlay"
+      ) as HTMLStyleElement | null;
+      const rule = "[data-active]{transition:height .2s}";
+      overlay?.sheet?.insertRule(rule, overlay.sheet.cssRules.length);
+      return Boolean(overlay?.sheet);
+    });
+    // The injection itself has to be observable: without this the assertion below is satisfied by
+    // a sheet that was never touched.
+    expect(added).toBe(true);
+
+    const found = await transitionRules(frame);
+    expect(found.some(rule => rule.includes("data-active"))).toBe(true);
   });
 
   test("the driver's settle allowance covers every pinned rule", async ({
