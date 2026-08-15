@@ -201,6 +201,64 @@ describe("resolvePreviewUrl", () => {
     expect(resolution.status).not.toBe("resolved");
   });
 
+  it("refuses a site URL the browser would EXECUTE rather than navigate to", () => {
+    // The resolved string is assigned to location.href by the admin, and these
+    // schemes run script in the assigning document's origin — which for the
+    // preview tab is the admin's own. `z.string().url()` accepts every one of
+    // them, so a settings write would otherwise become script execution for
+    // whoever next clicks Preview.
+    const executable = [
+      "javascript:alert(document.cookie)",
+      "JavaScript:alert(1)",
+      "data:text/html,<script>alert(1)</script>",
+      "vbscript:msgbox(1)",
+      "file:///etc/passwd",
+    ];
+
+    expect(executable.length).toBeGreaterThan(0);
+    for (const siteUrl of executable) {
+      const resolution = resolvePreviewUrl({
+        preview: { url: () => "/posts/hello" },
+        entry: {},
+        siteUrl,
+      });
+
+      expect(resolution).toEqual({ status: "noSiteUrl", path: "/posts/hello" });
+      // Never `resolved`: a caller branching on that status navigates to it.
+      expect(resolution.status).not.toBe("resolved");
+    }
+  });
+
+  it("refuses an executable URL returned by the authored function too", () => {
+    // The declaration is user code and may compute anything, so the same
+    // standard applies to what it returns as to the configured site.
+    const resolution = resolvePreviewUrl({
+      preview: { url: () => "javascript:alert(1)" },
+      entry: {},
+      siteUrl: SITE,
+    });
+
+    // Not absolute by the navigable test, so it is joined under the site origin,
+    // where the scheme is inert as an ordinary path segment.
+    expect(resolution).toEqual({
+      status: "resolved",
+      url: "https://example.com/javascript:alert(1)",
+    });
+  });
+
+  it("accepts a site URL carrying a base path", () => {
+    expect(
+      resolvePreviewUrl({
+        preview: { url: () => "/posts/hello" },
+        entry: {},
+        siteUrl: "https://example.com/site/",
+      })
+    ).toEqual({
+      status: "resolved",
+      url: "https://example.com/site/posts/hello",
+    });
+  });
+
   it("passes an absolute authored URL through even with no site configured", () => {
     // An author who wrote a full URL named the host on purpose; re-basing it
     // against the configured site would override a deliberate choice.
