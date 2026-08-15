@@ -12,6 +12,7 @@ const COMMIT = "a0e2817a2f1c4d5e6b7a8c9d0e1f2a3b4c5d6e7f";
 const subjects = new Map([
   [COMMIT, "fix(ui): make one control size name mean one control height (#833)"],
   ["b".repeat(40), "chore: a commit that arrived without a pull request"],
+  ["d".repeat(40), "Merge pull request #783 from nextlyhq/fix/blog-template-builds"],
 ]);
 
 describe("pullRequestFor", () => {
@@ -27,6 +28,13 @@ describe("pullRequestFor", () => {
   it("returns null for a commit this checkout does not have", () => {
     // A shallow clone reaches here. Degrading to no link is correct; failing is not.
     expect(pullRequestFor("c".repeat(40), subjects)).toBe(null);
+  });
+
+  it("reads the number a merge commit names", () => {
+    // The other shape that identifies a pull request in the commit ITSELF. 118 of 560
+    // changeset-adding commits in this history carry no `(#N)` suffix, and a merge commit is the
+    // one remaining case where the answer is present rather than inferred.
+    expect(pullRequestFor("d".repeat(40), subjects)).toBe("783");
   });
 
   it("does not read a number from the middle of a subject", () => {
@@ -89,6 +97,28 @@ describe("the changelog contract", () => {
     );
     expect(out).toContain("Updated dependencies");
     expect(out).toContain("  - @nextlyhq/ui@0.0.2-alpha.42");
+  });
+
+  it("emits ONE bullet with the packages nested under it", async () => {
+    // Markdown attaches a nested list to the LAST bullet, so a bullet per changeset leaves every
+    // earlier one empty. With a lockstep group that is the normal shape, not a corner case.
+    const out = await changelogFunctions.getDependencyReleaseLine(
+      [{ commit: COMMIT }, { commit: "b".repeat(40) }],
+      [{ name: "@nextlyhq/ui", newVersion: "0.0.2-alpha.42" }],
+      { repo: REPO }
+    );
+    expect(out.split("\n").filter(line => line.startsWith("- "))).toHaveLength(1);
+    expect(out).toContain("  - @nextlyhq/ui@0.0.2-alpha.42");
+  });
+
+  it("names every contributing commit in that one bullet", async () => {
+    const out = await changelogFunctions.getDependencyReleaseLine(
+      [{ commit: COMMIT }, { commit: "b".repeat(40) }],
+      [{ name: "@nextlyhq/ui", newVersion: "0.0.2-alpha.42" }],
+      { repo: REPO }
+    );
+    expect(out).toContain(COMMIT.slice(0, 7));
+    expect(out).toContain("b".repeat(7));
   });
 
   it("makes NO network call", async () => {

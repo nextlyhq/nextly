@@ -21,8 +21,26 @@
 
 const { execFileSync } = require("node:child_process");
 
-/** `feat(scope): subject (#1234)` - the shape a squash merge writes. */
-const PULL_REQUEST_IN_SUBJECT = /\(#(\d+)\)\s*$/;
+/**
+ * The two subject shapes that name a pull request unambiguously.
+ *
+ * A squash merge writes `feat(scope): subject (#1234)`; a merge commit writes
+ * `Merge pull request #1234 from owner/branch`. Both identify the pull request in the commit
+ * itself, so neither can attribute an entry to the wrong one.
+ *
+ * A commit arriving by neither route gets a commit link and no pull-request link. That is a
+ * deliberate miss: 118 of 560 changeset-adding commits in this history carry no reference at all,
+ * in the subject or the body, and the only way to reach one is to walk forward to an enclosing
+ * merge. Measured on three of them, that walk answers correctly once, lands on a
+ * `Merge remote-tracking branch` sync commit once, and finds nothing once - so it would sometimes
+ * name a pull request the change did not come from. A wrong link is worse than an absent one, for
+ * the same reason the author is dropped rather than guessed from a git identity.
+ */
+const PULL_REQUEST_PATTERNS = [
+  // Anchored to the END: `(#12)` mid-sentence is prose about an issue, not this merge's number.
+  /\(#(\d+)\)\s*$/,
+  /^Merge pull request #(\d+)\b/,
+];
 
 /**
  * Read every commit once, rather than per changeset.
@@ -66,8 +84,11 @@ function pullRequestFor(commit, subjects = commitSubjects()) {
   if (!commit) return null;
   const subject = subjects.get(commit);
   if (!subject) return null;
-  const match = PULL_REQUEST_IN_SUBJECT.exec(subject);
-  return match ? match[1] : null;
+  for (const pattern of PULL_REQUEST_PATTERNS) {
+    const match = pattern.exec(subject);
+    if (match) return match[1];
+  }
+  return null;
 }
 
 /** One release line. Exported so its formatting is testable without running a release. */
@@ -97,15 +118,27 @@ const changelogFunctions = {
     if (dependenciesUpdated.length === 0) return "";
     const repo = options?.repo ?? "nextlyhq/nextly";
     const subjects = commitSubjects();
-    const updatedBy = changesets.map(changeset => {
-      if (!changeset.commit) return "- Updated dependencies";
-      const short = changeset.commit.slice(0, 7);
-      const pull = pullRequestFor(changeset.commit, subjects);
-      const link = `[\`${short}\`](https://github.com/${repo}/commit/${changeset.commit})`;
-      return `- Updated dependencies ${link}${pull ? ` [#${pull}](https://github.com/${repo}/pull/${pull})` : ""}`;
-    });
+    // ONE bullet, with the commits inline and the packages nested under it.
+    //
+    // A bullet per changeset followed by a single package list reads correctly in source and
+    // renders wrongly: Markdown attaches the nested list to the LAST bullet, so every earlier
+    // changeset becomes an empty `Updated dependencies` line and the package versions appear to
+    // belong to whichever commit happened to sort last. With a lockstep release group every
+    // changeset touches every package, so that is not a corner case - it is the normal shape, and
+    // at this repository's backlog it produces dozens of empty bullets per package.
+    const links = changesets
+      .filter(changeset => changeset.commit)
+      .map(changeset => {
+        const short = changeset.commit.slice(0, 7);
+        const pull = pullRequestFor(changeset.commit, subjects);
+        const commitLink = `[\`${short}\`](https://github.com/${repo}/commit/${changeset.commit})`;
+        return pull
+          ? `${commitLink} [#${pull}](https://github.com/${repo}/pull/${pull})`
+          : commitLink;
+      });
+    const heading = links.length > 0 ? `- Updated dependencies ${links.join(", ")}` : "- Updated dependencies";
     const packages = dependenciesUpdated.map(one => `  - ${one.name}@${one.newVersion}`);
-    return [...updatedBy, ...packages].join("\n");
+    return [heading, ...packages].join("\n");
   },
 };
 
