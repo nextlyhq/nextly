@@ -86,11 +86,6 @@ export const FLAT_LIST_FIXTURE: SeedOptions = {
 };
 
 /**
- * Alternating 400px and 24px siblings, a ratio of about 16:1. dnd-kit #2088
- * reports the jitter as proportional to the ratio between the dragged element
- * and the one it moves over, so this is the condition under test.
- */
-/**
  * A flat list PLUS an empty container, so both drop-zone shapes are on the page at once.
  *
  * `.nx-pb-dropzone` and `.nx-pb-dropzone-empty` are different elements with different markup and
@@ -126,6 +121,11 @@ export const BOTH_ZONE_SHAPES_FIXTURE: SeedOptions = {
   blockIds: ["nx-both-root", "nx-both-0", "nx-both-1", "nx-both-empty"],
 };
 
+/**
+ * Alternating 400px and 24px siblings, a ratio of about 16:1. dnd-kit #2088
+ * reports the jitter as proportional to the ratio between the dragged element
+ * and the one it moves over, so this is the condition under test.
+ */
 export const EXTREME_RATIO_FIXTURE: SeedOptions = {
   title: "spike extreme ratio",
   slug: "spike-extreme-ratio",

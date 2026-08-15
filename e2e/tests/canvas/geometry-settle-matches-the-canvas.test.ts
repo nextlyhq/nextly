@@ -797,10 +797,12 @@ test.describe("the drop-zone geometry the probe waits on", () => {
   }) => {
     const frame = await canvas(page, request);
 
-    // This fixture renders no empty zones - measured: 7 `.nx-pb-dropzone`, 0
-    // `.nx-pb-dropzone-empty` - so one is created here. Without it the assertion below passes
-    // because its subject does not exist, which is coverage that is not there.
-    const present = await frame.evaluate(() => {
+    // Measured on the zone the canvas itself rendered, not on an element built here. A
+    // hand-made `div` carries the class and nothing else that decides the answer - the markup
+    // `DropZone`'s empty branch emits, its place in the tree, and the rules the cascade brings
+    // with that place - so it can only ever confirm the probe against the probe's own idea of an
+    // empty zone.
+    const probe = await frame.evaluate(() => {
       const sheet = (
         document.getElementById("nx-pb-style") as HTMLStyleElement | null
       )?.sheet;
@@ -808,13 +810,17 @@ test.describe("the drop-zone geometry the probe waits on", () => {
         ".nx-pb-dropzone-empty[data-drag] { transition: height .3s }",
         sheet.cssRules.length
       );
-      const el = document.createElement("div");
-      el.className = "nx-pb-dropzone-empty";
-      document.body.append(el);
-      return document.querySelectorAll(".nx-pb-dropzone-empty").length;
+      return {
+        injected: Boolean(sheet),
+        empty: document.querySelectorAll(".nx-pb-dropzone-empty").length,
+      };
     });
-    // The population, asserted before the verdict: zero here means the test measured nothing.
-    expect(present).toBeGreaterThan(0);
+    // Both asserted before the verdict, because each failure is silent in the passing
+    // direction: with no rule there is nothing to measure, and with no empty zone there is
+    // nothing to measure it on. Either way the assertion below reports 0 having looked at
+    // nothing.
+    expect(probe.injected).toBe(true);
+    expect(probe.empty).toBeGreaterThan(0);
 
     // `DropZone`'s empty branch renders `data-active` only; `data-drag` belongs to the
     // between-item zone. A rule keyed on `[data-drag]` for an empty zone can never fire, so
