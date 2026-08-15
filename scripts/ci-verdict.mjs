@@ -407,9 +407,13 @@ export function verdictCommentReviewers(
     // Same scoping rule the review objects get: a verdict predating the last
     // base move describes a diff that no longer exists, and a comment with no
     // timestamp cannot be shown to postdate it.
+    // `updated_at` where there is one, because a reviewer that edits an existing
+    // comment to name the newly reviewed revision has spoken about this
+    // revision now. Keying on creation alone discarded that verdict and left
+    // the gate reporting a reviewed head as uncovered.
+    const stated = comment?.updated_at ?? comment?.created_at;
     const withinScope =
-      since === undefined ||
-      (typeof comment?.created_at === "string" && comment.created_at > since);
+      since === undefined || (typeof stated === "string" && stated > since);
     if (withinScope) seen.add(login);
   }
   return [...seen].sort();
@@ -722,7 +726,15 @@ export function report({
  * and defining it inside the command tied its lifetime to one block — which is
  * how a later rearrangement of that block took the definition with it.
  */
-const fingerprint = (rv, th, ic) =>
+/**
+ * A stamp over every field the decisions read, so the observation window can
+ * tell whether the evidence moved underneath it.
+ *
+ * Exported to be tested directly: it is the one input to the stability check,
+ * and a field missing from it produces two equal stamps over different
+ * evidence, which is a stale decision reported as a settled one.
+ */
+export const fingerprint = (rv, th, ic) =>
   JSON.stringify([
     // Every field a decision function READS, so the stamp cannot hold still
     // while an input to the verdict moves. `submitted_at` is here because
@@ -736,7 +748,17 @@ const fingerprint = (rv, th, ic) =>
       r?.submitted_at,
     ]),
     th.map(t => [t?.isResolved, t?.comments?.nodes?.[0]?.author?.login]),
-    ic.map(c => [c?.id, c?.user?.login, RATE_LIMIT_MARKER.test(c?.body ?? "")]),
+    // The parsed revision and the timestamp are read by the coverage decision,
+    // so a comment edited in place from an older revision to the current one
+    // must move this stamp. Recording only the id let both snapshots compare
+    // equal while the evidence underneath them changed.
+    ic.map(c => [
+      c?.id,
+      c?.user?.login,
+      RATE_LIMIT_MARKER.test(c?.body ?? ""),
+      reviewedCommitFrom(c?.body),
+      c?.updated_at ?? c?.created_at,
+    ]),
   ]);
 
 /**

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   EXIT_NOT_CLEAN,
   changesRequested,
+  fingerprint,
   missingReviewers,
   rateLimited,
   report,
@@ -119,6 +120,19 @@ describe("verdictCommentReviewers", () => {
 
   // A comment with no timestamp cannot be shown to postdate the base move, and
   // unknown is not the same as covered.
+  // A reviewer that edits an existing comment to name the newly reviewed
+  // revision has spoken NOW; GitHub keeps the original `created_at`, so keying
+  // on creation alone discarded a valid post-retarget verdict.
+  it("counts a verdict RESTATED after the base moved", () => {
+    const edited = {
+      ...verdictComment(CODEX, HEAD, "2026-08-14T09:00:00Z"),
+      updated_at: "2026-08-14T11:00:00Z",
+    };
+    expect(
+      verdictCommentReviewers([edited], HEAD, "2026-08-14T10:00:00Z", [HEAD])
+    ).toEqual([CODEX]);
+  });
+
   it("excludes an undated verdict once a base move is in scope", () => {
     expect(
       verdictCommentReviewers(
@@ -169,6 +183,51 @@ describe("verdictCommentReviewers", () => {
     expect(verdictCommentReviewers([verdictComment(CODEX, HEAD)], "")).toEqual(
       []
     );
+  });
+});
+
+describe("fingerprint", () => {
+  // A comment edited in place keeps its id, so a stamp recording only the id
+  // holds still while the revision it names changes. Both snapshots then
+  // compare equal and a decision taken over the OLD evidence is reported as
+  // settled.
+  it("moves when a comment is edited to name a different revision", () => {
+    const before = [
+      { id: 7, user: { login: CODEX }, body: "**Reviewed commit:** `bbbbbbbbbb`" },
+    ];
+    const after = [
+      { id: 7, user: { login: CODEX }, body: "**Reviewed commit:** `aaaaaaaaaa`" },
+    ];
+    expect(fingerprint([], [], before)).not.toEqual(fingerprint([], [], after));
+  });
+
+  it("moves when a comment is edited without changing the named revision", () => {
+    const before = [
+      {
+        id: 7,
+        user: { login: CODEX },
+        body: "**Reviewed commit:** `aaaaaaaaaa`",
+        updated_at: "2026-08-14T09:00:00Z",
+      },
+    ];
+    const after = [
+      {
+        id: 7,
+        user: { login: CODEX },
+        body: "**Reviewed commit:** `aaaaaaaaaa`",
+        updated_at: "2026-08-14T11:00:00Z",
+      },
+    ];
+    expect(fingerprint([], [], before)).not.toEqual(fingerprint([], [], after));
+  });
+
+  // The control: identical evidence must produce an identical stamp, or the
+  // window never settles and every run exhausts its attempts.
+  it("holds still over identical evidence", () => {
+    const same = [
+      { id: 7, user: { login: CODEX }, body: "**Reviewed commit:** `aaaaaaaaaa`" },
+    ];
+    expect(fingerprint([], [], same)).toEqual(fingerprint([], [], [...same]));
   });
 });
 
