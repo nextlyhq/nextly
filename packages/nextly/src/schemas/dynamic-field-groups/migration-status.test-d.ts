@@ -18,9 +18,12 @@ import type {
   FieldGroupDefinition,
 } from "../../direct-api/types/field-groups";
 
+// `import type` covers both, and the const is legitimately imported that way: it is only ever read
+// through `typeof` below, which is a type position. The inner `type` modifier is illegal here and
+// the fixer will re-add it if the statement is written as a value import.
 import type {
   FIELD_GROUP_MIGRATION_STATUSES,
-  type FieldGroupMigrationStatus,
+  FieldGroupMigrationStatus,
 } from "./types";
 
 // The type IS the list's element type. Written as a mutual assignability check rather than a
