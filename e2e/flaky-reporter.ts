@@ -22,6 +22,7 @@ import { fileURLToPath } from "node:url";
 import type {
   FullResult,
   Reporter,
+  Suite,
   TestCase,
   TestResult,
 } from "@playwright/test/reporter";
@@ -42,11 +43,34 @@ export interface FlakyTest {
  * `onTestEnd` still satisfies `Reporter` — a full `TestCase` is assignable to
  * this, and method parameters are compared bivariantly.
  */
+export interface ObservedSuite {
+  title: string;
+  type: Suite["type"];
+  parent?: ObservedSuite;
+}
 export type ObservedTestCase = Pick<
   TestCase,
-  "outcome" | "titlePath" | "location"
->;
+  "outcome" | "title" | "location"
+> & { parent?: ObservedSuite };
 export type ObservedTestResult = Pick<TestResult, "status" | "retry">;
+
+/**
+ * A test's enclosing `describe` titles, outermost first.
+ *
+ * Selected by suite TYPE rather than by position. `titlePath()` returns the
+ * whole hierarchy — `["", project, file, ...describes, title]` — so dropping
+ * the metadata by index means hardcoding how many entries Playwright happens to
+ * put in front, and the file is already its own column. The type is the thing
+ * that decides: `root`, `project` and `file` are all suites, and only `describe`
+ * is authored.
+ */
+function describePath(test: ObservedTestCase): string[] {
+  const titles: string[] = [];
+  for (let suite = test.parent; suite; suite = suite.parent) {
+    if (suite.type === "describe") titles.unshift(suite.title);
+  }
+  return titles;
+}
 
 /**
  * A repository-relative path for an absolute test file.
@@ -162,7 +186,7 @@ export default class FlakyReporter implements Reporter {
     // keying on the classification would also record the same test twice.
     if (!recordsFlaky(test.outcome(), result.status, result.retry)) return;
     this.flaky.push({
-      title: test.titlePath().slice(1).join(" › "),
+      title: [...describePath(test), test.title].join(" › "),
       file: repoRelative(test.location.file),
       // `retry` is zero-based, so the run that finally passed is attempt N+1.
       attempts: result.retry + 1,

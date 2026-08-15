@@ -8,6 +8,7 @@ import FlakyReporter, {
   flakySummary,
   recordsFlaky,
   repoRelative,
+  type ObservedSuite,
   type ObservedTestCase,
   type ObservedTestResult,
 } from "../flaky-reporter";
@@ -20,11 +21,24 @@ function attempt(
   title = "the innermost container owns the drop target"
 ): [ObservedTestCase, ObservedTestResult] {
   const root = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
+  // Playwright's REAL suite hierarchy: root -> project -> file -> describe.
+  // A fixture that starts at the describe would let the reporter keep the
+  // project and file titles without any test noticing, since the file column
+  // already carries the path.
+  const fileSuite: ObservedSuite = {
+    title: "tests/canvas/checklist.spec.ts",
+    type: "file",
+    parent: {
+      title: "chromium",
+      type: "project",
+      parent: { title: "", type: "root" },
+    },
+  };
   return [
     {
       outcome: () => outcome,
-      // Playwright's first entry is the project name, which the reporter drops.
-      titlePath: () => ["chromium", "canvas", title],
+      title,
+      parent: { title: "canvas", type: "describe", parent: fileSuite },
       location: {
         file: join(root, "e2e/tests/canvas/checklist.spec.ts"),
         line: 1,
@@ -201,8 +215,15 @@ test("carries a failed-then-passed test through to the summary and the count", (
   expect(summary).toContain("the innermost container owns the drop target");
   // Repository-relative, so the path resolves for a reader of the summary.
   expect(summary).toContain("e2e/tests/canvas/checklist.spec.ts");
-  // The project name is dropped and the remaining path is joined.
+  // Only the describe titles survive. The project and the file are suites too,
+  // and the file already has its own column, so repeating either here would
+  // widen every row with information the reader can already see.
   expect(summary).toContain("canvas › the innermost container");
+  const row = summary.split("\n").find(l => l.startsWith("| `"));
+  expect(row).not.toContain("chromium");
+  expect(row?.indexOf("checklist.spec.ts")).toBe(
+    row?.lastIndexOf("checklist.spec.ts")
+  );
   // Attempt 2, from a zero-based retry of 1 — and one row, not one per attempt.
   expect(summary).toContain("| 2 |");
   expect(summary.split("\n").filter(l => l.startsWith("| `"))).toHaveLength(1);
