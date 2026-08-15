@@ -960,95 +960,109 @@ async function main(argv) {
   // the first, so the whole computation — the lifecycle checks, the stranded
   // count and `report()` — sits between two identical readings of everything
   // it consumed.
+  // The bracket is a FUNCTION rather than a sequence, so the ordering is
+  // structural instead of a convention. `decide` runs between the two
+  // observations because it is called between them; there is no arrangement of
+  // statements elsewhere that moves the computation outside the window while
+  // leaving this helper intact.
+  //
+  // Written this way after the ordering turned out to be untestable from
+  // outside: the verdict is identical whether it is computed inside the window
+  // or after it, so no assertion over the output can tell the two apart.
+  const bracketed = decide => {
+    const observed = snapshot();
+    const outcome = decide(observed);
+    return stamp(observed) === stamp(snapshot()) ? outcome : undefined;
+  };
+
   let accepted;
   for (
     let attempt = 0;
     attempt < STABILITY_ATTEMPTS && !accepted;
     attempt += 1
   ) {
-    const observed = snapshot();
+    let refusal;
+    accepted = bracketed(observed => {
+      if (
+        observed.head !== head ||
+        observed.state !== meta.state ||
+        observed.base !== meta.baseRefOid
+      ) {
+        refusal =
+          "ci-verdict: head, base or lifecycle moved since the first read; re-run\n";
+        return undefined;
+      }
+      // ANY rewrite event disqualifies the tail check, so this compares against
+      // zero rather than against a baseline taken earlier in the same run — a
+      // baseline could only say "it did not move while I looked", which is the
+      // weaker claim and the one an empty range already defeats.
+      if (meta.state === "MERGED" && observed.rewrites > 0) {
+        refusal = `ci-verdict: ${observed.rewrites} history-rewrite event(s); tail NOT CHECKABLE\n`;
+        return undefined;
+      }
 
-    if (
-      observed.head !== head ||
-      observed.state !== meta.state ||
-      observed.base !== meta.baseRefOid
-    ) {
-      process.stderr.write(
-        "ci-verdict: head, base or lifecycle moved since the first read; re-run\n"
-      );
-      return 2;
-    }
-    // ANY rewrite event disqualifies the tail check, so this compares against
-    // zero rather than against a baseline taken earlier in the same run — a
-    // baseline could only say "it did not move while I looked", which is the
-    // weaker claim and the one an empty range already defeats.
-    if (meta.state === "MERGED" && observed.rewrites > 0) {
-      process.stderr.write(
-        `ci-verdict: ${observed.rewrites} history-rewrite event(s); tail NOT CHECKABLE\n`
-      );
-      return 2;
-    }
+      // A merged pull request keeps a branch that can still be pushed to while
+      // GitHub freezes `headRefOid` at the revision that merged, so commits after
+      // that point are in neither and would otherwise go unnoticed.
+      let stranded = 0;
+      if (
+        meta.state === "MERGED" &&
+        observed.mergedHead &&
+        observed.mergedHead !== head
+      ) {
+        // Both ends fetched from the remote that HAS them: the workflow checks
+        // out shallow, and after a squash the merged head is commonly absent.
+        // A shallow checkout keeps its boundary in `.git/shallow`, and fetching
+        // two more objects does not remove it — so `rev-list` stops at the
+        // boundary and reports a SHORT count rather than failing. That is the
+        // reassuring direction: a truncated range reads as a clean tail, which is
+        // exactly what this count exists to disprove.
+        //
+        // Deepened only when the repository is actually shallow, because
+        // `--unshallow` errors on a complete one.
+        const isShallow =
+          execFileSync("git", ["rev-parse", "--is-shallow-repository"], {
+            encoding: "utf8",
+          }).trim() === "true";
+        execFileSync(
+          "git",
+          [
+            "fetch",
+            ...(isShallow ? ["--unshallow"] : []),
+            headRemote,
+            head,
+            observed.mergedHead,
+          ],
+          { stdio: "ignore" }
+        );
+        stranded =
+          Number(
+            execFileSync(
+              "git",
+              ["rev-list", "--count", `${observed.mergedHead}..${head}`],
+              { encoding: "utf8" }
+            ).trim()
+          ) || 0;
+      }
 
-    // A merged pull request keeps a branch that can still be pushed to while
-    // GitHub freezes `headRefOid` at the revision that merged, so commits after
-    // that point are in neither and would otherwise go unnoticed.
-    let stranded = 0;
-    if (
-      meta.state === "MERGED" &&
-      observed.mergedHead &&
-      observed.mergedHead !== head
-    ) {
-      // Both ends fetched from the remote that HAS them: the workflow checks
-      // out shallow, and after a squash the merged head is commonly absent.
-      // A shallow checkout keeps its boundary in `.git/shallow`, and fetching
-      // two more objects does not remove it — so `rev-list` stops at the
-      // boundary and reports a SHORT count rather than failing. That is the
-      // reassuring direction: a truncated range reads as a clean tail, which is
-      // exactly what this count exists to disprove.
-      //
-      // Deepened only when the repository is actually shallow, because
-      // `--unshallow` errors on a complete one.
-      const isShallow =
-        execFileSync("git", ["rev-parse", "--is-shallow-repository"], {
-          encoding: "utf8",
-        }).trim() === "true";
-      execFileSync(
-        "git",
-        [
-          "fetch",
-          ...(isShallow ? ["--unshallow"] : []),
-          headRemote,
-          head,
-          observed.mergedHead,
-        ],
-        { stdio: "ignore" }
-      );
-      stranded =
-        Number(
-          execFileSync(
-            "git",
-            ["rev-list", "--count", `${observed.mergedHead}..${head}`],
-            { encoding: "utf8" }
-          ).trim()
-        ) || 0;
-    }
-
-    const candidate = report({
-      head,
-      coverageSince: observed.baseChangedAt,
-      revisionOrder,
-      revisionOrderComplete,
-      reviews: observed.reviews,
-      threads: observed.threads,
-      issueComments: observed.issueComments,
-      blocking,
-      advisory,
-      state: meta.state,
-      stranded,
+      return report({
+        head,
+        coverageSince: observed.baseChangedAt,
+        revisionOrder,
+        revisionOrderComplete,
+        reviews: observed.reviews,
+        threads: observed.threads,
+        issueComments: observed.issueComments,
+        blocking,
+        advisory,
+        state: meta.state,
+        stranded,
+      });
     });
-
-    // The closing observation. Only an unchanged world licenses the candidate.
-    if (stamp(observed) === stamp(snapshot())) accepted = candidate;
+    if (refusal !== undefined) {
+      process.stderr.write(refusal);
+      return 2;
+    }
   }
 
   if (!accepted) {
