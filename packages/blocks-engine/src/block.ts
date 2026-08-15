@@ -211,6 +211,21 @@ export interface BlockDefinition<
   baseStyles?: NodeStyles;
   /** Named child regions; only container blocks declare these. */
   slots?: Record<string, SlotSpec>;
+  /**
+   * The only block names this block may be a DIRECT child of. Omitted means
+   * anywhere.
+   *
+   * The child's half of a nesting rule, and the counterpart to `SlotSpec.allow`
+   * rather than a restatement of it. A slot's allow-list is the PARENT saying
+   * what it will hold; this is the CHILD saying where it makes sense. Neither
+   * implies the other: a slot naming a type must not confine that type to it,
+   * and a block that is meaningless outside one parent has to say so itself,
+   * because no parent can be made to speak for a block it has never heard of.
+   *
+   * Named after the same field in Gutenberg's block metadata, which reaches the
+   * identical split — its `core/column` declares `parent: ["core/columns"]`.
+   */
+  parent?: readonly string[];
   /** Style capabilities this block opts into. */
   supports?: BlockSupports;
   /**

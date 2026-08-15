@@ -49,7 +49,11 @@ describe("singleApi.updateDocument — write locale", () => {
   beforeEach(() => patch.mockClear());
 
   it("appends ?locale= so the save targets the active language", async () => {
-    await singleApi.updateDocument("site-settings", { tagline: "T" }, { locale: "ar" });
+    await singleApi.updateDocument(
+      "site-settings",
+      { tagline: "T" },
+      { locale: "ar" }
+    );
     const url = patch.mock.calls[0][0] as string;
     expect(url).toContain("/singles/site-settings?locale=ar");
   });

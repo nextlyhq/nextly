@@ -59,6 +59,234 @@ function unwritable(value: unknown, limit = Number.MAX_SAFE_INTEGER): boolean {
   return measured.exceeded && measured.reason === "unwritable";
 }
 
+describe("the three things the writer can do", () => {
+  const LIMITS = { maxBytes: 1_000_000, maxDepth: 12, maxNodes: 5_000 };
+
+  it("refuses a document it could not read, through measureBytes too", () => {
+    // The published `unserializable` is what `measureBytes` refuses on, and
+    // `packages/builder/src/ops.ts` asks it nothing else — so a walk that
+    // declined to read something must reach that field, or an operation accepts
+    // a value that fails to save. Excluding it is fail-OPEN rather than a
+    // narrowing, which is why this asserts the refusal rather than the flag.
+    const hostile = new Proxy(
+      { a: 1 },
+      {
+        ownKeys() {
+          throw new Error("no");
+        },
+      }
+    );
+
+    const survey = surveyDocument(hostile, LIMITS);
+    expect(survey.unreadable).toBe(true);
+    expect(survey.complete).toBe(false);
+    expect(survey.unserializable).toBe(true);
+    // And UNWRITABLE, not merely unread. `JSON.stringify` enumerates a record's
+    // own keys through the same internal operation, so a key list this walk
+    // cannot read is one the writer cannot read either — asserted below.
+    expect(survey.unwritable).toBe(true);
+
+    expect(measureBytes(hostile, 1_000_000).exceeded).toBe(true);
+    // And `JSON.stringify` agrees the document has no stored form, which is
+    // what makes accepting it the wrong answer rather than a lenient one.
+    expect(() => JSON.stringify(hostile)).toThrow();
+  });
+
+  it("runs a FUNCTION's serialization hook, rather than assuming it is dropped", () => {
+    // `JSON.stringify` calls `toJSON` before deciding whether to omit anything,
+    // so a function carrying one is not simply dropped. Measured, both ways:
+    // a hook returning an object is WRITTEN, and one returning a BigInt makes
+    // the writer throw. Treating every function as dropped under-counts the
+    // first and reports the second as storable.
+    const written = function () {};
+    (written as unknown as { toJSON: () => unknown }).toJSON = () => ({
+      kept: 1,
+    });
+    expect(JSON.stringify({ a: written })).toBe('{"a":{"kept":1}}');
+    expect(surveyDocument({ a: written }, LIMITS).bytes).toBe(
+      realBytes({ a: written })
+    );
+
+    const refused = function () {};
+    (refused as unknown as { toJSON: () => unknown }).toJSON = () => 1n;
+    expect(() => JSON.stringify({ a: refused })).toThrow();
+    expect(surveyDocument({ a: refused }, LIMITS).unwritable).toBe(true);
+
+    // A function with NO hook really is dropped, so the exemption still holds.
+    expect(JSON.stringify({ a: function () {} })).toBe("{}");
+  });
+
+  it("does not call an ARRAY unwritable when its key list throws", () => {
+    // The counterpart to the record above, and the reason that rule is not
+    // "a failed key reflection means unwritable". `JSON.stringify` writes an
+    // array from its length and its indices and never enumerates own keys, so
+    // it produces a stored form for exactly the value the walk could not
+    // enumerate. Measured: this proxy serializes to `[1,2]`.
+    const hostile = new Proxy([1, 2], {
+      ownKeys() {
+        throw new Error("no");
+      },
+    });
+
+    const survey = surveyDocument({ items: hostile }, LIMITS);
+    expect(survey.unreadable).toBe(true);
+    expect(survey.unwritable).toBe(false);
+    expect(JSON.stringify(hostile)).toBe("[1,2]");
+  });
+
+  it("does not call a document lossy when only its prototype probe throws", () => {
+    // `JSON.stringify` never consults `getPrototypeOf`, so a proxy that throws
+    // from that trap alone still writes its ordinary form — measured, this one
+    // serializes to `{"a":1}`. A probe that THREW observed nothing, so it
+    // cannot support a claim about the prototype at all; reporting `lossy`
+    // there says storage rewrites a document that round-trips exactly.
+    const hostile = new Proxy(
+      { a: 1 },
+      {
+        getPrototypeOf() {
+          throw new Error("no");
+        },
+      }
+    );
+
+    const survey = surveyDocument({ nested: hostile }, LIMITS);
+    expect(survey.lossy).toBe(false);
+    expect(survey.unwritable).toBe(false);
+    // Still unreadable: the walk declined to descend, so the totals below it
+    // are lower bounds and the survey must not read as complete.
+    expect(survey.unreadable).toBe(true);
+    expect(survey.complete).toBe(false);
+    expect(JSON.stringify(hostile)).toBe('{"a":1}');
+  });
+
+  it("treats a member hook that throws as unwritable, not merely rewritten", () => {
+    // `JSON.stringify` calls the same hook and propagates the same throw, so
+    // this document has no stored form; and the value behind the hook was never
+    // measured, so the totals are lower bounds. Reporting it as a rewrite says
+    // the document can be stored and that these numbers are trustworthy, and
+    // neither is true.
+    const doc = {
+      a: {
+        toJSON() {
+          throw new Error("no");
+        },
+      },
+    };
+
+    const survey = surveyDocument(doc, LIMITS);
+    expect(survey.unwritable).toBe(true);
+    expect(survey.complete).toBe(false);
+    expect(() => JSON.stringify(doc)).toThrow();
+  });
+
+  it("treats a ROOT hook that throws as unwritable, not merely unread", () => {
+    // The same situation as a member hook throwing, one level up, and it was
+    // the level that kept reporting the wrong verdict. `JSON.stringify` calls
+    // the hook on the value it is handed first of all, so a throw here has no
+    // stored form for exactly the same reason.
+    const doc = {
+      toJSON() {
+        throw new Error("no");
+      },
+    };
+
+    const survey = surveyDocument(doc, LIMITS);
+    expect(survey.unwritable).toBe(true);
+    expect(survey.complete).toBe(false);
+    expect(() => JSON.stringify(doc)).toThrow();
+  });
+
+  it("does not call a survey complete when bytes are not the writer's", () => {
+    // A node hook returning a replacement is walked as the ORIGINAL, so a
+    // shallower replacement cannot present a smaller forest than the document
+    // holds. The cost is that `bytes` is then the original's size while the
+    // writer emits the replacement's, and the gap runs in the dangerous
+    // direction: measured, 97 surveyed against 2,046 written, so a caller
+    // trusting the number accepts a document past a cap it has broken.
+    const node = {
+      id: "n1",
+      type: "core/text",
+      version: 1,
+      props: {},
+      toJSON() {
+        return "x".repeat(2000);
+      },
+    };
+    const doc = { formatVersion: 1, kind: "page", nodes: [node] };
+
+    const survey = surveyDocument(doc, LIMITS);
+    expect(survey.complete).toBe(false);
+    expect(survey.bytes).toBeLessThan(JSON.stringify(doc)!.length);
+
+    // The other direction, so this cannot pass by reporting every document
+    // incomplete: an ordinary node is complete and its bytes are exact.
+    const plain = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "n1", type: "core/text", version: 1, props: {} }],
+    };
+    const exact = surveyDocument(plain, LIMITS);
+    expect(exact.complete).toBe(true);
+    expect(exact.bytes).toBe(JSON.stringify(plain)!.length);
+  });
+
+  it("refuses what the descriptor read cannot measure the writer's way", () => {
+    // The walk reads descriptors so validating never runs document code; the
+    // writer reads through [[Get]] and applies its own rules. Where those two
+    // diverge and the walk CAN see it, the totals stop being totals rather than
+    // being reported as exact.
+    //
+    // Boxed primitives are the visible case: JSON unboxes them, so the
+    // enumerable object shape measured here is not what gets stored.
+    const boxedNumber = { a: new Number(12345) };
+    const boxedString = { a: new String("abcdef") };
+    expect(surveyDocument(boxedNumber, LIMITS).complete).toBe(false);
+    expect(surveyDocument(boxedString, LIMITS).complete).toBe(false);
+    expect(surveyDocument(boxedString, LIMITS).bytes).not.toBe(
+      JSON.stringify(boxedString)!.length
+    );
+
+    // And the control, so this cannot pass by refusing everything: an ordinary
+    // value is complete and its bytes are exact.
+    const plain = { a: 12345 };
+    const exact = surveyDocument(plain, LIMITS);
+    expect(exact.complete).toBe(true);
+    expect(exact.bytes).toBe(JSON.stringify(plain)!.length);
+  });
+
+  it("reads a setter-only property instead of refusing it", () => {
+    // Only a GETTER runs document code. A setter-only property has none, so an
+    // ordinary read returns `undefined` without invoking anything — which is
+    // what `JSON.stringify` reads before dropping the key. Calling it
+    // unreadable reported that the validator refused to look at a document it
+    // had measured exactly.
+    const doc: Record<string, unknown> = { b: 1 };
+    Object.defineProperty(doc, "a", { enumerable: true, set() {} });
+
+    const survey = surveyDocument(doc, LIMITS);
+    expect(survey.unreadable).toBe(false);
+    expect(survey.complete).toBe(true);
+    expect(survey.bytes).toBe(JSON.stringify(doc)!.length);
+  });
+
+  it("separates a document JSON rewrites from one it refuses", () => {
+    // The distinction the whole split exists for, asserted against the writer
+    // rather than against an expectation of it.
+    const sparse: unknown[] = [];
+    sparse[1] = "b";
+
+    const rewritten = surveyDocument({ a: sparse }, LIMITS);
+    expect(rewritten.lossy).toBe(true);
+    expect(rewritten.unwritable).toBe(false);
+    expect(rewritten.complete).toBe(true);
+    expect(JSON.stringify({ a: sparse })).toBe('{"a":[null,"b"]}');
+
+    const refused = surveyDocument({ a: 1n }, LIMITS);
+    expect(refused.unwritable).toBe(true);
+    expect(() => JSON.stringify({ a: 1n })).toThrow();
+  });
+});
+
 describe("measureBytes", () => {
   it("counts exactly what JSON.stringify emits", () => {
     const cases: Array<[string, unknown]> = [

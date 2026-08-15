@@ -19,18 +19,31 @@ import { getTableConfig as pgTableConfig } from "drizzle-orm/pg-core";
 import { getTableConfig as sqliteTableConfig } from "drizzle-orm/sqlite-core";
 import { describe, expect, it } from "vitest";
 
-import { getMigrationLockDdl } from "../../../domains/field-groups/migration/session";
+import {
+  getMigrationLockDdl,
+  getMigrationLockUpgradeDdl,
+} from "../../../domains/field-groups/migration/session";
 import { nextlyFieldGroupLock as myLock } from "../mysql";
 import { nextlyFieldGroupLock as pgLock } from "../postgres";
 import { nextlyFieldGroupLock as slLock } from "../sqlite";
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+/** Each dialect's declared columns, read through the dialect's own config reader. */
+const DECLARED_COLUMNS: Record<
+  SupportedDialect,
+  () => { name: string; getSQLType: () => string }[]
+> = {
+  postgresql: () => pgTableConfig(pgLock).columns,
+  mysql: () => mysqlTableConfig(myLock).columns,
+  sqlite: () => sqliteTableConfig(slLock).columns,
+};
+
 /** Each dialect's declared table, normalised to the one thing this compares. */
 const DECLARED: Record<SupportedDialect, () => string[]> = {
-  postgresql: () => pgTableConfig(pgLock).columns.map(c => c.name),
-  mysql: () => mysqlTableConfig(myLock).columns.map(c => c.name),
-  sqlite: () => sqliteTableConfig(slLock).columns.map(c => c.name),
+  postgresql: () => DECLARED_COLUMNS.postgresql().map(c => c.name),
+  mysql: () => DECLARED_COLUMNS.mysql().map(c => c.name),
+  sqlite: () => DECLARED_COLUMNS.sqlite().map(c => c.name),
 };
 
 /** The dialects a lock is ever created on. */
@@ -50,7 +63,57 @@ function columnsInDdl(statement: string): string[] {
     .filter(name => name.length > 0);
 }
 
+/**
+ * The type each column is given in the bootstrap statement, keyed by column name.
+ *
+ * The trailing key clause belongs to the column's definition rather than to its type, so it is
+ * removed before comparing; leaving it in would compare `integer PRIMARY KEY` against `integer`
+ * and fail on a statement that is correct.
+ */
+function typesInDdl(statement: string): Map<string, string> {
+  const body = /\(([\s\S]*)\)/.exec(statement)?.[1] ?? "";
+  const types = new Map<string, string>();
+  for (const part of body.split(",")) {
+    const [name, ...rest] = part.trim().split(/\s+/);
+    if (name === undefined || name.length === 0) continue;
+    types.set(name, rest.join(" ").replace(/\s+PRIMARY KEY$/i, ""));
+  }
+  return types;
+}
+
 describe("the bootstrap DDL and the declared table agree", () => {
+  it.each(DIALECTS)("gives every column its declared type on %s", dialect => {
+    const [statement] = getMigrationLockDdl(dialect);
+    const inDdl = typesInDdl(statement as string);
+
+    // 🔴 Positive control on the parser: without it, a body that parsed to nothing would make every
+    // comparison below vacuous, since a loop over zero declared columns asserts nothing.
+    const declared = DECLARED_COLUMNS[dialect]();
+    expect(declared.length).toBeGreaterThan(0);
+    expect([...inDdl.keys()].sort()).toEqual(declared.map(c => c.name).sort());
+
+    for (const column of declared) {
+      expect(inDdl.get(column.name)).toBe(column.getSQLType());
+    }
+  });
+
+  it.each(DIALECTS)(
+    "adds the same expiry column on upgrade as it creates on %s",
+    dialect => {
+      // An installation that gains `expires_at` by ALTER must end up the shape a fresh install is
+      // born with, or the two populations diverge and nothing downstream can tell them apart.
+      const created = typesInDdl(getMigrationLockDdl(dialect)[0] as string).get(
+        "expires_at"
+      );
+      const added = /\bexpires_at\s+([\s\S]+)$/.exec(
+        getMigrationLockUpgradeDdl(dialect)
+      )?.[1];
+
+      expect(created).toBeDefined();
+      expect(added).toBe(created);
+    }
+  );
+
   it.each(DIALECTS)("declares the same columns on %s", dialect => {
     const [statement, ...rest] = getMigrationLockDdl(
       dialect === "postgresql" ? "postgresql" : dialect

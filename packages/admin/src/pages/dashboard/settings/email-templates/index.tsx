@@ -47,6 +47,7 @@ import type {
   NextlyColumn,
   RowAction,
 } from "@admin/components/ui/table/data-table";
+import { PAGINATION } from "@admin/constants/pagination";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import {
   useEmailTemplates,
@@ -54,6 +55,7 @@ import {
   usePreviewEmailTemplate,
 } from "@admin/hooks/queries/useEmailTemplates";
 import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
+import { usePagination } from "@admin/hooks/usePagination";
 import { navigateTo } from "@admin/lib/navigation";
 import type { EmailTemplateRecord } from "@admin/services/emailTemplateApi";
 
@@ -239,8 +241,7 @@ function EmailTemplateTable() {
 
   const { mutate: doDelete, isPending: isDeleting } = useDeleteEmailTemplate();
 
-  const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState(10);
+  const { page, pageSize, setPage, setPageSize, resetPage } = usePagination();
   const [search, setSearch] = useState("");
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
 
@@ -284,8 +285,8 @@ function EmailTemplateTable() {
   );
 
   useEffect(() => {
-    setPage(0);
-  }, [search]);
+    resetPage();
+  }, [search, resetPage]);
 
   const handleEdit = useCallback((template: EmailTemplateRecord) => {
     navigateTo(
@@ -333,11 +334,6 @@ function EmailTemplateTable() {
     navigateTo(
       `${ROUTES.SETTINGS_EMAIL_TEMPLATES_CREATE}?duplicate=${template.id}`
     );
-  }, []);
-
-  const handlePageSizeChange = useCallback((newPageSize: number) => {
-    setPageSize(newPageSize);
-    setPage(0);
   }, []);
 
   const allColumns = useMemo<NextlyColumn<EmailTemplateRecord>[]>(
@@ -540,9 +536,9 @@ function EmailTemplateTable() {
               currentPage: page,
               totalPages: Math.max(1, totalPages),
               pageSize,
-              pageSizeOptions: [10, 25, 50],
+              pageSizeOptions: PAGINATION.TABLE_PAGE_SIZE_OPTIONS,
               onPageChange: setPage,
-              onPageSizeChange: handlePageSizeChange,
+              onPageSizeChange: setPageSize,
               totalItems,
               isLoading,
             }}

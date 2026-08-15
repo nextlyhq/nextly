@@ -18,9 +18,10 @@
  * @module schemas/field-group-lock/postgres
  */
 
-import { integer, pgTable, text } from "drizzle-orm/pg-core";
+import { integer, pgTable, text, timestamp } from "drizzle-orm/pg-core";
 
 export const nextlyFieldGroupLock = pgTable("nextly_field_group_lock", {
   id: integer("id").primaryKey(),
   owner: text("owner"),
+  expiresAt: timestamp("expires_at", { withTimezone: true }),
 });
