@@ -1,154 +1,95 @@
 /**
- * Changelog entries built from LOCAL git, with no GitHub API call.
+ * `@changesets/changelog-github`, with its GitHub lookups memoised and issued one at a time.
  *
- * `@changesets/changelog-github` asks GitHub for the pull request and author behind every
- * changeset. Its `get-github-info` loader batches with no `maxBatchSize`, so one query carries an
- * aliased `object(expression: <commit>)` per changeset, each with a nested
- * `associatedPullRequests(first: 50)`. Past a few hundred pending changesets GitHub stops
- * VALIDATING the document - `{"message": "Timeout on validation of query"}` - and the release
- * fails before writing anything. Validation is refused rather than the work being slow, so
- * retries and backoff do not reach it; the query has to stop being built.
+ * Every entry is produced by the upstream generator, which this module delegates to rather than
+ * reimplements, so the pull-request link and the `Thanks [@user]` attribution are unchanged. Only
+ * HOW the lookups reach GitHub is different.
  *
- * Everything those entries need is already in the repository. The squash subject a merge writes
- * carries its pull-request number, `changeset.commit` carries the revision, and both URLs are
- * constructed from the repo name. One `git log` pass over the whole history builds the map, so
- * the cost does not grow with the number of changesets and no network is involved.
+ * Two properties of the release path combine into the failure this avoids:
  *
- * The trade against `@changesets/changelog-github` is author attribution: a git author is not a
- * GitHub login, and guessing one from a name or an email would be a fabricated link. Attribution
- * is dropped rather than approximated.
+ * - `apply-release-plan` calls `getReleaseLine` for every changeset of every package in one
+ *   synchronous loop. This repository releases as a fixed lockstep group, so every changeset
+ *   touches every package and the loop is packages x changesets - over a thousand lookups, all
+ *   started in the same tick.
+ * - `get-github-info` batches with a `DataLoader` that declares no `maxBatchSize`, so that whole
+ *   set becomes ONE GraphQL document with an aliased `object(expression: <commit>)` per lookup,
+ *   each carrying a nested `associatedPullRequests(first: 50)`. GitHub stops VALIDATING it -
+ *   `{"message": "Timeout on validation of query"}` - and the release fails before writing
+ *   anything. Validation is refused rather than the work being slow, so retries never reach it.
+ *
+ * `DataLoader` would normally collapse the repeats, and here it cannot: `load()` is handed a
+ * freshly built object every call, so the cache key is never `===` to a previous one. Measured,
+ * four identical `getInfo` calls each cost a full round trip (730ms, 517ms, 553ms, 531ms) - there
+ * is no second-call discount to rely on.
+ *
+ * So this wraps `getInfo` with a cache of its own, keyed by repo and commit, and lets one lookup
+ * run at a time. The thousand-odd calls collapse to one per distinct commit, and each is alone in
+ * its tick, so every batch holds a single alias. The wrap works because the generator reaches its
+ * dependency through a namespace property at CALL time rather than capturing the function at
+ * import, so replacing the property is enough and no patching of internals is involved.
  */
 
-const { execFileSync } = require("node:child_process");
+const getGithubInfo = require("@changesets/get-github-info");
+const changelogGithub = require("@changesets/changelog-github").default;
 
 /**
- * The two subject shapes that name a pull request unambiguously.
+ * One in-flight lookup at a time.
  *
- * A squash merge writes `feat(scope): subject (#1234)`; a merge commit writes
- * `Merge pull request #1234 from owner/branch`. Both identify the pull request in the commit
- * itself, so neither can attribute an entry to the wrong one.
+ * A promise chain rather than a concurrency limiter, because the property needed is not "few at
+ * once" but "alone in its tick" - that is what makes a `DataLoader` batch hold a single key.
  *
- * A commit arriving by neither route gets a commit link and no pull-request link. That is a
- * deliberate miss: 118 of 560 changeset-adding commits in this history carry no reference at all,
- * in the subject or the body, and the only way to reach one is to walk forward to an enclosing
- * merge. Measured on three of them, that walk answers correctly once, lands on a
- * `Merge remote-tracking branch` sync commit once, and finds nothing once - so it would sometimes
- * name a pull request the change did not come from. A wrong link is worse than an absent one, for
- * the same reason the author is dropped rather than guessed from a git identity.
+ * The chain absorbs rejections so one failed lookup cannot strand every later one. The rejection
+ * still reaches the caller through the returned promise; only the CHAIN is protected.
  */
-const PULL_REQUEST_PATTERNS = [
-  // Anchored to the END: `(#12)` mid-sentence is prose about an issue, not this merge's number.
-  /\(#(\d+)\)\s*$/,
-  /^Merge pull request #(\d+)\b/,
-];
+let chain = Promise.resolve();
 
-/**
- * Read every commit once, rather than per changeset.
- *
- * A lookup per entry would be several hundred subprocesses on a backlog this size. This is one,
- * and its result is reused for every line in the run.
- *
- * Resolved lazily so that importing this module cannot fail: `changeset version` runs in trees
- * where git may be absent or the history shallow, and a changelog is not worth aborting a release
- * over. A failed read yields an empty map, which degrades every entry to its summary alone.
- */
-let subjectsByCommit;
-
-function commitSubjects() {
-  if (subjectsByCommit) return subjectsByCommit;
-  subjectsByCommit = new Map();
-  try {
-    const log = execFileSync("git", ["log", "--format=%H%x09%s"], {
-      encoding: "utf8",
-      maxBuffer: 256 * 1024 * 1024,
-    });
-    for (const line of log.split("\n")) {
-      const tab = line.indexOf("\t");
-      if (tab === -1) continue;
-      subjectsByCommit.set(line.slice(0, tab), line.slice(tab + 1));
-    }
-  } catch {
-    // Left empty on purpose. The caller cannot tell "no such commit" from "no git", and both
-    // resolve the same way: emit the summary without links rather than fail the release.
-  }
-  return subjectsByCommit;
+function oneAtATime(work) {
+  const result = chain.then(work, work);
+  chain = result.then(
+    () => undefined,
+    () => undefined
+  );
+  return result;
 }
 
 /**
- * The pull request a commit landed through, or null when the subject does not name one.
+ * Results by repo and commit.
  *
- * Null is the correct answer for a direct push and for a commit this checkout does not have. It is
- * not an error: an entry without a link is still a correct changelog entry.
+ * The PROMISE is stored rather than the resolved value, so concurrent callers asking for the same
+ * commit share one lookup instead of queueing a second behind it.
+ *
+ * A rejection is evicted. Caching one would turn a single transient failure into a permanent hole
+ * in the changelog for that commit, for the rest of the run.
  */
-function pullRequestFor(commit, subjects = commitSubjects()) {
-  if (!commit) return null;
-  const subject = subjects.get(commit);
-  if (!subject) return null;
-  for (const pattern of PULL_REQUEST_PATTERNS) {
-    const match = pattern.exec(subject);
-    if (match) return match[1];
-  }
-  return null;
+const byCommit = new Map();
+
+function cachedGetInfo(request) {
+  const key = `${request.repo}\u0000${request.commit}`;
+  const existing = byCommit.get(key);
+  if (existing) return existing;
+
+  const pending = oneAtATime(() => original(request)).catch(error => {
+    byCommit.delete(key);
+    throw error;
+  });
+  byCommit.set(key, pending);
+  return pending;
 }
 
-/** One release line. Exported so its formatting is testable without running a release. */
-function releaseLine(changeset, repo, subjects = commitSubjects()) {
-  const [first, ...rest] = changeset.summary.split("\n").map(line => line.trimEnd());
-
-  const links = [];
-  if (changeset.commit) {
-    const short = changeset.commit.slice(0, 7);
-    links.push(`[\`${short}\`](https://github.com/${repo}/commit/${changeset.commit})`);
-    const pull = pullRequestFor(changeset.commit, subjects);
-    if (pull) links.push(`[#${pull}](https://github.com/${repo}/pull/${pull})`);
-  }
-
-  const prefix = links.length > 0 ? `${links.join(" ")} - ` : "";
-  let line = `- ${prefix}${first}`;
-  // A multi-line summary keeps its shape, indented under the bullet, as changelog-git does.
-  if (rest.length > 0) line += `\n${rest.map(one => `  ${one}`).join("\n")}`;
-  return line;
-}
+// Captured before the property is replaced, so the wrapper calls the real implementation rather
+// than itself. Assigning the wrapper first and reading the property inside it would recurse.
+const original = getGithubInfo.getInfo;
+getGithubInfo.getInfo = cachedGetInfo;
 
 const changelogFunctions = {
-  getReleaseLine: async (changeset, _type, options) =>
-    releaseLine(changeset, options?.repo ?? "nextlyhq/nextly"),
-
-  getDependencyReleaseLine: async (changesets, dependenciesUpdated, options) => {
-    if (dependenciesUpdated.length === 0) return "";
-    const repo = options?.repo ?? "nextlyhq/nextly";
-    const subjects = commitSubjects();
-    // ONE bullet, with the commits inline and the packages nested under it.
-    //
-    // A bullet per changeset followed by a single package list reads correctly in source and
-    // renders wrongly: Markdown attaches the nested list to the LAST bullet, so every earlier
-    // changeset becomes an empty `Updated dependencies` line and the package versions appear to
-    // belong to whichever commit happened to sort last. With a lockstep release group every
-    // changeset touches every package, so that is not a corner case - it is the normal shape, and
-    // at this repository's backlog it produces dozens of empty bullets per package.
-    const links = changesets
-      .filter(changeset => changeset.commit)
-      .map(changeset => {
-        const short = changeset.commit.slice(0, 7);
-        const pull = pullRequestFor(changeset.commit, subjects);
-        const commitLink = `[\`${short}\`](https://github.com/${repo}/commit/${changeset.commit})`;
-        return pull
-          ? `${commitLink} [#${pull}](https://github.com/${repo}/pull/${pull})`
-          : commitLink;
-      });
-    const heading = links.length > 0 ? `- Updated dependencies ${links.join(", ")}` : "- Updated dependencies";
-    const packages = dependenciesUpdated.map(one => `  - ${one.name}@${one.newVersion}`);
-    return [heading, ...packages].join("\n");
-  },
+  getReleaseLine: (changeset, type, options) =>
+    changelogGithub.getReleaseLine(changeset, type, options),
+  getDependencyReleaseLine: (changesets, dependenciesUpdated, options) =>
+    changelogGithub.getDependencyReleaseLine(changesets, dependenciesUpdated, options),
 };
 
-// CommonJS on purpose. `apply-release-plan` loads this with `require()`, which cannot read an
-// ESM `.mjs` on Node 20 - a version this repository still supports - so the module format is
-// decided by the consumer rather than by the surrounding convention.
-//
-// `default` as well as the bare shape: the loader accepts either, and pinning both means a change
-// to its interop cannot silently fall through to an undefined function.
 module.exports = changelogFunctions;
 module.exports.default = changelogFunctions;
-module.exports.pullRequestFor = pullRequestFor;
-module.exports.releaseLine = releaseLine;
+module.exports.oneAtATime = oneAtATime;
+module.exports.cachedGetInfo = cachedGetInfo;
+module.exports.byCommit = byCommit;

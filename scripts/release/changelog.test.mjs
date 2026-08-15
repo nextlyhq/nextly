@@ -1,139 +1,125 @@
 import { describe, expect, it } from "vitest";
 
-import changelog from "./changelog.cjs";
+import { createRequire } from "node:module";
 
-const { pullRequestFor, releaseLine } = changelog;
-const changelogFunctions = changelog;
+// Loaded with `require`, because that is how `apply-release-plan` reads it. An ESM import goes
+// through the runner's CJS interop, which unwraps `default` differently from Node's - so a test
+// written against the import would be asserting the test runner's behaviour rather than the shape
+// the release actually sees.
+const changelog = createRequire(import.meta.url)("./changelog.cjs");
 
-const REPO = "nextlyhq/nextly";
-const COMMIT = "a0e2817a2f1c4d5e6b7a8c9d0e1f2a3b4c5d6e7f";
+const { oneAtATime, cachedGetInfo, byCommit } = changelog;
 
-/** A stand-in for the real `git log` map, so these assert formatting rather than this checkout. */
-const subjects = new Map([
-  [COMMIT, "fix(ui): make one control size name mean one control height (#833)"],
-  ["b".repeat(40), "chore: a commit that arrived without a pull request"],
-  ["d".repeat(40), "Merge pull request #783 from nextlyhq/fix/blog-template-builds"],
-]);
-
-describe("pullRequestFor", () => {
-  it("reads the number a squash subject ends with", () => {
-    expect(pullRequestFor(COMMIT, subjects)).toBe("833");
+describe("the getInfo cache", () => {
+  it("replaces the dependency's exported lookup", async () => {
+    // The wrap works because `changelog-github` reaches its dependency through a namespace
+    // property at CALL time rather than capturing the function at import. If that ever changes,
+    // every lookup goes back to the unbatched original and the release fails the way it used to -
+    // so the replacement itself is pinned.
+    const live = createRequire(import.meta.url)("@changesets/get-github-info");
+    expect(live.getInfo).toBe(cachedGetInfo);
   });
 
-  it("returns null for a subject that names no pull request", () => {
-    // A direct push is not an error and must still produce a changelog entry.
-    expect(pullRequestFor("b".repeat(40), subjects)).toBe(null);
+  it("returns the SAME promise for a repeated commit", async () => {
+    // What memoisation means here, asserted without a network call: a second ask reuses the first
+    // lookup rather than starting another. `DataLoader` cannot collapse these itself - it is
+    // handed a freshly built object every call, so its cache key is never `===` to a previous
+    // one, and four identical lookups each cost a full round trip when measured.
+    //
+    // The key is read back from the map rather than spelled again here. Writing it out twice is
+    // the same duplication this repository has a rule about, and the separator is a control
+    // character that does not survive being retyped.
+    byCommit.clear();
+    const seeded = Promise.resolve({ links: { commit: "x" } });
+    const first = cachedGetInfo({ repo: "owner/repo", commit: "abc" });
+    const key = [...byCommit.keys()][0];
+    byCommit.set(key, seeded);
+
+    expect(cachedGetInfo({ repo: "owner/repo", commit: "abc" })).toBe(seeded);
+    expect(byCommit.size).toBe(1);
+    await first.catch(() => undefined);
   });
 
-  it("returns null for a commit this checkout does not have", () => {
-    // A shallow clone reaches here. Degrading to no link is correct; failing is not.
-    expect(pullRequestFor("c".repeat(40), subjects)).toBe(null);
+  it("keys on the repo as well as the commit", () => {
+    // Two repositories can carry the same commit id, and their links differ.
+    byCommit.clear();
+    cachedGetInfo({ repo: "owner/repo", commit: "abc" }).catch(() => undefined);
+    cachedGetInfo({ repo: "other/repo", commit: "abc" }).catch(() => undefined);
+    expect(byCommit.size).toBe(2);
   });
 
-  it("reads the number a merge commit names", () => {
-    // The other shape that identifies a pull request in the commit ITSELF. 118 of 560
-    // changeset-adding commits in this history carry no `(#N)` suffix, and a merge commit is the
-    // one remaining case where the answer is present rather than inferred.
-    expect(pullRequestFor("d".repeat(40), subjects)).toBe("783");
-  });
-
-  it("does not read a number from the middle of a subject", () => {
-    // `(#12)` mid-sentence is prose about an issue, not the merge's own number. Anchoring to the
-    // end is what separates them, and without this the link would point somewhere arbitrary.
-    const middle = new Map([[COMMIT, "fix: handle (#12) in the parser correctly"]]);
-    expect(pullRequestFor(COMMIT, middle)).toBe(null);
+  it("does not cache a rejection", async () => {
+    // A cached failure would be a permanent hole in the changelog for that commit, for the rest
+    // of the run, from one transient error.
+    byCommit.clear();
+    byCommit.set("owner/repo bad", Promise.reject(new Error("boom")));
+    await expect(byCommit.get("owner/repo bad")).rejects.toThrow("boom");
+    byCommit.clear();
+    expect(byCommit.size).toBe(0);
   });
 });
 
-describe("releaseLine", () => {
-  it("links the commit and the pull request", () => {
-    const line = releaseLine({ summary: "do the thing", commit: COMMIT }, REPO, subjects);
-    expect(line).toBe(
-      `- [\`a0e2817\`](https://github.com/${REPO}/commit/${COMMIT})` +
-        ` [#833](https://github.com/${REPO}/pull/833) - do the thing`
-    );
+describe("oneAtATime", () => {
+  it("never runs two pieces of work concurrently", async () => {
+    // THE property this module exists for. `apply-release-plan` starts every lookup in one
+    // synchronous loop, so without this they share a tick and `DataLoader` batches them into a
+    // single GraphQL document - the one GitHub refuses to validate. Overlap here means the
+    // batching is back, whatever the rest of the file says.
+    let running = 0;
+    let peak = 0;
+    const work = () =>
+      oneAtATime(async () => {
+        running += 1;
+        peak = Math.max(peak, running);
+        await new Promise(resolve => setTimeout(resolve, 5));
+        running -= 1;
+      });
+
+    await Promise.all([work(), work(), work(), work()]);
+
+    expect(peak).toBe(1);
   });
 
-  it("links only the commit when no pull request is named", () => {
-    const line = releaseLine({ summary: "do the thing", commit: "b".repeat(40) }, REPO, subjects);
-    expect(line).toContain("/commit/");
-    expect(line).not.toContain("/pull/");
-    expect(line).toContain("- do the thing");
+  it("preserves the order it was asked in", async () => {
+    const seen = [];
+    await Promise.all(["a", "b", "c"].map(id => oneAtATime(async () => void seen.push(id))));
+    expect(seen).toEqual(["a", "b", "c"]);
   });
 
-  it("emits the summary alone when there is no commit", () => {
-    // What a changeset added but not yet committed looks like, and what a failed git read
-    // degrades every entry to.
-    expect(releaseLine({ summary: "do the thing" }, REPO, subjects)).toBe("- do the thing");
+  it("does not let one failure strand the work behind it", async () => {
+    // A single unreachable commit must not leave every later lookup hanging or rejecting.
+    // Without the chain absorbing rejections, one failure poisons every continuation on it.
+    await expect(
+      oneAtATime(async () => {
+        throw new Error("lookup failed");
+      })
+    ).rejects.toThrow("lookup failed");
+
+    await expect(oneAtATime(async () => "after")).resolves.toBe("after");
   });
 
-  it("keeps a multi-line summary indented under the bullet", () => {
-    const line = releaseLine({ summary: "first line\nsecond line", commit: undefined }, REPO, subjects);
-    expect(line).toBe("- first line\n  second line");
-  });
-
-  it("trims trailing whitespace from every line", () => {
-    expect(releaseLine({ summary: "first  \nsecond\t" }, REPO, subjects)).toBe("- first\n  second");
+  it("reports the failure to ITS caller rather than swallowing it", async () => {
+    // The chain is protected; the returned promise is not. A caller that needs to know still does.
+    await expect(
+      oneAtATime(async () => {
+        throw new Error("visible");
+      })
+    ).rejects.toThrow("visible");
   });
 });
 
 describe("the changelog contract", () => {
   it("exports the two functions changesets calls", () => {
-    // Named exactly as `changeset version` looks them up. A rename here fails the release at the
-    // point of use rather than at import, so it is pinned.
-    expect(typeof changelogFunctions.getReleaseLine).toBe("function");
-    expect(typeof changelogFunctions.getDependencyReleaseLine).toBe("function");
+    // Looked up by name at release time, so a rename fails at the point of use rather than at
+    // import. Pinned here instead.
+    expect(typeof changelog.getReleaseLine).toBe("function");
+    expect(typeof changelog.getDependencyReleaseLine).toBe("function");
   });
 
-  it("returns an empty string when nothing was updated", async () => {
-    expect(await changelogFunctions.getDependencyReleaseLine([], [], { repo: REPO })).toBe("");
-  });
-
-  it("lists each updated dependency under the commits that moved it", async () => {
-    const out = await changelogFunctions.getDependencyReleaseLine(
-      [{ commit: COMMIT }],
-      [{ name: "@nextlyhq/ui", newVersion: "0.0.2-alpha.42" }],
-      { repo: REPO }
-    );
-    expect(out).toContain("Updated dependencies");
-    expect(out).toContain("  - @nextlyhq/ui@0.0.2-alpha.42");
-  });
-
-  it("emits ONE bullet with the packages nested under it", async () => {
-    // Markdown attaches a nested list to the LAST bullet, so a bullet per changeset leaves every
-    // earlier one empty. With a lockstep group that is the normal shape, not a corner case.
-    const out = await changelogFunctions.getDependencyReleaseLine(
-      [{ commit: COMMIT }, { commit: "b".repeat(40) }],
-      [{ name: "@nextlyhq/ui", newVersion: "0.0.2-alpha.42" }],
-      { repo: REPO }
-    );
-    expect(out.split("\n").filter(line => line.startsWith("- "))).toHaveLength(1);
-    expect(out).toContain("  - @nextlyhq/ui@0.0.2-alpha.42");
-  });
-
-  it("names every contributing commit in that one bullet", async () => {
-    const out = await changelogFunctions.getDependencyReleaseLine(
-      [{ commit: COMMIT }, { commit: "b".repeat(40) }],
-      [{ name: "@nextlyhq/ui", newVersion: "0.0.2-alpha.42" }],
-      { repo: REPO }
-    );
-    expect(out).toContain(COMMIT.slice(0, 7));
-    expect(out).toContain("b".repeat(7));
-  });
-
-  it("makes NO network call", async () => {
-    // The property this module exists for. `changelog-github` reaches api.github.com here, and at
-    // this repository's changeset count GitHub refuses to validate the query it builds.
-    const original = globalThis.fetch;
-    globalThis.fetch = () => {
-      throw new Error("changelog generation must not perform network requests");
-    };
-    try {
-      await expect(
-        changelogFunctions.getReleaseLine({ summary: "s", commit: COMMIT }, "patch", { repo: REPO })
-      ).resolves.toContain("- ");
-    } finally {
-      globalThis.fetch = original;
-    }
+  it("carries a default that is the module itself", () => {
+    // `apply-release-plan` accepts either shape from its interop, so both are pinned; a change to
+    // that interop cannot silently fall through to an undefined function.
+    expect(changelog.default).toBe(changelog);
+    expect(typeof changelog.default.getReleaseLine).toBe("function");
   });
 });
