@@ -67,9 +67,11 @@ const verdictComment = (login, sha, created_at = undefined) => ({
  */
 describe("verdictCommentReviewers", () => {
   it("grants coverage from a comment naming the head", () => {
-    expect(verdictCommentReviewers([verdictComment(CODEX, HEAD)], HEAD)).toEqual(
-      [CODEX]
-    );
+    expect(
+      verdictCommentReviewers([verdictComment(CODEX, HEAD)], HEAD, undefined, [
+        HEAD,
+      ])
+    ).toEqual([CODEX]);
   });
 
   it("ignores a verdict naming a different revision", () => {
@@ -110,9 +112,9 @@ describe("verdictCommentReviewers", () => {
 
   it("counts a verdict after the last base move", () => {
     const fresh = verdictComment(CODEX, HEAD, "2026-08-14T11:00:00Z");
-    expect(verdictCommentReviewers([fresh], HEAD, "2026-08-14T10:00:00Z")).toEqual(
-      [CODEX]
-    );
+    expect(
+      verdictCommentReviewers([fresh], HEAD, "2026-08-14T10:00:00Z", [HEAD])
+    ).toEqual([CODEX]);
   });
 
   // A comment with no timestamp cannot be shown to postdate the base move, and
@@ -124,6 +126,41 @@ describe("verdictCommentReviewers", () => {
         HEAD,
         "2026-08-14T10:00:00Z"
       )
+    ).toEqual([]);
+  });
+
+  // An abbreviation is only evidence if it identifies ONE commit. The author
+  // controls their own commits, and seven hexadecimal digits is within reach of
+  // grinding, so a head made to share a prefix with an earlier reviewed
+  // revision would otherwise be covered by that older verdict.
+  it("refuses an abbreviation that also matches an earlier revision", () => {
+    const shared = "aaaaaaa";
+    const collidingHead = shared + "1".repeat(40 - shared.length);
+    const olderRevision = shared + "2".repeat(40 - shared.length);
+    const comment = {
+      user: { login: CODEX },
+      body: `**Reviewed commit:** \`${shared}\``,
+    };
+    expect(
+      verdictCommentReviewers([comment], collidingHead, undefined, [
+        collidingHead,
+        olderRevision,
+      ])
+    ).toEqual([]);
+  });
+
+  // Nothing to compare against is not the same as nothing colliding.
+  it("refuses when no revision set is supplied", () => {
+    expect(verdictCommentReviewers([verdictComment(CODEX, HEAD)], HEAD)).toEqual(
+      []
+    );
+  });
+
+  it("refuses when the head is absent from the revision set", () => {
+    expect(
+      verdictCommentReviewers([verdictComment(CODEX, HEAD)], HEAD, undefined, [
+        OLD,
+      ])
     ).toEqual([]);
   });
 
@@ -141,14 +178,18 @@ describe("reviewersCovering", () => {
       reviewersCovering(
         [review(CODEX, HEAD)],
         [verdictComment(CODEX, HEAD)],
-        HEAD
+        HEAD,
+        undefined,
+        [HEAD]
       )
     ).toEqual([CODEX]);
   });
 
   it("clears a required reviewer that only ever commented", () => {
     expect(
-      missingReviewers([], [verdictComment(CODEX, HEAD)], HEAD, [CODEX])
+      missingReviewers([], [verdictComment(CODEX, HEAD)], HEAD, [CODEX], undefined, [
+        HEAD,
+      ])
     ).toEqual([]);
   });
 });

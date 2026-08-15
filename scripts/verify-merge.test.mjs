@@ -253,8 +253,58 @@ describe("reviewedRevision", () => {
         issueComments: [cleanComment(CODEX, FULL_TIP)],
         tip: FULL_TIP,
         login: CODEX,
+        knownRevisions: [FULL_TIP],
       })
     ).toBe(FULL_TIP);
+  });
+
+  // Inherited from the sibling's decision rather than restated here, which is
+  // the point of delegating: this gate cannot drift from the other on either
+  // rule below.
+  it("refuses an abbreviation that also identifies an earlier revision", () => {
+    const shared = "91fd950";
+    const older = shared + "0".repeat(40 - shared.length);
+    const comment = {
+      user: { login: CODEX },
+      body: `**Reviewed commit:** \`${shared}\``,
+    };
+    expect(
+      reviewedRevision({
+        reviews: [],
+        issueComments: [comment],
+        tip: FULL_TIP,
+        login: CODEX,
+        knownRevisions: [FULL_TIP, older],
+      })
+    ).toBeUndefined();
+  });
+
+  it("refuses a comment verdict predating a base change", () => {
+    const dated = {
+      ...cleanComment(CODEX, FULL_TIP),
+      created_at: "2026-08-14T09:00:00Z",
+    };
+    expect(
+      reviewedRevision({
+        reviews: [],
+        issueComments: [dated],
+        tip: FULL_TIP,
+        login: CODEX,
+        baseChangedAt: "2026-08-14T10:00:00Z",
+        knownRevisions: [FULL_TIP],
+      })
+    ).toBeUndefined();
+  });
+
+  it("refuses comment evidence when no revision set is supplied", () => {
+    expect(
+      reviewedRevision({
+        reviews: [],
+        issueComments: [cleanComment(CODEX, FULL_TIP)],
+        tip: FULL_TIP,
+        login: CODEX,
+      })
+    ).toBeUndefined();
   });
 
   it("still prefers the record when one exists", () => {
@@ -279,6 +329,7 @@ describe("reviewedRevision", () => {
         issueComments: [cleanComment(CODEX, older)],
         tip: FULL_TIP,
         login: CODEX,
+        knownRevisions: [FULL_TIP],
       })
     ).toBeUndefined();
   });
@@ -290,6 +341,7 @@ describe("reviewedRevision", () => {
         issueComments: [cleanComment("codex-impersonator", FULL_TIP)],
         tip: FULL_TIP,
         login: CODEX,
+        knownRevisions: [FULL_TIP],
       })
     ).toBeUndefined();
   });
@@ -305,6 +357,7 @@ describe("reviewedRevision", () => {
         issueComments: [prose],
         tip: FULL_TIP,
         login: CODEX,
+        knownRevisions: [FULL_TIP],
       })
     ).toBeUndefined();
   });
