@@ -33,10 +33,7 @@ vi.mock("../di", () => ({
 import { isErrorResponse, requireAnyPermission } from "../auth/middleware";
 import { container } from "../di";
 
-import {
-  getGeneralSettings,
-  updateGeneralSettings,
-} from "./general-settings";
+import { getGeneralSettings, updateGeneralSettings } from "./general-settings";
 
 const SETTINGS = {
   applicationName: "Nextly",
@@ -92,5 +89,57 @@ describe("updateGeneralSettings", () => {
     expect(json).not.toHaveProperty("data");
     expect(json.message).toMatch(/updated/i);
     expect(json.item).toEqual(updated);
+  });
+
+  it("refuses a site URL whose scheme the browser would execute", async () => {
+    // `z.string().url()` accepts every one of these — measured — because the
+    // WHATWG parser does. The value is concatenated into preview URLs the admin
+    // assigns to location.href, where such a scheme runs script in the admin's
+    // own origin rather than navigating.
+    const executable = [
+      "javascript:alert(document.cookie)",
+      "data:text/html,<script>alert(1)</script>",
+      "vbscript:msgbox(1)",
+      "file:///etc/passwd",
+    ];
+    const updateSettings = vi.fn();
+    (container.get as ReturnType<typeof vi.fn>).mockReturnValue({
+      updateSettings,
+    });
+
+    expect(executable.length).toBeGreaterThan(0);
+    for (const siteUrl of executable) {
+      const res = await updateGeneralSettings(
+        new Request("http://x/api/nextly/general-settings", {
+          method: "PATCH",
+          body: JSON.stringify({ siteUrl }),
+        })
+      );
+
+      expect(res.status).toBe(400);
+    }
+
+    // Rejected before the write, not merely reported afterwards.
+    expect(updateSettings).not.toHaveBeenCalled();
+  });
+
+  it("still accepts an ordinary http(s) site URL", async () => {
+    // The positive control for the refusal above: without it, a validator that
+    // rejected everything would satisfy that test perfectly.
+    const updated = { ...SETTINGS, siteUrl: "http://localhost:3000" };
+    const updateSettings = vi.fn().mockResolvedValue(updated);
+    (container.get as ReturnType<typeof vi.fn>).mockReturnValue({
+      updateSettings,
+    });
+
+    const res = await updateGeneralSettings(
+      new Request("http://x/api/nextly/general-settings", {
+        method: "PATCH",
+        body: JSON.stringify({ siteUrl: "http://localhost:3000" }),
+      })
+    );
+
+    expect(res.status).toBe(200);
+    expect(updateSettings).toHaveBeenCalled();
   });
 });
