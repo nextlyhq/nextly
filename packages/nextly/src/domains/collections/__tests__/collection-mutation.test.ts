@@ -11,7 +11,12 @@
  * - deleteEntry: 404, hooks, access control, success response.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+import {
+  clearFieldFunctions,
+  registerFieldFunctions,
+} from "../../../shared/lib/field-level-registry";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { CollectionEntryService } from "../../../services/collections/collection-entry-service";
@@ -22,6 +27,7 @@ import {
   createMockAdapter,
   silentLogger,
   createMockFileManager,
+  createMockCollection,
   createMockCollectionService,
   createMockRelationshipService,
   createMockHookRegistry,
@@ -94,20 +100,110 @@ vi.mock("../../../services/collections/geo-utils", () => ({
   sortByDistance: vi.fn(),
 }));
 
-vi.mock("@nextly/hooks/context-builder", () => ({
+vi.mock("../../../hooks/context-builder", () => ({
   buildContext: vi.fn((opts: Record<string, unknown>) => opts),
 }));
 
-vi.mock("@nextly/hooks/stored-hook-executor", () => {
+// Hoisted so every instance shares one spy. A per-instance `vi.fn()` is unreachable from a test,
+// which would leave this seam unobservable — and an unobservable seam is exactly where hook
+// dispatch could move ahead of the access check without any assertion noticing.
+const storedHookExecute = vi.hoisted(() =>
+  vi.fn().mockResolvedValue({ data: undefined, errors: [] })
+);
+
+// Field hooks are an independently movable dispatcher: `updateEntry` calls `runFieldHooks`
+// directly, so it is a fourth door the ordering assertions have to watch. Spied rather than
+// stubbed wholesale, so the rest of the registry keeps its real behaviour.
+const runFieldHooksSpy = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+
+// Relationship normalisation mutates the caller's data before the write. It is a seventh door:
+// `shapeWriteParts` calls it directly, so it can move above the gate independently of every hook
+// and validator. Spied rather than stubbed, so the rest of the module keeps its real behaviour.
+const normalizeRelationshipFieldsSpy = vi.hoisted(() => vi.fn());
+
+vi.mock("../../../shared/lib/field-transform", async importActual => {
+  const actual = await importActual<Record<string, unknown>>();
+  return {
+    ...actual,
+    normalizeRelationshipFields: vi.fn(
+      (...args: Parameters<typeof normalizeRelationshipFieldsSpy>) => {
+        normalizeRelationshipFieldsSpy(...args);
+        return (
+          actual.normalizeRelationshipFields as (...inner: unknown[]) => unknown
+        )(...args);
+      }
+    ),
+  };
+});
+
+vi.mock("../../../shared/lib/field-level-registry", async importActual => {
+  const actual = await importActual<Record<string, unknown>>();
+  return { ...actual, runFieldHooks: runFieldHooksSpy };
+});
+
+// Mocked by relative path, not by the `@nextly/hooks/stored-hook-executor` alias the source
+// imports: `vi.mock` does not resolve the tsconfig-path aliases that `vite-tsconfig-paths`
+// applies to real imports, so the alias form registers a mock against a specifier nothing
+// resolves to and the real class is constructed instead. That failure is silent — the factory
+// simply never runs — so the spy stays untouched and every `not.toHaveBeenCalled()` assertion
+// against it passes without observing anything.
+vi.mock("../../../hooks/stored-hook-executor", () => {
   class MockStoredHookExecutor {
-    execute = vi.fn().mockResolvedValue({ data: undefined, errors: [] });
+    execute = storedHookExecute;
   }
   return { StoredHookExecutor: MockStoredHookExecutor };
 });
 
-vi.mock("@nextly/lib/field-transform", () => ({
+vi.mock("../../../lib/field-transform", () => ({
   transformRichTextFields: vi.fn((entry: unknown) => entry),
 }));
+
+// A schema-supplied `validate` callback is application code that runs on the caller's data, so
+// it belongs behind the access gate for the same reason hooks do. Returning a non-string passes
+// the documented contract, which keeps this observable without changing any outcome.
+const titleValidate = vi.fn().mockReturnValue(true);
+
+// A field-level `access.update` callback is configuration-supplied code that also resolves the
+// caller's grants, so running it for a caller about to be refused both executes application code
+// and performs a lookup on their behalf. It reaches the service through the function registry
+// rather than through the collection, so it is a separate door from the validator above.
+const titleFieldAccess = vi.fn().mockResolvedValue(true);
+
+// `updateEntry` reads `schemaDefinition.fields` in preference to `fields`, so both lists carry
+// the validator: attaching it to only one leaves the assertion watching a list nothing reads.
+function withTitleValidator<T extends { name: string }>(
+  fields: T[]
+): (T & { validate?: typeof titleValidate })[] {
+  return fields.map(field =>
+    field.name === "title" ? { ...field, validate: titleValidate } : field
+  );
+}
+
+// The shared fixture declares `author` as `type: "relation"`, but `normalizeRelationshipFields`
+// dispatches on `type === "relationship"`. A value under the shared spelling therefore reaches the
+// normaliser and is skipped, so an ordering assertion on the spy passes while the mechanism it
+// names never runs. Corrected here rather than in the shared helper, which other suites rely on.
+function asRelationshipFields<T extends { name: string; type?: string }>(
+  fields: T[]
+): T[] {
+  return fields.map(field =>
+    field.type === "relation" ? { ...field, type: "relationship" } : field
+  );
+}
+
+function collectionWithTitleValidator() {
+  const base = createMockCollection();
+  const shape = <T extends { name: string; type?: string }>(fields: T[]) =>
+    asRelationshipFields(withTitleValidator(fields));
+  return {
+    ...base,
+    schemaDefinition: {
+      ...base.schemaDefinition,
+      fields: shape(base.schemaDefinition.fields),
+    },
+    fields: shape(base.fields),
+  };
+}
 
 // ── Test suite ────────────────────────────────────────────────────────────
 
@@ -127,6 +223,12 @@ describe("CollectionEntryService — Mutation Contracts", () => {
   let mockComponentDataService: ReturnType<
     typeof createMockComponentDataService
   >;
+
+  afterEach(() => {
+    // The function registry is module-global, so a registration left behind would apply to every
+    // later test in the file.
+    clearFieldFunctions();
+  });
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -466,6 +568,79 @@ describe("CollectionEntryService — Mutation Contracts", () => {
 
       expect(result.success).toBe(false);
       expect(result.statusCode).toBe(403);
+    });
+
+    it("runs no hook for a caller it refuses", async () => {
+      // Authorization is a precondition, so nothing may run on behalf of a caller about to be
+      // refused. Hooks are the sharp case: they reach outside this process, so one dispatched
+      // before the gate is an effect a refused request still caused.
+      //
+      // The 403 assertion above cannot see this — a hook fired before the check leaves the status
+      // unchanged — and moving hook dispatch above the access check still compiles.
+      selectData.rows = [createSampleEntry()];
+      mockCollectionService.getCollection.mockResolvedValue(
+        collectionWithTitleValidator()
+      );
+      registerFieldFunctions("collection", "posts", [
+        { name: "title", type: "text", access: { update: titleFieldAccess } },
+      ]);
+      mockAccessControlService.evaluateAccess.mockResolvedValueOnce({
+        allowed: false,
+        reason: "Not authorized to update",
+      });
+
+      await service.updateEntry(
+        { collectionName: "posts", entryId: "entry-1", user: { id: "user-1" } },
+        // A relationship value shaped as the admin sends it: an object carrying display
+        // properties, which normalisation reduces to its id.
+        { title: "Updated", author: { id: "user-9", name: "Ada" } }
+      );
+
+      // EVERY dispatch seam, not the one that happened to be handy. Asserting only
+      // `executeBeforeOperation` leaves `execute` — which carries `beforeUpdate` — and the stored
+      // hook executor free to move above the gate with this test still green.
+      expect(mockHookRegistry.executeBeforeOperation).not.toHaveBeenCalled();
+      expect(mockHookRegistry.execute).not.toHaveBeenCalled();
+      expect(runFieldHooksSpy).not.toHaveBeenCalled();
+      expect(storedHookExecute).not.toHaveBeenCalled();
+      expect(titleValidate).not.toHaveBeenCalled();
+      expect(titleFieldAccess).not.toHaveBeenCalled();
+      expect(normalizeRelationshipFieldsSpy).not.toHaveBeenCalled();
+    });
+
+    it("runs those same hooks for a caller it allows", async () => {
+      // The positive control the assertions above need, and it has to cover the same seams: one
+      // that never dispatches — a renamed method, a mock that stopped being wired — satisfies
+      // `not.toHaveBeenCalled()`, and the ordering rule then reads as enforced while nothing
+      // checks it.
+      selectData.rows = [createSampleEntry()];
+      mockCollectionService.getCollection.mockResolvedValue(
+        collectionWithTitleValidator()
+      );
+      registerFieldFunctions("collection", "posts", [
+        { name: "title", type: "text", access: { update: titleFieldAccess } },
+      ]);
+
+      await service.updateEntry(
+        { collectionName: "posts", entryId: "entry-1", user: { id: "user-1" } },
+        // A relationship value shaped as the admin sends it: an object carrying display
+        // properties, which normalisation reduces to its id.
+        { title: "Updated", author: { id: "user-9", name: "Ada" } }
+      );
+
+      expect(mockHookRegistry.executeBeforeOperation).toHaveBeenCalled();
+      expect(mockHookRegistry.execute).toHaveBeenCalled();
+      expect(runFieldHooksSpy).toHaveBeenCalled();
+      expect(storedHookExecute).toHaveBeenCalled();
+      expect(titleValidate).toHaveBeenCalled();
+      expect(titleFieldAccess).toHaveBeenCalled();
+      expect(normalizeRelationshipFieldsSpy).toHaveBeenCalled();
+      // The mechanism, not just the entry point: normalisation reduces the admin's object to its
+      // id, and the data object is mutated in place, so this reads what the call actually did.
+      const normalised = normalizeRelationshipFieldsSpy.mock.calls[0]?.[0] as
+        | Record<string, unknown>
+        | undefined;
+      expect(normalised?.author).toBe("user-9");
     });
 
     it("should execute beforeOperation hooks", async () => {
