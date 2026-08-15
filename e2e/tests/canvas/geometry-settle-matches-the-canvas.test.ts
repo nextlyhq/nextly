@@ -149,7 +149,18 @@ async function geometrySpanMs(
         const el = zone as HTMLElement;
         // A state may be a SET of attributes: the canvas can carry data-drag and data-active at
         // once, and a rule keyed on both is invisible to either alone.
-        const attrs = appliedState ? (appliedState as string).split(" ") : [];
+        // Only the states this VARIANT can really enter. `DropZone` renders `data-drag` on the
+        // between-item zone and not on the empty placeholder, which carries `data-active` alone —
+        // so applying `data-drag` to an empty zone would measure a rule the canvas can never
+        // trigger, and pin a span for movement that cannot happen.
+        const rendered = (zone as HTMLElement).classList.contains(
+          "nx-pb-dropzone-empty"
+        )
+          ? ["data-active"]
+          : ["data-drag", "data-active"];
+        const attrs = (
+          appliedState ? (appliedState as string).split(" ") : []
+        ).filter(a => rendered.includes(a));
         const had = attrs.filter(a => el.hasAttribute(a));
         // The VALUE React renders, not an empty string. `DropZone` passes
         // `data-active={isDropTarget || undefined}`, so the real DOM carries `data-active="true"`
@@ -206,9 +217,15 @@ async function geometrySpanMs(
               // `none` occupies a position in every timing list but starts no animation, so its
               // tuple would charge movement that never happens.
               if (name.trim() === "none") return;
+              // Nor does a zero-iteration entry, and its DELAY is equally irrelevant: under the
+              // default fill mode nothing is applied before the first iteration, and there is no
+              // first iteration. Charging the delay would report a wait for movement that never
+              // begins.
+              const count = cycled(counts, i);
+              if (count === 0) return;
               longest = Math.max(
                 longest,
-                cycled(durations, i) * cycled(counts, i) + cycled(delays, i)
+                cycled(durations, i) * count + cycled(delays, i)
               );
             });
           }
@@ -722,6 +739,58 @@ test.describe("the drop-zone geometry the probe waits on", () => {
     expect(injected).toBe(true);
 
     expect(await geometrySpanMs(frame, null)).toBe(300);
+  });
+
+  test("a zero-iteration animation charges neither duration nor DELAY", async ({
+    page,
+    request,
+  }) => {
+    const frame = await canvas(page, request);
+
+    // Zero iterations with a long delay. Under the default fill mode nothing is applied before
+    // the first iteration and there is no first iteration, so the 400ms wait is for movement that
+    // never begins - charging it pins a span the canvas cannot produce.
+    const injected = await frame.evaluate(() => {
+      const sheet = (
+        document.getElementById("nx-pb-style") as HTMLStyleElement | null
+      )?.sheet;
+      sheet?.insertRule(
+        "@keyframes nx-zero-delay { from { height: 0 } to { height: 6px } }",
+        sheet.cssRules.length
+      );
+      sheet?.insertRule(
+        ".nx-pb-dropzone { animation: nx-zero-delay .2s .4s 0 }",
+        sheet.cssRules.length
+      );
+      return Boolean(sheet);
+    });
+    expect(injected).toBe(true);
+
+    expect(await geometrySpanMs(frame, null)).toBe(0);
+  });
+
+  test("a state the empty zone never renders is not synthesized onto it", async ({
+    page,
+    request,
+  }) => {
+    const frame = await canvas(page, request);
+
+    // `DropZone`'s empty branch renders `data-active` only; `data-drag` appears on the
+    // between-item zone. A rule keyed on `[data-drag]` for an empty zone can never fire, so
+    // measuring it would pin a span for movement the canvas cannot produce.
+    const injected = await frame.evaluate(() => {
+      const sheet = (
+        document.getElementById("nx-pb-style") as HTMLStyleElement | null
+      )?.sheet;
+      sheet?.insertRule(
+        ".nx-pb-dropzone-empty[data-drag] { transition: height .3s }",
+        sheet.cssRules.length
+      );
+      return Boolean(sheet);
+    });
+    expect(injected).toBe(true);
+
+    expect(await geometrySpanMs(frame, "data-drag")).toBe(0);
   });
 
   test("it refuses rather than reporting a zero it cannot stand behind", async ({
