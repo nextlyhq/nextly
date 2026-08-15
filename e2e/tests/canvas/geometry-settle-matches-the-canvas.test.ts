@@ -269,10 +269,16 @@ async function geometrySpanMs(
             // elapsed time at all and the edge keeps moving on the next scroll — the declared
             // number is not wrong, it is about something else. Refused rather than charged.
             //
-            // Read through `??` because a browser without timeline support exposes no such
-            // longhand; there the value is correctly `auto`, since nothing can be driven by a
-            // timeline the engine does not implement.
-            const timelines = (surface.animationTimeline ?? "auto").split(",");
+            // Read by property NAME rather than as a member: `animation-timeline` is absent
+            // from the DOM typings, and `getPropertyValue` is the CSSOM accessor that takes
+            // any property whether or not the lib declares it. A browser without timeline
+            // support exposes no such longhand and answers `""`, which falls to `auto` —
+            // correct, since nothing can be driven by a timeline the engine does not
+            // implement. `||` rather than `??` for that reason: the miss is empty, not
+            // undefined.
+            const timelines = (
+              surface.getPropertyValue("animation-timeline") || "auto"
+            ).split(",");
             names.forEach((name, i) => {
               // `none` occupies a position in every timing list but starts no animation, so its
               // tuple would charge movement that never happens.
@@ -1097,7 +1103,11 @@ test.describe("the drop-zone geometry the probe waits on", () => {
       );
       const zone = document.querySelector(".nx-pb-dropzone");
       return zone
-        ? getComputedStyle(zone as HTMLElement).animationTimeline
+        ? // By name, for the same reason as the read inside the settle walk: the longhand
+          // is not in the DOM typings, and a browser without support answers `""`.
+          getComputedStyle(zone as HTMLElement).getPropertyValue(
+            "animation-timeline"
+          )
         : null;
     });
     // The population, before the verdict. A browser without scroll-timeline support resolves this

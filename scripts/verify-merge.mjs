@@ -720,24 +720,29 @@ export function reviewsCoveringTip(reviews, tip, login) {
 }
 
 /**
- * Review states that constitute coverage, named rather than excluded.
+ * Review states that constitute coverage, re-exported from the verdict gate.
  *
- * A NAMED set is the direction that fails closed. Excluding one state — say
- * `PENDING` — grants coverage to every other, including `DISMISSED`, which is a
- * review GitHub explicitly invalidated and which opens no thread, so a gate
- * counting it reads clean on a revision whose only review was withdrawn. It
- * also grants coverage to any state added later, which nobody here has met.
+ * One list, not two. Both gates ask the same question of the same API, and two
+ * frozen arrays of three strings agree until somebody edits one — silently,
+ * because each reads correctly on its own.
  *
- * The filter lives INSIDE this function rather than at its callers because two
- * callers each applying their own left them disagreeing: one excluded drafts
- * and the other filtered nothing, four lines apart, so the same review was
- * coverage for one reviewer and not the other.
+ * Resolved through this file's REAL path. A bare relative specifier is resolved
+ * against what the runtime holds for the main module, and under
+ * `--preserve-symlinks-main` that is the SYMLINK, so the sibling is looked for
+ * beside the link and the process dies before running. The entry guard below
+ * accepts two URL forms for the same reason; this is its import-time half.
+ *
+ * The filter stays INSIDE `reviewsCoveringTip` rather than at its callers,
+ * because two callers each applying their own left them disagreeing: one
+ * excluded drafts and the other filtered nothing, four lines apart, so the same
+ * review was coverage for one reviewer and not the other.
  */
-export const SUBMITTED_REVIEW_STATES = Object.freeze([
-  "APPROVED",
-  "CHANGES_REQUESTED",
-  "COMMENTED",
-]);
+const verdict = await import(
+  pathToFileURL(
+    join(dirname(realpathSync(fileURLToPath(import.meta.url))), "ci-verdict.mjs")
+  ).href
+);
+export const SUBMITTED_REVIEW_STATES = verdict.SUBMITTED_REVIEW_STATES;
 
 /**
  * Whether the merge took everything the branch had.
@@ -775,7 +780,8 @@ export function landedWhole({ checkable, reason, candidates }) {
 
 import { execFileSync } from "node:child_process";
 import { realpathSync } from "node:fs";
-import { pathToFileURL } from "node:url";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const REPO = "nextlyhq/nextly";
 

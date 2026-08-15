@@ -72,8 +72,24 @@ export const RATE_LIMIT_MARKER = /Review limit reached/;
  *
  * `PENDING` is an unsubmitted draft and `DISMISSED` has been explicitly
  * withdrawn, so neither is anybody saying anything about the revision.
+ *
+ * NAMED rather than excluded, which is the direction that fails closed.
+ * Excluding one state grants coverage to every other — including `DISMISSED`,
+ * which opens no thread, so a gate counting it reads clean on a revision whose
+ * only review was withdrawn — and to any state added later that nobody here
+ * has met.
+ *
+ * Exported because the merge-verification gate asks the same question, and two
+ * lists of three strings agree until one of them is edited.
  */
-const SUBMITTED = new Set(["APPROVED", "CHANGES_REQUESTED", "COMMENTED"]);
+export const SUBMITTED_REVIEW_STATES = Object.freeze([
+  "APPROVED",
+  "CHANGES_REQUESTED",
+  "COMMENTED",
+]);
+
+/** Membership form of {@link SUBMITTED_REVIEW_STATES}, for the hot path. */
+const SUBMITTED = new Set(SUBMITTED_REVIEW_STATES);
 
 /**
  * Exit code for a verdict that REFUSES, as distinct from a failure to answer.

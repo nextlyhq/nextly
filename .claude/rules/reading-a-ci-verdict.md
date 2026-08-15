@@ -56,11 +56,51 @@ PR targets rather than the PR's own revision. On `push` it is the pushed commit.
 Do not carry a variable named `SHA` between contexts, and qualify the claim by
 event AND by base before relying on it.)
 
-**`set -o pipefail` is load-bearing, not tidiness.** Without it the exit status
-is `sort`'s, so an authentication failure, a rate limit or a transient 5xx from
-`gh` yields an empty list AND a success status — the precise false-clean this
-file exists to prevent, reproduced by the command recommending against it. An
-unavailable answer must never read as a passing one.
+**A pipeline reports the LAST command's status, so any check read through one
+is UNREAD.** Above, without `pipefail` the status is `sort`'s, so an
+authentication failure, a rate limit or a transient 5xx from `gh` yields an
+empty list AND a success status — the precise false-clean this file exists to
+prevent, reproduced by the command recommending against it.
+
+That is one instance of a property with three now, across three mechanisms, so
+it is worth stating as the property rather than as a note about one command:
+
+- **status lost to the pipe.** A test run piped for readability reported
+  "42 passed" from a run that had exited 1.
+- **status lost to the pipe, and merged.** A comment-convention run read through
+  `tail -1` printed a summary line while exiting 1. The pass was recorded, the
+  pull request merged, and `main` was red on that check until someone else's
+  pull request inherited the failure and reported it.
+- **OUTPUT lost to the pipe.** A refusal printed below the twelfth line was cut
+  off by `head -12` and the run read as clean. That one is in
+  `derived-checks.md`, from the output side rather than the status side.
+
+Both halves have to reach the reader, and a pipe can lose either.
+
+**`set -o pipefail` is the obvious remedy and it has a scoping trap**, identical
+to the one `whole-file-writes.md` documents for `set -o noclobber`. The option
+applies to the shell that executes it. Where each command runs in a FRESH shell —
+which is every tool invocation for an agent — setting it in one call and running
+the pipeline in the next protects nothing, because the option is back at its
+default. Measured: `set -o pipefail; false | true` reports 1; a `false | true`
+in the next invocation reports 0.
+
+So it has to be in the SAME invocation as the pipeline:
+
+```sh
+set -o pipefail; gh api ... | sort      # ONE command, both parts
+```
+
+**Prefer not piping at all when what you want is a verdict.** Redirect, capture
+the status on its own line, then read the file. It has no scoping subtlety to
+get wrong and it keeps the whole output:
+
+```sh
+node scripts/check-comment-convention.mjs > out.log 2>&1; echo "EXIT=$?"
+```
+
+An unavailable answer must never read as a passing one, and neither must an
+answer whose status you did not look at.
 
 **Requiring `success` from a FIXED list is the obvious form and it is wrong
 here**, because some skips are the pipeline working. `ci.yml`'s first job
