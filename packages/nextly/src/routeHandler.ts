@@ -1294,6 +1294,25 @@ async function buildAdminMeta(): Promise<{
   const plugins = buildPluginAdminMeta(config?.plugins ?? [], pluginOverrides);
   if (plugins.length > 0) {
     workspace.plugins = plugins;
+
+    // A plugin may contribute components to the SIGN-IN screen, and those
+    // read their own `clientConfig` through the plugin SDK before a session
+    // exists. That channel is public by declaration — it never holds secrets
+    // — so it is projected here rather than withheld.
+    //
+    // Built by naming the two fields it carries rather than by removing the
+    // rest: a contribution field added later is then absent from this
+    // projection by construction, which is the same reason the public
+    // payload is a separate half rather than a filtered copy of the whole.
+    const publicPlugins = plugins
+      .filter(plugin => plugin.clientConfig !== undefined)
+      .map(plugin => ({
+        name: plugin.name,
+        clientConfig: plugin.clientConfig,
+      }));
+    if (publicPlugins.length > 0) {
+      branding.plugins = publicPlugins;
+    }
   }
 
   // Override config branding with DB values when available

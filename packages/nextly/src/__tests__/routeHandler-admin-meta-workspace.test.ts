@@ -32,11 +32,34 @@ afterAll(() => {
   else process.env.DB_DIALECT = ORIGINAL_DB_DIALECT;
 });
 
-function handlers() {
+function handlers({ withPlugin = false }: { withPlugin?: boolean } = {}) {
   return createDynamicHandlers({
     config: sanitizeConfig({
       collections: [],
       admin: { branding: { logoText: "Acme" } },
+      // A plugin contributing BOTH a public client config and a gated page, so
+      // the projection has something it must carry and something it must not.
+      plugins: withPlugin
+        ? ([
+            {
+              name: "@acme/p",
+              version: "1.0.0",
+              nextly: "*",
+              contributes: {
+                admin: {
+                  clientConfig: { providerId: "acme-sso" },
+                  pages: [
+                    {
+                      path: "settings",
+                      component: "AcmeSettings",
+                      requiredPermission: "manage-acme",
+                    },
+                  ],
+                },
+              },
+            },
+          ] as never)
+        : undefined,
     }),
   });
 }
@@ -128,11 +151,50 @@ describe("admin-meta split over HTTP", () => {
         "logoUrl",
         "logoUrlDark",
         "logoUrlLight",
+        // Permitted, and narrowed by its own pair of cases below: the entries
+        // carry a name and a public client config and nothing else.
+        "plugins",
       ].filter(key => key in payload)
     );
     // The population clause: a payload that happened to be empty would satisfy
     // the subset assertion above without proving anything was read.
     expect(payload.logoText).toBe("Acme");
+  });
+
+  it("serves a plugin's public client config before sign-in", async () => {
+    // A plugin may contribute components to the SIGN-IN screen, and those read
+    // their own config through the SDK before a session exists. That channel is
+    // public by declaration and holds no secrets, so withholding it removes the
+    // configuration those components render from.
+    const response = await handlers({ withPlugin: true }).GET(
+      request("admin-meta"),
+      ctx(["admin-meta"])
+    );
+    const payload = (await response.json()) as Record<string, unknown>;
+
+    expect(payload.plugins).toEqual([
+      { name: "@acme/p", clientConfig: { providerId: "acme-sso" } },
+    ]);
+  });
+
+  it("withholds everything else about that plugin from the public route", async () => {
+    // The separating assertion, and the reason the projection NAMES its two
+    // fields rather than deleting the rest: an exact key set fails when a
+    // contribution field added later reaches the public payload, which a check
+    // for specific forbidden fields would not.
+    const response = await handlers({ withPlugin: true }).GET(
+      request("admin-meta"),
+      ctx(["admin-meta"])
+    );
+    const payload = (await response.json()) as Record<string, unknown>;
+    const plugins = payload.plugins as Array<Record<string, unknown>>;
+
+    expect(Object.keys(plugins[0] ?? {}).sort()).toEqual([
+      "clientConfig",
+      "name",
+    ]);
+    expect(JSON.stringify(payload)).not.toContain("manage-acme");
+    expect(JSON.stringify(payload)).not.toContain("AcmeSettings");
   });
 
   it("withholds plugin contributions from the public route", async () => {

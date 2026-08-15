@@ -20,12 +20,18 @@ import type { NextlyColumn } from "@admin/components/ui/table/data-table";
 import { ListShell } from "@admin/components/ui/table/list-shell";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { UI } from "@admin/constants/ui";
-import { useBranding } from "@admin/context/providers/BrandingProvider";
+import {
+  useBranding,
+  useBrandingStatus,
+} from "@admin/context/providers/BrandingProvider";
 import { useDebouncedValue } from "@admin/hooks/useDebouncedValue";
 import { usePagination } from "@admin/hooks/usePagination";
 import { categoryLabel } from "@admin/lib/plugins/plugin-categories";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 import type { PluginMetadata } from "@admin/types/branding";
+
+import { InstalledPluginsUnavailable } from "./InstalledPluginsUnavailable";
+import { PluginsTableSkeleton } from "./PluginsTableSkeleton";
 
 type PluginWithId = PluginMetadata & { id: string };
 
@@ -75,6 +81,13 @@ export default function PluginsTable() {
   // pointed at the public one shares the same cache key while asking a
   // question that route no longer answers — the table would render empty.
   const branding = useBranding();
+  // `useBranding` neither suspends nor throws, so the Suspense boundary and
+  // the error boundary around this table can no longer show their
+  // fallbacks. Without these two branches an unanswered request renders the
+  // definitive empty state: momentarily on a slow load, permanently after a
+  // failure.
+  const { isPending: pluginsPending, isUnavailable: pluginsUnavailable } =
+    useBrandingStatus();
 
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebouncedValue(search, UI.SEARCH_DEBOUNCE_MS);
@@ -217,6 +230,12 @@ export default function PluginsTable() {
     () => allColumns.filter(col => !ALWAYS_VISIBLE.has(col.name)),
     [allColumns]
   );
+
+  // Before the table, because its empty state is a STATEMENT: "no plugins
+  // installed" read from a request that has not answered is wrong while it is
+  // in flight and stays wrong after it fails.
+  if (pluginsPending) return <PluginsTableSkeleton />;
+  if (pluginsUnavailable) return <InstalledPluginsUnavailable />;
 
   return (
     <ListShell

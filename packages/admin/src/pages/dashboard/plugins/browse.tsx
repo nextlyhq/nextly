@@ -33,6 +33,7 @@ import {
 import type { RegistryPlugin } from "@admin/lib/plugins/registry/types";
 import type { PluginMetadata } from "@admin/types/branding";
 
+import { InstalledPluginsUnavailable } from "./components/InstalledPluginsUnavailable";
 import { PluginCard } from "./components/PluginCard";
 import { PluginPageLoading } from "./components/PluginPageLoading";
 
@@ -89,7 +90,8 @@ function BrowseContent(): React.ReactElement {
   // question that route no longer answers — every installed plugin would read
   // as uninstalled.
   const branding = useBranding();
-  const { isPending: pluginsPending } = useBrandingStatus();
+  const { isPending: pluginsPending, isUnavailable: pluginsUnavailable } =
+    useBrandingStatus();
   const { data: entries } = useSuspenseQuery({
     queryKey: ["plugin-registry"],
     queryFn: () => staticRegistrySource.list(),
@@ -147,6 +149,11 @@ function BrowseContent(): React.ReactElement {
   // someone who already has a plugin to go and install it — so the directory
   // waits rather than rendering a claim it cannot yet support.
   if (pluginsPending) return <PluginPageLoading label="Loading directory…" />;
+  // A request that never answered is not an empty install list. Reporting
+  // every catalogue entry as uninstalled from an unanswered query tells
+  // someone who has the plugin to install it again, so the failure is shown
+  // instead of a claim derived from it.
+  if (pluginsUnavailable) return <InstalledPluginsUnavailable />;
 
   return (
     <>
