@@ -59,10 +59,16 @@ export const FORBIDDEN = [
   {
     pattern: /\b(review|codex|coderabbit)\s+round/i,
     why: "names a review iteration",
+    // Automation that records reviews already posted at a head describes a review round as its
+    // own behaviour. Outside review tooling the same words count development history.
+    domainVocabulary: true,
   },
   {
     pattern: /\brounds?\s+of\s+review\b/i,
     why: "names a review iteration",
+    // Automation that records reviews already posted at a head describes a review round as its
+    // own behaviour. Outside review tooling the same words count development history.
+    domainVocabulary: true,
   },
   {
     pattern: /\b(codex|coderabbit|greptile)\b/i,
@@ -225,6 +231,13 @@ const REVIEW_DOMAIN_PATHS = [
   "scripts/verify-merge",
   "scripts/release/",
   ".claude/rules/",
+  // This checker and its test. Their SUBJECT is the convention itself: the patterns name the
+  // shapes, and the prose has to quote them to explain why each was chosen. Four separate CI
+  // failures here came from an explanation instantiating the pattern it explains, which is a
+  // property of the file's job rather than of any one sentence - rewording each occurrence
+  // treats the symptom. What still fires here is genuine narration ("the founder asked for
+  // this", a task label), because those patterns are not domain vocabulary anywhere.
+  "scripts/check-comment-convention",
   // GitHub review automation: these files read pull requests, post reviews and dispatch on bot
   // logins, so pull-request vocabulary is what they OPERATE on rather than narration about them.
   ".github/workflows/nextly-review-bot.yml",
@@ -302,10 +315,31 @@ function shorten(text) {
   return text.length > 140 ? `${text.slice(0, 140)}…` : text;
 }
 
+/**
+ * The canonical text of a comment, for hashing and for display.
+ *
+ * Collapsing whitespace alone is not reflow-stable: a block comment carries a `*` at the start of
+ * every continuation line, so wrapping the same prose differently yields different text and
+ * therefore a different digest. The allowlist would then report an unrecorded offence for a
+ * comment nobody edited - a gate blocking ordinary formatting, which is the failure that gets a
+ * check switched off.
+ *
+ * Exported and used by every caller, rather than repeated at each one: three copies of this
+ * expression had already drifted apart in this file and its test.
+ */
+export function normaliseComment(comment) {
+  return comment
+    .split("\n")
+    .map(line => line.replace(/^\s*\*(?!\/)\s?/, ""))
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export function digestOffences(offences) {
   return offences
     .map(one =>
-      createHash("sha256").update(one.replace(/\s+/g, " ").trim()).digest("hex").slice(0, 16)
+      createHash("sha256").update(normaliseComment(one)).digest("hex").slice(0, 16)
     )
     .sort();
 }
@@ -550,7 +584,9 @@ function heredocDelimiter(line, start) {
   // No shape requirement: Bash defines the delimiter as a general word, so `123` and `EOF!` are
   // both valid and refusing them left their bodies scanned as source. Arithmetic contexts, which
   // are the reason a shape rule existed, are tracked directly above instead.
-  if (!delim) return null;
+  // `cat <<''` is a valid empty delimiter, terminated by a blank line. Only an ABSENT delimiter
+  // is a non-heredoc; refusing the empty one left its body scanned as source.
+  if (!delim && !quoted) return null;
   return { delim, stripTabs, end };
 }
 
@@ -864,7 +900,7 @@ function main() {
       // Whitespace is collapsed because that is not a difference worth failing on - a comment
       // reflowed across lines is the same comment - and doing it here keeps the stored form and
       // the hashed form identical rather than normalising twice.
-      const text = comment.replace(/\s+/g, " ").trim();
+      const text = normaliseComment(comment);
       const path = relative(process.cwd(), file).split(sep).join("/");
       byFile.set(path, [...(byFile.get(path) ?? []), `${why} — ${text}`]);
     }

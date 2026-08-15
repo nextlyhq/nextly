@@ -27,6 +27,7 @@ import {
   isReviewDomain,
   offencesIn,
   digestOffences,
+  normaliseComment,
   readAllowlist,
   readOptionsFor,
   SOURCE_EXTENSIONS,
@@ -216,7 +217,7 @@ describe("the allowlist", () => {
   // definition pre-existing. The checker's own source came out of EXCLUDED_FILES and brought 12
   // recorded offences with it. A raise for any other reason is the silencing this guards against.
   const EXPECTED_ENTRIES = 210;
-  const EXPECTED_TOTAL = 413;
+  const EXPECTED_TOTAL = 404;
 
   it("matches its pinned size exactly", () => {
     expect(readAllowlist().size).toBe(EXPECTED_ENTRIES);
@@ -250,6 +251,44 @@ describe("the allowlist", () => {
     // Degrading to an empty allowlist would turn every pre-existing comment into a failure and
     // present a parse error as a wave of unrelated findings.
     expect(() => readAllowlist("/nonexistent-root-for-this-test")).toThrow();
+  });
+});
+
+describe("normalised comment text", () => {
+  it("is stable across reflow of a block comment", () => {
+    // A block comment carries a `*` on every continuation line, so collapsing whitespace alone is
+    // not reflow-stable. Without this, re-wrapping prose nobody edited makes the blocking check
+    // report an unrecorded offence - a gate blocking ordinary formatting.
+    const wrapped = normaliseComment("/** one two and\n * three four. */");
+    const flat = normaliseComment("/** one two and three four. */");
+    expect(wrapped).toBe(flat);
+  });
+
+  it("does not eat a closing delimiter", () => {
+    // The decoration strip must not consume `*/`, which would merge the comment with what follows.
+    expect(normaliseComment("/* a\n */")).toBe("/* a */");
+  });
+});
+
+describe("the checker's own source", () => {
+  it("may quote the shapes it forbids", () => {
+    // Its SUBJECT is the convention, so the patterns and the prose explaining them are domain
+    // vocabulary. Four CI failures came from an explanation instantiating its own pattern.
+    expect(
+      offencesIn(
+        "// naming a review round is the shape this rejects",
+        readOptionsFor("scripts/check-comment-convention.mjs")
+      )
+    ).toEqual([]);
+  });
+
+  it("is still held to genuine narration", () => {
+    // The exemption covers domain vocabulary and nothing else, so the file is not waved through.
+    for (const line of ["// The founder asked for this", "// Task 17: do the thing"]) {
+      expect(
+        offencesIn(line, readOptionsFor("scripts/check-comment-convention.mjs")).length
+      ).toBeGreaterThan(0);
+    }
   });
 });
 
@@ -310,13 +349,23 @@ describe("review-process tooling", () => {
 
   it.each([
     "packages/nextly/src/di/register.ts",
-    "scripts/check-comment-convention.mjs",
     "scripts/drizzle-version.cjs",
   ])("does not exempt %j", path => {
     // The exemption is for code whose DOMAIN is pull requests, not for `scripts/` generally.
     // Widening it to the directory would take the release tooling's neighbours out of scope
     // without anyone choosing that.
     expect(isReviewDomain(path)).toBe(false);
+  });
+
+  it("exempts the checker itself, whose subject IS the convention", () => {
+    // This case moved out of the list above deliberately. It was excluded from the exemption and
+    // its own prose recorded in the allowlist instead, on the reading that the file should be
+    // held to the rule it enforces. It still is: the exemption covers domain VOCABULARY only, so
+    // genuine narration in this file is reported and its remaining entries are exactly those.
+    // What changed is that quoting a forbidden shape in order to explain it is the file's job,
+    // and four separate CI failures came from an explanation instantiating its own pattern.
+    expect(isReviewDomain("scripts/check-comment-convention.mjs")).toBe(true);
+    expect(isReviewDomain("scripts/check-comment-convention.test.mjs")).toBe(true);
   });
 });
 
@@ -376,7 +425,7 @@ describe("the command", () => {
       // stop matching the moment a pattern is added or its `why` reworded, and the failure would
       // look like the CLI breaking rather than the fixture drifting.
       const found = offencesIn(FIXTURE_SOURCE).map(
-        one => `${one.why} — ${one.comment.replace(/\s+/g, " ").trim()}`
+        one => `${one.why} — ${normaliseComment(one.comment)}`
       );
       writeFileSync(
         joinPath(root, "scripts", "comment-convention-allowlist.json"),
