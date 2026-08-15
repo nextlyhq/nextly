@@ -13,10 +13,10 @@ const ONE = [
 ];
 
 test("escapes a newline in a summary cell instead of splitting the row", () => {
-  // The annotation encoder was fixed first, and this is the SAME defect one
-  // layer over: a cell cannot contain a real line break, so a legal
-  // `test("a\nb")` splits the row and truncates the record before its file and
-  // attempt count are read.
+  // A Markdown table row is terminated by a line break, so a title containing
+  // one splits the row and truncates the record before its file and attempt
+  // count are read. `test("a\nb")` is legal, so this is reachable input rather
+  // than a defensive case.
   const summary = flakySummary([
     {
       title: "outer › a\nb",
