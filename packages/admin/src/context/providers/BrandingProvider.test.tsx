@@ -78,6 +78,25 @@ describe("useBrandingStatus", () => {
     await waitFor(() => expect(status()).toBe("answered"));
   });
 
+  it("settles once the workspace half answers, even if branding is stalled", async () => {
+    // The ASYMMETRIC case, and the only one that separates the two halves.
+    // Every other case here moves both queries together, so a status
+    // combining them passes all of them — measured: reverting to
+    // `brandingPending || workspacePending` left the rest of this file green.
+    //
+    // Its reader draws a conclusion from a plugin being absent, so holding it
+    // on a loading state while the plugin list has arrived hides a settled
+    // answer behind a request that has nothing to do with the question.
+    get.mockReturnValue(new Promise(() => {}));
+    protectedGet.mockResolvedValue({ plugins: [] } as AdminBranding);
+
+    renderProbe(
+      new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    );
+
+    await waitFor(() => expect(status()).toBe("answered"));
+  });
+
   it("stays unavailable when only the branding half arrives", async () => {
     // The property this hook exists for, and the one the split could have
     // broken silently. Its reader concludes something from a plugin being
