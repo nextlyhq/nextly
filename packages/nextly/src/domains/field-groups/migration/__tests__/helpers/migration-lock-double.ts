@@ -142,6 +142,24 @@ const RELEASE = new RegExp(
   String.raw`^UPDATE "${TABLE}" SET "owner" = NULL, "expires_at" = NULL WHERE "id" = \$\d+ AND "owner" = \$(?<owner>\d+)$`
 );
 
+/**
+ * The owner-only statements a legacy lock table takes.
+ *
+ * A table created before `expires_at` existed cannot answer any statement naming that column, so the
+ * session falls back to these three. Modelled here rather than absorbed by a permissive default: a
+ * double that resolved them silently would certify an exclusion nobody took, which is exactly the
+ * claim this fallback exists to make true.
+ */
+const OWNER_READ = new RegExp(
+  String.raw`^SELECT "owner" FROM "${TABLE}" WHERE "id" = \$\d+$`
+);
+const OWNER_CLAIM = new RegExp(
+  String.raw`^UPDATE "${TABLE}" SET "owner" = \$(?<claim>\d+) WHERE "id" = \$\d+ AND "owner" IS NULL$`
+);
+const OWNER_RELEASE = new RegExp(
+  String.raw`^UPDATE "${TABLE}" SET "owner" = NULL WHERE "id" = \$\d+ AND "owner" = \$(?<owner>\d+)$`
+);
+
 type Groups = Record<string, string | undefined> | undefined;
 
 /** The statements this module issues, named. */
@@ -150,7 +168,13 @@ export type LockStatementKind =
   | "state"
   | "claim"
   | "renew"
-  | "release";
+  | "release"
+  // The legacy-table fallback. Named separately from their expiry-aware counterparts because a test
+  // that fails "the state read" must NOT also fail these — they are the path taken precisely when
+  // the state read cannot work.
+  | "owner-read"
+  | "owner-claim"
+  | "owner-release";
 
 /**
  * What a statement IS, separately from what it DOES.
@@ -168,6 +192,9 @@ function matchLockStatement(
     ["claim", CLAIM],
     ["renew", RENEW],
     ["release", RELEASE],
+    ["owner-read", OWNER_READ],
+    ["owner-claim", OWNER_CLAIM],
+    ["owner-release", OWNER_RELEASE],
   ] as const) {
     const match = pattern.exec(flat);
     if (match) return { kind, groups: match.groups };
@@ -243,6 +270,23 @@ export function interpretLockStatement(
           },
         ]
       : [];
+  }
+  if (matched?.kind === "owner-read") {
+    return lock.seeded ? [{ owner: lock.owner }] : [];
+  }
+  if (matched?.kind === "owner-claim") {
+    // Predicated on the row being FREE, exactly as the statement is: a contender that won the race
+    // leaves the row naming them, and the session's read-back is what notices.
+    if (lock.seeded && lock.owner === null) {
+      lock.owner = bound(groups, params, "claim") as string | null;
+    }
+    return [];
+  }
+  if (matched?.kind === "owner-release") {
+    // Owner-scoped. `expires_at` is deliberately untouched: on this table it does not exist, and a
+    // model that cleared it would let a fixture pass that the real database would reject.
+    if (lock.owner === bound(groups, params, "owner")) lock.owner = null;
+    return [];
   }
   if (matched?.kind === "claim") {
     // 🔴 Unconditional, because the real statement is: `acquire` decides under a row lock and then
