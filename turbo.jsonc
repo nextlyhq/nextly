@@ -43,6 +43,25 @@
   "$schema": "https://v2-9-7.turborepo.dev/schema.json",
   "ui": "tui", // Terminal UI for better task visualization
 
+  // Files OUTSIDE any package that every task's result depends on.
+  //
+  // A task's hash covers its own package's files and its dependencies' hashes.
+  // The shared TypeScript configs belong to neither: 22 packages extend
+  // `@nextlyhq/tsconfig`, and `check-types` declares `dependsOn: []`, so there is
+  // no edge from a package to the config that decides what its compiler does.
+  // Without this entry, editing `base.json` — turning on a strict flag, moving
+  // `target`, changing `lib` — leaves every package's hash unmoved and turbo
+  // replays greens computed under the OLD settings, across the whole repository
+  // at once. Measured before adding it: appending a newline to
+  // `packages/tsconfig/base.json` left `@nextlyhq/e2e#check-types` on the
+  // identical hash `e2f45f80054274ba`.
+  //
+  // Deliberately coarse. It invalidates every task rather than only the
+  // type-aware ones, because a compiler setting reaches builds and type-aware
+  // lint rules as well, and the cost of an unnecessary re-run is minutes while
+  // the cost of a missed one is a replayed green nobody can see through.
+  "globalDependencies": ["packages/tsconfig/*.json"],
+
   // Runtime env vars referenced from package source (not build-time inputs).
   // Listed here so eslint-plugin-turbo's no-undeclared-env-vars rule passes.
   "globalPassThroughEnv": [
@@ -185,13 +204,27 @@
       // every package rather than the one that needs it today, because the cost
       // of a package having no such tree is a glob that matches nothing, while
       // the cost of omitting it is silent.
-      "inputs": [
-        "src/**/*.{ts,tsx,mts,cts}",
-        "scripts/**/*.{ts,tsx,mts,cts}",
-        "*.{ts,tsx,mts,cts}",
-        "tsconfig.json",
-        "tsconfig.tests.json"
-      ],
+      // Start from turbo's DEFAULT (every non-ignored file in the package) and
+      // subtract, rather than enumerating what to include.
+      //
+      // The direction is the whole point. An include list is unbounded — every
+      // directory, extension and config a package might adopt has to be
+      // predicted — and each gap is SILENT and reports green, because a file
+      // outside the list cannot move the hash however badly it breaks. An
+      // exclude list is bounded, and its gaps cost only an unnecessary re-run.
+      //
+      // The list this replaces had been patched once along the EXTENSION axis
+      // and still failed along the DIRECTORY axis: `e2e` keeps its modules in
+      // `tests/` rather than `src/`, so turbo hashed 5 files for a package
+      // holding 35, and a type error introduced in `tests/` sat on `main`
+      // behind a replayed green until an unrelated change to a top-level file
+      // happened to move the hash. Adding `tests/**` would have fixed that case
+      // and left the next axis to be discovered the same way.
+      //
+      // `!**/*.md` is the one subtraction, and it is safe to state rather than
+      // hope: no tsconfig in this repository includes Markdown, and nothing
+      // imports it, so it cannot enter a TypeScript program.
+      "inputs": ["$TURBO_DEFAULT$", "!**/*.md"],
       "outputs": ["**/*.tsbuildinfo"] // TypeScript incremental cache
     },
 
