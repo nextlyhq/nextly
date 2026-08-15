@@ -43,6 +43,7 @@ import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { Logger } from "../../../shared/types";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
 
+import { assertNotDiverged } from "./assert-not-diverged";
 import type { FieldGroupRegistryService } from "./field-group-registry-service";
 
 /**
@@ -304,20 +305,10 @@ export class FieldGroupMetadataService {
     // Metadata-only edits are deliberately still allowed: a label or a description moves no
     // storage, and locking an operator out of renaming the thing they are trying to reconcile
     // would make the state harder to get out of rather than safer.
-    if (
-      existing.migrationStatus === "diverged" &&
-      (input.fields !== undefined || input.localized !== undefined)
-    ) {
-      throw NextlyError.conflict({
-        // `state`, not `version`: the generic version message tells the caller to refresh and
-        // retry, which is precisely the action this refusal exists to prevent.
-        reason: "state",
-        message: `"${input.slug}" is marked as diverged: its tables were changed and its stored definition still describes the previous shape. Reconcile the definition against the tables before editing its schema again. Repeating the edit would plan the next change from a shape the database no longer has.`,
-        logContext: {
-          slug: input.slug,
-          migrationStatus: existing.migrationStatus,
-        },
-      });
+    // Only edits that MOVE STORAGE are refused; a label or description change is still allowed, so
+    // an operator is never locked out of renaming the thing they are trying to reconcile.
+    if (input.fields !== undefined || input.localized !== undefined) {
+      assertNotDiverged(input.slug, existing);
     }
     if (existing.locked && input.source !== "code") {
       throw NextlyError.forbidden({

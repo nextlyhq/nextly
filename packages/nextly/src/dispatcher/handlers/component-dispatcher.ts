@@ -23,6 +23,7 @@ import {
   respondMutation,
 } from "../../api/response-shapes";
 import type { FieldConfig } from "../../collections/fields/types";
+import { assertNotDiverged } from "../../domains/field-groups/services/assert-not-diverged";
 import {
   reconcileComponentCompanion,
   registerComponentRuntimeSchema,
@@ -352,6 +353,17 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
           "This component is managed via code and cannot be modified in the UI"
         );
       }
+
+      // 🔴 The same refusal the metadata service makes, from the same function rather than a copy.
+      // This route moves storage exactly as `updateFieldGroup` does and reaches the registry by a
+      // different path, so a guard living only there left this door open: an operator refused in
+      // the admin could compound the very edit that was refused by coming through the builder.
+      //
+      // Deliberately NOT applied to `getComponent` or `previewComponentSchemaChanges` above. Those
+      // read; they move no storage, and they are how an operator inspects a diverged group in order
+      // to reconcile it. Refusing them would make the state harder to escape rather than safer,
+      // which is the same reason metadata-only edits stay allowed.
+      assertNotDiverged(slug, component);
 
       const {
         fields,

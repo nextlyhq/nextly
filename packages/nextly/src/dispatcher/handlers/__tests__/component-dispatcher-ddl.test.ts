@@ -236,3 +236,65 @@ describe("createComponent — what the request forwards into the DDL", () => {
     expect(sql).toMatch(/"_parent_id"\s+\w+.*NOT NULL/i);
   });
 });
+
+/**
+ * `diverged` means the tables moved and the row recording it did not, so the stored definition
+ * describes the previous shape. Planning the next change from that shape is the retry the state
+ * exists to declare unsafe — and the state is only a control if EVERY route that moves storage
+ * asks it.
+ *
+ * 🔴 These exist because the refusal was added to `updateFieldGroup` and this route was left open.
+ * Measured at the time: `grep -c diverged` over the apply handler returned ZERO while the service's
+ * own guard read as complete. One transport enforcing and another not is worse than neither, since
+ * the operator is told the edit is unsafe and then handed a door that performs it.
+ */
+describe("a diverged field group and the routes that move its storage", () => {
+  const diverged = {
+    slug: "hero",
+    locked: false,
+    migrationStatus: "diverged",
+    fields: [],
+    schemaVersion: 3,
+  };
+
+  it("refuses to apply schema changes", async () => {
+    // Shared across the file, so it carries whatever earlier tests ran unless it is cleared here.
+    executed.length = 0;
+    adapter = makeAdapter("postgresql");
+    vi.mocked(getAdapterFromDI).mockReturnValue(
+      adapter as unknown as ReturnType<typeof getAdapterFromDI>
+    );
+    const registry = wireRegistry();
+    registry.getComponent.mockResolvedValue(diverged);
+
+    await expect(
+      dispatchComponents(
+        "applyComponentSchemaChanges",
+        { slug: "hero" },
+        { fields: [], confirmed: true, schemaVersion: 3 }
+      )
+    ).rejects.toMatchObject({
+      code: "CONFLICT",
+      logContext: { migrationStatus: "diverged" },
+    });
+
+    // 🔴 And it refused BEFORE touching the database. Asserting only the rejection would pass on a
+    // handler that ran the DDL and then threw, which is the outcome this guard exists to prevent.
+    expect(executed).toHaveLength(0);
+  });
+
+  it("still lets an operator READ one, because that is how it gets reconciled", async () => {
+    adapter = makeAdapter("postgresql");
+    vi.mocked(getAdapterFromDI).mockReturnValue(
+      adapter as unknown as ReturnType<typeof getAdapterFromDI>
+    );
+    const registry = wireRegistry();
+    registry.getComponent.mockResolvedValue(diverged);
+
+    // Positive control on the pair: without this, guarding every route by slug would pass the test
+    // above while locking the operator out of the state entirely.
+    await expect(
+      dispatchComponents("getComponent", { slug: "hero" }, {})
+    ).resolves.toBeDefined();
+  });
+});
