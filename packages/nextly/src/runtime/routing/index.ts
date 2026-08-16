@@ -36,11 +36,5 @@ export type {
 export { nextlySitemap } from "./sitemap";
 export type { NextlySitemapEntry, NextlySitemapOptions } from "./sitemap";
 
-// The URLs a content route serves, for the `entries` seam above. Beside the
-// route rather than in a renderer package: which URL an entry serves at is a
-// property of the ROUTE, so every renderer must get the same answer.
-export { contentSitemapEntries, SITEMAP_MAX_URLS } from "./content-sitemap";
-export type { ContentSitemapOptions } from "./content-sitemap";
-
 export { nextlyRobots } from "./robots";
 export type { NextlyRobotsOptions } from "./robots";

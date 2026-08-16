@@ -25,4 +25,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-Content routes can now produce their own sitemap entries, so a page published to a real URL is listed for crawlers instead of being invisible to them. Preview links can be wired to a route in one call, granting exactly the one unpublished entry the link was minted for rather than every unpublished entry on the site.
+Preview links can be wired to a content route in one call, granting exactly the one unpublished entry the link was minted for rather than every unpublished entry on the site.
