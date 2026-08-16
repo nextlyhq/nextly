@@ -27,6 +27,8 @@
 import { box } from "./box";
 import { button } from "./button";
 import { collectionLoop } from "./collection-loop";
+import { column } from "./column";
+import { columns } from "./columns";
 import { divider } from "./divider";
 import { embed } from "./embed";
 import { heading } from "./heading";
@@ -40,6 +42,13 @@ import { spacer } from "./spacer";
 export { box } from "./box";
 export { button, BUTTON_TYPES, type ButtonProps } from "./button";
 export { collectionLoop } from "./collection-loop";
+export { column } from "./column";
+// `COLUMN_BLOCK` / `COLUMNS_BLOCK` are deliberately NOT re-exported. They exist
+// so the two halves of the nesting rule name each other without a repeated
+// string literal, which is internal coupling rather than a contract a consumer
+// needs. A published constant is a promise to keep it, and this package's entry
+// surface is asserted exactly — widening it should buy a caller something.
+export { columns } from "./columns";
 export { divider, type DividerProps } from "./divider";
 export { embed, type EmbedProps } from "./embed";
 export {
@@ -75,6 +84,10 @@ export const coreBlocks = [
   // Layout
   section,
   box,
+  // Registered after `columns`, because a row's slot template names the column
+  // and a resolver built by iterating this list should meet the parent first.
+  columns,
+  column,
   spacer,
   // Typography
   heading,

@@ -14,7 +14,7 @@ import { defineBlock } from "@nextlyhq/blocks-engine";
 
 import type { PageContext } from "../context";
 
-import { renderContainer } from "./container";
+import { CONTAINER_SUPPORTS, renderContainer } from "./container";
 import type { ContainerProps } from "./container";
 
 // Defined against the ENGINE's `defineBlock`, not the plugin SDK's: the engine
@@ -38,15 +38,6 @@ export const box = defineBlock<ContainerProps, PageContext>({
   slots: {
     children: { template: [] },
   },
-  supports: {
-    spacing: true,
-    layout: true,
-    dimensions: true,
-    background: true,
-    border: true,
-    effects: true,
-    position: true,
-    container: true,
-  },
+  supports: CONTAINER_SUPPORTS,
   render: renderContainer,
 });
