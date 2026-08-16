@@ -225,14 +225,18 @@ async function geometrySpanMs(
           if (!effect || effect.target !== el) return false;
           return READ_SURFACES.has(effect.pseudoElement ?? null);
         };
-        const unreadable = el
-          .getAnimations({ subtree: true })
-          .filter(
-            a =>
-              (!(a instanceof CSSAnimation) && !(a instanceof CSSTransition)) ||
-              a.playbackRate !== 1 ||
-              !own(a)
-          );
+        const unreadable = el.getAnimations({ subtree: true }).filter(
+          a =>
+            (!(a instanceof CSSAnimation) && !(a instanceof CSSTransition)) ||
+            a.playbackRate !== 1 ||
+            // A PAUSED effect's time does not advance, so every span computed from it is a
+            // remainder that never shrinks and a wait sized to it certifies nothing: the edge
+            // moves whenever something resumes the animation, which may be after the allowance
+            // has elapsed. The rate-zero case beside it is already refused and this is the same
+            // unbounded wall clock reached by a different API.
+            a.playState === "paused" ||
+            !own(a)
+        );
         if (unreadable.length > 0) {
           // Restored BEFORE returning. An early return that skips cleanup leaves the probe's
           // attributes on a real canvas element, so every later read in this run — and the
@@ -285,21 +289,36 @@ async function geometrySpanMs(
          * minus the per-frame metadata that is not a property at all.
          */
         const propertiesOf = (a: Animation): string[] | null => {
-          if (a instanceof CSSTransition) return [a.transitionProperty];
+          // A transition's own property, which is what CREATED it. Kept alongside the keyframes
+          // rather than instead of them: `setKeyframes` can replace what a declared transition
+          // actually animates while `transitionProperty` goes on naming the original, so reading
+          // only the name classifies a paint transition rewritten to move `height` as safe — and
+          // the declared path skips the paint longhand too, leaving nothing to charge.
+          const declared =
+            a instanceof CSSTransition ? [a.transitionProperty] : [];
           const effect = a.effect;
-          if (!(effect instanceof KeyframeEffect)) return null;
+          // Unreadable keyframes fall back to whatever the declaration named, and refuse when it
+          // named nothing. An effect this cannot inspect is exactly the case to refuse rather
+          // than wave through.
+          if (!(effect instanceof KeyframeEffect)) {
+            return declared.length > 0 ? declared : null;
+          }
           let frames: Keyframe[];
           try {
             frames = effect.getKeyframes();
           } catch {
-            return null;
+            return declared.length > 0 ? declared : null;
           }
-          if (frames.length === 0) return null;
-          return frames.flatMap(frame =>
-            Object.keys(frame)
-              .filter(key => !KEYFRAME_META.has(key))
-              .map(kebab)
-          );
+          // An EMPTY list is a successful read, not a failure: it says the effect animates no
+          // properties. Refusing it would break the guard on a harmless timing-only animation.
+          return [
+            ...declared,
+            ...frames.flatMap(frame =>
+              Object.keys(frame)
+                .filter(key => !KEYFRAME_META.has(key))
+                .map(kebab)
+            ),
+          ];
         };
 
         /**
@@ -345,19 +364,26 @@ async function geometrySpanMs(
           // it holds. The two zeros are indistinguishable from `activeDuration` alone, and the
           // declared path already separates them, so this reads the iteration count to agree.
           if (Number(timing.iterations ?? 1) === 0) continue;
-          // Measured from where the effect currently IS, not from its declared length.
+          // Measured from where the effect currently IS, over its ACTIVE interval only.
           //
-          // `endTime` is delay + activeDuration + endDelay — the whole interval the effect holds
-          // the edge for, which is what `delay` was here to include. Subtracting `currentTime` is
-          // what catches a schedule moved through the API: an animation rewound to
-          // `currentTime = -1000` is still an owned `CSSAnimation` at playback rate 1, and both
-          // `activeDuration` and `delay` are unchanged, so a sum of those reports the declared
-          // span while the edge keeps moving for a second longer.
+          // Subtracting `currentTime` is what catches a schedule moved through the API rather than
+          // a duration: an animation rewound to `currentTime = -1000` is still an owned
+          // `CSSAnimation` at playback rate 1, with `activeDuration` and `delay` both unchanged,
+          // so a sum of those two reports the declared span while the edge keeps moving for a
+          // second longer.
+          //
+          // `endTime` would be the tempting whole-interval reading and it OVER-reports. It adds
+          // `endDelay`, which is a post-active tail: the property has stopped moving and the
+          // effect is merely still running, so charging it refuses a declaration that does cover
+          // every edge change. The active interval is the movement; the tail is not.
           //
           // For a freshly applied state `currentTime` is ~0 and this equals the declared span. It
           // can only come out SHORTER as an effect progresses, and short is the safe direction —
           // the probe then waits longer than the edge moves.
-          const live = Number(timing.endTime ?? 0) - Number(a.currentTime ?? 0);
+          const live =
+            Number(timing.delay ?? 0) +
+            Number(timing.activeDuration ?? 0) -
+            Number(a.currentTime ?? 0);
           if (Number.isFinite(live)) liveLongest = Math.max(liveLongest, live);
           else liveLongest = Infinity;
         }
@@ -1488,6 +1514,168 @@ test.describe("the drop-zone geometry the probe waits on", () => {
     await expect(
       geometrySpanMs(frame, "data-drag data-active")
     ).rejects.toThrow(/running effect claims/);
+  });
+
+  test("a PAUSED effect is refused, not read as a bounded remainder", async ({
+    page,
+    request,
+  }) => {
+    const frame = await canvas(page, request);
+
+    // Pausing stops the clock without touching the playback rate, so every span computed from
+    // this effect is a remainder that never shrinks. The edge moves again whenever something
+    // resumes it, which may be long after the allowance has elapsed.
+    const applied = await frame.evaluate(async () => {
+      const sheet = (
+        document.getElementById("nx-pb-style") as HTMLStyleElement | null
+      )?.sheet;
+      sheet?.insertRule(
+        "@keyframes nx-paused { from { height: 0 } to { height: 6px } }",
+        sheet.cssRules.length
+      );
+      sheet?.insertRule(
+        ".nx-pb-dropzone { animation: nx-paused .2s 100 }",
+        sheet.cssRules.length
+      );
+      const zone = document.querySelector(".nx-pb-dropzone");
+      const animation = zone
+        ?.getAnimations()
+        .find(a => a instanceof CSSAnimation);
+      if (!animation) return null;
+      animation.pause();
+      await animation.ready;
+      return { state: animation.playState, rate: animation.playbackRate };
+    });
+    expect(applied).not.toBeNull();
+    expect(applied?.state).toBe("paused");
+    // Untouched, which is why the rate clause beside it cannot see this.
+    expect(applied?.rate).toBe(1);
+
+    await expect(
+      geometrySpanMs(frame, "data-drag data-active")
+    ).rejects.toThrow(/refuses instead of reporting a span/);
+  });
+
+  test("a TRANSITION whose keyframes were replaced is read from the effect", async ({
+    page,
+    request,
+  }) => {
+    const frame = await canvas(page, request);
+
+    // `transitionProperty` names what CREATED the transition, not what it currently animates.
+    // A paint transition rewritten to move `height` is invisible to both the declared path — which
+    // skips the paint longhand — and to a live classification that trusts the name.
+    const applied = await frame.evaluate(async () => {
+      const zone = document.querySelector(".nx-pb-dropzone");
+      if (!(zone instanceof HTMLElement)) return null;
+      // The canvas's own background transition is the one to hijack: it is real, declared, and
+      // paint-only, so nothing else in this probe charges it.
+      zone.setAttribute("data-drag", "");
+      zone.setAttribute("data-active", "");
+      const transition = zone
+        .getAnimations()
+        .find(a => a instanceof CSSTransition);
+      if (!transition?.effect) return null;
+      const effect = transition.effect as KeyframeEffect;
+      effect.setKeyframes([{ height: "0px" }, { height: "600px" }]);
+      effect.updateTiming({ duration: 9000 });
+      await transition.ready;
+      return {
+        transitionProperty: transition.transitionProperty,
+        animates: Object.keys(effect.getKeyframes()[0] ?? {}),
+      };
+    });
+    expect(applied).not.toBeNull();
+    // Still naming the paint property it was created from.
+    expect(applied?.transitionProperty).toBe("background-color");
+    expect(applied?.animates).toContain("height");
+
+    await expect(
+      geometrySpanMs(frame, "data-drag data-active")
+    ).rejects.toThrow(/running effect claims/);
+  });
+
+  test("an EMPTY keyframe list is read as animating nothing, not refused", async ({
+    page,
+    request,
+  }) => {
+    const frame = await canvas(page, request);
+
+    // A successful read returning no properties PROVES the effect moves nothing. Treating that as
+    // unreadable would break the guard on a harmless timing-only animation.
+    const applied = await frame.evaluate(async () => {
+      const sheet = (
+        document.getElementById("nx-pb-style") as HTMLStyleElement | null
+      )?.sheet;
+      sheet?.insertRule("@keyframes nx-empty {}", sheet.cssRules.length);
+      sheet?.insertRule(
+        ".nx-pb-dropzone { animation: nx-empty 5s 1 }",
+        sheet.cssRules.length
+      );
+      const zone = document.querySelector(".nx-pb-dropzone");
+      const animation = zone
+        ?.getAnimations()
+        .find(a => a instanceof CSSAnimation);
+      if (!animation?.effect) return null;
+      await animation.ready;
+      return {
+        frames: (animation.effect as KeyframeEffect).getKeyframes().length,
+      };
+    });
+    expect(applied).not.toBeNull();
+    // The read SUCCEEDED and returned nothing, which is the whole point.
+    expect(applied?.frames).toBe(0);
+
+    // FINITE, deliberately. `infinite` is refused for being endless before any keyframe is read,
+    // so an endless fixture here would pass with this fix removed and prove nothing about it.
+    //
+    // The declared path charges the animation's own 5s, because a name list cannot say which
+    // properties a rule animates — that reading is unchanged and is not what this covers. What it
+    // covers is that the LIVE classification does not additionally refuse: an empty read says the
+    // effect moves nothing, and treating it as unreadable would throw `/cannot place/` here.
+    expect(await geometrySpanMs(frame, "data-drag data-active")).toBe(5000);
+  });
+
+  test("a positive end delay is not charged as movement", async ({
+    page,
+    request,
+  }) => {
+    const frame = await canvas(page, request);
+
+    // `endDelay` is a post-active tail: the property has stopped moving and the effect is merely
+    // still running. Charging it refuses a declaration that does cover every edge change.
+    const applied = await frame.evaluate(async () => {
+      const sheet = (
+        document.getElementById("nx-pb-style") as HTMLStyleElement | null
+      )?.sheet;
+      sheet?.insertRule(
+        "@keyframes nx-tail { from { height: 0 } to { height: 6px } }",
+        sheet.cssRules.length
+      );
+      sheet?.insertRule(
+        ".nx-pb-dropzone { animation: nx-tail .2s 1 }",
+        sheet.cssRules.length
+      );
+      const zone = document.querySelector(".nx-pb-dropzone");
+      const animation = zone
+        ?.getAnimations()
+        .find(a => a instanceof CSSAnimation);
+      if (!animation?.effect) return null;
+      animation.effect.updateTiming({ endDelay: 9000 });
+      await animation.ready;
+      const timing = animation.effect.getComputedTiming();
+      return {
+        activeDuration: Number(timing.activeDuration ?? 0),
+        endTime: Number(timing.endTime ?? 0),
+      };
+    });
+    expect(applied).not.toBeNull();
+    // The movement is 200ms; `endTime` is 9200. Charging the difference would refuse.
+    expect(applied?.activeDuration).toBe(200);
+    expect(applied?.endTime).toBe(9200);
+
+    // The declared 200ms covers every edge change, so this must REPORT rather than refuse.
+    expect(await geometrySpanMs(frame, "data-drag data-active")).toBe(200);
   });
 
   test("it refuses rather than reporting a zero it cannot stand behind", async ({
