@@ -39,8 +39,8 @@ import type { VersionDiff } from "../../domains/versions/diff";
 import { discardWorkingDraft } from "../../domains/versions/discard-working-draft";
 import { restoreVersion } from "../../domains/versions/restore-version";
 import {
-  expandComponentFields,
   resolveComponentFieldMap,
+  stripPasswordsThroughComponents,
 } from "../../domains/versions/tag-component-types";
 import type { VersionRow } from "../../domains/versions/versions-repository";
 import { NextlyError } from "../../errors/nextly-error";
@@ -803,9 +803,16 @@ export async function autosaveForDocument(
         });
       }
 
-      stripPasswordFieldValues(
-        snapshot as Record<string, unknown>,
-        expandComponentFields(fields, componentFields)
+      // Walks the SNAPSHOT rather than an expanded schema. A component may
+      // reference itself, so a schema-side expansion has to stop at some
+      // depth, and everything below that cut-off would keep its passwords.
+      // The data is finite, so this terminates on its own and strips every
+      // level that actually exists.
+      stripPasswordsThroughComponents(
+        snapshot,
+        fields,
+        componentFields,
+        stripPasswordFieldValues
       );
     }
   }

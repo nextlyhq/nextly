@@ -10,7 +10,10 @@ import { describe, expect, it } from "vitest";
 
 import type { FieldConfig } from "../../../collections/fields/types";
 import { stripPasswordFieldValues } from "../../../shared/lib/password-fields";
-import { expandComponentFields } from "../tag-component-types";
+import {
+  expandComponentFields,
+  stripPasswordsThroughComponents,
+} from "../tag-component-types";
 
 const f = (o: Record<string, unknown>) => o as unknown as FieldConfig;
 
@@ -115,5 +118,87 @@ describe("expandComponentFields", () => {
 
     const outer = entry.outer as Record<string, unknown>;
     expect(outer.creds).not.toMatchObject({ secret: "plaintext" });
+  });
+});
+
+describe("stripPasswordsThroughComponents", () => {
+  const strip = stripPasswordFieldValues;
+
+  it("reaches a password NESTED through a recursive component", () => {
+    // The case a schema-side expansion cannot serve: `tree` contains itself,
+    // so any expansion must stop at some depth and everything below the
+    // cut-off keeps its password. Walking the data terminates naturally.
+    const fields = [f({ name: "node", type: "component", component: "tree" })];
+    const map = new Map<string, FieldConfig[]>([
+      [
+        "tree",
+        [
+          f({ name: "child", type: "component", component: "tree" }),
+          f({ name: "secret", type: "password" }),
+        ],
+      ],
+    ]);
+
+    const entry: Record<string, unknown> = {
+      node: {
+        secret: "level-1",
+        child: { secret: "level-2", child: { secret: "level-3" } },
+      },
+    };
+    stripPasswordsThroughComponents(entry, fields, map, strip);
+
+    const node = entry.node as Record<string, unknown>;
+    const child = node.child as Record<string, unknown>;
+    const grandchild = child.child as Record<string, unknown>;
+    expect(node).not.toMatchObject({ secret: "level-1" });
+    expect(child).not.toMatchObject({ secret: "level-2" });
+    expect(grandchild).not.toMatchObject({ secret: "level-3" });
+  });
+
+  it("strips every row of a dynamic zone, not just the first", () => {
+    const fields = [
+      f({ name: "zone", type: "dynamic-zone", components: ["auth"] }),
+    ];
+    const map = new Map<string, FieldConfig[]>([
+      ["auth", [f({ name: "secret", type: "password" })]],
+    ]);
+
+    const entry: Record<string, unknown> = {
+      zone: [{ secret: "a" }, { secret: "b" }],
+    };
+    stripPasswordsThroughComponents(entry, fields, map, strip);
+
+    const rows = entry.zone as Record<string, unknown>[];
+    expect(rows[0]).not.toMatchObject({ secret: "a" });
+    expect(rows[1]).not.toMatchObject({ secret: "b" });
+  });
+
+  it("leaves non-password values alone at every depth", () => {
+    // Negative control: a strip-everything walker would satisfy the tests
+    // above while destroying the recovery point it exists to preserve.
+    const fields = [f({ name: "node", type: "component", component: "tree" })];
+    const map = new Map<string, FieldConfig[]>([
+      [
+        "tree",
+        [
+          f({ name: "child", type: "component", component: "tree" }),
+          f({ name: "secret", type: "password" }),
+          f({ name: "label", type: "text" }),
+        ],
+      ],
+    ]);
+
+    const entry: Record<string, unknown> = {
+      node: {
+        secret: "s",
+        label: "outer",
+        child: { secret: "s", label: "inner" },
+      },
+    };
+    stripPasswordsThroughComponents(entry, fields, map, strip);
+
+    const node = entry.node as Record<string, unknown>;
+    expect(node).toMatchObject({ label: "outer" });
+    expect(node.child).toMatchObject({ label: "inner" });
   });
 });

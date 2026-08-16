@@ -527,6 +527,80 @@ export function rehydrateSnapshotDates(
 }
 
 /**
+ * Strip password values out of a snapshot, following component REFERENCES.
+ *
+ * Recursion is bounded by the DATA, not by the schema. A component schema may
+ * reference itself, so expanding the schema ahead of time either loops forever
+ * or has to stop at some depth -- and stopping is what leaks: the values below
+ * the cut-off keep their passwords. A snapshot is finite, so walking it
+ * terminates on its own and every level present gets stripped.
+ *
+ * Leaf work is delegated to `stripPasswordFieldValues`, so "what counts as a
+ * password field", including inline groups and repeaters, has one definition
+ * rather than two that would drift.
+ */
+export function stripPasswordsThroughComponents(
+  value: unknown,
+  fields: FieldConfig[],
+  componentFields: Map<string, FieldConfig[]>,
+  strip: (entry: Record<string, unknown>, fields: FieldConfig[]) => void
+): void {
+  if (!value || typeof value !== "object") return;
+
+  // An array is a repeater or a dynamic zone: each row is its own document
+  // against the same field list.
+  if (Array.isArray(value)) {
+    for (const row of value) {
+      stripPasswordsThroughComponents(row, fields, componentFields, strip);
+    }
+    return;
+  }
+
+  const entry = value as Record<string, unknown>;
+  // Direct fields first, which removes the passwords declared at THIS level.
+  strip(entry, fields);
+
+  for (const field of fields) {
+    const name = (field as { name?: unknown }).name;
+    if (typeof name !== "string" || !(name in entry)) continue;
+
+    const slugs: string[] = [];
+    const one = (field as { component?: unknown }).component;
+    if (typeof one === "string") slugs.push(one);
+    const many = (field as { components?: unknown }).components;
+    if (Array.isArray(many)) {
+      for (const slug of many) if (typeof slug === "string") slugs.push(slug);
+    }
+
+    if (slugs.length > 0) {
+      // The union across candidates, for the same reason as before: it can
+      // only strip a value another candidate names the same, never miss one
+      // the actual component declares.
+      const inner: FieldConfig[] = [];
+      for (const slug of slugs)
+        inner.push(...(componentFields.get(slug) ?? []));
+      stripPasswordsThroughComponents(
+        entry[name],
+        inner,
+        componentFields,
+        strip
+      );
+      continue;
+    }
+
+    const children = (field as { fields?: unknown }).fields;
+    if (Array.isArray(children)) {
+      stripPasswordsThroughComponents(
+        entry[name],
+        children as FieldConfig[],
+        componentFields,
+        strip
+      );
+    }
+  }
+}
+
+/**
  * Rewrite component REFERENCES into the container shapes a field walker
  * already understands, carrying the referenced component's own fields.
  *
