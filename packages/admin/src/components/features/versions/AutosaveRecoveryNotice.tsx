@@ -56,10 +56,12 @@ export function AutosaveRecoveryNotice({
       )}
     >
       <p className="text-foreground">
-        {/* Names the time so the author can tell an abandoned edit from one they
-            already dealt with, which is the judgement only they can make. */}
-        Unsaved changes from {formatSavedAt(savedAt)} were recovered from this
-        document.
+        {/* Says the changes are AVAILABLE, not that they were applied: this
+            renders before the author chooses, and the form still holds the
+            saved document until they do. Names the time so they can tell an
+            abandoned edit from one they already dealt with, which is the
+            judgement only they can make. */}
+        Unsaved changes from {formatSavedAt(savedAt)} are available to restore.
       </p>
       <div className="flex shrink-0 items-center gap-2">
         <Button type="button" size="sm" variant="outline" onClick={onDismiss}>
