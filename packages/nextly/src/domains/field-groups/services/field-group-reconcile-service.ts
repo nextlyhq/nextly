@@ -73,9 +73,14 @@ export async function reconcileFieldGroup(args: {
   /**
    * The code sync is asking, so a LOCKED group may be repaired.
    *
-   * Never settable from the HTTP surface: the dispatcher does not pass it. It exists so the one
-   * caller that owns a code-managed definition can clear a marker that would otherwise leave the
-   * group unreachable from both directions.
+   * Never settable from the HTTP surface: the dispatcher does not pass it. It exists so the caller
+   * that owns a code-managed definition can clear a marker that would otherwise leave the group
+   * unreachable from both directions — a locked row marked `diverged` is refused by
+   * `assertNotDiverged` on the sync path and by the lock check here.
+   *
+   * 🔴 NOT YET WIRED. `syncCodeFirstComponents` does not call this, so that state currently has no
+   * automatic exit; the capability exists and the caller does not. Stated here rather than implied,
+   * because a parameter that looks like a recovery path reads as one.
    */
   fromCode?: boolean;
 }): Promise<ReconcileFieldGroupResult> {
@@ -93,7 +98,7 @@ export async function reconcileFieldGroup(args: {
   if (existing.locked && !args.fromCode) {
     throw NextlyError.conflict({
       reason: "state",
-      message: `"${slug}" is managed via code, so its definition lives in a config file — repairing the database row here would be overwritten by the next code sync. Fix the definition in its config file and re-sync; the sync clears this state itself.`,
+      message: `"${slug}" is managed via code, so its definition lives in a config file — repairing the database row here would be overwritten by the next code sync. Fix the definition in its config file and re-sync.`,
       logContext: { reason: "component-locked-for-reconcile", slug },
     });
   }
