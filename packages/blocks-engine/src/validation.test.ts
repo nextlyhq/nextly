@@ -13,9 +13,10 @@ import {
   FIXTURE_BREAKPOINTS,
   VALIDATION_FIXTURES,
 } from "./validation.fixtures";
+import type { NestingSource } from "./nesting";
 import type { BlockTypeLookup } from "./validation";
 import { measureBytes } from "./measure-bytes";
-import { ISSUE_CODES, validate } from "./validation";
+import { ISSUE_CODES, validate, validateDocument } from "./validation";
 
 function lookup(types: string[]): BlockTypeLookup {
   const set = new Set(types);
@@ -25,6 +26,17 @@ function lookup(types: string[]): BlockTypeLookup {
 /** Coerce deliberately-malformed input to BlockDocument for the validator. */
 function invalidDoc(doc: unknown): BlockDocument {
   return doc as BlockDocument;
+}
+
+/**
+ * A nesting source answering from a literal map of declared parents.
+ *
+ * A type the map does not name answers undefined, which the rule reads as "no
+ * restriction" — the same answer the registry source gives for a block it does
+ * not hold.
+ */
+function nestingOf(parents: Record<string, readonly string[]>): NestingSource {
+  return { parentsOf: type => parents[type] };
 }
 
 /** Resolve an RFC 6901 JSON-Pointer against a value; undefined if it misses. */
@@ -221,6 +233,194 @@ describe("validation fixture corpus", () => {
 });
 
 describe("issue-code vocabulary is stable and complete", () => {
+  it("reports a node sitting in a container its definition forbids", () => {
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "row",
+          type: "core/container",
+          version: 1,
+          props: {},
+          slots: {
+            default: [
+              { id: "cell", type: "acme/column", version: 1, props: {} },
+            ],
+          },
+        },
+      ],
+    });
+
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+      nesting: nestingOf({ "acme/column": ["core/columns"] }),
+    });
+
+    const placement = issues.find(i => i.code === "wrong-parent");
+    expect(placement?.path).toBe("/nodes/0/slots/default/0");
+    expect(placement?.severity).toBe("error");
+    // Names where the block WILL go, because that is the author's next action.
+    expect(placement?.message).toContain("core/columns");
+  });
+
+  it("reports a restricted node at the TOP LEVEL, where it has no container", () => {
+    // The walk only ever sees a node as somebody's child, so without the root
+    // entries carrying "no parent" the one node with no container is the one
+    // node the rule never reaches.
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "cell", type: "acme/column", version: 1, props: {} }],
+    });
+
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+      nesting: nestingOf({ "acme/column": ["core/columns"] }),
+    });
+
+    const placement = issues.find(i => i.code === "restricted-at-root");
+    expect(placement?.path).toBe("/nodes/0");
+    expect(placement?.severity).toBe("error");
+  });
+
+  it("accepts a node in a container its definition permits", () => {
+    // The positive control. Every refusal above is also satisfied by a rule that
+    // refuses everything, and at each individual assertion the two look alike.
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "row",
+          type: "core/columns",
+          version: 1,
+          props: {},
+          slots: {
+            default: [
+              { id: "cell", type: "acme/column", version: 1, props: {} },
+            ],
+          },
+        },
+      ],
+    });
+
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+      nesting: nestingOf({ "acme/column": ["core/columns"] }),
+    });
+
+    expect(issues.some(i => i.code === "wrong-parent")).toBe(false);
+    expect(issues.some(i => i.code === "restricted-at-root")).toBe(false);
+  });
+
+  it("is an ERROR in forgiving mode too", () => {
+    // `parent` is the child stating where it is meaningful, so a violation is a
+    // document that renders somewhere its author never said it could — not a
+    // forward-compatible value the lenient mode exists to preserve.
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "cell", type: "acme/column", version: 1, props: {} }],
+    });
+
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "forgiving",
+      nesting: nestingOf({ "acme/column": ["core/columns"] }),
+    });
+
+    expect(issues.find(i => i.code === "restricted-at-root")?.severity).toBe(
+      "error"
+    );
+  });
+
+  it("does not check placement when the caller supplies no nesting source", () => {
+    // Absent means not checked, the same terms as tokens and classes. Asserted
+    // so the fail-open is a decision the suite records rather than a gap.
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "cell", type: "acme/column", version: 1, props: {} }],
+    });
+
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+    });
+
+    expect(issues.some(i => i.code === "restricted-at-root")).toBe(false);
+  });
+
+  it("asks the rule about a container the document actually names", () => {
+    // The parent handed to the rule is the CONTAINER's type, not the slot name
+    // and not the child's own. A walk that carried the wrong one would refuse
+    // and accept in the right proportions while answering a different question,
+    // so the observation is on what the source was ASKED rather than on the
+    // verdict it produced.
+    const asked: string[] = [];
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "row",
+          type: "core/columns",
+          version: 1,
+          props: {},
+          slots: {
+            default: [
+              { id: "cell", type: "acme/column", version: 1, props: {} },
+            ],
+          },
+        },
+      ],
+    });
+
+    validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+      nesting: {
+        parentsOf: type => {
+          asked.push(type);
+          return type === "acme/column" ? ["core/columns"] : undefined;
+        },
+      },
+    });
+
+    // Both nodes reach the rule: the container as a root, the child under it.
+    expect(asked).toContain("core/columns");
+    expect(asked).toContain("acme/column");
+  });
+
+  it("does not ask about placement when the node type is malformed", () => {
+    // A malformed type is already reported as an invalid node. Asking where it
+    // may sit would answer for a name no definition carries, and add a second
+    // complaint about the same defect in terms the author cannot act on.
+    const asked: string[] = [];
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "bad", type: 42, version: 1, props: {} }],
+    });
+
+    validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+      nesting: {
+        parentsOf: type => {
+          asked.push(type);
+          return undefined;
+        },
+      },
+    });
+
+    expect(asked).toEqual([]);
+  });
+
   it("every code emitted by the corpus is documented in ISSUE_CODES", () => {
     for (const fixture of VALIDATION_FIXTURES) {
       const issues = validate(fixture.doc, {
@@ -2296,6 +2496,49 @@ describe("an unstorable document does not have its values parsed", () => {
     // And it is reported as rewritten rather than as impossible to store.
     expect(issues.some(i => i.code === "document-lossy")).toBe(true);
     expect(issues.some(i => i.code === "document-unwritable")).toBe(false);
+  });
+
+  it("still validates the classes of a document whose counts are approximate", () => {
+    // A node hook returning a replacement leaves the walk having read the whole
+    // document while the published byte total describes the replacement rather
+    // than the node. So the counts stop being the writer's — but nothing about
+    // the traversal stopped short, and the per-value work below is bounded by a
+    // tree that was measured end to end.
+    //
+    // Separating the two is what this covers. A sparse array is fully measured
+    // AND counted from itself, so it cannot tell a gate on "the numbers are the
+    // writer's" from one on "the walk reached everything"; only a document that
+    // is traversed and approximate at once distinguishes them.
+    const classes: unknown[] = [];
+    classes[1] = "cls";
+    const node = {
+      id: "n1",
+      type: "core/text",
+      version: 1,
+      props: {},
+      classes,
+      // Structure is counted from the document and bytes from the replacement,
+      // which is what withdraws the completeness claim without truncating the
+      // walk.
+      toJSON() {
+        return { id: "n1", type: "core/text", version: 1, props: {} };
+      },
+    };
+    const doc = invalidDoc({ formatVersion: 1, kind: "page", nodes: [node] });
+
+    const { issues, survey } = validateDocument(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+    });
+
+    // Asserted from the survey the validator itself judged the document with,
+    // and BEFORE the issues: a fixture that stopped being approximate, or that
+    // started tripping a cap, would leave every assertion below satisfied by a
+    // document that never reached the gate at all.
+    expect(survey.traversed).toBe(true);
+    expect(survey.complete).toBe(false);
+
+    expect(issues.some(i => i.code === "invalid-classes")).toBe(true);
   });
 
   it("skips per-value work when the byte pass could not measure the document", () => {
