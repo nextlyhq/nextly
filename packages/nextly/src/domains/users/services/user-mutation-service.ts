@@ -59,6 +59,7 @@ import { affectedRowCount } from "../../auth/services/auth-service";
 import { deliveriesTableFor } from "../../email/deliveries-table";
 import { eraseRecipientDeliveries } from "../../email/erase-recipient";
 import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
+import { VersionsRepository } from "../../versions/versions-repository";
 import { recordMutationEventInTx } from "../../webhooks/record-mutation-event";
 
 import type { UserExtSchemaService } from "./user-ext-schema-service";
@@ -1370,6 +1371,23 @@ export class UserMutationService extends BaseService {
     actor?: RequestActor
   ): Promise<void> {
     const { users, accounts, userRoles } = this.tables;
+
+    // Before the transaction, and deliberately a DELETE rather than the scrub
+    // the audit surfaces receive below.
+    //
+    // An audit row is a record: stripping the person from it keeps a trail
+    // worth keeping. A recovery point is that person's unsaved draft of a
+    // document. Scrubbing its author would leave the snapshot in the table
+    // with nobody able to claim it, and nothing else collects autosave rows --
+    // they are excluded from history listings, version reads and retention
+    // alike -- so it would outlive the account permanently.
+    //
+    // Ordered first so a failure here leaves the account intact and the
+    // operation retryable. Reversed, the account would be gone and its
+    // recovery points unreachable, which is the state this exists to prevent.
+    await new VersionsRepository(this.adapter).deleteAutosavesByAuthor(
+      String(userId)
+    );
 
     // Asked once, before the transaction opens, because a failed statement
     // aborts an open Postgres transaction and there would be no way back.

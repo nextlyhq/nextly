@@ -726,6 +726,25 @@ export class VersionsRepository {
   }
 
   /**
+   * Remove every recovery point belonging to one AUTHOR, across every document.
+   *
+   * For the account going away. Deliberately a delete rather than the scrub
+   * the audit surfaces perform: an audit row is a record, and stripping the
+   * person from it keeps a trail worth keeping, whereas a recovery point is
+   * that person's unsaved draft. Scrubbing its author would leave the snapshot
+   * in the table with nobody able to claim it, which is worse than either
+   * keeping or removing it cleanly.
+   */
+  async deleteAutosavesByAuthor(createdBy: string): Promise<number> {
+    return this.db.delete(TABLE, {
+      and: [
+        { column: "isAutosave", op: "=" as const, value: true },
+        { column: "createdBy", op: "=" as const, value: createdBy },
+      ],
+    });
+  }
+
+  /**
    * One author's current recovery point for a document, or null when they have
    * none.
    *
