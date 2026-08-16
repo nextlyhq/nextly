@@ -9,13 +9,14 @@
  * and reorder via the inspector — no pointer required.
  */
 import { DragDropProvider, DragOverlay } from "@dnd-kit/react";
-import { type LucideIcon } from "lucide-react";
+import { BuilderShell } from "@nextlyhq/builder/shell";
 import { useState } from "react";
 
 import { defaultBlockRegistry } from "../core/registry";
 
+import { BreakpointControl } from "./BreakpointControl";
 import { Canvas } from "./canvas/Canvas";
-import { Ban, Monitor, Smartphone, Tablet } from "./icons";
+import { Ban } from "./icons";
 import { InvalidSlotBanner } from "./InvalidSlotBanner";
 import { dragLabel } from "./logic/dragLabel";
 import { planDrop, type DropOutcome, type DropRefusal } from "./logic/dropPlan";
@@ -24,19 +25,24 @@ import { BlockLibrary } from "./panels/BlockLibrary";
 import { Inspector } from "./panels/Inspector";
 import { useEditor } from "./store/EditorProvider";
 
-const BREAKPOINTS: { id: string; label: string; Icon: LucideIcon }[] = [
-  { id: "base", label: "Desktop", Icon: Monitor },
-  { id: "tablet", label: "Tablet", Icon: Tablet },
-  { id: "mobile", label: "Mobile", Icon: Smartphone },
-];
-
 /** The source and target a drag event carries, which is all either handler below reads. */
 interface DragOperation {
   source: { id: string | number; data?: unknown } | null;
   target: { id: string | number; data?: unknown } | null;
 }
 
-export function EditorSurface() {
+export interface EditorSurfaceProps {
+  /**
+   * Leaving the editor, when the host has somewhere to go.
+   *
+   * Omitted by the FIELD mount, which renders inside an entry form: the author is
+   * already on the page an exit would return them to, so the shell renders no exit
+   * affordance at all rather than an inert one.
+   */
+  onExit?: () => void;
+}
+
+export function EditorSurface({ onExit }: EditorSurfaceProps = {}) {
   const { state, dispatch } = useEditor();
   const root = state.document.root;
   /**
@@ -103,49 +109,31 @@ export function EditorSurface() {
       onDragEnd={onDragEnd}
     >
       <div className="nx-pb-editor">
-        <div className="nx-pb-toolbar">
-          <div className="nx-pb-seg" role="group" aria-label="Preview device">
-            {BREAKPOINTS.map(({ id, label, Icon }) => (
-              <button
-                key={id}
-                type="button"
-                className="nx-pb-seg-btn"
-                aria-pressed={state.activeBreakpoint === id}
-                aria-label={label}
-                onClick={() =>
-                  dispatch({ type: "SET_BREAKPOINT", breakpoint: id })
-                }
-              >
-                <Icon size={15} aria-hidden />
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
         {/*
-         * Above the panes rather than inside the canvas column: the blocks it reports are not
+         * Above the shell rather than inside the canvas slot: the blocks it reports are not
          * drawn on the canvas at all, so anchoring the notice to the canvas would put it beside
-         * the one place that cannot show what it is about.
+         * the one place that cannot show what it is about. The shell offers no full-width notice
+         * slot, and the top bar is for controls, so it stays a sibling.
          */}
         <InvalidSlotBanner />
-        <div className="nx-pb-body">
-          <aside className="nx-pb-pane nx-pb-pane--left">
-            <BlockLibrary />
-          </aside>
-          {/*
-           * A region, not a second `main`. HTML allows one non-hidden `main` per
-           * document and the admin already renders it, so a nested one is invalid
-           * markup, gives assistive technology two competing primary landmarks,
-           * and makes every strict `main` locator in the e2e suite ambiguous. The
-           * label is what keeps it a useful landmark rather than a bare wrapper.
-           */}
-          <section className="nx-pb-pane--center" aria-label="Canvas">
-            <Canvas />
-          </section>
-          <aside className="nx-pb-pane nx-pb-pane--right">
-            <Inspector />
-          </aside>
-        </div>
+        {/*
+         * The shell supplies the chrome this file used to hand-roll: the rail, the switched
+         * panel, the inspector column and the bars. What it never does is look inside the
+         * canvas — its `children` docblock says so — which is why the drag provider and the
+         * overlay below can stay exactly where they were.
+         *
+         * `min-h-0` because the shell is `h-full` inside a flex column: without it the canvas
+         * grows to its content and the whole editor scrolls instead of the canvas.
+         */}
+        <BuilderShell
+          className="min-h-0 flex-1"
+          topBar={<BreakpointControl />}
+          renderPanel={panel => (panel === "insert" ? <BlockLibrary /> : null)}
+          inspector={<Inspector />}
+          onExit={onExit}
+        >
+          <Canvas />
+        </BuilderShell>
       </div>
 
       {/*
