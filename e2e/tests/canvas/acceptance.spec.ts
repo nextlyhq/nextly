@@ -179,7 +179,7 @@ test.describe("a canvas any Nextly editor could ship", () => {
 
   test.beforeEach(({ page }) => {
     driver = createPocDriver(page);
-    chrome = createPocChromeReader(page);
+    chrome = createPocChromeReader(page, driver);
   });
 
   test("resolves a pointer collision to the innermost container", async ({
@@ -1018,19 +1018,16 @@ test.describe("a canvas any Nextly editor could ship", () => {
     const fixture = await seedPage(request, FLAT_LIST_FIXTURE);
     await driver.mountTree(fixture);
 
-    // The canvas cannot answer this at all, and that refusal IS the
-    // shortfall. Asserted as the reader's OWN error type BEFORE the
-    // expectation is marked, so a broken selector, a missing iframe or a
-    // failed seed stays a real failure instead of becoming another
-    // expected one. It also fires the day the capability arrives: this
-    // line goes red first and forces the target below to be rewritten.
+    // The refusal this used to assert is gone, because the canvas never lacked the
+    // capability: `CanvasNode` makes every placed block a drag source, and a pointer
+    // drag on one raises the host overlay and marks the block. The reader now performs
+    // that drag instead of declining it.
     //
-    // Wrapped in an async thunk because these readers throw SYNCHRONOUSLY:
-    // `expect(reader())` never receives a promise, so `.rejects` cannot see
-    // the refusal and the raw error escapes the assertion entirely.
-    await expect(async () =>
-      chrome.startDragOfBlock(fixture.blockIds[1] ?? "")
-    ).rejects.toThrow(CanvasCapabilityError);
+    // The assertion it replaced could not have reported the arrival it was written to
+    // catch. It required the reader's own error type, and that reader refused
+    // UNCONDITIONALLY — so the line went red when someone edited the reader, never when
+    // the product gained the feature. A tripwire on an unconditional refusal watches the
+    // instrument, not the subject.
 
     // BOTH drags, measured the same way, and compared against each other.
     // Reading only the canvas drag asks whether it works, not whether it is the

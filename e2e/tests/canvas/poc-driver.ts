@@ -794,8 +794,20 @@ export { DROP_ZONES, ACTIVE_ZONE, LIBRARY_ITEM };
  * plausible value: an acceptance test that fails with "this canvas draws its
  * indicator inside the iframe" is a target, and one that fails with `false` is
  * indistinguishable from a broken harness.
+ *
+ * A refusal is only evidence of a shortfall when the reader LOOKED. One that declines
+ * unconditionally reports the same thing for "the canvas cannot do this" and "nobody has
+ * checked", and a case asserting that refusal can never go red when the capability arrives — so
+ * it certifies whichever of the two is convenient. Every reader here either measures or names
+ * what specifically stopped it.
+ *
+ * Takes the driver rather than only the page so a drag started here uses the driver's own
+ * gesture and leaves its pointer bookkeeping correct for whatever moves next.
  */
-export function createPocChromeReader(page: Page): CanvasChromeReader {
+export function createPocChromeReader(
+  page: Page,
+  driver: CanvasDriver
+): CanvasChromeReader {
   return {
     async readIndicators() {
       // Counted in BOTH documents, because the requirement is one claim: one
@@ -878,16 +890,36 @@ export function createPocChromeReader(page: Page): CanvasChromeReader {
       });
     },
 
-    startDragOfBlock(id: string): Promise<void> {
-      throw new CanvasCapabilityError(
-        `this canvas offers no drag for a block already placed in it, so ` +
-          `"${id}" cannot be picked up; only the insert panel is draggable`
-      );
+    async startDragOfBlock(id: string): Promise<void> {
+      // Through the DRIVER's own gesture, not a second one written here. `startDragAt` records
+      // the pointer it leaves behind, and every later `moveBy` is relative to that record — so a
+      // drag started with a bare `page.mouse` here would begin correctly and then move from
+      // wherever the driver last thought the pointer was, which is a harness fault that reads as
+      // the canvas resolving the wrong target.
+      const block = canvasFrameOf(page).locator(`[data-nx-id="${id}"]`);
+      const box = await block.boundingBox();
+      // Refused only when the block is genuinely absent, which is a fixture fault rather than a
+      // canvas shortfall — and named as one, so it is not read as the capability being missing.
+      if (!box) {
+        throw new Error(
+          `no block with id "${id}" is laid out in the canvas, so there is nothing to pick up`
+        );
+      }
+      await driver.startDragAt({
+        x: box.x + box.width / 2,
+        y: box.y + box.height / 2,
+      });
     },
 
     undoDepth(): Promise<number> {
+      // The refusal stands and its REASON has changed, which is the whole correction. The editor
+      // does keep history — a bounded past/future in its store — so a reader told "this canvas
+      // keeps no undo history" is sent to build something that already exists. What is missing is
+      // a way to observe the depth from here: nothing publishes it to the DOM, and a count this
+      // cannot see is not a count it may report.
       throw new CanvasCapabilityError(
-        "this canvas keeps no undo history, so there is no depth to count"
+        "this canvas publishes no undo depth a test can read; the editor keeps a bounded " +
+          "history in its store, so the gap is an observable seam rather than the feature"
       );
     },
   };
