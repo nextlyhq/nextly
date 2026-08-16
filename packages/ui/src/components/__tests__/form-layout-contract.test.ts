@@ -18,12 +18,14 @@
  * you.
  *
  * The negative-control block below exists because the check's own pattern
- * has a shape that could over-report: `max-w-[var(--nx-field-half,380px)]`
- * inside `field-shell.tsx` also matches the text `max-w-`, and that call
- * site is legitimate — it is the layout's OWN width token, not a page
- * re-declaring one. `OWN_MEASURE` excludes the `max-w-[var(` spelling for
- * exactly that reason, and the control below exercises it against the real
- * file rather than trusting the regex by inspection.
+ * has a shape that could over-report: the shared field-half width utility in
+ * `field-shell.tsx`, spelled as the CSS-variable token form of a max-width
+ * (an `--nx-field-half` custom property with a 380px fallback), also matches
+ * the text `max-w-`, and that call site is legitimate — it is the layout's
+ * OWN width token, not a page re-declaring one. `OWN_MEASURE` excludes that
+ * CSS-variable token spelling for exactly that reason, and the control below
+ * exercises it against the real file rather than trusting the regex by
+ * inspection.
  *
  * Two more spellings are excluded, and both are earned by running the scan
  * against the real tree rather than assumed: `max-w-full` and `max-w-none`
@@ -86,10 +88,11 @@ const ELEMENT = /<[A-Za-z][^>]*?>/gs;
  * A `max-w-*` utility that could actually compete with `FormLayout`'s
  * measure.
  *
- * Excludes the CSS-variable token form (`max-w-[var(...)]`, the shared
- * measure itself) and `max-w-full`/`max-w-none`, neither of which can ever
- * express an absolute width: both are defined relative to the parent, so
- * they cap nothing a page container could be competing over.
+ * Excludes the CSS-variable token form (the shared measure itself, written
+ * as a max-width driven by a `var(...)` custom property) and
+ * `max-w-full`/`max-w-none`, neither of which can ever express an absolute
+ * width: both are defined relative to the parent, so they cap nothing a page
+ * container could be competing over.
  */
 const OWN_MEASURE = /\bmax-w-(?!\[var\(|full\b|none\b)/;
 
