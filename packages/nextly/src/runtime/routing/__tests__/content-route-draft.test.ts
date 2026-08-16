@@ -239,6 +239,30 @@ describe("the content route's draft decision", () => {
     ]);
   });
 
+  it("hands the decision the locale the route reads in", async () => {
+    // The decision and the read it authorizes have to be about the same
+    // translation. A hook that is told nothing here cannot compare locale, so a
+    // token minted for one translation is accepted for every other — and the
+    // entry it names is then resolved in the route's language rather than the
+    // token's.
+    const { reader } = stubReader(null);
+    const seen: ResolvedContext[] = [];
+
+    await createContentRoute({
+      collections: ["pages"],
+      locale: "fr",
+      nextly: reader,
+      render: (entry: ContentEntry) => entry,
+      buildMetadata: (entry: ContentEntry) => ({ title: String(entry.id) }),
+      draft: context => {
+        seen.push(context);
+        return false;
+      },
+    }).generateMetadata(params);
+
+    expect(seen).toEqual([{ collection: "pages", slug: "a", locale: "fr" }]);
+  });
+
   it("refuses a draft for an object grant that names no entry", async () => {
     // The decision is app-supplied code, so the type is not a runtime
     // guarantee. An object carrying no usable id must authorize nothing: the
