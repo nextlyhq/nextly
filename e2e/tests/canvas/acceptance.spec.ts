@@ -1013,7 +1013,7 @@ test.describe("a canvas any Nextly editor could ship", () => {
     note(
       PLAN_POINT.oneEngineForBothDrags,
       "B-15",
-      "dragging a block already in the canvas is not offered here"
+      "a canvas drag does not stay live the way a panel drag does"
     );
     const fixture = await seedPage(request, FLAT_LIST_FIXTURE);
     await driver.mountTree(fixture);
@@ -1060,9 +1060,15 @@ test.describe("a canvas any Nextly editor could ship", () => {
     ).toEqual({ dragging: true, resolvesToContainingZone: true });
 
     // Marked only now, with the whole panel-side control behind it.
+    // The reason CHANGED, and the old one was false. The canvas does offer the drag —
+    // the reader now performs it — and the divergence measured afterwards is that the
+    // canvas drag is no longer live when its signature is read, where the panel drag
+    // is: `{ dragging: false, resolvesToContainingZone: false }` against the panel's
+    // `{ dragging: true, resolvesToContainingZone: true }`. That is a real shortfall
+    // and a different one, so it stays expected while it is investigated.
     test.fail(
       true,
-      "dragging a block already in the canvas is not offered here"
+      "a canvas drag does not stay live the way a panel drag does"
     );
 
     await chrome.startDragOfBlock(fixture.blockIds[1] ?? "");
