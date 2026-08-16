@@ -35,18 +35,19 @@ const COLS: Record<Cols, string> = {
 /**
  * Container-query column counts, used when `responsive` is set.
  *
- * The grid starts at one column and widens at the content container's
- * breakpoint rather than the viewport's. The admin content region is 328px
- * narrower than the window whenever both sidebars are open, so a viewport
- * breakpoint reports space the form does not have. Literal class names, not
- * template strings, so Tailwind's scanner emits them.
+ * The grid starts at one column and widens at ITS OWN container's breakpoint
+ * rather than the viewport's or an ancestor's. Unnamed `@` variants resolve
+ * against the nearest container ancestor, which `responsive` mode guarantees
+ * by rendering its own `@container` wrapper below — so this works wherever the
+ * grid is mounted, with no dependency on a named container declared elsewhere.
+ * Literal class names, not template strings, so Tailwind's scanner emits them.
  */
 const RESPONSIVE_COLS: Record<Cols, string> = {
   1: "grid-cols-1",
-  2: "grid-cols-1 @2xl/content:grid-cols-2",
-  3: "grid-cols-1 @2xl/content:grid-cols-3",
-  4: "grid-cols-1 @2xl/content:grid-cols-4",
-  6: "grid-cols-1 @2xl/content:grid-cols-6",
+  2: "grid-cols-1 @2xl:grid-cols-2",
+  3: "grid-cols-1 @2xl:grid-cols-3",
+  4: "grid-cols-1 @2xl:grid-cols-4",
+  6: "grid-cols-1 @2xl:grid-cols-6",
 };
 
 /** @experimental */
@@ -93,18 +94,26 @@ export interface GridProps extends HTMLAttributes<HTMLDivElement> {
  * @experimental
  */
 export const Grid = forwardRef<HTMLDivElement, GridProps>(
-  ({ cols = 2, gap = 4, responsive = false, className, ...props }, ref) => (
-    <div
-      ref={ref}
-      className={cn(
-        "grid",
-        responsive ? RESPONSIVE_COLS[cols] : COLS[cols],
-        GAP[gap],
-        className
-      )}
-      {...props}
-    />
-  )
+  ({ cols = 2, gap = 4, responsive = false, className, ...props }, ref) => {
+    const grid = (
+      <div
+        ref={ref}
+        className={cn(
+          "grid",
+          responsive ? RESPONSIVE_COLS[cols] : COLS[cols],
+          GAP[gap],
+          className
+        )}
+        {...props}
+      />
+    );
+
+    // Responsive mode renders its own unnamed `@container` wrapper so the
+    // grid queries the space IT has, not any ancestor's — no dependency on a
+    // named container declared elsewhere in the tree. Non-responsive mode
+    // renders no wrapper at all: existing callers must not gain a DOM node.
+    return responsive ? <div className="@container">{grid}</div> : grid;
+  }
 );
 Grid.displayName = "Grid";
 

@@ -62,4 +62,46 @@ describe("Grid responsive mode", () => {
     expect(grid?.className).toContain("grid-cols-3");
     expect(grid?.className).not.toContain("@");
   });
+
+  it("wraps itself in an unnamed @container and uses unnamed variants", () => {
+    // Responsive mode must not depend on an ancestor declaring a NAMED
+    // container: it renders its own wrapper and queries that, so it works
+    // wherever it is mounted, not only inside the one page that happens to
+    // declare `content`.
+    render(
+      <Grid cols={2} responsive>
+        <span>a</span>
+      </Grid>
+    );
+    const grid = screen.getByText("a").parentElement;
+    const wrapper = grid?.parentElement;
+    expect(wrapper?.className).toContain("@container");
+    expect(grid?.className).toMatch(/(^|\s)@2xl:grid-cols-2(\s|$)/);
+  });
+
+  it("never emits a /content named container variant", () => {
+    render(
+      <Grid cols={6} responsive>
+        <span>a</span>
+      </Grid>
+    );
+    const grid = screen.getByText("a").parentElement;
+    expect(grid?.className).not.toContain("/content");
+  });
+
+  it("renders no wrapper at all when responsive is not set", () => {
+    // Structure, not only classes: a non-responsive Grid's rendered element
+    // must be the direct child of whatever the caller placed it in, not a
+    // wrapper this component introduced.
+    const { container } = render(
+      <div data-testid="host">
+        <Grid cols={2}>
+          <span>b</span>
+        </Grid>
+      </div>
+    );
+    const host = container.querySelector('[data-testid="host"]');
+    const grid = screen.getByText("b").parentElement;
+    expect(grid?.parentElement).toBe(host);
+  });
 });

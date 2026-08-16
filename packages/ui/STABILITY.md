@@ -135,9 +135,12 @@ to the page rather than to a section. No first-party plugin exercises it yet, so
 has not met the graduation bar.
 
 `Grid` gained an opt-in `responsive` prop: off by default (so every existing caller
-keeps its fixed column count), and when set the grid starts at one column and widens
-on the content container's own breakpoint rather than the viewport's. No first-party
-plugin exercises this prop yet, so `Grid` stays on the experimental list above.
+keeps its fixed column count, with no wrapper element added), and when set the grid
+renders its own unnamed `@container` wrapper and starts at one column, widening on
+that wrapper's own breakpoint rather than the viewport's or any ancestor's — so it
+works wherever it is mounted, with no dependency on a named container declared
+elsewhere in the tree. No first-party plugin exercises this prop yet, so `Grid` stays
+on the experimental list above.
 
 `FormLayout` (with `FormLayoutProps` and `FormMeasure`) is the form-layout kit's page
 measure: it centres a bounded column so pages stop each hand-rolling their own width,
