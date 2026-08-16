@@ -543,6 +543,17 @@ async function pointsAtItself(
     if (targetPath === destination) return true;
 
     const resolved = await fs.realpath(targetPath).catch(() => null);
+
+    // Deduplicate on the RESOLVED path, not the lexical one. A directory symlink pointing back
+    // into the project makes every expansion produce a new spelling — `loop/AGENTS.md`,
+    // `loop/loop/AGENTS.md` — of one file, so a lexical `visited` never matches, the queue never
+    // empties and the scaffold HANGS before restoring anything. The lexical check above stays as
+    // a cheap filter; this is the one that terminates.
+    if (resolved !== null) {
+      if (visited.has(resolved)) continue;
+      visited.add(resolved);
+    }
+
     if (resolved === null) {
       // A DIRECT target that does not resolve means the pointer would install nothing, so there
       // is no upside to weigh against the target appearing later. A deeper one is an ordinary
