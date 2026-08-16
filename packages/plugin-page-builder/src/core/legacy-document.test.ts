@@ -201,7 +201,27 @@ describe("toEngineDocument", () => {
   });
 
   describe("bindings", () => {
-    it("rewrites `path` onto `$bind` against the owning entry", () => {
+    it("binds to the loop ITEM, not the entry owning the document", () => {
+      // The distinction decides whether a repeated block shows its own row.
+      // Legacy bindings resolve only inside a collection loop, so "field"
+      // always meant the current item; `entry` is the page, so converting to
+      // it would leave every repetition showing the same values. Nothing
+      // structural separates the two — both are a well-formed binding — so
+      // this assertion has to name the source explicitly.
+      const { document } = toEngineDocument(
+        doc(
+          wrapper([
+            node("a", {
+              bindings: { text: { source: "field", path: "author.name" } },
+            }),
+          ])
+        )
+      );
+
+      expect(document.nodes[0].bindings?.text.source).toBe("item");
+    });
+
+    it("rewrites `path` onto `$bind`", () => {
       const { document } = toEngineDocument(
         doc(
           wrapper([
@@ -213,7 +233,7 @@ describe("toEngineDocument", () => {
       );
 
       expect(document.nodes[0].bindings).toEqual({
-        text: { source: "entry", $bind: "author.name" },
+        text: { source: "item", $bind: "author.name" },
       });
     });
 
@@ -286,6 +306,27 @@ describe("toEngineDocument", () => {
       expect(document.nodes[0].styles).toEqual({
         base: { base: { color: "#111" } },
         hover: { base: { color: "#222" } },
+      });
+    });
+
+    it("rewrites a legacy token reference onto the engine's spelling", () => {
+      // The two spellings differ only in the key: legacy `{ token }` against
+      // the engine's `{ $token }`. Left alone, a token survives the generic
+      // object walk as an ordinary nested object — present, well-formed, and
+      // no longer a token. So asserting the value merely EXISTS passes on the
+      // broken conversion; the key is the whole property under test.
+      const { document } = toEngineDocument(
+        doc(
+          wrapper([
+            node("a", {
+              style: { base: { color: { token: "color.primary" } } },
+            }),
+          ])
+        )
+      );
+
+      expect(document.nodes[0].styles?.base?.base).toEqual({
+        color: { $token: "color.primary" },
       });
     });
 

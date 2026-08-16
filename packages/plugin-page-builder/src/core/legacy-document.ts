@@ -94,6 +94,19 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * True when a value is a design-token reference in the LEGACY spelling.
+ *
+ * Both formats reference a token by a single string property; only the key
+ * differs (`token` against the engine's `$token`). The check is the same shape
+ * as the engine's own predicate, and for the same reason: an array or a class
+ * instance carrying the key would serialize to something that is no longer a
+ * reference, so the token would be lost on the way to storage.
+ */
+function isLegacyTokenRef(value: unknown): value is { token: string } {
+  return isPlainObject(value) && typeof value.token === "string";
+}
+
+/**
  * Narrows an arbitrary stored value to something the engine's style envelope
  * accepts, or rejects it.
  *
@@ -107,6 +120,14 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 function toStyleValue(value: unknown): StyleValue | undefined {
   if (typeof value === "string" || typeof value === "number") return value;
   if (isTokenRef(value)) return value;
+  // A token reference has to be recognised BEFORE the generic object walk
+  // below, because the two spellings differ only in the key: the legacy
+  // control wrote `{ token }` and the engine's predicate reads `{ $token }`.
+  // Left to the walk, a token would survive as an ordinary nested object the
+  // engine no longer recognises as a reference — still present, still
+  // well-formed, and no longer a token, which is the shape of loss a
+  // structural comparison cannot see.
+  if (isLegacyTokenRef(value)) return { $token: value.token };
   if (!isPlainObject(value)) return undefined;
 
   const nested: Record<string, StyleValue> = {};
@@ -168,10 +189,17 @@ function toNodeStyles(node: LegacyNode): NodeStyles | undefined {
 /**
  * A node's bindings, rewritten onto the engine's binding contract.
  *
- * The legacy shape had one binding source ("field", always the owning entry)
- * and addressed it with `path`; the engine names the path `$bind` and models
- * the source as a union whose default is the owning entry. So every legacy
- * binding maps onto exactly one engine binding with no ambiguity.
+ * The legacy shape had one binding source, spelled "field", and addressed it
+ * with `path`; the engine names the path `$bind` and models the source as a
+ * union. So every legacy binding maps onto exactly one engine binding.
+ *
+ * That source is `item`, NOT `entry`, and the difference decides whether a
+ * repeated block shows its own row. Legacy bindings resolve only inside a
+ * collection loop — the renderer calls `resolveBindings(node, item)` when an
+ * item is in scope and uses the raw props otherwise — so "field" always meant
+ * the current loop item. The engine's `entry` is the entry owning the
+ * document, which for a repeated block is the page rather than the row, so
+ * converting to `entry` would leave every repetition showing the same values.
  *
  * The display `transform` does not survive. It was an unparsed string like
  * "date:MMM d, yyyy", and the engine's `format` is structured and
@@ -186,7 +214,7 @@ function toBindings(
 
   const bindings: Record<string, Binding> = {};
   for (const [prop, legacy] of Object.entries(node.bindings)) {
-    bindings[prop] = { source: "entry", $bind: legacy.path };
+    bindings[prop] = { source: "item", $bind: legacy.path };
     if (legacy.transform !== undefined) {
       notes.push({
         path: node.id,
