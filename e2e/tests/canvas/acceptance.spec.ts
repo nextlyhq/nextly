@@ -1026,6 +1026,35 @@ test.describe("a canvas any Nextly editor could ship", () => {
     expect(after - before, "one drop is one undoable edit").toBe(1);
   });
 
+  test("picks up a block already in the canvas", async ({ request }) => {
+    // The CONTROL the engine-parity case below depends on, kept as its own test so it
+    // fails for its own reason. That case runs this reader under an expected-failure
+    // marker, where a reader that stopped finding the block or stopped activating its
+    // drag would be absorbed as the shortfall it is investigating — leaving the suite
+    // green having measured nothing about either.
+    //
+    // Deliberately the SIMPLEST possible use: one drag, nothing before it. The parity
+    // case starts this drag after a cancelled one, so the two differ only in what
+    // precedes them, and that is exactly the difference under investigation there.
+    const fixture = await seedPage(request, FLAT_LIST_FIXTURE);
+    await driver.mountTree(fixture);
+
+    await chrome.startDragOfBlock(fixture.blockIds[1] ?? "");
+
+    // POLLED for the same reason the Escape case polls: the drag state is written on a
+    // React commit, so a read taken in the tick that started the drag sees the state one
+    // commit before it is set and reports a working drag as a dead one.
+    await expect
+      .poll(async () => driver.isDragging(), {
+        message:
+          "a placed block must be draggable on a canvas with no prior drag",
+        timeout: ESCAPE_SETTLE_MS,
+      })
+      .toBe(true);
+
+    await driver.cancel();
+  });
+
   test("drives a canvas drag with the same engine as a panel drag", async ({
     request,
   }) => {
