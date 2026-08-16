@@ -92,7 +92,7 @@ describe("the regions the shell exposes", () => {
     expect(
       screen.getByRole("navigation", { name: "Editor panels" })
     ).toBeTruthy();
-    expect(screen.getByRole("main", { name: "Canvas" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Canvas" })).toBeTruthy();
     expect(
       screen.getByRole("complementary", { name: "Inspector" })
     ).toBeTruthy();
@@ -298,7 +298,7 @@ describe("F6 region cycling", () => {
 
     // The next PRESENT region is the canvas, because the panel is closed.
     expect(document.activeElement).toBe(
-      screen.getByRole("main", { name: "Canvas" })
+      screen.getByRole("region", { name: "Canvas" })
     );
   });
 
@@ -352,7 +352,7 @@ describe("a viewport too narrow for the shell", () => {
     render(<BuilderShell onExit={vi.fn()} store={memoryStore()} />);
 
     expect(screen.getByText(/needs a wider screen/i)).toBeTruthy();
-    expect(screen.queryByRole("main", { name: "Canvas" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Canvas" })).toBeNull();
   });
 
   it("still offers a way out", () => {
@@ -417,7 +417,7 @@ describe("a viewport too narrow for the shell", () => {
     expect(hiddenWrapper).not.toBeNull();
     expect(hiddenWrapper?.hasAttribute("inert")).toBe(true);
     // And the canvas is genuinely out of the accessibility tree.
-    expect(screen.queryByRole("main", { name: "Canvas" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Canvas" })).toBeNull();
   });
 
   it("keeps a portalling slot child from opening over the notice", () => {

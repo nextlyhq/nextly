@@ -12,6 +12,16 @@
  * would test the harness as much as the markup; and a render-based check only covers the
  * components that particular fixture happens to reach, while a new pane added tomorrow is
  * exactly the regression this exists to catch.
+ *
+ * **KNOWN BLIND SPOT, stated rather than left to be discovered.** The scan reads THIS package's
+ * admin directory. The editor's chrome now comes from `@nextlyhq/builder`, which is outside that
+ * population — so a `<main>` added there passes this check silently. That is not hypothetical:
+ * the shell DID render one, and this file did not catch it. What went red was the canvas-landmark
+ * assertion below, for an adjacent reason, which happened to land on the real defect.
+ *
+ * Widening the population to cover `packages/builder/src` is the actual repair and is tracked
+ * separately. Until then, read a green result here as "this package adds no second landmark",
+ * never as "the document has one `main`".
  */
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -59,13 +69,15 @@ describe("the editor adds no second landmark", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("gives the canvas pane a labelled region instead", () => {
-    // The replacement is only an improvement if it stays a landmark: a bare `section` with no
-    // accessible name is not exposed as one, so dropping the label would quietly trade an
-    // invalid landmark for no landmark at all.
+  it("delegates the canvas landmark to the shell rather than dropping it", () => {
+    // The labelled canvas region used to be markup in this file. It now comes from
+    // `BuilderShell`, which renders `<section aria-label="Canvas">` for the same reason
+    // this test exists. Asserting the delegation keeps the landmark's ABSENCE from
+    // reading as a pass: a surface that stopped rendering the shell would lose the
+    // region entirely, and nothing else here would notice.
     const surface = readFileSync(join(ADMIN_DIR, "EditorSurface.tsx"), "utf8");
 
-    expect(surface).toContain('<section className="nx-pb-pane--center"');
-    expect(surface).toContain('aria-label="Canvas"');
+    expect(surface).toContain("<BuilderShell");
+    expect(surface).toContain("<Canvas />");
   });
 });

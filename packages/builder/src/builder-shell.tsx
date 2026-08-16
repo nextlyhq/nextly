@@ -698,7 +698,25 @@ function ShellRegions({
           ) : null}
 
           <ResizablePanel id="canvas" minSize={MIN_CANVAS_WIDTH}>
-            <main
+            {/*
+             * A named `section`, never `<main>`.
+             *
+             * HTML allows one non-hidden `main` per document, and every mount this
+             * shell has is inside a host that already owns it — the admin's
+             * dashboard layout renders one, and the editor is embedded in it. A
+             * second gives assistive technology two competing primary landmarks and
+             * makes every strict `main` locator ambiguous.
+             *
+             * Nothing is lost: a `section` carrying an accessible name is still
+             * exposed as a landmark, as a `region`. For an editor embedded in a page
+             * whose primary content is the surrounding form, `region` is the more
+             * accurate description of what this is.
+             *
+             * The ref and `tabIndex` move with the element deliberately. F6 region
+             * cycling focuses this node, and dropping either would lose the canvas as
+             * a cycle target — which reads as a focus bug rather than a markup change.
+             */}
+            <section
               ref={element => {
                 regionRefs.current.canvas = element;
               }}
@@ -707,7 +725,7 @@ function ShellRegions({
               className="h-full overflow-auto"
             >
               {children}
-            </main>
+            </section>
           </ResizablePanel>
 
           <ResizableHandle withGrip />
