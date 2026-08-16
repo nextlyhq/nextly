@@ -543,3 +543,29 @@ export { parseKeys } from "./lib/shortcuts/key-spec";
  * uses rather than re-splitting the string.
  */
 export type { KeyChord, KeySequence } from "./lib/shortcuts/key-spec";
+
+/** @experimental Form layout. No first-party plugin has exercised it in production yet. */
+export { FieldShell } from "./components/field-shell";
+/** @experimental */
+export type { FieldShellProps, FieldWidth } from "./types/form-layout";
+
+/**
+ * @experimental A labelled card holding a group of fields, composing `Card`
+ * rather than hand-rolling its own chrome. No first-party plugin has
+ * exercised it in production yet.
+ */
+export { FormSection } from "./components/form-section";
+/** @experimental */
+export type { FormSectionProps } from "./components/form-section";
+
+/**
+ * @experimental The form-layout kit's page measure and its single action bar.
+ * No first-party plugin has exercised either in production yet.
+ */
+export { FormActions, FormLayout } from "./components/form-layout";
+/** @experimental */
+export type {
+  FormActionsProps,
+  FormLayoutProps,
+  FormMeasure,
+} from "./types/form-layout";

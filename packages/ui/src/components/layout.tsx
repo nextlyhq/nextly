@@ -32,6 +32,24 @@ const COLS: Record<Cols, string> = {
   6: "grid-cols-6",
 };
 
+/**
+ * Container-query column counts, used when `responsive` is set.
+ *
+ * The grid starts at one column and widens at ITS OWN container's breakpoint
+ * rather than the viewport's or an ancestor's. Unnamed `@` variants resolve
+ * against the nearest container ancestor, which `responsive` mode guarantees
+ * by rendering its own `@container` wrapper below — so this works wherever the
+ * grid is mounted, with no dependency on a named container declared elsewhere.
+ * Literal class names, not template strings, so Tailwind's scanner emits them.
+ */
+const RESPONSIVE_COLS: Record<Cols, string> = {
+  1: "grid-cols-1",
+  2: "grid-cols-1 @2xl:grid-cols-2",
+  3: "grid-cols-1 @2xl:grid-cols-3",
+  4: "grid-cols-1 @2xl:grid-cols-4",
+  6: "grid-cols-1 @2xl:grid-cols-6",
+};
+
 /** @experimental */
 export interface StackProps extends HTMLAttributes<HTMLDivElement> {
   /** Main-axis direction. Default `col`. */
@@ -65,19 +83,55 @@ export interface GridProps extends HTMLAttributes<HTMLDivElement> {
   cols?: Cols;
   /** Gap between cells. Default `4`. */
   gap?: Gap;
+  /**
+   * Collapse to one column in a narrow container. Off by default so existing
+   * callers keep the fixed column count they were written against.
+   */
+  responsive?: boolean;
 }
 
-/** Simple fixed-column grid.
+/** Simple fixed-column grid, or a container-responsive one via `responsive`.
  * @experimental
  */
 export const Grid = forwardRef<HTMLDivElement, GridProps>(
-  ({ cols = 2, gap = 4, className, ...props }, ref) => (
-    <div
-      ref={ref}
-      className={cn("grid", COLS[cols], GAP[gap], className)}
-      {...props}
-    />
-  )
+  (
+    { cols = 2, gap = 4, responsive = false, className, children, ...rest },
+    ref
+  ) => {
+    if (!responsive) {
+      // No wrapper: the single element IS the grid, exactly as before
+      // `responsive` existed, so an existing caller's className, style and
+      // other HTML attributes keep landing on the one node it renders.
+      return (
+        <div
+          ref={ref}
+          className={cn("grid", COLS[cols], GAP[gap], className)}
+          {...rest}
+        >
+          {children}
+        </div>
+      );
+    }
+
+    // Responsive mode renders its own unnamed `@container` wrapper so the
+    // grid queries the space IT has, not any ancestor's — no dependency on a
+    // named container declared elsewhere in the tree.
+    //
+    // That wrapper is the element that actually participates in the PARENT's
+    // layout, so everything describing how this Grid sits in its parent —
+    // `className`, `style` and the rest of the HTML attributes, plus `ref` —
+    // belongs on it rather than on the inner grid. `cols` and `gap` describe
+    // the grid's OWN internal layout and stay on the inner element regardless
+    // of which mode is active. A caller passing spacing through `className`
+    // instead of `gap` is already misusing the prop, not losing information.
+    return (
+      <div ref={ref} className={cn("@container", className)} {...rest}>
+        <div className={cn("grid", RESPONSIVE_COLS[cols], GAP[gap])}>
+          {children}
+        </div>
+      </div>
+    );
+  }
 );
 Grid.displayName = "Grid";
 

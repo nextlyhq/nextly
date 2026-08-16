@@ -1,25 +1,8 @@
-import type { ReactNode } from "react";
-
-interface SettingsSectionProps {
-  /** Short label rendered above the card. e.g. "Locale & Formatting" */
-  label: string;
-  /** Children are typically <SettingsRow> instances. */
-  children: ReactNode;
-}
-
 /**
- * A settings section: small uppercase grey label above a thin-bordered card.
- * Rows inside are auto-divided with thin horizontal lines.
+ * Retained as a re-export so the existing call sites, several of which are
+ * form pages, keep importing the path they already use while the
+ * implementation moves to the shared package. New code imports FormSection
+ * from "@nextlyhq/ui" directly.
  */
-export function SettingsSection({ label, children }: SettingsSectionProps) {
-  return (
-    <section className="space-y-2">
-      <p className="text-xs font-semibold tracking-[0.08em] uppercase text-muted-foreground">
-        {label}
-      </p>
-      <div className="rounded-md border border-input bg-card overflow-hidden">
-        <div className="divide-y divide-foreground/10 px-6">{children}</div>
-      </div>
-    </section>
-  );
-}
+export { FormSection as SettingsSection } from "@nextlyhq/ui";
+export type { FormSectionProps as SettingsSectionProps } from "@nextlyhq/ui";
