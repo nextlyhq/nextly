@@ -156,6 +156,23 @@ export interface ReconcileInput<F extends ReconcilableField> {
    * as an unknown column and adopt it as a user field.
    */
   typeColumn?: string;
+  /**
+   * What the CREATOR would write for each column, by column name, already normalised.
+   *
+   * 🔴 The creator, not the column descriptor, and the distinction is the whole reason this input
+   * exists. `FieldGroupSchemaService` owns its own dialect type table and it deliberately differs
+   * from `getColumnDescriptor`: measured on live databases, a `date` field is `DATETIME` on MySQL
+   * and an `email` is `VARCHAR(255)` on PostgreSQL, where the descriptor answers `timestamp` and
+   * `text`. Comparing against the descriptor therefore reported drift on perfectly healthy groups
+   * and refused to repair them — the opposite of this operation's purpose.
+   *
+   * Supplied by the caller rather than computed here so this module stays pure: the creator is a
+   * service, and the seam that already owns I/O is the right place to instantiate it.
+   *
+   * A column ABSENT from this map is not compared. Absence means "no expectation could be derived",
+   * which is not evidence of drift, and blocking on it would re-create the false refusal.
+   */
+  expectedColumnTypes?: ReadonlyMap<string, string>;
 }
 
 /**
@@ -383,20 +400,28 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
       repairedField = withOverride(repairedField, "localized", inCompanion);
     }
 
-    // 🔴 The PHYSICAL type, through the diff engine's own canonical form so `varchar(255)` and
-    // `varchar` are one answer. A name match is not evidence the column still stores what the field
-    // declares: a confirmed apply can change `number` to `text` and then fail its registry write,
-    // and keeping the stored logical type would mark `synced` a definition the next diff instantly
-    // disagrees with. Which logical type now belongs there cannot be derived — many map to one
-    // physical column — so this refuses and names the drift rather than guessing.
+    // 🔴 The PHYSICAL type, compared against what the CREATOR would write — never against the
+    // column descriptor, which answers differently for the same field and made this check refuse
+    // healthy groups. Both sides go through the diff engine's canonical form so `VARCHAR(255)` and
+    // `varchar` are one answer.
+    //
+    // A name match is not evidence the column still stores what the field declares: a confirmed
+    // apply can change `number` to `text` and then fail its registry write, and keeping the stored
+    // logical type would mark `synced` a definition the next diff instantly disagrees with. Which
+    // logical type now belongs there cannot be derived — many map to one physical column — so this
+    // refuses and names the drift rather than guessing.
+    const expectedType = input.expectedColumnTypes?.get(descriptor.name);
     const liveType = normalizeType(live.type);
-    const declaredType = normalizeType(descriptor.dialectType);
-    if (liveType !== undefined && declaredType !== liveType) {
+    if (
+      expectedType !== undefined &&
+      liveType !== undefined &&
+      expectedType !== liveType
+    ) {
       blockers.push({
         fieldName: field.name,
         columnName: descriptor.name,
         kind: "physical-type-changed",
-        detail: `"${field.name}" is declared ${field.type} (${descriptor.dialectType}) but its column is ${live.type}; the logical type that now belongs there cannot be derived from the column alone.`,
+        detail: `"${field.name}" is declared ${field.type}, whose column this database would create as ${expectedType}, but the live column is ${live.type}; the logical type that now belongs there cannot be derived from the column alone.`,
       });
     }
 

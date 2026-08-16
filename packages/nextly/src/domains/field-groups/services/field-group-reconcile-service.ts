@@ -25,6 +25,8 @@ import type { DynamicFieldGroupInsert } from "../../../schemas/dynamic-field-gro
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { Logger } from "../../../shared/types";
 import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
+import { normalizeType } from "../../schema/pipeline/diff/normalize-type";
+import type { SupportedDialect } from "../../schema/services/field-column-descriptor";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
 
 import type { FieldGroupRegistryService } from "./field-group-registry-service";
@@ -54,6 +56,77 @@ export interface ReconcileFieldGroupResult {
 }
 
 /**
+ * What THIS database's creator would write for each of a field group's columns, normalised.
+ *
+ * 🔴 Read out of the creator's own rendered DDL rather than from the column descriptor, because
+ * the two disagree and the creator is the one that made the tables. `FieldGroupSchemaService`
+ * carries its own dialect type table: measured live, a `date` becomes `DATETIME` on MySQL and an
+ * `email` becomes `VARCHAR(255)` on PostgreSQL, where the descriptor answers `timestamp` and
+ * `text`. Comparing a live column against the descriptor reported drift on healthy groups and
+ * refused to repair them.
+ *
+ * The same extraction `assertNoUnappliableSchemaChange` uses, for the same reason — a column
+ * definition is one INDENTED, QUOTED line, which no statement in the script is.
+ *
+ * A column this cannot parse is simply absent from the map, and the planner skips comparing it.
+ * That direction is deliberate: an underivable expectation is not evidence of drift, and treating
+ * it as such is what produced the false refusal in the first place.
+ */
+async function expectedColumnTypes(args: {
+  dialect: SupportedDialect;
+  tableName: string;
+  fields: FieldDefinition[];
+  localized: boolean;
+}): Promise<ReadonlyMap<string, string>> {
+  const out = new Map<string, string>();
+
+  const { FieldGroupSchemaService } = await import(
+    "./field-group-schema-service"
+  );
+  const sql = new FieldGroupSchemaService(args.dialect).generateMigrationSQL(
+    args.tableName,
+    args.fields as unknown as Parameters<
+      InstanceType<typeof FieldGroupSchemaService>["generateMigrationSQL"]
+    >[1],
+    { localized: args.localized }
+  );
+  for (const line of sql.split("\n")) {
+    // Name then type, from an indented quoted definition. The type runs to the first space that
+    // begins a constraint keyword, so `VARCHAR(255) NOT NULL` yields `VARCHAR(255)`.
+    const match =
+      /^\s+["`]([A-Za-z0-9_]+)["`]\s+([A-Za-z0-9_]+(?:\([^)]*\))?)/.exec(line);
+    if (!match) continue;
+    const [, column, type] = match;
+    const normalised = normalizeType(type);
+    if (column !== undefined && normalised !== undefined) {
+      out.set(column, normalised);
+    }
+  }
+
+  // The companion's columns come from the localization renderer, which is what actually adds them.
+  if (args.localized) {
+    const { isFieldLocalized } = await import("../../i18n/classify-fields");
+    const { fieldToLocalizedColumnSpec } = await import(
+      "../../i18n/migration/field-to-column-spec"
+    );
+    const { ddlType } = await import("../../i18n/migration/ddl-types");
+    for (const field of args.fields) {
+      if (!isFieldLocalized(field, true)) continue;
+      const spec = fieldToLocalizedColumnSpec(
+        field,
+        args.dialect,
+        "fieldGroup"
+      );
+      if (!spec) continue;
+      const normalised = normalizeType(ddlType(spec, args.dialect));
+      if (normalised !== undefined) out.set(spec.name, normalised);
+    }
+  }
+
+  return out;
+}
+
+/**
  * Reconcile one field group's registry row against its live tables.
  *
  * Preconditions, in order and before anything is decided:
@@ -78,9 +151,8 @@ export async function reconcileFieldGroup(args: {
    * unreachable from both directions — a locked row marked `diverged` is refused by
    * `assertNotDiverged` on the sync path and by the lock check here.
    *
-   * 🔴 NOT YET WIRED. `syncCodeFirstComponents` does not call this, so that state currently has no
-   * automatic exit; the capability exists and the caller does not. Stated here rather than implied,
-   * because a parameter that looks like a recovery path reads as one.
+   * Wired: `syncCodeFirstComponents` passes it when it finds a `diverged` code-managed row, so
+   * that state clears on the next sync rather than needing a hand-edited database.
    */
   fromCode?: boolean;
 }): Promise<ReconcileFieldGroupResult> {
@@ -139,14 +211,21 @@ export async function reconcileFieldGroup(args: {
     existing.tableName
   );
 
+  const storedFields = existing.fields as unknown as FieldDefinition[];
   const plan = planFieldGroupReconcile<FieldDefinition>({
-    storedFields: existing.fields as unknown as FieldDefinition[],
+    storedFields,
     storedLocalized: existing.localized === true,
     dialect,
     tableName: existing.tableName,
     liveMain,
     liveCompanion,
     typeColumn,
+    expectedColumnTypes: await expectedColumnTypes({
+      dialect,
+      tableName: existing.tableName,
+      fields: storedFields,
+      localized: existing.localized === true,
+    }),
   });
 
   // 🔴 REFUSE before writing anything when the tables hold a state the planner can see but must
