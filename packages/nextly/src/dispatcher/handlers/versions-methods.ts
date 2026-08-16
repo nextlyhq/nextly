@@ -702,9 +702,23 @@ export async function autosaveForDocument(
     (args.scopeKind === "collection" || args.scopeKind === "single")
   ) {
     const fields = await resolveCurrentFields(args.scopeKind, args.slug);
-    if (fields.length > 0) {
-      stripPasswordFieldValues(snapshot as Record<string, unknown>, fields);
+    // Fail CLOSED. `resolveCurrentFields` swallows every failure and answers
+    // with an empty list, so "no fields" and "could not look" are the same
+    // value here -- and skipping the strip on that value would write whatever
+    // the editor sent, credentials included, exactly when the lookup that was
+    // meant to find them broke. Every entity carries at least its identity
+    // fields, so an empty list means the resolution failed rather than that
+    // there is nothing to strip.
+    if (fields.length === 0) {
+      throw NextlyError.internal({
+        logContext: {
+          reason: "autosave-field-resolution-failed",
+          scopeKind: args.scopeKind,
+          scopeSlug: args.slug,
+        },
+      });
     }
+    stripPasswordFieldValues(snapshot as Record<string, unknown>, fields);
   }
 
   return getService("versionsService").autosave({

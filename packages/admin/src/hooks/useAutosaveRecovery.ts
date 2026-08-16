@@ -66,6 +66,13 @@ export function useAutosaveRecovery({
       : `collection:${scope.slug}:${scope.entryId}`;
 
   useEffect(() => {
+    // Drop whatever the previous scope offered before asking about this one.
+    // Without this, switching document or language leaves the old offer on
+    // screen when the new scope has no recovery point, and restoring it would
+    // write one document's work into another.
+    setSnapshot(null);
+    setSavedAt(null);
+
     if (!enabled) return;
 
     // Guards the async result against a scope change mid-flight: without it a
