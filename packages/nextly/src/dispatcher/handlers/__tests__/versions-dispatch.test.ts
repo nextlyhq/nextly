@@ -25,6 +25,10 @@ vi.mock("../../../api/versions-access", () => ({
   resolveSingleDocumentId: (...a: unknown[]) => resolveSingleIdSpy(...a),
 }));
 
+import {
+  COLLECTION_ENTRY_METHODS,
+  SINGLE_DOCUMENT_METHODS,
+} from "../../../routeHandler";
 import { COLLECTION_VERSION_METHODS } from "../collection-dispatcher";
 import { SINGLE_VERSION_METHODS } from "../single-dispatcher";
 import { parseRestRoute } from "../../../route-handler/route-parser";
@@ -60,6 +64,33 @@ describe("version methods are registered", () => {
       "restoreSingleVersion",
       "setSingleVersionLabel",
     ]);
+  });
+
+  it("authorizes every registered version method against its document", () => {
+    // Read OUT of the dispatcher's own maps rather than restated, so a version
+    // method cannot be registered without also being authorized.
+    //
+    // The consequence of an omission is not a refusal, which is why this is
+    // asserted rather than left to review: a method absent from these sets
+    // skips the per-slug branch in `resolveAuthorization` and falls through to
+    // the definition branch, which demands `manage-settings`. That denies the
+    // editors who hold `update-{slug}` AND admits a caller who holds settings
+    // but no access to the document, so one omission fails open and closed at
+    // once. Nothing in the type system joins the two, so this is the join.
+    const collectionMethods = Object.keys(COLLECTION_VERSION_METHODS);
+    const singleMethods = Object.keys(SINGLE_VERSION_METHODS);
+
+    // A map that went missing would satisfy every assertion below by having
+    // nothing to check, so the population is asserted before the verdict.
+    expect(collectionMethods.length).toBeGreaterThan(0);
+    expect(singleMethods.length).toBeGreaterThan(0);
+
+    for (const method of collectionMethods) {
+      expect(COLLECTION_ENTRY_METHODS).toContain(method);
+    }
+    for (const method of singleMethods) {
+      expect(SINGLE_DOCUMENT_METHODS).toContain(method);
+    }
   });
 
   it("passes the collection slug, entry id and caller through", async () => {
