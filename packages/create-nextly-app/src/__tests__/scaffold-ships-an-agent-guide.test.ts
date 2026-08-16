@@ -552,6 +552,65 @@ describe("scaffolding over a project that already has these files", () => {
     );
   }, 30_000);
 
+  it("expands a shared include reached from two different directories", async () => {
+    // `shared.md` is reached twice — directly, and through `rules/alias.md` which symlinks to
+    // it. Its `@../CLAUDE.md` resolves from the DIRECTORY it was reached from, so the two
+    // arrivals point at different files: the root arrival names the project's own CLAUDE.md and
+    // closes a cycle, while the `rules/` arrival names a sibling outside the project.
+    //
+    // Keying a visited node by its referent alone collapses the two, skips the second before
+    // its edges are expanded, and writes the cyclic pointer.
+    workdir = await mkdtemp(path.join(tmpdir(), "nextly-existing-"));
+    const target = path.join(workdir, "project");
+    await mkdir(path.join(target, "rules"), { recursive: true });
+
+    await writeFile(
+      path.join(target, "AGENTS.md"),
+      "# Ours\n\n@shared.md\n\n@rules/alias.md\n\nOur own notes.\n",
+      "utf-8"
+    );
+    await writeFile(
+      path.join(target, "shared.md"),
+      "# Shared\n\n@../CLAUDE.md\n",
+      "utf-8"
+    );
+    await symlink(
+      path.join(target, "shared.md"),
+      path.join(target, "rules", "alias.md"),
+      "file"
+    );
+
+    await copyTemplate({
+      projectName: "my-app",
+      projectType: "blank",
+      targetDir: target,
+      database: sqlite,
+      packageManager: "npm",
+      templateSource: {
+        basePath: path.join(templatesRoot, "base"),
+        templatePath: path.join(templatesRoot, "blank"),
+      },
+      allowExistingTarget: true,
+    });
+
+    const guide = await readFile(path.join(target, "AGENTS.md"), "utf-8");
+    expect(guide).toContain("Our own notes.");
+
+    // The ROOT arrival at `shared.md` reaches `../CLAUDE.md` outside the project — a dead end.
+    // The `rules/` arrival at the same file reaches the project's OWN `CLAUDE.md` and closes the
+    // cycle, so the pointer must NOT be written.
+    //
+    // Keying by referent alone records the root arrival, skips the `rules/` one as already seen,
+    // never expands its edge, misses the cycle, and writes a pointer that loops.
+    const claude = await readFile(
+      path.join(target, "CLAUDE.md"),
+      "utf-8"
+    ).catch(() => "");
+    expect(claude.split("\n").filter(l => l.trim() === "@AGENTS.md")).toEqual(
+      []
+    );
+  }, 30_000);
+
   it("does not count a commented-out or inline pointer as installed", async () => {
     // Three inactive forms. A reader acts on none of them, so the real pointer must still be
     // added — otherwise the guide is silently unreachable.

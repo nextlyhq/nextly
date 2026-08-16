@@ -552,7 +552,16 @@ async function pointsAtItself(
     // before its contents were ever read — no includes expanded, no cycle found. On macOS the
     // temporary directory resolves through `/private`, so the two never collided and the defect
     // was invisible locally. Two keys for one question, disagreeing per platform.
-    const identity = resolved ?? targetPath;
+    // The identity of a visited node is the file AND the directory it was reached from, because
+    // that pair — not the file alone — determines the edges it emits. A relative `@../CLAUDE.md`
+    // resolves from the containing directory, so one file reached through two symlink aliases in
+    // different directories points at two different targets; keying on the referent alone skips
+    // the second alias before those edges are ever expanded.
+    //
+    // It still terminates. The symlink loop this guards against produces endless LEXICAL
+    // spellings of one file, but only finitely many (file, directory) pairs — the directory set
+    // is bounded by the real tree, which the spellings are not.
+    const identity = `${resolved ?? targetPath}\u0000${path.dirname(targetPath)}`;
     if (visited.has(identity)) continue;
     visited.add(identity);
 
