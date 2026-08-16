@@ -503,6 +503,22 @@ function guidePlaceholders(
  * differ while denoting one file. A target that cannot be resolved answers true as well — a
  * dangling pointer installs nothing, so writing it has no upside to weigh against the risk.
  */
+/**
+ * How many include hops the cycle check will follow.
+ *
+ * Termination is bounded HERE rather than by the visited key, because the key answers a
+ * different question: which arrivals are distinct. A directory symlink pointing back into the
+ * project (`loop -> .`) makes the lexical directory grow without bound, so no key built from it
+ * is finite — and a key made finite by canonicalising the directory collapses aliases whose
+ * relative includes genuinely differ. One key cannot be both, so the hop count carries
+ * termination on its own.
+ *
+ * Generous against real projects: an instruction file including another that includes another
+ * is already unusual, and this allows far deeper. A graph that exceeds it is pathological, and
+ * the conservative answer for a pathological graph is the one this returns.
+ */
+const MAX_INCLUDE_HOPS = 64;
+
 async function pointsAtItself(
   targetDir: string,
   destination: string,
@@ -533,7 +549,15 @@ async function pointsAtItself(
   // length is not something the scaffolder gets to bound.
   const visited = new Set<string>();
 
+  let hops = 0;
+
   while (queue.length > 0) {
+    // Exceeding the bound means the graph is pathological rather than merely deep. Answering
+    // TRUE declines to write the pointer, which is the conservative direction: a guide that is
+    // one hop further away costs a click, while a pointer that closes a cycle sends an agent in
+    // circles.
+    if (++hops > MAX_INCLUDE_HOPS) return true;
+
     const { name, depth, from } = queue.shift()!;
     const targetPath = path.resolve(from, name);
 
@@ -561,17 +585,19 @@ async function pointsAtItself(
     // It still terminates. The symlink loop this guards against produces endless LEXICAL
     // spellings of one file, but only finitely many (file, directory) pairs — the directory set
     // is bounded by the real tree, which the spellings are not.
-    // The directory is CANONICALISED, not taken lexically. Under `loop -> .` the lexical
-    // dirname grows without bound — `project/loop`, `project/loop/loop` — so a lexical pair is
-    // not finite and the walk would not terminate.
+    // Identity is the resolved file paired with the LEXICAL directory it was reached from,
+    // because that directory is what `path.resolve` uses for the node's outgoing edges. Two
+    // aliases of one file in different directories emit different edges and must stay distinct,
+    // and canonicalising the directory collapses exactly the case that matters: with
+    // `alias -> ../shared-dir`, the alias arrival's `..` reaches this project while the real
+    // directory's `..` does not.
     //
-    // It is the directory that is resolved rather than the file's own parent: two aliases of one
-    // file in genuinely different directories must stay distinct, and `dirname(resolved)` would
-    // collapse them back to the referent's parent.
-    const fromDirectory = await fs
-      .realpath(path.dirname(targetPath))
-      .catch(() => path.dirname(targetPath));
-    const identity = `${resolved ?? targetPath}\u0000${fromDirectory}`;
+    // A lexical pair is not finite on its own — `loop -> .` grows `loop/loop/...` forever — so
+    // termination is a separate concern, bounded by hop count below rather than by folding two
+    // questions into one key. Three keys were tried before this: the referent alone (missed
+    // aliases), the lexical pair (unbounded), and the canonical pair (collapsed aliases). Each
+    // traded one property for the other because one key was answering both.
+    const identity = `${resolved ?? targetPath}\u0000${path.dirname(targetPath)}`;
     if (visited.has(identity)) continue;
     visited.add(identity);
 

@@ -555,8 +555,9 @@ describe("scaffolding over a project that already has these files", () => {
   it("expands a shared include reached from two different directories", async () => {
     // `shared.md` is reached twice — directly, and through `rules/alias.md` which symlinks to
     // it. Its `@../CLAUDE.md` resolves from the DIRECTORY it was reached from, so the two
-    // arrivals point at different files: the root arrival names the project's own CLAUDE.md and
-    // closes a cycle, while the `rules/` arrival names a sibling outside the project.
+    // arrivals point at different files: the ROOT arrival's `..` leaves the project entirely
+    // and is a dead end, while the `rules/` arrival's `..` names the project's own CLAUDE.md
+    // and closes the cycle.
     //
     // Keying a visited node by its referent alone collapses the two, skips the second before
     // its edges are expanded, and writes the cyclic pointer.
@@ -602,6 +603,63 @@ describe("scaffolding over a project that already has these files", () => {
     //
     // Keying by referent alone records the root arrival, skips the `rules/` one as already seen,
     // never expands its edge, misses the cycle, and writes a pointer that loops.
+    const claude = await readFile(
+      path.join(target, "CLAUDE.md"),
+      "utf-8"
+    ).catch(() => "");
+    expect(claude.split("\n").filter(l => l.trim() === "@AGENTS.md")).toEqual(
+      []
+    );
+  }, 30_000);
+
+  it("keeps alias contexts distinct when the DIRECTORY itself is a symlink", async () => {
+    // `alias -> ../shared-dir`, so a file reached through `alias/` and through the real
+    // directory is one file arriving from two lexically different places. Its `@../CLAUDE.md`
+    // resolves from the directory it was written in: through `alias/` that is the project, and
+    // from the real `shared-dir/` it is outside.
+    //
+    // Canonicalising the directory in the identity collapses these two arrivals, skips the
+    // alias one, misses the cycle it closes, and writes a looping pointer.
+    workdir = await mkdtemp(path.join(tmpdir(), "nextly-existing-"));
+    const target = path.join(workdir, "project");
+    await mkdir(target, { recursive: true });
+    await mkdir(path.join(workdir, "shared-dir"), { recursive: true });
+
+    await writeFile(
+      path.join(workdir, "shared-dir", "shared.md"),
+      "# Shared\n\n@../CLAUDE.md\n",
+      "utf-8"
+    );
+    await symlink(
+      path.join(workdir, "shared-dir"),
+      path.join(target, "alias"),
+      "dir"
+    );
+    await writeFile(
+      path.join(target, "AGENTS.md"),
+      "# Ours\n\n@../shared-dir/shared.md\n\n@alias/shared.md\n\nOur own notes.\n",
+      "utf-8"
+    );
+
+    await copyTemplate({
+      projectName: "my-app",
+      projectType: "blank",
+      targetDir: target,
+      database: sqlite,
+      packageManager: "npm",
+      templateSource: {
+        basePath: path.join(templatesRoot, "base"),
+        templatePath: path.join(templatesRoot, "blank"),
+      },
+      allowExistingTarget: true,
+    });
+
+    expect(
+      (await readFile(path.join(target, "AGENTS.md"), "utf-8")).includes(
+        "Our own notes."
+      )
+    ).toBe(true);
+
     const claude = await readFile(
       path.join(target, "CLAUDE.md"),
       "utf-8"
