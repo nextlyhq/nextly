@@ -25,4 +25,9 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-feat(ui): add a field shell with a named width vocabulary
+feat(ui): add a shared admin form layout layer
+
+A shared form layout layer for the admin: a named field-width vocabulary for
+consistently sized controls, section chrome composed from the existing card,
+a single page-level action bar, and an opt-in responsive mode on the existing
+grid.
