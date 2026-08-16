@@ -1,0 +1,32 @@
+// Type-checks what `tsconfig.json` leaves out: this package's test files, and the two Playwright
+// specs under `e2e/`.
+//
+// The shipping config sets `include: ["src/**/*"]` and excludes `**/*.test.ts(x)`, so neither tree
+// was in any TypeScript program at all — measured with `tsc --listFiles`, zero files from `e2e/`.
+// Vitest does not close that either, because esbuild strips annotations rather than checking them.
+//
+// `rootDir` is cleared because it is `src` in the shipping config and `e2e/` sits beside it, not
+// under it. With `noEmit` there is no output layout for it to describe, so the constraint only
+// serves to reject the files this config exists to read.
+//
+// `types` is re-widened for the same reason the other packages' test configs do it: the shipping
+// config sets it to `[]` so nothing published can reach `process` or `node:fs`, and test code
+// legitimately can. Both halves are needed — the empty list alone breaks these files, and node
+// types alone would put `process` in reach of every module this package publishes.
+//
+// `**/*.test.ts(x)` STAYS EXCLUDED here, and that is a deliberate boundary rather than a copy of
+// the parent's list. Admitting this package's unit tests reports 38 errors across ten files —
+// measured, not estimated — because they have never been in any program either. That is a real
+// gap and a bigger one than this config was opened to close; carrying it here would either block
+// this change behind ten unrelated repairs or force the gate to land red, and a gate that lands
+// red is one somebody turns off. It is filed separately with the count.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "types": ["node"]
+  },
+  "include": ["src/**/*", "e2e/**/*"],
+  "exclude": ["dist", "node_modules", "**/*.test.ts", "**/*.test.tsx"]
+}

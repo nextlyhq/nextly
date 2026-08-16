@@ -52,8 +52,26 @@ const DROP_ZONES = ".nx-pb-dropzone, .nx-pb-dropzone-empty";
  * Exported so the guard that checks it against the canvas's MEASURED spans reads the SAME value
  * the driver uses. A guard restating the number checks a constant against itself and passes while
  * the driver carries something else entirely.
+ *
+ * ## Why it is a frame and not an animation
+ *
+ * This was the canvas's own transition duration, from when a zone grew its height and margin on
+ * becoming the active target. It does not do that any more: a zone is `position:absolute` at a
+ * fixed `height:6px`, and `[data-drag]` / `[data-active]` change only `pointer-events`,
+ * `background` and `box-shadow`. The guard beside it measures every one of those states through
+ * the browser and pins the geometry span at 0ms, so an allowance sized for an animation is sized
+ * for something that does not happen.
+ *
+ * What the wait still has to do is separate two brackets into DIFFERENT animation frames: adjacent
+ * samples can quantize to the same whole pixel inside one frame, so agreement between them is
+ * necessary and not sufficient however static the edge is. A frame is ~16ms, and this carries a
+ * comfortable multiple of it.
+ *
+ * Not a speed change, and it must not be sold as one. `dragToInsetInZone` is the only consumer of
+ * this value; no browser test reaches it, and the one suite that does drives a test double which
+ * declares no allowance and therefore spends the shared default instead.
  */
-export const POC_GEOMETRY_SETTLE_MS = 120;
+export const POC_GEOMETRY_SETTLE_MS = 32;
 
 /**
  * Block-level insertion targets. A grid registers insert-before and append

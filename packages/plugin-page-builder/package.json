@@ -45,7 +45,7 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
-    "check-types": "tsc --noEmit",
+    "check-types": "tsc --noEmit && tsc --noEmit -p tsconfig.tests.json",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
     "test": "vitest run",
@@ -79,6 +79,7 @@
     "@nextlyhq/plugin-sdk": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
     "@nextlyhq/ui": "workspace:*",
+    "@playwright/test": "^1.58.2",
     "@tanstack/react-query": "^5.62.0",
     "@types/css-tree": "^2.3.4",
     "@types/node": "^20.19.17",
