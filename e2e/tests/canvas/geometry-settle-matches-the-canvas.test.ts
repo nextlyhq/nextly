@@ -295,11 +295,13 @@ async function geometrySpanMs(
          * minus the per-frame metadata that is not a property at all.
          */
         const propertiesOf = (a: Animation): string[] | null => {
-          // A transition's own property, which is what CREATED it. Kept alongside the keyframes
-          // rather than instead of them: `setKeyframes` can replace what a declared transition
-          // actually animates while `transitionProperty` goes on naming the original, so reading
-          // only the name classifies a paint transition rewritten to move `height` as safe — and
-          // the declared path skips the paint longhand too, leaving nothing to charge.
+          // A transition's own property, which is what CREATED it — the FALLBACK for an effect
+          // whose keyframes cannot be read, never an addition to them. `setKeyframes` replaces
+          // what a declared transition animates while `transitionProperty` goes on naming the
+          // original, so the two disagree in both directions and only the keyframes describe what
+          // is moving now. Unioning them takes the pessimistic answer from each: a paint
+          // transition rewritten to move `height` is caught by the keyframes either way, while a
+          // geometry one rewritten to move paint is charged for an edge it no longer touches.
           const declared =
             a instanceof CSSTransition ? [a.transitionProperty] : [];
           const effect = a.effect;
@@ -316,15 +318,14 @@ async function geometrySpanMs(
             return declared.length > 0 ? declared : null;
           }
           // An EMPTY list is a successful read, not a failure: it says the effect animates no
-          // properties. Refusing it would break the guard on a harmless timing-only animation.
-          return [
-            ...declared,
-            ...frames.flatMap(frame =>
-              Object.keys(frame)
-                .filter(key => !KEYFRAME_META.has(key))
-                .map(kebab)
-            ),
-          ];
+          // properties. Refusing it would break the guard on a harmless timing-only animation,
+          // and falling back to the declaration here would reinstate the union for exactly the
+          // case where the effect has told us it moves nothing.
+          return frames.flatMap(frame =>
+            Object.keys(frame)
+              .filter(key => !KEYFRAME_META.has(key))
+              .map(kebab)
+          );
         };
 
         /**
@@ -1551,7 +1552,12 @@ test.describe("the drop-zone geometry the probe waits on", () => {
     });
     expect(applied).not.toBeNull();
     expect(applied?.rate).toBe(1);
-    expect(applied?.currentTime).toBe(-30000);
+    // A BOUND, not an equality. The clock keeps running between the assignment and the read, so
+    // an exact comparison measures how long that round trip took — it held locally and lost a
+    // frame (16.7ms) on CI. What makes this the case it claims to be is that the effect is rewound
+    // far into the past, which is stable; the exact value is not, and asserting it tests the
+    // runner rather than the rewind.
+    expect(applied?.currentTime).toBeLessThan(-29000);
     // The two readings a naive live span would use, both still describing the stylesheet.
     expect(applied?.activeDuration).toBe(20000);
     expect(applied?.delay).toBe(0);
@@ -1640,6 +1646,62 @@ test.describe("the drop-zone geometry the probe waits on", () => {
     await expect(
       geometrySpanMs(frame, "data-drag data-active")
     ).rejects.toThrow(/running effect claims/);
+  });
+
+  test("a GEOMETRY transition rewritten to move paint stops being charged", async ({
+    page,
+    request,
+  }) => {
+    const frame = await canvas(page, request);
+
+    // The mirror of the case above, and the direction that costs more. Reading the name ALONGSIDE
+    // the keyframes charges an effect for a property it has stopped animating, so a correct canvas
+    // is refused — and a guard that fires on correct code is the one that gets suppressed.
+    const applied = await frame.evaluate(async () => {
+      const zone = document.querySelector(".nx-pb-dropzone");
+      if (!(zone instanceof HTMLElement)) return null;
+      // A transition starts only where the property's value CHANGES, so the height is pinned and
+      // flushed before the transition is declared and the new height applied. The canvas declares
+      // no geometry transition of its own, which is why this one has to be built rather than
+      // hijacked the way the paint case above hijacks the real background transition.
+      zone.style.height = "100px";
+      void zone.offsetHeight;
+      zone.style.transition = "height 3s";
+      void zone.offsetHeight;
+      zone.style.height = "600px";
+      const transition = zone
+        .getAnimations()
+        .find(
+          (a): a is CSSTransition =>
+            a instanceof CSSTransition && a.transitionProperty === "height"
+        );
+      if (!transition?.effect) return null;
+      const effect = transition.effect as KeyframeEffect;
+      // Now moving PAINT alone, for three times as long as the declaration reads. The longer span
+      // is what makes the misclassification observable: charged as geometry it exceeds the
+      // declared 3000ms and the comparison refuses, while an effect that moves no edge has no
+      // business being compared at all.
+      effect.setKeyframes([
+        { backgroundColor: "red" },
+        { backgroundColor: "blue" },
+      ]);
+      effect.updateTiming({ duration: 9000 });
+      await transition.ready;
+      return {
+        transitionProperty: transition.transitionProperty,
+        animates: Object.keys(effect.getKeyframes()[0] ?? {}),
+      };
+    });
+    expect(applied).not.toBeNull();
+    // Still naming the geometry property it was created from, which is the whole difficulty.
+    expect(applied?.transitionProperty).toBe("height");
+    expect(applied?.animates).toContain("backgroundColor");
+
+    // REPORTS rather than refuses, and reports the declaration's own 3000ms: nothing running moves
+    // an edge at all, so there is no live span to exceed it.
+    await expect(
+      geometrySpanMs(frame, "data-drag data-active")
+    ).resolves.toBeGreaterThanOrEqual(3000);
   });
 
   test("an EMPTY keyframe list is read as animating nothing, not refused", async ({
