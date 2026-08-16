@@ -31,10 +31,6 @@ on:
       - "templates/blank/**"
       - "templates/blog/**"
       - "packages/create-nextly-app/**"
-      # The blog legs run this script to replace the registry packages with the workspace
-      # builds. A change to it alters what those legs actually test, so a pull request
-      # touching only the script must still run them.
-      - "scripts/pin-workspace-packages.mjs"
       - ".github/workflows/scaffold-build.yml"
 
 permissions:
@@ -248,9 +244,8 @@ jobs:
           # `create-nextly-app` is excluded because it is the scaffolder rather than a
           # dependency of what it scaffolds; its own pack step covers it.
           #
-          # This is the rule `pin-workspace-packages.mjs` already states about ITSELF — the
-          # names are a question the manifests answer, and a second answer agrees only until
-          # someone adds a package. That is exactly what happened, one layer up.
+          # The names are a question the manifests answer, and a second answer agrees only
+          # until someone adds a package. That is exactly what happened here once already.
           PKGS=$(node -e '
             const fs = require("node:fs");
             const names = fs.readdirSync("packages").filter(dir => {
@@ -329,6 +324,142 @@ jobs:
               exit 1
             }
           done
+
+      # The packed tarballs are served from a registry running inside the job, and the
+      # scaffold installs them BY VERSION. The mechanism this replaces rewrote the generated
+      # manifest to `file:` specifiers, and pnpm applies that rewrite to peer RANGES as well as
+      # to dependency specs. No resolved semver version satisfies a `file:` range, so pnpm
+      # reported `unmet peer nextly@file:...: found 0.0.2-alpha.57` with a correct copy
+      # installed, never linked the peer, and the build failed on `Can't resolve
+      # '@nextlyhq/plugin-sdk/admin'`. npm's hoisted layout hid the same defect.
+      #
+      # Publishing real tarballs removes that class rather than narrowing it: peer ranges stay
+      # semver, and the generated manifest is not modified at all. The generator already writes
+      # `^0.0.2-alpha.<current>`, which the packed version satisfies, so the app resolves the
+      # packages under review while still declaring exactly the dependencies a user's project
+      # would. A boundary the resolver agrees with, rather than a check that looks for crossings.
+      - name: Serve the packed packages from a registry in this job
+        if: matrix.core == 'workspace'
+        shell: bash
+        run: |
+          mkdir -p /tmp/local-registry/storage
+
+          # `nextly` and `@nextlyhq/*` are served with NO uplink, so a copy already on npm can
+          # never answer for them. Everything else proxies, because the scaffold still installs
+          # react, next and the rest the way a user would.
+          cat > /tmp/local-registry/config.yaml <<'YAML'
+          storage: ./storage
+          uplinks:
+            npmjs:
+              url: https://registry.npmjs.org/
+          packages:
+            'nextly':
+              access: $all
+              publish: $all
+              unpublish: $all
+            '@nextlyhq/*':
+              access: $all
+              publish: $all
+              unpublish: $all
+            '**':
+              access: $all
+              publish: $all
+              proxy: npmjs
+          log: { type: stdout, format: pretty, level: warn }
+          YAML
+
+          # Written to the runner's home rather than passed as a flag, because the scaffold's
+          # install is run by the CLI rather than by this step, and pnpm and npm both read it.
+          #
+          # The scope line is not redundant with the registry line. A `@scope:registry` entry
+          # outranks even an explicit `--registry` argument, so without it every `@nextlyhq`
+          # request goes to npmjs and the leg silently tests the last release.
+          # STARTED BEFORE the redirect below, and the order is load-bearing. `verdaccio` is not a
+          # repository dependency, so this fetches it, and a redirect written first would point that
+          # fetch at a port nothing is listening on yet. It currently survives only because this
+          # step runs from the repository root, whose own `.npmrc` names npmjs and outranks the
+          # user-level file being written below — a working directory away from failing.
+          npx --yes verdaccio@6 --config /tmp/local-registry/config.yaml --listen 4873 \
+            > /tmp/local-registry/server.log 2>&1 &
+
+          {
+            echo "registry=http://localhost:4873/"
+            echo "@nextlyhq:registry=http://localhost:4873/"
+            echo "//localhost:4873/:_authToken=local-registry"
+            echo "provenance=false"
+          } >> "$HOME/.npmrc"
+
+          for _ in $(seq 1 90); do
+            curl -sf http://localhost:4873/-/ping > /dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -sf http://localhost:4873/-/ping > /dev/null 2>&1 || {
+            echo "the local registry never came up"
+            tail -20 /tmp/local-registry/server.log
+            exit 1
+          }
+
+          # Refuse to publish anything until both names resolve locally. These packages carry
+          # `publishConfig.registry: https://registry.npmjs.org/`, so a publish that reaches the
+          # network is a publish to the real registry — measured locally, where exactly that
+          # happened and was stopped only by the absence of a credential.
+          for key in registry @nextlyhq:registry; do
+            resolved=$(cd /tmp && npm config get "$key")
+            case "$resolved" in
+              http://localhost:4873*) echo "$key resolves to $resolved" ;;
+              *) echo "refusing to publish: $key resolves to '$resolved'"; exit 1 ;;
+            esac
+          done
+
+          # `--registry` is passed AS WELL as the config entry above, and neither is sufficient
+          # alone: the flag is what overrides each package's own `publishConfig.registry`, and
+          # the config entry is what wins for a scoped name where the flag does not.
+          # `--tag` is required because every version here is a prerelease.
+          #
+          # Every published version also carries the `alpha` tag. The generator resolves a version
+          # by asking npmjs for a package's dist-tags, and for a package whose only published
+          # artifact is its `0.0.0` name-claiming placeholder there is no `alpha` tag to find — so
+          # it writes the literal string `alpha` as the spec rather than a range. A local registry
+          # carrying only `latest` cannot satisfy that, and the leg would fail on an unavailable
+          # tag instead of testing the new package.
+          published=0
+          for f in /tmp/nextly-workspace-packs/*.tgz; do
+            (cd /tmp && npm publish "$f" \
+              --registry http://localhost:4873 --tag latest --provenance=false) \
+              >> /tmp/local-registry/publish.log 2>&1 && published=$((published + 1))
+
+            meta=$(tar -xzOf "$f" package/package.json)
+            spec=$(node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{const m=JSON.parse(d);console.log(m.name+'@'+m.version)})" <<<"$meta")
+            (cd /tmp && npm dist-tag add "$spec" alpha --registry http://localhost:4873) \
+              >> /tmp/local-registry/publish.log 2>&1
+          done
+
+          expected=$(ls /tmp/nextly-workspace-packs/*.tgz | wc -l | tr -d ' ')
+          echo "published $published of $expected"
+          [ "$published" -eq "$expected" ] || {
+            echo "not every packed package reached the local registry"
+            tail -30 /tmp/local-registry/publish.log
+            exit 1
+          }
+
+          if grep -q "registry.npmjs.org" /tmp/local-registry/publish.log; then
+            echo "a publish was aimed at the real registry"
+            exit 1
+          fi
+
+          # A publish loop that silently no-opped would satisfy the count above, so each
+          # package is asked for by the exact version the tarball carries.
+          for f in /tmp/nextly-workspace-packs/*.tgz; do
+            meta=$(tar -xzOf "$f" package/package.json)
+            name=$(node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>console.log(JSON.parse(d).name))" <<<"$meta")
+            version=$(node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>console.log(JSON.parse(d).version))" <<<"$meta")
+            got=$(cd /tmp && npm view "$name@$version" version 2>/dev/null)
+            [ "$got" = "$version" ] || {
+              echo "$name@$version is not resolvable from the local registry (got '$got')"
+              exit 1
+            }
+          done
+          echo "all $expected packages resolve from the local registry"
 
       - name: Scaffold with a real install
         shell: bash
@@ -430,46 +561,51 @@ jobs:
           echo "font packages imported by the scaffold: $found"
           [ "$found" -gt 0 ] || { echo "scanned no font imports at all"; exit 1; }
 
-      # After the scaffold's own install, so the lockfile and package-manager assertions above
-      # still describe what the CLI did. This repoints the workspace packages and installs
-      # again; everything else stays on the registry copies the first install resolved.
-      - name: Install the workspace packages under review
+      # The scaffold's own install already resolved these from the local registry, so there is
+      # nothing to repin. What remains is the assertion that it did: the install exits 0 either
+      # way, and a published copy carries the same name and version as the packed one, so
+      # nothing about the manifest distinguishes them. The packed tarball's entry file is diffed
+      # against the installed one.
+      - name: Check the packages under review are the ones installed
         if: matrix.core == 'workspace'
         shell: bash
         run: |
           cd /tmp/scaffold-build/scaffolded-app
-          node "$GITHUB_WORKSPACE/scripts/pin-workspace-packages.mjs" \
-            /tmp/nextly-workspace-packs "${{ matrix.pm }}"
-
-          # The pin rewrites dependency specifiers AFTER the scaffold generated its
-          # lockfile, so the two disagree by design at this point. pnpm turns
-          # frozen-lockfile ON by default when CI is set and then refuses the install with
-          # ERR_PNPM_OUTDATED_LOCKFILE — measured, with exactly that code — so the repin
-          # has to say it means it. npm has no equivalent default: `npm install` updates
-          # the lockfile, and it is `npm ci` that would refuse.
-          if [ "${{ matrix.pm }}" = "pnpm" ]; then
-            pnpm install --no-frozen-lockfile
-          else
-            npm install
-          fi
-
-          # The assertion this whole step exists for, and it has to compare CONTENT: the
-          # install exits 0 either way, and a registry copy carries the same name and version
-          # as the packed one, so nothing about the manifest distinguishes them.
-          #
-          # The packed tarball's entry file is diffed against the installed one. Identical
-          # means the build is about to run the code under review; different means the pin
-          # silently fell through to the registry and every later assertion is about the last
-          # release instead.
           rm -rf /tmp/pack-check && mkdir -p /tmp/pack-check
           tar -xzf /tmp/nextly-workspace-packs/nextly-*.tgz -C /tmp/pack-check
           if ! diff -q /tmp/pack-check/package/dist/index.mjs \
                        node_modules/nextly/dist/index.mjs > /dev/null; then
             echo "installed nextly does NOT match the packed workspace build"
-            echo "the pin fell through to the registry; this leg would test the last release"
+            echo "the install fell through to a published copy; this leg would test the last release"
             exit 1
           fi
           echo "installed nextly matches the packed workspace build"
+
+          # The generated manifest has to be exactly what the CLI wrote. What this replaces
+          # rewrote it, and every version of that rewrite widened the app's dependency graph:
+          # an import the generator deliberately never declares would then compile here and fail
+          # in a real project. Asserting the manifest is untouched is what keeps these legs a
+          # test of the dependency boundary rather than of a boundary CI invented.
+          node -e "
+            const manifest = require('/tmp/scaffold-build/scaffolded-app/package.json');
+            const specs = {
+              ...manifest.dependencies,
+              ...manifest.devDependencies,
+              ...manifest.optionalDependencies,
+            };
+            const rewritten = Object.entries(specs)
+              .filter(([, spec]) => String(spec).startsWith('file:'))
+              .map(([name]) => name);
+            if (rewritten.length > 0) {
+              console.error('the manifest carries file: specifiers: ' + rewritten.join(', '));
+              process.exit(1);
+            }
+            if (manifest.pnpm && manifest.pnpm.overrides) {
+              console.error('the manifest carries pnpm.overrides');
+              process.exit(1);
+            }
+            console.log('the generated manifest is unmodified');
+          "
 
       - name: Build the scaffolded project
         shell: bash
