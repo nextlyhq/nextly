@@ -21,6 +21,7 @@
 import type { BlockDocument, BreakpointSet } from "@nextlyhq/blocks-engine";
 import {
   DOCUMENT_VERDICT_CODES,
+  registryNestingSource,
   validateDocument,
   walkNodes,
 } from "@nextlyhq/blocks-engine";
@@ -116,6 +117,22 @@ export function validateBlocksValue(
   const { issues: allDocumentIssues, survey } = validateDocument(doc, {
     breakpoints: NO_BREAKPOINTS,
     mode: "forgiving",
+    // Where a block declares the containers it may sit inside, this is the path
+    // that has to enforce it: the editor refuses such a placement while
+    // dragging, and a document written by an import, a script, or an older
+    // client never passes through the editor at all.
+    //
+    // Read through to the live registry on each call, so a block contributed
+    // after this module loaded is still judged by its own declaration.
+    //
+    // This is NOT the block-type existence check the module docblock declines,
+    // and the difference is the direction of the failure. Existence would
+    // REJECT every document when the registry is empty. A nesting source that
+    // holds nothing answers "declares no restriction" for every type, so an
+    // unpopulated registry leaves this silent rather than hostile — the rule
+    // reaches exactly the blocks something has contributed, and no document is
+    // refused for a declaration nobody made.
+    nesting: registryNestingSource(),
   });
   const documentIssues = allDocumentIssues.filter(
     issue => issue.severity === "error"
