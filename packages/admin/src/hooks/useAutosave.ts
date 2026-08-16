@@ -67,8 +67,17 @@ export interface UseAutosaveOptions {
    * what the author had, so it is allowed to be incomplete.
    */
   getValues: () => Record<string, unknown>;
-  /** Performs the write. Rejects on failure. */
-  save: (values: Record<string, unknown>) => Promise<unknown>;
+  /**
+   * Performs the write. Rejects on failure.
+   *
+   * `keepalive` asks for a transport that survives the page being discarded.
+   * It is a hint rather than a guarantee: browsers cap such a request's body,
+   * so the caller decides whether this snapshot qualifies.
+   */
+  save: (
+    values: Record<string, unknown>,
+    opts?: { keepalive?: boolean }
+  ) => Promise<unknown>;
   /** Quiet period after the last edit before saving. */
   debounceMs?: number;
   /** Longest the debounce may defer a save during continuous editing. */
@@ -248,6 +257,30 @@ export function useAutosave({
     }
     timerRef.current = setTimeout(run, delay);
   }, [run]);
+
+  // Discarding the DOCUMENT -- a refresh, a tab close, a navigation the router
+  // does not own -- is the case React cleanup cannot cover: it is not
+  // guaranteed to run at all during unload, and an ordinary request started
+  // there is cancelled with the page. `pagehide` fires for it (including the
+  // bfcache path, unlike `unload`), and the keepalive hint is what lets the
+  // request outlive the document.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const flushOnHide = () => {
+      if (timerRef.current === null || !enabledRef.current) return;
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+      void saveRef
+        .current(getValuesRef.current(), { keepalive: true })
+        .catch(() => {
+          // The page is going away; there is nothing left to report it on.
+        });
+    };
+
+    window.addEventListener("pagehide", flushOnHide);
+    return () => window.removeEventListener("pagehide", flushOnHide);
+  }, []);
 
   // Leaving the page with edits still inside the debounce window is exactly the
   // work a recovery point exists to keep, so flush instead of dropping the

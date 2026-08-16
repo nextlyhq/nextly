@@ -221,6 +221,55 @@ describe("useAutosave", () => {
     expect(save).toHaveBeenCalledWith({ title: "half typed" });
   });
 
+  it("flushes with an unload-safe transport when the page is hidden", async () => {
+    // React cleanup is not guaranteed to run when a document is discarded, and
+    // an ordinary request started there is cancelled with the page. This is
+    // the path that survives a refresh or a tab close mid-edit.
+    const save = vi.fn().mockResolvedValue(undefined);
+    const { result } = renderHook(() =>
+      useAutosave({
+        enabled: true,
+        scopeKey: "posts:e1",
+        getValues: () => ({ title: "half typed" }),
+        save,
+        debounceMs: 10_000,
+      })
+    );
+
+    act(() => {
+      result.current.notifyChange();
+    });
+    expect(save).not.toHaveBeenCalled();
+
+    act(() => {
+      window.dispatchEvent(new Event("pagehide"));
+    });
+
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledWith(
+      { title: "half typed" },
+      { keepalive: true }
+    );
+  });
+
+  it("does not flush on pagehide when nothing is pending", async () => {
+    const save = vi.fn().mockResolvedValue(undefined);
+    renderHook(() =>
+      useAutosave({
+        enabled: true,
+        scopeKey: "posts:e1",
+        getValues: () => ({ title: "untouched" }),
+        save,
+      })
+    );
+
+    act(() => {
+      window.dispatchEvent(new Event("pagehide"));
+    });
+
+    expect(save).not.toHaveBeenCalled();
+  });
+
   it("does not flush on unmount when nothing is pending", async () => {
     const save = vi.fn().mockResolvedValue(undefined);
     const { unmount } = renderHook(() =>

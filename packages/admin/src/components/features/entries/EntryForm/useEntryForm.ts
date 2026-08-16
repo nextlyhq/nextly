@@ -719,14 +719,14 @@ export function useEntryForm({
     !autosaveDisabledBySchema(collection);
 
   const autosaveEntry = useCallback(
-    async (values: Record<string, unknown>) => {
+    async (values: Record<string, unknown>, opts?: { keepalive?: boolean }) => {
       if (!entryId) return;
       await versionApi.autosave(
         { kind: "collection", slug: collection.name, entryId },
         values,
         // Route the recovery point to the language being edited, as the
         // update mutation does; absent means the unlocalized row.
-        locale ? { locale } : {}
+        { ...(locale ? { locale } : {}), ...(opts ?? {}) }
       );
     },
     [collection.name, entryId, locale]

@@ -445,14 +445,14 @@ export function SingleForm({
   // client-supplied id.
   const documentId = document?.id ? String(document.id) : "";
   const autosaveSingle = useCallback(
-    async (values: Record<string, unknown>) => {
+    async (values: Record<string, unknown>, opts?: { keepalive?: boolean }) => {
       if (!documentId) return;
       await versionApi.autosave(
         { kind: "single", slug: schema.slug, documentId },
         values,
         // Route the recovery point to the language being edited, matching the
         // save; absent means the unlocalized row.
-        locale ? { locale } : {}
+        { ...(locale ? { locale } : {}), ...(opts ?? {}) }
       );
     },
     [schema.slug, documentId, locale]

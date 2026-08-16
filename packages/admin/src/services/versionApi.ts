@@ -115,6 +115,26 @@ export interface SetVersionLabelResponse {
 }
 
 /**
+ * The keepalive body ceiling browsers enforce, in bytes. Measured on the
+ * encoded body rather than string length, because a snapshot is user text and
+ * a multi-byte character costs more bytes than it does UTF-16 code units.
+ */
+const KEEPALIVE_MAX_BYTES = 60_000;
+
+function withinKeepaliveLimit(snapshot: Record<string, unknown>): boolean {
+  try {
+    return (
+      new TextEncoder().encode(JSON.stringify(snapshot)).length <=
+      KEEPALIVE_MAX_BYTES
+    );
+  } catch {
+    // A snapshot that will not serialize cannot be sized; let the ordinary
+    // request path raise the real failure rather than guessing here.
+    return false;
+  }
+}
+
+/**
  * What an autosave reports back: the canonical mutation envelope, whose item
  * is the stored row's metadata rather than the snapshot.
  */
@@ -222,16 +242,25 @@ export const versionApi = {
   autosave: (
     scope: VersionScope,
     snapshot: Record<string, unknown>,
-    opts: { locale?: string } = {}
+    opts: { locale?: string; keepalive?: boolean } = {}
   ): Promise<AutosaveResponse> => {
     // Only sent when a content language is active; absent means the
     // unlocalized row rather than "every locale".
     const query = opts.locale
       ? `?${new URLSearchParams({ locale: opts.locale }).toString()}`
       : "";
+    // `keepalive` lets a request outlive the page that started it, which is
+    // the only way a flush during unload survives. Browsers cap a keepalive
+    // body at 64KB and REJECT anything larger, so an oversized snapshot falls
+    // back to an ordinary request: that one may be cancelled with the page,
+    // which is no worse than not attempting it, whereas sending it keepalive
+    // would fail outright.
+    const keepalive = opts.keepalive === true && withinKeepaliveLimit(snapshot);
+
     return protectedApi.put<AutosaveResponse>(
       `${basePath(scope)}/autosave${query}`,
-      snapshot
+      snapshot,
+      keepalive ? { keepalive: true } : {}
     );
   },
 
