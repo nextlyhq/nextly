@@ -1,5 +1,20 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
+// The sync asks the reconcile service to clear a diverged mark on a code-managed group. Mocked so
+// the ASK is observable: the repair itself is proved in its own suite, and running it here would
+// make these tests depend on introspection they do not model.
+vi.mock("../services/field-group-reconcile-service", () => ({
+  reconcileFieldGroup: vi.fn(async () => ({
+    slug: "seo",
+    localized: false,
+    removed: [],
+    repaired: [],
+    adopted: [],
+    unchanged: true,
+    schemaVersion: 1,
+  })),
+}));
+
 // The service throws NextlyError, so `rejects.toThrow(...)` asserts against
 // that class for the instanceof check to line up with the thrown type.
 import { NextlyError } from "../../../errors";
@@ -604,6 +619,61 @@ describe("FieldGroupRegistryService", () => {
       expect(result.created).toEqual(["hero"]);
       expect(result.updated).toEqual([]);
       expect(result.unchanged).toEqual([]);
+    });
+
+    // 🔴 A code-managed group marked `diverged` is otherwise a DEAD END: the admin refuses it for
+    // being locked and this sync refuses it for being diverged, so neither direction reaches it.
+    // The sync holds the config file — which IS the definition for a locked group — so it is the
+    // caller that may repair, and it must do so BEFORE deciding what to write.
+    it("clears a diverged mark on a code-managed component before writing it", async () => {
+      const fields = [{ name: "metaTitle", type: "text" }];
+      ctx.adapter.selectOne.mockResolvedValue(
+        dbRow({ migration_status: "diverged", locked: 1 })
+      );
+      ctx.adapter.update.mockResolvedValue([dbRow()]);
+      // The repair itself is proved where it lives; here the question is only whether the sync
+      // ASKS for it, so the introspection the reconcile service performs is answered minimally.
+      ctx.adapter.tableExists.mockResolvedValue(true);
+
+      await ctx.service.syncCodeFirstComponents([
+        { slug: "seo", label: "SEO", fields },
+      ]);
+
+      // 🔴 Asserted on the CALL, not on the result lists. The component ends up in `updated` or
+      // `unchanged` whether or not the repair was requested, so a result-shaped assertion would
+      // pass with and without the wiring — coverage in appearance only. `fromCode: true` is the
+      // part that matters: without it the repair is refused by the lock check it exists to pass.
+      const { reconcileFieldGroup } = await import(
+        "../services/field-group-reconcile-service"
+      );
+      expect(reconcileFieldGroup).toHaveBeenCalledWith(
+        expect.objectContaining({ slug: "seo", fromCode: true })
+      );
+    });
+
+    it("does not ask for a repair when the component is not diverged", async () => {
+      // The control that keeps the branch above from becoming unconditional: a healthy row must
+      // not be run through a repair on every boot.
+      const fields = [{ name: "metaTitle", type: "text" }];
+      ctx.adapter.selectOne.mockResolvedValue(
+        dbRow({ migration_status: "applied", locked: 1 })
+      );
+      ctx.adapter.update.mockResolvedValue([dbRow()]);
+
+      // The mock is module-level and this suite's `beforeEach` only rebuilds the adapter, so a
+      // call recorded by the test above would satisfy this assertion's opposite. Cleared here
+      // rather than globally: 53 other tests in this file pass under the current lifecycle and
+      // widening it would be a change to their experiment, not to mine.
+      const { reconcileFieldGroup } = await import(
+        "../services/field-group-reconcile-service"
+      );
+      vi.mocked(reconcileFieldGroup).mockClear();
+
+      await ctx.service.syncCodeFirstComponents([
+        { slug: "seo", label: "SEO", fields },
+      ]);
+
+      expect(reconcileFieldGroup).not.toHaveBeenCalled();
     });
 
     it("updates components with changed schema hash", async () => {

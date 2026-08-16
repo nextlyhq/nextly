@@ -736,39 +736,54 @@ export class FieldGroupRegistryService extends BaseRegistryService<
             schemaHash,
           });
           result.created.push(config.slug);
-        } else if (
-          repairedTableName !== undefined ||
-          !schemaHashesMatch(schemaHash, existing.schemaHash) ||
-          (config.localized === true) !== (existing.localized === true)
-        ) {
-          await this.updateComponent(
-            config.slug,
-            {
-              label: config.label,
-              description: config.description,
-              fields: config.fields,
-              admin: config.admin,
-              configPath: config.configPath,
-              schemaHash,
-              locked: true,
-              localized: config.localized === true,
-              tableName: repairedTableName,
-            },
-            { source: "code" }
-          );
-          result.updated.push(config.slug);
-        } else if (this.adminConfigChanged(config.admin, existing.admin)) {
-          await this.updateComponent(
-            config.slug,
-            {
-              admin: config.admin,
-              locked: true,
-            },
-            { source: "code" }
-          );
-          result.updated.push(config.slug);
         } else {
-          result.unchanged.push(config.slug);
+          // 🔴 Clear a `diverged` mark BEFORE deciding what this sync writes, because that state
+          // is otherwise a dead end for a code-managed group: the admin refuses it for being
+          // locked and this path is refused for being diverged, so neither direction can reach it.
+          // The sync is the right caller — it holds the config file, which IS the definition for a
+          // locked group — and `fromCode` is what lets the repair past the lock check.
+          //
+          // Best effort, and deliberately so: the repair describes the row against its tables,
+          // while the write below describes it against the config file. If the repair cannot
+          // decide (it refuses on genuinely ambiguous tables) the error is RECORDED and the sync
+          // continues to the next component, leaving the mark in place rather than failing every
+          // remaining component behind one unrepairable row.
+          if (existing.migrationStatus === "diverged") {
+            try {
+              const { reconcileFieldGroup } = await import(
+                "./field-group-reconcile-service"
+              );
+              await reconcileFieldGroup({
+                registry: this,
+                adapter: this.adapter,
+                logger: this.logger,
+                slug: config.slug,
+                fromCode: true,
+              });
+              this.logger.info(
+                "[FieldGroups] Cleared a diverged mark on a code-managed field group",
+                { slug: config.slug }
+              );
+            } catch (reconcileError) {
+              const detail =
+                reconcileError instanceof Error
+                  ? reconcileError.message
+                  : String(reconcileError);
+              this.logger.error(
+                "[FieldGroups] Could not clear the diverged mark on a code-managed field group",
+                { slug: config.slug, error: detail }
+              );
+              result.errors.push({ slug: config.slug, error: detail });
+              continue;
+            }
+          }
+          await this.syncExistingCodeFirstComponent({
+            config,
+            existing,
+            schemaHash,
+            repairedTableName,
+            result,
+          });
         }
       } catch (error) {
         result.errors.push({
@@ -778,7 +793,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       }
     }
 
-    this.logger.info("Code-first Component sync completed", {
+    this.logger.info("Code-first Component sync complete", {
       created: result.created.length,
       updated: result.updated.length,
       unchanged: result.unchanged.length,
@@ -786,6 +801,56 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     });
 
     return result;
+  }
+
+  /**
+   * Write the config file's definition onto a component the registry already holds.
+   *
+   * Extracted so the divergence repair above reads as one step rather than being buried in the
+   * branch it guards; the decision of WHAT to write is unchanged.
+   */
+  private async syncExistingCodeFirstComponent(args: {
+    config: CodeFirstComponentConfig;
+    existing: DynamicFieldGroupRecord;
+    schemaHash: string;
+    repairedTableName: string | undefined;
+    result: SyncComponentResult;
+  }): Promise<void> {
+    const { config, existing, schemaHash, repairedTableName, result } = args;
+    if (
+      repairedTableName !== undefined ||
+      !schemaHashesMatch(schemaHash, existing.schemaHash) ||
+      (config.localized === true) !== (existing.localized === true)
+    ) {
+      await this.updateComponent(
+        config.slug,
+        {
+          label: config.label,
+          description: config.description,
+          fields: config.fields,
+          admin: config.admin,
+          configPath: config.configPath,
+          schemaHash,
+          locked: true,
+          localized: config.localized === true,
+          tableName: repairedTableName,
+        },
+        { source: "code" }
+      );
+      result.updated.push(config.slug);
+    } else if (this.adminConfigChanged(config.admin, existing.admin)) {
+      await this.updateComponent(
+        config.slug,
+        {
+          admin: config.admin,
+          locked: true,
+        },
+        { source: "code" }
+      );
+      result.updated.push(config.slug);
+    } else {
+      result.unchanged.push(config.slug);
+    }
   }
 
   /**
