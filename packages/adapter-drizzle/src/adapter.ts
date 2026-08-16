@@ -222,6 +222,23 @@ function affectedRowCount(result: unknown): number {
   return 0;
 }
 
+/**
+ * The fragment of Drizzle's update builder `updateCount` uses, spelled dialect-neutrally.
+ *
+ * Declared rather than reached for through a permissive generic: the three dialects' builders carry
+ * different type parameters but agree on this chain, so naming just the chain keeps the compiler
+ * checking the call while leaving the parts that genuinely differ outside the contract. `set` is
+ * awaitable on its own, which is what makes an update with no WHERE a complete statement rather
+ * than a builder waiting for one.
+ */
+interface UpdateCapableDb {
+  update(table: unknown): {
+    set(values: Record<string, unknown>): PromiseLike<unknown> & {
+      where(condition: unknown): PromiseLike<unknown>;
+    };
+  };
+}
+
 export abstract class DrizzleAdapter {
   // ============================================================
   // Abstract Methods (MUST be implemented by subclasses)
@@ -1383,19 +1400,20 @@ export abstract class DrizzleAdapter {
     const tableObj = this.getTableObject(table);
     if (tableObj) {
       try {
-        // Transaction executor when supplied, otherwise the pooled instance.
-        // getDrizzle() returns unknown - explicit any generic for dialect-specific Drizzle API
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const db = executor ?? this.getDrizzle<any>();
+        // Transaction executor when supplied, otherwise the pooled instance — narrowed to the
+        // fragment of the update builder this method uses rather than the whole dialect-specific
+        // surface, which is the same seam `getDrizzle<{ execute }>()` above takes. `where` returns
+        // a thenable rather than a further builder, so awaiting either branch is what the type
+        // says: the statement is issued whether or not a condition was added.
+        const db = (executor ??
+          this.getDrizzle<UpdateCapableDb>()) as UpdateCapableDb;
         const mappedData = this.mapDataToColumnNames(tableObj, data);
-        let query = db.update(tableObj).set(mappedData);
+        const statement = db.update(tableObj).set(mappedData);
 
         const whereCondition = buildDrizzleWhere(tableObj as never, where);
-        if (whereCondition) {
-          query = query.where(whereCondition);
-        }
-
-        const result = await query;
+        const result = await (whereCondition
+          ? statement.where(whereCondition)
+          : statement);
         return affectedRowCount(result);
       } catch (error) {
         throw this.handleQueryError(error, "update", table);

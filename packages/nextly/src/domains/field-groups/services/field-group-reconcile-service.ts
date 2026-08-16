@@ -53,6 +53,17 @@ export interface ReconcileFieldGroupResult {
   unchanged: boolean;
   /** The version after the repair; unchanged repairs report the version they found. */
   schemaVersion: number;
+  /**
+   * Whether the RUNNING process was re-pointed at the repaired shape.
+   *
+   * Separate from the repair's own success because the two can genuinely differ: the row is written
+   * durably before this is attempted, so `false` means the database is correct and this process is
+   * not, which a restart fixes. Reported rather than folded into an error so an operator is never
+   * told a landed repair failed, nor told a stale process is ready.
+   */
+  runtimeRefreshed: boolean;
+  /** Why the refresh did not happen; present only when `runtimeRefreshed` is false. */
+  runtimeRefreshReason?: string;
 }
 
 /**
@@ -236,10 +247,20 @@ export async function reconcileFieldGroup(args: {
   );
   assertValidPluginFieldOptions(plan.fields);
 
-  // A standing `diverged` mark is itself part of what this operation repairs: once the definition
+  // A standing failure mark is itself part of what this operation repairs: once the definition
   // describes the tables, leaving the mark would keep refusing schema edits on a group that is
   // now fine — the plan can be unchanged while the STATUS is still the thing that is wrong.
-  const markerStandsWrongly = existing.migrationStatus === "diverged";
+  //
+  // `failed` counts for the same reason `diverged` does, and it is the commoner way in: a create
+  // whose table landed and whose verification query failed records `failed` over a table that may
+  // already match the definition exactly. Introspection has just proved whether it does, so the
+  // status is stale in precisely the way this operation exists to clear. Listing the statuses that
+  // MEAN unhealthy, rather than testing for one of them, is what keeps a status added later from
+  // silently becoming permanent.
+  const UNHEALTHY_STATUSES = new Set(["diverged", "failed"]);
+  const markerStandsWrongly = UNHEALTHY_STATUSES.has(
+    existing.migrationStatus ?? ""
+  );
 
   if (plan.unchanged && !markerStandsWrongly) {
     // Nothing to write — and writing anyway would bump the version and invalidate every open
@@ -253,6 +274,8 @@ export async function reconcileFieldGroup(args: {
       adopted: [],
       unchanged: true,
       schemaVersion: existing.schemaVersion,
+      // Nothing was rewritten, so the process is already describing what the row says.
+      runtimeRefreshed: true,
     };
   }
 
@@ -289,9 +312,12 @@ export async function reconcileFieldGroup(args: {
   }
 
   // Point the running process at the repaired shape. Registration DESCRIBES the tables — it moves
-  // no storage — and the repair is durable whether or not this succeeds, so a failure here raises
-  // to the caller as its own error rather than unwinding anything.
-  registerComponentRuntimeSchema(
+  // no storage — and the repair is durable whether or not this succeeds, so a failure here must
+  // not unwind anything. It must also not be silent: this operation's whole promise is that the
+  // group is usable again, and a process still holding the pre-repair columns will fail the very
+  // reads the operator runs next. The outcome is reported so the answer can say which of the two
+  // happened rather than implying the stronger one.
+  const registration = registerComponentRuntimeSchema(
     adapter,
     dialect,
     existing.tableName,
@@ -309,6 +335,7 @@ export async function reconcileFieldGroup(args: {
     repaired: plan.repaired.map(r => `${r.fieldName}.${r.attribute}`),
     adopted: plan.adopted.map(a => a.fieldName),
     localized: plan.localized,
+    runtimeRefreshed: registration.registered,
   });
 
   return {
@@ -319,5 +346,9 @@ export async function reconcileFieldGroup(args: {
     adopted: plan.adopted,
     unchanged: false,
     schemaVersion: outcome.newSchemaVersion,
+    runtimeRefreshed: registration.registered,
+    ...(registration.reason !== undefined
+      ? { runtimeRefreshReason: registration.reason }
+      : {}),
   };
 }

@@ -23,6 +23,21 @@ import { localizedColumnsOnMain } from "../../i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../i18n/runtime/companion-registration";
 import { isIdempotencyError } from "../../schema/pipeline/sql-statement-utils";
 
+/**
+ * Whether the in-memory schema was actually refreshed, and why not when it was not.
+ *
+ * Reported rather than thrown because this step runs AFTER the durable write on every caller: the
+ * schema change is already committed, so raising here would describe a repair that landed as one
+ * that failed. Returning the outcome lets a caller that must not overstate its result — a repair
+ * telling an operator the group is usable again — say what is still stale, while the callers that
+ * treat registration as best-effort carry on ignoring it exactly as before.
+ */
+export interface RuntimeSchemaRegistration {
+  registered: boolean;
+  /** Present only when `registered` is false; safe to show an operator. */
+  reason?: string;
+}
+
 export function registerComponentRuntimeSchema(
   adapter: DrizzleAdapter,
   dialect: string,
@@ -32,7 +47,7 @@ export function registerComponentRuntimeSchema(
   // i18n: when localized, the main comp_ runtime table omits translatable columns and the
   // companion comp_<slug>_locales runtime table is registered for per-language reads/writes.
   localized = false
-): void {
+): RuntimeSchemaRegistration {
   try {
     const fieldGroupSchemaService = new FieldGroupSchemaService(
       dialect as ConstructorParameters<typeof FieldGroupSchemaService>[0]
@@ -64,7 +79,7 @@ export function registerComponentRuntimeSchema(
           companion.table
         );
       }
-      return;
+      return { registered: true };
     }
 
     // Fallback for paths where DI isn't wired (tests, CLI).
@@ -77,7 +92,7 @@ export function registerComponentRuntimeSchema(
     ).tableResolver;
     if (resolver && typeof resolver.registerDynamicSchema === "function") {
       resolver.registerDynamicSchema(tableName, runtimeTable);
-      return;
+      return { registered: true };
     }
 
     console.warn(
@@ -85,6 +100,10 @@ export function registerComponentRuntimeSchema(
         `'${tableName}'. Component queries may reference old column names ` +
         `until next server restart.`
     );
+    return {
+      registered: false,
+      reason: "no schema registry is available in this process",
+    };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.warn(
@@ -92,6 +111,7 @@ export function registerComponentRuntimeSchema(
         `'${tableName}': ${msg}. Component queries may reference old ` +
         `column names until next server restart.`
     );
+    return { registered: false, reason: msg };
   }
 }
 
