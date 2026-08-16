@@ -585,11 +585,16 @@ export class VersionsRepository {
     const where = this.autosaveWhere(input.ref, createdBy);
     // Project only the id: the existence check must not transfer the (possibly
     // large) snapshot of the row it is about to overwrite.
-    const existing = await this.db.select<{ id: string }>(TABLE, {
-      columns: ["id"],
-      where,
-      limit: 1,
-    });
+    const existing = await this.db.select<{ id: string; updatedAt: Date }>(
+      TABLE,
+      {
+        // `updatedAt` rides along so the update can compare against the value
+        // this read OBSERVED rather than against a clock.
+        columns: ["id", "updatedAt"],
+        where,
+        limit: 1,
+      }
+    );
     if (existing[0]) {
       // Compare-and-set on the timestamp, not a blind overwrite. Two tabs
       // belonging to the same author race here: A can read the row, pause, and
@@ -613,7 +618,18 @@ export class VersionsRepository {
         {
           and: [
             ...(where.and ?? []),
-            { column: "updatedAt", op: "<" as const, value: now },
+            // Inequality against the value this read OBSERVED, not `<` against
+            // a clock. SQLite stores this column as integer epoch SECONDS, so
+            // a rewrite inside the same second serializes identically and `<`
+            // would match nothing -- silently dropping the newest snapshot
+            // while still reporting success. What the clause must prevent is
+            // writing over a row that changed since it was read, and that is
+            // what inequality says, at any clock resolution.
+            {
+              column: "updatedAt",
+              op: "!=" as const,
+              value: existing[0].updatedAt,
+            },
           ],
         }
       );

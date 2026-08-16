@@ -122,8 +122,12 @@ describe("VersionsRepository.upsertAutosave", () => {
     // The compare-and-set clause. Two tabs belonging to one author race on
     // this row, and without it the slower request overwrites the newer
     // snapshot and stamps it newer still.
+    //
+    // `!=` against the OBSERVED value rather than `<` against a clock: SQLite
+    // stores this column as integer epoch seconds, so a rewrite within the
+    // same second compares equal and `<` would silently match nothing.
     expect(conditions).toContainEqual(
-      expect.objectContaining({ column: "updatedAt", op: "<" })
+      expect.objectContaining({ column: "updatedAt", op: "!=" })
     );
     // And nothing else: an extra condition would narrow the lookup in a way
     // this test would otherwise not notice.
