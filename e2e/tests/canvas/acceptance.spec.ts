@@ -975,13 +975,17 @@ test.describe("a canvas any Nextly editor could ship", () => {
     // instead of becoming another expected one.
     //
     // Unlike the placed-block reader this file used to guard the same way, this
-    // refusal is a genuine one: it reports what it looked for and did not find. A
-    // guard on a refusal that never looked would only detect the reader being
-    // edited, which is why that other assertion was removed rather than kept.
+    // refusal is a genuine one: `undoDepth` QUERIES the seam in both documents and
+    // refuses only on an actual absence. That is what makes this assertion a real
+    // tripwire — publish the attribute and the reader returns a count, this line goes
+    // red, and the target below has to be rewritten. A guard on a reader that refused
+    // without looking would instead detect only the reader being edited, which is why
+    // the placed-block one was removed rather than kept.
     //
-    // Wrapped in an async thunk because these readers throw SYNCHRONOUSLY:
-    // `expect(reader())` never receives a promise, so `.rejects` cannot see
-    // the refusal and the raw error escapes the assertion entirely.
+    // The async thunk is retained. It was required when these readers threw
+    // synchronously — `expect(reader())` never receives a promise, so `.rejects`
+    // cannot see the refusal — and it stays correct now that they reject instead,
+    // so the form works whichever way a future reader signals failure.
     await expect(async () => chrome.undoDepth()).rejects.toThrow(
       CanvasCapabilityError
     );

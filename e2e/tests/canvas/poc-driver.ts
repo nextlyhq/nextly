@@ -130,6 +130,17 @@ const REFUSAL_RENDER_MS = 2_000;
 const DRAG_THRESHOLD_PX = 12;
 
 /**
+ * The attribute an editor publishes its undo depth through, and the selector that finds it.
+ *
+ * Named here rather than inlined so the refusal can quote it: a reader that says only "no
+ * seam" leaves whoever acts on it guessing what would satisfy the check, and two people
+ * guessing produce two seams. This is the contract, such as it is — one element carrying a
+ * base-10 count of undoable entries, in either document.
+ */
+const UNDO_DEPTH_ATTR = "data-nx-undo-depth";
+const UNDO_DEPTH_SELECTOR = `[${UNDO_DEPTH_ATTR}]`;
+
+/**
  * How far inside the canvas's bottom edge {@link CanvasDriver.canvasBottomEdge} stands.
  *
  * Comfortably inside dnd-kit's own autoscroll threshold, which is a fraction of the scroller's
@@ -911,15 +922,43 @@ export function createPocChromeReader(
       });
     },
 
-    undoDepth(): Promise<number> {
-      // The refusal stands and its REASON has changed, which is the whole correction. The editor
-      // does keep history — a bounded past/future in its store — so a reader told "this canvas
-      // keeps no undo history" is sent to build something that already exists. What is missing is
-      // a way to observe the depth from here: nothing publishes it to the DOM, and a count this
-      // cannot see is not a count it may report.
+    async undoDepth(): Promise<number> {
+      // LOOKED FOR, then refused — never refused on the assumption that it is absent. A
+      // reader that declines unconditionally reports the same thing for "there is no seam"
+      // and "nobody checked", so the assertion guarding it in the acceptance suite keeps
+      // passing on the day the seam arrives, which is the one moment it exists to catch.
+      //
+      // BOTH documents, for the same reason `isDragging` reads both: the editor chrome is
+      // host-side and the canvas is in the frame, and which of them would publish this has
+      // not been decided. Searching one would refuse about a seam that exists in the other.
+      const read = async (where: Frame | Page) =>
+        where.evaluate(
+          ([selector, attribute]) =>
+            document.querySelector(selector)?.getAttribute(attribute) ?? null,
+          [UNDO_DEPTH_SELECTOR, UNDO_DEPTH_ATTR] as const
+        );
+      const published = (await read(page)) ?? (await read(canvasFrameOf(page)));
+
+      if (published !== null) {
+        // A seam that publishes something unreadable is a DEFECT in the seam, not a canvas
+        // that lacks undo — so it fails rather than degrading to the capability refusal
+        // below, which would hide a broken seam behind a message about a missing one.
+        const depth = Number.parseInt(published, 10);
+        if (!Number.isFinite(depth)) {
+          throw new Error(
+            `the undo-depth seam published ${JSON.stringify(published)}, which is not a count`
+          );
+        }
+        return depth;
+      }
+
+      // The editor DOES keep history — a bounded past/future in its store — so a reader told
+      // "this canvas keeps no undo history" is sent to build what already exists. The
+      // attribute is named here so the refusal says what would satisfy it.
       throw new CanvasCapabilityError(
-        "this canvas publishes no undo depth a test can read; the editor keeps a bounded " +
-          "history in its store, so the gap is an observable seam rather than the feature"
+        `this canvas publishes no undo depth a test can read (no \`${UNDO_DEPTH_SELECTOR}\` ` +
+          "in either document); the editor keeps a bounded history in its store, so the gap " +
+          "is an observable seam rather than the feature"
       );
     },
   };
