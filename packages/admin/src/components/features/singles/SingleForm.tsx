@@ -476,7 +476,7 @@ export function SingleForm({
   // Restart the debounce on user edits only. `subscribe` reports changes without
   // re-rendering, and `type` is undefined for programmatic updates, so the
   // `form.reset` after a save does not arm a fresh autosave.
-  const { notifyChange } = autosave;
+  const { notifyChange, cancel: cancelAutosave } = autosave;
   useEffect(() => {
     const unsubscribe = form.subscribe({
       formState: { values: true, isDirty: true },
@@ -485,11 +485,17 @@ export function SingleForm({
       callback: ({ isDirty }) => {
         if (isDirty) {
           notifyChange();
+          return;
         }
+        // The form just stopped being behind the document: a successful save,
+        // a reset or a discard. A timer left armed here would write values
+        // that are already persisted and stamp them newer than the document,
+        // so the next visit would offer them back as unsaved work.
+        cancelAutosave();
       },
     });
     return unsubscribe;
-  }, [form, notifyChange]);
+  }, [form, notifyChange, cancelAutosave]);
 
   // ---------------------------------------------------------------------------
   // Handlers

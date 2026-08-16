@@ -403,10 +403,19 @@ export async function redactSnapshotForUser(
  * yields an empty list rather than failing the request (redaction then falls
  * back to field-level access alone; a diff falls back to raw-key comparison).
  */
-export async function resolveCurrentFields(
+/**
+ * Current fields, or `null` when the lookup itself failed.
+ *
+ * Separated from `resolveCurrentFields` because the two answers are different:
+ * a valid entity can legitimately have NO user-defined fields (a freshly
+ * created Single whose identity columns alone form a document), and collapsing
+ * that into the same empty array as a failed lookup forces every caller to
+ * guess which happened. Callers that must fail closed read this one.
+ */
+export async function tryResolveCurrentFields(
   scopeKind: "collection" | "single",
   slug: string
-): Promise<FieldConfig[]> {
+): Promise<FieldConfig[] | null> {
   try {
     if (scopeKind === "single") {
       const registry = getService("singleRegistryService");
@@ -420,8 +429,22 @@ export async function resolveCurrentFields(
     return ((collection as { fields?: unknown[] } | null)?.fields ??
       []) as FieldConfig[];
   } catch {
-    return [];
+    return null;
   }
+}
+
+/**
+ * Current fields, with a failed lookup flattened to an empty list.
+ *
+ * Kept for the redaction paths, where "no fields" and "could not look" lead to
+ * the same conservative behaviour. Derived from the strict form above rather
+ * than repeating the lookups.
+ */
+export async function resolveCurrentFields(
+  scopeKind: "collection" | "single",
+  slug: string
+): Promise<FieldConfig[]> {
+  return (await tryResolveCurrentFields(scopeKind, slug)) ?? [];
 }
 
 /**

@@ -634,6 +634,13 @@ export const SINGLE_DOCUMENT_METHODS = new Set([
  * silently ignores the rule it was configured with is the worse tradeoff.
  */
 const ROLE_AWARE_READ_METHODS = new Set([
+  // The autosave reads evaluate the document's stored access rules through the
+  // same gate the version reads use, so they need resolved roles for the same
+  // reason: without them a caller arrives as a non-super-admin holding no
+  // roles, and a role-based rule answers not-found for the author whose own
+  // recovery point it is.
+  "getEntryAutosave",
+  "getSingleAutosave",
   "listEntries",
   "getEntry",
   "countEntries",

@@ -749,7 +749,7 @@ export function useEntryForm({
   // without re-rendering, so watching every field costs no render per
   // keystroke; `type` is "change" for user input and undefined for programmatic
   // updates, which keeps `form.reset` after a save from arming a fresh autosave.
-  const { notifyChange } = autosave;
+  const { notifyChange, cancel: cancelAutosave } = autosave;
   useEffect(() => {
     const unsubscribe = form.subscribe({
       formState: { values: true, isDirty: true },
@@ -761,11 +761,17 @@ export function useEntryForm({
       callback: ({ isDirty }) => {
         if (isDirty) {
           notifyChange();
+          return;
         }
+        // The form just stopped being behind the document: a successful save,
+        // a reset or a discard. A timer left armed here would write values
+        // that are already persisted and stamp them newer than the document,
+        // so the next visit would offer them back as unsaved work.
+        cancelAutosave();
       },
     });
     return unsubscribe;
-  }, [form, notifyChange]);
+  }, [form, notifyChange, cancelAutosave]);
 
   // The read half of autosave. Without it the stored snapshot is unreachable:
   // history listings exclude autosave rows and a version read addresses rows by

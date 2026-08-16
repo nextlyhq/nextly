@@ -17,7 +17,7 @@ import {
   diffDocumentVersions,
   hydrateVersionSnapshot,
   redactSnapshotForUser,
-  resolveCurrentFields,
+  tryResolveCurrentFields,
 } from "../../api/versions-access";
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import {
@@ -701,15 +701,16 @@ export async function autosaveForDocument(
     // field resolution has no answer for them.
     (args.scopeKind === "collection" || args.scopeKind === "single")
   ) {
-    const fields = await resolveCurrentFields(args.scopeKind, args.slug);
-    // Fail CLOSED. `resolveCurrentFields` swallows every failure and answers
-    // with an empty list, so "no fields" and "could not look" are the same
-    // value here -- and skipping the strip on that value would write whatever
-    // the editor sent, credentials included, exactly when the lookup that was
-    // meant to find them broke. Every entity carries at least its identity
-    // fields, so an empty list means the resolution failed rather than that
-    // there is nothing to strip.
-    if (fields.length === 0) {
+    // Fail CLOSED on a failed LOOKUP, which is what `null` means here. An
+    // empty list is a different answer: a valid entity can have no
+    // user-defined fields at all (a freshly created Single, whose identity
+    // columns alone form a document), and there is genuinely nothing to strip
+    // from one. Treating those alike would refuse every autosave for such an
+    // entity, while treating a failed lookup as "nothing to strip" would write
+    // whatever the editor sent, credentials included, exactly when the lookup
+    // meant to find them had broken.
+    const fields = await tryResolveCurrentFields(args.scopeKind, args.slug);
+    if (fields === null) {
       throw NextlyError.internal({
         logContext: {
           reason: "autosave-field-resolution-failed",
@@ -718,7 +719,9 @@ export async function autosaveForDocument(
         },
       });
     }
-    stripPasswordFieldValues(snapshot as Record<string, unknown>, fields);
+    if (fields.length > 0) {
+      stripPasswordFieldValues(snapshot as Record<string, unknown>, fields);
+    }
   }
 
   return getService("versionsService").autosave({
@@ -788,5 +791,17 @@ export async function getAutosaveForDocument(
   );
   // Null rather than a 404: having no recovery point is the ordinary state, not
   // a missing resource, and the editor asks on every open.
-  return row ?? null;
+  if (!row) return null;
+
+  // Same redaction a version read applies. Document-level access is not the
+  // whole question: a field's `access.read` rule can deny this caller today
+  // even though the snapshot was stored while they could see it, and handing
+  // the row back verbatim would serve that field's old value from history.
+  await redactSnapshotForUser(
+    row.snapshot,
+    args.scopeKind,
+    args.slug,
+    args.user
+  );
+  return row;
 }

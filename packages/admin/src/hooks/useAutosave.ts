@@ -98,6 +98,15 @@ export interface UseAutosaveReturn {
   notifyChange: () => void;
   /** Saves immediately, bypassing the debounce. */
   saveNow: () => void;
+  /**
+   * Drop any queued write without performing it.
+   *
+   * For the moment the form stops being behind the document -- a successful
+   * save, a reset, a discard. A timer left armed across one of those writes
+   * values that are already persisted, and stamps them NEWER than the
+   * document, so the next visit offers them back as unsaved work.
+   */
+  cancel: () => void;
 }
 
 export function useAutosave({
@@ -192,6 +201,14 @@ export function useAutosave({
             caught instanceof Error ? caught : new Error(String(caught))
           );
         }
+        // An edit that arrived while this save was in flight consumed its own
+        // timer and is carried only by the superseded flag. Clearing it here
+        // would drop that newer snapshot for good if the author has since
+        // stopped typing, so re-arm one debounce for it instead of retrying
+        // the failure immediately.
+        if (supersededRef.current && enabledRef.current) {
+          timerRef.current = setTimeout(run, debounceMsRef.current);
+        }
       } finally {
         inFlightRef.current = false;
         supersededRef.current = false;
@@ -261,6 +278,18 @@ export function useAutosave({
     };
   }, [scopeKey]);
 
+  const cancel = useCallback(() => {
+    if (timerRef.current !== null) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    firstPendingAtRef.current = null;
+    supersededRef.current = false;
+    // Back to reporting the last successful save rather than pending edits:
+    // there are no pending edits now.
+    setStatus(current => (current === "pending" ? "saved" : current));
+  }, []);
+
   const saveNow = useCallback(() => {
     if (!enabledRef.current) {
       return;
@@ -268,5 +297,5 @@ export function useAutosave({
     run();
   }, [run]);
 
-  return { status, lastSavedAt, error, notifyChange, saveNow };
+  return { status, lastSavedAt, error, notifyChange, saveNow, cancel };
 }
