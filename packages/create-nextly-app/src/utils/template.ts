@@ -510,7 +510,11 @@ async function pointsAtItself(
 ): Promise<boolean> {
   // Nothing to trace when the incoming content includes nothing — the common case, and it must
   // not pay for a filesystem call it cannot use.
-  const queue = includeTargets(incoming);
+  // Depth is carried because an unresolvable name means two different things depending on where
+  // it sits. At depth 0 it is the pointer this function is deciding whether to write, and a
+  // pointer at nothing installs nothing. Deeper, it is a file the DEVELOPER included from a file
+  // they own, and a dead end there says nothing about whether any path returns here.
+  const queue = includeTargets(incoming).map(name => ({ name, depth: 0 }));
   if (queue.length === 0) return false;
 
   const self = await fs.realpath(destination).catch(() => destination);
@@ -522,7 +526,7 @@ async function pointsAtItself(
   const visited = new Set<string>();
 
   while (queue.length > 0) {
-    const name = queue.shift()!;
+    const { name, depth } = queue.shift()!;
     const targetPath = path.join(targetDir, name);
     if (visited.has(targetPath)) continue;
     visited.add(targetPath);
@@ -531,13 +535,26 @@ async function pointsAtItself(
     if (targetPath === destination) return true;
 
     const resolved = await fs.realpath(targetPath).catch(() => null);
-    // Unresolvable: a dangling pointer installs nothing, so writing it has no upside to weigh
-    // against the target appearing later.
-    if (resolved === null) return true;
+    if (resolved === null) {
+      // A DIRECT target that does not resolve means the pointer would install nothing, so there
+      // is no upside to weigh against the target appearing later. A deeper one is an ordinary
+      // dead end in the developer's own graph: it cannot be the destination, because the
+      // destination is a path being written, so it cannot close a cycle. Treating it as one
+      // deletes a guide that nothing points back to.
+      if (depth === 0) return true;
+      continue;
+    }
     if (resolved === self) return true;
 
     const contents = await fs.readFile(targetPath, "utf-8").catch(() => null);
-    if (contents !== null) queue.push(...includeTargets(contents));
+    if (contents !== null) {
+      queue.push(
+        ...includeTargets(contents).map(next => ({
+          name: next,
+          depth: depth + 1,
+        }))
+      );
+    }
   }
 
   return false;

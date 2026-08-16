@@ -505,6 +505,29 @@ describe("scaffolding over a project that already has these files", () => {
     );
   }, 30_000);
 
+  it("still writes the pointer when the guide has an unrelated dangling include", async () => {
+    // The separating case, and the reason the cycle tests above cannot stand in for it: they
+    // also pass if EVERY unresolved descendant is rejected, because rejecting everything
+    // produces the same "no pointer" outcome a real cycle does.
+    //
+    // Here `AGENTS.md` includes an absent optional file. That leaf is a dead end in the
+    // developer's own graph, not a path back to `CLAUDE.md` — nothing includes `CLAUDE.md` at
+    // all — so the pointer must still be written.
+    const after = await scaffoldOver({
+      "AGENTS.md":
+        "# Ours\n\n@OPTIONAL.md\n\nOptional extras, usually absent.\n",
+    });
+
+    expect(after["AGENTS.md"]).toContain("Optional extras, usually absent.");
+    const claude = await readFile(
+      path.join(workdir, "project", "CLAUDE.md"),
+      "utf-8"
+    ).catch(() => "");
+    expect(claude.split("\n").filter(l => l.trim() === "@AGENTS.md")).toEqual([
+      "@AGENTS.md",
+    ]);
+  }, 30_000);
+
   it("does not count a commented-out or inline pointer as installed", async () => {
     // Three inactive forms. A reader acts on none of them, so the real pointer must still be
     // added — otherwise the guide is silently unreachable.

@@ -31,8 +31,9 @@ points at it, following the pattern the monorepo uses for itself.
 The guide is written for a coding agent picking the project up cold: where the
 config and collections live, which commands exist, and the things that surprise
 people — that `find()` is loosely typed until `types:generate` runs, that users
-are read through their own namespace rather than as a collection, and that
-migrations ship one file per dialect.
+are read through their own namespace rather than as a collection, and that a
+migration you generate is a single file in this project's own dialect, while a
+suffixed set beside it means that migration was shipped rather than generated.
 
 The generated content sits inside a managed block, so a future regeneration can
 replace it without touching notes written above or below it.
