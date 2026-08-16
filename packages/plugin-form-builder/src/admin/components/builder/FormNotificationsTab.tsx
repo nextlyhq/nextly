@@ -599,62 +599,81 @@ function NotificationSheet({
               narrower than the window whenever both sidebars are open, so a
               viewport breakpoint promises columns this sheet does not have. */}
           <Grid cols={2} responsive>
-            <div className="space-y-1.5">
-              <Label htmlFor="notification-provider">Email provider</Label>
-              <Select
-                value={form.providerId ?? "__default"}
-                onValueChange={value =>
-                  update(
-                    "providerId",
-                    value === "__default" ? undefined : value
-                  )
-                }
-              >
-                <SelectTrigger
-                  id="notification-provider"
-                  className="w-full bg-transparent border-input dark:bg-muted/50"
+            {/* Both `Select`-driven: FieldShell's render-function `children`
+                applies the computed id/aria-describedby/aria-invalid to
+                SelectTrigger, the actual focusable element, rather than to
+                `Select`'s root (which accepts a fixed prop list and forwards
+                none of the rest). */}
+            <FieldShell label="Email provider" htmlFor="notification-provider">
+              {({ id, describedBy, invalid }) => (
+                <Select
+                  value={form.providerId ?? "__default"}
+                  onValueChange={value =>
+                    update(
+                      "providerId",
+                      value === "__default" ? undefined : value
+                    )
+                  }
                 >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__default">
-                    {defaultProviderLabel}
-                  </SelectItem>
-                  {providers.map(p => (
-                    <SelectItem key={p.id} value={p.id}>
-                      {p.name}
-                      {p.isDefault ? " (Default)" : ""}
+                  <SelectTrigger
+                    id={id}
+                    aria-describedby={describedBy}
+                    aria-invalid={invalid}
+                    className="w-full bg-transparent border-input dark:bg-muted/50"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__default">
+                      {defaultProviderLabel}
                     </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="notification-template">Email template</Label>
-              <Select
-                value={form.templateSlug ?? "__none"}
-                onValueChange={value =>
-                  update("templateSlug", value === "__none" ? undefined : value)
-                }
-              >
-                <SelectTrigger
-                  id="notification-template"
-                  className="w-full bg-transparent border-input dark:bg-muted/50"
-                >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__none">Select a template</SelectItem>
-                  {templates
-                    .filter(t => t.isActive && t.kind !== "layout")
-                    .map(t => (
-                      <SelectItem key={t.id} value={t.slug}>
-                        {t.name}
+                    {providers.map(p => (
+                      <SelectItem key={p.id} value={p.id}>
+                        {p.name}
+                        {p.isDefault ? " (Default)" : ""}
                       </SelectItem>
                     ))}
-                </SelectContent>
-              </Select>
+                  </SelectContent>
+                </Select>
+              )}
+            </FieldShell>
+
+            <div className="space-y-1.5">
+              <FieldShell
+                label="Email template"
+                htmlFor="notification-template"
+              >
+                {({ id, describedBy, invalid }) => (
+                  <Select
+                    value={form.templateSlug ?? "__none"}
+                    onValueChange={value =>
+                      update(
+                        "templateSlug",
+                        value === "__none" ? undefined : value
+                      )
+                    }
+                  >
+                    <SelectTrigger
+                      id={id}
+                      aria-describedby={describedBy}
+                      aria-invalid={invalid}
+                      className="w-full bg-transparent border-input dark:bg-muted/50"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none">Select a template</SelectItem>
+                      {templates
+                        .filter(t => t.isActive && t.kind !== "layout")
+                        .map(t => (
+                          <SelectItem key={t.id} value={t.slug}>
+                            {t.name}
+                          </SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </FieldShell>
               {!form.templateSlug && (
                 <p className="flex items-center gap-1 text-xs text-destructive">
                   <TriangleAlert className="h-3 w-3" aria-hidden="true" />
@@ -683,60 +702,74 @@ function NotificationSheet({
           {/* Recipients */}
           <div className="space-y-4 pt-4 border-t border-border">
             <Grid cols={2} responsive>
-              <div className="space-y-1.5">
-                <Label htmlFor="notification-recipient-type">Send to</Label>
-                <Select
-                  value={form.recipientType}
-                  onValueChange={value => {
-                    // Switching target kinds invalidates the previous `to`
-                    // value shape, so it resets rather than leaking a
-                    // {{ref}} into the static input (or vice versa).
-                    setForm(prev => ({
-                      ...prev,
-                      recipientType: value as "static" | "field",
-                      to: "",
-                    }));
-                  }}
-                >
-                  <SelectTrigger
-                    id="notification-recipient-type"
-                    className="w-full bg-transparent border-input dark:bg-muted/50"
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="static">A specific address</SelectItem>
-                    <SelectItem value="field">
-                      The visitor (email field)
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {form.recipientType === "field" ? (
-                <div className="space-y-1.5">
-                  <Label htmlFor="notification-to">Visitor email field</Label>
+              <FieldShell label="Send to" htmlFor="notification-recipient-type">
+                {({ id, describedBy, invalid }) => (
                   <Select
-                    value={toRef ?? "__none"}
-                    onValueChange={value =>
-                      update("to", value === "__none" ? "" : toFieldRef(value))
-                    }
+                    value={form.recipientType}
+                    onValueChange={value => {
+                      // Switching target kinds invalidates the previous `to`
+                      // value shape, so it resets rather than leaking a
+                      // {{ref}} into the static input (or vice versa).
+                      setForm(prev => ({
+                        ...prev,
+                        recipientType: value as "static" | "field",
+                        to: "",
+                      }));
+                    }}
                   >
                     <SelectTrigger
-                      id="notification-to"
+                      id={id}
+                      aria-describedby={describedBy}
+                      aria-invalid={invalid}
                       className="w-full bg-transparent border-input dark:bg-muted/50"
                     >
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="__none">Select a field</SelectItem>
-                      {toFieldOptions.map(f => (
-                        <SelectItem key={f.name} value={f.name}>
-                          {f.label}
-                        </SelectItem>
-                      ))}
+                      <SelectItem value="static">A specific address</SelectItem>
+                      <SelectItem value="field">
+                        The visitor (email field)
+                      </SelectItem>
                     </SelectContent>
                   </Select>
+                )}
+              </FieldShell>
+
+              {form.recipientType === "field" ? (
+                <div className="space-y-1.5">
+                  <FieldShell
+                    label="Visitor email field"
+                    htmlFor="notification-to"
+                  >
+                    {({ id, describedBy, invalid }) => (
+                      <Select
+                        value={toRef ?? "__none"}
+                        onValueChange={value =>
+                          update(
+                            "to",
+                            value === "__none" ? "" : toFieldRef(value)
+                          )
+                        }
+                      >
+                        <SelectTrigger
+                          id={id}
+                          aria-describedby={describedBy}
+                          aria-invalid={invalid}
+                          className="w-full bg-transparent border-input dark:bg-muted/50"
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none">Select a field</SelectItem>
+                          {toFieldOptions.map(f => (
+                            <SelectItem key={f.name} value={f.name}>
+                              {f.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  </FieldShell>
                   {toFieldOptions.length === 0 && (
                     <p className="text-xs text-muted-foreground">
                       Add an email field to the form first.
@@ -764,66 +797,73 @@ function NotificationSheet({
 
             {/* Reply-To */}
             <Grid cols={2} responsive>
-              <div className="space-y-1.5">
-                <Label htmlFor="notification-replyto-mode">Reply-To</Label>
-                <Select
-                  value={replyToMode}
-                  onValueChange={value => {
-                    const mode = value as ReplyToMode;
-                    setReplyToMode(mode);
-                    // A mode change always clears the stored value (the old
-                    // shape can't be represented in the new mode); it stays
-                    // absent — not an empty string — until the user picks a
-                    // field or types an address.
-                    update("replyTo", undefined);
-                  }}
-                >
-                  <SelectTrigger
-                    id="notification-replyto-mode"
-                    className="w-full bg-transparent border-input dark:bg-muted/50"
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">None</SelectItem>
-                    <SelectItem value="field">
-                      The visitor (email field)
-                    </SelectItem>
-                    <SelectItem value="custom">A custom address</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {replyToMode === "field" && (
-                <div className="space-y-1.5">
-                  <Label htmlFor="notification-replyto">
-                    Visitor email field
-                  </Label>
+              <FieldShell label="Reply-To" htmlFor="notification-replyto-mode">
+                {({ id, describedBy, invalid }) => (
                   <Select
-                    value={replyToRef ?? "__none"}
-                    onValueChange={value =>
-                      update(
-                        "replyTo",
-                        value === "__none" ? undefined : toFieldRef(value)
-                      )
-                    }
+                    value={replyToMode}
+                    onValueChange={value => {
+                      const mode = value as ReplyToMode;
+                      setReplyToMode(mode);
+                      // A mode change always clears the stored value (the old
+                      // shape can't be represented in the new mode); it stays
+                      // absent — not an empty string — until the user picks a
+                      // field or types an address.
+                      update("replyTo", undefined);
+                    }}
                   >
                     <SelectTrigger
-                      id="notification-replyto"
+                      id={id}
+                      aria-describedby={describedBy}
+                      aria-invalid={invalid}
                       className="w-full bg-transparent border-input dark:bg-muted/50"
                     >
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="__none">Select a field</SelectItem>
-                      {replyToFieldOptions.map(f => (
-                        <SelectItem key={f.name} value={f.name}>
-                          {f.label}
-                        </SelectItem>
-                      ))}
+                      <SelectItem value="none">None</SelectItem>
+                      <SelectItem value="field">
+                        The visitor (email field)
+                      </SelectItem>
+                      <SelectItem value="custom">A custom address</SelectItem>
                     </SelectContent>
                   </Select>
-                </div>
+                )}
+              </FieldShell>
+
+              {replyToMode === "field" && (
+                <FieldShell
+                  label="Visitor email field"
+                  htmlFor="notification-replyto"
+                >
+                  {({ id, describedBy, invalid }) => (
+                    <Select
+                      value={replyToRef ?? "__none"}
+                      onValueChange={value =>
+                        update(
+                          "replyTo",
+                          value === "__none" ? undefined : toFieldRef(value)
+                        )
+                      }
+                    >
+                      <SelectTrigger
+                        id={id}
+                        aria-describedby={describedBy}
+                        aria-invalid={invalid}
+                        className="w-full bg-transparent border-input dark:bg-muted/50"
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none">Select a field</SelectItem>
+                        {replyToFieldOptions.map(f => (
+                          <SelectItem key={f.name} value={f.name}>
+                            {f.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                </FieldShell>
               )}
               {replyToMode === "custom" && (
                 <FieldShell
@@ -899,65 +939,77 @@ function NotificationSheet({
 
             {condition && (
               <div className="flex flex-wrap items-end gap-2 border border-border bg-muted/40 p-3">
-                <div className="min-w-36 flex-1 space-y-1.5">
-                  <Label htmlFor="notification-condition-field">Field</Label>
-                  <Select
-                    value={condition.field || "__none"}
-                    onValueChange={value =>
-                      update("condition", {
-                        ...condition,
-                        field: value === "__none" ? "" : value,
-                      })
-                    }
-                  >
-                    <SelectTrigger
-                      id="notification-condition-field"
-                      className="w-full bg-transparent border-input dark:bg-muted/50"
+                <FieldShell
+                  label="Field"
+                  htmlFor="notification-condition-field"
+                  className="min-w-36 flex-1"
+                >
+                  {({ id, describedBy, invalid }) => (
+                    <Select
+                      value={condition.field || "__none"}
+                      onValueChange={value =>
+                        update("condition", {
+                          ...condition,
+                          field: value === "__none" ? "" : value,
+                        })
+                      }
                     >
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__none">Select a field</SelectItem>
-                      {fields.map(f => (
-                        <SelectItem key={f.name} value={f.name}>
-                          {f.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="min-w-36 flex-1 space-y-1.5">
-                  <Label htmlFor="notification-condition-comparison">
-                    Comparison
-                  </Label>
-                  <Select
-                    value={condition.comparison}
-                    onValueChange={value =>
-                      update("condition", {
-                        ...condition,
-                        comparison:
-                          value as ConditionalLogicCondition["comparison"],
-                      })
-                    }
-                  >
-                    <SelectTrigger
-                      id="notification-condition-comparison"
-                      className="w-full bg-transparent border-input dark:bg-muted/50"
-                    >
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {Object.entries(COMPARISON_LABELS).map(
-                        ([value, label]) => (
-                          <SelectItem key={value} value={value}>
-                            {label}
+                      <SelectTrigger
+                        id={id}
+                        aria-describedby={describedBy}
+                        aria-invalid={invalid}
+                        className="w-full bg-transparent border-input dark:bg-muted/50"
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none">Select a field</SelectItem>
+                        {fields.map(f => (
+                          <SelectItem key={f.name} value={f.name}>
+                            {f.label}
                           </SelectItem>
-                        )
-                      )}
-                    </SelectContent>
-                  </Select>
-                </div>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                </FieldShell>
+
+                <FieldShell
+                  label="Comparison"
+                  htmlFor="notification-condition-comparison"
+                  className="min-w-36 flex-1"
+                >
+                  {({ id, describedBy, invalid }) => (
+                    <Select
+                      value={condition.comparison}
+                      onValueChange={value =>
+                        update("condition", {
+                          ...condition,
+                          comparison:
+                            value as ConditionalLogicCondition["comparison"],
+                        })
+                      }
+                    >
+                      <SelectTrigger
+                        id={id}
+                        aria-describedby={describedBy}
+                        aria-invalid={invalid}
+                        className="w-full bg-transparent border-input dark:bg-muted/50"
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {Object.entries(COMPARISON_LABELS).map(
+                          ([value, label]) => (
+                            <SelectItem key={value} value={value}>
+                              {label}
+                            </SelectItem>
+                          )
+                        )}
+                      </SelectContent>
+                    </Select>
+                  )}
+                </FieldShell>
 
                 {!VALUELESS_COMPARISONS.has(condition.comparison) && (
                   <FieldShell

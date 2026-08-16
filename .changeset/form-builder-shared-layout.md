@@ -39,7 +39,27 @@ breakpoint onto `Grid`'s container-query mode, since the admin content region
 is narrower than the window whenever both sidebars are open.
 
 Simple single-element fields (plain text/email inputs) now render through
-`FieldShell` for their label, description and error wiring. Fields built on a
-compound control (Radix `Select`) stay hand-rolled: `Select`'s root does not
-forward arbitrary props to its trigger, so a wrapper that clones a single
-child to attach `id`/`aria-describedby` has nothing to attach them to.
+`FieldShell` for their label, description and error wiring.
+
+`FieldShell`'s `children` now also accepts a function —
+`(field: FieldShellRenderProps) => ReactNode`, `FieldShellRenderProps` newly
+exported — receiving the `{ id, describedBy, invalid }` it computes so a
+caller can apply that wiring to a nested element instead of relying on a
+single top-level `cloneElement`. This is what a compound Radix control needs:
+`Select`'s root destructures a fixed prop list and never forwards the rest,
+so an id cloned onto it never reaches the real, focusable `SelectTrigger` two
+levels down — silently, with no error and no warning. Both call paths derive
+their id/`aria-describedby`/`aria-invalid` from one shared computation, so
+they cannot drift into disagreeing about the same field. In development,
+`FieldShell` now also checks after mount whether the id it computed landed on
+any element in the document at all, and warns once, by field name, if it did
+not — the general form of the defect a compound control's dropped id was a
+specific case of. Every `Select`-driven field in the form builder's Create/
+Edit view and its Notifications sheet (Status, Email provider, Email
+template, Send-to type, Recipient address in field mode, Reply-To mode,
+Reply-To visitor-field in field mode, and the send-condition Field and
+Comparison pickers) now goes through `FieldShell` using this render-function
+form, wiring their `SelectTrigger` correctly for the first time. `RadioGroup`,
+`AddressChipList` and the horizontal label-left/control-right rows
+(`SettingRow`, the Enabled toggle) stay hand-rolled for their own, unrelated
+reasons, each documented at its own call site.

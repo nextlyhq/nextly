@@ -402,32 +402,38 @@ function FormBuilderViewInner({
               forwards none of the rest to the trigger DOM node, so a
               FieldShell clone's id/aria-describedby/aria-invalid would land
               on a component that drops them rather than on the focusable
-              trigger. Kept hand-rolled so the label stays wired to the real
-              control instead of silently failing to connect. */}
-          <div className="w-36 space-y-1.5">
-            <label
-              htmlFor="form-status"
-              className="text-sm font-medium text-foreground"
-            >
-              Status
-            </label>
-            <Select
-              value={formData.status || "draft"}
-              onValueChange={value =>
-                updateFormData({
-                  status: value as "draft" | "published" | "closed",
-                })
-              }
-            >
-              <SelectTrigger id="form-status" className="bg-transparent">
-                <SelectValue placeholder="Status" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="draft">Draft</SelectItem>
-                <SelectItem value="published">Published</SelectItem>
-                <SelectItem value="closed">Closed</SelectItem>
-              </SelectContent>
-            </Select>
+              trigger. The render-function form of `children` sidesteps
+              that: FieldShell hands the computed wiring to this function,
+              which applies it to SelectTrigger — the actual focusable,
+              ARIA-bearing element — instead of a clone that can never reach
+              past `Select`'s root. */}
+          <div className="w-36">
+            <FieldShell label="Status" htmlFor="form-status">
+              {({ id, describedBy, invalid }) => (
+                <Select
+                  value={formData.status || "draft"}
+                  onValueChange={value =>
+                    updateFormData({
+                      status: value as "draft" | "published" | "closed",
+                    })
+                  }
+                >
+                  <SelectTrigger
+                    id={id}
+                    aria-describedby={describedBy}
+                    aria-invalid={invalid}
+                    className="bg-transparent"
+                  >
+                    <SelectValue placeholder="Status" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="draft">Draft</SelectItem>
+                    <SelectItem value="published">Published</SelectItem>
+                    <SelectItem value="closed">Closed</SelectItem>
+                  </SelectContent>
+                </Select>
+              )}
+            </FieldShell>
           </div>
         </div>
 
