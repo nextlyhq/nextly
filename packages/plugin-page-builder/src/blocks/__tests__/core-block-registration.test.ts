@@ -60,6 +60,8 @@ describe("core block registration", () => {
       "core/box",
       "core/button",
       "core/collection-loop",
+      "core/column",
+      "core/columns",
       "core/divider",
       "core/embed",
       "core/heading",
