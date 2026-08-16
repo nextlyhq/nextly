@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { buildDesiredTableFromComponentFields } from "../../../schema/pipeline/diff/build-from-fields";
 import type { TableSpec } from "../../../schema/pipeline/diff/types";
+import { STORAGE_FORMAT } from "../../../../schemas/storage-format";
 import {
   planFieldGroupReconcile,
   type ReconcilableField,
@@ -693,6 +694,61 @@ describe("planFieldGroupReconcile", () => {
           kind: "structural-column-missing",
         }),
       ]);
+    });
+
+    /**
+     * A system column can survive with its TYPE or NULLABILITY changed, and both break what the
+     * runtime schema is about to be registered on: a nullable `_parent_id` admits rows belonging
+     * to no parent, and a retyped one makes the parent-scoped queries compare values that no
+     * longer correspond.
+     */
+    it("refuses a structural column that is nullable where the table requires a value", () => {
+      const live = liveTableFor(stored);
+      const parent = live.columns.find(c => c.name === "_parent_id");
+      if (parent) parent.nullable = true;
+
+      const result = plan({ storedFields: stored, liveMain: live });
+
+      expect(result.blockers).toEqual([
+        expect.objectContaining({
+          columnName: "_parent_id",
+          kind: "structural-column-missing",
+        }),
+      ]);
+    });
+
+    it("refuses a structural column whose type has drifted", () => {
+      const live = liveTableFor(stored);
+      const parent = live.columns.find(c => c.name === "_parent_id");
+      if (parent) parent.type = "int4";
+
+      const result = plan({ storedFields: stored, liveMain: live });
+
+      expect(result.blockers).toEqual([
+        expect.objectContaining({
+          columnName: "_parent_id",
+          kind: "structural-column-missing",
+        }),
+      ]);
+    });
+
+    /**
+     * The negative control, and it is the one that decides the direction of the nullability check.
+     *
+     * A column the generator leaves NULLABLE that is live NOT NULL rejects nothing this operation
+     * can repair, and refusing it would turn a table an older generation created with a tighter
+     * constraint into an unreconcilable one — a false refusal on the single path out of trouble.
+     */
+    it("accepts a structural column that is stricter than the skeleton requires", () => {
+      const live = liveTableFor(stored);
+      const nullableInSkeleton = live.columns.find(
+        c => c.name === STORAGE_FORMAT.columns.type
+      );
+      if (nullableInSkeleton) nullableInSkeleton.nullable = false;
+
+      const result = plan({ storedFields: stored, liveMain: live });
+
+      expect(result.blockers).toEqual([]);
     });
 
     it("refuses a main table missing its parent index", () => {
