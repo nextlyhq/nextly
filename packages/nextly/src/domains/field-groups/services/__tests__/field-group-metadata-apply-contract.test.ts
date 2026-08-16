@@ -1005,8 +1005,13 @@ describe("an update whose row write fails after the tables moved", () => {
           _data: Record<string, unknown>,
           expectedSchemaVersion: number,
           _options?: { source?: string }
-        ) => ({
-          matched: true as const,
+          // The union is the declared return type so a test can answer `matched: false` — the
+          // outcome half these tests exist to drive — without the literal-`true` default narrowing
+          // the property type.
+        ): Promise<
+          { matched: true; newSchemaVersion: number } | { matched: false }
+        > => ({
+          matched: true,
           newSchemaVersion: expectedSchemaVersion + 1,
         })
       ),
