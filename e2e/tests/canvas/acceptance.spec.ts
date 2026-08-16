@@ -763,40 +763,62 @@ test.describe("a canvas any Nextly editor could ship", () => {
       "the fixture must overflow the canvas, or autoscroll is unobservable"
     ).toBeGreaterThan(1400);
 
-    await dragFromPanel(driver);
+    // A second precondition, and it is about the CANVAS rather than the fixture: a document that
+    // renders tall enough still gives autoscroll nothing to do if the element that holds it does
+    // not overflow. The two are different failures and only this one is invisible in the boxes.
+    const range = await chrome.canvasScroll();
+    expect(
+      range.max,
+      "the canvas must have somewhere to scroll TO, or nothing here can move"
+    ).toBeGreaterThan(0);
+    expect(range.top, "the canvas must start at the top").toBe(0);
 
-    // The canvas cannot answer this at all, and that refusal IS the
-    // shortfall. Asserted as the reader's OWN error type BEFORE the
-    // expectation is marked, so a broken selector, a missing iframe or a
-    // failed seed stays a real failure instead of becoming another
-    // expected one. It also fires the day the capability arrives: this
-    // line goes red first and forces the target below to be rewritten.
-    //
-    // Wrapped in an async thunk because these readers throw SYNCHRONOUSLY:
-    // `expect(reader())` never receives a promise, so `.rejects` cannot see
-    // the refusal and the raw error escapes the assertion entirely.
-    await expect(async () => chrome.canvasScrollTop()).rejects.toThrow(
-      CanvasCapabilityError
-    );
+    // To the EDGE, then dwell. Autoscroll answers a pointer resting near a boundary, not a single
+    // move — and walking down in fixed steps runs the pointer off the viewport before it has
+    // dwelled anywhere, which reads as the canvas ignoring the gesture.
+    const source = await driver.dragSourceCentre();
+    await driver.startDragAt(source);
+    await dragPointerTo(driver, await driver.canvasBottomEdge());
 
-    // Marked only now. Everything above ran unprotected.
-    test.fail(true, "this canvas does not autoscroll toward an edge");
+    // Moving by a pixel each tick rather than holding still. dnd-kit recomputes the scroll intent
+    // from the drag position, and a pointer that never moves again produces no further signal —
+    // so a perfectly still hold can measure a canvas that simply stopped being told anything.
+    const dwell = async (ticks: number) => {
+      for (let tick = 0; tick < ticks; tick += 1) {
+        await driver.moveBy(0, tick % 2 === 0 ? 1 : -1);
+      }
+    };
 
-    const start = await chrome.canvasScrollTop();
-    // Autoscroll answers dwelling near an edge, not a single move.
-    for (let tick = 0; tick < 12; tick += 1) await driver.moveBy(0, 40);
-    const engaged = await chrome.canvasScrollTop();
-    for (let tick = 0; tick < 40; tick += 1) await driver.moveBy(0, 40);
-    const settled = await chrome.canvasScrollTop();
-    const stillSettled = await chrome.canvasScrollTop();
+    await dwell(20);
+    const engaged = await chrome.canvasScroll();
+    // Long enough to reach the end of a 6000px document at any plausible rate. The bound is what
+    // this half is about, so the dwell has to be generous enough to actually arrive at it.
+    await dwell(200);
+    const settled = await chrome.canvasScroll();
+    await dwell(40);
+    const stillSettled = await chrome.canvasScroll();
     await driver.cancel();
 
-    expect(engaged, "autoscroll must engage near an edge").toBeGreaterThan(
-      start
-    );
-    // And stop. A scroll that runs past the end leaves the author looking at
-    // blank space with no way back except releasing the drag.
-    expect(settled, "autoscroll must stop at the bounds").toBe(stillSettled);
+    expect(
+      engaged.top,
+      "autoscroll must engage while the pointer rests near an edge"
+    ).toBeGreaterThan(range.top);
+    // And STOP, at the end rather than merely somewhere. Two equal readings alone are satisfied by
+    // a scroll that stalled for any reason, including one that never started — so the bound is
+    // asserted as well. A scroll that runs past the end leaves the author looking at blank space
+    // with no way back except releasing the drag.
+    expect(
+      settled.top,
+      "autoscroll must not scroll past the end of the document"
+    ).toBeLessThanOrEqual(settled.max);
+    expect(
+      settled.top,
+      "autoscroll must actually reach the bound it is asked to stop at"
+    ).toBe(settled.max);
+    expect(
+      stillSettled.top,
+      "autoscroll must stay stopped once it is at the bound"
+    ).toBe(settled.top);
   });
 
   test("stays responsive dragging over a large tree", async ({ request }) => {

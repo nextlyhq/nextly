@@ -129,6 +129,15 @@ const REFUSAL_RENDER_MS = 2_000;
 /** Past dnd-kit's activation distance in one move, so a drag actually starts. */
 const DRAG_THRESHOLD_PX = 12;
 
+/**
+ * How far inside the canvas's bottom edge {@link CanvasDriver.canvasBottomEdge} stands.
+ *
+ * Comfortably inside dnd-kit's own autoscroll threshold, which is a fraction of the scroller's
+ * size rather than a fixed distance, so a point a few pixels in is within it for any canvas large
+ * enough to scroll at all.
+ */
+const EDGE_INSET_PX = 8;
+
 export function createPocDriver(page: Page): CanvasDriver {
   /** The canvas iframe, from the one place that decides which frame that is. */
   function canvasFrame(): Frame {
@@ -290,6 +299,18 @@ export function createPocDriver(page: Page): CanvasDriver {
       // Near the top rather than the middle: the drag then travels downward
       // through the tree, which is what the sweep scenarios need.
       return { x: box.x + box.width / 2, y: box.y + 40 };
+    },
+
+    async canvasBottomEdge() {
+      const box = await page.locator("iframe").boundingBox();
+      if (!box) throw new Error("canvas iframe has no box");
+      // INSIDE the edge, not on it. A pointer on the boundary is as likely to resolve to whatever
+      // sits below the canvas, and a drag that has left the canvas is not a test of what the
+      // canvas does near its edge.
+      return {
+        x: box.x + box.width / 2,
+        y: box.y + box.height - EDGE_INSET_PX,
+      };
     },
 
     async clickToInsert() {
@@ -835,11 +856,26 @@ export function createPocChromeReader(page: Page): CanvasChromeReader {
       return said.trim().length > 0;
     },
 
-    canvasScrollTop(): Promise<number> {
-      throw new CanvasCapabilityError(
-        "this canvas does not autoscroll, so its scroll offset during a drag " +
-          "reports nothing about a behaviour it does not have"
-      );
+    async canvasScroll(): Promise<{ top: number; max: number }> {
+      // The FRAME's own document. The host wrapper around the iframe has `overflow: auto` and is
+      // the obvious thing to watch, and it never moves: the iframe is sized to the wrapper, so
+      // the document that overflows is the one inside it. Measured — during a drag held at the
+      // edge the frame document travelled 3192px while the wrapper stayed at 0 — and a reader
+      // pointed at the wrapper would report "no autoscroll" about a canvas that is scrolling.
+      return canvasFrameOf(page).evaluate(() => {
+        const el = document.scrollingElement;
+        if (!el) {
+          throw new Error(
+            "the canvas frame has no scrolling element, so its scroll offset cannot be read"
+          );
+        }
+        return {
+          top: el.scrollTop,
+          // The bound the requirement is about. `scrollTop` alone cannot distinguish autoscroll
+          // stopping because it reached the end from autoscroll stopping for any other reason.
+          max: Math.max(0, el.scrollHeight - el.clientHeight),
+        };
+      });
     },
 
     startDragOfBlock(id: string): Promise<void> {
