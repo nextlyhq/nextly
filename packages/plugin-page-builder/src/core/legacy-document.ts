@@ -314,6 +314,16 @@ function toEngineNode(node: LegacyNode, notes: ConversionNote[]): BlockNode {
 }
 
 /**
+ * True when a record carries nothing, whether by being absent or by being empty.
+ *
+ * The two are the same fact about authorship and different values in storage,
+ * because clearing the last entry leaves the key behind.
+ */
+function isAbsentRecord(value: Record<string, string> | undefined): boolean {
+  return value === undefined || Object.keys(value).length === 0;
+}
+
+/**
  * True when the root node is the editor's synthetic wrapper rather than a
  * block the author put there.
  *
@@ -332,7 +342,12 @@ function isSyntheticRoot(root: LegacyNode): boolean {
     root.motion === undefined &&
     root.name === undefined &&
     root.cssId === undefined &&
-    root.attributes === undefined &&
+    // An EMPTY attribute map is absent metadata, not authorship. Clearing the
+    // last attribute in the legacy editor stores `{}` rather than removing the
+    // field, so a strict undefined check reads an otherwise untouched wrapper
+    // as authored and preserves a `core/container` that has no behaviour to
+    // preserve.
+    isAbsentRecord(root.attributes) &&
     root.visibility === undefined &&
     root.locked !== true
   );
@@ -445,8 +460,34 @@ export function toEngineDocument(legacy: LegacyDocument): ConversionResult {
 export function isLegacyDocument(value: unknown): value is LegacyDocument {
   return (
     isPlainObject(value) &&
-    "root" in value &&
-    isPlainObject(value.root) &&
-    !("nodes" in value)
+    !("nodes" in value) &&
+    isLegacyNode((value as { root?: unknown }).root)
+  );
+}
+
+/**
+ * True when a value carries the node fields the conversion DEREFERENCES.
+ *
+ * The guard has to promise what the narrowed type promises, not merely that
+ * something called `root` is an object. `toEngineDocument` reads `props`,
+ * `type` and `id` without checking them, on the strength of this predicate —
+ * so a stored value of `{ root: {} }` would satisfy a shallower guard, narrow
+ * to `LegacyDocument` with TypeScript's blessing, and then throw partway
+ * through the walk. A migration that throws on a corrupt row turns a
+ * repairable document into a failed migration; refusing it here makes the same
+ * row a controlled rejection the caller can report and skip.
+ *
+ * Children are deliberately NOT walked. This runs on every stored value to
+ * decide which format it is, and a deep validation would make that decision
+ * cost a full tree traversal; the engine's own validator owns depth checking,
+ * and a malformed descendant surfaces there rather than being silently
+ * reclassified as an engine document here.
+ */
+function isLegacyNode(value: unknown): boolean {
+  return (
+    isPlainObject(value) &&
+    typeof value.id === "string" &&
+    typeof value.type === "string" &&
+    isPlainObject(value.props)
   );
 }

@@ -261,6 +261,19 @@ describe("toEngineDocument", () => {
   });
 
   describe("the root the author built", () => {
+    it("is still unwrapped when its attribute map is EMPTY", () => {
+      // Clearing the last attribute in the legacy editor stores `{}` rather
+      // than removing the field, so an untouched wrapper can legitimately
+      // carry one. Treating that as authorship preserves a `core/container`
+      // with no behaviour to preserve.
+      const wrapped = wrapper([node("a")]);
+      wrapped.attributes = {};
+
+      const { document } = toEngineDocument(doc(wrapped));
+
+      expect(document.nodes.map(n => n.id)).toEqual(["a"]);
+    });
+
     it("is kept as a real block rather than unwrapped", () => {
       // Unwrapping a container the author added would change how the page
       // renders — its padding and background would simply stop applying.
@@ -355,7 +368,12 @@ describe("toEngineDocument", () => {
 
 describe("isLegacyDocument", () => {
   it("separates the two envelopes on key presence alone", () => {
-    expect(isLegacyDocument({ version: 1, root: { id: "r" } })).toBe(true);
+    expect(
+      isLegacyDocument({
+        version: 1,
+        root: { id: "r", type: "core/container", props: {} },
+      })
+    ).toBe(true);
     expect(
       isLegacyDocument({ formatVersion: 1, kind: "page", nodes: [] })
     ).toBe(false);
@@ -365,5 +383,32 @@ describe("isLegacyDocument", () => {
     for (const value of [null, undefined, 7, "root", [], { root: "no" }]) {
       expect(isLegacyDocument(value)).toBe(false);
     }
+  });
+
+  it("refuses a root that cannot survive the conversion", () => {
+    // The guard has to promise what the narrowed type promises. A shallower
+    // one accepts these, narrows with TypeScript's blessing, and then throws
+    // partway through the walk — turning a repairable row into a failed
+    // migration instead of a controlled rejection.
+    for (const root of [
+      {},
+      { id: "r" },
+      { id: "r", type: "core/container" },
+      { id: "r", type: "core/container", props: "no" },
+      { id: 7, type: "core/container", props: {} },
+    ]) {
+      expect(isLegacyDocument({ version: 1, root })).toBe(false);
+    }
+  });
+
+  it("still accepts a well-formed legacy document", () => {
+    // Without this, tightening the guard to reject everything would satisfy
+    // the assertion above.
+    expect(
+      isLegacyDocument({
+        version: 1,
+        root: { id: "r", type: "core/container", props: {} },
+      })
+    ).toBe(true);
   });
 });
