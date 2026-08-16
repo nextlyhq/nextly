@@ -226,13 +226,14 @@ describe("blockingJobs", () => {
 });
 
 /**
- * A reviewer that reports a clean pass WITHOUT opening a review record.
+ * Which revision a reviewer is known to have read, from either source.
  *
- * This gate required a record, on the reasoning that only a record states which
- * tree was read. Measured across four pull requests here, the one carrying
- * findings produced records and the three CLEAN ones produced none: the pass
- * existed only as a comment naming the commit. Requiring a record therefore
- * made a clean verdict permanently invisible.
+ * A record carries a server-assigned revision and is preferred wherever one
+ * exists. It is not always present: a reviewer may open a record only when it
+ * has findings and state a clean pass as a comment, so a gate reading records
+ * alone cannot tell that verdict from silence. The cases below fix what a
+ * comment must carry before it stands in, and the three answers this returns:
+ * the tip, an earlier revision, or nothing.
  */
 describe("reviewedRevision", () => {
   const CODEX = "chatgpt-codex-connector[bot]";

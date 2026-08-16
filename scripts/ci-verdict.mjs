@@ -355,9 +355,13 @@ export function latestBaseChange(pages) {
 }
 
 export function abbreviationIsAmbiguous(named, head, knownRevisions) {
-  // Nothing to compare against is not the same as nothing colliding. An
-  // abbreviation is only known to identify ONE commit once something has been
-  // checked, so an absent revision set refuses rather than waving it through.
+  // `knownRevisions` must be the pull request's COMPLETE revision set, or
+  // absent. A partial set is worse than none: it answers "nothing else shares
+  // this prefix" from a sample, so the caller decides completeness and passes
+  // nothing when it cannot establish it.
+  //
+  // Nothing to compare against is not the same as nothing colliding, so an
+  // absent set refuses rather than waving it through.
   if (knownRevisions === undefined || knownRevisions === null) return true;
   const target = head.toLowerCase();
   let sawTarget = false;
@@ -1005,9 +1009,18 @@ async function main(argv) {
   // asking whether an abbreviation identifies more than one revision does not,
   // and folding the two together makes a single merge commit anywhere in the
   // pull request refuse every comment verdict.
-  const knownRevisions = commits
+  const revisionShas = commits
     .map(commit => commit?.sha)
     .filter(value => typeof value === "string");
+  // Withheld unless every revision was returned. That endpoint serves at most
+  // 250 commits and reports no error when it truncates, so a short list answers
+  // "no other revision shares this prefix" from a sample of the history, and an
+  // omitted one carrying an old verdict is exactly what the question is about.
+  const knownRevisions =
+    typeof pullObject.commits === "number" &&
+    new Set(revisionShas).size >= pullObject.commits
+      ? revisionShas
+      : undefined;
   // GitHub serves at most 250 commits from that endpoint and `--paginate`
   // cannot reach past it, returning a short list and no error. Compared against
   // the map's SIZE rather than the array's length, because a duplicate sha

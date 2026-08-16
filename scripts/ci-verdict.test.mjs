@@ -59,12 +59,12 @@ const verdictComment = (login, sha, created_at = undefined) => ({
 });
 
 /**
- * A reviewer that reports a clean pass WITHOUT opening a review object.
+ * Coverage from a reviewer that states a clean pass WITHOUT a review object.
  *
- * Measured against this repository: on four pull requests, the one carrying
- * findings produced review objects and the three clean ones produced none at
- * all, only a comment. A gate reading the reviews endpoint alone therefore
- * refuses forever on a revision that was reviewed and passed.
+ * The fixture carries no review record at all, which is the point: a reviewer
+ * may open one only when it has findings, so a gate reading records alone
+ * cannot tell a clean verdict from silence. Every case below fixes what a
+ * comment must carry before it counts as coverage.
  */
 describe("verdictCommentReviewers", () => {
   it("grants coverage from a comment naming the head", () => {
@@ -153,10 +153,10 @@ describe("verdictCommentReviewers", () => {
     ).toEqual([]);
   });
 
-  // An abbreviation is only evidence if it identifies ONE commit. The author
-  // controls their own commits, and seven hexadecimal digits is within reach of
-  // grinding, so a head made to share a prefix with an earlier reviewed
-  // revision would otherwise be covered by that older verdict.
+  // An abbreviation is evidence only if it identifies ONE commit. The author
+  // controls their own commits and seven hexadecimal digits is within reach of
+  // grinding, so a head sharing a prefix with an earlier reviewed revision
+  // would otherwise be covered by that older verdict.
   it("refuses an abbreviation that also matches an earlier revision", () => {
     const shared = "aaaaaaa";
     const collidingHead = shared + "1".repeat(40 - shared.length);
@@ -187,13 +187,31 @@ describe("verdictCommentReviewers", () => {
     ).toEqual([]);
   });
 
-  // A rewritten branch no longer lists the revisions an abbreviation would have
-  // to be unique against, while a comment naming a removed one survives.
+  // A rewritten branch no longer lists the revisions an abbreviation must be
+  // unique against, while a comment naming a removed one survives.
   it("refuses every comment verdict once history was rewritten", () => {
     expect(
       verdictCommentReviewers([verdictComment(CODEX, HEAD)], HEAD, {
         knownRevisions: [HEAD],
         historyRewritten: true,
+      })
+    ).toEqual([]);
+  });
+
+  // A caller that cannot establish completeness passes nothing, so a truncated
+  // history cannot answer "no other revision shares this prefix" from a sample.
+  it("refuses when the revision set omits a colliding revision", () => {
+    const shared = "aaaaaaa";
+    const collidingHead = shared + "1".repeat(40 - shared.length);
+    const comment = {
+      user: { login: CODEX },
+      body: `**Reviewed commit:** \`${shared}\``,
+    };
+    // The omitted revision is absent from the set exactly as truncation leaves
+    // it, so the head alone would look unanimous.
+    expect(
+      verdictCommentReviewers([comment], collidingHead, {
+        knownRevisions: undefined,
       })
     ).toEqual([]);
   });
