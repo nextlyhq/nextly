@@ -645,6 +645,25 @@ export class SingleRegistryService extends BaseRegistryService<
     }
 
     try {
+      // BEFORE the registry row, so a failure here is retryable. Reversed, a
+      // failed cleanup would leave the Single gone and its recovery points
+      // behind, and the retry would stop at `getSingle` with not-found -- so
+      // nothing could ever remove them. This order can only leave a surviving
+      // Single whose recovery points were dropped, which costs an author one
+      // unsaved draft rather than orphaning rows permanently.
+      //
+      // Recovery points are excluded from history listings, version reads and
+      // retention pruning alike, so nothing else in the system would ever
+      // collect them.
+      //
+      // Durable history and working drafts are deliberately NOT touched. What
+      // a deletion owes a document's recorded past is a wider question, and
+      // answering it as a side effect here would decide it by accident.
+      await new VersionsRepository(this.adapter).deleteAutosavesForEntity(
+        "single",
+        slug
+      );
+
       const count = await this.adapter.delete(
         this.registryTableName,
         this.whereEq("slug", slug)
@@ -654,21 +673,6 @@ export class SingleRegistryService extends BaseRegistryService<
         // §13.8: generic "Not found." — slug in logContext only.
         throw NextlyError.notFound({ logContext: { slug } });
       }
-
-      // Recovery points go with the entity. They are excluded from history
-      // listings, from version reads and from retention pruning, so nothing
-      // else would ever remove them, and once the Single is gone the
-      // live-document gate makes them permanently unreachable: one author's
-      // unsaved work on a document that no longer exists.
-      //
-      // Durable history and working drafts are deliberately NOT touched here.
-      // What a deletion owes a document's recorded past is a wider question
-      // than this, and answering it as a side effect would decide it by
-      // accident. A recovery point carries no such question.
-      await new VersionsRepository(this.adapter).deleteAutosavesForEntity(
-        "single",
-        slug
-      );
 
       // Drop the in-process recording decision with the row, for the same
       // reason as collections: a slug reused later must start from the
