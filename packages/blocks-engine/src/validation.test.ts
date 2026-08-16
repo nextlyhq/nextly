@@ -425,6 +425,47 @@ describe("issue-code vocabulary is stable and complete", () => {
     expect(placement?.message).not.toContain("acme/somewhere-else");
   });
 
+  it.each(["columns", "core/columns/", "", "core//columns"])(
+    "declines the placement question under a container typed %o",
+    badType => {
+      // A STRING is not a name. These are all strings no block can be named, so
+      // treating them as container names refuses a restricted child against
+      // something nothing could ever match — a placement error the author cannot
+      // act on, beside the malformed-type error that is the real defect.
+      const doc = invalidDoc({
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "row",
+            type: badType,
+            version: 1,
+            props: {},
+            slots: {
+              default: [
+                { id: "cell", type: "acme/column", version: 1, props: {} },
+              ],
+            },
+          },
+        ],
+      });
+
+      const issues = validate(doc, {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+        nesting: nestingOf({ "acme/column": ["core/columns"] }),
+      });
+
+      expect(
+        issues.filter(
+          i => i.code === "wrong-parent" || i.code === "restricted-at-root"
+        )
+      ).toEqual([]);
+      // The container's own defect is still what the document is refused for.
+      expect(issues.some(i => i.code === "invalid-node-type")).toBe(true);
+    }
+  );
+
   it("does not call a child of an unnameable container a root", () => {
     // "No container" and "a container this walk cannot name" are different
     // facts. One absent value standing for both makes a node in a slot answer
