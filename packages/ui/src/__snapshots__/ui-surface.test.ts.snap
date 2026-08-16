@@ -143,6 +143,7 @@ exports[`ui public export surface > . surface is unchanged 1`] = `
   "DropdownMenuTrigger (value)",
   "FieldShell (value)",
   "FieldShellProps (type)",
+  "FieldShellRenderProps (type)",
   "FieldWidth (type)",
   "FilterInfo (type)",
   "FormActions (value)",
