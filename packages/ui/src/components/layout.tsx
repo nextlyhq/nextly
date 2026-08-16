@@ -94,25 +94,43 @@ export interface GridProps extends HTMLAttributes<HTMLDivElement> {
  * @experimental
  */
 export const Grid = forwardRef<HTMLDivElement, GridProps>(
-  ({ cols = 2, gap = 4, responsive = false, className, ...props }, ref) => {
-    const grid = (
-      <div
-        ref={ref}
-        className={cn(
-          "grid",
-          responsive ? RESPONSIVE_COLS[cols] : COLS[cols],
-          GAP[gap],
-          className
-        )}
-        {...props}
-      />
-    );
+  (
+    { cols = 2, gap = 4, responsive = false, className, children, ...rest },
+    ref
+  ) => {
+    if (!responsive) {
+      // No wrapper: the single element IS the grid, exactly as before
+      // `responsive` existed, so an existing caller's className, style and
+      // other HTML attributes keep landing on the one node it renders.
+      return (
+        <div
+          ref={ref}
+          className={cn("grid", COLS[cols], GAP[gap], className)}
+          {...rest}
+        >
+          {children}
+        </div>
+      );
+    }
 
     // Responsive mode renders its own unnamed `@container` wrapper so the
     // grid queries the space IT has, not any ancestor's — no dependency on a
-    // named container declared elsewhere in the tree. Non-responsive mode
-    // renders no wrapper at all: existing callers must not gain a DOM node.
-    return responsive ? <div className="@container">{grid}</div> : grid;
+    // named container declared elsewhere in the tree.
+    //
+    // That wrapper is the element that actually participates in the PARENT's
+    // layout, so everything describing how this Grid sits in its parent —
+    // `className`, `style` and the rest of the HTML attributes, plus `ref` —
+    // belongs on it rather than on the inner grid. `cols` and `gap` describe
+    // the grid's OWN internal layout and stay on the inner element regardless
+    // of which mode is active. A caller passing spacing through `className`
+    // instead of `gap` is already misusing the prop, not losing information.
+    return (
+      <div ref={ref} className={cn("@container", className)} {...rest}>
+        <div className={cn("grid", RESPONSIVE_COLS[cols], GAP[gap])}>
+          {children}
+        </div>
+      </div>
+    );
   }
 );
 Grid.displayName = "Grid";
