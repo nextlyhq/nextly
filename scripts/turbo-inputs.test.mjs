@@ -42,11 +42,22 @@ const TYPESCRIPT_EXTENSIONS = /\.(?:ts|tsx|mts|cts)$/;
  * answer accounts for `$TURBO_DEFAULT$`, negations and per-package overrides
  * that a pattern-by-pattern re-implementation here would have to model.
  */
+/**
+ * Long enough for a real compiler probe.
+ *
+ * Each case launches `tsc` synchronously, which takes seconds rather than
+ * milliseconds — and Vitest's 5s default applies per case, so the suite fails
+ * on duration while every assertion in it is correct. That failure is
+ * indistinguishable from a hash gap in the summary line, which is the reason
+ * this is a named constant rather than a number tucked into one call.
+ */
+const PROBE_TIMEOUT_MS = 180_000;
+
 function dryRun() {
   const raw = execFileSync(
     "pnpm",
     ["exec", "turbo", "run", "check-types", "--dry=json"],
-    { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }
+    { cwd: REPO_ROOT, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }
   );
   // Turbo's document is pretty-printed from column zero, while the tools around
   // it are not silent: pnpm emits config warnings and turbo a version banner,
@@ -160,12 +171,42 @@ describe("turbo hashes every TypeScript module it type-checks", () => {
 
 /** Every path git tracks, so a generated file is never mistaken for a source input. */
 function trackedPaths() {
+  // `cwd` pinned to the repository root, as everywhere else here: `git ls-files`
+  // prints paths relative to the working directory, so running this suite from
+  // `scripts/` would yield a set that shares no member with the
+  // repository-relative paths the compiler reports — and every program file
+  // would then read as untracked and be skipped as generated output. The guard
+  // would pass by checking nothing.
   return new Set(
     execFileSync("git", ["ls-files"], {
+      cwd: REPO_ROOT,
       encoding: "utf8",
       maxBuffer: 64 * 1024 * 1024,
     }).split("\n")
   );
+}
+
+/**
+ * Every tsconfig a package's `check-types` command actually compiles.
+ *
+ * Five packages here run TWO passes — `tsc --noEmit && tsc --noEmit -p
+ * tsconfig.tests.json` — because their shipping config excludes the test files.
+ * Probing only the implicit `tsconfig.json` leaves whatever is unique to the
+ * second program invisible, so an unhashed input reachable only from a test
+ * would pass this guard: the same too-narrow-population defect the guard exists
+ * to catch, one level up.
+ *
+ * Derived from the command rather than from a list of packages, so a package
+ * that gains or loses a pass is covered without anyone editing this.
+ */
+function projectConfigs(command) {
+  const configs = [];
+  for (const invocation of String(command).split("&&")) {
+    if (!/\btsc\b/.test(invocation)) continue;
+    const explicit = /(?:-p|--project)\s+(\S+)/.exec(invocation);
+    configs.push(explicit ? explicit[1] : "tsconfig.json");
+  }
+  return configs.length > 0 ? configs : ["tsconfig.json"];
 }
 
 /**
@@ -177,15 +218,19 @@ function trackedPaths() {
  * either way: the question here is which files were reached, not whether they
  * compiled.
  */
-function programFiles(directory) {
+function programFiles(directory, config) {
   let output = "";
   try {
-    output = execFileSync("pnpm", ["exec", "tsc", "--noEmit", "--listFilesOnly"], {
-      cwd: join(REPO_ROOT, directory),
-      encoding: "utf8",
-      maxBuffer: 64 * 1024 * 1024,
-      stdio: ["ignore", "pipe", "ignore"],
-    });
+    output = execFileSync(
+      "pnpm",
+      ["exec", "tsc", "--noEmit", "--listFilesOnly", "-p", config],
+      {
+        cwd: join(REPO_ROOT, directory),
+        encoding: "utf8",
+        maxBuffer: 64 * 1024 * 1024,
+        stdio: ["ignore", "pipe", "ignore"],
+      }
+    );
   } catch (error) {
     output = typeof error.stdout === "string" ? error.stdout : "";
   }
@@ -230,12 +275,19 @@ describe("every tracked file a compiler reads is covered by some hash", () => {
         .map(id => byPackage.get(id.split("#")[0])?.directory)
         .filter(Boolean);
 
-      const program = programFiles(task.directory);
+      // The UNION over every config the package's command compiles, not just
+      // the implicit one.
+      const configs = projectConfigs(task.command);
+      const program = [
+        ...new Set(
+          configs.flatMap(config => programFiles(task.directory, config))
+        ),
+      ];
       // Guards the guard: a compiler that produced no list would satisfy the
       // assertion below by having read nothing.
       expect(
         program.length,
-        `no program resolved for ${task.package} — the tsc invocation, not the package, is probably wrong`
+        `no program resolved for ${task.package} from ${configs.join(", ")} — the tsc invocation, not the package, is probably wrong`
       ).toBeGreaterThan(0);
 
       const uncovered = program.filter(file => {
@@ -256,7 +308,8 @@ describe("every tracked file a compiler reads is covered by some hash", () => {
         uncovered,
         `${task.package} compiles ${String(uncovered.length)} tracked file(s) that no hash covers, so editing one leaves its cache valid:\n  ${uncovered.slice(0, 10).join("\n  ")}`
       ).toEqual([]);
-    }
+    },
+    PROBE_TIMEOUT_MS
   );
 });
 
