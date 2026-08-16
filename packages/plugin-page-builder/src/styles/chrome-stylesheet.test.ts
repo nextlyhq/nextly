@@ -15,6 +15,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { generate, parse } from "css-tree";
 import { describe, expect, it } from "vitest";
 
 const STYLES = dirname(fileURLToPath(import.meta.url));
@@ -35,18 +36,48 @@ describe("the editor stylesheet", () => {
   });
 
   it("imports it BEFORE any rule, which is what makes the import valid", () => {
-    // CSS ignores an `@import` that follows a style rule. Asserting only that the
-    // import exists would pass on a file where it sits at the bottom and is
-    // silently dropped by every browser — the failure this ordering prevents.
-    // The full statement, not the bare word: the comment above the import
-    // contains "@import" too, so searching for that alone measures the COMMENT's
-    // position and passes however the real statement is ordered. Found by
-    // stub-verifying — moving the import to the bottom left this test green.
-    const importAt = css.indexOf('@import "@nextlyhq/builder/styles.css"');
-    const firstRuleAt = css.indexOf(".nx-pb-editor {");
+    // CSS ignores an `@import` that follows a style rule, so an import at the
+    // bottom is silently dropped by every browser while still being present in
+    // the file. Ordering is the property, and it is asked of the PARSED
+    // stylesheet rather than of string offsets.
+    //
+    // Both operands defeated a text search in turn. Searching the bare word
+    // `@import` measured the position of the COMMENT above the statement; and
+    // taking `.nx-pb-editor {` as the first rule measures one specific
+    // selector, so a rule inserted above the import but below that selector
+    // invalidates the import while the comparison still reads correctly.
+    // Neither is a property of the file — they are properties of two strings
+    // that happen to appear in it.
+    //
+    // Walking the top-level children in order asks what CSS itself asks: does
+    // any style rule precede the import.
+    const sheet = parse(css);
+    if (sheet.type !== "StyleSheet") throw new Error("not a stylesheet");
 
-    expect(importAt).toBeGreaterThanOrEqual(0);
-    expect(firstRuleAt).toBeGreaterThanOrEqual(0);
-    expect(importAt).toBeLessThan(firstRuleAt);
+    const kinds: string[] = [];
+    sheet.children.forEach(node => {
+      if (node.type === "Rule") kinds.push("rule");
+      else if (node.type === "Atrule" && node.name === "import") {
+        // `generate` rather than reading the prelude's shape: css-tree gives an
+        // `AtrulePrelude` here, and a guess at the node type silently matches
+        // nothing — which reads as a missing import rather than a bad probe.
+        kinds.push(
+          `import:${node.prelude === null ? "" : generate(node.prelude)}`
+        );
+      }
+    });
+
+    const importIndex = kinds.findIndex(
+      kind =>
+        kind.startsWith("import:") &&
+        kind.includes("@nextlyhq/builder/styles.css")
+    );
+    const firstRuleIndex = kinds.indexOf("rule");
+
+    // Population first: a parse that yielded neither would satisfy an ordering
+    // comparison between two -1s.
+    expect(importIndex).toBeGreaterThanOrEqual(0);
+    expect(firstRuleIndex).toBeGreaterThanOrEqual(0);
+    expect(importIndex).toBeLessThan(firstRuleIndex);
   });
 });
