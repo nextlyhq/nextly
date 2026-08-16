@@ -23,6 +23,7 @@
  * @module domains/field-groups/services/reconcile-field-group-plan
  */
 
+import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { isFieldLocalized } from "../../i18n/classify-fields";
 import { COMPANION_STRUCTURAL_COLUMNS } from "../../i18n/migration/generate-up";
 import { buildDesiredTableFromComponentFields } from "../../schema/pipeline/diff/build-from-fields";
@@ -140,7 +141,9 @@ function mainSystemColumnNames(
     input.dialect,
     {
       builtBy: "fieldGroup",
-      ...(input.typeColumn !== undefined ? { typeColumn: input.typeColumn } : {}),
+      ...(input.typeColumn !== undefined
+        ? { typeColumn: input.typeColumn }
+        : {}),
     }
   );
   return new Set(skeleton.columns.map(column => column.name));
@@ -238,7 +241,11 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
   const claimedCompanion = new Set<string>();
 
   for (const field of storedFields) {
-    const descriptor = getColumnDescriptor(field as never, dialect, "fieldGroup");
+    const descriptor = getColumnDescriptor(
+      field as unknown as FieldDefinition,
+      dialect,
+      "fieldGroup"
+    );
     // A layout-only field produces no column, so no live column can confirm or deny it. Keeping it
     // is the only correct answer: removing it would delete an authored field on the evidence of a
     // column that was never supposed to exist.
@@ -247,7 +254,7 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
       continue;
     }
 
-    const inCompanion = localized && isFieldLocalized(field as never, true);
+    const inCompanion = localized && isFieldLocalized(field, true);
     const table: ReconcileTable = inCompanion ? "companion" : "main";
     const live = inCompanion
       ? companionColumns.get(descriptor.name)
@@ -265,19 +272,23 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
 
     let repairedField = field;
 
-    // `required` is the field's spelling of NOT NULL. A primary key is exempt for the same reason
-    // the diff exempts it: the key implies the constraint without declaring it.
-    const liveRequired = !live.nullable && live.primaryKey !== true;
-    if ((field.required === true) !== liveRequired) {
-      repaired.push({
-        fieldName: field.name,
-        columnName: descriptor.name,
-        table,
-        attribute: "required",
-        from: field.required === true,
-        to: liveRequired,
-      });
-      repairedField = withOverride(repairedField, "required", liveRequired);
+    // `required` is the field's spelling of NOT NULL, and only the MAIN table can testify to it:
+    // companion columns are created nullable regardless of the field's declaration, because a row
+    // may legitimately have no value for a locale. A primary key is exempt for the same reason the
+    // diff exempts it: the key implies the constraint without declaring it.
+    if (!inCompanion) {
+      const liveRequired = !live.nullable && live.primaryKey !== true;
+      if ((field.required === true) !== liveRequired) {
+        repaired.push({
+          fieldName: field.name,
+          columnName: descriptor.name,
+          table,
+          attribute: "required",
+          from: field.required === true,
+          to: liveRequired,
+        });
+        repairedField = withOverride(repairedField, "required", liveRequired);
+      }
     }
 
     // Indexes live only on the main table; the companion is keyed by `(_parent, _locale)` and
@@ -337,10 +348,21 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
       liveType: column.type,
       guessedType,
     });
+    // A live index over the column is meaning worth keeping: dropping it from the adopted field
+    // would tell the next schema edit to remove an object the operator's database relies on.
+    // Companion columns carry no per-field index, and their nullability says nothing about
+    // `required` — the same two exclusions the repair loop above makes.
+    const { present, unique } =
+      table === "main"
+        ? indexOver(liveMain.indexes, column.name)
+        : { present: false, unique: false };
     fields.push({
       name: column.name,
       type: guessedType,
-      required: !column.nullable && column.primaryKey !== true,
+      required:
+        table === "main" && !column.nullable && column.primaryKey !== true,
+      ...(unique ? { unique: true } : {}),
+      ...(present && !unique ? { index: true } : {}),
       ...(table === "companion" ? { localized: true } : {}),
     } as F);
   };

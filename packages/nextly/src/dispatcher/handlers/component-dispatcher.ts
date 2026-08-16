@@ -677,6 +677,61 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
     },
   },
 
+  // Repair a field group's stored definition to describe its live tables.
+  //
+  // The exit from `diverged`, so `assertNotDiverged` is deliberately NOT called: this is the one
+  // operation the state exists to permit. Also deliberately not gated on the status being
+  // `diverged` — a recording write that failed after its DDL committed leaves a divergence with no
+  // mark, and the operation is idempotent on a healthy group.
+  reconcileComponent: {
+    execute: async (svc, p) => {
+      const slug = requireParam(p, "slug", "Component slug");
+
+      const adapter = getAdapterFromDI();
+      if (!adapter) {
+        // Without a database there are no live tables, so there is nothing to reconcile AGAINST —
+        // unlike the schema services' generate-only mode, this operation is meaningless dry.
+        throw NextlyError.internal({
+          logContext: { reason: "reconcile-requires-adapter", slug },
+        });
+      }
+      const logger = getLoggerFromDI() ?? DISCARDED_LOG;
+
+      // Inside the exclusion even though no DDL runs: the plan is computed from a read of the
+      // registry AND the catalog, and an apply committing between those reads would hand the
+      // planner a pair that never coexisted. The version-conditional write catches the registry
+      // half of that race; holding the exclusion closes the catalog half too.
+      return withSchemaChangeExcluded(
+        {
+          adapter,
+          logger,
+          label: `reconcile field group "${slug}"`,
+          // Reads the catalog and writes one registry row; no DDL, so a database this cannot
+          // create the lock table on refuses nothing it would need.
+          issuesDdl: false,
+        },
+        async () => {
+          const { reconcileFieldGroup } = await import(
+            "../../domains/field-groups/services/field-group-reconcile-service"
+          );
+          const report = await reconcileFieldGroup({
+            registry: svc.registry,
+            adapter,
+            logger,
+            slug,
+          });
+
+          return respondAction(
+            report.unchanged
+              ? `"${slug}" already describes its tables; nothing was changed.`
+              : `Reconciled "${slug}" against its live tables.`,
+            { report }
+          );
+        }
+      );
+    },
+  },
+
   deleteComponent: {
     // Spec divergence: spec §5.1 / §7.4 strictly maps delete to
     // respondMutation, but registry.deleteComponent returns void (no

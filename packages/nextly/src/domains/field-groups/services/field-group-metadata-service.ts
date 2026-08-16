@@ -443,9 +443,14 @@ export class FieldGroupMetadataService {
         );
         return { record: settled };
       }
-      // Returns `never`, so this is a raise rather than a value — written as a return so the
-      // compiler, not a comment, is what establishes that nothing falls out of this method.
-      return await this.recordUnrecordedTransition(input.slug, existing, error);
+      // Usually a raise; the one value it can return is a settled row discovered on its second
+      // look, which is a success this catch then answers with.
+      return await this.recordUnrecordedTransition(
+        input,
+        requestedLocalized,
+        existing,
+        error
+      );
     }
   }
 
@@ -767,6 +772,16 @@ export class FieldGroupMetadataService {
    * main-table columns the first attempt already dropped. The caller has to be told the physical
    * change stands.
    *
+   * 🔴 The marker is a COMPARE-AND-SET against the version this edit started from, because "the
+   * write raised" does not mean "the row went unwritten". The read-back that would settle that can
+   * itself fail transiently, and a marker written unconditionally after two failed reads stamps
+   * `diverged` onto a row the original write reached after all — permanently refusing schema edits
+   * on a group that is completely fine, with its version bumped twice. Pinning the version makes
+   * the DATABASE answer the question the reads could not: zero rows matched MEANS the row already
+   * advanced, i.e. the original write landed, and this takes one more look before answering
+   * success. The version advance the marker needs (an editor loaded before the transition must
+   * fail `assertSchemaVersionMatch`) is the conditional write's own contract.
+   *
    * The status write is BEST EFFORT and its failure is not raised. It is a narrow single-column
    * update, so it survives the failures that realistically break the full write — a rejected field
    * list, an oversized label, a value the driver cannot encode — and if the database is genuinely
@@ -774,10 +789,12 @@ export class FieldGroupMetadataService {
    * group without it.
    */
   private async recordUnrecordedTransition(
-    slug: string,
+    input: UpdateFieldGroupInput,
+    requestedLocalized: boolean | undefined,
     existing: DynamicFieldGroupRecord,
     cause: unknown
-  ): Promise<never> {
+  ): Promise<UpdateFieldGroupResult> {
+    const slug = input.slug;
     this.logger.error(
       "[FieldGroups] Schema transition committed but its registry row was not written.",
       {
@@ -788,18 +805,41 @@ export class FieldGroupMetadataService {
       }
     );
 
-    let marked = false;
+    // Three endings, and the message below must not conflate them: the mark was persisted, the row
+    // turned out to have advanced (so the CHANGE was recorded, and only the confirmation is
+    // missing), or nothing about the state could be recorded at all.
+    let recordState: "marked" | "advanced" | "unrecorded" = "unrecorded";
     try {
-      await this.registry.updateComponent(
+      const outcome = await this.registry.updateComponentIfVersion(
         slug,
         { migrationStatus: "diverged" },
-        // The version advances even though this write carries no new field set: the TABLES moved,
-        // and an editor loaded before that is now describing a shape that is gone. Leaving the
-        // version alone would let such a preview pass `assertSchemaVersionMatch` and apply its
-        // stale resolutions against the tables this transition already changed.
-        { source: "code", invalidateSchemaVersion: true }
+        existing.schemaVersion,
+        { source: "code" }
       );
-      marked = true;
+      if (outcome.matched) {
+        recordState = "marked";
+      } else {
+        // The row is past the version this edit started from, which is what the original write
+        // leaves behind — so the change was recorded and the raise was in reading it back. Look
+        // once more before answering: connectivity good enough for the conditional statement is
+        // usually good enough for a read now.
+        const settled = await this.readBackSettledRow(
+          input,
+          requestedLocalized
+        );
+        if (settled) {
+          this.logger.warn(
+            "[FieldGroups] The registry write raised but the row already carries the change; the error was in reading it back.",
+            { slug }
+          );
+          return { record: settled };
+        }
+        recordState = "advanced";
+        this.logger.error(
+          "[FieldGroups] The row advanced past this edit's version but could not be re-read; not marking it diverged.",
+          { slug, expectedSchemaVersion: existing.schemaVersion }
+        );
+      }
     } catch (markError) {
       this.logger.error(
         "[FieldGroups] Could not mark the field group as diverged either.",
@@ -816,19 +856,24 @@ export class FieldGroupMetadataService {
     // point is that the edit half-happened and repeating it is harmful. The status still comes from
     // the central mapping rather than a literal, so this cannot drift from the code it carries.
     //
-    // 🔴 The message distinguishes whether the mark was PERSISTED. Claiming a durable record that
-    // does not exist is worse than admitting the log is the only trace: the first sends an operator
-    // looking at a row that reads normal, the second tells them where to look.
+    // 🔴 The message distinguishes what was PERSISTED. Claiming a durable record that does not
+    // exist is worse than admitting the log is the only trace — and claiming nothing was recorded
+    // when the row demonstrably advanced sends an operator repairing a group that likely carries
+    // the change already. Each ending tells them where to look and what not to do.
+    const publicMessages: Record<typeof recordState, string> = {
+      marked: `The field group's tables were changed, but recording the change failed. "${slug}" is marked as diverged and its stored definition still describes the previous shape. Do not retry the same edit: check the server logs and reconcile the field group before editing it again.`,
+      advanced: `The field group's tables were changed, and its record already carries a newer version — the change was very likely recorded and only confirming it failed. Reload "${slug}" before doing anything else; retry the edit only if the reloaded definition does not show it.`,
+      unrecorded: `The field group's tables were changed, but neither the change nor the failure could be recorded. "${slug}" still reads as though nothing happened, and the only trace is the server log. Do not retry the same edit: reconcile the field group against its tables before editing it again.`,
+    };
     throw new NextlyError({
       code: "INTERNAL_ERROR",
       statusCode: NEXTLY_ERROR_STATUS.INTERNAL_ERROR,
-      publicMessage: marked
-        ? `The field group's tables were changed, but recording the change failed. "${slug}" is marked as diverged and its stored definition still describes the previous shape. Do not retry the same edit: check the server logs and reconcile the field group before editing it again.`
-        : `The field group's tables were changed, but neither the change nor the failure could be recorded. "${slug}" still reads as though nothing happened, and the only trace is the server log. Do not retry the same edit: reconcile the field group against its tables before editing it again.`,
+      publicMessage: publicMessages[recordState],
       cause: cause instanceof Error ? cause : undefined,
       logContext: {
         reason: "registry write failed after committed schema transition",
         slug,
+        recordState,
         tableName: existing.tableName,
       },
     });
