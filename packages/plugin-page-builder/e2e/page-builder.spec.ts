@@ -72,7 +72,11 @@ test.describe("page builder editor", () => {
     await page.getByRole("button", { name: "Insert Paragraph" }).click();
     const clipped = await page.evaluate(() => {
       const editor = document.querySelector(".nx-pb-editor");
-      const right = document.querySelector(".nx-pb-pane--right");
+      // The inspector is the shell's column now, not this plugin's own pane, so
+      // it is located by the ROLE and name the shell exposes rather than by a
+      // class the plugin no longer renders. Treating absence as clipped keeps a
+      // missing inspector a failure rather than a silent pass.
+      const right = document.querySelector('[aria-label="Inspector"]');
       if (!editor || !right) return true;
       return (
         right.getBoundingClientRect().right >
