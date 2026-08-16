@@ -182,7 +182,7 @@ export class FieldGroupSchemaService {
     options: { localized?: boolean } = {}
   ): string {
     const types = SQL_COLUMN_TYPES[this.dialect];
-    const tsDefault = TIMESTAMP_DEFAULT[this.dialect];
+    const structuralDefaults = this.structuralColumnDefaults();
     // i18n: a localized component omits its translatable columns from the main comp_ CREATE
     // (they live in the companion `comp_<slug>_locales` table, provisioned out-of-band).
     const localizedNames = options.localized
@@ -222,7 +222,7 @@ export class FieldGroupSchemaService {
       `  ${this.q}${STORAGE_FORMAT.columns.parentField}${this.q} ${types.varchar(255)} NOT NULL,`
     );
     lines.push(
-      `  ${this.q}${STORAGE_FORMAT.columns.order}${this.q} ${types.integer} DEFAULT 0,`
+      `  ${this.q}${STORAGE_FORMAT.columns.order}${this.q} ${types.integer} DEFAULT ${structuralDefaults.get(STORAGE_FORMAT.columns.order)},`
     );
     lines.push(
       `  ${this.q}${STORAGE_FORMAT.columns.type}${this.q} ${types.varchar(255)},`
@@ -244,10 +244,10 @@ export class FieldGroupSchemaService {
     }
 
     lines.push(
-      `  ${this.q}created_at${this.q} ${types.timestamp} NOT NULL ${tsDefault},`
+      `  ${this.q}created_at${this.q} ${types.timestamp} NOT NULL DEFAULT ${structuralDefaults.get("created_at")},`
     );
     lines.push(
-      `  ${this.q}updated_at${this.q} ${types.timestamp} NOT NULL ${tsDefault}`
+      `  ${this.q}updated_at${this.q} ${types.timestamp} NOT NULL DEFAULT ${structuralDefaults.get("updated_at")}`
     );
 
     lines.push(");");
@@ -777,6 +777,32 @@ export class FieldGroupSchemaService {
    */
   columnTypeFor(field: DataFieldConfig): string | null {
     return this.getColumnType(this.asMappableField(field));
+  }
+
+  /**
+   * The DEFAULT expression each SYSTEM column is created with, by column name.
+   *
+   * These belong to no field, so nothing derived from the field list can describe them — and they
+   * are not decoration: the generated runtime schema declares `_order` and the timestamps as
+   * DATABASE defaults, so Drizzle OMITS those columns from an INSERT and the database supplies the
+   * value. A dropped default therefore fails a NOT NULL insert outright, or silently stores NULL
+   * where a zero was intended.
+   *
+   * Rendered into the CREATE TABLE below rather than restated there, so the defaults a caller can
+   * ask about and the ones the table actually gets are one expression.
+   */
+  structuralColumnDefaults(): ReadonlyMap<string, string> {
+    // The timestamp keyword carries its own `DEFAULT ` prefix in the DDL table; the VALUE is what a
+    // comparison needs, so the prefix is stripped once, here.
+    const timestamp = TIMESTAMP_DEFAULT[this.dialect].replace(
+      /^DEFAULT\s+/,
+      ""
+    );
+    return new Map([
+      [STORAGE_FORMAT.columns.order, "0"],
+      ["created_at", timestamp],
+      ["updated_at", timestamp],
+    ]);
   }
 
   /**

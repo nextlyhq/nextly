@@ -14,10 +14,19 @@ import type { CustomEditViewProps } from "./types";
 
 export function SaveShell({ props }: { props: CustomEditViewProps }) {
   const { state, dispatch } = useEditor();
-  const data = props.initialData ?? {};
-  const str = (v: unknown) => (typeof v === "string" ? v : "");
-  const [title, setTitle] = useState(str(data.title));
-  const [slug, setSlug] = useState(str(data.slug));
+  /*
+   * Title and slug are read from the editor state rather than held here.
+   *
+   * They are unsaved work like any block edit, and `state.dirty` is what every
+   * consumer asks before treating the page as safe to leave — the exit guard
+   * among them. A copy kept in this component cannot move that flag, so a page
+   * whose title had been changed and nothing else reported itself as clean.
+   */
+  const { title, slug } = state.metadata;
+  const setTitle = (value: string) =>
+    dispatch({ type: "SET_PAGE_METADATA", metadata: { title: value } });
+  const setSlug = (value: string) =>
+    dispatch({ type: "SET_PAGE_METADATA", metadata: { slug: value } });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 

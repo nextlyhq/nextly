@@ -25,6 +25,7 @@ import {
   initialState,
   type EditorAction,
   type EditorState,
+  type PageMetadata,
 } from "./editorStore";
 
 /** Stable identity so the context value does not change on every render. */
@@ -71,6 +72,7 @@ export function EditorProvider({
   document: doc,
   draftKey,
   customCss,
+  metadata,
   remotePatterns,
   onDocumentChange,
   onCustomCssChange,
@@ -103,6 +105,11 @@ export function EditorProvider({
    */
   customCss?: string;
   /**
+   * The page's own fields at load. Supplied by the full Edit view, which shows
+   * inputs for them; the field mount has no such inputs and leaves it unset.
+   */
+  metadata?: PageMetadata;
+  /**
    * Fired whenever the document changes (skipping the initial mount) — used by the
    * field mount (`PageBuilderField`) to sync into the host react-hook-form. The full
    * Edit-view leaves this unset and persists via `SaveShell`.
@@ -113,7 +120,7 @@ export function EditorProvider({
   children: ReactNode;
 }) {
   const [state, dispatch] = useReducer(editorReducer, undefined, () =>
-    initialState(doc, customCss ?? "")
+    initialState(doc, customCss ?? "", metadata)
   );
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const firstRender = useRef(true);
@@ -175,6 +182,7 @@ export function EditorProvider({
           JSON.stringify({
             document: state.document,
             customCss: state.customCss,
+            metadata: state.metadata,
           })
         );
       } catch {
@@ -184,7 +192,7 @@ export function EditorProvider({
     return () => {
       if (timer.current) clearTimeout(timer.current);
     };
-  }, [state.document, state.customCss, state.dirty, draftKey]);
+  }, [state.document, state.customCss, state.metadata, state.dirty, draftKey]);
 
   return (
     <EditorContext.Provider

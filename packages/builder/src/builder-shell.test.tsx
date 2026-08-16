@@ -92,7 +92,7 @@ describe("the regions the shell exposes", () => {
     expect(
       screen.getByRole("navigation", { name: "Editor panels" })
     ).toBeTruthy();
-    expect(screen.getByRole("main", { name: "Canvas" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Canvas" })).toBeTruthy();
     expect(
       screen.getByRole("complementary", { name: "Inspector" })
     ).toBeTruthy();
@@ -125,6 +125,70 @@ describe("leaving the editor", () => {
     const exit = screen.getByRole("button", { name: "Exit editor" });
     fireEvent.click(exit);
     expect(onExit).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("panels the host cannot fill", () => {
+  it("shows them, disabled, rather than opening an empty region", () => {
+    // Hiding them would make the rail change shape under an author as features
+    // land. Opening one is worse: it reserves a panel and shrinks the canvas to
+    // display nothing, which reads as a broken control rather than a missing one.
+    renderShell({ availablePanels: ["insert"] });
+
+    const layers = screen.getByRole("button", { name: /^Layers/ });
+    expect((layers as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("says why, rather than presenting a dead control", () => {
+    renderShell({ availablePanels: ["insert"] });
+
+    expect(
+      screen.getByRole("button", { name: "Layers — coming soon" })
+    ).toBeTruthy();
+  });
+
+  it("leaves a panel the host CAN fill fully operable", () => {
+    // The positive control. Without it, a shell that disabled every rail button
+    // would satisfy both assertions above perfectly.
+    renderShell({
+      availablePanels: ["insert"],
+      renderPanel: panel => <p>{panel} panel</p>,
+    });
+
+    const insert = screen.getByRole("button", { name: "Insert" });
+    expect((insert as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(insert);
+    expect(screen.getByText("insert panel")).toBeTruthy();
+  });
+
+  it("does not reserve a panel a RESTORED selection names but the host cannot fill", () => {
+    // Disabling the rail button does not cover this: nobody clicked it, the
+    // selection came out of storage. Left alone the layout reserves a left panel
+    // whose content renders nothing — the blank panel the prop exists to prevent.
+    const store = memoryStore(
+      JSON.stringify({ ...DEFAULT_PREFERENCES, leftPanel: "layers" })
+    );
+    stubViewport(true);
+    render(
+      <BuilderShell
+        store={store}
+        availablePanels={["insert"]}
+        renderPanel={panel => <p>{panel} panel</p>}
+      />
+    );
+
+    expect(screen.queryByText("layers panel")).toBeNull();
+  });
+
+  it("treats every panel as available when the host says nothing", () => {
+    // Omitting the prop must not silently disable the whole rail for hosts that
+    // fill all of them.
+    renderShell();
+
+    expect(
+      (screen.getByRole("button", { name: "Layers" }) as HTMLButtonElement)
+        .disabled
+    ).toBe(false);
   });
 });
 
@@ -298,7 +362,7 @@ describe("F6 region cycling", () => {
 
     // The next PRESENT region is the canvas, because the panel is closed.
     expect(document.activeElement).toBe(
-      screen.getByRole("main", { name: "Canvas" })
+      screen.getByRole("region", { name: "Canvas" })
     );
   });
 
@@ -319,6 +383,156 @@ describe("F6 region cycling", () => {
   });
 });
 
+describe("which shell F6 belongs to", () => {
+  /**
+   * The binding is registered on the document, so every mounted shell sees
+   * every press. What decides the answer has to be where focus IS — a shell
+   * the author is not in should let the key reach whatever they are in.
+   */
+  it("leaves the key alone when focus is in a control outside the shell", () => {
+    // The field mount's real situation: an editor embedded in an entry form,
+    // beside ordinary inputs. Enabling from viewport state alone made this
+    // press move focus into the editor from a field the author was typing in.
+    render(
+      <div>
+        <input aria-label="Page title" />
+        <BuilderShell store={memoryStore()}>
+          <p>canvas</p>
+        </BuilderShell>
+      </div>
+    );
+
+    const outside = screen.getByRole("textbox", { name: "Page title" });
+    outside.focus();
+    expect(document.activeElement).toBe(outside);
+
+    fireEvent.keyDown(outside, { key: "F6" });
+
+    expect(document.activeElement).toBe(outside);
+  });
+
+  it("still enters from a page where nothing has focus yet", () => {
+    // The positive control, and the behaviour the rule above must not cost:
+    // the full Edit view owns its page and nothing inside it has focus on
+    // load, so refusing there would make the key look broken until focus
+    // happened to land somewhere it recognised.
+    renderShell({ renderPanel: panel => <p>{panel} panel</p> });
+    (document.activeElement as HTMLElement | null)?.blur();
+
+    fireEvent.keyDown(document, { key: "F6" });
+
+    expect(document.activeElement).toBe(
+      screen.getByRole("navigation", { name: "Editor panels" })
+    );
+  });
+
+  it("answers from the chrome header, which is in no region", () => {
+    // The header holds the exit button and whatever the host puts in the top
+    // bar — the breakpoint switcher, here — and it is a SIBLING of the region
+    // container rather than inside one. Asking the regions who owns the key
+    // therefore rejected the shell from its own chrome, so F6 did nothing
+    // while focus sat on a control that is plainly inside the editor.
+    renderShell({
+      renderPanel: panel => <p>{panel} panel</p>,
+      topBar: <button type="button">Desktop</button>,
+    });
+
+    const inTopBar = screen.getByRole("button", { name: "Desktop" });
+    inTopBar.focus();
+    expect(document.activeElement).toBe(inTopBar);
+
+    fireEvent.keyDown(inTopBar, { key: "F6" });
+
+    expect(document.activeElement).toBe(
+      screen.getByRole("navigation", { name: "Editor panels" })
+    );
+  });
+
+  it("answers from the exit button as well", () => {
+    renderShell({ renderPanel: panel => <p>{panel} panel</p> });
+
+    const exit = screen.getByRole("button", { name: "Exit editor" });
+    exit.focus();
+
+    fireEvent.keyDown(exit, { key: "F6" });
+
+    expect(document.activeElement).toBe(
+      screen.getByRole("navigation", { name: "Editor panels" })
+    );
+  });
+
+  it("still enters after a shell has been mounted and torn down", () => {
+    // The counter deciding "is this the only shell" must come back DOWN. A
+    // leak drifts it upward and never returns, which declines the entry above
+    // permanently — the same defect as the one this rule fixes, arriving from
+    // the other side and first in dev, where a hot reload remounts.
+    //
+    // Asserting the count is 1 after one mount would not catch that: it passes
+    // on a leaky counter the first time. The cycle is what separates them.
+    const first = render(
+      <BuilderShell store={memoryStore()}>
+        <p>canvas</p>
+      </BuilderShell>
+    );
+    first.unmount();
+
+    renderShell({ renderPanel: panel => <p>{panel} panel</p> });
+    (document.activeElement as HTMLElement | null)?.blur();
+
+    fireEvent.keyDown(document, { key: "F6" });
+
+    expect(document.activeElement).toBe(
+      screen.getByRole("navigation", { name: "Editor panels" })
+    );
+  });
+
+  it("declines that entry when a second shell makes it ambiguous", () => {
+    // With two mounted, a press from nowhere names neither — and answering it
+    // anyway is decided by whichever registered last, which is how a form with
+    // several page-builder fields moved focus into an arbitrary one.
+    render(
+      <div>
+        <BuilderShell store={memoryStore()}>
+          <p>first canvas</p>
+        </BuilderShell>
+        <BuilderShell store={memoryStore()}>
+          <p>second canvas</p>
+        </BuilderShell>
+      </div>
+    );
+    (document.activeElement as HTMLElement | null)?.blur();
+
+    fireEvent.keyDown(document, { key: "F6" });
+
+    expect(document.activeElement).toBe(document.body);
+  });
+});
+
+describe("an embedded host with nowhere to exit to", () => {
+  it("renders no exit affordance at all", () => {
+    // The editor also mounts as a FIELD inside an entry form, where the author is
+    // already on the page they would be sent back to. An inert button there
+    // teaches them that leaving does nothing.
+    stubViewport(true);
+    render(<BuilderShell store={memoryStore()} />);
+
+    expect(screen.queryByRole("button", { name: "Exit editor" })).toBeNull();
+  });
+
+  it("still renders the editor itself", () => {
+    // The positive control for the assertion above: without it, a shell that
+    // failed to render anything would satisfy "no exit button" perfectly.
+    stubViewport(true);
+    render(
+      <BuilderShell store={memoryStore()}>
+        <div data-testid="canvas-slot" />
+      </BuilderShell>
+    );
+
+    expect(screen.getByTestId("canvas-slot")).toBeTruthy();
+  });
+});
+
 describe("a viewport too narrow for the shell", () => {
   it("says where to edit instead of compressing", () => {
     // An editor that merely gets cramped is worse than one that says it needs a
@@ -327,7 +541,7 @@ describe("a viewport too narrow for the shell", () => {
     render(<BuilderShell onExit={vi.fn()} store={memoryStore()} />);
 
     expect(screen.getByText(/needs a wider screen/i)).toBeTruthy();
-    expect(screen.queryByRole("main", { name: "Canvas" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Canvas" })).toBeNull();
   });
 
   it("still offers a way out", () => {
@@ -339,6 +553,20 @@ describe("a viewport too narrow for the shell", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Exit editor" }));
     expect(onExit).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops the escape sentence WITH the button when no host can be exited to", () => {
+    // The copy and the control are one unit. Keeping the sentence while dropping
+    // the button instructs the author to go somewhere and offers nothing to get
+    // there; keeping the button with no handler is worse, because it looks
+    // operable. Asserting only the button's absence would pass on the version
+    // that still promises an escape, so the sentence is asserted too.
+    stubViewport(false);
+    render(<BuilderShell store={memoryStore()} />);
+
+    expect(screen.getByText(/needs a wider screen/i)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Exit editor" })).toBeNull();
+    expect(screen.queryByText(/from the admin/i)).toBeNull();
   });
 
   it("keeps the caller's slots mounted behind the notice", () => {
@@ -378,7 +606,7 @@ describe("a viewport too narrow for the shell", () => {
     expect(hiddenWrapper).not.toBeNull();
     expect(hiddenWrapper?.hasAttribute("inert")).toBe(true);
     // And the canvas is genuinely out of the accessibility tree.
-    expect(screen.queryByRole("main", { name: "Canvas" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Canvas" })).toBeNull();
   });
 
   it("keeps a portalling slot child from opening over the notice", () => {

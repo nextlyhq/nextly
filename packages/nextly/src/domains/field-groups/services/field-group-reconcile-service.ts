@@ -141,6 +141,22 @@ async function expectedColumnTypeResolver(
  * reports `known: false` and is skipped rather than being claimed to have no default. Claiming
  * that would turn every localized checkbox carrying a default into a refusal.
  */
+/**
+ * The DEFAULT each system column is created with, asked of the code that creates them.
+ *
+ * The desired-state skeleton records no default for any system column, so it cannot answer this —
+ * and a comparison built on its silence would report drift on every healthy table. The creator is
+ * the only side that knows, and it renders its own CREATE TABLE from this same map.
+ */
+async function structuralColumnDefaults(
+  dialect: SupportedDialect
+): Promise<ReadonlyMap<string, string>> {
+  const { FieldGroupSchemaService } = await import(
+    "./field-group-schema-service"
+  );
+  return new FieldGroupSchemaService(dialect).structuralColumnDefaults();
+}
+
 async function expectedColumnDefaultResolver(
   dialect: SupportedDialect
 ): Promise<
@@ -254,6 +270,7 @@ export async function reconcileFieldGroup(args: {
     typeColumn,
     expectedColumnType: await expectedColumnTypeResolver(dialect),
     expectedColumnDefault: await expectedColumnDefaultResolver(dialect),
+    structuralColumnDefaults: await structuralColumnDefaults(dialect),
   });
 
   // 🔴 REFUSE before writing anything when the tables hold a state the planner can see but must

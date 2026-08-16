@@ -226,6 +226,19 @@ export interface ReconcileInput<F extends ReconcilableField> {
     field: F,
     table: ReconcileTable
   ) => ExpectedColumnDefault;
+  /**
+   * The DEFAULT each SYSTEM column is created with, by column name.
+   *
+   * Separate from `expectedColumnDefault` because these belong to no FIELD: nothing derived from
+   * the field list describes `_order` or the timestamps, and the desired-state skeleton records
+   * `undefined` for every one of them — so comparing the skeleton against a live table would report
+   * drift on every healthy database. The creator is the only side that knows.
+   *
+   * Load-bearing rather than cosmetic: the generated runtime schema declares these as DATABASE
+   * defaults, so Drizzle omits the columns from an INSERT and the database supplies the value. A
+   * dropped default fails a NOT NULL insert, or silently stores NULL where a zero was intended.
+   */
+  structuralColumnDefaults?: ReadonlyMap<string, string>;
 }
 
 /**
@@ -328,10 +341,34 @@ function structuralBlockers(
   skeleton: TableSpec,
   liveMain: TableSpec,
   liveCompanion: TableSpec | null,
-  localized: boolean
+  localized: boolean,
+  structuralDefaults: ReadonlyMap<string, string> | undefined
 ): ReconcileBlocker[] {
   const blockers: ReconcileBlocker[] = [];
   const liveMainByName = new Map(liveMain.columns.map(c => [c.name, c]));
+
+  // 🔴 The main table's key compared as a WHOLE, for the reason the companion's is. Asking only
+  // whether `id` participates in a key accepts a composite `(id, user_column)`, which enforces
+  // uniqueness over the pair and so lets one component id repeat whenever the other value differs —
+  // the guarantee `id` exists for, absent, behind a check that passes. Membership is the wrong
+  // question on either table; equality is the property both keys actually need.
+  const skeletonKey = skeleton.columns
+    .filter(column => column.primaryKey === true)
+    .map(column => column.name);
+  const liveMainKey = liveMain.columns
+    .filter(column => column.primaryKey === true)
+    .map(column => column.name);
+  const mainKeyMatches =
+    skeletonKey.length === liveMainKey.length &&
+    skeletonKey.every(name => liveMainKey.includes(name));
+  if (skeletonKey.length > 0 && !mainKeyMatches) {
+    blockers.push({
+      fieldName: skeletonKey.join(", "),
+      columnName: skeletonKey.join(", "),
+      kind: "structural-column-missing",
+      detail: `${liveMain.name} has the primary key (${liveMainKey.join(", ") || "none"}) where every field-group table is keyed on (${skeletonKey.join(", ")}); any other key lets one row's identity repeat, and this operation issues no DDL to restore it.`,
+    });
+  }
 
   for (const column of skeleton.columns) {
     const live = liveMainByName.get(column.name);
@@ -354,9 +391,6 @@ function structuralBlockers(
     // The skeleton is the only side that can be authoritative here: these columns belong to no
     // field, so nothing else in this module describes them.
     const attributeDrift: string[] = [];
-    if (column.primaryKey === true && live.primaryKey !== true) {
-      attributeDrift.push("is no longer part of the primary key");
-    }
     const wantType = normalizeType(column.type);
     const haveType = normalizeType(live.type);
     if (
@@ -373,6 +407,19 @@ function structuralBlockers(
     // refuse tables an older generation created with a tighter constraint.
     if (column.nullable === false && live.nullable === true) {
       attributeDrift.push("is nullable where the table requires a value");
+    }
+    // The system column's DEFAULT, taken from the creator rather than the skeleton, which records
+    // none for any of them. Compared through the diff engine's normaliser so a dialect reporting
+    // `now()` where the DDL wrote `NOW()` is not drift.
+    const wantDefault = structuralDefaults?.get(column.name);
+    if (wantDefault !== undefined) {
+      const want = normalizeDefault(wantDefault, column.type);
+      const have = normalizeDefault(live.default, live.type);
+      if (want !== have) {
+        attributeDrift.push(
+          `defaults to ${have ?? "nothing"} where the table requires ${want ?? "nothing"}`
+        );
+      }
     }
     if (attributeDrift.length > 0) {
       blockers.push({
@@ -599,7 +646,8 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
     skeleton,
     liveMain,
     liveCompanion,
-    localized
+    localized,
+    input.structuralColumnDefaults
   );
 
   /** Column names a stored field accounted for, so the leftovers can be adopted. */

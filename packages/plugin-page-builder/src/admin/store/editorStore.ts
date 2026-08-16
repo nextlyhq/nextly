@@ -33,6 +33,19 @@ import { canDrop } from "../logic/dropRules";
 const HISTORY_LIMIT = 50;
 const BASE_BREAKPOINT = "base";
 
+/**
+ * The page's own fields, as opposed to the block tree it contains.
+ *
+ * Held here rather than beside the editor because `dirty` is what decides
+ * whether unsaved work exists, and a field kept outside this state cannot
+ * move it. Anything the author edits and expects Save to persist belongs in
+ * this state for that reason.
+ */
+export interface PageMetadata {
+  title: string;
+  slug: string;
+}
+
 export interface EditorState {
   document: BlockDocument;
   selectedId: string | null;
@@ -41,6 +54,7 @@ export interface EditorState {
   future: BlockDocument[];
   dirty: boolean;
   customCss: string;
+  metadata: PageMetadata;
 }
 
 /**
@@ -84,7 +98,8 @@ function slotAccepts(
  */
 export function initialState(
   document: BlockDocument,
-  customCss = ""
+  customCss = "",
+  metadata: PageMetadata = { title: "", slug: "" }
 ): EditorState {
   return {
     document: migrateDocument(document, defaultBlockRegistry),
@@ -94,6 +109,7 @@ export function initialState(
     future: [],
     dirty: false,
     customCss,
+    metadata,
   };
 }
 
@@ -158,6 +174,14 @@ export type EditorAction =
       styleHover?: BlockNode["styleHover"];
     }
   | { type: "SET_PAGE_CUSTOM_CSS"; customCss: string }
+  /**
+   * Edit one or more page fields.
+   *
+   * Partial because the fields have independent inputs, and carrying the whole
+   * object from each would make every input responsible for preserving the
+   * others — a shape where the last write wins and the loser is silent.
+   */
+  | { type: "SET_PAGE_METADATA"; metadata: Partial<PageMetadata> }
   | { type: "REPLACE"; document: BlockDocument }
   | { type: "MARK_SAVED" }
   | { type: "UNDO" }
@@ -414,9 +438,16 @@ export function editorReducer(
     case "SET_PAGE_CUSTOM_CSS":
       return { ...state, customCss: action.customCss, dirty: true };
 
+    case "SET_PAGE_METADATA":
+      return {
+        ...state,
+        metadata: { ...state.metadata, ...action.metadata },
+        dirty: true,
+      };
+
     case "REPLACE":
       return {
-        ...initialState(action.document, state.customCss),
+        ...initialState(action.document, state.customCss, state.metadata),
         activeBreakpoint: state.activeBreakpoint,
       };
 
