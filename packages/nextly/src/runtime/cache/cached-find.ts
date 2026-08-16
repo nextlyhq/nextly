@@ -101,17 +101,25 @@ export interface CachedFindOptions {
  * // Per-user list — access rules evaluated AS the caller, and EVERY dimension
  * // those rules read in the key, not merely who the caller is.
  * //
- * // `roles` is in the key because the identity outlives the permission: tags bust
+ * // Roles are in the key because the identity outlives the permission: tags bust
  * // on CONTENT changes and a role change is not one, so keying on the id alone
  * // lets the same person fill an entry while privileged and read it back after
- * // being downgraded. Sort them, because the key is compared as text and two
- * // orderings of one role set would otherwise be two entries.
+ * // being downgraded.
+ * //
+ * // The set is built the way `evaluateRoleBasedAccess` builds the one it decides
+ * // with — the many-to-many `roles` UNIONED with the singular `role` — because a
+ * // key that reads fewer dimensions than the rule cannot notice a change in the
+ * // ones it skipped. Both fields are optional on `UserContext`, so both are
+ * // guarded; `[...user.roles]` alone throws for a valid `{ id, role }` caller.
+ * // Deduped and sorted last, because the key is compared as text and one role
+ * // set spelled two ways would otherwise be two entries.
+ * const roleKey = [...new Set([...(user.roles ?? []), user.role ?? []].flat())]
+ *   .sort()
+ *   .join(",");
+ *
  * const mine = await cachedFind(
  *   () => nextly.find({ collection: "orders", user, overrideAccess: false }),
- *   {
- *     tags: nextlyTags("orders"),
- *     keyParts: ["orders", "list", user.id, [...user.roles].sort().join(",")],
- *   }
+ *   { tags: nextlyTags("orders"), keyParts: ["orders", "list", user.id, roleKey] }
  * );
  */
 export function cachedFind<T>(
