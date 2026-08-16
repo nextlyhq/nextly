@@ -1248,7 +1248,7 @@ describe("an update whose row write fails after the tables moved", () => {
       .catch((error: unknown) => error);
 
     expect((refusal as NextlyError).publicMessage).toContain(
-      "already carries a newer version"
+      "no longer at the version this edit started from"
     );
     // Not claiming a mark that was never written, and not claiming nothing happened either.
     expect((refusal as NextlyError).publicMessage).not.toContain(

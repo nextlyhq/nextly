@@ -232,7 +232,10 @@ export async function reconcileFieldGroup(args: {
     adapter,
     dialect,
     existing.tableName,
-    plan.fields as never,
+    // The parameter's own declared type. `FieldDefinition` and `FieldConfig` describe the same
+    // stored field from two layers, and the registry's insert shape is the seam between them —
+    // naming the target type keeps the compiler checking this call rather than waving it through.
+    plan.fields as unknown as FieldConfig[],
     typeColumn,
     plan.localized
   );

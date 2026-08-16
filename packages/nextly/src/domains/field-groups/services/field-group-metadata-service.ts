@@ -862,7 +862,12 @@ export class FieldGroupMetadataService {
     // the change already. Each ending tells them where to look and what not to do.
     const publicMessages: Record<typeof recordState, string> = {
       marked: `The field group's tables were changed, but recording the change failed. "${slug}" is marked as diverged and its stored definition still describes the previous shape. Do not retry the same edit: check the server logs and reconcile the field group before editing it again.`,
-      advanced: `The field group's tables were changed, and its record already carries a newer version — the change was very likely recorded and only confirming it failed. Reload "${slug}" before doing anything else; retry the edit only if the reloaded definition does not show it.`,
+      // 🔴 Says only what the write PROVED: the row is no longer at the version this edit started
+      // from. `matched: false` has two causes — the row advanced, or it was deleted — and a
+      // concurrent delete reaches here through the same path, because the confirming read then
+      // raises NOT_FOUND and reports the same "could not confirm". Claiming a newer version exists
+      // would send that operator to reload a field group that is gone.
+      advanced: `The field group's tables were changed, and its record is no longer at the version this edit started from — most likely the change was recorded and only confirming it failed, though the field group may also have been deleted. Reload "${slug}" before doing anything else; retry the edit only if it still exists and the reloaded definition does not show the change.`,
       unrecorded: `The field group's tables were changed, but neither the change nor the failure could be recorded. "${slug}" still reads as though nothing happened, and the only trace is the server log. Do not retry the same edit: reconcile the field group against its tables before editing it again.`,
     };
     throw new NextlyError({
