@@ -1180,7 +1180,11 @@ test.describe("a canvas any Nextly editor could ship", () => {
   });
 
   test("ends the drag when Escape cancels", async ({ request }) => {
-    note(PLAN_POINT.escapeCancelsWithoutNavigating, "B-11");
+    note(
+      PLAN_POINT.escapeCancelsWithoutNavigating,
+      "B-11",
+      "Escape clears the drag state, but a cancel leaves the engine unable to start the next drag"
+    );
     await driver.mountTree(await seedPage(request, FLAT_LIST_FIXTURE));
     await dragFromPanel(driver);
 
@@ -1208,11 +1212,27 @@ test.describe("a canvas any Nextly editor could ship", () => {
     // nothing for the allowance.
     await expect
       .poll(async () => driver.isDragging(), {
-        message: "Escape must end the drag",
+        message: "Escape must clear the drag state",
         timeout: ESCAPE_SETTLE_MS,
       })
       .toBe(false);
 
+    // WHAT THIS DOES AND DOES NOT ESTABLISH, stated because the title is broader than the
+    // assertion. The poll above passes: Escape genuinely clears `aria-grabbed` in both
+    // documents, within about 100ms, and the earlier reading that said otherwise was
+    // taken one React commit too early.
+    //
+    // But clearing the source attribute is NECESSARY and not sufficient for "the drag
+    // ended", and this file has the counterexample in it. The engine-parity case above
+    // starts a drag after this same cancellation and that drag never activates — so
+    // something survives a cancel that `aria-grabbed` cannot see, and treating the one
+    // attribute as proof would certify a teardown that demonstrably leaves state behind.
+    //
+    // The full property needs an observable teardown control — overlay and active target
+    // gone, AND a subsequent drag able to start. That last clause is NOT asserted here,
+    // deliberately: what survives a cancel has not been isolated, and marking this point
+    // as failing for an unisolated cause would be as wrong as graduating it without
+    // saying any of this. The claim is narrowed to what was measured.
     await driver.cancel();
   });
 });

@@ -943,7 +943,13 @@ export function createPocChromeReader(
         // A seam that publishes something unreadable is a DEFECT in the seam, not a canvas
         // that lacks undo — so it fails rather than degrading to the capability refusal
         // below, which would hide a broken seam behind a message about a missing one.
-        const depth = Number.parseInt(published, 10);
+        // The WHOLE string, not a prefix. `Number.parseInt` stops at the first character it
+        // cannot use, so `1junk` reads as 1 and `1.5` as 1 — and a seam publishing `1junk`
+        // then `2junk` reports the delta of one that B-9 requires while remaining malformed.
+        // A count is also never negative, so the contract is asserted rather than approximated.
+        const depth = /^\d+$/.test(published.trim())
+          ? Number.parseInt(published.trim(), 10)
+          : Number.NaN;
         if (!Number.isFinite(depth)) {
           throw new Error(
             `the undo-depth seam published ${JSON.stringify(published)}, which is not a count`
