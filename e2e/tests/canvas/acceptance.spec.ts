@@ -1032,21 +1032,10 @@ test.describe("a canvas any Nextly editor could ship", () => {
     note(
       PLAN_POINT.oneEngineForBothDrags,
       "B-15",
-      "a cancelled drag leaves its state behind, so the next drag never starts"
+      "a drag started after a cancelled drag does not activate"
     );
     const fixture = await seedPage(request, FLAT_LIST_FIXTURE);
     await driver.mountTree(fixture);
-
-    // The refusal this used to assert is gone, because the canvas never lacked the
-    // capability: `CanvasNode` makes every placed block a drag source, and a pointer
-    // drag on one raises the host overlay and marks the block. The reader now performs
-    // that drag instead of declining it.
-    //
-    // The assertion it replaced could not have reported the arrival it was written to
-    // catch. It required the reader's own error type, and that reader refused
-    // UNCONDITIONALLY — so the line went red when someone edited the reader, never when
-    // the product gained the feature. A tripwire on an unconditional refusal watches the
-    // instrument, not the subject.
 
     // BOTH drags, measured the same way, and compared against each other.
     // Reading only the canvas drag asks whether it works, not whether it is the
