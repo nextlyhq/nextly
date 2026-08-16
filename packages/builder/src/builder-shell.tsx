@@ -551,7 +551,27 @@ function ShellRegions({
   const chromeRef = React.useRef<HTMLDivElement | null>(null);
   useDesignSystemStylesheet(chromeRef);
 
-  const openPanel = preferences.leftPanel;
+  /**
+   * Whether the host can fill a panel. One predicate, so the rail's disabled
+   * state and the panel the layout reserves cannot answer differently.
+   */
+  const isAvailable = (panel: LeftPanel) =>
+    availablePanels === undefined || availablePanels.includes(panel);
+
+  /**
+   * The open panel, NORMALISED against what the host can fill.
+   *
+   * Preferences outlive the code that wrote them, and availability can change
+   * between mounts — a store restoring `layers` while the host now offers only
+   * `insert` would reserve a left panel whose content renders nothing. Disabling
+   * the rail button does not help: nobody clicked it, the selection was restored.
+   *
+   * Treated as closed instead, which is the same answer the shell gives for a
+   * panel name it no longer recognises.
+   */
+  const restored = preferences.leftPanel;
+  const openPanel =
+    restored !== null && isAvailable(restored) ? restored : null;
   // The panel set about to be rendered, named the same way a persisted layout
   // is keyed. Derived from `openPanel` because that is what decides the set;
   // the persisted key is derived from the layout's own ids, and the two meet at
@@ -617,8 +637,7 @@ function ShellRegions({
             // hidden, so the rail describes the editor's full shape while never
             // opening an empty region. Clicking one previously reserved a panel
             // and shrank the canvas to show nothing.
-            const ready =
-              availablePanels === undefined || availablePanels.includes(panel);
+            const ready = isAvailable(panel);
             return (
               <Tooltip key={panel}>
                 <TooltipTrigger asChild>

@@ -161,6 +161,25 @@ describe("panels the host cannot fill", () => {
     expect(screen.getByText("insert panel")).toBeTruthy();
   });
 
+  it("does not reserve a panel a RESTORED selection names but the host cannot fill", () => {
+    // Disabling the rail button does not cover this: nobody clicked it, the
+    // selection came out of storage. Left alone the layout reserves a left panel
+    // whose content renders nothing — the blank panel the prop exists to prevent.
+    const store = memoryStore(
+      JSON.stringify({ ...DEFAULT_PREFERENCES, leftPanel: "layers" })
+    );
+    stubViewport(true);
+    render(
+      <BuilderShell
+        store={store}
+        availablePanels={["insert"]}
+        renderPanel={panel => <p>{panel} panel</p>}
+      />
+    );
+
+    expect(screen.queryByText("layers panel")).toBeNull();
+  });
+
   it("treats every panel as available when the host says nothing", () => {
     // Omitting the prop must not silently disable the whole rail for hosts that
     // fill all of them.

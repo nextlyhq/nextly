@@ -10,7 +10,7 @@
  */
 import { DragDropProvider, DragOverlay } from "@dnd-kit/react";
 import { BuilderShell } from "@nextlyhq/builder/shell";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { defaultBlockRegistry } from "../core/registry";
 
@@ -69,6 +69,32 @@ export function EditorSurface({ onExit, surface }: EditorSurfaceProps = {}) {
    * new object every render would reset the author's panel choices on each keystroke.
    */
   const [preferences] = useState(() => editorPreferenceStore(surface));
+
+  /**
+   * Leaving, but never silently discarding work.
+   *
+   * The host's handler navigates away and consults nothing. The canvas holds
+   * unsaved edits in memory and its local draft is not restored anywhere, so an
+   * unguarded Exit loses the whole edit — and loses it fastest right after a
+   * change, while the draft write is still inside its debounce.
+   *
+   * So the confirmation is the editor's to add rather than the host's: the host
+   * cannot see `dirty`, and every host would otherwise have to remember this.
+   * A clean document exits immediately, which keeps the common case one click.
+   */
+  const exitWithGuard = useMemo(() => {
+    if (!onExit) return undefined;
+    return () => {
+      if (!state.dirty) {
+        onExit();
+        return;
+      }
+      const leave = window.confirm(
+        "Leave the editor? Your unsaved changes to this page will be lost."
+      );
+      if (leave) onExit();
+    };
+  }, [onExit, state.dirty]);
   /**
    * Why the CURRENT target refuses this block, while the drag is still in the air.
    *
@@ -156,7 +182,7 @@ export function EditorSurface({ onExit, surface }: EditorSurfaceProps = {}) {
           availablePanels={FILLED_PANELS}
           renderPanel={panel => (panel === "insert" ? <BlockLibrary /> : null)}
           inspector={<Inspector />}
-          onExit={onExit}
+          onExit={exitWithGuard}
         >
           <Canvas />
         </BuilderShell>
