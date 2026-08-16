@@ -225,6 +225,30 @@ describe("entry autosave", () => {
     expect(versionApiMock.autosave).toHaveBeenCalled();
   });
 
+  it("drops a queued write when the form stops being dirty", async () => {
+    // A save inside the quiet period leaves a timer armed. Letting it fire
+    // would rewrite already-persisted values with a NEWER timestamp than the
+    // document, so the next visit would offer them back as unsaved work.
+    const { result } = renderEditForm();
+
+    act(() => {
+      result.current.form.setValue("body", "typed", { shouldDirty: true });
+      result.current.autosave.notifyChange();
+    });
+
+    // What a successful save does to the form.
+    act(() => {
+      result.current.form.reset({ title: "", body: "typed" });
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(10_000);
+      await Promise.resolve();
+    });
+
+    expect(versionApiMock.autosave).not.toHaveBeenCalled();
+  });
+
   it("does not autosave while creating", async () => {
     // There is no stored record for a snapshot to attach to yet.
     const { result } = renderHook(() =>
