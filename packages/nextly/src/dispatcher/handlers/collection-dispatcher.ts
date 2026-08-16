@@ -124,6 +124,7 @@ import {
   listVersionsForDocument,
   setVersionLabelForDocument,
   userFromParams,
+  autosaveEntryForDocument,
 } from "./versions-methods";
 
 type CollectionsHandlerType = CollectionsHandler;
@@ -229,6 +230,27 @@ export const COLLECTION_VERSION_METHODS: Record<
         params: p,
       });
       return respondMutation("Working draft discarded.", item);
+    },
+  },
+  autosaveEntry: {
+    execute: async (_svc, p, body) => {
+      await autosaveEntryForDocument({
+        scopeKind: "collection",
+        slug: String(p.collectionName ?? ""),
+        entryId: String(p.entryId ?? ""),
+        user: userFromParams(p),
+        params: p,
+        // The body IS the snapshot. It is stored verbatim rather than validated
+        // into a shape, because a recovery point records what the author had
+        // and an author part-way through a required field still has something
+        // worth not losing.
+        snapshot: body,
+        locale: typeof p.locale === "string" && p.locale ? p.locale : null,
+      });
+      // No document echoed back. The caller already holds these values, and a
+      // response body would be one more thing to keep in step with the form on
+      // a request that runs while somebody is typing.
+      return respondAction("Draft recovery point saved.");
     },
   },
   getEntryVersion: {

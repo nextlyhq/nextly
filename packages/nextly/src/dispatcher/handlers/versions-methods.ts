@@ -598,3 +598,81 @@ export async function discardWorkingDraftForDocument(
     authenticatedScope,
   });
 }
+
+/**
+ * Record the caller's rolling recovery point for one document.
+ *
+ * Writes the autosave row and nothing else. The live row and the working draft
+ * are both untouched, so this cannot change what a reader sees or what publish
+ * would promote — which is what makes it safe to run on a timer while somebody
+ * is still typing, and why the snapshot is allowed to be incomplete.
+ *
+ * Authorization is the same chain a discard runs, and for the same reason: a
+ * recovery point holds the document's content, so storing one owes every rule
+ * that reading and updating the document owe. The coarse `update-<slug>`
+ * permission ran at the route; a per-document rule can still refuse THIS
+ * document, and a read refusal is reported as "not found" so it does not
+ * confirm the document exists.
+ */
+export async function autosaveEntryForDocument(
+  args: Omit<VersionMethodArgs, "locale"> & {
+    params: Params;
+    snapshot: unknown;
+    /**
+     * Null and undefined are the SAME here, unlike on a listing where absent
+     * means "every locale" and a value narrows. A snapshot belongs to exactly
+     * one locale or to an unlocalized document, so both spellings of "none"
+     * mean the unlocalized row.
+     */
+    locale?: string | null;
+  }
+): Promise<unknown> {
+  const caller = readAccessCallerFromParams(args.params, args.user);
+
+  if (!(await canReadEntity(args.slug, caller))) {
+    throw NextlyError.notFound({
+      logContext: {
+        reason: "autosave-read-denied",
+        scopeKind: args.scopeKind,
+        scopeSlug: args.slug,
+        entryId: args.entryId,
+        userId: args.user.id,
+      },
+    });
+  }
+
+  const authenticatedScope = readAuthenticatedScope(args.params);
+
+  await assertVersionDocumentReadable(
+    args.scopeKind,
+    args.slug,
+    args.entryId,
+    args.user,
+    authenticatedScope
+  );
+  await assertVersionDocumentUpdatable(
+    args.scopeKind,
+    args.slug,
+    args.entryId,
+    args.user,
+    authenticatedScope
+  );
+
+  await getService("versionsService").autosave({
+    ref: {
+      scopeKind: args.scopeKind,
+      scopeSlug: args.slug,
+      entryId: args.entryId,
+    },
+    // A recovery point always describes unpublished work: it is what the author
+    // has, not what the site serves. Recording it as published would put an
+    // unfinished edit into surfaces that filter on status.
+    status: "draft",
+    snapshot: args.snapshot,
+    locale: args.locale ?? null,
+    // An empty id is the unauthenticated shape this context uses; storing it as
+    // a string would make every anonymous author share one recovery point.
+    createdBy: args.user.id || null,
+  });
+  return { ok: true };
+}

@@ -16,6 +16,7 @@
  */
 
 import { NextlyError } from "../../errors";
+import type { VersionStatus } from "../../schemas/versions/types";
 
 import type { VersionsDbApi } from "./db-api";
 import {
@@ -104,5 +105,28 @@ export class VersionsService {
     locale: string | null
   ): Promise<number> {
     return this.repo.deleteWorkingDraft(ref, locale);
+  }
+
+  /**
+   * Record one author's rolling recovery point for a document.
+   *
+   * Outside any transaction, unlike durable capture. A durable version is part
+   * of the write that produced it and must land or roll back with it; a
+   * recovery point describes work that has not been written at all, so there is
+   * no surrounding write for it to join. That also keeps a slow snapshot from
+   * holding a transaction open while somebody types.
+   *
+   * Rewrites the one row this author holds for this document rather than adding
+   * to history, so an editing session costs a single row and durable history is
+   * untouched.
+   */
+  async autosave(input: {
+    ref: VersionRef;
+    status: VersionStatus;
+    snapshot: unknown;
+    locale?: string | null;
+    createdBy?: string | null;
+  }): Promise<void> {
+    return this.repo.upsertAutosave(input);
   }
 }

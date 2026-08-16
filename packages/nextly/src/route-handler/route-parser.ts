@@ -849,6 +849,32 @@ function parseCollectionEntryVersionRoutes(
     };
   }
 
+  // `versions/autosave` PUT records the author's rolling recovery point.
+  // `autosave` is a named sub-resource and a version number is always numeric,
+  // so the two can never collide.
+  //
+  // PUT rather than POST because it is idempotent by construction: there is one
+  // autosave row per document and author, rewritten in place, so repeating the
+  // request leaves the same single row rather than accumulating them.
+  //
+  // Authorized as an UPDATE of the entry. A recovery point holds the same
+  // content the entry does, so anyone who may not change the entry must not be
+  // able to store its contents, and anyone editing it already holds this.
+  if (
+    additionalParams.length === 2 &&
+    additionalParams[1] === "autosave" &&
+    httpMethod === "PUT"
+  ) {
+    routeParams.collectionName = id;
+    routeParams.entryId = subId;
+    return {
+      service: "collections",
+      operation: "update",
+      method: "autosaveEntry",
+      routeParams,
+    };
+  }
+
   if (
     // Only `versions` or `versions/{versionNo}`; anything deeper is not a
     // route this owns and must not be silently truncated to one that is.
