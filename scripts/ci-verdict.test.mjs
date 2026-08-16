@@ -69,16 +69,18 @@ const verdictComment = (login, sha, created_at = undefined) => ({
 describe("verdictCommentReviewers", () => {
   it("grants coverage from a comment naming the head", () => {
     expect(
-      verdictCommentReviewers([verdictComment(CODEX, HEAD)], HEAD, undefined, [
-        HEAD,
-      ])
+      verdictCommentReviewers([verdictComment(CODEX, HEAD)], HEAD, {
+        knownRevisions: [HEAD],
+      })
     ).toEqual([CODEX]);
   });
 
   it("ignores a verdict naming a different revision", () => {
-    expect(verdictCommentReviewers([verdictComment(CODEX, OLD)], HEAD)).toEqual(
-      []
-    );
+    expect(
+      verdictCommentReviewers([verdictComment(CODEX, OLD)], HEAD, {
+        knownRevisions: [HEAD],
+      })
+    ).toEqual([]);
   });
 
   it("ignores a comment with no commit named", () => {
@@ -106,40 +108,48 @@ describe("verdictCommentReviewers", () => {
 
   it("excludes a verdict predating the last base move", () => {
     const stale = verdictComment(CODEX, HEAD, "2026-08-14T09:00:00Z");
-    expect(verdictCommentReviewers([stale], HEAD, "2026-08-14T10:00:00Z")).toEqual(
-      []
-    );
+    expect(
+      verdictCommentReviewers([stale], HEAD, {
+        since: "2026-08-14T10:00:00Z",
+        knownRevisions: [HEAD],
+      })
+    ).toEqual([]);
   });
 
   it("counts a verdict after the last base move", () => {
     const fresh = verdictComment(CODEX, HEAD, "2026-08-14T11:00:00Z");
     expect(
-      verdictCommentReviewers([fresh], HEAD, "2026-08-14T10:00:00Z", [HEAD])
+      verdictCommentReviewers([fresh], HEAD, {
+        since: "2026-08-14T10:00:00Z",
+        knownRevisions: [HEAD],
+      })
     ).toEqual([CODEX]);
   });
 
-  // A comment with no timestamp cannot be shown to postdate the base move, and
-  // unknown is not the same as covered.
   // A reviewer that edits an existing comment to name the newly reviewed
-  // revision has spoken NOW; GitHub keeps the original `created_at`, so keying
-  // on creation alone discarded a valid post-retarget verdict.
+  // revision has spoken NOW, while the creation time still describes the older
+  // verdict.
   it("counts a verdict RESTATED after the base moved", () => {
     const edited = {
       ...verdictComment(CODEX, HEAD, "2026-08-14T09:00:00Z"),
       updated_at: "2026-08-14T11:00:00Z",
     };
     expect(
-      verdictCommentReviewers([edited], HEAD, "2026-08-14T10:00:00Z", [HEAD])
+      verdictCommentReviewers([edited], HEAD, {
+        since: "2026-08-14T10:00:00Z",
+        knownRevisions: [HEAD],
+      })
     ).toEqual([CODEX]);
   });
 
+  // A comment with no timestamp cannot be shown to postdate the base move, and
+  // unknown is not the same as covered.
   it("excludes an undated verdict once a base move is in scope", () => {
     expect(
-      verdictCommentReviewers(
-        [verdictComment(CODEX, HEAD)],
-        HEAD,
-        "2026-08-14T10:00:00Z"
-      )
+      verdictCommentReviewers([verdictComment(CODEX, HEAD)], HEAD, {
+        since: "2026-08-14T10:00:00Z",
+        knownRevisions: [HEAD],
+      })
     ).toEqual([]);
   });
 
@@ -156,10 +166,9 @@ describe("verdictCommentReviewers", () => {
       body: `**Reviewed commit:** \`${shared}\``,
     };
     expect(
-      verdictCommentReviewers([comment], collidingHead, undefined, [
-        collidingHead,
-        olderRevision,
-      ])
+      verdictCommentReviewers([comment], collidingHead, {
+        knownRevisions: [collidingHead, olderRevision],
+      })
     ).toEqual([]);
   });
 
@@ -172,9 +181,20 @@ describe("verdictCommentReviewers", () => {
 
   it("refuses when the head is absent from the revision set", () => {
     expect(
-      verdictCommentReviewers([verdictComment(CODEX, HEAD)], HEAD, undefined, [
-        OLD,
-      ])
+      verdictCommentReviewers([verdictComment(CODEX, HEAD)], HEAD, {
+        knownRevisions: [OLD],
+      })
+    ).toEqual([]);
+  });
+
+  // A rewritten branch no longer lists the revisions an abbreviation would have
+  // to be unique against, while a comment naming a removed one survives.
+  it("refuses every comment verdict once history was rewritten", () => {
+    expect(
+      verdictCommentReviewers([verdictComment(CODEX, HEAD)], HEAD, {
+        knownRevisions: [HEAD],
+        historyRewritten: true,
+      })
     ).toEqual([]);
   });
 
@@ -238,17 +258,16 @@ describe("reviewersCovering", () => {
         [review(CODEX, HEAD)],
         [verdictComment(CODEX, HEAD)],
         HEAD,
-        undefined,
-        [HEAD]
+        { knownRevisions: [HEAD] }
       )
     ).toEqual([CODEX]);
   });
 
   it("clears a required reviewer that only ever commented", () => {
     expect(
-      missingReviewers([], [verdictComment(CODEX, HEAD)], HEAD, [CODEX], undefined, [
-        HEAD,
-      ])
+      missingReviewers([], [verdictComment(CODEX, HEAD)], HEAD, [CODEX], {
+        knownRevisions: [HEAD],
+      })
     ).toEqual([]);
   });
 });
