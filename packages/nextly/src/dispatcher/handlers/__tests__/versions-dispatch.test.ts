@@ -41,6 +41,7 @@ describe("version methods are registered", () => {
     // being registered for authorization, which decides whether it is
     // permitted as a read or as a write.
     expect(Object.keys(COLLECTION_VERSION_METHODS).sort()).toEqual([
+      "autosaveEntry",
       "discardWorkingDraft",
       "getEntryVersion",
       "getEntryVersionDiff",
@@ -52,6 +53,7 @@ describe("version methods are registered", () => {
 
   it("exposes every single version method", () => {
     expect(Object.keys(SINGLE_VERSION_METHODS).sort()).toEqual([
+      "autosaveSingle",
       "getSingleVersion",
       "getSingleVersionDiff",
       "listSingleVersions",
