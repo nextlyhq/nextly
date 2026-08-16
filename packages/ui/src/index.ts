@@ -547,7 +547,11 @@ export type { KeyChord, KeySequence } from "./lib/shortcuts/key-spec";
 /** @experimental Form layout. No first-party plugin has exercised it in production yet. */
 export { FieldShell } from "./components/field-shell";
 /** @experimental */
-export type { FieldShellProps, FieldWidth } from "./types/form-layout";
+export type {
+  FieldShellProps,
+  FieldShellRenderProps,
+  FieldWidth,
+} from "./types/form-layout";
 
 /**
  * @experimental A labelled card holding a group of fields, composing `Card`
