@@ -18,6 +18,7 @@ import { getNextly } from "nextly";
 import type { NextlyContentReader } from "nextly/runtime";
 
 import nextlyConfig from "../../../../nextly.config";
+import { BLOCKS_COLLECTION, BLOCKS_MOUNT } from "../route-config";
 
 type NextlyInstance = Awaited<ReturnType<typeof getNextly>>;
 
@@ -103,7 +104,7 @@ const reader: NextlyContentReader & { media: MediaLookup } = {
  * wired under. Prefixing is the host's job, and getting it wrong is how a page
  * comes to claim it lives somewhere nothing is served.
  */
-const MOUNT = "/blocks";
+const MOUNT = BLOCKS_MOUNT;
 
 /**
  * The mount plus the entry's own path.
@@ -133,7 +134,7 @@ function canonicalFor(path: string): string {
  * two. The posture is the factory you call — there is no option for it.
  */
 const { ContentPage, generateMetadata } = createBlocksPage({
-  collections: ["block-pages"],
+  collections: [BLOCKS_COLLECTION],
   field: "content",
   nextly: reader,
   // An explicit set, not the process registry. `registeredBlocks()` reads the

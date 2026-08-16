@@ -32,6 +32,27 @@ import type { NextlySitemapEntry } from "./sitemap";
  */
 export const SITEMAP_MAX_URLS = 50_000;
 
+/**
+ * The protocol's other per-file ceiling: 50MB uncompressed.
+ *
+ * A document can cross it while well under the URL count — tens of thousands of
+ * kilobyte-long paths do it — and a crawler rejects the file as a whole either
+ * way, so counting URLs alone enforces half a limit. Measured against the URL
+ * text rather than the serialized XML: the markup around each entry is roughly
+ * constant and the paths are what vary without bound, so this tracks the term
+ * that actually moves and leaves headroom for the rest.
+ */
+export const SITEMAP_MAX_BYTES = 50 * 1024 * 1024;
+
+/**
+ * Bytes of markup a sitemap spends on an entry beyond its URL.
+ *
+ * `<url><loc></loc></url>` plus indentation and an optional `<lastmod>`. A
+ * deliberate over-estimate: this bounds a document that must not be rejected,
+ * so erring high costs a shard boundary and erring low costs the whole file.
+ */
+const BYTES_PER_ENTRY_OVERHEAD = 120;
+
 /** Rows read per query while paginating; the read asks for one column. */
 const PAGE_SIZE = 500;
 
@@ -82,11 +103,21 @@ export interface ContentSitemapOptions {
    * - reading `"public"` for a RESTRICTED route bypasses access control, and
    *   publishes the slugs of entries no visitor may read.
    *
-   * Defaults to `"restricted"`, the same secure default the route factories
-   * take. Naming the decision does not relax it — a site saying `"public"` here
-   * is stating what it already stated by calling the public factory.
+   * REQUIRED rather than defaulted, deliberately. A safe default is exactly the
+   * documented-rule-with-nothing-enforcing-it this repository has a rule about:
+   * a caller serving public content who simply never met this option gets a
+   * sitemap that silently omits every page whose collection denies anonymous
+   * reads, and nothing anywhere reports it. Naming it costs one line and makes
+   * the omission a compile error instead.
+   *
+   * It restates a decision the caller already made by choosing
+   * `createContentRoute` or `createPublicContentRoute`, and TWO security-
+   * sensitive values that must agree is a weaker arrangement than one. The
+   * stronger form is for the route to hand back a sitemap function already
+   * bound to its own posture, so there is nothing to keep in step; that changes
+   * the public route surface and is filed rather than smuggled in here.
    */
-  content?: "public" | "restricted";
+  content: "public" | "restricted";
   /** Field carrying the last-modified timestamp, e.g. `"updatedAt"`. */
   lastModifiedField?: string;
   /** `changeFrequency` applied to every entry, if the site wants one. */
@@ -166,7 +197,7 @@ export async function contentSitemapEntries(
     lastModifiedField,
     changeFrequency,
     priority,
-    content = "restricted",
+    content,
     limit = SITEMAP_MAX_URLS,
     offset = 0,
     nextly,
@@ -181,6 +212,9 @@ export async function contentSitemapEntries(
   // URL it read is published by the next shard. Only the caller knows which
   // situation this is, so only the caller can say.
   const sharded = options.offset !== undefined;
+  // Counted alongside the URLs, because the two ceilings are independent and
+  // whichever is reached first decides.
+  let bytes = 0;
 
   if (limit <= 0) return [];
 
@@ -278,6 +312,12 @@ export async function contentSitemapEntries(
         if (entries.length > limit) {
           return sharded ? entries.slice(0, limit) : truncated(entries, limit);
         }
+        bytes += url.length + BYTES_PER_ENTRY_OVERHEAD;
+        // The byte ceiling has no shard exemption. A URL count can be split
+        // deliberately, but a document over 50MB is refused whatever the caller
+        // intended, so this always reports — and it drops the entry that
+        // crossed rather than emitting a file the crawler will reject.
+        if (bytes > SITEMAP_MAX_BYTES) return oversized(entries);
       }
 
       if (!result.meta.hasNext) break;
@@ -297,6 +337,30 @@ export async function contentSitemapEntries(
  * protocol and has nowhere to carry a third state, so the signal goes where a
  * developer will meet it: the build log, naming the remedy.
  */
+/**
+ * Report a document stopped at the BYTE ceiling.
+ *
+ * Separate from {@link truncated} because the cause differs even though the
+ * remedy does not: this one is reached by long paths rather than by many of
+ * them, so a caller told only about the URL count would look at a sitemap well
+ * under 50,000 entries and conclude the warning was wrong.
+ *
+ * No shard exemption, unlike the URL limit. A count can be split deliberately;
+ * a document over the byte ceiling is refused whatever the caller intended.
+ */
+function oversized(entries: NextlySitemapEntry[]): NextlySitemapEntry[] {
+  // Without the entry that crossed, rather than with it — emitting a document
+  // known to be over the limit publishes something the crawler discards whole.
+  const emitted = entries.slice(0, -1);
+  console.warn(
+    `[nextly] sitemap reached the ${SITEMAP_MAX_BYTES}-byte protocol limit at ` +
+      `${emitted.length} URLs and stopped. Long paths cross this well before ` +
+      `the 50,000-URL count, and a crawler rejects the whole document. Split ` +
+      `it with Next's generateSitemaps, giving shard n its own offset and limit.`
+  );
+  return emitted;
+}
+
 function truncated(
   entries: NextlySitemapEntry[],
   limit: number

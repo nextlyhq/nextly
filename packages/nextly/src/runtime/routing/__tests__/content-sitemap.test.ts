@@ -30,7 +30,11 @@ function reader(pages: Record<string, Array<Record<string, unknown>>[]>): {
   return { reader: { find } as unknown as NextlyContentReader, calls };
 }
 
-const BASE = { baseUrl: "https://example.com", collections: ["pages"] };
+const BASE = {
+  baseUrl: "https://example.com",
+  collections: ["pages"],
+  content: "restricted" as const,
+};
 
 describe("contentSitemapEntries", () => {
   it("emits one URL per published entry, under the route's mount point", async () => {
@@ -86,6 +90,7 @@ describe("contentSitemapEntries", () => {
       collections: ["pages"],
       baseUrl: "https://example.com/",
       basePath: "blocks/",
+      content: "restricted" as const,
       nextly: r,
     });
 
@@ -133,6 +138,7 @@ describe("contentSitemapEntries", () => {
     const entries = await contentSitemapEntries({
       baseUrl: "https://example.com",
       collections: ["pages", "posts"],
+      content: "restricted" as const,
       nextly: r,
     });
 
@@ -195,6 +201,29 @@ describe("contentSitemapEntries", () => {
       nextly: reader({ pages: [page] }).reader,
     });
     expect(warn).toHaveBeenCalledOnce();
+    warn.mockRestore();
+  });
+
+  it("stops at the BYTE ceiling even when far under the URL count", async () => {
+    // The protocol bounds both, and long paths cross the byte limit while the
+    // entry count is still small. A crawler rejects the document as a whole
+    // either way, so counting URLs alone enforces half a limit.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const longSegment = "x".repeat(2000);
+    const rows = Array.from({ length: 40_000 }, (_, i) => ({
+      slug: `${longSegment}/${i}`,
+    }));
+
+    const entries = await contentSitemapEntries({
+      ...BASE,
+      nextly: reader({ pages: [rows] }).reader,
+    });
+
+    // Well under the 50,000-URL cap, so the URL check cannot be what stopped it.
+    expect(entries.length).toBeLessThan(40_000);
+    expect(entries.length).toBeLessThan(50_000);
+    expect(warn).toHaveBeenCalledOnce();
+    expect(String(warn.mock.calls[0][0])).toContain("byte");
     warn.mockRestore();
   });
 
@@ -312,6 +341,7 @@ describe("contentSitemapEntries", () => {
       contentSitemapEntries({
         baseUrl: "https://example.com",
         collections: ["locked", "pages"],
+        content: "restricted" as const,
         nextly: skipping,
       })
     ).resolves.toEqual([{ url: "https://example.com/a" }]);

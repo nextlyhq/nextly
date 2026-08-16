@@ -19,15 +19,12 @@ import {
 
 import nextlyConfig from "../../../nextly.config";
 
-/**
- * The collection the blocks route reads, and the mount it serves from.
- *
- * Stated once and used for both, because a sitemap built against a different
- * collection or a different mount is wrong in a way nothing detects: it
- * produces well-formed URLs for pages that do not exist there.
- */
-const COLLECTION = "block-pages";
-const MOUNT = "/blocks";
+import { BLOCKS_COLLECTION, BLOCKS_MOUNT } from "./route-config";
+
+// The collection and mount come from the route's own definition, so this
+// cannot advertise a path the route does not serve. They were literals here
+// until review pointed out that the route declares its own — two copies of a
+// value whose disagreement produces a well-formed sitemap full of 404s.
 
 /**
  * The site's public origin.
@@ -62,12 +59,17 @@ const reader = {
 export default nextlySitemap({
   // Busted by a write to the collection, so the sitemap moves with the pages
   // rather than going stale until the next deploy.
-  tags: nextlyTags(COLLECTION),
+  tags: nextlyTags(BLOCKS_COLLECTION),
   entries: () =>
     contentSitemapEntries({
-      collections: [COLLECTION],
+      collections: [BLOCKS_COLLECTION],
+      // The route is `createBlocksPage`, the access-ENFORCED factory, so the
+      // scan reads as the anonymous visitor this document is served to. Stated
+      // rather than defaulted: the option is required precisely so a public
+      // route cannot inherit a restricted scan and silently omit every page.
+      content: "restricted",
       baseUrl: BASE_URL,
-      basePath: MOUNT,
+      basePath: BLOCKS_MOUNT,
       // Present on every collection with timestamps on, and omitted from the
       // entry when a row does not carry a usable one.
       lastModifiedField: "updatedAt",
