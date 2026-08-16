@@ -21,9 +21,21 @@ import { renderToStaticMarkup } from "react-dom/server";
 // Built output (plain JS) — avoids TSX transpilation in the Playwright runner.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import { PageRenderer } from "../dist/render/index.js";
+// Types from source, values from `dist`. The built entry re-exports the renderer but not the
+// document types, and a type-only import is erased anyway — so this couples the fixture to the
+// shape the package actually declares rather than to whatever the bundler happened to surface.
+import type { BlockDocument, BlockNode } from "../src/core/types";
 
 let n = 0;
-const h = (type: string, props: object = {}, slots?: object) => ({
+// `Record<string, unknown>` rather than `object`: a block node's props are an index-signature type,
+// and `object` is not assignable to one — `{}` has no index signature, so a document built from
+// this helper is rejected by `PageRenderer` at the type level while being perfectly valid at
+// runtime.
+const h = (
+  type: string,
+  props: Record<string, unknown> = {},
+  slots?: Record<string, BlockNode[]>
+): BlockNode => ({
   id: `e2e-${type.replace(/\W/g, "")}-${n++}`,
   type,
   props,
@@ -31,8 +43,8 @@ const h = (type: string, props: object = {}, slots?: object) => ({
 });
 
 function buildHtml(): string {
-  const doc = {
-    version: 1 as const,
+  const doc: BlockDocument = {
+    version: 1,
     root: h(
       "core/container",
       {},
@@ -55,10 +67,18 @@ function buildHtml(): string {
       }
     ),
   };
-  // Entrance motion on the heading to assert the compiled animation.
-  (
-    doc.root as { slots: { default: { motion?: unknown }[] } }
-  ).slots.default[0].motion = { entrance: "slide-up", duration: "400ms" };
+  // Entrance motion on the heading, which is what the animation assertion below reads.
+  //
+  // Reached through the real type rather than a cast. The cast this replaces asserted a shape the
+  // document does not have, so it would have kept compiling after the fixture stopped putting a
+  // heading first — and the browser assertion would then fail naming the renderer.
+  const heading = doc.root.slots?.default?.[0];
+  if (!heading) {
+    throw new Error(
+      "the fixture must put a heading first for motion to be applied to"
+    );
+  }
+  heading.motion = { entrance: "slide-up", duration: "400ms" };
   const body = renderToStaticMarkup(
     React.createElement(PageRenderer, { document: doc })
   );
