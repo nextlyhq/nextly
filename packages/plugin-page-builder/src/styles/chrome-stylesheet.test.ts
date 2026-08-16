@@ -38,8 +38,12 @@ describe("the editor stylesheet", () => {
     // CSS ignores an `@import` that follows a style rule. Asserting only that the
     // import exists would pass on a file where it sits at the bottom and is
     // silently dropped by every browser — the failure this ordering prevents.
-    const importAt = css.indexOf("@import");
-    const firstRuleAt = css.indexOf(".nx-pb-editor");
+    // The full statement, not the bare word: the comment above the import
+    // contains "@import" too, so searching for that alone measures the COMMENT's
+    // position and passes however the real statement is ordered. Found by
+    // stub-verifying — moving the import to the bottom left this test green.
+    const importAt = css.indexOf('@import "@nextlyhq/builder/styles.css"');
+    const firstRuleAt = css.indexOf(".nx-pb-editor {");
 
     expect(importAt).toBeGreaterThanOrEqual(0);
     expect(firstRuleAt).toBeGreaterThanOrEqual(0);
