@@ -109,6 +109,7 @@ import type { MethodHandler, Params } from "../types";
 import { assertSchemaVersionMatch } from "./schema-version-guard";
 import {
   assertLabelRequestValid,
+  autosaveForDocument,
   getVersionDiffForDocument,
   getVersionForDocument,
   restoreVersionForDocument,
@@ -313,6 +314,26 @@ export const SINGLE_VERSION_METHODS: Record<
         params: p,
       });
       return respondMutation("Version renamed.", row);
+    },
+  },
+  autosaveSingle: {
+    execute: async (_svc, p, body) => {
+      const slug = String(p.slug ?? "");
+      // As everywhere in this handler, the document id comes from the live row
+      // rather than the URL: a Single has exactly one document and the client
+      // must not name which one it is writing a recovery point for.
+      const entryId = await requireLiveSingleId(slug);
+      await autosaveForDocument({
+        scopeKind: "single",
+        slug,
+        entryId,
+        user: userFromParams(p),
+        params: p,
+        // The body IS the snapshot, stored verbatim. See the collection handler.
+        snapshot: body,
+        locale: typeof p.locale === "string" && p.locale ? p.locale : null,
+      });
+      return respondAction("Draft recovery point saved.");
     },
   },
 };

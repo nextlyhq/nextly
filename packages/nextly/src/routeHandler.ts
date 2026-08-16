@@ -541,8 +541,18 @@ async function handleEmailRequest(
 // Authorization Helpers
 // ============================================================================
 
-/** Collection entry methods that operate on collection data (not definitions). */
-const COLLECTION_ENTRY_METHODS = new Set([
+/**
+ * Collection entry methods that operate on collection data (not definitions).
+ *
+ * Membership decides which permission a method resolves to, and the fallthrough
+ * is not a refusal: a method absent from this set lands on the definition branch
+ * and demands `manage-settings`. That denies the editors who hold
+ * `update-{slug}` and grants the request to a caller who holds settings but no
+ * access to the collection, so an omission fails in both directions at once.
+ * Exported so the route-parser suite can assert every entry route's method
+ * against it rather than restating the list.
+ */
+export const COLLECTION_ENTRY_METHODS = new Set([
   "listEntries",
   "createEntry",
   "getEntry",
@@ -569,10 +579,17 @@ const COLLECTION_ENTRY_METHODS = new Set([
   // route parser marks it an `update` operation, so it resolves to the
   // `update-{slug}` permission rather than a definition mutation's manage-settings.
   "discardWorkingDraft",
+  // Storing a recovery point writes the entry's content into history, so it is
+  // authorized as an update of the entry like a discard is.
+  "autosaveEntry",
 ]);
 
-/** Single document methods (read/update content, not schema definitions). */
-const SINGLE_DOCUMENT_METHODS = new Set([
+/**
+ * Single document methods (read/update content, not schema definitions).
+ *
+ * Carries the same fallthrough hazard as `COLLECTION_ENTRY_METHODS` above.
+ */
+export const SINGLE_DOCUMENT_METHODS = new Set([
   "getSingleDocument",
   "updateSingleDocument",
   // Read-only history for the document, guarded by the same read permission.
@@ -584,6 +601,9 @@ const SINGLE_DOCUMENT_METHODS = new Set([
   // Also a write. Deliberately absent from the read allowlist below, so the
   // action resolves to `update` by default.
   "setSingleVersionLabel",
+  // A write for the same reason as the collection entry's autosave, and left
+  // out of the read branch below so it resolves to `update`.
+  "autosaveSingle",
 ]);
 
 /**

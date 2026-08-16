@@ -614,7 +614,7 @@ export async function discardWorkingDraftForDocument(
  * document, and a read refusal is reported as "not found" so it does not
  * confirm the document exists.
  */
-export async function autosaveEntryForDocument(
+export async function autosaveForDocument(
   args: Omit<VersionMethodArgs, "locale"> & {
     params: Params;
     snapshot: unknown;

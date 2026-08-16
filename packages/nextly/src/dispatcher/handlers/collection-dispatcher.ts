@@ -124,7 +124,7 @@ import {
   listVersionsForDocument,
   setVersionLabelForDocument,
   userFromParams,
-  autosaveEntryForDocument,
+  autosaveForDocument,
 } from "./versions-methods";
 
 type CollectionsHandlerType = CollectionsHandler;
@@ -234,7 +234,7 @@ export const COLLECTION_VERSION_METHODS: Record<
   },
   autosaveEntry: {
     execute: async (_svc, p, body) => {
-      await autosaveEntryForDocument({
+      await autosaveForDocument({
         scopeKind: "collection",
         slug: String(p.collectionName ?? ""),
         entryId: String(p.entryId ?? ""),
