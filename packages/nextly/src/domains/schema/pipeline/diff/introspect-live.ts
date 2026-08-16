@@ -90,6 +90,53 @@ function normalizeIndexOrder(snapshot: NextlySchemaSnapshot): void {
   }
 }
 
+/**
+ * The modifier a DECLARED type string already carries — `varchar(255)` gives `255`.
+ *
+ * Right for MySQL and SQLite, whose introspection reports the declaration itself
+ * (`COLUMN_TYPE`, `PRAGMA table_info.type`). Reading their information_schema
+ * width columns instead would INVENT modifiers: measured on MySQL 8, a `TEXT`
+ * column reports `CHARACTER_MAXIMUM_LENGTH` 65535 while its `COLUMN_TYPE` is a
+ * bare `text`, and an `INT` reports precision 10.
+ */
+function modifierFromDeclaredType(type: string): string | undefined {
+  const match = /\(([^)]*)\)/.exec(type);
+  const inner = match?.[1];
+  return inner === undefined ? undefined : inner.replace(/\s+/g, "");
+}
+
+/**
+ * PostgreSQL's modifier, reconstructed — it has no `COLUMN_TYPE` equivalent, and
+ * `udt_name` never carries one.
+ *
+ * 🔴 GATED BY TYPE, because `information_schema` reports a precision for types
+ * that were never declared with one. Measured on PostgreSQL 17: `integer` reports
+ * numeric_precision 32, `double precision` reports 53. Those are properties of the
+ * storage, not of the declaration — nobody writes `INTEGER(32)` — so copying them
+ * would compare a fabricated modifier against a generator that emits none, and
+ * refuse healthy tables.
+ *
+ * Only the two families that genuinely take a modifier are read: character types
+ * carry a length, exact-numeric types carry precision and scale.
+ */
+function pgTypeModifier(row: PgRow): string | undefined {
+  // 🔴 Tested for a NUMBER rather than against null. `information_schema` yields null for a type
+  // with no modifier, but a row that simply lacks the key — an older snapshot, a driver that omits
+  // nulls, a hand-built row — is `undefined`, and `undefined !== null` is true. That branch then
+  // stringifies to the literal "undefined" and records it as a width, which is a fabricated
+  // modifier of exactly the kind the gating below exists to prevent.
+  if (typeof row.character_maximum_length === "number") {
+    return String(row.character_maximum_length);
+  }
+  const exactNumeric = row.udt_name === "numeric" || row.udt_name === "decimal";
+  if (exactNumeric && typeof row.numeric_precision === "number") {
+    return typeof row.numeric_scale === "number"
+      ? `${row.numeric_precision},${row.numeric_scale}`
+      : String(row.numeric_precision);
+  }
+  return undefined;
+}
+
 interface PgRow {
   table_name: string;
   column_name: string;
@@ -98,6 +145,9 @@ interface PgRow {
   column_default: string | null;
   owned_sequence_default: boolean;
   is_primary_key: boolean;
+  character_maximum_length: number | null;
+  numeric_precision: number | null;
+  numeric_scale: number | null;
 }
 
 interface MysqlRow {
@@ -191,6 +241,7 @@ export async function introspectLiveSnapshot(
     const result = (await dbTyped.execute(
       sql`SELECT c.table_name, c.column_name, c.udt_name, c.is_nullable,
                  c.column_default,
+                 c.character_maximum_length, c.numeric_precision, c.numeric_scale,
                  EXISTS (
                    SELECT 1
                    FROM pg_index i
@@ -393,6 +444,10 @@ export async function introspectLiveSnapshot(
           // Coerce primitives to string; treat anything non-primitive as
           // missing (defensive - SQLite never returns object defaults).
           default: sqliteDefaultExpression(r.dflt_value),
+          // PRAGMA reports the DECLARED type, so any modifier is already in it.
+          ...(modifierFromDeclaredType(r.type) !== undefined
+            ? { typeModifier: modifierFromDeclaredType(r.type) }
+            : {}),
         })
       ),
     });
@@ -477,6 +532,8 @@ function buildSnapshotFromPgRows(rows: PgRow[]): NextlySchemaSnapshot {
     // so a snapshot taken before this reads the same as one where the column
     // is genuinely not part of the key.
     if (r.is_primary_key === true) column.primaryKey = true;
+    const pgModifier = pgTypeModifier(r);
+    if (pgModifier !== undefined) column.typeModifier = pgModifier;
     cols.push(column);
   }
   return {
@@ -554,6 +611,8 @@ function buildSnapshotFromMysqlRows(
     if (primaryKeyColumns.has(`${r.TABLE_NAME}.${r.COLUMN_NAME}`)) {
       column.primaryKey = true;
     }
+    const myModifier = modifierFromDeclaredType(r.COLUMN_TYPE);
+    if (myModifier !== undefined) column.typeModifier = myModifier;
     cols.push(column);
   }
   return {
