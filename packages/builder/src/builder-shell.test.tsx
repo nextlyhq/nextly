@@ -128,6 +128,51 @@ describe("leaving the editor", () => {
   });
 });
 
+describe("panels the host cannot fill", () => {
+  it("shows them, disabled, rather than opening an empty region", () => {
+    // Hiding them would make the rail change shape under an author as features
+    // land. Opening one is worse: it reserves a panel and shrinks the canvas to
+    // display nothing, which reads as a broken control rather than a missing one.
+    renderShell({ availablePanels: ["insert"] });
+
+    const layers = screen.getByRole("button", { name: /^Layers/ });
+    expect((layers as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("says why, rather than presenting a dead control", () => {
+    renderShell({ availablePanels: ["insert"] });
+
+    expect(
+      screen.getByRole("button", { name: "Layers — coming soon" })
+    ).toBeTruthy();
+  });
+
+  it("leaves a panel the host CAN fill fully operable", () => {
+    // The positive control. Without it, a shell that disabled every rail button
+    // would satisfy both assertions above perfectly.
+    renderShell({
+      availablePanels: ["insert"],
+      renderPanel: panel => <p>{panel} panel</p>,
+    });
+
+    const insert = screen.getByRole("button", { name: "Insert" });
+    expect((insert as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(insert);
+    expect(screen.getByText("insert panel")).toBeTruthy();
+  });
+
+  it("treats every panel as available when the host says nothing", () => {
+    // Omitting the prop must not silently disable the whole rail for hosts that
+    // fill all of them.
+    renderShell();
+
+    expect(
+      (screen.getByRole("button", { name: "Layers" }) as HTMLButtonElement)
+        .disabled
+    ).toBe(false);
+  });
+});
+
 describe("the rail", () => {
   const railButton = (name: string) =>
     screen.getByRole("button", { name, pressed: undefined }) ??

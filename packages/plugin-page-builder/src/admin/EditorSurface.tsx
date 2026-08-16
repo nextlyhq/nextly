@@ -32,6 +32,16 @@ interface DragOperation {
   target: { id: string | number; data?: unknown } | null;
 }
 
+/**
+ * The rail panels this editor can currently fill.
+ *
+ * The shell draws all seven and disables the rest, so the rail keeps describing
+ * the editor's eventual shape without offering a control that opens an empty
+ * region. Extend this as the layers panel, inserter and entry panel land — it is
+ * the one place that decides, so the rail cannot disagree with `renderPanel`.
+ */
+const FILLED_PANELS = ["insert"] as const;
+
 export interface EditorSurfaceProps {
   /**
    * Which editor surface this is, for scoping chrome preferences.
@@ -143,6 +153,7 @@ export function EditorSurface({ onExit, surface }: EditorSurfaceProps = {}) {
           className="min-h-0 flex-1"
           store={preferences}
           topBar={<BreakpointControl />}
+          availablePanels={FILLED_PANELS}
           renderPanel={panel => (panel === "insert" ? <BlockLibrary /> : null)}
           inspector={<Inspector />}
           onExit={onExit}

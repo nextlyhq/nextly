@@ -89,6 +89,24 @@ type Region = (typeof REGIONS)[number];
 export interface BuilderShellProps {
   /** Rendered inside the switched left panel. Keyed by the panel that is open. */
   renderPanel?: (panel: LeftPanel) => React.ReactNode;
+  /**
+   * Which panels the host can actually fill.
+   *
+   * The rail always shows all seven, because the set is the editor's shape and
+   * hiding the unbuilt ones would make the chrome change under an author as
+   * features land. What it must not do is OPEN one nothing renders into: that
+   * reserves a panel and shrinks the canvas to display nothing, which reads as a
+   * broken control rather than an absent feature.
+   *
+   * So a panel outside this list is drawn disabled and labelled as coming soon.
+   * Omit the prop entirely and every panel is treated as available, which keeps
+   * a host that fills all of them from having to enumerate them.
+   *
+   * Derived from what the host can render rather than declared twice: pass the
+   * same set `renderPanel` returns content for, and the rail cannot disagree with
+   * the panel body.
+   */
+  availablePanels?: readonly LeftPanel[];
   /** The canvas. The shell never looks inside it. */
   children?: React.ReactNode;
   /** The inspector's contents. */
@@ -491,6 +509,7 @@ function useSeparatorRegionEscape(
 
 function ShellRegions({
   renderPanel,
+  availablePanels,
   children,
   inspector,
   topBar,
@@ -594,6 +613,12 @@ function ShellRegions({
           {LEFT_PANELS.map(panel => {
             const { label, Icon } = PANEL_CHROME[panel];
             const isOpen = openPanel === panel;
+            // A panel the host cannot fill is shown and DISABLED rather than
+            // hidden, so the rail describes the editor's full shape while never
+            // opening an empty region. Clicking one previously reserved a panel
+            // and shrank the canvas to show nothing.
+            const ready =
+              availablePanels === undefined || availablePanels.includes(panel);
             return (
               <Tooltip key={panel}>
                 <TooltipTrigger asChild>
@@ -601,20 +626,26 @@ function ShellRegions({
                     type="button"
                     data-builder-animates
                     data-panel={panel}
-                    aria-pressed={isOpen}
-                    aria-label={label}
+                    disabled={!ready}
+                    aria-pressed={ready ? isOpen : undefined}
+                    aria-label={ready ? label : `${label} — coming soon`}
                     onClick={() => selectPanel(panel)}
                     className={cn(
                       "focus-visible:ring-ring flex size-8 items-center justify-center rounded-md focus-visible:ring-2 focus-visible:outline-none",
-                      isOpen
+                      isOpen && ready
                         ? "bg-[color:var(--nx-builder-accent)] text-[color:var(--nx-builder-accent-text)]"
-                        : "text-[color:var(--nx-builder-text-muted)]"
+                        : "text-[color:var(--nx-builder-text-muted)]",
+                      // Dimmed rather than removed: the control stays legible as
+                      // a place the editor will grow into.
+                      !ready && "cursor-not-allowed opacity-40"
                     )}
                   >
                     <Icon className="size-4" />
                   </button>
                 </TooltipTrigger>
-                <TooltipContent side="right">{label}</TooltipContent>
+                <TooltipContent side="right">
+                  {ready ? label : `${label} — coming soon`}
+                </TooltipContent>
               </Tooltip>
             );
           })}
