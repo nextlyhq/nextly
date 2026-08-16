@@ -16,10 +16,9 @@
  *
  * @module runtime/preview/preview-draft-gate
  */
-import { previewTokenCovers } from "../../auth/preview/preview-token";
 import type { PreviewTokenScope } from "../../auth/preview/preview-token";
 
-import { readPreviewScope } from "./preview-route";
+import { previewGrantsDraft, readPreviewScope } from "./preview-route";
 import type { PreviewScopeReaderConfig } from "./preview-route";
 
 /**
@@ -87,24 +86,26 @@ export function previewDraftGate(
     // whether this visitor is previewing — and whether their token has since
     // expired or been revoked — is a fact about the request in hand.
     const scope = await readPreviewScope(config);
+
     if (scope === null) return false;
 
-    // Asked of the shared rule rather than compared field by field here. The
-    // rule already decides collection, entry and locale together, and a second
-    // comparison in this file would be the drift that turns "a preview session
-    // exists" into "this preview session covers what is being read".
+    // `previewGrantsDraft` owns the whole authorization question — an absent
+    // session AND whether a present one reaches the document — so it is asked
+    // rather than rebuilt from its parts. Rejecting null here and calling
+    // `previewTokenCovers` beside it is the same decision computed twice, and
+    // the copy is the one that keeps the old policy when the shared one moves.
     //
     // `entryId` is the scope's own, because the route has not resolved a
-    // document yet and this gate must not perform a read of its own to guess
-    // one. That leaves the entry comparison to the route, which makes it
-    // against the row it actually resolved — a stronger check than any this
-    // function could do from a slug.
+    // document yet and this gate must not read one of its own to guess. That
+    // leaves the entry comparison to the route, made against the row it
+    // actually resolved — a stronger check than any this function could do
+    // from a slug.
     const requested: PreviewTokenScope = {
       collection,
       entryId: scope.entryId,
       ...(config.locale === undefined ? {} : { locale: config.locale }),
     };
-    if (!previewTokenCovers(scope, requested)) return false;
+    if (!previewGrantsDraft(scope, requested)) return false;
 
     return { entryId: scope.entryId };
   };
