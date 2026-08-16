@@ -77,6 +77,16 @@ const PLAN_POINT = {
 } as const;
 
 /**
+ * How long a cancelled drag may take to report that it ended, in milliseconds.
+ *
+ * Generous on purpose. The property is that Escape ends the drag, not that it ends it
+ * within any particular frame, so a tight bound here would turn a loaded CI runner into
+ * a canvas defect. Measured locally the state clears within 100ms; the allowance is a
+ * ceiling the poll stops early on rather than a wait anyone pays.
+ */
+const ESCAPE_SETTLE_MS = 2_000;
+
+/**
  * Time budgets for the autoscroll case, in milliseconds.
  *
  * Durations rather than move counts. The scroll advances on the canvas's own timer, so a number of
@@ -179,7 +189,7 @@ test.describe("a canvas any Nextly editor could ship", () => {
 
   test.beforeEach(({ page }) => {
     driver = createPocDriver(page);
-    chrome = createPocChromeReader(page);
+    chrome = createPocChromeReader(page, driver);
   });
 
   test("resolves a pointer collision to the innermost container", async ({
@@ -950,20 +960,29 @@ test.describe("a canvas any Nextly editor could ship", () => {
     note(
       PLAN_POINT.oneDropOneUndo,
       "B-9",
-      "this canvas keeps no undo history to count"
+      "this canvas publishes no undo depth a test can read"
     );
     await driver.mountTree(await seedPage(request, FLAT_LIST_FIXTURE));
 
-    // The canvas cannot answer this at all, and that refusal IS the
-    // shortfall. Asserted as the reader's OWN error type BEFORE the
-    // expectation is marked, so a broken selector, a missing iframe or a
-    // failed seed stays a real failure instead of becoming another
-    // expected one. It also fires the day the capability arrives: this
-    // line goes red first and forces the target below to be rewritten.
+    // The canvas cannot answer this, and that refusal IS the shortfall — but the
+    // refusal is about the SEAM, not the feature. The editor keeps a bounded undo
+    // history in its store; nothing publishes a depth to the DOM, so no test can
+    // read one. Directing a maintainer to implement undo would send them to build
+    // what already exists.
     //
-    // Wrapped in an async thunk because these readers throw SYNCHRONOUSLY:
-    // `expect(reader())` never receives a promise, so `.rejects` cannot see
-    // the refusal and the raw error escapes the assertion entirely.
+    // Asserted as the reader's OWN error type BEFORE the expectation is marked, so
+    // a broken selector, a missing iframe or a failed seed stays a real failure
+    // instead of becoming another expected one.
+    //
+    // This assertion is a tripwire rather than a restatement, and it is one only
+    // because `undoDepth` QUERIES the seam in both documents and refuses on an actual
+    // absence. Publish the attribute and the reader returns a count, this line goes red,
+    // and the target below has to be rewritten. Guarding a reader that refused without
+    // looking would detect only that reader being edited, never the seam arriving.
+    //
+    // The async thunk covers a reader that signals failure either way: a synchronous
+    // throw never reaches `expect(reader())` as a promise, so `.rejects` cannot see it,
+    // while a rejected promise works through the thunk unchanged.
     await expect(async () => chrome.undoDepth()).rejects.toThrow(
       CanvasCapabilityError
     );
@@ -995,7 +1014,7 @@ test.describe("a canvas any Nextly editor could ship", () => {
       .toBe(treeBefore.length + 1);
 
     // Marked only now. Everything above ran unprotected.
-    test.fail(true, "this canvas keeps no undo history to count");
+    test.fail(true, "this canvas publishes no undo depth a test can read");
 
     const before = await chrome.undoDepth();
     await dragOntoZone(driver);
@@ -1007,30 +1026,45 @@ test.describe("a canvas any Nextly editor could ship", () => {
     expect(after - before, "one drop is one undoable edit").toBe(1);
   });
 
+  test("picks up a block already in the canvas", async ({ request }) => {
+    // The CONTROL the engine-parity case below depends on, kept as its own test so it
+    // fails for its own reason. That case runs this reader under an expected-failure
+    // marker, where a reader that stopped finding the block or stopped activating its
+    // drag would be absorbed as the shortfall it is investigating — leaving the suite
+    // green having measured nothing about either.
+    //
+    // Deliberately the SIMPLEST possible use: one drag, nothing before it. The parity
+    // case starts this drag after a cancelled one, so the two differ only in what
+    // precedes them, and that is exactly the difference under investigation there.
+    const fixture = await seedPage(request, FLAT_LIST_FIXTURE);
+    await driver.mountTree(fixture);
+
+    await chrome.startDragOfBlock(fixture.blockIds[1] ?? "");
+
+    // POLLED for the same reason the Escape case polls: the drag state is written on a
+    // React commit, so a read taken in the tick that started the drag sees the state one
+    // commit before it is set and reports a working drag as a dead one.
+    await expect
+      .poll(async () => driver.isDragging(), {
+        message:
+          "a placed block must be draggable on a canvas with no prior drag",
+        timeout: ESCAPE_SETTLE_MS,
+      })
+      .toBe(true);
+
+    await driver.cancel();
+  });
+
   test("drives a canvas drag with the same engine as a panel drag", async ({
     request,
   }) => {
     note(
       PLAN_POINT.oneEngineForBothDrags,
       "B-15",
-      "dragging a block already in the canvas is not offered here"
+      "a drag started after a cancelled drag does not activate"
     );
     const fixture = await seedPage(request, FLAT_LIST_FIXTURE);
     await driver.mountTree(fixture);
-
-    // The canvas cannot answer this at all, and that refusal IS the
-    // shortfall. Asserted as the reader's OWN error type BEFORE the
-    // expectation is marked, so a broken selector, a missing iframe or a
-    // failed seed stays a real failure instead of becoming another
-    // expected one. It also fires the day the capability arrives: this
-    // line goes red first and forces the target below to be rewritten.
-    //
-    // Wrapped in an async thunk because these readers throw SYNCHRONOUSLY:
-    // `expect(reader())` never receives a promise, so `.rejects` cannot see
-    // the refusal and the raw error escapes the assertion entirely.
-    await expect(async () =>
-      chrome.startDragOfBlock(fixture.blockIds[1] ?? "")
-    ).rejects.toThrow(CanvasCapabilityError);
 
     // BOTH drags, measured the same way, and compared against each other.
     // Reading only the canvas drag asks whether it works, not whether it is the
@@ -1062,13 +1096,31 @@ test.describe("a canvas any Nextly editor could ship", () => {
       "the panel drag is the reference and must be live and on a zone"
     ).toEqual({ dragging: true, resolvesToContainingZone: true });
 
-    // Marked only now, with the whole panel-side control behind it.
-    test.fail(
-      true,
-      "dragging a block already in the canvas is not offered here"
-    );
+    // The previous drag must be DEMONSTRABLY over before the next one starts. A drag
+    // begun while the last one is still tearing down never activates at all, and
+    // `cancel` returns as soon as the events are sent rather than when the engine has
+    // settled — so without this the canvas looks unable to drag its own blocks.
+    await expect
+      .poll(async () => driver.isDragging(), {
+        message:
+          "the panel drag must be fully over before the canvas drag begins",
+        timeout: ESCAPE_SETTLE_MS,
+      })
+      .toBe(false);
 
     await chrome.startDragOfBlock(fixture.blockIds[1] ?? "");
+    // Marked HERE, with the panel-side control and the settle above it.
+    //
+    // The shortfall is an interaction between consecutive drags, not a missing capability
+    // and not a failure to cancel. `CanvasNode` makes every placed block a drag source,
+    // and started on its own this drag activates: the source inside the frame reports
+    // `aria-grabbed="true"` and carries the dragging class across repeated moves. Started
+    // after a panel drag has run and been cancelled, it does not, and waiting for the
+    // first drag to report that it ended does not change that.
+    //
+    // So the settle above is necessary and NOT sufficient, and what survives a cancel to
+    // block the next drag is not yet isolated.
+    test.fail(true, "a drag started after a cancelled drag does not activate");
     // Advanced INSIDE a zone, exactly as the panel side is. Sampling the two
     // under different conditions makes the comparison a statement about the
     // harness: `dragUntilTarget` can resolve through overlap with the pointer
@@ -1136,8 +1188,7 @@ test.describe("a canvas any Nextly editor could ship", () => {
     note(
       PLAN_POINT.escapeCancelsWithoutNavigating,
       "B-11",
-      "this canvas leaves its drag state set after Escape; the gesture stops " +
-        "affecting the document but never reports that it ended"
+      "Escape clears the drag state, but a cancel leaves the engine unable to start the next drag"
     );
     await driver.mountTree(await seedPage(request, FLAT_LIST_FIXTURE));
     await dragFromPanel(driver);
@@ -1149,16 +1200,41 @@ test.describe("a canvas any Nextly editor could ship", () => {
       "the drag must be running before Escape can end it"
     ).toBe(true);
 
-    // Escape ALONE. `cancel` releases the pointer straight after, so reading
-    // the state through it cannot tell Escape ending the drag from the
-    // mouse-up ending it — and a dead Escape handler passes.
+    // Escape ALONE. `cancel` releases the pointer straight after, so reading the
+    // state through it cannot tell Escape ending the drag from the mouse-up ending
+    // it — and a dead Escape handler passes. The release below happens only after
+    // the assertion has already been satisfied.
     await driver.pressEscape();
-    const afterEscape = await driver.isDragging();
-    await driver.cancel();
 
-    // Marked HERE, not on the declaration, so a failed seed or a broken
-    // driver is a real failure rather than another expected one.
-    test.fail(true, "the drag state stays set after Escape");
-    expect(afterEscape, "Escape must end the drag").toBe(false);
+    // POLLED, not read once. The drag state clears on a React commit, so a read taken
+    // in the same tick as the key press observes the state one commit BEFORE it is
+    // cleared — measured, `aria-grabbed` is still set at +0ms and gone by +100ms. A
+    // single read there reports a working Escape as a dead one.
+    //
+    // The bound IS the claim: an Escape that has not ended the drag within it has not
+    // ended it. Polling stops early on success, so a canvas that cancels promptly pays
+    // nothing for the allowance.
+    await expect
+      .poll(async () => driver.isDragging(), {
+        message: "Escape must clear the drag state",
+        timeout: ESCAPE_SETTLE_MS,
+      })
+      .toBe(false);
+
+    // WHAT THIS ESTABLISHES, stated because the title is broader than the assertion.
+    //
+    // Escape clears the drag state: `aria-grabbed` goes false in both documents, within
+    // about 100ms. That is what the poll asserts and all it asserts.
+    //
+    // Clearing the source attribute is NECESSARY and not sufficient for "the drag ended",
+    // and this file holds the counterexample: the engine-parity case starts a drag after
+    // this same cancellation and that drag never activates, so something survives a
+    // cancel that `aria-grabbed` cannot see.
+    //
+    // The full property needs an observable teardown control — overlay and active target
+    // gone, AND a subsequent drag able to start. That last clause is deliberately not
+    // asserted while what survives a cancel remains unisolated, since a failure attributed
+    // to an unknown cause is not a target anyone can work.
+    await driver.cancel();
   });
 });
