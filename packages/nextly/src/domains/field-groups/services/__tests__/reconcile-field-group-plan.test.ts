@@ -30,15 +30,21 @@ function liveTableFor(
   });
 }
 
-/** A companion holding the given user columns beside its structural pair. */
+/**
+ * A companion holding the given user columns beside its structural pair.
+ *
+ * The structural pair carries `primaryKey`, because the real companion DDL declares
+ * `PRIMARY KEY (_parent, _locale)` and introspection reports it per column on all three dialects.
+ * A fixture that omitted it would model a table the generator never produces.
+ */
 function companionWith(
   columns: Array<{ name: string; type?: string }>
 ): TableSpec {
   return {
     name: COMPANION,
     columns: [
-      { name: "_parent", type: "text", nullable: false },
-      { name: "_locale", type: "varchar", nullable: false },
+      { name: "_parent", type: "text", nullable: false, primaryKey: true },
+      { name: "_locale", type: "varchar", nullable: false, primaryKey: true },
       ...columns.map(c => ({
         name: c.name,
         type: c.type ?? "text",
@@ -598,6 +604,32 @@ describe("planFieldGroupReconcile", () => {
       ]);
     });
 
+    /**
+     * The companion's composite key is load-bearing at runtime rather than merely structural:
+     * localized writes match rows on `(_parent, _locale)`. A companion that kept both columns and
+     * lost the key passes every other check here while failing every localized write on
+     * PostgreSQL and SQLite, and silently accepting duplicate locale rows on MySQL.
+     */
+    it("refuses a companion whose key columns are no longer its primary key", () => {
+      const localizedStored: ReconcilableField[] = [
+        { name: "title", type: "text", localized: true },
+      ];
+      const companion = companionWith([{ name: "title" }]);
+      for (const column of companion.columns) delete column.primaryKey;
+
+      const result = plan({
+        storedFields: localizedStored,
+        storedLocalized: true,
+        liveMain: liveTableFor(localizedStored, { localized: true }),
+        liveCompanion: companion,
+      });
+
+      expect(result.blockers.map(b => b.columnName).sort()).toEqual([
+        "_locale",
+        "_parent",
+      ]);
+    });
+
     // The negative control that keeps the companion check honest: a field group is never
     // Draft/Published, so its companion has no `_status` and requiring one would refuse every
     // localized group.
@@ -645,6 +677,52 @@ describe("planFieldGroupReconcile", () => {
 
     expect(result.blockers).toEqual([]);
     expect(result.removed.map(r => r.fieldName)).toEqual(["subtitle"]);
+  });
+
+  /**
+   * A width change is a physical change, and the canonical form deliberately discards it.
+   *
+   * That strip is right for PostgreSQL, whose introspection reads `udt_name` and never reports a
+   * length — but MySQL reports `COLUMN_TYPE`, which does. So a `maxLength` edit that resized the
+   * column and then failed its registry write leaves the two comparing equal under the canonical
+   * form alone, and the definition keeps a width the column no longer has.
+   */
+  describe("type width", () => {
+    const stored: ReconcilableField[] = [{ name: "title", type: "text" }];
+
+    function planWithWidths(liveType: string, expected: string) {
+      const live = liveTableFor(stored);
+      const col = live.columns.find(c => c.name === "title");
+      if (col) col.type = liveType;
+      return plan({
+        storedFields: stored,
+        liveMain: live,
+        expectedColumnType: () => expected,
+      });
+    }
+
+    it("refuses when both sides report a width and they differ", () => {
+      const result = planWithWidths("varchar(32)", "VARCHAR(255)");
+      expect(result.blockers).toEqual([
+        expect.objectContaining({
+          fieldName: "title",
+          kind: "physical-type-changed",
+        }),
+      ]);
+    });
+
+    it("accepts equal widths", () => {
+      expect(planWithWidths("varchar(255)", "VARCHAR(255)").blockers).toEqual(
+        []
+      );
+    });
+
+    // The negative control, and the reason the check is gated on BOTH sides carrying a modifier:
+    // PostgreSQL's introspected type has none, so demanding one would refuse every healthy
+    // PostgreSQL column whose declaration happens to specify a length.
+    it("stays silent when the live side reports no width", () => {
+      expect(planWithWidths("varchar", "VARCHAR(255)").blockers).toEqual([]);
+    });
   });
 
   // The control that keeps the check from firing on a column it has no expectation for. Absence

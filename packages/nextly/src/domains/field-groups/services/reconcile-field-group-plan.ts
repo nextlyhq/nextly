@@ -27,6 +27,7 @@ import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { isFieldLocalized } from "../../i18n/classify-fields";
 import {
+  COMPANION_KEY_COLUMNS,
   COMPANION_STATUS_COLUMN,
   COMPANION_STRUCTURAL_COLUMNS,
 } from "../../i18n/migration/generate-up";
@@ -270,6 +271,26 @@ function mainSkeleton(
 }
 
 /**
+ * The size modifier a type carries, normalised for comparison — `VARCHAR(255)` gives `255`.
+ *
+ * 🔴 Compared SEPARATELY from the type token because the canonical form deliberately strips it, and
+ * that strip is correct for the reason its own module gives: PostgreSQL introspection reads
+ * `udt_name`, which never carries a length, so keeping it would report drift on every healthy
+ * PostgreSQL column. MySQL introspection reads `COLUMN_TYPE`, which DOES carry it — so a `maxLength`
+ * change that resized a column and then failed its registry write leaves `VARCHAR(32)` live against
+ * an authored `VARCHAR(255)`, and the two compare equal once the modifier is gone.
+ *
+ * Gated on BOTH sides having one rather than on a dialect name: presence is the property that
+ * decides whether the comparison is meaningful, and a dialect list would be a second opinion about
+ * which introspector preserves widths.
+ */
+function typeModifier(type: string | undefined): string | undefined {
+  const match = /\(([^)]*)\)/.exec(type ?? "");
+  const inner = match?.[1];
+  return inner === undefined ? undefined : inner.replace(/\s+/g, "");
+}
+
+/**
  * Whether a live table carries an index covering exactly these columns, in this order.
  *
  * Matched by the ordered column LIST and uniqueness rather than by NAME: an engine appends a
@@ -359,6 +380,28 @@ function structuralBlockers(
         columnName: required,
         kind: "structural-column-missing",
         detail: `${liveCompanion.name} holds translated values but is missing the system column "${required}", so its rows cannot be matched back to a parent or a locale.`,
+      });
+    }
+
+    // 🔴 The composite key is load-bearing at RUNTIME, not merely structural: `upsertCompanionRow`
+    // names `(_parent, _locale)` as its conflict target. A companion that kept those columns and
+    // lost the key looks healthy to every check above while failing every localized write on
+    // PostgreSQL and SQLite, and silently accepting duplicate locale rows on MySQL — which is the
+    // worse outcome, because nothing reports it. Checked only where the columns are present, so a
+    // table already refused above is not reported twice for the same cause.
+    const keyed = new Set(
+      liveCompanion.columns
+        .filter(column => column.primaryKey === true)
+        .map(column => column.name)
+    );
+    for (const keyColumn of COMPANION_KEY_COLUMNS) {
+      if (!liveCompanionColumns.has(keyColumn) || keyed.has(keyColumn))
+        continue;
+      blockers.push({
+        fieldName: keyColumn,
+        columnName: keyColumn,
+        kind: "structural-column-missing",
+        detail: `${liveCompanion.name} has "${keyColumn}" but it is not part of the table's primary key; localized writes match rows on (${COMPANION_KEY_COLUMNS.join(", ")}) and cannot do so without it.`,
       });
     }
   }
@@ -593,10 +636,21 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
     const expectedSpelling = input.expectedColumnType?.(field, table);
     const expectedType = normalizeType(expectedSpelling);
     const liveType = normalizeType(live.type);
+    // The width is part of the physical type wherever the database reports one. Both must carry a
+    // modifier for the comparison to mean anything: where the introspector drops it, an absent
+    // modifier says nothing about the column and treating that as a mismatch would refuse every
+    // healthy group on that dialect.
+    const expectedWidth = typeModifier(expectedSpelling);
+    const liveWidth = typeModifier(live.type);
+    const widthDiffers =
+      expectedWidth !== undefined &&
+      liveWidth !== undefined &&
+      expectedWidth !== liveWidth;
     if (
-      expectedType !== undefined &&
-      liveType !== undefined &&
-      expectedType !== liveType
+      (expectedType !== undefined &&
+        liveType !== undefined &&
+        expectedType !== liveType) ||
+      widthDiffers
     ) {
       blockers.push({
         fieldName: field.name,
