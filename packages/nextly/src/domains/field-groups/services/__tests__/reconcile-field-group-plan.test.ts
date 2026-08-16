@@ -213,6 +213,48 @@ describe("planFieldGroupReconcile", () => {
     expect(result.unchanged).toBe(true);
   });
 
+  /**
+   * A localized group whose fields produce no translatable COLUMN has no companion table at all —
+   * `deriveCompanionSpec` returns null in exactly that case, so the absence is healthy rather than
+   * evidence of anything.
+   *
+   * Reading it as "not localized" rewrites a correct row, and the damage surfaces later: the next
+   * default-translatable field added to the group is placed on the main table, which is the
+   * divergence this operation exists to clear rather than to create.
+   */
+  it("keeps a localized group localized when its fields need no companion", () => {
+    const stored: ReconcilableField[] = [
+      { name: "title", type: "text", localized: false },
+    ];
+
+    const result = plan({
+      storedFields: stored,
+      liveMain: liveTableFor(stored),
+      liveCompanion: null,
+      storedLocalized: true,
+    });
+
+    expect(result.localized).toBe(true);
+    expect(result.unchanged).toBe(true);
+  });
+
+  // The negative control: where the fields WOULD have produced a companion column, a missing
+  // companion is still read as not localized, so a genuine disable is still repaired.
+  it("still reads a missing companion as not localized when one was due", () => {
+    const stored: ReconcilableField[] = [
+      { name: "title", type: "text", localized: true },
+    ];
+
+    const result = plan({
+      storedFields: stored,
+      liveMain: liveTableFor(stored),
+      liveCompanion: null,
+      storedLocalized: true,
+    });
+
+    expect(result.localized).toBe(false);
+  });
+
   it("reads a companion holding only structural columns as not localized", () => {
     const stored: ReconcilableField[] = [{ name: "title", type: "text" }];
     const result = plan({

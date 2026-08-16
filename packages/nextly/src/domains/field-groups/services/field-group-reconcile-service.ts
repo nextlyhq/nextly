@@ -304,9 +304,26 @@ export async function reconcileFieldGroup(args: {
   );
 
   if (plan.unchanged && !markerStandsWrongly) {
-    // Nothing to write — and writing anyway would bump the version and invalidate every open
+    // Nothing to WRITE — and writing anyway would bump the version and invalidate every open
     // editor for a repair that repaired nothing.
-    logger.info("[FieldGroups] Reconcile found nothing to repair", { slug });
+    //
+    // 🔴 Registration still runs, and its real outcome is reported rather than assumed. "The row
+    // matches the tables" says nothing about what THIS process is holding: an earlier apply whose
+    // own registration failed leaves a stale resolver behind a perfectly healthy row, and that is
+    // exactly the state an operator runs this operation to get out of. Claiming a refresh that was
+    // never attempted made the one answer they act on the least trustworthy part of it.
+    const unchangedRegistration = registerComponentRuntimeSchema(
+      adapter,
+      dialect,
+      existing.tableName,
+      plan.fields as unknown as FieldConfig[],
+      typeColumn,
+      plan.localized
+    );
+    logger.info("[FieldGroups] Reconcile found nothing to repair", {
+      slug,
+      runtimeRefreshed: unchangedRegistration.registered,
+    });
     return {
       slug,
       localized: plan.localized,
@@ -315,8 +332,10 @@ export async function reconcileFieldGroup(args: {
       adopted: [],
       unchanged: true,
       schemaVersion: existing.schemaVersion,
-      // Nothing was rewritten, so the process is already describing what the row says.
-      runtimeRefreshed: true,
+      runtimeRefreshed: unchangedRegistration.registered,
+      ...(unchangedRegistration.reason !== undefined
+        ? { runtimeRefreshReason: unchangedRegistration.reason }
+        : {}),
     };
   }
 

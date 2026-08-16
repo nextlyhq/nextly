@@ -26,6 +26,7 @@
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { isFieldLocalized } from "../../i18n/classify-fields";
+import { fieldToLocalizedColumnSpec } from "../../i18n/migration/field-to-column-spec";
 import {
   COMPANION_KEY_COLUMNS,
   COMPANION_STATUS_COLUMN,
@@ -420,10 +421,19 @@ function structuralBlockers(
  */
 function deriveLocalized(
   liveCompanion: TableSpec | null,
-  storedLocalized: boolean
+  storedLocalized: boolean,
+  // Whether this field set would produce any companion COLUMN, by the same predicate the
+  // production companion builder uses to decide whether to make the table at all.
+  companionWouldHaveColumns: boolean
 ): boolean {
-  // No companion at all is unambiguous: nothing was ever moved out.
-  if (!liveCompanion) return false;
+  // 🔴 No companion is only evidence when a companion was DUE. `deriveCompanionSpec` returns null
+  // for a localized entity whose fields produce no localized columns, so a healthy `localized: true`
+  // group made only of non-localized or columnless fields correctly has no companion table. Reading
+  // that absence as "not localized" rewrites a healthy group, and the damage lands later: the next
+  // default-translatable field added to it goes to the MAIN table, which is the divergence this
+  // operation exists to clear rather than create.
+  if (!liveCompanion)
+    return companionWouldHaveColumns ? false : storedLocalized;
   if (
     liveCompanion.columns.some(
       column => !COMPANION_STRUCTURAL_COLUMNS.has(column.name)
@@ -500,7 +510,19 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
 ): ReconcilePlan<F> {
   const { storedFields, dialect, liveMain, liveCompanion } = input;
 
-  const localized = deriveLocalized(liveCompanion, input.storedLocalized);
+  // Asked of the production column builder rather than of the field flags alone: a field can be
+  // marked translatable and still produce no companion column, and it is the COLUMN that decides
+  // whether a companion exists.
+  const companionWouldHaveColumns = storedFields.some(
+    field =>
+      isFieldLocalized(field, true) &&
+      fieldToLocalizedColumnSpec(field, dialect, "fieldGroup") !== null
+  );
+  const localized = deriveLocalized(
+    liveCompanion,
+    input.storedLocalized,
+    companionWouldHaveColumns
+  );
 
   const mainColumns = new Map(liveMain.columns.map(c => [c.name, c]));
   const companionColumns = new Map(
