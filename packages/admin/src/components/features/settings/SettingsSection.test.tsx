@@ -24,12 +24,17 @@ describe("SettingsSection", () => {
     expect(screen.getByTestId("row-2")).toBeInTheDocument();
   });
 
-  it("uses the bordered-card token classes", () => {
+  it("uses the shared Card's container-tier token classes", () => {
+    // The section now composes @nextlyhq/ui's Card rather than hand-rolling
+    // its own border, so it carries the CONTAINER radius/border tier
+    // (`rounded-lg`/`border-border`) instead of the CONTROL tier
+    // (`rounded-md`/`border-input`) the old hand-rolled markup used.
     const { container } = render(
       <SettingsSection label="X">
         <div />
       </SettingsSection>
     );
-    expect(container.querySelector(".border-input")).not.toBeNull();
+    expect(container.querySelector(".border-border")).not.toBeNull();
+    expect(container.querySelector(".border-input")).toBeNull();
   });
 });
