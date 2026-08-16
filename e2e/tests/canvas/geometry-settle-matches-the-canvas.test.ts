@@ -300,10 +300,19 @@ async function geometrySpanMs(
               // begins.
               const count = cycled(counts, i);
               if (count === 0) return;
-              longest = Math.max(
-                longest,
-                cycled(durations, i) * count + cycled(delays, i)
-              );
+              // A zero-DURATION entry settles before the iteration count is even consulted, and it
+              // has to be handled first: `0 * Infinity` is `NaN`, which the caller refuses as an
+              // unparseable time. `animation: grow 0s infinite` is valid CSS whose edge never
+              // travels, so refusing it would name the wrong cause and send someone looking for a
+              // malformed value that is not there. Its DELAY still counts, because a delayed
+              // instantaneous animation applies its end state at the end of the delay under the
+              // default fill mode.
+              const duration = cycled(durations, i);
+              if (duration === 0) {
+                longest = Math.max(longest, cycled(delays, i));
+                return;
+              }
+              longest = Math.max(longest, duration * count + cycled(delays, i));
             });
           }
 
@@ -930,6 +939,56 @@ test.describe("the drop-zone geometry the probe waits on", () => {
     // between-item zone. A rule keyed on `[data-drag]` for an empty zone can never fire, so
     // measuring it would pin a span for movement the canvas cannot produce.
     expect(await geometrySpanMs(frame, "data-drag")).toBe(0);
+  });
+
+  test("an ENDLESS animation of zero duration settles rather than refusing", async ({
+    page,
+    request,
+  }) => {
+    const frame = await canvas(page, request);
+
+    // Valid CSS whose edge never travels. The endless neighbour a few tests up is refused for
+    // never settling; this one settles instantly, and the two must not be confused — `0 * Infinity`
+    // is `NaN`, which the caller reports as an unparseable time and sends someone hunting a
+    // malformed value that does not exist.
+    //
+    // The DELAY is nonzero deliberately, and it is what makes this a test rather than a
+    // demonstration. With a zero delay the expected span is zero, which an implementation that
+    // simply returned on `duration === 0` would also produce — so the control could not tell the
+    // delay accounting from its absence. At 400ms the three candidate implementations separate:
+    // charging the delay reports 400, dropping it reports 0, and multiplying by `Infinity` first
+    // refuses on a `NaN` that no malformed value produced.
+    const injected = await frame.evaluate(() => {
+      const sheet = (
+        document.getElementById("nx-pb-style") as HTMLStyleElement | null
+      )?.sheet;
+      sheet?.insertRule(
+        "@keyframes nx-instant { from { height: 0 } to { height: 6px } }",
+        sheet.cssRules.length
+      );
+      sheet?.insertRule(
+        ".nx-pb-dropzone { animation: nx-instant 0s .4s infinite }",
+        sheet.cssRules.length
+      );
+      const zone = document.querySelector(".nx-pb-dropzone");
+      if (!zone) return null;
+      const style = getComputedStyle(zone as HTMLElement);
+      // The population: the rule must have applied, still be endless, AND carry the delay this
+      // test is about. A browser that normalised any of the three would leave the assertion below
+      // measuring something else entirely.
+      return {
+        duration: style.animationDuration,
+        delay: style.animationDelay,
+        iterations: style.animationIterationCount,
+      };
+    });
+    expect(injected?.duration).toBe("0s");
+    expect(injected?.delay).toBe("0.4s");
+    expect(injected?.iterations).toBe("infinite");
+
+    // The DELAY, not zero: under the default fill mode an instantaneous animation still applies its
+    // end state when the delay elapses, so the edge is settled at 400ms rather than at 0.
+    expect(await geometrySpanMs(frame, "data-drag data-active")).toBe(400);
   });
 
   test("an effect on a pseudo-element this loop never reads is refused", async ({
