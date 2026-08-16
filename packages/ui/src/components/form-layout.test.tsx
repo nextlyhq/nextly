@@ -56,19 +56,25 @@ describe("FormActions", () => {
     expect(screen.getByRole("button", { name: "Create key" })).toBeDefined();
   });
 
-  it("announces unsaved changes only when the page says so", () => {
+  it("announces unsaved changes in a live region only when the page says so", () => {
+    // `role="status"` implies `aria-live="polite"`, so a screen-reader user is
+    // told when the flag flips false to true, not only sighted users watching
+    // the bar. Assert the semantics, not only that the text exists — text
+    // alone is what the previous version of this test checked, and it passed
+    // on a plain `<span>` that announced nothing.
     const { rerender } = render(
       <FormActions dirty>
         <button type="submit">Save</button>
       </FormActions>
     );
-    expect(screen.getByText(/unsaved/i)).toBeDefined();
+    expect(screen.getByRole("status").textContent).toMatch(/unsaved/i);
 
     rerender(
       <FormActions>
         <button type="submit">Save</button>
       </FormActions>
     );
+    expect(screen.queryByRole("status")).toBeNull();
     expect(screen.queryByText(/unsaved/i)).toBeNull();
   });
 });

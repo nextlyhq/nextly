@@ -51,7 +51,11 @@ export function FormActions({ dirty, className, children }: FormActionsProps) {
       )}
     >
       {dirty ? (
-        <span className="mr-auto text-sm text-muted-foreground">
+        // `role="status"` (implying `aria-live="polite"`) so a screen-reader
+        // user is told when the flag flips false to true, not only sighted
+        // users watching the bar. This is the only live region FormActions
+        // renders, one per form.
+        <span role="status" className="mr-auto text-sm text-muted-foreground">
           You have unsaved changes
         </span>
       ) : null}
