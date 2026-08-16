@@ -27,7 +27,7 @@ import type React from "react";
 import { Controller, useFieldArray, useForm } from "react-hook-form";
 
 import {
-  SettingsRow,
+  SettingsRowGroup,
   SettingsSection,
 } from "@admin/components/features/settings";
 import { Info, Loader2, Plus, Trash2 } from "@admin/components/icons";
@@ -164,11 +164,11 @@ export const WebhookForm: React.FC<WebhookFormProps> = ({
           </SettingsSection>
 
           <SettingsSection label="Events">
-            {/* Not a FieldShell candidate: a switch and a conditional grid of
-                checkboxes share one label, description and error, so there is
-                no single control for an id to attach to. Left as the original
-                hand-rolled row. */}
-            <SettingsRow
+            {/* Not a FieldShell (or SettingsRow) candidate: a switch and a
+                conditional grid of checkboxes are several independently-
+                focusable controls, not one a `label for` can name. Grouped
+                with `role="group"`/`aria-labelledby` instead. */}
+            <SettingsRowGroup
               label="Subscription"
               description="Choose which events are delivered to this endpoint."
             >
@@ -217,14 +217,16 @@ export const WebhookForm: React.FC<WebhookFormProps> = ({
                   <p className="text-sm text-destructive-500">{eventError}</p>
                 )}
               </div>
-            </SettingsRow>
+            </SettingsRowGroup>
           </SettingsSection>
 
           <SettingsSection label="Custom headers">
-            {/* Not a FieldShell candidate: an alert, a clear-all toggle, a
-                dynamic list of name/value pairs and an add/remove control all
-                share this one row. Left as the original hand-rolled row. */}
-            <SettingsRow
+            {/* Not a FieldShell (or SettingsRow) candidate: an alert, a
+                clear-all toggle, a dynamic list of name/value pairs and an
+                add/remove control are several independently-focusable
+                controls, not one a `label for` can name. Grouped with
+                `role="group"`/`aria-labelledby` instead. */}
+            <SettingsRowGroup
               label="Headers"
               description="Optional static headers sent with every delivery."
             >
@@ -335,7 +337,7 @@ export const WebhookForm: React.FC<WebhookFormProps> = ({
                   </Button>
                 )}
               </div>
-            </SettingsRow>
+            </SettingsRowGroup>
           </SettingsSection>
 
           <FormActions dirty={form.formState.isDirty}>
