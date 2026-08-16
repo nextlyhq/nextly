@@ -1,14 +1,21 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Alert, AlertDescription, Input, Skeleton, Switch } from "@nextlyhq/ui";
+import {
+  Alert,
+  AlertDescription,
+  FieldShell,
+  FormLayout,
+  Input,
+  Skeleton,
+  Switch,
+} from "@nextlyhq/ui";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useForm, type Resolver } from "react-hook-form";
 
 import { AlertTriangle } from "@admin/components/icons";
 import {
   Form,
-  FormControl,
   FormField,
   FormItem,
   FormMessage,
@@ -510,131 +517,135 @@ export function EmailProviderForm({
 
   return (
     <Form {...form}>
-      {staleCatalog && (
-        <Alert className="mb-6">
-          <AlertDescription>
-            The list of provider types could not be refreshed, so this form is
-            using the version it loaded with. Your changes are safe; reload once
-            you have saved if a provider seems to be missing.
-          </AlertDescription>
-        </Alert>
-      )}
-      <form
-        id={EMAIL_PROVIDER_FORM_ID}
-        onSubmit={e => {
-          // Refused here as well as on the button. Every field is disabled in
-          // this state, so the payload could only ever be an empty
-          // configuration, which the server would reject as an unsupported
-          // provider — an error contradicting the notice above it. A disabled
-          // button is a UI affordance; this is the rule.
-          if (isUnknownStoredType) {
-            e.preventDefault();
-            return;
-          }
-          void form.handleSubmit(handleValidSubmit)(e);
-        }}
-        className="space-y-6"
-        aria-busy={isPending}
-      >
-        {isUnknownStoredType && (
-          <Alert variant="destructive">
+      {/* The Update/Test Connection/Cancel buttons live in the page that
+          renders this form (they submit via the `EMAIL_PROVIDER_FORM_ID`
+          attribute), so there is no action bar for this component to own —
+          only the measure moves to FormLayout. */}
+      <FormLayout>
+        {staleCatalog && (
+          <Alert className="mb-6">
             <AlertDescription>
-              <span className="flex items-start gap-1.5">
-                <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-                <span>
-                  This provider is stored as{" "}
-                  <code className="font-mono">{provider.type}</code>, which is
-                  not registered on this server. Its settings cannot be edited
-                  and it cannot send until the package that provides it is
-                  installed again. Deleting it here is safe.
-                </span>
-              </span>
+              The list of provider types could not be refreshed, so this form is
+              using the version it loaded with. Your changes are safe; reload
+              once you have saved if a provider seems to be missing.
             </AlertDescription>
           </Alert>
         )}
+        <form
+          id={EMAIL_PROVIDER_FORM_ID}
+          onSubmit={e => {
+            // Refused here as well as on the button. Every field is disabled in
+            // this state, so the payload could only ever be an empty
+            // configuration, which the server would reject as an unsupported
+            // provider — an error contradicting the notice above it. A disabled
+            // button is a UI affordance; this is the rule.
+            if (isUnknownStoredType) {
+              e.preventDefault();
+              return;
+            }
+            void form.handleSubmit(handleValidSubmit)(e);
+          }}
+          className="space-y-6"
+          aria-busy={isPending}
+        >
+          {isUnknownStoredType && (
+            <Alert variant="destructive">
+              <AlertDescription>
+                <span className="flex items-start gap-1.5">
+                  <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                  <span>
+                    This provider is stored as{" "}
+                    <code className="font-mono">{provider.type}</code>, which is
+                    not registered on this server. Its settings cannot be edited
+                    and it cannot send until the package that provides it is
+                    installed again. Deleting it here is safe.
+                  </span>
+                </span>
+              </AlertDescription>
+            </Alert>
+          )}
 
-        {/* ── Section: Provider Identity ─────────────────────────── */}
-        <SettingsSection label="Provider Identity">
-          <FormField
-            control={form.control}
-            name="name"
-            render={({ field }) => (
-              <FormItem className="m-0">
-                <SettingsRow
+          {/* ── Section: Provider Identity ─────────────────────────── */}
+          <SettingsSection label="Provider Identity">
+            <FormField
+              control={form.control}
+              name="name"
+              render={({ field, fieldState }) => (
+                <FieldShell
                   label="Provider Name"
                   description="A friendly name to identify this email provider."
+                  error={fieldState.error?.message}
                 >
-                  <FormControl>
-                    <Input
-                      placeholder="e.g. Production SMTP, Resend Primary"
-                      autoFocus={!isEdit}
-                      disabled={isPending || isUnknownStoredType}
-                      {...field}
-                    />
-                  </FormControl>
-                  <FormMessage className="mt-1.5" />
-                </SettingsRow>
-              </FormItem>
-            )}
-          />
-
-          <FormField
-            control={form.control}
-            name="type"
-            render={({ field }) => (
-              <FormItem className="m-0">
-                <SettingsRow
-                  label="Provider Type"
-                  description="Select the provider type to match your configuration."
-                >
-                  <ProviderTypePicker
-                    descriptors={descriptors}
-                    value={field.value}
-                    // Locked along with the rest when the stored type is not
-                    // registered: the notice above says the settings cannot be
-                    // edited, and a live picker would make that false by
-                    // letting an orphaned record be converted while every
-                    // other field stays disabled.
+                  <Input
+                    placeholder="e.g. Production SMTP, Resend Primary"
+                    autoFocus={!isEdit}
                     disabled={isPending || isUnknownStoredType}
-                    onChange={type => {
-                      field.onChange(type);
-                      handleTypeChange(type);
-                    }}
+                    {...field}
                   />
-                  <FormMessage className="mt-1.5" />
-                </SettingsRow>
-              </FormItem>
-            )}
-          />
-        </SettingsSection>
+                </FieldShell>
+              )}
+            />
 
-        {/* ── Section: Provider-specific configuration ───────────── */}
-        {selectedDescriptor && (
-          <ProviderConfigFields
-            descriptor={selectedDescriptor}
-            control={form.control}
-            disabled={isPending}
-            // Only while the type is unchanged, on the same reasoning the
-            // submit path uses: across a type change the stored configuration
-            // belongs to the previous provider, so none of these fields has
-            // anything stored behind it.
-            storedConfiguration={
-              provider && provider.type === selectedType
-                ? provider.configuration
-                : undefined
-            }
-            recordId={provider?.id}
-          />
-        )}
+            {/* Not a FieldShell candidate: ProviderTypePicker is a row of
+                independently-focusable cards (like a RadioGroup), not one
+                control an id can attach to. Left as its original SettingsRow
+                so the label still reads over the picker. */}
+            <FormField
+              control={form.control}
+              name="type"
+              render={({ field }) => (
+                <FormItem className="m-0">
+                  <SettingsRow
+                    label="Provider Type"
+                    description="Select the provider type to match your configuration."
+                  >
+                    <ProviderTypePicker
+                      descriptors={descriptors}
+                      value={field.value}
+                      // Locked along with the rest when the stored type is not
+                      // registered: the notice above says the settings cannot be
+                      // edited, and a live picker would make that false by
+                      // letting an orphaned record be converted while every
+                      // other field stays disabled.
+                      disabled={isPending || isUnknownStoredType}
+                      onChange={type => {
+                        field.onChange(type);
+                        handleTypeChange(type);
+                      }}
+                    />
+                    <FormMessage className="mt-1.5" />
+                  </SettingsRow>
+                </FormItem>
+              )}
+            />
+          </SettingsSection>
 
-        {/* ── Section: Sender Information ────────────────────────── */}
-        <SettingsSection label="Sender Information">
-          <FormField
-            control={form.control}
-            name="fromEmail"
-            render={({ field }) => (
-              <FormItem className="m-0">
-                <SettingsRow
+          {/* ── Section: Provider-specific configuration ───────────── */}
+          {selectedDescriptor && (
+            <ProviderConfigFields
+              descriptor={selectedDescriptor}
+              control={form.control}
+              disabled={isPending}
+              // Only while the type is unchanged, on the same reasoning the
+              // submit path uses: across a type change the stored configuration
+              // belongs to the previous provider, so none of these fields has
+              // anything stored behind it.
+              storedConfiguration={
+                provider && provider.type === selectedType
+                  ? provider.configuration
+                  : undefined
+              }
+              recordId={provider?.id}
+            />
+          )}
+
+          {/* ── Section: Sender Information ────────────────────────── */}
+          <SettingsSection label="Sender Information">
+            <FormField
+              control={form.control}
+              name="fromEmail"
+              render={({ field, fieldState }) => (
+                <FieldShell
                   label="From Email"
                   description={
                     // Three independent parts, composed rather than nested.
@@ -680,91 +691,77 @@ export function EmailProviderForm({
                       </span>
                     </span>
                   }
+                  error={fieldState.error?.message}
                 >
-                  <FormControl>
-                    <Input
-                      type="email"
-                      placeholder="noreply@example.com"
-                      disabled={isPending || isUnknownStoredType}
-                      {...field}
-                    />
-                  </FormControl>
-                  <FormMessage className="mt-1.5" />
-                </SettingsRow>
-              </FormItem>
-            )}
-          />
+                  <Input
+                    type="email"
+                    placeholder="noreply@example.com"
+                    disabled={isPending || isUnknownStoredType}
+                    {...field}
+                  />
+                </FieldShell>
+              )}
+            />
 
-          <FormField
-            control={form.control}
-            name="fromName"
-            render={({ field }) => (
-              <FormItem className="m-0">
-                <SettingsRow
+            <FormField
+              control={form.control}
+              name="fromName"
+              render={({ field, fieldState }) => (
+                <FieldShell
                   label="From Name"
                   description='Display name shown in the email "From" field. Optional.'
+                  error={fieldState.error?.message}
                 >
-                  <FormControl>
-                    <Input
-                      placeholder="My App"
-                      disabled={isPending || isUnknownStoredType}
-                      {...field}
-                    />
-                  </FormControl>
-                  <FormMessage className="mt-1.5" />
-                </SettingsRow>
-              </FormItem>
-            )}
-          />
-        </SettingsSection>
+                  <Input
+                    placeholder="My App"
+                    disabled={isPending || isUnknownStoredType}
+                    {...field}
+                  />
+                </FieldShell>
+              )}
+            />
+          </SettingsSection>
 
-        {/* ── Section: Defaults ──────────────────────────────────── */}
-        <SettingsSection label="Defaults">
-          <FormField
-            control={form.control}
-            name="isDefault"
-            render={({ field }) => (
-              <FormItem className="m-0">
-                <SettingsRow
+          {/* ── Section: Defaults ──────────────────────────────────── */}
+          <SettingsSection label="Defaults">
+            <FormField
+              control={form.control}
+              name="isDefault"
+              render={({ field, fieldState }) => (
+                <FieldShell
                   label="Set as Default Provider"
                   description="When enabled, this provider will be used to send all transactional emails unless a specific provider is requested."
+                  error={fieldState.error?.message}
                 >
-                  <FormControl>
-                    <Switch
-                      checked={field.value}
-                      onCheckedChange={field.onChange}
-                      disabled={isPending || isUnknownStoredType}
-                    />
-                  </FormControl>
-                  <FormMessage className="mt-1.5" />
-                </SettingsRow>
-              </FormItem>
-            )}
-          />
+                  <Switch
+                    checked={field.value}
+                    onCheckedChange={field.onChange}
+                    disabled={isPending || isUnknownStoredType}
+                  />
+                </FieldShell>
+              )}
+            />
 
-          <FormField
-            control={form.control}
-            name="isActive"
-            render={({ field }) => (
-              <FormItem className="m-0">
-                <SettingsRow
+            <FormField
+              control={form.control}
+              name="isActive"
+              render={({ field, fieldState }) => (
+                <FieldShell
                   label="Active"
                   description="Inactive providers are kept but never used to send. Turn off to pause a provider without deleting it."
+                  error={fieldState.error?.message}
                 >
-                  <FormControl>
-                    <Switch
-                      checked={field.value}
-                      onCheckedChange={field.onChange}
-                      disabled={isPending || isUnknownStoredType}
-                    />
-                  </FormControl>
-                  <FormMessage className="mt-1.5" />
-                </SettingsRow>
-              </FormItem>
-            )}
-          />
-        </SettingsSection>
-      </form>
+                  <Switch
+                    checked={field.value}
+                    onCheckedChange={field.onChange}
+                    disabled={isPending || isUnknownStoredType}
+                  />
+                </FieldShell>
+              )}
+            />
+          </SettingsSection>
+        </form>
+      </FormLayout>
     </Form>
   );
 }

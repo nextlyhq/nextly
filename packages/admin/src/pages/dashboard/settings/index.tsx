@@ -3,6 +3,9 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
   Button,
+  FieldShell,
+  FormActions,
+  FormLayout,
   Select,
   SelectContent,
   SelectItem,
@@ -17,17 +20,10 @@ import { z } from "zod";
 import {
   SettingsLayout,
   SettingsSection,
-  SettingsRow,
 } from "@admin/components/features/settings";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { toast } from "@admin/components/ui";
-import {
-  Form,
-  FormControl,
-  FormField,
-  FormItem,
-  FormMessage,
-} from "@admin/components/ui/form";
+import { Form, FormField } from "@admin/components/ui/form";
 import {
   useGeneralSettings,
   useUpdateGeneralSettings,
@@ -221,120 +217,126 @@ const SettingsGeneralPage: React.FC = () => {
             void form.handleSubmit(onSubmit)(e);
           }}
         >
-          <SettingsLayout
-            actions={
-              <Button type="submit" disabled={isPending || isLoading}>
-                {isPending ? "Saving…" : "Save Changes"}
-              </Button>
-            }
-          >
-            {isLoading ? (
-              <GeneralSettingsSkeleton />
-            ) : (
-              <div className="space-y-5">
-                {/* ── Section: Locale & Formatting ── */}
+          <SettingsLayout>
+            <FormLayout>
+              {isLoading ? (
+                <GeneralSettingsSkeleton />
+              ) : (
+                // ── Section: Locale & Formatting ──
                 <SettingsSection label="Locale & Formatting">
                   <FormField
                     control={form.control}
                     name="timezone"
-                    render={({ field }) => (
-                      <FormItem className="m-0">
-                        <SettingsRow
-                          label="Timezone"
-                          description="Time zone used across the admin and email notifications."
-                        >
-                          <FormControl>
-                            <Select
-                              onValueChange={field.onChange}
-                              value={field.value ?? ""}
-                              disabled={isLoading}
+                    render={({ field, fieldState }) => (
+                      <FieldShell
+                        label="Timezone"
+                        description="Time zone used across the admin and email notifications."
+                        error={fieldState.error?.message}
+                      >
+                        {({ id, describedBy, invalid }) => (
+                          <Select
+                            onValueChange={field.onChange}
+                            value={field.value ?? ""}
+                            disabled={isLoading}
+                          >
+                            <SelectTrigger
+                              id={id}
+                              aria-describedby={describedBy}
+                              aria-invalid={invalid}
                             >
-                              <SelectTrigger>
-                                <SelectValue placeholder="Select a timezone" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {TIMEZONE_OPTIONS.map(opt => (
-                                  <SelectItem key={opt.value} value={opt.value}>
-                                    {opt.label}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          </FormControl>
-                          <FormMessage className="mt-1.5" />
-                        </SettingsRow>
-                      </FormItem>
+                              <SelectValue placeholder="Select a timezone" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {TIMEZONE_OPTIONS.map(opt => (
+                                <SelectItem key={opt.value} value={opt.value}>
+                                  {opt.label}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        )}
+                      </FieldShell>
                     )}
                   />
 
                   <FormField
                     control={form.control}
                     name="dateFormat"
-                    render={({ field }) => (
-                      <FormItem className="m-0">
-                        <SettingsRow
-                          label="Date Format"
-                          description="How dates appear in lists and detail pages."
-                        >
-                          <FormControl>
-                            <Select
-                              onValueChange={field.onChange}
-                              value={field.value ?? ""}
-                              disabled={isLoading}
+                    render={({ field, fieldState }) => (
+                      <FieldShell
+                        label="Date Format"
+                        description="How dates appear in lists and detail pages."
+                        error={fieldState.error?.message}
+                      >
+                        {({ id, describedBy, invalid }) => (
+                          <Select
+                            onValueChange={field.onChange}
+                            value={field.value ?? ""}
+                            disabled={isLoading}
+                          >
+                            <SelectTrigger
+                              id={id}
+                              aria-describedby={describedBy}
+                              aria-invalid={invalid}
                             >
-                              <SelectTrigger>
-                                <SelectValue placeholder="Select a date format" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {DATE_FORMAT_OPTIONS.map(opt => (
-                                  <SelectItem key={opt.value} value={opt.value}>
-                                    {opt.label}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          </FormControl>
-                          <FormMessage className="mt-1.5" />
-                        </SettingsRow>
-                      </FormItem>
+                              <SelectValue placeholder="Select a date format" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {DATE_FORMAT_OPTIONS.map(opt => (
+                                <SelectItem key={opt.value} value={opt.value}>
+                                  {opt.label}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        )}
+                      </FieldShell>
                     )}
                   />
 
                   <FormField
                     control={form.control}
                     name="timeFormat"
-                    render={({ field }) => (
-                      <FormItem className="m-0">
-                        <SettingsRow
-                          label="Time Format"
-                          description="12-hour vs 24-hour clock."
-                        >
-                          <FormControl>
-                            <Select
-                              onValueChange={field.onChange}
-                              value={field.value ?? ""}
-                              disabled={isLoading}
+                    render={({ field, fieldState }) => (
+                      <FieldShell
+                        label="Time Format"
+                        description="12-hour vs 24-hour clock."
+                        error={fieldState.error?.message}
+                      >
+                        {({ id, describedBy, invalid }) => (
+                          <Select
+                            onValueChange={field.onChange}
+                            value={field.value ?? ""}
+                            disabled={isLoading}
+                          >
+                            <SelectTrigger
+                              id={id}
+                              aria-describedby={describedBy}
+                              aria-invalid={invalid}
                             >
-                              <SelectTrigger>
-                                <SelectValue placeholder="Select a time format" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {TIME_FORMAT_OPTIONS.map(opt => (
-                                  <SelectItem key={opt.value} value={opt.value}>
-                                    {opt.label}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          </FormControl>
-                          <FormMessage className="mt-1.5" />
-                        </SettingsRow>
-                      </FormItem>
+                              <SelectValue placeholder="Select a time format" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {TIME_FORMAT_OPTIONS.map(opt => (
+                                <SelectItem key={opt.value} value={opt.value}>
+                                  {opt.label}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        )}
+                      </FieldShell>
                     )}
                   />
                 </SettingsSection>
-              </div>
-            )}
+              )}
+
+              <FormActions dirty={form.formState.isDirty}>
+                <Button type="submit" disabled={isPending || isLoading}>
+                  {isPending ? "Saving…" : "Save Changes"}
+                </Button>
+              </FormActions>
+            </FormLayout>
           </SettingsLayout>
         </form>
       </Form>
