@@ -148,7 +148,13 @@ export function EditorSurface() {
         </div>
       </div>
 
-      <DragOverlay>
+      {/*
+       * Named, because everything inside it is an anonymous inline-styled div otherwise. The chip
+       * and the refusal below it are the editor's only feedback during a drag, and neither the
+       * stylesheet nor anything reading the surface has a handle on them without a class on the
+       * element dnd-kit positions.
+       */}
+      <DragOverlay className="nx-pb-drag-overlay">
         {source => (
           <div
             data-refused={refusal ? "true" : undefined}
