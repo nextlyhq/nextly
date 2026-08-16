@@ -21,6 +21,8 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  FieldShell,
+  Grid,
   Input,
   Label,
   Select,
@@ -583,19 +585,20 @@ function NotificationSheet({
 
         <div className="flex-1 overflow-y-auto p-4 space-y-6">
           {/* Name */}
-          <div className="space-y-1.5">
-            <Label htmlFor="notification-name">Name</Label>
+          <FieldShell label="Name" htmlFor="notification-name" width="half">
             <Input
-              id="notification-name"
               type="text"
               value={form.name}
               onChange={e => update("name", e.target.value)}
               placeholder="e.g. Admin notification"
             />
-          </div>
+          </FieldShell>
 
-          {/* Provider & Template */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {/* Provider & Template. A container-query grid rather than the
+              viewport's `sm:` breakpoint: the admin content region is
+              narrower than the window whenever both sidebars are open, so a
+              viewport breakpoint promises columns this sheet does not have. */}
+          <Grid cols={2} responsive>
             <div className="space-y-1.5">
               <Label htmlFor="notification-provider">Email provider</Label>
               <Select
@@ -659,31 +662,27 @@ function NotificationSheet({
                 </p>
               )}
             </div>
-          </div>
+          </Grid>
 
           {/* Sender */}
-          <div className="space-y-1.5">
-            <Label htmlFor="notification-sender">Sender email</Label>
+          <FieldShell
+            label="Sender email"
+            htmlFor="notification-sender"
+            width="half"
+            description={addressErrors.senderEmail ? undefined : senderHelp}
+            error={addressErrors.senderEmail}
+          >
             <Input
-              id="notification-sender"
               type="email"
               value={form.senderEmail ?? ""}
               onChange={e => update("senderEmail", e.target.value || undefined)}
               placeholder={senderPlaceholder}
-              aria-invalid={addressErrors.senderEmail ? true : undefined}
             />
-            {addressErrors.senderEmail ? (
-              <p className="text-xs text-destructive">
-                {addressErrors.senderEmail}
-              </p>
-            ) : (
-              <p className="text-xs text-muted-foreground">{senderHelp}</p>
-            )}
-          </div>
+          </FieldShell>
 
           {/* Recipients */}
           <div className="space-y-4 pt-4 border-t border-border">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Grid cols={2} responsive>
               <div className="space-y-1.5">
                 <Label htmlFor="notification-recipient-type">Send to</Label>
                 <Select
@@ -714,13 +713,9 @@ function NotificationSheet({
                 </Select>
               </div>
 
-              <div className="space-y-1.5">
-                <Label htmlFor="notification-to">
-                  {form.recipientType === "field"
-                    ? "Visitor email field"
-                    : "Recipient address"}
-                </Label>
-                {form.recipientType === "field" ? (
+              {form.recipientType === "field" ? (
+                <div className="space-y-1.5">
+                  <Label htmlFor="notification-to">Visitor email field</Label>
                   <Select
                     value={toRef ?? "__none"}
                     onValueChange={value =>
@@ -742,32 +737,33 @@ function NotificationSheet({
                       ))}
                     </SelectContent>
                   </Select>
-                ) : (
+                  {toFieldOptions.length === 0 && (
+                    <p className="text-xs text-muted-foreground">
+                      Add an email field to the form first.
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <FieldShell
+                  label="Recipient address"
+                  htmlFor="notification-to"
+                  width="half"
+                  error={addressErrors.to}
+                >
                   <Input
-                    id="notification-to"
                     type="email"
                     value={form.to}
                     onChange={e => update("to", e.target.value)}
                     placeholder={
                       defaults?.defaultToEmail || "admin@example.com"
                     }
-                    aria-invalid={addressErrors.to ? true : undefined}
                   />
-                )}
-                {addressErrors.to && (
-                  <p className="text-xs text-destructive">{addressErrors.to}</p>
-                )}
-                {form.recipientType === "field" &&
-                  toFieldOptions.length === 0 && (
-                    <p className="text-xs text-muted-foreground">
-                      Add an email field to the form first.
-                    </p>
-                  )}
-              </div>
-            </div>
+                </FieldShell>
+              )}
+            </Grid>
 
             {/* Reply-To */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Grid cols={2} responsive>
               <div className="space-y-1.5">
                 <Label htmlFor="notification-replyto-mode">Reply-To</Label>
                 <Select
@@ -830,26 +826,23 @@ function NotificationSheet({
                 </div>
               )}
               {replyToMode === "custom" && (
-                <div className="space-y-1.5">
-                  <Label htmlFor="notification-replyto">Reply-To address</Label>
+                <FieldShell
+                  label="Reply-To address"
+                  htmlFor="notification-replyto"
+                  width="half"
+                  error={addressErrors.replyTo}
+                >
                   <Input
-                    id="notification-replyto"
                     type="email"
                     value={form.replyTo ?? ""}
                     onChange={e =>
                       update("replyTo", e.target.value || undefined)
                     }
                     placeholder="replies@example.com"
-                    aria-invalid={addressErrors.replyTo ? true : undefined}
                   />
-                  {addressErrors.replyTo && (
-                    <p className="text-xs text-destructive">
-                      {addressErrors.replyTo}
-                    </p>
-                  )}
-                </div>
+                </FieldShell>
               )}
-            </div>
+            </Grid>
             {replyToMode === "field" && (
               <p className="text-xs text-muted-foreground -mt-2">
                 Replying to this email answers the person who submitted the
@@ -967,10 +960,12 @@ function NotificationSheet({
                 </div>
 
                 {!VALUELESS_COMPARISONS.has(condition.comparison) && (
-                  <div className="min-w-36 flex-1 space-y-1.5">
-                    <Label htmlFor="notification-condition-value">Value</Label>
+                  <FieldShell
+                    label="Value"
+                    htmlFor="notification-condition-value"
+                    className="min-w-36 flex-1"
+                  >
                     <Input
-                      id="notification-condition-value"
                       type="text"
                       value={
                         typeof condition.value === "string" ||
@@ -985,7 +980,7 @@ function NotificationSheet({
                         })
                       }
                     />
-                  </div>
+                  </FieldShell>
                 )}
 
                 <Button
@@ -1110,7 +1105,8 @@ export function FormNotificationsTab({ defaults }: FormNotificationsTabProps) {
   const initialNotification = sheetState.editing ?? createNotification();
 
   return (
-    <div className="max-w-200">
+    // The measure belongs to `FormLayout` now, not to this tab.
+    <div>
       <div className="flex items-center justify-between mb-8 pb-4 border-b border-border">
         <div>
           <h3 className="text-xl font-semibold text-foreground">
