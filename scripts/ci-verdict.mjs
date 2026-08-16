@@ -8,14 +8,13 @@
 // object proves a reviewer saw a commit whether or not it carried findings,
 // and GitHub's own thread resolution state says what is still open.
 //
-// That first source is INCOMPLETE on its own, which is not obvious and cost
-// this gate its usefulness for a while. A reviewer may open a review object
-// only when it has something to report and post a clean verdict as an ordinary
-// issue comment naming the commit it read. Asking the reviews endpoint alone
-// then yields nothing for a revision that was reviewed and passed, so the gate
-// refuses permanently on exactly the pull requests that are ready, and whoever
-// needs to merge learns to go around it. Coverage is therefore read from both
-// places, and a verdict counts only when it NAMES the revision it read.
+// A review object is not the only form a verdict takes. A reviewer may open one
+// only when it has something to report, and state a clean pass as an issue
+// comment naming the commit it read. Asking the reviews endpoint alone
+// therefore yields nothing for a revision that was reviewed and passed, which
+// is indistinguishable from one nobody looked at. Coverage is read from both
+// places, and a comment counts only when it NAMES a revision that identifies
+// the head unambiguously.
 //
 // Counting a reviewer's findings would be a proxy for the second question and a
 // worse one, because reviewers do not agree on what a review object is: one
@@ -299,15 +298,13 @@ function approvalCovers(
 /**
  * A verdict posted as an ISSUE COMMENT that names the commit it read.
  *
- * Some reviewers only open a review object when they have something to say. A
- * clean pass from one of those arrives as an ordinary comment, so a gate asking
- * the reviews endpoint alone sees nothing and cannot distinguish "read it and
- * found nothing" from "never looked" — refusing forever on exactly the
- * revisions that are ready.
+ * Some reviewers open a review object only when they have something to say, so
+ * a clean pass arrives as an ordinary comment. Without this, such a verdict is
+ * indistinguishable from no verdict at all.
  *
  * Coverage is granted only when the comment NAMES a revision and that revision
- * is the head. A comment that merely exists proves nothing: the reviewer
- * comments on every round, and an older one would otherwise certify whatever
+ * is the head. A comment that merely exists proves nothing: a reviewer that
+ * comments on every round would otherwise have an older one certify whatever
  * was pushed after it.
  */
 const REVIEWED_COMMIT_MARKER = /reviewed commit:\**\s*`([0-9a-f]{7,40})`/i;
@@ -385,8 +382,7 @@ export function abbreviationIsAmbiguous(named, head, knownRevisions) {
 export function verdictCommentReviewers(
   issueComments,
   head,
-  since = undefined,
-  knownRevisions = undefined
+  { since, knownRevisions, historyRewritten = false } = {}
 ) {
   if (
     !Array.isArray(issueComments) ||
@@ -395,6 +391,12 @@ export function verdictCommentReviewers(
   ) {
     return [];
   }
+  // A rewritten branch cannot supply the revisions to compare an abbreviation
+  // against: the removed ones are gone from the commit list while a comment
+  // naming one survives, so an abbreviation that looks unique among what
+  // remains may identify a revision nobody can enumerate. A review record
+  // still carries a full revision and is unaffected.
+  if (historyRewritten) return [];
   const target = head.toLowerCase();
   const seen = new Set();
   for (const comment of issueComments) {
@@ -409,8 +411,7 @@ export function verdictCommentReviewers(
     // timestamp cannot be shown to postdate it.
     // `updated_at` where there is one, because a reviewer that edits an existing
     // comment to name the newly reviewed revision has spoken about this
-    // revision now. Keying on creation alone discarded that verdict and left
-    // the gate reporting a reviewed head as uncovered.
+    // revision now, while the creation time still describes the older verdict.
     const stated = comment?.updated_at ?? comment?.created_at;
     const withinScope =
       since === undefined || (typeof stated === "string" && stated > since);
@@ -426,17 +427,11 @@ export function verdictCommentReviewers(
  * same question asked twice: computing them apart lets a gate name a reviewer
  * as covering the head while still holding the merge for them.
  */
-export function reviewersCovering(
-  reviews,
-  issueComments,
-  head,
-  since = undefined,
-  knownRevisions = undefined
-) {
+export function reviewersCovering(reviews, issueComments, head, options = {}) {
   return [
     ...new Set([
-      ...reviewersAtHead(reviews, head, since),
-      ...verdictCommentReviewers(issueComments, head, since, knownRevisions),
+      ...reviewersAtHead(reviews, head, options.since),
+      ...verdictCommentReviewers(issueComments, head, options),
     ]),
   ].sort();
 }
@@ -447,12 +442,9 @@ export function missingReviewers(
   issueComments,
   head,
   required,
-  since = undefined,
-  knownRevisions = undefined
+  options = {}
 ) {
-  const seen = new Set(
-    reviewersCovering(reviews, issueComments, head, since, knownRevisions)
-  );
+  const seen = new Set(reviewersCovering(reviews, issueComments, head, options));
   return (required ?? []).filter(login => !seen.has(login));
 }
 
@@ -607,6 +599,8 @@ export function report({
   coverageSince = undefined,
   revisionOrder,
   revisionOrderComplete = false,
+  knownRevisions = undefined,
+  historyRewritten = false,
   reviews,
   threads,
   issueComments,
@@ -625,24 +619,26 @@ export function report({
     login => !blockingList.includes(login)
   );
   const required = [...new Set([...blockingList, ...effectiveAdvisory])];
-  // The pull request's own revisions, so an abbreviation that also identifies
-  // an earlier one of them is refused rather than trusted.
-  const knownRevisions =
-    revisionOrder instanceof Map ? [...revisionOrder.keys()] : undefined;
+  // Taken from the revision SET, never from the order map. Ordering is withheld
+  // where ancestry is not linear, and reusing it here would make a merge commit
+  // anywhere in the pull request refuse every comment verdict.
+  const coverageOptions = {
+    since: coverageSince,
+    knownRevisions,
+    historyRewritten,
+  };
   const covering = reviewersCovering(
     reviews,
     issueComments,
     head,
-    coverageSince,
-    knownRevisions
+    coverageOptions
   );
   const missing = missingReviewers(
     reviews,
     issueComments,
     head,
     required,
-    coverageSince,
-    knownRevisions
+    coverageOptions
   );
   const unresolved = unresolvedThreads(threads, effectiveAdvisory);
   const limited = rateLimited(issueComments);
@@ -730,8 +726,8 @@ export function report({
  * A stamp over every field the decisions read, so the observation window can
  * tell whether the evidence moved underneath it.
  *
- * Exported to be tested directly: it is the one input to the stability check,
- * and a field missing from it produces two equal stamps over different
+ * Exported so it can be asserted directly: it is the one input to the stability
+ * check, and a field missing from it produces two equal stamps over different
  * evidence, which is a stale decision reported as a settled one.
  */
 export const fingerprint = (rv, th, ic) =>
@@ -750,8 +746,8 @@ export const fingerprint = (rv, th, ic) =>
     th.map(t => [t?.isResolved, t?.comments?.nodes?.[0]?.author?.login]),
     // The parsed revision and the timestamp are read by the coverage decision,
     // so a comment edited in place from an older revision to the current one
-    // must move this stamp. Recording only the id let both snapshots compare
-    // equal while the evidence underneath them changed.
+    // moves this stamp. Recording only the id would leave two snapshots equal
+    // while the evidence underneath them changed.
     ic.map(c => [
       c?.id,
       c?.user?.login,
@@ -1005,6 +1001,13 @@ async function main(argv) {
   const revisionOrder = linearHistory
     ? new Map(commits.map((commit, index) => [commit.sha, index]))
     : undefined;
+  // Kept even where the ORDER is withheld. Ordering needs linear ancestry;
+  // asking whether an abbreviation identifies more than one revision does not,
+  // and folding the two together makes a single merge commit anywhere in the
+  // pull request refuse every comment verdict.
+  const knownRevisions = commits
+    .map(commit => commit?.sha)
+    .filter(value => typeof value === "string");
   // GitHub serves at most 250 commits from that endpoint and `--paginate`
   // cannot reach past it, returning a short list and no error. Compared against
   // the map's SIZE rather than the array's length, because a duplicate sha
@@ -1168,7 +1171,11 @@ async function main(argv) {
       // A force-push away from a revision and back leaves every SHA identical
       // while recording an event, so the count belongs IN the snapshot rather
       // than beside it.
-      rewrites: live.state === "MERGED" ? rewriteEvents() : 0,
+      // Read whatever the state, because comment evidence depends on it: a
+      // rewritten branch no longer lists the revisions an abbreviation would
+      // have to be unique against, and that is true of an open pull request
+      // exactly as it is of a merged one.
+      rewrites: rewriteEvents(),
     };
   };
 
@@ -1267,6 +1274,8 @@ async function main(argv) {
       return report({
         head,
         coverageSince: observed.baseChangedAt,
+        knownRevisions,
+        historyRewritten: observed.rewrites > 0,
         revisionOrder,
         revisionOrderComplete,
         reviews: observed.reviews,

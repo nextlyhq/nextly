@@ -221,6 +221,7 @@ export function reviewedRevision({
   login,
   baseChangedAt = undefined,
   knownRevisions = undefined,
+  historyRewritten = false,
 }) {
   const records = Array.isArray(reviews) ? reviews : [];
   const comments = Array.isArray(issueComments) ? issueComments : [];
@@ -230,12 +231,11 @@ export function reviewedRevision({
   // supplies one.
   const coversTip =
     reviewsCoveringTip(records, tip, login).length > 0 ||
-    verdictCommentReviewers(
-      comments,
-      tip,
-      baseChangedAt,
-      knownRevisions
-    ).includes(login);
+    verdictCommentReviewers(comments, tip, {
+      since: baseChangedAt,
+      knownRevisions,
+      historyRewritten,
+    }).includes(login);
   if (coversTip) return tip;
   // Falls back to records ONLY. A comment naming an older revision says which
   // tree that verdict read, and reporting it here would present a stale opinion
@@ -1174,18 +1174,11 @@ export function main(argv) {
   // PREFERRED from the review RECORD's own `commit_id`, because only the record
   // carries a sha the server assigned and nobody can edit afterwards.
   //
-  // This once read from the record ALONE, on the reasoning that prose naming a
-  // sha may be progress text rather than a verdict. That reasoning still holds
-  // for prose, and it rested on a premise measurement has since refuted: that a
-  // review record exists to be read. It does not always. Across four pull
-  // requests here, the one carrying findings produced review records and the
-  // three CLEAN ones produced none at all — the pass arrived only as a comment
-  // naming the commit it read. Requiring a record therefore made a clean verdict
-  // permanently invisible, which is not caution; it is a gate that cannot open.
-  //
-  // So the record still decides wherever there is one, and a comment is
-  // consulted only when it carries the reviewer's own structured marker naming a
-  // revision. Prose that merely mentions a sha still counts for nothing.
+  // A record is not always present: a reviewer may open one only when it has
+  // findings and state a clean pass as a comment. So the record decides
+  // wherever there is one, and a comment is consulted only when it carries the
+  // reviewer's own structured marker naming a revision. Prose that merely
+  // mentions a sha counts for nothing.
   // `--slurp` returns an array of PAGES and cannot be combined with `--jq`,
   // so the flattening happens here rather than in the query.
   const reviews = ghJson([
@@ -1218,12 +1211,15 @@ export function main(argv) {
   const knownRevisions = prCommits
     .map(commit => commit?.sha)
     .filter(value => typeof value === "string");
+  const timeline = timelinePages(pr);
+  const historyRewritten = countRewriteEvents(timeline) > 0;
   const reviewedSha = reviewedRevision({
     reviews,
     issueComments,
     tip,
     login: CODEX,
-    baseChangedAt: latestBaseChange(timelinePages(pr)),
+    historyRewritten,
+    baseChangedAt: latestBaseChange(timeline),
     // The tip is the revision being judged and is not always the last commit
     // the API lists, so it is named explicitly rather than assumed present.
     knownRevisions: [...new Set([...knownRevisions, tip])],
@@ -1305,10 +1301,9 @@ export function main(argv) {
   const MUTABLE = "{merged:.merged,state:.state,draft:.draft}";
   const after = ghJson(["api", `repos/${REPO}/pulls/${pr}`, "--jq", MUTABLE]);
   // Comment evidence is MUTABLE in a way a review record is not: it can be
-  // edited or deleted after this run read it, on an unchanged head, so none of
-  // the facts above would move. Re-read and folded into the same comparison,
-  // because a verdict that has since been withdrawn must not reach a caller as
-  // GATE PASSED.
+  // edited or deleted on an unchanged head, so none of the facts above would
+  // move. Re-read and folded into the same comparison, so a verdict withdrawn
+  // during the run cannot reach a caller as GATE PASSED.
   const reviewedShaAfter = reviewedRevision({
     reviews,
     issueComments: ghJson([
@@ -1319,7 +1314,8 @@ export function main(argv) {
     ]).flat(),
     tip,
     login: CODEX,
-    baseChangedAt: latestBaseChange(timelinePages(pr)),
+    historyRewritten,
+    baseChangedAt: latestBaseChange(timeline),
     knownRevisions: [...new Set([...knownRevisions, tip])],
   });
   const stale = staleVerification(
