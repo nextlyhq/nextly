@@ -548,3 +548,12 @@ export type { KeyChord, KeySequence } from "./lib/shortcuts/key-spec";
 export { FieldShell } from "./components/field-shell";
 /** @experimental */
 export type { FieldShellProps, FieldWidth } from "./types/form-layout";
+
+/**
+ * @experimental A labelled card holding a group of fields, composing `Card`
+ * rather than hand-rolling its own chrome. No first-party plugin has
+ * exercised it in production yet.
+ */
+export { FormSection } from "./components/form-section";
+/** @experimental */
+export type { FormSectionProps } from "./components/form-section";

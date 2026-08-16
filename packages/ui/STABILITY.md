@@ -124,6 +124,13 @@ kit: a labelled row that caps its control's width to a named token rather than a
 one-off measurement. No first-party plugin exercises it yet, so it has not met the
 graduation bar.
 
+`FormSection` (with `FormSectionProps`) is the form-layout kit's section: a labelled
+card holding a group of fields. It composes `Card` for its container rather than
+hand-rolling its own border and background, so it carries `Card`'s CONTAINER radius
+tier. It has no footer slot — a form commits as one document, so its action belongs
+to the page rather than to a section. No first-party plugin exercises it yet, so it
+has not met the graduation bar.
+
 ## Peer dependency policy
 
 `@nextlyhq/ui` is a **peer** dependency of `@nextlyhq/admin`, not a bundled one, and must

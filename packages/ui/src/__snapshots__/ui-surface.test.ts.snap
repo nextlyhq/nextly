@@ -147,6 +147,8 @@ exports[`ui public export surface > . surface is unchanged 1`] = `
   "FilterInfo (type)",
   "FormLabelWithTooltip (value)",
   "FormLabelWithTooltipProps (type)",
+  "FormSection (value)",
+  "FormSectionProps (type)",
   "Grid (value)",
   "GridProps (type)",
   "Input (value)",
