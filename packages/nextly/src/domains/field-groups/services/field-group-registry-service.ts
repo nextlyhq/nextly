@@ -519,8 +519,13 @@ export class FieldGroupRegistryService extends BaseRegistryService<
         {
           and: [
             { column: "slug", op: "=", value: slug },
+            // 🔴 The Drizzle PROPERTY name, not the database column name. A WHERE clause is
+            // resolved against the table object's properties, while the SET payload above is
+            // mapped from snake_case by `mapDataToColumnNames` — so the two halves of this one
+            // statement legitimately spell the same column differently, and `schema_version` here
+            // raises "Column not found" rather than matching nothing.
             {
-              column: "schema_version",
+              column: "schemaVersion",
               op: "=",
               value: expectedSchemaVersion,
             },
