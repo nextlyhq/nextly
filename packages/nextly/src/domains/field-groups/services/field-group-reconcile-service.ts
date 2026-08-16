@@ -121,6 +121,7 @@ export async function reconcileFieldGroup(args: {
 
   const plan = planFieldGroupReconcile<FieldDefinition>({
     storedFields: existing.fields as unknown as FieldDefinition[],
+    storedLocalized: existing.localized === true,
     dialect,
     tableName: existing.tableName,
     liveMain,
@@ -128,7 +129,12 @@ export async function reconcileFieldGroup(args: {
     typeColumn,
   });
 
-  if (plan.unchanged) {
+  // A standing `diverged` mark is itself part of what this operation repairs: once the definition
+  // describes the tables, leaving the mark would keep refusing schema edits on a group that is
+  // now fine — the plan can be unchanged while the STATUS is still the thing that is wrong.
+  const markerStandsWrongly = existing.migrationStatus === "diverged";
+
+  if (plan.unchanged && !markerStandsWrongly) {
     // Nothing to write — and writing anyway would bump the version and invalidate every open
     // editor for a repair that repaired nothing.
     logger.info("[FieldGroups] Reconcile found nothing to repair", { slug });

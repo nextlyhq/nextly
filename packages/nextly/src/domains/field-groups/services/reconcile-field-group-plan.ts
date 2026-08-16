@@ -34,6 +34,7 @@ import type {
 } from "../../schema/pipeline/diff/types";
 import {
   getColumnDescriptor,
+  toSnakeCase,
   type SupportedDialect,
 } from "../../schema/services/field-column-descriptor";
 
@@ -95,6 +96,15 @@ export interface ReconcilePlan<F extends ReconcilableField> {
 
 export interface ReconcileInput<F extends ReconcilableField> {
   storedFields: readonly F[];
+  /**
+   * The entity-level flag as the ROW records it, so drift in the flag alone is a change.
+   *
+   * The primary divergence this operation repairs is a localization transition whose DDL landed
+   * and whose row write failed — a state where every FIELD matches its (new) table and only this
+   * flag is wrong. A no-op decision computed from the field lists alone reports that as
+   * unchanged, and the caller then skips exactly the write the repair exists to make.
+   */
+  storedLocalized: boolean;
   dialect: SupportedDialect;
   tableName: string;
   /** Introspected `comp_<slug>`. */
@@ -239,6 +249,14 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
   /** Column names a stored field accounted for, so the leftovers can be adopted. */
   const claimedMain = new Set<string>();
   const claimedCompanion = new Set<string>();
+  /**
+   * Kept columnless fields, by the column name each WOULD occupy. A stored `component` field that
+   * a failed apply turned into a scalar leaves a live column under this very name; adopting it
+   * while also keeping the columnless field would persist two fields with one name, and the
+   * conditional write would then mark that ambiguity `synced`. The collision replaces the
+   * columnless field — reported as a removal — rather than preserving both.
+   */
+  const columnlessByColumnName = new Map<string, F>();
 
   for (const field of storedFields) {
     const descriptor = getColumnDescriptor(
@@ -251,6 +269,7 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
     // column that was never supposed to exist.
     if (!descriptor || descriptor.kind === "skip") {
       fields.push(field);
+      columnlessByColumnName.set(toSnakeCase(field.name), field);
       continue;
     }
 
@@ -340,6 +359,16 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
     system: ReadonlySet<string>
   ): void => {
     if (claimed.has(column.name) || system.has(column.name)) return;
+    // A columnless field under this very name is what a half-applied type change leaves behind:
+    // the DDL created the scalar column, the row still declares the columnless field. One name
+    // must map to one field, so the columnless declaration gives way — as a REPORTED removal —
+    // and the adoption below stands in for whatever the column now is.
+    const displaced = columnlessByColumnName.get(column.name);
+    if (displaced) {
+      const at = fields.indexOf(displaced);
+      if (at !== -1) fields.splice(at, 1);
+      removed.push({ fieldName: displaced.name, columnName: column.name });
+    }
     const guessedType = guessFieldType(column.type);
     adopted.push({
       fieldName: column.name,
@@ -363,7 +392,12 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
         table === "main" && !column.nullable && column.primaryKey !== true,
       ...(unique ? { unique: true } : {}),
       ...(present && !unique ? { index: true } : {}),
+      // The flag is written in BOTH directions, because for text-like guesses silence is not
+      // neutral: `isFieldLocalized` defaults them to translatable in a localized group, which
+      // would re-home a column the planner just found on the MAIN table — recording, on the
+      // repair path itself, another definition that does not describe the database.
       ...(table === "companion" ? { localized: true } : {}),
+      ...(table === "main" && localized ? { localized: false } : {}),
     } as F);
   };
 
@@ -381,6 +415,12 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
     repaired,
     adopted,
     unchanged:
-      removed.length === 0 && repaired.length === 0 && adopted.length === 0,
+      removed.length === 0 &&
+      repaired.length === 0 &&
+      adopted.length === 0 &&
+      // Flag drift is a change even when every field matches: a localization transition whose DDL
+      // landed but whose row write failed differs ONLY here, and it is the primary state this
+      // repair exists to clear.
+      localized === input.storedLocalized,
   };
 }

@@ -721,11 +721,14 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
             slug,
           });
 
-          return respondAction(
+          // The canonical mutation envelope: this method can rewrite the registry row, so its
+          // result is `item` like every other definition write — not a bespoke top-level key a
+          // consumer would need special handling for.
+          return respondMutation(
             report.unchanged
               ? `"${slug}" already describes its tables; nothing was changed.`
               : `Reconciled "${slug}" against its live tables.`,
-            { report }
+            report
           );
         }
       );

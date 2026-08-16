@@ -51,9 +51,12 @@ function plan(args: {
   storedFields: ReconcilableField[];
   liveMain: TableSpec;
   liveCompanion?: TableSpec | null;
+  /** Defaults to false — the flag the row of a never-localized group records. */
+  storedLocalized?: boolean;
 }) {
   return planFieldGroupReconcile({
     storedFields: args.storedFields,
+    storedLocalized: args.storedLocalized ?? false,
     dialect: DIALECT,
     tableName: TABLE,
     liveMain: args.liveMain,
@@ -157,6 +160,7 @@ describe("planFieldGroupReconcile", () => {
 
     const result = planFieldGroupReconcile({
       storedFields: stored,
+      storedLocalized: false,
       dialect: DIALECT,
       tableName: TABLE,
       liveMain: live,
@@ -176,6 +180,7 @@ describe("planFieldGroupReconcile", () => {
       storedFields: stored,
       liveMain: liveTableFor(stored, { localized: true }),
       liveCompanion: companionWith([{ name: "title" }]),
+      storedLocalized: true,
     });
 
     expect(result.localized).toBe(true);
@@ -203,6 +208,7 @@ describe("planFieldGroupReconcile", () => {
       storedFields: stored,
       liveMain: liveTableFor(stored, { localized: true }),
       liveCompanion: companionWith([{ name: "title" }]),
+      storedLocalized: true,
     });
 
     expect(result.repaired).toEqual([]);
@@ -261,6 +267,75 @@ describe("planFieldGroupReconcile", () => {
     expect(result.removed).toEqual([]);
   });
 
+  // The primary divergence this operation repairs: a localization enable whose DDL landed and
+  // whose row write failed differs from a healthy group ONLY in the flag. Field-list comparison
+  // alone reads that as unchanged, and the caller then skips the one write the repair exists for.
+  it("treats flag drift alone as a change", () => {
+    const stored: ReconcilableField[] = [
+      { name: "title", type: "text", localized: true },
+    ];
+    const result = plan({
+      storedFields: stored,
+      liveMain: liveTableFor(stored, { localized: true }),
+      liveCompanion: companionWith([{ name: "title" }]),
+      // The row still says non-localized: the enable transition committed, the write did not.
+      storedLocalized: false,
+    });
+
+    expect(result.localized).toBe(true);
+    expect(result.unchanged).toBe(false);
+    // And nothing else invented: the flag IS the whole repair.
+    expect(result.removed).toEqual([]);
+    expect(result.repaired).toEqual([]);
+    expect(result.adopted).toEqual([]);
+  });
+
+  // A half-applied type change leaves a live column under a columnless field's own name. Keeping
+  // the columnless declaration AND adopting the column would persist two fields with one name and
+  // mark the ambiguity synced; the columnless field gives way, as a reported removal.
+  it("replaces a columnless field whose name a live column now occupies", () => {
+    const stored: ReconcilableField[] = [
+      { name: "title", type: "text" },
+      { name: "cta", type: "component" },
+    ];
+    const live = liveTableFor([{ name: "title", type: "text" }]);
+    live.columns.push({ name: "cta", type: "text", nullable: true });
+
+    const result = plan({ storedFields: stored, liveMain: live });
+
+    expect(result.fields.filter(f => f.name === "cta")).toHaveLength(1);
+    expect(result.fields.find(f => f.name === "cta")).toMatchObject({
+      type: "text",
+    });
+    expect(result.removed).toEqual([{ fieldName: "cta", columnName: "cta" }]);
+    expect(result.adopted).toEqual([
+      expect.objectContaining({ fieldName: "cta", table: "main" }),
+    ]);
+  });
+
+  // In a localized group a text-like field with NO flag defaults to translatable, which would
+  // re-home a column the planner just found on the MAIN table. Silence is not neutral there, so
+  // main-table adoptions carry an explicit false.
+  it("pins a main-table adoption of a localized group to the main table", () => {
+    const stored: ReconcilableField[] = [
+      { name: "title", type: "text", localized: true },
+    ];
+    const live = liveTableFor(stored, { localized: true });
+    live.columns.push({ name: "mystery_note", type: "text", nullable: true });
+
+    const result = plan({
+      storedFields: stored,
+      liveMain: live,
+      liveCompanion: companionWith([{ name: "title" }]),
+      storedLocalized: true,
+    });
+
+    expect(result.fields.find(f => f.name === "mystery_note")).toMatchObject({
+      type: "text",
+      localized: false,
+    });
+  });
+
   it("adopts a companion-resident unknown column as a localized field", () => {
     const stored: ReconcilableField[] = [
       { name: "title", type: "text", localized: true },
@@ -269,6 +344,7 @@ describe("planFieldGroupReconcile", () => {
       storedFields: stored,
       liveMain: liveTableFor(stored, { localized: true }),
       liveCompanion: companionWith([{ name: "title" }, { name: "tagline" }]),
+      storedLocalized: true,
     });
 
     expect(result.adopted).toEqual([

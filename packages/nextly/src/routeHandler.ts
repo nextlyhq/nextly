@@ -742,7 +742,14 @@ async function resolveAuthorization(
 
   // --- Field groups → manage-settings ---
   if (service === "field-groups") {
-    const action = getActionFromMethod(httpMethod);
+    // The verb is a proxy for the action and reconcile is where the proxy breaks: it travels
+    // over POST but rewrites an EXISTING definition, so verb-derived authorization would demand
+    // create-settings from a principal repairing a definition they are allowed to update, while
+    // letting a create-only principal rewrite definitions they may not touch.
+    const action =
+      method === "reconcileComponent"
+        ? "update"
+        : getActionFromMethod(httpMethod);
     return requireAnyPermission(req, [
       { action, resource: "settings" },
       { action: "manage", resource: "settings" },
