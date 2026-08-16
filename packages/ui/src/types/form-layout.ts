@@ -21,13 +21,15 @@ export interface FieldShellProps {
   htmlFor?: string;
   className?: string;
   /**
-   * Exactly one element: the control this field wraps. `FieldShell` passes it
-   * through Radix `Slot`, which clones its single child rather than rendering
-   * a wrapper, and throws at runtime if handed more than one. Typing this as
-   * `ReactNode` would let a composite field (two inputs with a unit between
-   * them, for example) compile and then crash on mount. A caller with several
-   * elements to slot in wraps them in one — a `<div>`, a `<Fragment>` is not
-   * enough since `Slot` still needs a single DOM-bearing element to clone.
+   * Exactly one element: the control this field wraps. `FieldShell` clones it
+   * with `cloneElement` to attach the id, `aria-describedby` and
+   * `aria-invalid` it computes, rather than rendering a wrapper. Typing this
+   * as `ReactNode` would let a composite field (two inputs with a unit
+   * between them, for example) compile and then crash on mount. A caller
+   * with several elements to slot in wraps them in one — a `<div>`, not a
+   * `<Fragment>`: a Fragment forwards none of those props to what is inside
+   * it, so the element must be single and DOM-bearing for the clone to have
+   * anywhere to land them.
    */
   children: React.ReactElement;
 }

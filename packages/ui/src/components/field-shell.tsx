@@ -1,7 +1,7 @@
-import { Slot } from "@radix-ui/react-slot";
 import { cva } from "class-variance-authority";
-import { useId } from "react";
+import { cloneElement, Fragment, useId } from "react";
 
+import { devWarnOnce } from "../lib/dev-warn";
 import { cn } from "../lib/utils";
 import type { FieldShellProps } from "../types/form-layout";
 
@@ -28,23 +28,48 @@ const controlWidth = cva("w-full", {
 });
 
 /**
- * Reads the `id` a child element already carries, if any.
+ * The subset of a child's own props this component reads before deciding
+ * what to merge onto it.
  *
- * Radix `Slot`'s own prop merge lets a key present on the child's props win
- * over whatever `id` Slot receives — unconditionally, regardless of what this
- * component asked it to inject (see `mergeProps` in `@radix-ui/react-slot`).
- * So the id this function reports is the one that will actually land in the
- * DOM, and it is what the label has to target rather than the id FieldShell
- * merely offered. `children.props` is untyped (`ReactElement<unknown>`), so
- * this narrows it defensively instead of asserting a shape onto it.
+ * `child.props` is untyped (`ReactElement<unknown>`), so this narrows it
+ * defensively — checking each key is actually present with the expected
+ * primitive type — rather than asserting a shape onto a value nothing has
+ * verified. A key present with the wrong type (an `id` that is a number, an
+ * `aria-describedby` that is a boolean) is treated the same as absent: the
+ * caller's field-shell contract is about ids and id-reference strings, and a
+ * value that cannot serve as one is not a real override.
  */
-function readOwnId(child: FieldShellProps["children"]): string | undefined {
+interface KnownControlProps {
+  id?: unknown;
+  "aria-describedby"?: unknown;
+}
+
+function readControlProps(
+  child: FieldShellProps["children"]
+): KnownControlProps {
   const props: unknown = child.props;
-  if (props && typeof props === "object" && "id" in props) {
-    const value = (props as { id?: unknown }).id;
-    return typeof value === "string" ? value : undefined;
-  }
-  return undefined;
+  // An object with no properties the type checker knows about is already
+  // assignable to a type whose properties are all optional, so no cast is
+  // needed here: only the `typeof` guard is doing real work.
+  return props && typeof props === "object" ? props : {};
+}
+
+/**
+ * The props this component injects onto the control, computed once and
+ * applied with a single `cloneElement` call.
+ *
+ * Declared as its own type, rather than inlined at the call site, so the
+ * object passed to `cloneElement` carries real key names instead of a
+ * loosely-typed record. `children`'s props are unknown to this component (see
+ * `KnownControlProps` above), so `cloneElement`'s `Partial<P>` parameter
+ * collapses to `{}` for any child it is handed — meaning this type is the
+ * only thing constraining what gets attached, and getting its keys right is
+ * what keeps a typo from silently landing on the DOM as a data attribute.
+ */
+interface ControlOverrides {
+  id: string;
+  "aria-describedby"?: string;
+  "aria-invalid"?: boolean;
 }
 
 /** @experimental */
@@ -66,22 +91,84 @@ export function FieldShell({
   const descriptionId = `${messageBaseId}-description`;
   const errorId = `${messageBaseId}-error`;
 
-  // What FieldShell asks Slot to inject, honoring `htmlFor` when the caller
-  // supplied one and falling back to a generated id otherwise.
+  // What FieldShell would use for the control absent any id the child
+  // already carries: `htmlFor` when the caller supplied one, a generated id
+  // otherwise.
   const requestedId = htmlFor ?? generatedControlId;
-  // What actually ends up on the control: the child's own id wins over the
-  // requested one whenever the child sets one at all (see `readOwnId`), so
-  // the label has to target THAT id rather than `requestedId` to stay
-  // accurate for a caller-supplied child that already carries an id.
-  const controlId = readOwnId(children) ?? requestedId;
+
+  const ownProps = readControlProps(children);
+
+  // A non-empty string the child already carries wins over the requested id;
+  // anything else — including an explicitly-present `id={undefined}`, which
+  // a naive object spread would let win — does not. Deciding this here,
+  // rather than leaving it to a generic prop-merge, is the entire point of
+  // owning the merge: there is exactly one rule for what counts as "the
+  // child already has an id", and it is applied before the clone rather than
+  // discovered afterward in whatever a merge library happened to do.
+  const ownId =
+    typeof ownProps.id === "string" && ownProps.id !== ""
+      ? ownProps.id
+      : undefined;
+  const controlId = ownId ?? requestedId;
 
   // Only messages that actually render get an id, and only those ids are
   // listed: a control pointed at an id nothing carries is worse than one
   // with no description at all.
+  const renderedMessageIds = [
+    description ? descriptionId : null,
+    error ? errorId : null,
+  ].filter((id): id is string => id !== null);
+
+  const ownDescribedByIds =
+    typeof ownProps["aria-describedby"] === "string"
+      ? ownProps["aria-describedby"].split(" ").filter(Boolean)
+      : [];
+
+  // Compose, never replace: a child may already point at ids of its own (a
+  // unit label, a character counter) that this component knows nothing
+  // about, and overwriting them would break whatever wired them up. The
+  // child's own ids come first so the reading order matches what the caller
+  // wrote; `Set` then drops any id both sides already agree on.
+  const describedByIds = Array.from(
+    new Set([...ownDescribedByIds, ...renderedMessageIds])
+  );
   const describedBy =
-    [description ? descriptionId : null, error ? errorId : null]
-      .filter((id): id is string => id !== null)
-      .join(" ") || undefined;
+    describedByIds.length > 0 ? describedByIds.join(" ") : undefined;
+
+  const controlOverrides: ControlOverrides = {
+    id: controlId,
+    ...(describedBy !== undefined ? { "aria-describedby": describedBy } : {}),
+    // A rendered error always forces the control invalid: a child that
+    // already set `aria-invalid={false}`, or left it unset, must not
+    // suppress a validation message that is visibly on the page. With no
+    // error the key is omitted entirely rather than set to `undefined`, so
+    // `cloneElement` leaves whatever the child already had untouched instead
+    // of overwriting it with an absence.
+    ...(error ? { "aria-invalid": true } : {}),
+  };
+
+  // A Fragment is a valid `ReactElement` — it type-checks as one — but it
+  // forwards none of these props to anything inside it, so cloning it would
+  // silently disconnect the label and the validation wiring from every real
+  // element the Fragment contains. The type system cannot rule this out
+  // (`Fragment`'s element type is indistinguishable from any other
+  // component's at the type level), so it is checked at runtime instead.
+  const isFragment = children.type === Fragment;
+  devWarnOnce(
+    !isFragment,
+    "FieldShell: `children` must be a single element, not a Fragment. A Fragment forwards " +
+      "no props to the elements inside it, so the id, aria-describedby and aria-invalid this " +
+      "component computes would have nowhere to land — the label and the control would look " +
+      "wired up and never actually connect. Wrap the intended elements in a real element " +
+      "instead, such as a `<div>`."
+  );
+  // Cloning a Fragment with these props would only add React's own "invalid
+  // prop supplied to React.Fragment" warning on top of the one above without
+  // fixing anything, so it is rendered unmodified and the warning is the
+  // only signal.
+  const control = isFragment
+    ? children
+    : cloneElement(children, controlOverrides);
 
   return (
     <div className={cn("flex flex-col gap-1.5", className)}>
@@ -93,19 +180,7 @@ export function FieldShell({
           {label}
         </label>
       ) : null}
-      <div className={controlWidth({ width })}>
-        {/* Slot injects the id, description and validation state onto the
-            child rather than wrapping it in an extra DOM node. A child that
-            already sets its own `id` keeps it: Slot's prop merge gives the
-            child's own props precedence over the ones passed here. */}
-        <Slot
-          id={requestedId}
-          aria-describedby={describedBy}
-          aria-invalid={error ? true : undefined}
-        >
-          {children}
-        </Slot>
-      </div>
+      <div className={controlWidth({ width })}>{control}</div>
       {description ? (
         <p id={descriptionId} className="text-sm text-muted-foreground">
           {description}

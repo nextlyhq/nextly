@@ -33,10 +33,13 @@ a single page-level action bar, and an opt-in responsive mode on the existing
 grid.
 
 `FieldShell` associates its label with whichever id actually ends up on the
-control (a caller's own id or a generated one), wires `aria-describedby` and
-`aria-invalid` from its `description`/`error` props, and narrows `children`
-to a single element to match what it can actually slot in. `FormSection`
-names its region with `aria-labelledby`. `Grid`'s `responsive` mode now
-splits `className`/`style`/`ref` (parent-layout concerns) from `cols`/`gap`
-(internal layout) between its wrapper and inner grid; non-responsive mode is
-unchanged.
+control (a caller's own id or a generated one, never an explicitly-`undefined`
+one), composes `aria-describedby` with whatever the control already carries
+rather than replacing it, and forces `aria-invalid` when `error` is rendered
+even if the control claims otherwise. It owns this prop merge itself with
+`cloneElement` instead of Radix `Slot`, warns in development rather than
+silently disconnecting when handed a `Fragment`, and narrows `children` to a
+single element to match what it can actually slot in. `FormSection` names its
+region with `aria-labelledby`. `Grid`'s `responsive` mode now splits
+`className`/`style`/`ref` (parent-layout concerns) from `cols`/`gap` (internal
+layout) between its wrapper and inner grid; non-responsive mode is unchanged.

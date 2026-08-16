@@ -121,17 +121,24 @@ the subpaths are new and unexercised by any third party.
 
 `FieldShell` (with `FieldShellProps` and `FieldWidth`) is the atom of the form-layout
 kit: a labelled row that caps its control's width to a named token rather than a
-one-off measurement. `htmlFor` is optional: when omitted, `FieldShell` generates an id
-with `useId()`, puts it on the label, and injects it onto the control via Radix `Slot` —
-so the label/control association works out of the box, and a child that sets its own
-`id` still wins, with the label following it there. Pass `htmlFor` explicitly only when
-the caller already manages its own id. `FieldShell` also owns the control's ARIA wiring:
-it generates ids for `description` and `error` (only for whichever are actually
-rendered), lists them on the control's `aria-describedby`, and sets `aria-invalid` when
-`error` is present. `children` is typed as a single `ReactElement`, not `ReactNode`:
-`Slot` clones exactly one child and throws at runtime if handed more, so a caller with
-several elements to slot in wraps them in one. No first-party plugin exercises it yet,
-so it has not met the graduation bar.
+one-off measurement. It owns its own prop merge with `cloneElement` rather than
+delegating to Radix `Slot`, so there is exactly one implementation of "what props does
+the control end up with" and it is not subject to another library's precedence rules.
+`htmlFor` is optional: when omitted, `FieldShell` generates an id with `useId()` and
+puts it on the label; a non-empty `id` the child already carries wins over that
+generated id (an explicitly-present `id={undefined}` does not), and the label always
+targets whichever id the control actually ends up with. Pass `htmlFor` explicitly only
+when the caller already manages its own id. `FieldShell` also owns the control's ARIA
+wiring: it generates ids for `description` and `error` (only for whichever are actually
+rendered) and COMPOSES them onto the control's `aria-describedby` alongside any ids the
+child already listed there, rather than replacing them; the attribute is omitted
+entirely when the result would be empty. A rendered `error` always forces
+`aria-invalid="true"`, overriding whatever the child set; with no error, the child's own
+`aria-invalid` passes through untouched. `children` is typed as a single `ReactElement`,
+not `ReactNode`, and must not be a `Fragment` — nothing can forward props through one —
+which `FieldShell` detects at runtime and reports via `devWarnOnce` rather than
+throwing, since no compile-time check can rule it out. No first-party plugin exercises
+it yet, so it has not met the graduation bar.
 
 `FormSection` (with `FormSectionProps`) is the form-layout kit's section: a labelled
 card holding a group of fields. It composes `Card` for its container rather than
