@@ -405,6 +405,126 @@ describe("contentSitemapEntries", () => {
     expect(await shard(2)).toEqual(["https://example.com/e"]);
   });
 
+  it("measures UTF-8 BYTES, not string length", async () => {
+    // `String.length` counts UTF-16 code units while the document is emitted as
+    // UTF-8, so a non-ASCII path costs two to four bytes per character. An
+    // ASCII-only fixture cannot separate the two implementations; this one can.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // The MOUNT, not the slug. A slug goes through `encodeURIComponent`, which
+    // renders it pure ASCII — so for slugs the two measurements agree and no
+    // fixture built from one can separate them. `basePath` is not encoded, so a
+    // non-ASCII mount reaches the document as multi-byte UTF-8: three bytes per
+    // character here, one UTF-16 code unit.
+    const wideMount = `/${"\u4e2d".repeat(500)}`;
+    const rows = Array.from({ length: 40_000 }, (_, i) => ({ slug: `p${i}` }));
+
+    const entries = await contentSitemapEntries({
+      ...BASE,
+      basePath: wideMount,
+      nextly: reader({ pages: [rows] }).reader,
+    });
+
+    // Each URL is ~1500 UTF-8 bytes against ~500 UTF-16 units. Measured in
+    // bytes the ceiling is reached around 30,000 entries; measured in length it
+    // is not reached at all within this fixture, so the count separates the two
+    // implementations rather than merely being small.
+    expect(entries.length).toBeGreaterThan(0);
+    expect(entries.length).toBeLessThan(40_000);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("clamps a limit above the protocol ceiling", async () => {
+    // The module documented a 50,000-URL bound and compared against whatever
+    // the caller passed, so the ceiling was documentation rather than a limit.
+    const rows = Array.from({ length: 50_010 }, (_, i) => ({ slug: `p${i}` }));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const entries = await contentSitemapEntries({
+      ...BASE,
+      limit: 100_000,
+      nextly: reader({ pages: [rows] }).reader,
+    });
+
+    expect(entries).toHaveLength(50_000);
+    warn.mockRestore();
+  });
+
+  it("refuses a baseUrl that is not a credential-free http(s) origin", async () => {
+    const r = reader({ pages: [[{ slug: "a" }]] }).reader;
+    const bad = [
+      "example.com",
+      "ftp://example.com",
+      "https://user:pw@example.com",
+      "https://example.com?x=1",
+      "https://example.com#f",
+    ];
+    for (const baseUrl of bad) {
+      await expect(
+        contentSitemapEntries({ ...BASE, baseUrl, nextly: r })
+      ).rejects.toThrow(/baseUrl/);
+    }
+    // The positive control: a valid origin still works, so this is not a rule
+    // that refuses everything.
+    await expect(
+      contentSitemapEntries({
+        ...BASE,
+        baseUrl: "https://example.com",
+        nextly: r,
+      })
+    ).resolves.toHaveLength(1);
+  });
+
+  it("drops a location over the protocol's per-entry length bound", async () => {
+    // Non-compliant on its own, however small the document is.
+    const { reader: r } = reader({
+      pages: [[{ slug: "x".repeat(3000) }, { slug: "ok" }]],
+    });
+
+    const entries = await contentSitemapEntries({ ...BASE, nextly: r });
+
+    expect(entries.map(e => e.url)).toEqual(["https://example.com/ok"]);
+  });
+
+  it("omits a last-modified value that is not a parseable date", async () => {
+    // The field is caller-named and may hold anything a column does. An
+    // unparseable string emitted as `<lastmod>` is an invalid document, not a
+    // wrong date — and a numeric-only fixture cannot tell a parser from a
+    // non-empty-string check.
+    const { reader: r } = reader({
+      pages: [
+        [
+          { slug: "a", updatedAt: "not a date" },
+          { slug: "b", updatedAt: "2026-01-02 03:04:05" },
+          { slug: "c", updatedAt: "" },
+        ],
+      ],
+    });
+
+    const entries = await contentSitemapEntries({
+      ...BASE,
+      lastModifiedField: "updatedAt",
+      nextly: r,
+    });
+
+    expect(entries[0].lastModified).toBeUndefined();
+    // A driver's space-separated form parses, and is normalized to ISO rather
+    // than reaching the document in a shape the protocol does not define.
+    expect(String(entries[1].lastModified)).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(entries[2].lastModified).toBeUndefined();
+  });
+
+  it("asks for one column and no relationship expansion", async () => {
+    // The Direct API's relationship depth defaults to 2 and expansion runs
+    // before selection, so a 50,000-row scan would issue relationship reads —
+    // with their access checks and hooks — for rows discarded immediately.
+    const { reader: r, calls } = reader({ pages: [[{ slug: "a" }]] });
+
+    await contentSitemapEntries({ ...BASE, nextly: r });
+
+    expect(calls[0].depth).toBe(0);
+  });
+
   it("returns nothing for a non-positive limit, without reading", async () => {
     const { reader: r, calls } = reader({ pages: [[{ slug: "a" }]] });
 

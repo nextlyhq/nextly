@@ -53,6 +53,42 @@ export const SITEMAP_MAX_BYTES = 50 * 1024 * 1024;
  */
 const BYTES_PER_ENTRY_OVERHEAD = 120;
 
+/**
+ * The protocol's per-`<loc>` ceiling: 2,048 characters.
+ *
+ * A single stored slug can exceed it while the document is far under both
+ * whole-file limits, and one over-long location makes the sitemap
+ * non-compliant — so it is bounded per entry rather than only in aggregate.
+ */
+const MAX_LOCATION_LENGTH = 2048;
+
+/**
+ * Measures what the document will WEIGH, not how long the string is.
+ *
+ * `String.length` counts UTF-16 code units. The document is emitted as UTF-8,
+ * where a non-ASCII path costs two to four bytes per character — so a mount or
+ * slug outside ASCII, repeated across thousands of entries, crosses 50MB while
+ * a length-based estimate is still comfortably under it.
+ */
+const encoder = new TextEncoder();
+
+/**
+ * Bytes this entry adds, including what XML escaping will cost.
+ *
+ * `&` and `<` in a stored slug become `&amp;` and `&lt;` in the document, so the
+ * written size exceeds the URL's own. Measured on the escaped form rather than
+ * estimated, because the expansion is unbounded in the worst case.
+ */
+function entryBytes(url: string): number {
+  const escaped = url
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+  return encoder.encode(escaped).length + BYTES_PER_ENTRY_OVERHEAD;
+}
+
 /** Rows read per query while paginating; the read asks for one column. */
 const PAGE_SIZE = 500;
 
@@ -216,10 +252,15 @@ export async function contentSitemapEntries(
   // whichever is reached first decides.
   let bytes = 0;
 
-  if (limit <= 0) return [];
+  if (!Number.isFinite(limit) || limit <= 0) return [];
+  // The protocol ceiling BINDS, whatever the caller asked for. A limit above it
+  // produced a document consumers reject while the module documented the bound
+  // it was not applying — the byte estimate does not save it, since 50,000
+  // short URLs stay far under 50MB.
+  const urlCap = Math.min(Math.floor(limit), SITEMAP_MAX_URLS);
 
   const reader = nextly ?? getNextly();
-  const origin = trimTrailingSlash(baseUrl);
+  const origin = requireOrigin(baseUrl);
   const mount = normalizeBasePath(basePath);
   const entries: NextlySitemapEntry[] = [];
   // URLs passed over for a lower shard. Counted here rather than translated
@@ -251,6 +292,11 @@ export async function contentSitemapEntries(
           // `id` is unique and present on every collection; a non-unique sort
           // lets rows shift between pages and duplicate or vanish across a
           // paginated scan.
+          // A slug scan wants ONE column. The Direct API's relationship depth
+          // defaults to 2, and expansion happens before selection — so without
+          // this a 50,000-row scan issues relationship reads, and runs their
+          // access checks and hooks, for rows discarded immediately.
+          depth: 0,
           sort: "id",
           limit: PAGE_SIZE,
           page,
@@ -289,6 +335,11 @@ export async function contentSitemapEntries(
             ? `/${param.slug.map(encodeURIComponent).join("/")}`
             : "";
         const url = `${origin}${mount}${path}`;
+        // A location over the protocol's per-entry bound makes the document
+        // non-compliant on its own, however small the file is. Skipped rather
+        // than emitted: the route still serves that page, and one unlisted URL
+        // is better than a sitemap a crawler discards whole.
+        if (url.length > MAX_LOCATION_LENGTH) continue;
         if (seen.has(url)) continue;
         seen.add(url);
         // Marked seen BEFORE the skip, so de-duplication spans shard
@@ -309,15 +360,19 @@ export async function contentSitemapEntries(
         // so a complete sitemap would announce that pages were omitted. The
         // extra URL is the evidence that some were, and it is dropped rather
         // than emitted.
-        if (entries.length > limit) {
-          return sharded ? entries.slice(0, limit) : truncated(entries, limit);
+        if (entries.length > urlCap) {
+          return sharded
+            ? entries.slice(0, urlCap)
+            : truncated(entries, urlCap);
         }
-        bytes += url.length + BYTES_PER_ENTRY_OVERHEAD;
+        bytes += entryBytes(url);
         // The byte ceiling has no shard exemption. A URL count can be split
         // deliberately, but a document over 50MB is refused whatever the caller
         // intended, so this always reports — and it drops the entry that
         // crossed rather than emitting a file the crawler will reject.
-        if (bytes > SITEMAP_MAX_BYTES) return oversized(entries);
+        if (bytes > SITEMAP_MAX_BYTES) {
+          return sharded ? shardOverByBytes(entries) : oversized(entries);
+        }
       }
 
       if (!result.meta.hasNext) break;
@@ -337,6 +392,30 @@ export async function contentSitemapEntries(
  * protocol and has nowhere to carry a third state, so the signal goes where a
  * developer will meet it: the build log, naming the remedy.
  */
+/**
+ * A SHARD that hit the byte ceiling before its count.
+ *
+ * Reported rather than silently short, because it breaks the arithmetic the
+ * caller is sharding by. Shard `n` starts at `n * limit`, so a shard that emits
+ * fewer than `limit` entries leaves the next one starting past the URLs it
+ * skipped — they are in no shard at all, and every file still looks complete.
+ *
+ * The document cannot simply be allowed over the ceiling: a crawler rejects it
+ * whole. So the caller is told to lower `limit` until a shard fits, which
+ * restores contiguity by making the count the binding constraint again.
+ */
+function shardOverByBytes(entries: NextlySitemapEntry[]): NextlySitemapEntry[] {
+  const emitted = entries.slice(0, -1);
+  console.warn(
+    `[nextly] a sitemap shard reached the ${SITEMAP_MAX_BYTES}-byte protocol ` +
+      `limit after ${emitted.length} URLs, before its own limit. Offsets are ` +
+      `derived from the limit, so the NEXT shard starts past the URLs this one ` +
+      `could not carry and they appear in no shard. Lower the limit until a ` +
+      `shard fits within the byte ceiling.`
+  );
+  return emitted;
+}
+
 /**
  * Report a document stopped at the BYTE ceiling.
  *
@@ -386,11 +465,62 @@ function lastModifiedOf(
   // A Date passes through; a string is what most drivers return. Anything else
   // is omitted rather than coerced — `lastModified` is optional, and a wrong
   // date is worse for a crawler than an absent one.
-  if (value instanceof Date) return { lastModified: value };
-  if (typeof value === "string" && value.length > 0) {
-    return { lastModified: value };
+  // PARSED, not merely non-empty. The field is named by the caller and may hold
+  // anything a column does — a title, a slug, a malformed timestamp — and an
+  // unparseable string emitted as `<lastmod>` is an invalid document rather
+  // than a wrong date. Normalized to ISO so a driver's local-time or
+  // space-separated form does not reach the file in a shape the protocol does
+  // not define.
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? {} : { lastModified: value };
+  }
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) {
+      return { lastModified: parsed.toISOString() };
+    }
   }
   return {};
+}
+
+/**
+ * The origin, refused rather than concatenated when it is not one.
+ *
+ * The option's contract already required an absolute HTTP(S) origin, and a
+ * contract nothing enforces is how `example.com` becomes a relative location in
+ * every entry of a published document. Refused at the top, where the caller can
+ * still be told which value was wrong — a sitemap full of malformed locations
+ * is discovered by a crawler rather than by a build.
+ *
+ * Credentials, a query and a fragment are refused too: none is meaningful on a
+ * sitemap origin, and the first would publish them.
+ */
+function requireOrigin(value: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw NextlyError.invalidInput({
+      message: `contentSitemapEntries: baseUrl must be an absolute URL, received ${JSON.stringify(value)}.`,
+    });
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw NextlyError.invalidInput({
+      message: `contentSitemapEntries: baseUrl must use http or https, received ${JSON.stringify(value)}.`,
+    });
+  }
+  if (parsed.username !== "" || parsed.password !== "") {
+    throw NextlyError.invalidInput({
+      message:
+        "contentSitemapEntries: baseUrl must not carry credentials; they would be published in every location.",
+    });
+  }
+  if (parsed.search !== "" || parsed.hash !== "") {
+    throw NextlyError.invalidInput({
+      message: `contentSitemapEntries: baseUrl must be an origin without a query or fragment, received ${JSON.stringify(value)}.`,
+    });
+  }
+  return trimTrailingSlash(parsed.origin + parsed.pathname);
 }
 
 /** `https://x.com/` and `https://x.com` must produce the same URLs. */
