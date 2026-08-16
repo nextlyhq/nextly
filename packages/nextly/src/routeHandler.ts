@@ -1233,6 +1233,20 @@ async function handleServiceRequest(
         );
       }
     }
+    // A REFUSAL from a session-private read must not be cacheable either. The
+    // success path already carries these headers, but a shared cache holding
+    // the 404 this produces would replay it to a caller the gate WOULD have
+    // allowed -- hiding their own recovery point rather than exposing anyone
+    // else's. The failure direction is availability, and it is the one a
+    // success-only fix leaves open.
+    if (SESSION_PRIVATE_METHODS.has(method)) {
+      return withSessionCacheHeaders(
+        new Response(
+          JSON.stringify({ error: nextlyErr.toResponseJSON(requestId) }),
+          { status: nextlyErr.statusCode, headers: errorHeaders }
+        )
+      );
+    }
     return new Response(
       JSON.stringify({ error: nextlyErr.toResponseJSON(requestId) }),
       {
@@ -1430,6 +1444,19 @@ function respondAdminMeta(payload: Record<string, unknown>): Response {
  * request that does carry a session is the same defect pointing the other way,
  * and it is the direction that looks like a working gate.
  */
+/**
+ * Methods whose responses are scoped to ONE caller's session, success or
+ * failure alike.
+ *
+ * A recovery point belongs to a person rather than to a document, so both the
+ * snapshot and the refusal are caller-specific: a cached 404 replayed to an
+ * authorized reader hides their own unsaved work.
+ */
+const SESSION_PRIVATE_METHODS = new Set([
+  "getEntryAutosave",
+  "getSingleAutosave",
+]);
+
 export function withSessionCacheHeaders(response: Response): Response {
   response.headers.set("Cache-Control", "private, no-store");
   response.headers.set("Vary", "Cookie");
