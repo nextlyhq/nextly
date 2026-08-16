@@ -110,6 +110,11 @@ describe("isBuilderRoute", () => {
     ["DELETE", "/field-groups/hero"],
     ["POST", "/field-groups/schema/hero/preview"],
     ["POST", "/field-groups/schema/hero/apply"],
+    // Rewrites the stored definition, so it is builder surface exactly as the apply is. Absence
+    // from the guarded set is SILENT — the route simply answers in production — which is why this
+    // table is the join between the parser and `BUILDER_METHODS` rather than two lists that agree
+    // by hand until one of them gains a method.
+    ["POST", "/field-groups/schema/hero/reconcile"],
   ])("gates %s %s", (httpMethod, path) => {
     expect(classify(path, httpMethod)).toBe(true);
   });
