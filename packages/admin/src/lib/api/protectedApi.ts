@@ -12,18 +12,6 @@ export const protectedApi = {
       },
       true
     ),
-  // For writes that replace a resource outright, where repeating the request
-  // leaves the same single row rather than adding another.
-  put: <T>(path: string, body: unknown, options = {}) =>
-    fetcher<T>(
-      path,
-      {
-        ...options,
-        method: "PUT",
-        body: JSON.stringify(body),
-      },
-      true
-    ),
   patch: <T>(path: string, body: unknown, options = {}) =>
     fetcher<T>(
       path,

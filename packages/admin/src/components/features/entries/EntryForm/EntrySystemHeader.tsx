@@ -12,7 +12,6 @@ import { isFieldLocalized, type FieldConfig } from "nextly/config";
 import { useEffect, useRef, useState } from "react";
 import { useFormContext } from "react-hook-form";
 
-import { AutosaveStatus } from "@admin/components/features/versions/AutosaveStatus";
 import { VersionHistorySheet } from "@admin/components/features/versions/VersionHistorySheet";
 import {
   Code,
@@ -27,7 +26,6 @@ import {
   RotateCcw,
   Trash2,
 } from "@admin/components/icons";
-import type { AutosaveStatus as AutosaveStatusValue } from "@admin/hooks/useAutosave";
 import { useCan } from "@admin/hooks/useCan";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { cn } from "@admin/lib/utils";
@@ -70,14 +68,6 @@ export interface EntrySystemHeaderProps {
   isInvalid?: boolean;
   /** Whether the form has unsaved changes. Toggles Discard menu item. */
   isDirty?: boolean;
-  /**
-   * Rolling recovery-point state, rendered as a quiet line beside the actions.
-   *
-   * Grouped rather than passed as loose fields so that absent unambiguously
-   * means "autosave is not wired here" -- which is the case on a create form,
-   * where there is no stored record for a recovery point to attach to.
-   */
-  autosave?: { status: AutosaveStatusValue; lastSavedAt: Date | null };
   /** Form id for the single submit button when drafts are off. */
   formId?: string;
   /** Entry data; needed for Show JSON dialog (entry id) and Duplicate (id). */
@@ -219,7 +209,6 @@ export function EntrySystemHeader({
   isSubmitting = false,
   isInvalid = false,
   isDirty = false,
-  autosave,
   formId = "entry-form",
   entry,
   collectionSlug,
@@ -375,15 +364,6 @@ export function EntrySystemHeader({
 
       {/* Action cluster — right-aligned */}
       <div className="flex items-center gap-1.5 shrink-0">
-        {/* Leftmost in the cluster, so it reads as a report on the document
-            rather than as another control competing with Save. */}
-        {autosave ? (
-          <AutosaveStatus
-            status={autosave.status}
-            lastSavedAt={autosave.lastSavedAt}
-            className="mr-1"
-          />
-        ) : null}
         {toolbarSlot}
         {/* A document only has history once it has been saved, and rendering a
             snapshot needs the schema, so both are required to offer this. */}

@@ -18,7 +18,6 @@
 import { resolveLocalizedFieldNames } from "nextly/config";
 import { useMemo } from "react";
 
-import { AutosaveRecoveryNotice } from "@admin/components/features/versions/AutosaveRecoveryNotice";
 import { historyEnabledFrom } from "@admin/components/features/versions/history-enabled";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useGeneralSettings } from "@admin/hooks/queries/useGeneralSettings";
@@ -209,8 +208,6 @@ export function EntryForm({
     handleCancel,
     isSubmitting,
     isDirty,
-    autosave,
-    recovery,
   } = useEntryForm({
     collection,
     entry,
@@ -410,15 +407,6 @@ export function EntryForm({
           className={className}
         >
           <div className="space-y-6">
-            {/* The embedded editor autosaves like the standalone one, so it
-                owes the same way back. Without this, work lost in a quick-edit
-                modal has a recovery point stored and no control that offers
-                it, which is worse than not storing one. */}
-            <AutosaveRecoveryNotice
-              savedAt={recovery.savedAt}
-              onRestore={recovery.restore}
-              onDismiss={recovery.dismiss}
-            />
             {/* Error summary at top of form */}
             <FormErrorSummary errors={errors} submitCount={submitCount} />
             {/* This branch renders every collection field, the editable slug among them, but not
@@ -464,15 +452,6 @@ export function EntryForm({
       >
         <div className={cn("space-y-0", className)}>
           <EntryFormProvider form={form} onSubmit={handleSubmit}>
-            {/* Above the error summary: recovering unsaved work is a decision
-                about which values the form should hold, so it comes before any
-                complaint about the values currently in it. */}
-            <AutosaveRecoveryNotice
-              savedAt={recovery.savedAt}
-              onRestore={recovery.restore}
-              onDismiss={recovery.dismiss}
-              className="mx-6 mt-3"
-            />
             <FormErrorSummary
               errors={errors}
               submitCount={submitCount}
@@ -497,7 +476,6 @@ export function EntryForm({
                   draftsEnabled={collection.draftsEnabled === true}
                   isSubmitting={isSubmitting}
                   isDirty={isDirty}
-                  autosave={autosave}
                   entry={entry}
                   collectionSlug={collection.name}
                   historyFields={getCollectionFields(collection)}

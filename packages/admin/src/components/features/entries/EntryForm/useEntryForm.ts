@@ -17,15 +17,11 @@ import { useMemo, useCallback, useEffect } from "react";
 import { useForm, type UseFormReturn } from "react-hook-form";
 import { z } from "zod";
 
-import { autosaveDisabledBySchema } from "@admin/components/features/versions/autosave-enabled";
 import { useCreateEntry } from "@admin/hooks/queries/useCreateEntry";
 import { useDeleteEntry } from "@admin/hooks/queries/useDeleteEntry";
 import { useDiscardWorkingDraft } from "@admin/hooks/queries/useDiscardWorkingDraft";
 import { useUpdateEntry } from "@admin/hooks/queries/useUpdateEntry";
-import { useAutosave, type UseAutosaveReturn } from "@admin/hooks/useAutosave";
-import { useAutosaveRecovery } from "@admin/hooks/useAutosaveRecovery";
 import { generateClientSchema } from "@admin/lib/field-validation";
-import { versionApi } from "@admin/services/versionApi";
 import type { EntryValue } from "@admin/types/collection";
 
 // ============================================================================
@@ -321,25 +317,6 @@ export interface UseEntryFormReturn {
   isDeleting: boolean;
   /** Whether form has unsaved changes */
   isDirty: boolean;
-  /**
-   * Rolling recovery point for this entry, for the status line beside Save.
-   *
-   * Autosave never clears `isDirty`: a recovery point is not a save, so the
-   * unsaved-changes guard must keep warning on the way out. Someone who saw
-   * "Saved" and left believing their work was published would be exactly wrong.
-   */
-  autosave: UseAutosaveReturn;
-  /**
-   * The recovery point on offer, if any, and what to do with it. Present only
-   * when a stored autosave is NEWER than the saved document: an older one
-   * describes work the author has since committed, and offering that would
-   * invite them to undo it.
-   */
-  recovery: {
-    savedAt: Date | null;
-    restore: () => void;
-    dismiss: () => void;
-  };
   /** Form mode */
   mode: EntryFormMode;
   /** Collection being edited */
@@ -706,98 +683,6 @@ export function useEntryForm({
     entryId: entry?.id ?? "",
   });
 
-  // A recovery point has to attach to a stored record, so autosave stays off
-  // while creating: there is no id to write against until the first save, and
-  // materializing one from a half-typed form would put an entry nobody asked
-  // for into the list.
-  const entryId = entry?.id;
-  // An owner who set `autosave: false` gets no recovery rows. Absence of the
-  // setting is not read as "off": see `autosaveDisabledBySchema`.
-  const autosaveEnabled =
-    mode === "edit" &&
-    Boolean(entryId) &&
-    !autosaveDisabledBySchema(collection);
-
-  const autosaveEntry = useCallback(
-    async (values: Record<string, unknown>, opts?: { keepalive?: boolean }) => {
-      if (!entryId) return;
-      await versionApi.autosave(
-        { kind: "collection", slug: collection.name, entryId },
-        values,
-        // Route the recovery point to the language being edited, as the
-        // update mutation does; absent means the unlocalized row.
-        { ...(locale ? { locale } : {}), ...(opts ?? {}) }
-      );
-    },
-    [collection.name, entryId, locale]
-  );
-
-  const autosave = useAutosave({
-    enabled: autosaveEnabled,
-    // Switching entry or language resets this same form, so a write armed
-    // before the switch must not fire against the new scope's values.
-    scopeKey: `${collection.name}:${entryId ?? ""}:${locale ?? ""}`,
-    // getValues, never handleSubmit. This form is deliberately
-    // `mode: "onSubmit"` so validation stays quiet until the user asks to save;
-    // submitting on a timer would run the validator and light up inline errors
-    // and the toast while they are still mid-field.
-    getValues: form.getValues,
-    save: autosaveEntry,
-  });
-
-  // Restart the debounce on user edits only. `subscribe` delivers changes
-  // without re-rendering, so watching every field costs no render per
-  // keystroke; `type` is "change" for user input and undefined for programmatic
-  // updates, which keeps `form.reset` after a save from arming a fresh autosave.
-  const { notifyChange, cancel: cancelAutosave } = autosave;
-  useEffect(() => {
-    const unsubscribe = form.subscribe({
-      formState: { values: true, isDirty: true },
-      // Armed on DIRTY rather than on `type === "change"`. A user edit made
-      // through `setValue` -- the slug commit, Copy from language, plugin
-      // toolbar controls -- carries no event type, so filtering on "change"
-      // would silently drop it and leave that edit out of the recovery point.
-      // `form.reset` clears the dirty flag, so a reset still does not arm one.
-      callback: ({ isDirty }) => {
-        if (isDirty) {
-          notifyChange();
-          return;
-        }
-        // The form just stopped being behind the document: a successful save,
-        // a reset or a discard. A timer left armed here would write values
-        // that are already persisted and stamp them newer than the document,
-        // so the next visit would offer them back as unsaved work.
-        cancelAutosave();
-      },
-    });
-    return unsubscribe;
-  }, [form, notifyChange, cancelAutosave]);
-
-  // The read half of autosave. Without it the stored snapshot is unreachable:
-  // history listings exclude autosave rows and a version read addresses rows by
-  // a sequence number a recovery point does not carry.
-  const recovery = useAutosaveRecovery({
-    enabled: autosaveEnabled,
-    scope: {
-      kind: "collection",
-      slug: collection.name,
-      entryId: entryId ?? "",
-    },
-    documentUpdatedAt:
-      typeof entry?.updatedAt === "string" ? entry.updatedAt : undefined,
-  });
-
-  const restoreAutosave = useCallback(() => {
-    if (!recovery.snapshot) return;
-    // `keepDefaultValues` leaves the defaults as the SAVED document, so the
-    // restored values differ from them and the form comes back dirty on its
-    // own. That is the property that matters: restoring puts unsaved work on
-    // screen without persisting it, so the leave-page guard has to keep
-    // warning until the author actually saves.
-    form.reset(recovery.snapshot, { keepDefaultValues: true });
-    recovery.dismiss();
-  }, [form, recovery]);
-
   // Singular label for UI
   const singularLabel = getSingularLabel(collection);
 
@@ -916,12 +801,6 @@ export function useEntryForm({
       discardMutation.isPending,
     isDeleting: deleteMutation.isPending,
     isDirty: form.formState.isDirty,
-    autosave,
-    recovery: {
-      savedAt: recovery.savedAt,
-      restore: restoreAutosave,
-      dismiss: recovery.dismiss,
-    },
     mode,
     collection,
     entry,

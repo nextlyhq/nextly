@@ -59,6 +59,17 @@ export {
   type FormErrorSummaryProps,
 } from "./FormErrorSummary";
 
+// Auto-save & Draft Recovery components
+export {
+  DraftRecoveryDialog,
+  type DraftRecoveryDialogProps,
+} from "./DraftRecoveryDialog";
+
+export {
+  AutoSaveIndicator,
+  type AutoSaveIndicatorProps,
+} from "./AutoSaveIndicator";
+
 // Show JSON dialog
 export { ShowJSONDialog, type ShowJSONDialogProps } from "./ShowJSONDialog";
 

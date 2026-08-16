@@ -56,6 +56,8 @@ export {
   Circle, // useFields: radio
   Clipboard, // Collection Settings: icon picker
   Clock, // useFields: time picker
+  Cloud, // AutoSaveIndicator: saved state
+  CloudOff, // AutoSaveIndicator: not saved state
   ChevronDownSquare, // Rich text editor: collapsible
   Code, // Rich text editor
   Code2, // Rich text editor: code block

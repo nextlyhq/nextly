@@ -45,12 +45,8 @@ import {
   EntryLocaleProvider,
   type EntryLocaleContextValue,
 } from "@admin/components/features/entries/EntryLocaleContext";
-import { autosaveDisabledBySchema } from "@admin/components/features/versions/autosave-enabled";
-import { AutosaveRecoveryNotice } from "@admin/components/features/versions/AutosaveRecoveryNotice";
 import { historyEnabledFrom } from "@admin/components/features/versions/history-enabled";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
-import { useAutosave } from "@admin/hooks/useAutosave";
-import { useAutosaveRecovery } from "@admin/hooks/useAutosaveRecovery";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
 import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 import { useLocalization } from "@admin/hooks/useLocalization";
@@ -61,7 +57,6 @@ import {
 } from "@admin/lib/builder/takeoverLayout";
 import { generateClientSchema } from "@admin/lib/field-validation";
 import { cn } from "@admin/lib/utils";
-import { versionApi } from "@admin/services/versionApi";
 
 import { relaxIdentityRequired } from "./identity-fields";
 
@@ -439,64 +434,6 @@ export function SingleForm({
   const { errors, submitCount } = form.formState;
   const isDirty = form.formState.isDirty;
 
-  // A recovery point attaches to the stored document, so autosave waits until
-  // the Single has been materialized. The id is carried for cache identity
-  // only: the server resolves the live document itself rather than trusting a
-  // client-supplied id.
-  const documentId = document?.id ? String(document.id) : "";
-  const autosaveSingle = useCallback(
-    async (values: Record<string, unknown>, opts?: { keepalive?: boolean }) => {
-      if (!documentId) return;
-      await versionApi.autosave(
-        { kind: "single", slug: schema.slug, documentId },
-        values,
-        // Route the recovery point to the language being edited, matching the
-        // save; absent means the unlocalized row.
-        { ...(locale ? { locale } : {}), ...(opts ?? {}) }
-      );
-    },
-    [schema.slug, documentId, locale]
-  );
-
-  // See EntryForm: an explicit `autosave: false` is honored, absence is not.
-  const autosaveEnabled =
-    Boolean(documentId) && !autosaveDisabledBySchema(schema);
-
-  const autosave = useAutosave({
-    enabled: autosaveEnabled,
-    // See EntryForm: the language switch resets this same mounted form.
-    scopeKey: `${schema.slug}:${documentId}:${locale ?? ""}`,
-    // getValues, never handleSubmit: this form is `mode: "onSubmit"` for the
-    // same reason EntryForm is, and submitting on a timer would fire validation
-    // while the author is still mid-field.
-    getValues: form.getValues,
-    save: autosaveSingle,
-  });
-
-  // Restart the debounce on user edits only. `subscribe` reports changes without
-  // re-rendering, and `type` is undefined for programmatic updates, so the
-  // `form.reset` after a save does not arm a fresh autosave.
-  const { notifyChange, cancel: cancelAutosave } = autosave;
-  useEffect(() => {
-    const unsubscribe = form.subscribe({
-      formState: { values: true, isDirty: true },
-      // See EntryForm: dirty rather than event type, so a `setValue` edit is
-      // not silently dropped from the recovery point.
-      callback: ({ isDirty }) => {
-        if (isDirty) {
-          notifyChange();
-          return;
-        }
-        // The form just stopped being behind the document: a successful save,
-        // a reset or a discard. A timer left armed here would write values
-        // that are already persisted and stamp them newer than the document,
-        // so the next visit would offer them back as unsaved work.
-        cancelAutosave();
-      },
-    });
-    return unsubscribe;
-  }, [form, notifyChange, cancelAutosave]);
-
   // ---------------------------------------------------------------------------
   // Handlers
   // ---------------------------------------------------------------------------
@@ -525,22 +462,6 @@ export function SingleForm({
     },
     [form, onSubmit, blankPasswordFields]
   );
-
-  // The read half. See EntryForm: without it the stored snapshot is unreachable.
-  const recovery = useAutosaveRecovery({
-    enabled: autosaveEnabled,
-    scope: { kind: "single", slug: schema.slug, documentId },
-    documentUpdatedAt: document?.updatedAt,
-  });
-
-  const restoreAutosave = useCallback(() => {
-    if (!recovery.snapshot) return;
-    // `keepDefaultValues` so the restored values differ from the saved
-    // document's and the form comes back dirty: restoring shows unsaved work
-    // rather than persisting it, so the leave-page guard must keep warning.
-    form.reset(recovery.snapshot, { keepDefaultValues: true });
-    recovery.dismiss();
-  }, [form, recovery]);
 
   const handleCancel = useCallback(() => {
     onCancel?.();
@@ -650,14 +571,6 @@ export function SingleForm({
     <EntryLocaleProvider value={localeCtx}>
       <div className={cn("space-y-0", className)}>
         <EntryFormProvider form={form} onSubmit={handleSubmit}>
-          {/* See EntryForm: which values the form should hold comes before any
-              complaint about the values it currently holds. */}
-          <AutosaveRecoveryNotice
-            savedAt={recovery.savedAt}
-            onRestore={restoreAutosave}
-            onDismiss={recovery.dismiss}
-            className="mx-6 mt-3"
-          />
           <FormErrorSummary
             errors={errors}
             submitCount={submitCount}
@@ -679,7 +592,6 @@ export function SingleForm({
                 hasStatus={hasStatus}
                 isSubmitting={isSubmitting}
                 isDirty={isDirty}
-                autosave={autosave}
                 entry={entryLike}
                 collectionSlug={schema.slug}
                 /* i18n: forward the active locale + switch handler so a localized single shows

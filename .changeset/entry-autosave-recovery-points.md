@@ -25,4 +25,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-Autosave a recovery point while editing an entry or a Single, and authorize the autosave routes as an update of the document they belong to.
+Store a rolling autosave recovery point per document and author, authorized as an update of the document, with password fields stripped before the snapshot is persisted and the rows removed when the document is deleted.
