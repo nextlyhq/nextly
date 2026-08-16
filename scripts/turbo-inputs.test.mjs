@@ -23,7 +23,15 @@
  * @module turbo-inputs.test
  */
 import { execFileSync } from "node:child_process";
+import { dirname, join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+
+/**
+ * The repository root, derived from this module rather than `process.cwd()`,
+ * which differs between a run from the root and one filtered to `scripts`.
+ */
+const REPO_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
 /** Extensions the TypeScript compiler follows, so a change to one can break a build. */
 const TYPESCRIPT_EXTENSIONS = /\.(?:ts|tsx|mts|cts)$/;
@@ -145,6 +153,108 @@ describe("turbo hashes every TypeScript module it type-checks", () => {
       expect(
         unhashed,
         `${task.package} ships ${String(unhashed.length)} TypeScript module(s) that turbo does not hash, so editing one leaves the cache valid and CI replays the previous result:\n  ${unhashed.slice(0, 10).join("\n  ")}`
+      ).toEqual([]);
+    }
+  );
+});
+
+/** Every path git tracks, so a generated file is never mistaken for a source input. */
+function trackedPaths() {
+  return new Set(
+    execFileSync("git", ["ls-files"], {
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+    }).split("\n")
+  );
+}
+
+/**
+ * The files a package's compiler actually READS, repo-relative.
+ *
+ * `--listFilesOnly` resolves the program without type-checking it, so this is
+ * the compiler's own answer rather than a second reading of `tsconfig`. A
+ * failing invocation still prints the list it built, so its output is used
+ * either way: the question here is which files were reached, not whether they
+ * compiled.
+ */
+function programFiles(directory) {
+  let output = "";
+  try {
+    output = execFileSync("pnpm", ["exec", "tsc", "--noEmit", "--listFilesOnly"], {
+      cwd: join(REPO_ROOT, directory),
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch (error) {
+    output = typeof error.stdout === "string" ? error.stdout : "";
+  }
+  return output
+    .split("\n")
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map(file => relative(REPO_ROOT, file))
+    .filter(file => !file.startsWith("..") && !file.includes("node_modules"));
+}
+
+describe("every tracked file a compiler reads is covered by some hash", () => {
+  // The package-scoped check above found its gap along one axis, `^check-types`
+  // closed a second, and a root script sat outside both. Three axes, three
+  // fixes, each invisible until someone happened to look — which is the shape
+  // that says the INSTRUMENT is wrong rather than that the fixes were.
+  //
+  // So the population here is not "files under the package directory" but the
+  // program the compiler resolves, which is the thing the property is actually
+  // about. A future axis nobody has thought of fails this without anyone having
+  // to predict it.
+  const dry = dryRun();
+  const globalFiles = new Set(Object.keys(dry.globalCacheInputs.files));
+  const byPackage = new Map(dry.tasks.map(task => [task.package, task]));
+  const runnable = dry.tasks.filter(
+    task => !String(task.command).includes("NONEXISTENT")
+  );
+  const tracked = trackedPaths();
+
+  it("reads a populated task list", () => {
+    expect(runnable.length).toBeGreaterThan(15);
+    expect(runnable.map(task => task.package)).toContain("playground");
+  });
+
+  it.each(runnable.map(task => [task.package, task]))(
+    "%s: every tracked file its compiler reads moves its hash",
+    (_name, task) => {
+      const own = new Set(Object.keys(task.inputs));
+      // A dependency's files are covered transitively: `^check-types` folds its
+      // hash in, and that hash is computed from those files.
+      const dependencyDirs = (task.dependencies ?? [])
+        .map(id => byPackage.get(id.split("#")[0])?.directory)
+        .filter(Boolean);
+
+      const program = programFiles(task.directory);
+      // Guards the guard: a compiler that produced no list would satisfy the
+      // assertion below by having read nothing.
+      expect(
+        program.length,
+        `no program resolved for ${task.package} — the tsc invocation, not the package, is probably wrong`
+      ).toBeGreaterThan(0);
+
+      const uncovered = program.filter(file => {
+        // Generated output is not a source input: its content is derived from
+        // files that ARE tracked, and those are what a hash must follow.
+        if (!tracked.has(file)) return false;
+        if (globalFiles.has(file)) return false;
+        if (
+          file.startsWith(`${task.directory}/`) &&
+          own.has(file.slice(task.directory.length + 1))
+        ) {
+          return false;
+        }
+        return !dependencyDirs.some(dir => file.startsWith(`${dir}/`));
+      });
+
+      expect(
+        uncovered,
+        `${task.package} compiles ${String(uncovered.length)} tracked file(s) that no hash covers, so editing one leaves its cache valid:\n  ${uncovered.slice(0, 10).join("\n  ")}`
       ).toEqual([]);
     }
   );
