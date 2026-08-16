@@ -354,7 +354,15 @@ export async function reconcileFieldGroup(args: {
       migrationStatus: "synced",
       schemaHash: calculateSchemaHash(plan.fields as unknown as FieldConfig[]),
     },
-    existing.schemaVersion
+    existing.schemaVersion,
+    // 🔴 The caller's identity has to reach the WRITE, not stop at the precondition above. A
+    // code-managed group is LOCKED, and the registry refuses a locked row to any writer that is not
+    // the config file — first with a permission refusal, then with the lock clause in the
+    // conditional predicate. `fromCode` means the code sync is asking, holding the file that IS the
+    // definition, so it is the owner here exactly as it is for the lock check at the top of this
+    // function. Omitting it left the recovery path reaching the database and being refused every
+    // time, on the one route out of a locked row marked `diverged`.
+    args.fromCode ? { source: "code" } : undefined
   );
 
   if (!outcome.matched) {
