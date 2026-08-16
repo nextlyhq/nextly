@@ -1013,7 +1013,7 @@ test.describe("a canvas any Nextly editor could ship", () => {
     note(
       PLAN_POINT.oneEngineForBothDrags,
       "B-15",
-      "a canvas drag does not stay live the way a panel drag does"
+      "a cancelled drag leaves its state behind, so the next drag never starts"
     );
     const fixture = await seedPage(request, FLAT_LIST_FIXTURE);
     await driver.mountTree(fixture);
@@ -1060,15 +1060,29 @@ test.describe("a canvas any Nextly editor could ship", () => {
     ).toEqual({ dragging: true, resolvesToContainingZone: true });
 
     // Marked only now, with the whole panel-side control behind it.
-    // The reason CHANGED, and the old one was false. The canvas does offer the drag —
-    // the reader now performs it — and the divergence measured afterwards is that the
-    // canvas drag is no longer live when its signature is read, where the panel drag
-    // is: `{ dragging: false, resolvesToContainingZone: false }` against the panel's
-    // `{ dragging: true, resolvesToContainingZone: true }`. That is a real shortfall
-    // and a different one, so it stays expected while it is investigated.
+    //
+    // The reason CHANGED, and the old one was false: the canvas does offer this drag.
+    // `CanvasNode` makes every placed block a drag source, and the reader performs a
+    // real drag of one. Measured on a clean canvas, it activates — the source inside
+    // the frame reports `aria-grabbed="true"` and carries the dragging class.
+    //
+    // What defeats it here is the drag BEFORE it. Reading both documents through a
+    // panel drag, its cancel, and the canvas drag that follows:
+    //
+    //   panel drag live         host aria-grabbed=1   frame aria-grabbed=0
+    //   after driver.cancel()   host aria-grabbed=1   frame aria-grabbed=0
+    //   after startDragOfBlock  host aria-grabbed=0   frame aria-grabbed=0
+    //
+    // `cancel` sends Escape and then releases the button, and the drag state survives
+    // both. The stale drag is still holding the engine when the canvas drag is asked
+    // for, so that one never starts — which is why this reads as a canvas that cannot
+    // drag its own blocks. It is the Escape shortfall, seen from another test.
+    //
+    // So this point is DOWNSTREAM of that one rather than an independent gap, and it
+    // should be re-measured when Escape is fixed rather than worked on directly.
     test.fail(
       true,
-      "a canvas drag does not stay live the way a panel drag does"
+      "a cancelled drag leaves its state behind, so the next drag never starts"
     );
 
     await chrome.startDragOfBlock(fixture.blockIds[1] ?? "");
