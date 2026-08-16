@@ -178,6 +178,53 @@ describe("entry autosave", () => {
     expect(result.current.recovery.savedAt).toBeNull();
   });
 
+  it("does not autosave when the schema turns it off", async () => {
+    // A stated preference. Writing recovery rows anyway would make the
+    // documented setting inert.
+    const off = {
+      ...COLLECTION,
+      versions: { enabled: true, drafts: { autosave: { enabled: false } } },
+    } as unknown as Parameters<typeof useEntryForm>[0]["collection"];
+
+    const { result } = renderHook(() =>
+      useEntryForm({ collection: off, entry: ENTRY, mode: "edit" })
+    );
+
+    act(() => {
+      result.current.form.setValue("body", "typed", { shouldDirty: true });
+      result.current.autosave.notifyChange();
+      result.current.autosave.saveNow();
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(10_000);
+      await Promise.resolve();
+    });
+
+    expect(versionApiMock.autosave).not.toHaveBeenCalled();
+    // And it must not ASK for one either: offering a recovery point for a
+    // document that stores none would be an empty promise.
+    expect(versionApiMock.getAutosave).not.toHaveBeenCalled();
+  });
+
+  it("still autosaves when the schema says nothing about it", async () => {
+    // Absence is not a preference. Reading it as "off" would silently withdraw
+    // recovery from every document whose owner never expressed a view.
+    const { result } = renderEditForm();
+
+    act(() => {
+      result.current.form.setValue("body", "typed", { shouldDirty: true });
+      result.current.autosave.notifyChange();
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(5_000);
+      await Promise.resolve();
+    });
+
+    expect(versionApiMock.autosave).toHaveBeenCalled();
+  });
+
   it("does not autosave while creating", async () => {
     // There is no stored record for a snapshot to attach to yet.
     const { result } = renderHook(() =>

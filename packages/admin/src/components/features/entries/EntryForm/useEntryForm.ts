@@ -17,6 +17,7 @@ import { useMemo, useCallback, useEffect } from "react";
 import { useForm, type UseFormReturn } from "react-hook-form";
 import { z } from "zod";
 
+import { autosaveDisabledBySchema } from "@admin/components/features/versions/autosave-enabled";
 import { useCreateEntry } from "@admin/hooks/queries/useCreateEntry";
 import { useDeleteEntry } from "@admin/hooks/queries/useDeleteEntry";
 import { useDiscardWorkingDraft } from "@admin/hooks/queries/useDiscardWorkingDraft";
@@ -710,7 +711,12 @@ export function useEntryForm({
   // materializing one from a half-typed form would put an entry nobody asked
   // for into the list.
   const entryId = entry?.id;
-  const autosaveEnabled = mode === "edit" && Boolean(entryId);
+  // An owner who set `autosave: false` gets no recovery rows. Absence of the
+  // setting is not read as "off": see `autosaveDisabledBySchema`.
+  const autosaveEnabled =
+    mode === "edit" &&
+    Boolean(entryId) &&
+    !autosaveDisabledBySchema(collection);
 
   const autosaveEntry = useCallback(
     async (values: Record<string, unknown>) => {

@@ -45,6 +45,7 @@ import {
   EntryLocaleProvider,
   type EntryLocaleContextValue,
 } from "@admin/components/features/entries/EntryLocaleContext";
+import { autosaveDisabledBySchema } from "@admin/components/features/versions/autosave-enabled";
 import { AutosaveRecoveryNotice } from "@admin/components/features/versions/AutosaveRecoveryNotice";
 import { historyEnabledFrom } from "@admin/components/features/versions/history-enabled";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
@@ -457,8 +458,12 @@ export function SingleForm({
     [schema.slug, documentId, locale]
   );
 
+  // See EntryForm: an explicit `autosave: false` is honored, absence is not.
+  const autosaveEnabled =
+    Boolean(documentId) && !autosaveDisabledBySchema(schema);
+
   const autosave = useAutosave({
-    enabled: Boolean(documentId),
+    enabled: autosaveEnabled,
     // See EntryForm: the language switch resets this same mounted form.
     scopeKey: `${schema.slug}:${documentId}:${locale ?? ""}`,
     // getValues, never handleSubmit: this form is `mode: "onSubmit"` for the
@@ -517,7 +522,7 @@ export function SingleForm({
 
   // The read half. See EntryForm: without it the stored snapshot is unreachable.
   const recovery = useAutosaveRecovery({
-    enabled: Boolean(documentId),
+    enabled: autosaveEnabled,
     scope: { kind: "single", slug: schema.slug, documentId },
     documentUpdatedAt: document?.updatedAt,
   });
