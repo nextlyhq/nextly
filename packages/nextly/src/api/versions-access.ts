@@ -26,7 +26,10 @@ import { hydrateDiffReferences } from "../domains/versions/diff-references";
 import { hydrateSnapshotReferences } from "../domains/versions/snapshot-references";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
-import type { VersionScopeKind } from "../schemas/versions/types";
+import type {
+  ResolvedVersionsConfig,
+  VersionScopeKind,
+} from "../schemas/versions/types";
 import { AccessControlService } from "../services/access/access-control-service";
 import { resolveRoleSlugs } from "../services/lib/permissions";
 import { applyFieldReadAccess } from "../shared/lib/field-level-registry";
@@ -403,6 +406,39 @@ export async function redactSnapshotForUser(
  * yields an empty list rather than failing the request (redaction then falls
  * back to field-level access alone; a diff falls back to raw-key comparison).
  */
+/**
+ * The entity's stored versioning policy, as the registry persisted it.
+ *
+ * Deliberately NOT wrapped in a catch. `tryResolveCurrentFields` flattens a
+ * failed lookup because its callers can degrade safely; a policy check cannot.
+ * "I could not read the setting" and "the setting permits this" must never be
+ * the same answer on a path that decides whether to store unpublished content,
+ * so a lookup failure propagates and the caller refuses.
+ *
+ * Returns `null` for an entity that records no versions at all, which is a
+ * definite answer rather than missing information: the registry writes the
+ * property and sets it to null when versioning is off.
+ */
+export async function resolveVersionsPolicy(
+  scopeKind: "collection" | "single",
+  slug: string
+): Promise<ResolvedVersionsConfig | null> {
+  if (scopeKind === "single") {
+    const registry = getService("singleRegistryService");
+    const record = await registry.getSingleBySlug(slug);
+    return (
+      (record as { versions?: ResolvedVersionsConfig | null } | null)
+        ?.versions ?? null
+    );
+  }
+  const collections = getService("collectionService");
+  const collection = await collections.getCollection(slug, {});
+  return (
+    (collection as { versions?: ResolvedVersionsConfig | null } | null)
+      ?.versions ?? null
+  );
+}
+
 /**
  * Current fields, or `null` when the lookup itself failed.
  *

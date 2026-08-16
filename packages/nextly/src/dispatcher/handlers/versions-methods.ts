@@ -17,6 +17,7 @@ import {
   diffDocumentVersions,
   hydrateVersionSnapshot,
   redactSnapshotForUser,
+  resolveVersionsPolicy,
   tryResolveCurrentFields,
 } from "../../api/versions-access";
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
@@ -685,6 +686,25 @@ export async function autosaveForDocument(
     args.user,
     authenticatedScope
   );
+
+  // The owner's setting is enforced HERE, not in whichever editor happens to
+  // be calling. A REST or plugin client holding update access can reach this
+  // endpoint directly, so a client-side check would be a suggestion rather
+  // than a rule -- and storing unpublished content for an entity whose owner
+  // switched autosave off, or which records no versions at all, is exactly
+  // what the setting exists to prevent.
+  if (args.scopeKind === "collection" || args.scopeKind === "single") {
+    const policy = await resolveVersionsPolicy(args.scopeKind, args.slug);
+    if (!policy?.drafts?.autosave?.enabled) {
+      throw NextlyError.forbidden({
+        logContext: {
+          reason: "autosave-not-enabled",
+          scopeKind: args.scopeKind,
+          scopeSlug: args.slug,
+        },
+      });
+    }
+  }
 
   // The snapshot arrives straight from the editor, so it carries whatever the
   // author has typed -- including a NEW password, in plaintext, which no write
