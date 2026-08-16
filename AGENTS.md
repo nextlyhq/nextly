@@ -251,12 +251,15 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
   `telemetry`, `client`) plus `playground`, `root`, `ci`, `docs`, `deps`,
   `release`. Scope is optional; the subject must not start with an uppercase
   letter. Subsystem names are not valid scopes.
-- Errors thrown inside `packages/nextly/**` use `NextlyError` (static
-  factories: `notFound`, `forbidden`, `validation`, `conflict`, `duplicate`,
-  `authRequired`, `invalidCredentials`, `rateLimited`, `internal`, ...), never
-  bare `Error`. The admin package is exempt: it consumes the typed
-  `{ error: { code, message, requestId, data? } }` envelope via
-  `parseApiError`.
+- Errors thrown inside `packages/nextly/**` PRODUCT CODE use `NextlyError`
+  (static factories: `notFound`, `forbidden`, `validation`, `conflict`,
+  `duplicate`, `authRequired`, `invalidCredentials`, `rateLimited`,
+  `internal`, ...), never bare `Error`. The admin package is exempt: it
+  consumes the typed `{ error: { code, message, requestId, data? } }` envelope
+  via `parseApiError`. Test files are also exempt: fixtures model driver and
+  database failures arriving from OUTSIDE the package, which `NextlyError`
+  cannot faithfully represent — wrapping them would make every negative test
+  pass on the wrong error shape.
 - Database access is Drizzle ORM only. No raw SQL strings in product code.
   Test fixtures reuse the production DDL helpers (for example
   `getSchemaEventsDdl`), never hand-copied CREATE TABLE statements.

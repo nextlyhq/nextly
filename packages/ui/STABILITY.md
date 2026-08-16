@@ -119,26 +119,42 @@ expect them to move.
 `@experimental` as entry points: the functions are trivial and unlikely to change, but
 the subpaths are new and unexercised by any third party.
 
-`FieldShell` (with `FieldShellProps` and `FieldWidth`) is the atom of the form-layout
-kit: a labelled row that caps its control's width to a named token rather than a
-one-off measurement. It owns its own prop merge with `cloneElement` rather than
-delegating to Radix `Slot`, so there is exactly one implementation of "what props does
-the control end up with" and it is not subject to another library's precedence rules.
-`htmlFor` is optional: when omitted, `FieldShell` generates an id with `useId()` and
-puts it on the label; a non-empty `id` the child already carries wins over that
-generated id (an explicitly-present `id={undefined}` does not), and the label always
-targets whichever id the control actually ends up with. Pass `htmlFor` explicitly only
-when the caller already manages its own id. `FieldShell` also owns the control's ARIA
-wiring: it generates ids for `description` and `error` (only for whichever are actually
-rendered) and COMPOSES them onto the control's `aria-describedby` alongside any ids the
-child already listed there, rather than replacing them; the attribute is omitted
+`FieldShell` (with `FieldShellProps`, `FieldShellRenderProps` and `FieldWidth`) is the
+atom of the form-layout kit: a labelled row that caps its control's width to a named
+token rather than a one-off measurement. It owns its own prop merge with `cloneElement`
+rather than delegating to Radix `Slot`, so there is exactly one implementation of "what
+props does the control end up with" and it is not subject to another library's
+precedence rules. `htmlFor` is optional: when omitted, `FieldShell` generates an id with
+`useId()` and puts it on the label; a non-empty `id` the child already carries wins over
+that generated id (an explicitly-present `id={undefined}` does not), and the label
+always targets whichever id the control actually ends up with. Pass `htmlFor` explicitly
+only when the caller already manages its own id. `FieldShell` also owns the control's
+ARIA wiring: it generates ids for `description` and `error` (only for whichever are
+actually rendered) and COMPOSES them onto the control's `aria-describedby` alongside any
+ids the child already listed there, rather than replacing them; the attribute is omitted
 entirely when the result would be empty. A rendered `error` always forces
 `aria-invalid="true"`, overriding whatever the child set; with no error, the child's own
-`aria-invalid` passes through untouched. `children` is typed as a single `ReactElement`,
-not `ReactNode`, and must not be a `Fragment` — nothing can forward props through one —
-which `FieldShell` detects at runtime and reports via `devWarnOnce` rather than
-throwing, since no compile-time check can rule it out. No first-party plugin exercises
-it yet, so it has not met the graduation bar.
+`aria-invalid` passes through untouched.
+
+`children` accepts EITHER a single `ReactElement` (cloned, as above) OR a function of
+type `(field: FieldShellRenderProps) => ReactNode`, called with the SAME `{ id,
+describedBy, invalid }` the clone path would have applied — both derive from one shared
+computation, so the two forms cannot silently drift into answering "what does the
+control get" differently. The element form must not be a `Fragment` — nothing can
+forward props through one — which `FieldShell` detects at runtime and reports via
+`devWarnOnce` rather than throwing, since no compile-time check can rule it out. The
+function form exists for a compound control built on a Radix `Root` (`Select`, and by
+the same shape `RadioGroup`): `Root` destructures a fixed, named prop list and never
+spreads the remainder, so an id `cloneElement` attaches to it never reaches the actual
+focusable element nested inside (`SelectTrigger`, two levels down); the caller applies
+the wiring to that nested element itself instead. In development, `FieldShell` checks
+after mount whether the id it computed landed on any element in the document at all —
+regardless of which `children` form was used — and warns once, by name, if it did not:
+a compound control silently dropping the id is otherwise indistinguishable from one that
+correctly wired it up, since nothing throws and nothing else warns either way. No
+first-party plugin exercised `FieldShell` in production until `plugin-form-builder`'s
+Notifications and Status fields adopted the function form for their `Select` controls,
+so it has not yet met the graduation bar.
 
 `FormSection` (with `FormSectionProps`) is the form-layout kit's section: a labelled
 card holding a group of fields. It composes `Card` for its container rather than

@@ -130,6 +130,17 @@ const REFUSAL_RENDER_MS = 2_000;
 const DRAG_THRESHOLD_PX = 12;
 
 /**
+ * The attribute an editor publishes its undo depth through, and the selector that finds it.
+ *
+ * Named here rather than inlined so the refusal can quote it: a reader that says only "no
+ * seam" leaves whoever acts on it guessing what would satisfy the check, and two people
+ * guessing produce two seams. This is the contract, such as it is — one element carrying a
+ * base-10 count of undoable entries, in either document.
+ */
+const UNDO_DEPTH_ATTR = "data-nx-undo-depth";
+const UNDO_DEPTH_SELECTOR = `[${UNDO_DEPTH_ATTR}]`;
+
+/**
  * How far inside the canvas's bottom edge {@link CanvasDriver.canvasBottomEdge} stands.
  *
  * Comfortably inside dnd-kit's own autoscroll threshold, which is a fraction of the scroller's
@@ -794,8 +805,20 @@ export { DROP_ZONES, ACTIVE_ZONE, LIBRARY_ITEM };
  * plausible value: an acceptance test that fails with "this canvas draws its
  * indicator inside the iframe" is a target, and one that fails with `false` is
  * indistinguishable from a broken harness.
+ *
+ * A refusal is only evidence of a shortfall when the reader LOOKED. One that declines
+ * unconditionally reports the same thing for "the canvas cannot do this" and "nobody has
+ * checked", and a case asserting that refusal can never go red when the capability arrives — so
+ * it certifies whichever of the two is convenient. Every reader here either measures or names
+ * what specifically stopped it.
+ *
+ * Takes the driver rather than only the page so a drag started here uses the driver's own
+ * gesture and leaves its pointer bookkeeping correct for whatever moves next.
  */
-export function createPocChromeReader(page: Page): CanvasChromeReader {
+export function createPocChromeReader(
+  page: Page,
+  driver: CanvasDriver
+): CanvasChromeReader {
   return {
     async readIndicators() {
       // Counted in BOTH documents, because the requirement is one claim: one
@@ -878,16 +901,96 @@ export function createPocChromeReader(page: Page): CanvasChromeReader {
       });
     },
 
-    startDragOfBlock(id: string): Promise<void> {
-      throw new CanvasCapabilityError(
-        `this canvas offers no drag for a block already placed in it, so ` +
-          `"${id}" cannot be picked up; only the insert panel is draggable`
+    async startDragOfBlock(id: string): Promise<void> {
+      // Through the DRIVER's own gesture, not a second one written here. `startDragAt` records
+      // the pointer it leaves behind, and every later `moveBy` is relative to that record — so a
+      // drag started with a bare `page.mouse` here would begin correctly and then move from
+      // wherever the driver last thought the pointer was, which is a harness fault that reads as
+      // the canvas resolving the wrong target.
+      // Matched by comparing the ATTRIBUTE VALUE, never by interpolating the id into a
+      // selector. Block validation requires only a nonempty string, so an imported id
+      // carrying `"` or `]` either makes the selector invalid or silently changes what it
+      // matches — the second being the dangerous one, since it drags the wrong node while
+      // looking like it worked.
+      const handle = await canvasFrameOf(page).evaluateHandle(
+        ([attribute, wanted]) =>
+          [...document.querySelectorAll(`[${attribute}]`)].find(
+            el => el.getAttribute(attribute) === wanted
+          ) ?? null,
+        ["data-nx-id", id] as const
       );
+      const box = await handle.asElement()?.boundingBox();
+      // Refused only when the block is genuinely absent, which is a fixture fault rather than a
+      // canvas shortfall — and named as one, so it is not read as the capability being missing.
+      if (!box) {
+        throw new Error(
+          `no block with id "${id}" is laid out in the canvas, so there is nothing to pick up`
+        );
+      }
+      await driver.startDragAt({
+        x: box.x + box.width / 2,
+        y: box.y + box.height / 2,
+      });
     },
 
-    undoDepth(): Promise<number> {
+    async undoDepth(): Promise<number> {
+      // LOOKED FOR, then refused — never refused on the assumption that it is absent. A
+      // reader that declines unconditionally reports the same thing for "there is no seam"
+      // and "nobody checked", so the assertion guarding it in the acceptance suite keeps
+      // passing on the day the seam arrives, which is the one moment it exists to catch.
+      //
+      // BOTH documents, for the same reason `isDragging` reads both: the editor chrome is
+      // host-side and the canvas is in the frame, and which of them would publish this has
+      // not been decided. Searching one would refuse about a seam that exists in the other.
+      // EVERY publisher in both documents, not the first one found. Preferring one document
+      // over the other lets a stale host depth of 0 mask a frame depth going 0 -> 1, and the
+      // acceptance point then reports that a drop created no undo entry; taking the first
+      // match inside one document hides a duplicate the same way. The contract is ONE
+      // publisher, so more than one is an ambiguous count and refusing is the honest answer.
+      const read = async (where: Frame | Page) =>
+        where.evaluate(
+          ([selector, attribute]) =>
+            [...document.querySelectorAll(selector)].map(el =>
+              el.getAttribute(attribute)
+            ),
+          [UNDO_DEPTH_SELECTOR, UNDO_DEPTH_ATTR] as const
+        );
+      const all = [...(await read(page)), ...(await read(canvasFrameOf(page)))];
+      if (all.length > 1) {
+        throw new Error(
+          `${String(all.length)} elements publish ${UNDO_DEPTH_SELECTOR} across the host and ` +
+            "canvas documents; exactly one may, so which count is authoritative is undecidable"
+        );
+      }
+      const published = all[0] ?? null;
+
+      if (published !== null) {
+        // A seam that publishes something unreadable is a DEFECT in the seam, not a canvas
+        // that lacks undo — so it fails rather than degrading to the capability refusal
+        // below, which would hide a broken seam behind a message about a missing one.
+        // The WHOLE string, not a prefix. `Number.parseInt` stops at the first character it
+        // cannot use, so `1junk` reads as 1 and `1.5` as 1 — and a seam publishing `1junk`
+        // then `2junk` reports the delta of one that B-9 requires while remaining malformed.
+        // A count is also never negative, so the contract is asserted rather than approximated.
+        const depth = /^\d+$/.test(published.trim())
+          ? Number.parseInt(published.trim(), 10)
+          : Number.NaN;
+        if (!Number.isFinite(depth)) {
+          throw new Error(
+            `the undo-depth seam published ${JSON.stringify(published)}, which is not a count`
+          );
+        }
+        return depth;
+      }
+
+      // The editor DOES keep history — a bounded past/future in its store — so the message
+      // names the missing SEAM rather than a missing feature, and quotes the attribute that
+      // would satisfy it. Reporting this as absent undo would send someone to build what is
+      // already there.
       throw new CanvasCapabilityError(
-        "this canvas keeps no undo history, so there is no depth to count"
+        `this canvas publishes no undo depth a test can read (no \`${UNDO_DEPTH_SELECTOR}\` ` +
+          "in either document); the editor keeps a bounded history in its store, so the gap " +
+          "is an observable seam rather than the feature"
       );
     },
   };

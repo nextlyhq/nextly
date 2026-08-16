@@ -996,6 +996,25 @@ describe("an update whose row write fails after the tables moved", () => {
           return record;
         }
       ),
+      // The marker travels through the version-conditional write, so the double answers it
+      // separately from the full write above: matched by default, because most of these tests are
+      // about the row genuinely not carrying the edit.
+      updateComponentIfVersion: vi.fn(
+        async (
+          _slug: string,
+          _data: Record<string, unknown>,
+          expectedSchemaVersion: number,
+          _options?: { source?: string }
+          // The union is the declared return type so a test can answer `matched: false` — the
+          // outcome half these tests exist to drive — without the literal-`true` default narrowing
+          // the property type.
+        ): Promise<
+          { matched: true; newSchemaVersion: number } | { matched: false }
+        > => ({
+          matched: true,
+          newSchemaVersion: expectedSchemaVersion + 1,
+        })
+      ),
     };
   }
 
@@ -1035,20 +1054,22 @@ describe("an update whose row write fails after the tables moved", () => {
 
     // The divergence is RECORDED, not merely raised: the raise reaches one caller once, the row is
     // what anyone looking later can see.
-    expect(registry.updateComponent).toHaveBeenCalledTimes(2);
+    expect(registry.updateComponent).toHaveBeenCalledTimes(1);
     // 🔴 `diverged`, NOT `failed`. The canonical type documents `failed` as a table-creation
     // failure whose repair is to retry, which is the exact action that compounds this one: a retry
     // derives `wasLocalized` from a row that already describes the wrong shape. Once the one-time
     // error response is gone, this column is the only thing telling a recovery tool which of the
     // two it is looking at.
-    expect(registry.updateComponent.mock.calls[1]?.[1]).toEqual({
-      migrationStatus: "diverged",
-    });
-    // The optimistic lock is invalidated with it: the tables moved, so every editor loaded before
-    // this moment is describing a shape that no longer exists.
-    expect(registry.updateComponent.mock.calls[1]?.[2]).toMatchObject({
-      invalidateSchemaVersion: true,
-    });
+    //
+    // And it is a COMPARE-AND-SET against the version this edit started from, so a marker landing
+    // after the original write turns out to have committed cannot stamp the settled row. The
+    // version advance an invalidated editor needs is the conditional write's own contract.
+    expect(registry.updateComponentIfVersion).toHaveBeenCalledWith(
+      "hero",
+      { migrationStatus: "diverged" },
+      registry.record.schemaVersion,
+      { source: "code" }
+    );
   });
 
   // 🔴 THE case the request shape cannot answer. A field-set change on a group that was and remains
@@ -1149,7 +1170,93 @@ describe("an update whose row write fails after the tables moved", () => {
     expect((refusal as NextlyError).publicMessage).toContain(
       "Do not retry the same edit"
     );
-    expect(registry.updateComponent).toHaveBeenCalledTimes(2);
+    expect(registry.updateComponent).toHaveBeenCalledTimes(1);
+    expect(registry.updateComponentIfVersion).toHaveBeenCalledTimes(1);
+  });
+
+  // 🔴 THE case the marker's conditionality exists for: the write raised, the re-read ALSO failed
+  // to confirm it, and yet the write had landed. Any number of reads can fail transiently, so the
+  // answer comes from the write itself — zero rows matched at the old version MEANS the row
+  // advanced, and one more look then finds the settled state. A marker written unconditionally
+  // here stamps `diverged` onto a healthy row and bumps its version a second time.
+  it("does not mark a row the original write reached, even when every read failed first", async () => {
+    const registry = registryWhoseWriteFails({});
+    const settledFields = [
+      { name: "heading", type: "text", localized: true },
+      { name: "subheading", type: "text", localized: true },
+    ];
+    const settledHash = await (async () => {
+      const { calculateSchemaHash } = await import(
+        "../../../schema/services/schema-hash"
+      );
+      return calculateSchemaHash(settledFields as never);
+    })();
+    // Reads 1 (the edit's own) and 2 (the first read-back) see the OLD row, so the read-back
+    // cannot settle the question; read 3 (after the conditional write answered "advanced") sees
+    // the row the committed write left. That ordering is the scenario, not an artefact.
+    let reads = 0;
+    registry.getComponent = vi.fn(async () => {
+      reads += 1;
+      return reads >= 3
+        ? { ...registry.record, schemaVersion: 2, schemaHash: settledHash }
+        : registry.record;
+    });
+    registry.updateComponentIfVersion = vi.fn(async () => ({
+      matched: false as const,
+    }));
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    const result = await service.updateFieldGroup({
+      slug: "hero",
+      fields: settledFields as never,
+    });
+
+    // Answered as SUCCESS with the settled row — the caller's edit is in the database.
+    expect(result.record).toMatchObject({ slug: "hero", schemaVersion: 2 });
+    // And the row was never stamped: the conditional write is the only marker path, and it
+    // reported unmatched rather than writing.
+    expect(registry.updateComponent).toHaveBeenCalledTimes(1);
+    expect(registry.updateComponentIfVersion).toHaveBeenCalledTimes(1);
+  });
+
+  // The unconfirmable half of the same case: the row demonstrably advanced, but no read ever
+  // succeeds. The caller must be told the change LIKELY landed — "nothing happened" would send
+  // them retrying an edit that is probably already in the tables.
+  it("says the change likely landed when the row advanced but cannot be re-read", async () => {
+    const registry = registryWhoseWriteFails({});
+    registry.updateComponentIfVersion = vi.fn(async () => ({
+      matched: false as const,
+    }));
+    const adapter = adapterDouble(async () => true);
+    const service = serviceOver(
+      registry as unknown as ReturnType<typeof registryDouble>,
+      adapter
+    );
+
+    const refusal = await service
+      .updateFieldGroup({
+        slug: "hero",
+        fields: [
+          { name: "heading", type: "text", localized: true },
+          { name: "subheading", type: "text", localized: true },
+        ] as never,
+      })
+      .catch((error: unknown) => error);
+
+    expect((refusal as NextlyError).publicMessage).toContain(
+      "no longer at the version this edit started from"
+    );
+    // Not claiming a mark that was never written, and not claiming nothing happened either.
+    expect((refusal as NextlyError).publicMessage).not.toContain(
+      "is marked as diverged"
+    );
+    expect((refusal as NextlyError).publicMessage).not.toContain(
+      "reads as though nothing happened"
+    );
   });
 
   // 🔴 Recording `diverged` is only half a control. Without a refusal, an editor opened AFTER the
@@ -1308,6 +1415,10 @@ describe("an update whose row write fails after the tables moved", () => {
         throw new Error("database unreachable");
       }
     );
+    // The marker is the conditional write, so an unreachable database fails it the same way.
+    registry.updateComponentIfVersion = vi.fn(async () => {
+      throw new Error("database unreachable");
+    });
     const adapter = adapterDouble(async () => true);
     const service = serviceOver(
       registry as unknown as ReturnType<typeof registryDouble>,
@@ -1338,6 +1449,6 @@ describe("an update whose row write fails after the tables moved", () => {
     );
     // The mark was attempted and refused, which is the state this describes. Asserting only the
     // raise would pass on an implementation that never tried.
-    expect(registry.updateComponent).toHaveBeenCalledTimes(2);
+    expect(registry.updateComponentIfVersion).toHaveBeenCalledTimes(1);
   });
 });

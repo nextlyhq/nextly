@@ -68,8 +68,13 @@ const SPEAKING_ENVIRONMENTS = new Set(["development", "test"]);
  * at build time, but nothing obliges them to: a build that leaves `process`
  * undefined would answer "not production" and ship every warning to end users.
  * An unrecognized environment is treated as one to stay quiet in.
+ *
+ * Exported so a caller that needs to skip more than a `console.warn` in
+ * production — a component gating an entire post-mount DOM check, for
+ * example — reuses this SAME predicate rather than re-deriving its own
+ * `process.env.NODE_ENV` guard next to it.
  */
-function isDevelopmentRuntime(): boolean {
+export function isDevelopmentRuntime(): boolean {
   if (typeof process === "undefined") return false;
   const env = process?.env?.NODE_ENV;
   return env !== undefined && SPEAKING_ENVIRONMENTS.has(env);

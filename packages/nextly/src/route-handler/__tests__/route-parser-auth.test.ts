@@ -34,6 +34,7 @@ describe("component route auth tier", () => {
       "deleteComponent",
       "previewComponentSchemaChanges",
       "applyComponentSchemaChanges",
+      "reconcileComponent",
     ]) {
       expect(isPublicEndpoint("field-groups", method)).toBe(false);
       expect(requiresAuthOnly("field-groups", method)).toBe(false);
