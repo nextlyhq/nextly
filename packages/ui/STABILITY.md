@@ -121,8 +121,11 @@ the subpaths are new and unexercised by any third party.
 
 `FieldShell` (with `FieldShellProps` and `FieldWidth`) is the atom of the form-layout
 kit: a labelled row that caps its control's width to a named token rather than a
-one-off measurement. No first-party plugin exercises it yet, so it has not met the
-graduation bar.
+one-off measurement. `htmlFor` is optional: when omitted, `FieldShell` generates an id
+with `useId()`, puts it on the label, and injects it onto the control via Radix `Slot` —
+so the label/control association works out of the box, and a child that sets its own
+`id` still wins. Pass `htmlFor` explicitly only when the caller already manages its own
+id. No first-party plugin exercises it yet, so it has not met the graduation bar.
 
 `FormSection` (with `FormSectionProps`) is the form-layout kit's section: a labelled
 card holding a group of fields. It composes `Card` for its container rather than

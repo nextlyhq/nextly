@@ -1,4 +1,6 @@
+import { Slot } from "@radix-ui/react-slot";
 import { cva } from "class-variance-authority";
+import { useId } from "react";
 
 import { cn } from "../lib/utils";
 import type { FieldShellProps } from "../types/form-layout";
@@ -35,17 +37,30 @@ export function FieldShell({
   className,
   children,
 }: FieldShellProps) {
+  // `htmlFor` stays supported for callers that manage their own ids; when it
+  // is omitted, generate one so the simplest usage (a label with no explicit
+  // id anywhere) still produces a working label/control association instead
+  // of a label that merely sits next to its control.
+  const generatedId = useId();
+  const controlId = htmlFor ?? generatedId;
+
   return (
     <div className={cn("flex flex-col gap-1.5", className)}>
       {label ? (
         <label
-          htmlFor={htmlFor}
+          htmlFor={controlId}
           className="text-sm font-medium text-foreground"
         >
           {label}
         </label>
       ) : null}
-      <div className={controlWidth({ width })}>{children}</div>
+      <div className={controlWidth({ width })}>
+        {/* Slot injects the id onto the child rather than wrapping it in an
+            extra DOM node. A child that already sets its own `id` keeps it:
+            Slot's prop merge gives the child's own props precedence over the
+            ones passed to Slot. */}
+        <Slot id={controlId}>{children}</Slot>
+      </div>
       {description ? (
         <p className="text-sm text-muted-foreground">{description}</p>
       ) : null}
