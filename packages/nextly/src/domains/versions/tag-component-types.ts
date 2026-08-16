@@ -525,3 +525,76 @@ export function rehydrateSnapshotDates(
     }
   }
 }
+
+/**
+ * Rewrite component REFERENCES into the container shapes a field walker
+ * already understands, carrying the referenced component's own fields.
+ *
+ * A `component` field is a reference: its schema lives under another slug, so
+ * a walker looking only at the field list sees `{ type: "component" }` and has
+ * nothing to descend into. Expanding it into a `group` (and a dynamic zone
+ * into a `repeater`) lets one existing walker handle inline containers and
+ * referenced ones alike, instead of a second walker that would have to agree
+ * with the first about what a password field is.
+ *
+ * A dynamic zone becomes the UNION of its candidate components' fields. A
+ * per-instance `_componentType` would let each row be judged against its own
+ * schema, but resolving that here would duplicate the tagging logic above. For
+ * the redaction this exists for, the union errs the safe way: it can only
+ * strip a value some OTHER candidate component happens to name the same, never
+ * miss one the actual component declares.
+ *
+ * `seen` breaks reference cycles. A component that reaches itself would
+ * otherwise expand forever, and a schema is free to be recursive.
+ */
+export function expandComponentFields(
+  fields: FieldConfig[],
+  componentFields: Map<string, FieldConfig[]>,
+  seen: ReadonlySet<string> = new Set()
+): FieldConfig[] {
+  const expandUnder = (
+    slugs: string[],
+    type: "group" | "repeater",
+    field: FieldConfig
+  ) => {
+    const next = new Set(seen);
+    const inner: FieldConfig[] = [];
+    for (const slug of slugs) {
+      if (next.has(slug)) continue;
+      next.add(slug);
+      inner.push(...(componentFields.get(slug) ?? []));
+    }
+    return {
+      ...(field as unknown as Record<string, unknown>),
+      type,
+      fields: expandComponentFields(inner, componentFields, next),
+    } as unknown as FieldConfig;
+  };
+
+  return fields.map(field => {
+    const one = (field as { component?: unknown }).component;
+    if (typeof one === "string") return expandUnder([one], "group", field);
+
+    const many = (field as { components?: unknown }).components;
+    if (Array.isArray(many)) {
+      return expandUnder(
+        many.filter((s): s is string => typeof s === "string"),
+        "repeater",
+        field
+      );
+    }
+
+    const children = (field as { fields?: unknown }).fields;
+    if (Array.isArray(children)) {
+      return {
+        ...(field as unknown as Record<string, unknown>),
+        fields: expandComponentFields(
+          children as FieldConfig[],
+          componentFields,
+          seen
+        ),
+      } as unknown as FieldConfig;
+    }
+    return field;
+  });
+}

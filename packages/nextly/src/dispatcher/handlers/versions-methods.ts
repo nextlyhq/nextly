@@ -26,7 +26,10 @@ import {
   type ReadAccessCaller,
 } from "../../auth/entity-read-access";
 import type { RequestActor } from "../../auth/request-actor";
+import type { FieldConfig } from "../../collections/fields/types";
 import { getService } from "../../di";
+import { container } from "../../di/container";
+import type { FieldGroupDataService } from "../../domains/field-groups/services/field-group-data-service";
 import type { UserContext } from "../../domains/singles/types";
 import {
   attachVersionAuthors,
@@ -35,6 +38,10 @@ import {
 import type { VersionDiff } from "../../domains/versions/diff";
 import { discardWorkingDraft } from "../../domains/versions/discard-working-draft";
 import { restoreVersion } from "../../domains/versions/restore-version";
+import {
+  expandComponentFields,
+  resolveComponentFieldMap,
+} from "../../domains/versions/tag-component-types";
 import type { VersionRow } from "../../domains/versions/versions-repository";
 import { NextlyError } from "../../errors/nextly-error";
 import type { VersionScopeKind } from "../../schemas/versions/types";
@@ -96,6 +103,30 @@ export function requireSnapshotBody(body: unknown): Record<string, unknown> {
     });
   }
   return body as Record<string, unknown>;
+}
+
+/**
+ * Whether any field in this schema references a component by slug, at any
+ * depth. Used to decide whether an unavailable component registry is a problem
+ * for THIS entity: a schema with no references has nothing unresolvable in it.
+ */
+function declaresComponentReference(fields: FieldConfig[]): boolean {
+  for (const field of fields) {
+    if (typeof (field as { component?: unknown }).component === "string") {
+      return true;
+    }
+    if (Array.isArray((field as { components?: unknown }).components)) {
+      return true;
+    }
+    const children = (field as { fields?: unknown }).fields;
+    if (
+      Array.isArray(children) &&
+      declaresComponentReference(children as FieldConfig[])
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** What every version method needs to identify and authorize a document. */
@@ -740,7 +771,42 @@ export async function autosaveForDocument(
       });
     }
     if (fields.length > 0) {
-      stripPasswordFieldValues(snapshot as Record<string, unknown>, fields);
+      // A `component` field is a REFERENCE: its schema lives under another
+      // slug, so the stripper sees `{ type: "component" }` and has nothing to
+      // descend into. A password declared inside a referenced component would
+      // survive in the snapshot. Resolve those schemas, rewrite the references
+      // into the container shapes the stripper already walks, and strip once.
+      const dataService = container.has("fieldGroupDataService")
+        ? container.get<FieldGroupDataService>("fieldGroupDataService")
+        : null;
+      // No executor: autosave runs outside any transaction by design, and the
+      // parameter exists so an in-transaction caller can read on its own
+      // connection rather than take a second one.
+      const componentFields = dataService
+        ? await resolveComponentFieldMap(fields, slug =>
+            dataService.getComponentFields(slug)
+          )
+        : new Map<string, FieldConfig[]>();
+
+      // Fail CLOSED where a reference cannot be resolved. `resolveComponentFieldMap`
+      // propagates a lookup error rather than reporting the component absent,
+      // so an unresolvable schema arrives here as a thrown error and refuses
+      // the write; what this guards is the other case, a registry that is not
+      // wired at all while the schema still declares references.
+      if (!dataService && declaresComponentReference(fields)) {
+        throw NextlyError.internal({
+          logContext: {
+            reason: "autosave-component-schema-unavailable",
+            scopeKind: args.scopeKind,
+            scopeSlug: args.slug,
+          },
+        });
+      }
+
+      stripPasswordFieldValues(
+        snapshot as Record<string, unknown>,
+        expandComponentFields(fields, componentFields)
+      );
     }
   }
 
