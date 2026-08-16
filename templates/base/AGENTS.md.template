@@ -121,6 +121,13 @@ const slug = typeof doc.slug === "string" ? doc.slug : undefined;
 
   // ACCESS RULES — evaluate them as the caller, and key by EVERY dimension the
   // rules read, not just who the caller is.
+  //
+  // Both role fields are optional and Nextly reads BOTH: the many-to-many
+  // `roles` unioned with the singular `role`. Deduped and sorted, so one role
+  // set spelled two ways is one cache entry rather than two.
+  const roleKey = (u: { role?: string; roles?: string[] }) =>
+    [...new Set([...(u.roles ?? []), u.role ?? []].flat())].sort().join(",");
+
   cachedFind(
     () => nextly.find({ collection: "orders", user, overrideAccess: false }),
     {
