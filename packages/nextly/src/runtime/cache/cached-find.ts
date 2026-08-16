@@ -47,8 +47,12 @@ export interface CachedFindOptions {
    * the query itself, **include anything the result varies by**.
    *
    * SECURITY: if the read applies per-caller access rules (owner-only scoping,
-   * role-based visibility, an API-key's narrowed scope), the caller's identity
-   * MUST be in `keyParts` (their user id, role set, or key scope). Two different
+   * role-based visibility, an API-key's narrowed scope), EVERY dimension those
+   * rules read MUST be in `keyParts` — not merely who the caller is. A user id
+   * alone survives a role change, a claim change and a narrower key scope, so
+   * the same person can fill an entry while privileged and read it back after
+   * being downgraded: tags bust on CONTENT changes, and a permission change is
+   * not one. Two different
    * users share one cache entry when their `keyParts` match, so caching an
    * owner-filtered list under a stable key would serve one user's rows to
    * another — a cross-tenant leak, not a stale-cache annoyance. For genuinely
@@ -72,17 +76,51 @@ export interface CachedFindOptions {
  * @example
  * // Public entry detail — cached and busted when any post changes. Tag with the
  * // collection tag; a slug-routed read has no entry id until the fetch resolves.
- * const post = await cachedFind(() => nextly.findBySlug("posts", slug), {
- *   tags: nextlyTags("posts"),
- *   keyParts: ["posts", slug],
- * });
+ * //
+ * // Two independent hazards, and `status` answers only one. `find()` defaults to
+ * // `overrideAccess: true`, so a slug filter alone can return a DRAFT —
+ * // `status: "published"` is enforced even on a trusted read and fixes that.
+ * // It does NOT evaluate per-row ACCESS rules: a published row only its owner
+ * // may read is still returned. A shared key is correct only for a collection
+ * // with no read rules; otherwise use the per-user form below.
+ * // `find()` returns `{ items, meta }`, so a detail route takes the first item.
+ * const post = await cachedFind(
+ *   async () =>
+ *     (
+ *       await nextly.find({
+ *         collection: "posts",
+ *         where: { slug: { equals: slug } },
+ *         status: "published",
+ *         limit: 1,
+ *       })
+ *     ).items[0] ?? null,
+ *   { tags: nextlyTags("posts"), keyParts: ["posts", slug] }
+ * );
  *
  * @example
- * // Per-user list — the caller's id is in the key so it never leaks.
- * const mine = await cachedFind(() => nextly.find("orders", { user }), {
- *   tags: nextlyTags("orders"),
- *   keyParts: ["orders", "list", user.id],
- * });
+ * // Per-user list — access rules evaluated AS the caller, and EVERY dimension
+ * // those rules read in the key, not merely who the caller is.
+ * //
+ * // Roles are in the key because the identity outlives the permission: tags bust
+ * // on CONTENT changes and a role change is not one, so keying on the id alone
+ * // lets the same person fill an entry while privileged and read it back after
+ * // being downgraded.
+ * //
+ * // The set is built the way `evaluateRoleBasedAccess` builds the one it decides
+ * // with — the many-to-many `roles` UNIONED with the singular `role` — because a
+ * // key that reads fewer dimensions than the rule cannot notice a change in the
+ * // ones it skipped. Both fields are optional on `UserContext`, so both are
+ * // guarded; `[...user.roles]` alone throws for a valid `{ id, role }` caller.
+ * // Deduped and sorted last, because the key is compared as text and one role
+ * // set spelled two ways would otherwise be two entries.
+ * const roleKey = [...new Set([...(user.roles ?? []), user.role ?? []].flat())]
+ *   .sort()
+ *   .join(",");
+ *
+ * const mine = await cachedFind(
+ *   () => nextly.find({ collection: "orders", user, overrideAccess: false }),
+ *   { tags: nextlyTags("orders"), keyParts: ["orders", "list", user.id, roleKey] }
+ * );
  */
 export function cachedFind<T>(
   reader: () => Promise<T>,

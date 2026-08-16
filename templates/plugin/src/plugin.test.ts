@@ -6,12 +6,11 @@ import { myPlugin } from "./index";
 let t: Awaited<ReturnType<typeof createTestNextly>>;
 
 beforeEach(async () => {
-  const plugin = myPlugin();
-  t = await createTestNextly({
-    plugins: [plugin],
-    // Pass the plugin's collections so the harness creates their SQLite tables.
-    collections: plugin.contributes?.collections,
-  });
+  // `plugins` alone. Runtime auto-sync creates the tables for contributed
+  // collections during registration, so passing them again as `collections`
+  // registers the same slugs as code-owned entities and boot fails with
+  // NEXTLY_SCHEMA_SLUG_COLLISION.
+  t = await createTestNextly({ plugins: [myPlugin()] });
 });
 
 afterEach(async () => {
