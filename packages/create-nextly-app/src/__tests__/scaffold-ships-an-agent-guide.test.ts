@@ -200,7 +200,11 @@ describe("scaffolding over a project that already has these files", () => {
     const target = path.join(workdir, "project");
     await mkdir(target, { recursive: true });
     for (const [name, contents] of Object.entries(seed)) {
-      await writeFile(path.join(target, name), contents, "utf-8");
+      // A seeded name may be nested — an include graph that runs through a subdirectory is
+      // exactly where a relative `@../file` resolves differently from the project root.
+      const file = path.join(target, name);
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, contents, "utf-8");
     }
 
     await copyTemplate({
@@ -526,6 +530,26 @@ describe("scaffolding over a project that already has these files", () => {
     expect(claude.split("\n").filter(l => l.trim() === "@AGENTS.md")).toEqual([
       "@AGENTS.md",
     ]);
+  }, 30_000);
+
+  it("resolves a nested include from the file that wrote it", async () => {
+    // `rules/team.md` includes `@../CLAUDE.md`, which is relative to `rules/` and therefore
+    // names the project's own CLAUDE.md. Resolving every hop against the project root instead
+    // checks `rules/../..`, finds nothing, treats it as a dead end, and writes a pointer that
+    // closes a real cycle.
+    const after = await scaffoldOver({
+      "AGENTS.md": "# Ours\n\n@rules/team.md\n\nTeam rules live in rules/.\n",
+      "rules/team.md": "# Team\n\n@../CLAUDE.md\n",
+    });
+
+    expect(after["AGENTS.md"]).toContain("Team rules live in rules/.");
+    const claude = await readFile(
+      path.join(workdir, "project", "CLAUDE.md"),
+      "utf-8"
+    ).catch(() => "");
+    expect(claude.split("\n").filter(l => l.trim() === "@AGENTS.md")).toEqual(
+      []
+    );
   }, 30_000);
 
   it("does not count a commented-out or inline pointer as installed", async () => {

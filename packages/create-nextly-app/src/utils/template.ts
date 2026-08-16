@@ -514,7 +514,15 @@ async function pointsAtItself(
   // it sits. At depth 0 it is the pointer this function is deciding whether to write, and a
   // pointer at nothing installs nothing. Deeper, it is a file the DEVELOPER included from a file
   // they own, and a dead end there says nothing about whether any path returns here.
-  const queue = includeTargets(incoming).map(name => ({ name, depth: 0 }));
+  // Each entry carries the DIRECTORY its include was written in, because an `@name` is relative
+  // to the file containing it. A nested `rules/team.md` holding `@../CLAUDE.md` means the sibling
+  // of `rules/`, not of the project root, and rebasing every hop against `targetDir` resolves a
+  // different file — which then reads as a dead end and lets a real cycle be written.
+  const queue = includeTargets(incoming).map(name => ({
+    name,
+    depth: 0,
+    from: targetDir,
+  }));
   if (queue.length === 0) return false;
 
   const self = await fs.realpath(destination).catch(() => destination);
@@ -526,8 +534,8 @@ async function pointsAtItself(
   const visited = new Set<string>();
 
   while (queue.length > 0) {
-    const { name, depth } = queue.shift()!;
-    const targetPath = path.join(targetDir, name);
+    const { name, depth, from } = queue.shift()!;
+    const targetPath = path.resolve(from, name);
     if (visited.has(targetPath)) continue;
     visited.add(targetPath);
 
@@ -552,6 +560,7 @@ async function pointsAtItself(
         ...includeTargets(contents).map(next => ({
           name: next,
           depth: depth + 1,
+          from: path.dirname(targetPath),
         }))
       );
     }
