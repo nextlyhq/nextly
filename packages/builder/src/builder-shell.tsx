@@ -415,10 +415,13 @@ function useMountedShellCount(): () => number {
  * eligible at once and the most recently registered answered, which moved
  * focus into an editor the author was not in.
  *
- * Containment is asked of the REGIONS rather than of a separate root element.
- * They are what cycling already moves between, so a shell that contains the
- * focus is exactly a shell one of whose regions does, and a second ref for the
- * same question could disagree with the first.
+ * Ownership is asked of the shell ROOT, not of the regions. The two are
+ * different questions and only look like one: the root answers "is the author
+ * inside this editor", while the region list answers "where can cycling land".
+ * The chrome header — the exit button and whatever the host puts in the top
+ * bar — is inside the editor and inside no region, so asking the regions
+ * rejected the shell whenever focus was on one of those controls and left F6
+ * doing nothing from the very chrome it belongs to.
  *
  * The `document.body` case is what keeps the key working from a cold page: the
  * full Edit view owns its page and nothing inside it has focus yet, and
@@ -427,12 +430,11 @@ function useMountedShellCount(): () => number {
  * because with more than one the press names none of them.
  */
 function shellClaimsRegionCycling(
-  map: Record<Region, HTMLElement | null> | null,
+  root: HTMLElement | null,
   shellCount: number
 ): boolean {
-  if (!map) return false;
   const active = document.activeElement;
-  if (REGIONS.some(region => map[region]?.contains(active))) return true;
+  if (root?.contains(active)) return true;
   // `null` as well as `body`: a document that has never been clicked reports
   // no active element at all in some engines, which is the same "nowhere".
   const nowhere = active === null || active === document.body;
@@ -448,6 +450,7 @@ function shellClaimsRegionCycling(
  */
 function useRegionCycling(
   regionRefs: React.RefObject<Record<Region, HTMLElement | null>>,
+  rootRef: React.RefObject<HTMLElement | null>,
   enabled: boolean
 ): void {
   const shellCount = useMountedShellCount();
@@ -477,7 +480,7 @@ function useRegionCycling(
         // author is not in should let the key reach whatever they ARE in.
         when: () =>
           enabledRef.current &&
-          shellClaimsRegionCycling(regionRefs.current, shellCount()),
+          shellClaimsRegionCycling(rootRef.current, shellCount()),
         description: "Move to the next area of the editor",
         // The manager's default asks whether the FIRST chord carries a modifier
         // or is Escape, and answers no for a bare function key — so F6 would be
@@ -605,9 +608,12 @@ function ShellRegions({
     canvas: null,
     inspector: null,
   });
-  useRegionCycling(regionRefs, active);
-  const onKeyDownCapture = useSeparatorRegionEscape(regionRefs, active);
+  // Declared before the hook that reads it: `chromeRef` is the shell's own root
+  // element, which is what decides whether the author is inside this editor at
+  // all — the chrome header sits outside every region but inside this.
   const chromeRef = React.useRef<HTMLDivElement | null>(null);
+  useRegionCycling(regionRefs, chromeRef, active);
+  const onKeyDownCapture = useSeparatorRegionEscape(regionRefs, active);
   useDesignSystemStylesheet(chromeRef);
 
   /**

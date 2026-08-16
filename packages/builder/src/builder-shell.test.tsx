@@ -426,6 +426,41 @@ describe("which shell F6 belongs to", () => {
     );
   });
 
+  it("answers from the chrome header, which is in no region", () => {
+    // The header holds the exit button and whatever the host puts in the top
+    // bar — the breakpoint switcher, here — and it is a SIBLING of the region
+    // container rather than inside one. Asking the regions who owns the key
+    // therefore rejected the shell from its own chrome, so F6 did nothing
+    // while focus sat on a control that is plainly inside the editor.
+    renderShell({
+      renderPanel: panel => <p>{panel} panel</p>,
+      topBar: <button type="button">Desktop</button>,
+    });
+
+    const inTopBar = screen.getByRole("button", { name: "Desktop" });
+    inTopBar.focus();
+    expect(document.activeElement).toBe(inTopBar);
+
+    fireEvent.keyDown(inTopBar, { key: "F6" });
+
+    expect(document.activeElement).toBe(
+      screen.getByRole("navigation", { name: "Editor panels" })
+    );
+  });
+
+  it("answers from the exit button as well", () => {
+    renderShell({ renderPanel: panel => <p>{panel} panel</p> });
+
+    const exit = screen.getByRole("button", { name: "Exit editor" });
+    exit.focus();
+
+    fireEvent.keyDown(exit, { key: "F6" });
+
+    expect(document.activeElement).toBe(
+      screen.getByRole("navigation", { name: "Editor panels" })
+    );
+  });
+
   it("still enters after a shell has been mounted and torn down", () => {
     // The counter deciding "is this the only shell" must come back DOWN. A
     // leak drifts it upward and never returns, which declines the entry above
