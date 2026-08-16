@@ -69,6 +69,25 @@ export interface CanvasDriver {
    */
   dragSourceCentre(): Promise<Point>;
 
+  /**
+   * Two sources chosen by whether an ordinary container will TAKE them, for the
+   * one acceptance point that needs a refused drag and a permitted one.
+   *
+   * A pair rather than a single "restricted" reader, because either half alone
+   * is satisfied by a canvas that behaves identically over both. Showing a
+   * refusal everywhere and showing it nowhere are different defects and each
+   * passes the other's test; only running the same drag with the two sources
+   * separates them.
+   *
+   * On the driver for the same reason {@link dragSourceCentre} is: WHICH block a
+   * canvas refuses is its own structural rule, and a suite that picked one by
+   * name could not be retargeted by swapping the driver.
+   */
+  restrictedDragSourceCentre(): Promise<Point>;
+
+  /** The permitted half of the pair above. */
+  acceptedDragSourceCentre(): Promise<Point>;
+
   /** A point over the canvas, near its top, in host coordinates. */
   canvasCentre(): Promise<Point>;
 

@@ -15,17 +15,16 @@
  * REASON arriving where the author reads it, so that is what is asserted — against a control drag
  * that must reach a target and say nothing.
  *
- * ## Why "Column" needs no special fixture
+ * ## Why no special fixture
  *
- * `core/column` declares `parent: ["core/columns"]`, so every drop zone in an ordinary
- * `core/container` refuses it with `wrong-parent`. The refusal is the shipped registry's own, not
- * one arranged here — a fixture that manufactured a restricted slot would be testing a document
- * nobody authors.
+ * The driver's restricted source is a block that restricts its own PARENT, so an ordinary
+ * container refuses it by the shipped registry's own rule. A fixture manufacturing a slot with an
+ * allowlist would be testing a document nobody authors.
  */
 import { expect, test, type Page } from "@playwright/test";
 
 import { dragUntilTarget } from "./driver";
-import type { CanvasFixture, Point } from "./driver";
+import type { CanvasFixture } from "./driver";
 import { FLAT_LIST_FIXTURE, seedPage } from "./fixtures";
 import { createPocDriver } from "./poc-driver";
 
@@ -48,51 +47,35 @@ const DRAG_OVERLAY = ".nx-pb-drag-overlay";
 const WRONG_PARENT_TEXT = "This block can only go inside certain containers.";
 
 /**
- * The centre of one named library entry.
- *
- * Searched for rather than scrolled to. The library is a long scrolling list, so an entry's box
- * can be off-screen while the locator resolves happily — and the search box remounts each category
- * expanded, which puts the match at the top of the panel where a drag can start from it.
- *
- * Exact text, because "Column" and "Columns" are both registered blocks and only one of them is
- * refused by a container.
- */
-async function libraryItemCentre(page: Page, label: string): Promise<Point> {
-  await page.getByLabel("Search blocks").fill(label);
-  const item = page
-    .locator(".nx-pb-lib-item")
-    .filter({ has: page.getByText(label, { exact: true }) });
-  await expect(
-    item,
-    `exactly one library entry must be labelled "${label}"`
-  ).toHaveCount(1);
-  const box = await item.boundingBox();
-  if (!box) throw new Error(`library entry "${label}" has no box`);
-  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
-}
-
-/**
- * Drag a named library entry onto a real drop zone, and refuse to return without one.
+ * Drag one of the driver's two named sources onto a real drop zone, refusing to return without
+ * one.
  *
  * The canvas centre is over dead space as often as not, so reading the overlay straight after
  * arriving would measure a drag with no target — and "no refusal shown" is then true for a reason
  * that has nothing to do with the feature.
+ *
+ * WHICH block each source is belongs to the driver, not here: it is the canvas's own structural
+ * rule that decides what a container refuses, and naming a block by label in this file would make
+ * the test unretargetable and duplicate a lookup that already exists.
  */
-async function dragLibraryBlockOntoZone(
+async function dragOntoZone(
   page: Page,
   fixture: CanvasFixture,
-  label: string
+  pick: "restricted" | "accepted"
 ): Promise<void> {
   const driver = createPocDriver(page);
   await driver.mountTree(fixture);
-  const source = await libraryItemCentre(page, label);
+  const source =
+    pick === "restricted"
+      ? await driver.restrictedDragSourceCentre()
+      : await driver.acceptedDragSourceCentre();
   const target = await driver.canvasCentre();
   await driver.startDragAt(source);
   await driver.moveBy(target.x - source.x, target.y - source.y);
   const active = await dragUntilTarget(driver);
   expect(
     active,
-    `the "${label}" drag must reach a drop zone before the overlay is read`
+    `the ${pick} drag must reach a drop zone before the overlay is read`
   ).toBeGreaterThanOrEqual(0);
 }
 
@@ -100,10 +83,10 @@ test("tells the author which rule refused the drop", async ({
   page,
   request,
 }) => {
-  await dragLibraryBlockOntoZone(
+  await dragOntoZone(
     page,
     await seedPage(request, FLAT_LIST_FIXTURE),
-    "Column"
+    "restricted"
   );
 
   const overlay = page.locator(DRAG_OVERLAY);
@@ -132,10 +115,10 @@ test("says nothing over a target that accepts the block", async ({
   page,
   request,
 }) => {
-  await dragLibraryBlockOntoZone(
+  await dragOntoZone(
     page,
     await seedPage(request, FLAT_LIST_FIXTURE),
-    "Heading"
+    "accepted"
   );
 
   // The population first. Silence is the expected result here, and silence is also what a drag
@@ -148,7 +131,7 @@ test("says nothing over a target that accepts the block", async ({
   ).toHaveCount(1);
   await expect(
     overlay.locator("[data-refused]"),
-    "a container accepts a heading, so nothing may be marked refused"
+    "the target accepts this block, so nothing may be marked refused"
   ).toHaveCount(0);
   await expect(
     overlay.locator('[role="status"]'),
