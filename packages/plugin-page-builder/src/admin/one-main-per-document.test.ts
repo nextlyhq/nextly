@@ -77,7 +77,17 @@ describe("the editor adds no second landmark", () => {
     // region entirely, and nothing else here would notice.
     const surface = readFileSync(join(ADMIN_DIR, "EditorSurface.tsx"), "utf8");
 
-    expect(surface).toContain("<BuilderShell");
-    expect(surface).toContain("<Canvas />");
+    // NESTING, not two independent presences. Both substrings survive `<Canvas />`
+    // being moved out of the shell — which would lose the landmark and the
+    // shell-managed layout while this test stayed green. The canvas must sit
+    // BETWEEN the shell's opening and closing tags.
+    const open = surface.indexOf("<BuilderShell");
+    const close = surface.indexOf("</BuilderShell>");
+    const canvas = surface.indexOf("<Canvas />");
+
+    expect(open).toBeGreaterThanOrEqual(0);
+    expect(close).toBeGreaterThan(open);
+    expect(canvas).toBeGreaterThan(open);
+    expect(canvas).toBeLessThan(close);
   });
 });
