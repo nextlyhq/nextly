@@ -26,7 +26,6 @@ import {
 } from "react";
 
 import { Pencil, Trash2 } from "@admin/components/icons";
-import { Pagination } from "@admin/components/shared/pagination";
 import { RangeField } from "@admin/components/shared/range-field";
 import { DataTableView } from "@admin/components/ui/table/data-table";
 import type {
@@ -549,18 +548,22 @@ export const EntryTable = forwardRef<EntryTableRef, EntryTableProps>(
                   ? "No entries found. Try adjusting your search or filters."
                   : "No entries found."
               }
-            />
-
-            <Pagination
-              currentPage={pagination.page}
-              totalPages={pagination.totalPages}
-              totalItems={pagination.total}
-              pageSize={pagination.limit}
-              onPageChange={onPageChange}
-              onPageSizeChange={onLimitChange}
-              isLoading={isLoading}
-              itemLabel="entries"
-              ariaLabel="Entry table pagination"
+              // Inside the table rather than beside it, so the component that
+              // knows whether the row table or the mobile card view is showing
+              // is the one that places the pager. The wrapper below draws the
+              // card and `bordered={false}` stops the table drawing a second
+              // one, so this renders in the same place it always did.
+              pagination={{
+                currentPage: pagination.page,
+                totalPages: pagination.totalPages,
+                totalItems: pagination.total,
+                pageSize: pagination.limit,
+                onPageChange,
+                onPageSizeChange: onLimitChange,
+                isLoading,
+                itemLabel: "entries",
+                ariaLabel: "Entry table pagination",
+              }}
             />
           </div>
         )}

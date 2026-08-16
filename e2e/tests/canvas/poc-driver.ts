@@ -47,6 +47,33 @@ interface RecordedTransition {
 const DROP_ZONES = ".nx-pb-dropzone, .nx-pb-dropzone-empty";
 
 /**
+ * How long this canvas may still be moving a zone's edge after entry, in milliseconds.
+ *
+ * Exported so the guard that checks it against the canvas's MEASURED spans reads the SAME value
+ * the driver uses. A guard restating the number checks a constant against itself and passes while
+ * the driver carries something else entirely.
+ *
+ * ## Why it is a frame and not an animation
+ *
+ * This was the canvas's own transition duration, from when a zone grew its height and margin on
+ * becoming the active target. It does not do that any more: a zone is `position:absolute` at a
+ * fixed `height:6px`, and `[data-drag]` / `[data-active]` change only `pointer-events`,
+ * `background` and `box-shadow`. The guard beside it measures every one of those states through
+ * the browser and pins the geometry span at 0ms, so an allowance sized for an animation is sized
+ * for something that does not happen.
+ *
+ * What the wait still has to do is separate two brackets into DIFFERENT animation frames: adjacent
+ * samples can quantize to the same whole pixel inside one frame, so agreement between them is
+ * necessary and not sufficient however static the edge is. A frame is ~16ms, and this carries a
+ * comfortable multiple of it.
+ *
+ * Not a speed change, and it must not be sold as one. `dragToInsetInZone` is the only consumer of
+ * this value; no browser test reaches it, and the one suite that does drives a test double which
+ * declares no allowance and therefore spends the shared default instead.
+ */
+export const POC_GEOMETRY_SETTLE_MS = 32;
+
+/**
  * Block-level insertion targets. A grid registers insert-before and append
  * droppables on the block element itself and signals them with these classes
  * rather than with `data-active` on a separate zone element, so they are a
@@ -69,26 +96,43 @@ const EDITOR_ROOT = ".nx-pb-editor";
 /** A library entry in the left panel; the drag source for a cross-frame drag. */
 const LIBRARY_ITEM = ".nx-pb-lib-item";
 
+/** The library's filter, used to bring a named entry into view rather than scrolling to it. */
+const LIBRARY_SEARCH = "Search blocks";
+
+/**
+ * A block this canvas refuses inside an ordinary container, and one it accepts.
+ *
+ * `core/column` declares `parent: ["core/columns"]`, so a container's drop zones refuse it by the
+ * shipped registry's own rule — no fixture has to manufacture a restricted slot. `core/heading`
+ * declares no parent and sits in the same panel, so the two differ only in the rule under test.
+ */
+const RESTRICTED_BLOCK_LABEL = "Column";
+const ACCEPTED_BLOCK_LABEL = "Heading";
+
+/** The element dnd-kit positions under the cursor; the chip and any refusal are inside it. */
+const DRAG_OVERLAY = ".nx-pb-drag-overlay";
+
+/** The overlay's refusal marker, set only while a rule is stopping the drop. */
+const REFUSED = "[data-refused]";
+
+/** Where the refusal's sentence goes, so it reaches an author not watching the cursor. */
+const LIVE_REGION = '[role="status"]';
+
+/**
+ * How long a refusal may take to appear after the drag reaches the target it refuses.
+ *
+ * One React commit, so this is generous by two orders of magnitude on purpose: it is the cost of
+ * reporting "not refused" about a target that IS refused, and only a permitted target ever pays it.
+ */
+const REFUSAL_RENDER_MS = 2_000;
+
 /** Past dnd-kit's activation distance in one move, so a drag actually starts. */
 const DRAG_THRESHOLD_PX = 12;
 
 export function createPocDriver(page: Page): CanvasDriver {
-  /** The canvas iframe is srcless, so it is the about:blank child frame. */
+  /** The canvas iframe, from the one place that decides which frame that is. */
   function canvasFrame(): Frame {
-    const frame = page
-      .frames()
-      .find(
-        f => f.parentFrame() === page.mainFrame() && f.url() === "about:blank"
-      );
-    if (!frame) {
-      throw new Error(
-        `canvas frame not found; frames: ${page
-          .frames()
-          .map(f => f.url())
-          .join(", ")}`
-      );
-    }
-    return frame;
+    return canvasFrameOf(page);
   }
 
   /**
@@ -110,6 +154,32 @@ export function createPocDriver(page: Page): CanvasDriver {
       if (!(frame instanceof HTMLElement)) return 1;
       return new DOMMatrixReadOnly(getComputedStyle(frame).transform).a;
     });
+  }
+
+  /**
+   * The centre of the library entry carrying exactly this label.
+   *
+   * Filtered for rather than scrolled to. The library is a long scrolling list, so an entry's
+   * locator resolves happily while its box is off-screen and a drag started there begins nowhere;
+   * typing into the search remounts each category expanded and puts the match at the top of the
+   * panel.
+   *
+   * EXACT text, because "Column" and "Columns" are both registered blocks and a container refuses
+   * only one of them. A substring match returns whichever the DOM lists first, so the drag under
+   * test would be chosen by document order rather than by the rule.
+   */
+  async function libraryEntryCentre(label: string): Promise<Point> {
+    await page.getByLabel(LIBRARY_SEARCH).fill(label);
+    const entry = page
+      .locator(LIBRARY_ITEM)
+      .filter({ has: page.getByText(label, { exact: true }) });
+    await expect(
+      entry,
+      `exactly one library entry must be labelled "${label}"`
+    ).toHaveCount(1);
+    const box = await entry.boundingBox();
+    if (!box) throw new Error(`library entry "${label}" has no box`);
+    return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
   }
 
   /**
@@ -160,6 +230,34 @@ export function createPocDriver(page: Page): CanvasDriver {
   let pointer: Point = { x: 0, y: 0 };
 
   const driver: CanvasDriver = {
+    // Zero, because this canvas has no target-switch hysteresis at all:
+    // `plugin-page-builder` registers no collision priority and no dwell, and a
+    // 2px jitter at a boundary flips the indicator on every move. Declaring a
+    // dwell it does not have would spend a wait per reading for lag that never
+    // happens, and would let a real hysteresis defect hide inside the wait.
+    dwellAllowanceMs: 0,
+
+    // How long this canvas may still be moving a zone's EDGE after entry. A
+    // probe that re-measures inside that window can read the same whole pixel
+    // twice while the edge is still travelling through it, and return a depth
+    // measured from a boundary that has already moved.
+    //
+    // Every geometry span this canvas currently produces is ZERO. The
+    // between-item zone is `position: absolute` at a fixed `height: 6px` and
+    // transitions only `background`, which moves no edge; the empty placeholder
+    // is in flow at an auto height and declares no transition at all. So this
+    // number is not covering a known animation — it is headroom against one
+    // arriving, and against two brackets landing inside a single animation
+    // frame.
+    //
+    // Stated here rather than inside the probe because the timing belongs to
+    // this canvas. `geometry-settle-matches-the-canvas.test.ts` MEASURES the
+    // real elements through `getComputedStyle` rather than reading any
+    // stylesheet, pins each state's span, and fails if a span ever outgrows
+    // this number — so the two cannot drift silently, and a lowered allowance
+    // is checked against movement rather than against declarations.
+    geometrySettleMs: POC_GEOMETRY_SETTLE_MS,
+
     async mountTree(fixture: CanvasFixture) {
       await gotoAdmin(page, `/collections/pages/${fixture.entryId}`);
       await expect(page.locator("iframe")).toBeVisible({ timeout: 30_000 });
@@ -176,6 +274,14 @@ export function createPocDriver(page: Page): CanvasDriver {
       const box = await page.locator(LIBRARY_ITEM).first().boundingBox();
       if (!box) throw new Error(`no drag source matched ${LIBRARY_ITEM}`);
       return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    },
+
+    async restrictedDragSourceCentre() {
+      return libraryEntryCentre(RESTRICTED_BLOCK_LABEL);
+    },
+
+    async acceptedDragSourceCentre() {
+      return libraryEntryCentre(ACCEPTED_BLOCK_LABEL);
     },
 
     async canvasCentre() {
@@ -204,7 +310,21 @@ export function createPocDriver(page: Page): CanvasDriver {
       // dnd-kit flips aria-grabbed on the source while a drag is active, so the
       // signal is the library's own accessibility state rather than a class the
       // canvas happens to add.
-      return page.evaluate(
+      //
+      // BOTH documents, because the source can live in either. A panel drag's
+      // source is host chrome; a drag of a block already in the canvas has its
+      // source inside the iframe. Searching only the host reports `false` for a
+      // fully active canvas drag — and since that half of the engine-parity
+      // case runs under an expected-failure marker, the capability arriving
+      // would still look exactly like the capability missing.
+      if (
+        await page.evaluate(
+          () => !!document.querySelector('[aria-grabbed="true"]')
+        )
+      ) {
+        return true;
+      }
+      return canvasFrame().evaluate(
         () => !!document.querySelector('[aria-grabbed="true"]')
       );
     },
@@ -341,14 +461,23 @@ export function createPocDriver(page: Page): CanvasDriver {
       pointer = { ...point };
       await page.mouse.move(pointer.x, pointer.y);
       await page.mouse.down();
-      pointer = { x: pointer.x + DRAG_THRESHOLD_PX, y: pointer.y };
-      await page.mouse.move(pointer.x, pointer.y);
+      await driver.crossActivationThreshold();
     },
 
     async pressAt(point: Point) {
       pointer = { ...point };
       await page.mouse.move(pointer.x, pointer.y);
       await page.mouse.down();
+    },
+
+    async crossActivationThreshold() {
+      // The one place this driver performs its activation motion. `startDragAt`
+      // calls it too, so the GESTURE is single-sourced rather than only the
+      // distance: sharing the constant alone leaves two code paths that agree
+      // today and diverge the moment activation needs a different direction,
+      // several moves, or another event — and both would still compile.
+      pointer = { x: pointer.x + DRAG_THRESHOLD_PX, y: pointer.y };
+      await page.mouse.move(pointer.x, pointer.y);
     },
 
     async moveBy(dx: number, dy: number) {
@@ -610,6 +739,29 @@ export function createPocDriver(page: Page): CanvasDriver {
   return driver;
 }
 
+/**
+ * The canvas iframe, found the same way the driver finds it.
+ *
+ * Exported so a test needing to read or measure the canvas's own document asks the same question
+ * this module already answers, instead of carrying a second copy of "which frame is the canvas".
+ */
+export function canvasFrameOf(page: Page): Frame {
+  const frame = page
+    .frames()
+    .find(
+      f => f.parentFrame() === page.mainFrame() && f.url() === "about:blank"
+    );
+  if (!frame) {
+    throw new Error(
+      `canvas frame not found; frames: ${page
+        .frames()
+        .map(f => f.url())
+        .join(", ")}`
+    );
+  }
+  return frame;
+}
+
 export { DROP_ZONES, ACTIVE_ZONE, LIBRARY_ITEM };
 
 /**
@@ -648,11 +800,39 @@ export function createPocChromeReader(page: Page): CanvasChromeReader {
       return { count: inHost + inFrame, host: "document" as const };
     },
 
-    readsInvalidTarget(): Promise<boolean> {
-      throw new CanvasCapabilityError(
-        "this canvas shows nothing over an illegal target, so there is no " +
-          "invalid state to read; absence of an indicator is not a state"
-      );
+    async readsInvalidTarget(): Promise<boolean> {
+      // The overlay first, and it THROWS rather than answering. `false` here would mean "this
+      // canvas shows nothing over an illegal target", and a drag that never started produces the
+      // same nothing — so a harness fault would be reported as the shortfall this reader exists to
+      // detect, which is the one confusion it must not make.
+      const overlay = page.locator(DRAG_OVERLAY);
+      if ((await overlay.count()) === 0) {
+        throw new Error(
+          "no drag overlay is on screen, so there is no drag whose target could be invalid"
+        );
+      }
+      // Marked AND worded. The marker alone is a state the canvas draws for itself; what the
+      // requirement asks for is something the author can read, and the two break independently.
+      //
+      // WAITED FOR, not counted. `count()` resolves against the DOM as it stands, and the two
+      // things this reader correlates are written by different systems: the active zone that got
+      // the drag here is a dnd-kit attribute write on an element inside the canvas frame, while
+      // the marker is a React commit in the host document. They land in either order, so an
+      // immediate read reports a refusal that has not rendered yet as no refusal at all — a
+      // canvas defect, from a race.
+      //
+      // The wait is bounded, and the bound is the honest instrument here: nothing signals "this
+      // canvas has decided and the answer is no", so a permitted target is only distinguishable
+      // from a slow refusal by having stayed unmarked for longer than a refusal takes to draw.
+      // It errs toward WAITING — a slow machine costs the timeout rather than a false verdict.
+      const marked = await overlay
+        .locator(REFUSED)
+        .waitFor({ state: "attached", timeout: REFUSAL_RENDER_MS })
+        .then(() => true)
+        .catch(() => false);
+      if (!marked) return false;
+      const said = await overlay.locator(LIVE_REGION).innerText();
+      return said.trim().length > 0;
     },
 
     canvasScrollTop(): Promise<number> {

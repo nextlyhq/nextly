@@ -9,6 +9,7 @@
 import {
   ArrowDown,
   ArrowUp,
+  Ban,
   ChevronDown,
   ChevronRight,
   Copy,
@@ -51,6 +52,7 @@ export function blockIcon(name: string | undefined): LucideIcon {
 export {
   ArrowDown,
   ArrowUp,
+  Ban,
   ChevronDown,
   ChevronRight,
   Copy,

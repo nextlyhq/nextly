@@ -109,3 +109,11 @@ packages/nextly/src/db/migrations/dynamic/*.sql
 # root, outside this repository: they are internal planning, and this repo is
 # public. Ignored here so a worktree cannot commit one by accident.
 /tasks/
+
+# tsup writes a bundled copy of its config while building and removes it on
+# exit. A watcher killed mid-run leaves one behind, and an untracked build
+# artifact in a package root fails the next lint rather than being ignored.
+tsup.config.bundled_*.mjs
+tsup.config.bundled_*.cjs
+tsup.*.config.bundled_*.mjs
+tsup.*.config.bundled_*.cjs

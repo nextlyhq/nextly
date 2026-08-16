@@ -176,6 +176,46 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           echo "inert=false" >> "$GITHUB_OUTPUT"
 
+  comments:
+    name: Comment convention (describes code, not process)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # Deliberately NOT gated on the inert decision, and not a dependent of the
+    # build job. Its scope is DEFAULT_ROOTS in the script, which starts at the
+    # repository root, so it covers paths the inert filter treats as unable to
+    # affect anything - `.claude/` among them. A source file added there would
+    # otherwise be in the checker's scope while the step that runs it was
+    # skipped, which is coverage on paper only.
+    #
+    # It needs no build and no database: the scan reads tracked files and one
+    # JSON record, so running it unconditionally costs seconds.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Setup Node
+        uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # The comments that predate this check are recorded in
+      # scripts/comment-convention-allowlist.json with a per-file count and one
+      # digest per offence. That record is what lets this run blocking rather
+      # than advisory, and it may only shrink: adding an entry to silence a new
+      # comment is the one use it does not have.
+      - name: Comment convention
+        run: pnpm check:comments
+
   ci:
     name: Lint / Typecheck / Test / Build
     needs: changes
@@ -248,6 +288,23 @@ jobs:
       - name: Storage-spelling gate (field-group storage format)
         run: pnpm check:storage-format-literals
 
+      # `pnpm dev` refuses to start when the concurrency limit written into the
+      # root scripts stops exceeding the number of persistent `dev` tasks, and
+      # that count grows whenever any package gains a `dev` script. Nothing else
+      # here can see it: the failure is in the launcher, so every build, test and
+      # type check stays green while the workspace dev command is dead.
+      #
+      # Static on purpose. Actually running `turbo run dev` would mean starting
+      # twenty long-running watchers to observe a property that is decided
+      # before any of them runs.
+      - name: Dev concurrency gate (persistent task count)
+        run: pnpm check:dev-concurrency
+
+      # Comments describe the code, never the process that produced it. A comment
+      # narrating a review or naming a tool compiles, lints and reads as insight,
+      # so nothing else in this repository can see it — and it decays into a
+      # reference to a conversation nobody can retrieve.
+      #
       # The drizzle-v1 migration's own safety net (review-driven: these
       # suites previously executed in NO CI job because the `nextly`
       # package's full test task carries a pre-existing failing baseline).
@@ -303,7 +360,7 @@ jobs:
       # `turbo run test` never reaches it. Its own suite runs here: a defect in
       # the release-notes builder only surfaces during a real publish, after the
       # packages are already on npm. Needs no build, runs in milliseconds.
-      - name: Release script tests
+      - name: Script tests
         run: pnpm test:scripts
 
       # The published packages version in lockstep, so a changeset that names
@@ -627,6 +684,22 @@ jobs:
           # avoids the multi-minute pnpm install during the smoke check.
           npm exec --yes --package="$tarball" -- create-nextly-app smoke-app --template blank --skip-install --yes
           test -f smoke-app/package.json && echo "scaffold ok"
+
+      # The generated scripts and the CLI's command set live in two different
+      # packages, and nothing compared them: every project shipped a
+      # `db:migrate:reset` calling a command `nextly` has never registered, which
+      # failed the first time a user ran it while every build stayed green.
+      #
+      # It runs HERE rather than in `scaffold-build.yml` because this job is
+      # reached by a change to EITHER side. That workflow triggers on the
+      # scaffolder and the templates, so a pull request that removes or renames a
+      # CLI command — the other half of the contract — would never run it.
+      - name: Check the generated scripts name real CLI commands
+        shell: bash
+        run: |
+          node scripts/check-scaffold-cli-scripts.mjs \
+            /tmp/scaffold-test/smoke-app \
+            packages/nextly/dist/cli/nextly.mjs
   # The `dev` script of `packages/ui` starts TWO watchers, and the shape it used
   # before — `a --watch & b --watch & wait` — is POSIX. `cmd.exe` treats `&` as a
   # SEQUENTIAL separator and has no `wait`, so on Windows the first watcher held

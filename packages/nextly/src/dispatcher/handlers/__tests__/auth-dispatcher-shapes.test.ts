@@ -144,6 +144,57 @@ describe("dispatchRbac — paginated lists (respondList)", () => {
       },
     });
   });
+
+  // Observed on the service call rather than reconstructed here: the response
+  // body is identical whichever way the option went, so asserting the shape
+  // again would pass on a dispatcher that dropped the parameter entirely.
+  it.each([
+    ["true", true],
+    ["false", false],
+  ])(
+    "forwards includeOrphaned=%s to the service as %s",
+    async (query, expected) => {
+      const listPermissions = vi.fn().mockResolvedValue({
+        data: [],
+        meta: { total: 0, page: 1, limit: 10, totalPages: 0 },
+      });
+      const container = {
+        permissions: { listPermissions },
+        roles: {},
+      } as unknown as ServiceContainer;
+
+      await dispatchRbac(
+        container,
+        "listPermissions",
+        { includeOrphaned: query },
+        undefined
+      );
+
+      expect(listPermissions).toHaveBeenCalledWith(
+        expect.objectContaining({ includeOrphaned: expected })
+      );
+    }
+  );
+
+  // Omission has to reach the service as `undefined` rather than as `false`,
+  // so the service's own default decides. A dispatcher substituting a literal
+  // here would pin the policy in two places.
+  it("leaves includeOrphaned undefined when the query omits it", async () => {
+    const listPermissions = vi.fn().mockResolvedValue({
+      data: [],
+      meta: { total: 0, page: 1, limit: 10, totalPages: 0 },
+    });
+    const container = {
+      permissions: { listPermissions },
+      roles: {},
+    } as unknown as ServiceContainer;
+
+    await dispatchRbac(container, "listPermissions", { page: "1" }, undefined);
+
+    expect(listPermissions).toHaveBeenCalledWith(
+      expect.objectContaining({ includeOrphaned: undefined })
+    );
+  });
 });
 
 describe("dispatchRbac — non-paginated lists (respondData)", () => {

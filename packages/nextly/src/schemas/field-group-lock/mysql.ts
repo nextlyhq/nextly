@@ -9,9 +9,10 @@
  * @module schemas/field-group-lock/mysql
  */
 
-import { int, mysqlTable, text } from "drizzle-orm/mysql-core";
+import { datetime, int, mysqlTable, text } from "drizzle-orm/mysql-core";
 
 export const nextlyFieldGroupLock = mysqlTable("nextly_field_group_lock", {
   id: int("id").primaryKey(),
   owner: text("owner"),
+  expiresAt: datetime("expires_at"),
 });

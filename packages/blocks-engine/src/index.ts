@@ -76,12 +76,23 @@ export {
 export type { NodeLocation, TreePosition } from "./tree";
 
 export { measureBytes, surveyDocument } from "./measure-bytes";
+// The nesting rule and the types it answers in. Exported together: a caller
+// that can ask the question must be able to name the verdict it gets back, and
+// a refusal reason it cannot name is one it has to re-derive from the boolean.
+export { canNest, canBeRoot } from "./nesting";
+export type { NestingSource, NestingVerdict, NestingRefusal } from "./nesting";
 // The measurement's return type travels with the function. Without it a
 // consumer naming `measureBytes`'s result has to rebuild the union by hand or
 // reach for `ReturnType`, and a hand-rebuilt copy is the second statement of a
 // contract that then drifts from the first.
 export type { ByteMeasurement } from "./measure-bytes";
-export { validate, ISSUE_CODES } from "./validation";
+export {
+  validate,
+  validateDocument,
+  ISSUE_CODES,
+  DOCUMENT_VERDICT_CODES,
+  INCOMPLETE_SURVEY_CODES,
+} from "./validation";
 /**
  * The registry-independent facts about a node, exported so a caller holding no
  * block registry can still refuse a malformed one. The editor's op layer is the
@@ -104,6 +115,7 @@ export type {
   BlockTypeLookup,
   ClassLookup,
   IssueCode,
+  ValidationResult,
   IssueSeverity,
   TokenLookup,
   ValidationContext,
@@ -135,6 +147,7 @@ export {
   registerBlocks,
   registerSupport,
   getBlock,
+  isBlockName,
   hasBlock,
   allBlocks,
   getBlockSource,
@@ -144,6 +157,7 @@ export {
   MAX_BLOCK_VERSION,
   registryLookup,
   registryMigrationSource,
+  registryNestingSource,
 } from "./registry";
 export type { RegisterOptions, SupportDefinition } from "./registry";
 

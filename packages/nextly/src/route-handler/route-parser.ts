@@ -1770,6 +1770,37 @@ function parsePreviewLinkRoutes(
   return null;
 }
 
+/**
+ * `POST /api/nextly/preview-url` resolves where one entry previews.
+ *
+ * The entry travels in the body rather than the path, because an editor
+ * previews what is on screen — including values not yet saved — so there is no
+ * id that identifies what is being asked about.
+ *
+ * Anything deeper is refused rather than folded in. A trailing segment here
+ * would otherwise be ignored, and a caller who mistyped a longer path would get
+ * a confident answer to a route they did not ask for.
+ */
+function parsePreviewUrlRoutes(
+  id: string | undefined,
+  subresource: string | undefined,
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  // The entry travels in the body, so only POST can carry a request at all.
+  // Matching regardless of method would hand a GET straight to the JSON-body
+  // handler rather than answering method-not-allowed.
+  if (httpMethod !== "POST") return null;
+  if (id !== undefined || subresource !== undefined) return null;
+
+  return {
+    service: "previewUrl",
+    operation: "create",
+    method: "resolveEntryPreviewUrl",
+    routeParams,
+  };
+}
+
 function parseApiKeyRoutes(
   id: string | undefined,
   httpMethod: string,
@@ -2360,6 +2391,17 @@ export function parseRestRoute(
   // Handle preview link minting and revocation
   if (resource === "preview-links") {
     const result = parsePreviewLinkRoutes(
+      id,
+      subresource,
+      httpMethod,
+      routeParams
+    );
+    if (result) return result;
+  }
+
+  // Handle resolving where an entry previews
+  if (resource === "preview-url") {
+    const result = parsePreviewUrlRoutes(
       id,
       subresource,
       httpMethod,

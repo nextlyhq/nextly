@@ -41,6 +41,8 @@ import {
 import { MoreHorizontal } from "lucide-react";
 import { useMemo, type KeyboardEvent } from "react";
 
+import { Pagination } from "@admin/components/shared/pagination";
+import type { PaginationProps } from "@admin/components/shared/pagination/types";
 import { navigateTo } from "@admin/lib/navigation";
 import { cn } from "@admin/lib/utils";
 
@@ -110,6 +112,21 @@ export interface DataTableViewProps<Row extends object> {
    * two-pixel band.
    */
   footer?: React.ReactNode;
+  /**
+   * The list's pagination, as DATA rather than markup.
+   *
+   * This is how a table paginates. The placement of a pager depends on which
+   * view is showing and this component is the only one that knows, so it owns
+   * where the pager lands as well as when — and a caller that hands over
+   * `currentPage` and `onPageChange` has no opportunity to put it anywhere.
+   * Passing the pager as markup left that decision at the call site, where the
+   * wrong arrangement is the one you get by writing the markup in reading
+   * order, and several surfaces drifted into it.
+   *
+   * Typed as the pager's own props rather than a restatement of them, so a prop
+   * added there is available here without a second definition to keep in step.
+   */
+  pagination?: PaginationProps;
   emptyMessage?: string;
   ariaLabel?: string;
   /** Draw the desktop table's card border. Disable when a parent supplies one. */
@@ -143,6 +160,7 @@ export function DataTableView<Row extends object>({
   loading = false,
   error = null,
   footer,
+  pagination,
   emptyMessage = "No results found.",
   ariaLabel = "Data table",
   bordered = true,
@@ -302,6 +320,65 @@ export function DataTableView<Row extends object>({
   const colSpan =
     visibleColumns.length + (selection ? 1 : 0) + (hasRowActions ? 1 : 0);
 
+  // The surface that holds the views and the footer, defined once because BOTH
+  // return paths below render a footer into it. Written out in each branch, the
+  // error path silently lost the card, the clipping and the breakpoint gap, so
+  // a pager that is correctly placed in the normal state moved outside the card
+  // the moment a request failed -- the exact defect this component's `footer`
+  // exists to prevent.
+  // What the footer slot holds, resolved ONCE for both return paths. Deciding
+  // it separately per branch is how the error path lost the surface: two
+  // answers to one question, agreeing until one of them was edited.
+  //
+  // Both render, footer first, rather than one displacing the other. `footer`
+  // takes an arbitrary node and not a pager, so a caller can legitimately hold a
+  // selection summary or bulk actions there while paginating -- a summary above
+  // its pager is a real arrangement. Letting `pagination` win would drop that
+  // content with both props public, both permitted by the type, and nothing
+  // reporting the loss. Footer first because a summary describes the rows above
+  // it and the pager moves between them.
+  // Whether the caller's footer will put anything on screen, decided by REACT's
+  // rule rather than by JavaScript's. The two disagree in both directions and
+  // each disagreement is a real defect:
+  //
+  //   truthiness  drops `0`, which React renders as "0" -- so a caller passing
+  //               `selectedIds.length` with nothing selected loses its footer;
+  //   nullishness keeps `false`, which React renders as nothing -- so the
+  //               ubiquitous `footer={show && <Summary />}` draws an empty
+  //               bordered surface under the table when `show` is false.
+  //
+  // React renders nothing for `null`, `undefined` and booleans, and renders
+  // numbers and strings. That set is closed and defined by React, which is what
+  // separates listing it here from guessing at values.
+  const footerRendersNothing =
+    footer === null ||
+    footer === undefined ||
+    typeof footer === "boolean" ||
+    footer === "";
+
+  // The limit worth stating rather than hiding: a component that RETURNS null
+  // still counts as content here, because no inspection of the node can know
+  // what it renders without rendering it. That case draws an empty surface, and
+  // the fix for it belongs at the caller, which knows.
+  const footerContent =
+    !footerRendersNothing || pagination !== undefined ? (
+      <>
+        {footer}
+        {pagination !== undefined && <Pagination {...pagination} />}
+      </>
+    ) : undefined;
+
+  const surfaceClassName = cn(
+    // Clipping is NOT part of the card. The table view rounds its own
+    // corners through whatever encloses it, and a globally coloured
+    // <thead> paints square corners through a rounded parent that does
+    // not clip -- which the shared DataTable is, and it is the caller
+    // that passes bordered={false}. So this stays unconditional.
+    "flex flex-col gap-4 @md/table:block @md/table:gap-0 @md/table:overflow-hidden",
+    bordered &&
+      "@md/table:rounded-md @md/table:border @md/table:border-border @md/table:bg-card @md/table:text-card-foreground"
+  );
+
   // A failed request and an empty result are different facts, and only one of
   // them can be true. Rendering the table anyway pairs "could not load" with
   // "no users available", which states as data what is actually the absence of
@@ -309,13 +386,22 @@ export function DataTableView<Row extends object>({
   // only the row-less case replaces the table outright.
   if (error && rows.length === 0) {
     return (
-      <div className={cn("@container/table w-full", className)}>
+      <div className={cn("@container/table w-full space-y-4", className)}>
         <div
           role="alert"
           className="rounded-md bg-destructive/10 p-3 text-sm text-destructive"
         >
           <TableError message={error} />
         </div>
+        {/* The footer stays, and stays in the SAME surface it occupies when the
+            request succeeds. It carries the pager, and a request that failed
+            for ONE page leaves the user on that page with no rows -- so
+            removing the controls here removes the only way back to a page that
+            works. The rows are gone; the navigation out of the failure is not
+            part of the failure, and neither is its placement. */}
+        {footerContent && (
+          <div className={surfaceClassName}>{footerContent}</div>
+        )}
       </div>
     );
   }
@@ -337,19 +423,7 @@ export function DataTableView<Row extends object>({
           column: the row cards carry their own borders and the footer takes the
           column's gap. At and above it, it becomes the card and the footer sits
           inside as the table's own footer. */}
-      <div
-        className={cn(
-          // Clipping is NOT part of the card. The table view rounds its own
-          // corners through whatever encloses it, and a globally coloured
-          // <thead> paints square corners through a rounded parent that does
-          // not clip -- which the shared DataTable is, and it is the caller
-          // that passes bordered={false}. So this stays unconditional, as it
-          // was before the card moved onto this element.
-          "flex flex-col gap-4 @md/table:block @md/table:gap-0 @md/table:overflow-hidden",
-          bordered &&
-            "@md/table:rounded-md @md/table:border @md/table:border-border @md/table:bg-card @md/table:text-card-foreground"
-        )}
-      >
+      <div className={surfaceClassName}>
         {/* Mobile / narrow: card view */}
         <div className="flex flex-col gap-4 @md/table:hidden">
           {loading && rows.length === 0 ? (
@@ -592,7 +666,7 @@ export function DataTableView<Row extends object>({
             </Table>
           </div>
         </div>
-        {footer}
+        {footerContent}
       </div>
     </div>
   );

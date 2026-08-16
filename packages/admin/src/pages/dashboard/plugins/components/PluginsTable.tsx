@@ -10,11 +10,9 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
-import { useSuspenseQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Columns } from "@admin/components/icons";
-import { Pagination } from "@admin/components/shared/pagination";
 import { PluginIcon } from "@admin/components/shared/plugin-icon";
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { DataTableView } from "@admin/components/ui/table/data-table";
@@ -22,11 +20,18 @@ import type { NextlyColumn } from "@admin/components/ui/table/data-table";
 import { ListShell } from "@admin/components/ui/table/list-shell";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { UI } from "@admin/constants/ui";
+import {
+  useBranding,
+  useBrandingStatus,
+} from "@admin/context/providers/BrandingProvider";
 import { useDebouncedValue } from "@admin/hooks/useDebouncedValue";
-import { publicApi } from "@admin/lib/api/publicApi";
+import { usePagination } from "@admin/hooks/usePagination";
 import { categoryLabel } from "@admin/lib/plugins/plugin-categories";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
-import type { PluginMetadata, AdminBranding } from "@admin/types/branding";
+import type { PluginMetadata } from "@admin/types/branding";
+
+import { InstalledPluginsUnavailable } from "./InstalledPluginsUnavailable";
+import { PluginsTableSkeleton } from "./PluginsTableSkeleton";
 
 type PluginWithId = PluginMetadata & { id: string };
 
@@ -71,31 +76,35 @@ export function PluginStatusPill({ enabled }: { enabled: boolean }) {
  * the table exposes no mutation actions.
  */
 export default function PluginsTable() {
-  const { data: branding } = useSuspenseQuery<AdminBranding>({
-    queryKey: ["admin-meta"],
-    queryFn: () => publicApi.get<AdminBranding>("/admin-meta"),
-    staleTime: 5 * 60 * 1000,
-  });
+  // Read through the provider rather than a second query of its own. The
+  // plugin list is served by the session-gated route, and a duplicate reader
+  // pointed at the public one shares the same cache key while asking a
+  // question that route no longer answers — the table would render empty.
+  const branding = useBranding();
+  // `useBranding` neither suspends nor throws, so the Suspense boundary and
+  // the error boundary around this table can no longer show their
+  // fallbacks. Without these two branches an unanswered request renders the
+  // definitive empty state: momentarily on a slow load, permanently after a
+  // failure.
+  const { isPending: pluginsPending, isUnavailable: pluginsUnavailable } =
+    useBrandingStatus();
 
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebouncedValue(search, UI.SEARCH_DEBOUNCE_MS);
-  const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState(25);
+  // 25 rather than the hook's default: an installed-plugins list is short and
+  // read in one pass, so a smaller page would split most installations across
+  // pages that no one needs to visit.
+  const { page, pageSize, setPage, setPageSize, resetPage } = usePagination({
+    initialPageSize: 25,
+  });
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
 
   // Reset to the first page when the search term or status filter changes so
   // the slice does not fall out of range against the newly filtered list.
   useEffect(() => {
-    setPage(0);
-  }, [debouncedSearch, statusFilter]);
-
-  // Changing the page size can leave the current page index out of range; snap
-  // back to the first page.
-  const handlePageSizeChange = (newPageSize: number) => {
-    setPageSize(newPageSize);
-    setPage(0);
-  };
+    resetPage();
+  }, [debouncedSearch, statusFilter, resetPage]);
 
   const pluginsWithId = useMemo(() => {
     return (branding?.plugins ?? []).map(plugin => ({
@@ -222,6 +231,12 @@ export default function PluginsTable() {
     [allColumns]
   );
 
+  // Before the table, because its empty state is a STATEMENT: "no plugins
+  // installed" read from a request that has not answered is wrong while it is
+  // in flight and stays wrong after it fails.
+  if (pluginsPending) return <PluginsTableSkeleton />;
+  if (pluginsUnavailable) return <InstalledPluginsUnavailable />;
+
   return (
     <ListShell
       toolbar={
@@ -287,17 +302,17 @@ export default function PluginsTable() {
         }
         registryKey="plugins"
         ariaLabel="Installed plugins table"
-        footer={
-          totalCount > 0 ? (
-            <Pagination
-              currentPage={page}
-              totalPages={Math.ceil(totalCount / pageSize)}
-              pageSize={pageSize}
-              onPageChange={setPage}
-              onPageSizeChange={handlePageSizeChange}
-              totalItems={totalCount}
-            />
-          ) : undefined
+        pagination={
+          totalCount > 0
+            ? {
+                currentPage: page,
+                totalPages: Math.ceil(totalCount / pageSize),
+                pageSize,
+                onPageChange: setPage,
+                onPageSizeChange: setPageSize,
+                totalItems: totalCount,
+              }
+            : undefined
         }
         emptyMessage={
           debouncedSearch || statusFilter !== "all"

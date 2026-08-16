@@ -60,6 +60,7 @@ function MigrationIndicator({
     generated: "bg-primary",
     applied: "bg-success-500",
     failed: "bg-destructive-500",
+    diverged: "bg-destructive-500",
   };
 
   const titles: Record<FieldGroupMigrationStatus, string> = {
@@ -68,6 +69,8 @@ function MigrationIndicator({
     generated: "Migration generated",
     applied: "Migration applied",
     failed: "Migration failed",
+    diverged:
+      "Tables changed but the definition did not - reconcile before editing again",
   };
 
   return (

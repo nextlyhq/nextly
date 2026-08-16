@@ -37,10 +37,16 @@ import { dirname, join, resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import type { CollectionConfig } from "../../../collections/config/define-collection";
+import type {
+  CollectionAdminOptions,
+  CollectionConfig,
+} from "../../../collections/config/define-collection";
 import type { SanitizedNextlyConfig } from "../../../collections/config/define-config";
 import type { FieldConfig } from "../../../collections/fields/types";
-import type { DynamicCollectionRecord } from "../../../schemas/dynamic-collections/types";
+import type {
+  CollectionAdminConfig,
+  DynamicCollectionRecord,
+} from "../../../schemas/dynamic-collections/types";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import {
@@ -60,6 +66,7 @@ import {
   type CodeFirstCollectionConfig,
   type SyncResult,
 } from "./collection-registry-service";
+import { hasPreviewConfigured } from "./preview-url-resolver";
 
 /**
  * Options for the sync operation.
@@ -236,6 +243,47 @@ export interface CollectionSyncResultWithValidation
  * Exported so the projection can be asserted directly rather than only through
  * a sync that needs a database.
  */
+/**
+ * `admin` keys this projection deliberately does NOT carry, each with the reason it is absent.
+ *
+ * Every key of `CollectionAdminOptions` must appear either in the object `toPersistedAdmin`
+ * returns or here — enforced below, at compile time. That is the point: the list of persisted
+ * keys is precisely what has drifted twice already (both conversion paths once omitted
+ * `defaultColumns`, and only one of them carried `disableCreate`), and a drop is invisible
+ * because the value type-checks at the author's keyboard and simply never arrives.
+ *
+ * Adding an option to `CollectionAdminOptions` now fails the build until it is classified.
+ */
+export const ADMIN_KEYS_NOT_PERSISTED = {
+  /**
+   * Written to the collection's own `description` column instead of into `admin`, so the two
+   * authoring paths describe a collection in one place. See `resolveDescription`.
+   */
+  description: "stored on the collection row rather than under `admin`",
+} as const;
+
+/**
+ * Re-establish the `admin` type on a value that has lost it.
+ *
+ * The HMR payload builder holds its config as `unknown`: it reads a module that has been
+ * re-imported across a reload, so nothing carries the authored type across that boundary. The
+ * projection keeps its precise signature — it is the boundary that decides what may be stored, and
+ * widening it to `unknown` would mean every caller could hand it anything.
+ *
+ * So the narrowing lives here, once, named for what it does. It checks only that the value is an
+ * object: the projection reads individual keys and each is optional, so a malformed one yields a
+ * projection with undefined fields rather than a throw — the same outcome as an absent `admin`.
+ *
+ * No assertion is needed after that narrowing: every option on `CollectionAdminOptions` is
+ * optional, so a non-null object is already assignable to it.
+ */
+export function asAdminOptions(
+  value: unknown
+): CollectionAdminOptions | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  return value;
+}
+
 export function toPersistedAdmin(admin: CollectionConfig["admin"]) {
   if (!admin) return undefined;
   return {
@@ -246,15 +294,103 @@ export function toPersistedAdmin(admin: CollectionConfig["admin"]) {
     defaultColumns: admin.defaultColumns,
     isPlugin: admin.isPlugin,
     disableCreate: admin.disableCreate,
+    // Sidebar placement. Both are read by `DynamicCollectionNav`, which takes its collections
+    // from the persisted registry — so omitting them here meant a code-first collection could
+    // set them, type-check, and still sort by the default.
+    order: admin.order,
+    sidebarGroup: admin.sidebarGroup,
     pagination: admin.pagination
       ? {
           defaultLimit: admin.pagination.defaultLimit,
           limits: admin.pagination.limits,
         }
       : undefined,
+    // The preview declaration minus the part no column can hold. `url` is a function of the
+    // entry, so what is stored is the ANSWER to the only question the admin asks of it — is
+    // there a preview here — plus the two presentation options the button needs to render.
+    // The URL itself depends on the entry and is resolved per request instead.
+    preview: admin.preview
+      ? {
+          hasPreview: hasPreviewConfigured(admin.preview),
+          label: admin.preview.label,
+          openInNewTab: admin.preview.openInNewTab,
+        }
+      : undefined,
     // Include custom components for plugins (e.g., custom Edit views)
     components: admin.components,
   };
+}
+
+/**
+ * Every `admin` option is either persisted or explicitly excluded — checked by the compiler.
+ *
+ * A plain assertion the checker EVALUATES, rather than a suppression: when
+ * `CollectionAdminOptions` gains a key that is in neither set, `UnclassifiedAdminKey` stops
+ * being `never` and this line fails with the offending key names in the error text.
+ */
+type UnclassifiedAdminKey = Exclude<
+  keyof CollectionAdminOptions,
+  | keyof NonNullable<ReturnType<typeof toPersistedAdmin>>
+  | keyof typeof ADMIN_KEYS_NOT_PERSISTED
+>;
+const _everyAdminKeyIsClassified: UnclassifiedAdminKey extends never
+  ? true
+  : [
+      "unclassified admin key(s) — persist them or list a reason",
+      UnclassifiedAdminKey,
+    ] = true;
+void _everyAdminKeyIsClassified;
+
+/**
+ * Everything this projection returns is a field the registry actually stores.
+ *
+ * The companion to the check above, and it has to be its own assertion because the two run in
+ * opposite directions. That one is computed from what the projection RETURNS, so it catches a
+ * key the persisted shape declares and the projection drops — which is how `order` and
+ * `sidebarGroup` were being lost. Basing it on `CollectionAdminConfig` instead would certify
+ * those as handled simply because the column type mentions them.
+ *
+ * This one is the reverse: every key the projection emits must exist on `CollectionAdminConfig`.
+ * Assignability alone does not give it, since a structural check permits extra properties — so a
+ * key could be marked "persisted" by the check above merely by being returned, while the column's
+ * type never described it and nothing could read it back with types.
+ */
+type UnstorableProjectedKey = Exclude<
+  keyof NonNullable<ReturnType<typeof toPersistedAdmin>>,
+  keyof CollectionAdminConfig
+>;
+const _everyProjectedKeyIsStorable: UnstorableProjectedKey extends never
+  ? true
+  : [
+      "projected key(s) absent from CollectionAdminConfig — declare them or stop returning them",
+      UnstorableProjectedKey,
+    ] = true;
+void _everyProjectedKeyIsStorable;
+
+/**
+ * The description a collection is stored with.
+ *
+ * `admin.description` and the top-level `description` are two spellings of one thing — help text
+ * under the collection title — and only the second has a column. Resolved in ONE place so the two
+ * sync paths cannot disagree about which wins.
+ *
+ * The top-level field takes precedence: it is the documented home, so an author who sets both is
+ * most plausibly migrating from the `admin` spelling and expects the explicit field to win.
+ */
+export function resolveDescription(config: {
+  description?: string;
+  admin?: unknown;
+}): string | undefined {
+  if (config.description !== undefined) return config.description;
+
+  // `admin` is narrowed here rather than required as a typed shape, because one of the callers
+  // holds it as `unknown`: the HMR payload builder reads a config that has crossed a module
+  // reload and does not carry its type. Narrowing in the single resolver keeps that seam honest
+  // without a cast at the call site, and without every caller repeating the check.
+  if (typeof config.admin !== "object" || config.admin === null)
+    return undefined;
+  const description = (config.admin as { description?: unknown }).description;
+  return typeof description === "string" ? description : undefined;
 }
 
 /**
@@ -677,7 +813,7 @@ export class CollectionSyncService extends BaseService {
         plural: config.labels?.plural ?? toPluralLabel(config.slug),
       },
       fields: config.fields,
-      description: config.description,
+      description: resolveDescription(config),
       tableName: config.dbName ?? config.slug.replace(/-/g, "_"),
       timestamps: config.timestamps ?? true,
       // Persist Draft/Published, i18n, and the resolved versioning config through
@@ -879,7 +1015,7 @@ export class CollectionSyncService extends BaseService {
           plural: config.labels?.plural ?? toPluralLabel(config.slug),
         },
         tableName,
-        description: config.description,
+        description: resolveDescription(config),
         fields: config.fields,
         timestamps: config.timestamps ?? true,
         // Why: status from defineCollection() input if present, otherwise false.

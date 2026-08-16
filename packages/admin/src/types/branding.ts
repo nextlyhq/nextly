@@ -39,6 +39,19 @@ export interface PluginWidgetMeta {
   requiredPermission?: string;
 }
 
+/**
+ * A plugin's public client configuration, served before a session exists.
+ *
+ * Separate from `plugins` because the two answer different questions:
+ * this says a plugin DECLARED a public config, while `plugins` says which
+ * plugins the project has installed. Merging them would let a plugin with
+ * a public config read as installed before the gated request answers.
+ */
+export interface PluginClientConfigMeta {
+  name: string;
+  clientConfig?: Record<string, unknown>;
+}
+
 /** Plugin metadata returned by the `/admin-meta` API. */
 export interface PluginMetadata {
   name: string;
@@ -83,14 +96,6 @@ export interface PluginMetadata {
   singles?: string[];
   /** Slugs of contributed field groups, for the detail page's contributions view. */
   fieldGroups?: string[];
-  /** Declared custom permissions (identity + display fields only; enabled plugins). */
-  permissions?: Array<{
-    action: string;
-    resource: string;
-    label?: string;
-    description?: string;
-    danger?: boolean;
-  }>;
   /** Declared HTTP routes as method + path (enabled plugins only). */
   /**
    * Declared HTTP routes. `fullPath` is the namespace the dispatcher mounts
@@ -192,8 +197,24 @@ export interface AdminBranding {
   /** Runtime toggle for builder-related navigation visibility. */
   showBuilder?: boolean;
 
-  /** Installed plugin metadata for sidebar rendering and plugin settings pages. */
+  /**
+   * INSTALLED plugin metadata, for sidebar rendering and plugin settings pages.
+   *
+   * Comes from the session-gated half alone, so its absence means the list has
+   * not arrived rather than that the project has no plugins. Read
+   * `useBrandingStatus()` before concluding anything from a plugin missing here.
+   */
   plugins?: PluginMetadata[];
+
+  /**
+   * Public client configuration, readable before a session exists.
+   *
+   * Deliberately NOT merged into `plugins`: a plugin declaring a public config
+   * is not a plugin the project has installed, and a reader that found it in
+   * that list would have skipped the checks saying the installed list is still
+   * unavailable. Only `usePluginClientConfig` reads this.
+   */
+  pluginClientConfigs?: PluginClientConfigMeta[];
 
   /** Custom sidebar groups created by the user for organizing collections/singles. */
   customGroups?: Array<{ slug: string; name: string; icon?: string }>;

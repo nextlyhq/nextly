@@ -1,0 +1,1034 @@
+#!/usr/bin/env node
+
+/**
+ * Code comments explain the code. They do not narrate the process that produced it — no tasks,
+ * no plans, no conversations, no review findings.
+ *
+ * The convention is written in `AGENTS.md`, and a documented rule with nothing enforcing it is
+ * not a control: the correct phrasing and the easy phrasing differ, so the rule gets broken by
+ * people who know it. A comment saying "this took four rounds to find" is invisible to every
+ * other check in the repository — it compiles, it lints, it reads as insight — and it decays
+ * into a reference to a conversation nobody can retrieve.
+ *
+ * A SCRIPT rather than a test, because the rule is repository-wide and a test enforcing it
+ * necessarily roots itself somewhere. A test rooted at its own directory covers one package
+ * while reading, from the outside, exactly like repository coverage — and one reaching beyond
+ * its package coupples that package to every other, which is what `layering.test.ts` guards
+ * against elsewhere.
+ *
+ * Here the scope is an argument, so a caller can narrow it without moving the check.
+ *
+ * Usage:
+ *   node scripts/check-comment-convention.mjs             # DEFAULT_ROOTS, the repository-wide scan
+ *   node scripts/check-comment-convention.mjs packages    # one root, for a faster local loop
+ *
+ * The allowlist's shrink check is skipped when roots are given explicitly, because a partial scan
+ * cannot tell a fixed file from one it never opened.
+ */
+
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { readFileSync, statSync } from "node:fs";
+import { join, relative, sep } from "node:path";
+import ts from "typescript";
+
+/**
+ * The forbidden shapes, deliberately narrow.
+ *
+ * A broad pattern ("PR", "issue") would fire on ordinary prose about pull requests or issue
+ * codes and be silenced, and a check that gets silenced is worth less than no check. These match
+ * shapes that have actually appeared: a count of review iterations, a reference to a review
+ * tool, a deictic reference to the change itself, a quoted conversation.
+ *
+ * Every one matches a NAME the code cannot own — a review tool, the pull request, the reviewer.
+ * That is what makes them safe: those words carry no meaning inside a description of what the
+ * code does, so matching them cannot reject a correct comment.
+ *
+ * ORDINAL PROCESS NARRATION IS NOT ENFORCED, and that is stated rather than left to be inferred
+ * from its absence: "the third instance of this shape we have found" passes, and nothing else in
+ * the repository covers it. The convention still forbids it; nothing mechanical catches it.
+ *
+ * The reason generalises. "The third instance of this shape we have found" is process history;
+ * "the third instance in the array owns the separator" describes a parser. The difference is
+ * intent, not vocabulary, so no expression over the words can separate them. Pairing the ordinal
+ * with a discovery verb does not help either, because those verbs are ordinary technical words:
+ * a cache MISSES, a guard CATCHES, a value is FOUND. This matches structure and leaves intent
+ * unenforced, rather than pretending intent is detectable syntax.
+ */
+export const FORBIDDEN = [
+  {
+    pattern: /\b(review|codex|coderabbit)\s+round/i,
+    why: "names a review iteration",
+    // Automation that records reviews already posted at a head describes a review round as its
+    // own behaviour. Outside review tooling the same words count development history.
+    domainVocabulary: true,
+  },
+  {
+    pattern: /\brounds?\s+of\s+review\b/i,
+    why: "names a review iteration",
+    // Automation that records reviews already posted at a head describes a review round as its
+    // own behaviour. Outside review tooling the same words count development history.
+    domainVocabulary: true,
+  },
+  {
+    pattern: /\b(codex|coderabbit|greptile)\b/i,
+    why: "names a review tool",
+    // Domain vocabulary in review tooling, which dispatches on these bots by login and must be
+    // able to say so. The line is what the code OPERATES on versus what happened to it: naming a
+    // tool the code matches against describes the code, while quoting what a reviewer said is
+    // narration wherever it appears, including here.
+    domainVocabulary: true,
+  },
+  {
+    // A numbered change, with or without a roadmap-item prefix: "PR 4 migration", "F11 PR 3".
+    // Mechanically distinct from the deictic form below and far more common, because it survives
+    // being copied between files - the number keeps naming a change nobody can now look up.
+    pattern: /\b(?:[a-z]\d+\s+)?PR\s+#?\d+/i,
+    why: "names a numbered change rather than the code",
+    // Suppressed in review tooling, where a pull-request number is the subject matter.
+    domainVocabulary: true,
+  },
+  {
+    // Deliberately broad, and only safe because of REVIEW_DOMAIN_PATHS below. In code that does
+    // not work on pull requests, naming one describes the change rather than the code. In code
+    // that DOES, the same words are the subject matter: "the head comes from the REF, not from
+    // the pull request object" and "has nothing to do with this pull request" are both correct
+    // descriptions, and no expression over the words separates them from narration because only
+    // the file's role differs. The role is declared by path instead of guessed at by pattern.
+    pattern: /\b(this|the)\s+(PR|pull request)\b/i,
+    why: "refers to the change rather than the code",
+    domainVocabulary: true,
+  },
+  {
+    // A NUMBERED task or plan: "Task 17", "Task #17", "Plan C2". The convention names tasks and
+    // plans alongside reviews, and this is the shape they arrive in - a reference to a document
+    // the reader has no way to open, describing why the code was written rather than what it does.
+    //
+    // A number AND a trailing colon are both required, because neither alone separates a label
+    // from ordinary technical English. "plan:" alone matches a query plan or an execution plan;
+    // "task 17" alone matches "the scheduler assigns task 17 to worker 2". Only the label form,
+    // "Task 17:", is unambiguous - and matching either half rejected correct comments describing
+    // runtime behaviour, which is the failure that gets a check switched off rather than fixed.
+    //
+    // A PARENTHESISED label is the second unambiguous form and is matched too: "(Plan D4)" is a
+    // reference, while prose does not bracket a runtime concept that way.
+    //
+    // The cost is stated rather than hidden: a bare "Plan C2" mid-sentence is NOT matched, because
+    // nothing in its syntax distinguishes it from prose. That is the same limit this file already
+    // accepts for ordinal narration - the difference is intent, not vocabulary.
+    pattern:
+      /(?:\b(?:[a-z]\d+\s+)?(?:task|plan)\s*(?:#\s*)?[a-z]?\d+\s*:)|(?:\((?:task|plan)\s*(?:#\s*)?[a-z]?\d+\))/i,
+    why: "names a task or plan rather than the code",
+  },
+  {
+    // An explicit process label: "Review finding:", "Review feedback:", "Review comment".
+    // Mechanically distinct from the reviewer-as-role uses the negative controls protect, because
+    // the noun that follows names the review artefact rather than a person or a permission.
+    pattern: /\breview\s+(?:finding|feedback|comment|note)s?\b/i,
+    why: "names a review artefact rather than the code",
+    // Suppressed in review tooling, where the artefact is the DATA being processed: "the review
+    // comment body is read from payload.body" describes the code.
+    domainVocabulary: true,
+  },
+  {
+    // The ACTOR carries the verdict, not the verb. "the operator asked", "the caller asked" and
+    // "the probe asked" are ordinary descriptions of a query; the same verb after one of these
+    // actors is a conversation. Anchoring on the verb alone would reject the first three, and
+    // anchoring on neither would miss "the control Codex asked for".
+    //
+    // A tool or a founder is never a RUNTIME actor, so these stay forbidden everywhere.
+    pattern:
+      /\b(?:founder|codex|coderabbit|greptile)\s+(?:said|asked|requested|wanted|suggested|flagged|found)\b/i,
+    why: "quotes a conversation",
+  },
+  {
+    // Split from the pattern above because a REVIEWER and a MAINTAINER can both be runtime
+    // actors: code that models review behaviour describes what a reviewer requested as a state,
+    // not as something someone told the author. Outside review tooling the same words are a
+    // conversation, so the file's role decides, exactly as it does for pull-request vocabulary.
+    pattern:
+      /\b(?:reviewer|reviewers|maintainer|maintainers)\s+(?:said|asked|requested|wanted|suggested|flagged|found)\b/i,
+    why: "quotes a conversation",
+    domainVocabulary: true,
+  },
+];
+
+/**
+ * Files this check does not read.
+ *
+ * Empty, and kept as a declared seam rather than deleted: whatever this check cannot read is
+ * unjudged, so the list is the place that has to stay visible. Its own source and test are NOT
+ * here - an instrument exempt from the control it applies elsewhere is the one thing nothing is
+ * watching, and this file necessarily contains what it forbids, so its existing prose is recorded
+ * in the allowlist like any other file rather than waved through by name.
+ */
+export const EXCLUDED_FILES = new Set([]);
+
+/**
+ * Extensions this reads. The JS family is included because authored source lives there too —
+ * config files, scripts, template sources — and a comment in one is as invisible to every other
+ * check as a comment in a `.ts`.
+ */
+/**
+ * Dialects whose findings REPORT without failing the run.
+ *
+ * The JS family and CSS are read by TypeScript's own scanner, with the one decision a lexer
+ * cannot make alone taken from the parser, so their answers are as good as the compiler's. Shell
+ * and YAML are read by a hand-rolled line scan carrying quote state, block-scalar indent, heredoc
+ * delimiters and a substitution stack - an unbounded surface, and one that has produced several
+ * reports against VALID input.
+ *
+ * A false positive costs more than a miss here: a gate that rejects correct code gets switched
+ * off, taking its true positives with it. So these two dialects are advisory until their reader
+ * is replaced by a real parser, and the run says so rather than leaving the difference implicit.
+ */
+export const ADVISORY_EXTENSIONS = [".yml", ".yaml", ".sh"];
+
+export function isAdvisory(path) {
+  return ADVISORY_EXTENSIONS.some(ext => path.endsWith(ext));
+}
+
+export const SOURCE_EXTENSIONS = [
+  ".ts",
+  ".tsx",
+  ".mts",
+  ".cts",
+  ".js",
+  ".jsx",
+  ".mjs",
+  ".cjs",
+  // CSS is authored source that ships to users, and its block comments reach the same extractor.
+  ".css",
+  // YAML and shell are authored too, and a workflow or a dev script is exactly where a note about
+  // why a step exists gets written.
+  ".yml",
+  ".yaml",
+  ".sh",
+];
+
+/**
+ * Options for reading one path, by dialect.
+ *
+ * CSS has block comments and no line comments. Reading `//` as one there would take an unquoted
+ * `url(https://...)` - legal CSS - as a comment running to the end of the line, and report
+ * whatever the rest of that URL happens to spell.
+ */
+const HASH_COMMENT_EXTENSIONS = [".yml", ".yaml", ".sh"];
+
+export function readOptionsFor(path) {
+  return {
+    hashComments: HASH_COMMENT_EXTENSIONS.some(ext => path.endsWith(ext)),
+    shell: path.endsWith(".sh"),
+    jsx: path.endsWith(".tsx") || path.endsWith(".jsx"),
+    lineComments: !path.endsWith(".css"),
+    domainVocabularyAllowed: isReviewDomain(path),
+  };
+}
+
+/** Directories that hold generated or vendored code rather than authored source. */
+const EXCLUDED_DIRS = new Set(["node_modules", "dist", ".next", ".turbo", "coverage"]);
+
+/**
+ * Paths whose SUBJECT is the review and release process, where this convention does not apply.
+ *
+ * The patterns match a name the code cannot own — a review tool, a pull request, a reviewer.
+ * That reasoning holds for code that does something else, and inverts for code that works ON
+ * pull requests: there the same words are the domain vocabulary, and "the head comes from the
+ * REF, not from the pull request object" is a correct description of a value's origin. The text
+ * is identical in both cases and only the file's role differs, so no expression over the words
+ * can separate them.
+ *
+ * Declaring the role by path is therefore the honest form. The alternative is a pattern that
+ * rejects correct prose in this tooling, and a check that rejects correct prose gets silenced -
+ * which costs more detection than the narrower scope does.
+ *
+ * Matched as a path PREFIX against the repository-relative path, so a directory entry covers
+ * everything beneath it.
+ */
+const REVIEW_DOMAIN_PATHS = [
+  "scripts/ci-verdict",
+  // The gate's request layer, named separately because the match above is at a
+  // path BOUNDARY: "scripts/ci-verdict" covers `ci-verdict.mjs` and anything
+  // under `ci-verdict/`, and deliberately not a sibling whose name merely
+  // starts with it. It reads pull requests and refs, so the vocabulary is what
+  // it operates on rather than narration about a change.
+  "scripts/ci-verdict-evidence",
+  "scripts/verify-merge",
+  "scripts/release/",
+  ".claude/rules/",
+  // This checker and its test. Their SUBJECT is the convention itself: the patterns name the
+  // shapes, and the prose has to quote them to explain why each was chosen. Four separate CI
+  // failures here came from an explanation instantiating the pattern it explains, which is a
+  // property of the file's job rather than of any one sentence - rewording each occurrence
+  // treats the symptom. What still fires here is genuine narration ("the founder asked for
+  // this", a task label), because those patterns are not domain vocabulary anywhere.
+  "scripts/check-comment-convention",
+  // GitHub review automation: these files read pull requests, post reviews and dispatch on bot
+  // logins, so pull-request vocabulary is what they OPERATE on rather than narration about them.
+  ".github/workflows/nextly-review-bot.yml",
+  ".github/workflows/nextly-bot-mention.yml",
+  ".github/scripts/review-bot",
+];
+
+/** True when `file` sits in tooling whose subject matter is the review or release process. */
+export function isReviewDomain(file) {
+  const path = relative(process.cwd(), file).split(sep).join("/");
+  // Matched at a path BOUNDARY, not as a bare prefix. "scripts/verify-merge" as a raw prefix also
+  // covers "scripts/verify-merge-anything.ts", which is a different file nobody exempted; an
+  // entry ending in "/" is a directory and covers what is under it.
+  return REVIEW_DOMAIN_PATHS.some(entry =>
+    entry.endsWith("/")
+      ? path.startsWith(entry)
+      : path === entry || path.startsWith(`${entry}.`) || path.startsWith(`${entry}/`)
+  );
+}
+
+/** The comments that predate this check, as a path to per-file count. */
+export const ALLOWLIST_FILE = "scripts/comment-convention-allowlist.json";
+
+/**
+ * The allowlist, validated.
+ *
+ * It records what the repository already contained when the check went live, so the rule can be
+ * enforced from the first commit without rewriting comments whose authors are better placed to
+ * rewrite them. Counts are per file rather than a single total: a bare list would exempt a file
+ * entirely, so a NEW offence added to an already-listed file would land unnoticed - which is the
+ * case the check most needs to catch.
+ *
+ * A malformed file aborts rather than degrading to an empty allowlist. Empty would read as "no
+ * exemptions", turn every pre-existing comment into a failure, and present a parse error as a
+ * wave of unrelated findings.
+ */
+export function readAllowlist(root = process.cwd()) {
+  const raw = JSON.parse(readFileSync(join(root, ALLOWLIST_FILE), "utf8"));
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error(`${ALLOWLIST_FILE} must be an object mapping each path to its entry`);
+  }
+  for (const [path, entry] of Object.entries(raw)) {
+    const shaped =
+      entry !== null &&
+      typeof entry === "object" &&
+      Number.isInteger(entry.count) &&
+      entry.count >= 1 &&
+      Array.isArray(entry.digests) &&
+      entry.digests.length === entry.count &&
+      entry.digests.every(d => typeof d === "string" && d.length > 0);
+    if (!shaped) {
+      throw new Error(
+        `${ALLOWLIST_FILE}: ${path} must be { count: positive integer, digests: string[] of that length }`
+      );
+    }
+  }
+  return new Map(Object.entries(raw));
+}
+
+/**
+ * A stable identity for the offences recorded against one file.
+ *
+ * A count alone cannot tell a recorded comment from a different one that replaced it: deleting the
+ * exempted comment and adding a new offence in the same change leaves the total unchanged, so a
+ * count comparison accepts it and the shrink check sees no reduction either. Hashing the offences
+ * themselves closes that, because the substitution changes the digest even when the number is
+ * identical.
+ *
+ * Sorted so a reordering is not a change, and whitespace-collapsed so reflowing a comment across
+ * lines is not either. Both would otherwise fail as new offences and teach people to regenerate
+ * the file, which is the habit that turns a record into a rubber stamp.
+ */
+/** One line, capped, for display only - never for the digest, which needs the whole text. */
+function shorten(text) {
+  return text.length > 140 ? `${text.slice(0, 140)}…` : text;
+}
+
+/**
+ * The canonical text of a comment, for hashing and for display.
+ *
+ * Collapsing whitespace alone is not reflow-stable: a block comment carries a `*` at the start of
+ * every continuation line, so wrapping the same prose differently yields different text and
+ * therefore a different digest. The allowlist would then report an unrecorded offence for a
+ * comment nobody edited - a gate blocking ordinary formatting, which is the failure that gets a
+ * check switched off.
+ *
+ * Exported and used by every caller, rather than repeated at each one: three copies of this
+ * expression had already drifted apart in this file and its test.
+ */
+export function normaliseComment(comment) {
+  return comment
+    .split("\n")
+    .map(line => line.replace(/^\s*\*(?!\/)\s?/, ""))
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function digestOffences(offences) {
+  return offences
+    .map(one =>
+      createHash("sha256").update(normaliseComment(one)).digest("hex").slice(0, 16)
+    )
+    .sort();
+}
+
+/**
+ * Every authored source file under `root`, taken from git's index rather than from the
+ * filesystem.
+ *
+ * A directory walk reads whatever is on disk, and what is on disk depends on which build and
+ * test commands the machine has run. `apps/playground/.next-e2e/` holds compiled bundles that
+ * embed the comments of every module they bundle, so a walk reports them as findings, attributes
+ * them to a generated path, and does so only on machines where that directory happens to exist -
+ * clean in a fresh worktree, twenty findings after an e2e run, from identical sources.
+ *
+ * Extending the excluded-name list cannot close that. `.next` was listed and `.next-e2e` was
+ * not, and the next tool to add an output directory reopens it. Tracked-ness is the property
+ * actually wanted: generated output is ignored, authored source is committed, and git already
+ * holds that answer exactly.
+ *
+ * `-z` because a path may contain a newline, and `--` so a root that looks like a flag is still
+ * read as a path.
+ */
+export function sourceFiles(root) {
+  const listed = execFileSync("git", ["ls-files", "-z", "--", root], {
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  return listed
+    .split("\0")
+    .filter(Boolean)
+    .filter(path => SOURCE_EXTENSIONS.some(ext => path.endsWith(ext)))
+    .filter(path => {
+      const parts = path.split("/");
+      return (
+        !parts.some(part => EXCLUDED_DIRS.has(part)) &&
+        // Matched on the whole repository-relative path. A basename comparison would exempt any
+        // file anywhere in the monorepo that happened to share the name, so a package adding its
+        // own copy would drop out of the scan without the exclusion list changing.
+        !EXCLUDED_FILES.has(path)
+      );
+    });
+}
+
+/**
+ * Comment text only.
+ *
+ * Scanning whole lines would match a string literal — a test fixture naming a reviewer, an error
+ * message mentioning a pull request — and the check would then be reporting on data rather than
+ * on prose. This is a scan over syntax and so has the usual limit: a comment spelled unusually
+ * escapes it. It is a floor rather than a boundary, and worth having because the failure it
+ * catches is one nothing else in the repository can see.
+ */
+export function commentText(source, { lineComments = true, jsx = false, hashComments = false, shell = false } = {}) {
+  // YAML and shell are not JavaScript. Their comments start at `#`, which TypeScript cannot lex.
+  if (hashComments) return hashLineComments(source, { shell });
+
+  // CSS is not JavaScript, so TypeScript cannot lex it. It has block comments and nothing else.
+  if (!lineComments) return cssBlockComments(source);
+
+  // Rendered JSX text is data, not code, and `scanner.scan()` does not enter JSX child text
+  // mode - the parser transitions with `scanJsxToken`. So `<span>https://x</span>` reaches the
+  // scanner as a slash pair and reads as a comment. The parser knows exactly which spans are
+  // JsxText, so its answer is used to reject them rather than reimplementing the transition.
+  // Only for files that ARE JSX. Parsing a plain .ts file as TSX turns ordinary generic syntax
+  // into phantom JsxText spans, and comments falling inside them would be dropped - a false
+  // NEGATIVE, which is the worse direction for a gate.
+  const facts = parserFacts(source, jsx);
+  const jsxText = facts.jsxText;
+
+  const comments = [];
+  const scanner = ts.createScanner(
+    ts.ScriptTarget.Latest,
+    // Keep trivia: comments ARE trivia, and skipping it would discard the only tokens wanted.
+    false,
+    // JSX so `{/* ... */}` inside markup is lexed rather than read as an operator soup.
+    // JSX only where the file is JSX. `scan()` never enters JSX child-text mode by itself, so the
+    // variant buys nothing on a plain `.ts` file and would only change how `<` is treated.
+    jsx ? ts.LanguageVariant.JSX : ts.LanguageVariant.Standard,
+    source
+  );
+
+  // Depth of `{` since each open template interpolation, so a `}` closes the interpolation only
+  // when it is the matching one. A template can open inside an interpolation, hence a stack.
+  const interpolations = [];
+  // Whether each open paren belongs to an if/while/for HEADER. A slash after such a paren opens a
+  // regular expression - `if (ready) /x/.test(v)` is a statement, not a division - while a slash
+  // after a call or grouping paren divides.
+  let token = scanner.scan();
+
+  while (token !== ts.SyntaxKind.EndOfFileToken) {
+    // The one decision a lexer cannot make alone: `/` opens a regular expression in some
+    // positions and divides in others, and only what precedes it separates them. TypeScript
+    // exposes the re-scan for exactly this, so the DECISION is made here and the SCANNING stays
+    // TypeScript's - which is what keeps character classes and escapes correct.
+    if (
+      (token === ts.SyntaxKind.SlashToken || token === ts.SyntaxKind.SlashEqualsToken) &&
+      facts.regexStarts.has(scanner.getTokenStart())
+    ) {
+      token = scanner.reScanSlashToken();
+    }
+
+    if (
+      token === ts.SyntaxKind.SingleLineCommentTrivia ||
+      token === ts.SyntaxKind.MultiLineCommentTrivia
+    ) {
+      const start = scanner.getTokenStart();
+      const jsxSpan = jsxText.find(r => start >= r.pos && start < r.end);
+      if (jsxSpan) {
+        // Rendered text, not a comment. Resume at the END of that text rather than at the end of
+        // the line the scanner just consumed: `<div>https://x</div>; // Codex asked` has a real
+        // comment after the URL, and discarding the line would take it too.
+        scanner.resetTokenState(jsxSpan.end);
+        token = scanner.scan();
+        continue;
+      }
+      comments.push(scanner.getTokenText());
+    } else if (token === ts.SyntaxKind.TemplateHead) {
+      interpolations.push(0);
+    } else if (token === ts.SyntaxKind.OpenBraceToken && interpolations.length > 0) {
+      interpolations[interpolations.length - 1] += 1;
+    } else if (token === ts.SyntaxKind.CloseBraceToken && interpolations.length > 0) {
+      if (interpolations[interpolations.length - 1] === 0) {
+        // Back into template TEXT. Without this the scanner keeps lexing the rest of the
+        // template as code, and a `//` in that text reads as a comment.
+        const resumed = scanner.reScanTemplateToken(false);
+        if (resumed === ts.SyntaxKind.TemplateTail) interpolations.pop();
+        token = scanner.scan();
+        continue;
+      }
+      interpolations[interpolations.length - 1] -= 1;
+    }
+
+    token = scanner.scan();
+  }
+
+  return comments;
+}
+
+/**
+ * The two things the SCANNER cannot decide for itself, taken from the parser in one pass.
+ *
+ * `regexStarts` holds the offset of every regular-expression literal. Whether a `/` opens one or
+ * divides is a grammar question, not a lexical one - `value as number / 2` divides while
+ * `if (ready) /x/.test(v)` does not - and a set of "token kinds that end a value" is a
+ * reimplementation of the parser's state that is wrong wherever it is incomplete. Each gap is a
+ * SILENT one: the slash re-scans as a regular expression and swallows the comment behind it. So
+ * the answer is read from the parser, which already computed it.
+ *
+ * `jsxText` holds rendered JSX text, which no comment can begin inside: `<span>https://x</span>`
+ * reaches the scanner as a slash pair. Populated only for files that ARE JSX, because parsing a
+ * plain `.ts` file as TSX turns ordinary generic syntax into phantom JsxText spans and comments
+ * falling inside them would be dropped.
+ */
+function parserFacts(source, jsx) {
+  const sourceFile = ts.createSourceFile(
+    jsx ? "f.tsx" : "f.ts",
+    source,
+    ts.ScriptTarget.Latest,
+    false,
+    jsx ? ts.ScriptKind.TSX : ts.ScriptKind.TS
+  );
+  const regexStarts = new Set();
+  const jsxText = [];
+  const visit = node => {
+    if (node.kind === ts.SyntaxKind.RegularExpressionLiteral) {
+      regexStarts.add(node.getStart(sourceFile));
+    }
+    if (jsx && node.kind === ts.SyntaxKind.JsxText) {
+      jsxText.push({ pos: node.pos, end: node.end });
+    }
+    node.forEachChild(visit);
+  };
+  visit(sourceFile);
+  return { regexStarts, jsxText };
+}
+
+/**
+ * Comments in a `#` dialect: YAML and shell.
+ *
+ * A `#` only opens one at the start of a line or after whitespace. Mid-token it is data, and both
+ * dialects rely on that - `color: #fff` is a YAML scalar and `${#name}` is a shell expansion, so
+ * a naive split on the character reports both as comments.
+ *
+ * Quotes are tracked because a `#` inside them is literal in both dialects. A shebang is skipped:
+ * `#!/usr/bin/env bash` is an interpreter directive rather than prose.
+ */
+/**
+ * A block-scalar header (`key: |`, `- >-`, `key: |2`) makes every line indented past it DATA.
+ *
+ * The indicator may be followed by a chomping or indentation modifier in either order, and by the
+ * header's own trailing comment - which is a real comment and still gets scanned, so this only
+ * decides where the scalar STARTS. Sequence form (`- |`) is included because a scalar introduced
+ * by a sequence entry has no `:` in front of it.
+ */
+const BLOCK_SCALAR_HEADER = /(?::|^\s*-)\s*[|>][\d+-]*\s*(?:#.*)?$/;
+
+/**
+ * The delimiter a `<<` opens, or null when the operator is not a heredoc after all.
+ *
+ * `<<-` strips leading tabs from the terminator, and a delimiter written `'EOF'`, `"EOF"` or
+ * `\\EOF` is quoted. An UNQUOTED delimiter must look like a word: a left shift inside `(( ))`
+ * reaches here as `<< 2`, and treating that as a heredoc would swallow the rest of the file.
+ */
+function heredocDelimiter(line, start) {
+  let at = start;
+  let stripTabs = false;
+  if (line[at] === "-") {
+    stripTabs = true;
+    at += 1;
+  }
+  while (line[at] === " " || line[at] === "\t") at += 1;
+
+  // The delimiter is ONE word that the shell quote-removes as a whole, so `<<'E'OF` names EOF.
+  // Stopping at the first closing quote would name `E`, and no later line would ever match the
+  // terminator - which suppresses the rest of the file rather than reporting anything.
+  let end = at;
+  let delim = "";
+  let quoted = false;
+  while (end < line.length) {
+    const c = line[end];
+    if (c === "'" || c === '"') {
+      const close = line.indexOf(c, end + 1);
+      if (close === -1) return null;
+      delim += line.slice(end + 1, close);
+      quoted = true;
+      end = close + 1;
+      continue;
+    }
+    if (c === "\\") {
+      if (end + 1 >= line.length) return null;
+      delim += line[end + 1];
+      quoted = true;
+      end += 2;
+      continue;
+    }
+    if (/[\s;&|()<>]/.test(c)) break;
+    delim += c;
+    end += 1;
+  }
+  // A quoted delimiter is unambiguous. An UNQUOTED one must look like a word, because a left
+  // shift reaches here as `<< 2` and opening a heredoc on it would swallow the rest of the file.
+  // No shape requirement: Bash defines the delimiter as a general word, so `123` and `EOF!` are
+  // both valid and refusing them left their bodies scanned as source. Arithmetic contexts, which
+  // are the reason a shape rule existed, are tracked directly above instead.
+  // `cat <<''` is a valid empty delimiter, terminated by a blank line. Only an ABSENT delimiter
+  // is a non-heredoc; refusing the empty one left its body scanned as source.
+  if (!delim && !quoted) return null;
+  return { delim, stripTabs, end };
+}
+
+function hashLineComments(source, { shell = false } = {}) {
+  const comments = [];
+  const lines = source.split("\n");
+  // Carried ACROSS lines: a double-quoted string may span them in shell, and resetting per line
+  // reads the closing quote as an opening one, which hides the comment that follows it.
+  let quote = "";
+  // Set from a block-scalar header; every line indented at least this far is scalar DATA. A # there
+  // is content - a prompt, a generated payload, an embedded shell snippet - and reporting it fails
+  // CI on a legal document, which is the failure that gets a check switched off.
+  let blockIndent = null;
+  // Quote states suspended by an enclosing `$(`. Shell parses a command substitution as commands
+  // even inside double quotes, so `"$(cmd # c)"` holds a real comment: the substitution opens a
+  // fresh quoting context and restores the outer one at its `)`.
+  // Whether the open single quote is an ANSI-C one, which is the only single-quoted form in
+  // either dialect that honours backslash escapes.
+  let ansiC = false;
+  const substitutions = [];
+  // Delimiters opened on the current line, in the order their bodies follow it, and the one now
+  // consuming lines. A heredoc body is data the script EMITS rather than prose about the script.
+  const pending = [];
+  let heredoc = null;
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    // Only in shell. `#!/usr/bin/env bash` is an interpreter directive rather than prose, but YAML
+    // has no shebang - there a first line beginning `#!` is simply a comment, and skipping it left
+    // the first line of every YAML file unreadable by this check.
+    if (shell && i === 0 && line.startsWith("#!")) continue;
+
+    if (heredoc) {
+      const terminator = heredoc.stripTabs ? line.replace(/^\t+/, "") : line;
+      if (terminator === heredoc.delim) heredoc = pending.shift() ?? null;
+      continue;
+    }
+
+    const indent = line.search(/\S/);
+    if (blockIndent !== null) {
+      // A blank line stays inside the scalar; anything indented less ends it.
+      if (indent === -1 || indent >= blockIndent) continue;
+      blockIndent = null;
+    }
+    if (!shell && quote === "" && BLOCK_SCALAR_HEADER.test(line)) {
+      blockIndent = (indent === -1 ? 0 : indent) + 1;
+      // Deliberately no `continue`: the header's own trailing comment is authored prose.
+    }
+
+    let found = -1;
+    for (let at = 0; at < line.length; at += 1) {
+      const c = line[at];
+
+      // Checked BEFORE the quote state, because that is the whole point: `$(` opens commands even
+      // inside double quotes. `$((` is arithmetic, where `<<` is a shift rather than a heredoc.
+      // `$'...'` is ANSI-C quoting, where a backslash escapes the next character - including the
+      // closing quote. A plain shell single quote has no escapes at all, so reading `$'it\\'s'` with
+      // the plain rule closes the string early and reports the rest of the line as a comment.
+      if (shell && !quote && c === "$" && line[at + 1] === "'") {
+        ansiC = true;
+        quote = "'";
+        at += 1;
+        continue;
+      }
+      if (shell && quote !== "'" && c === "$" && line[at + 1] === "(") {
+        const arithmetic = line[at + 2] === "(";
+        substitutions.push({ quote, arithmetic, depth: 0 });
+        quote = "";
+        at += arithmetic ? 2 : 1;
+        continue;
+      }
+      // A subshell or grouping inside the substitution closes with the same character, so its
+      // `)` must not restore the enclosing quote - doing so would read the rest of a
+      // `"$( (cmd); # c )"` line as quoted data and miss the comment.
+      // A bare `(( ))` is arithmetic too, and it is what still made a delimiter SHAPE restriction
+      // necessary. Tracking it means the shape rule can go, so valid delimiters like `123` and
+      // `EOF!` stop being refused - a refusal that left their bodies scanned as source.
+      if (shell && !quote && c === "(" && line[at + 1] === "(" && substitutions.length === 0) {
+        substitutions.push({ quote, arithmetic: true, depth: 0 });
+        at += 1;
+        continue;
+      }
+      if (shell && !quote && c === "(" && substitutions.length > 0) {
+        substitutions[substitutions.length - 1].depth += 1;
+        continue;
+      }
+      if (shell && !quote && c === ")" && substitutions.length > 0) {
+        const innermost = substitutions[substitutions.length - 1];
+        if (innermost.depth > 0) {
+          innermost.depth -= 1;
+          continue;
+        }
+        substitutions.pop();
+        if (innermost.arithmetic && line[at + 1] === ")") at += 1;
+        quote = innermost.quote;
+        continue;
+      }
+
+      if (quote) {
+        // A backslash escapes inside shell double quotes and inside ANSI-C single quotes, and
+        // nowhere else: plain single quotes in either dialect take it literally.
+        if (c === "\\" && (quote === '"' || ansiC)) {
+          at += 1;
+          continue;
+        }
+        if (c === quote) {
+          // YAML escapes a single quote by DOUBLING it, so `'it''s'` is one scalar. Closing on the
+          // first of the pair would hand the rest of a legal value back to the comment scan.
+          if (!shell && quote === "'" && line[at + 1] === "'") {
+            at += 1;
+            continue;
+          }
+          quote = "";
+          ansiC = false;
+        }
+        continue;
+      }
+
+      // Outside quotes a backslash escapes the next character, so `\\#` is a literal hash.
+      if (shell && c === "\\") {
+        at += 1;
+        continue;
+      }
+
+      // Shell allows a quote to open mid-word (`a'b'c` concatenates), but YAML does not: in a
+      // plain scalar an apostrophe or inch mark is ordinary content. Treating `Don't` or
+      // `12" screen` as opening a scalar swallows the rest of the line, and the end-of-line reset
+      // comes too late to recover the comment that followed on it.
+      if (c === '"' || c === "'") {
+        if (shell || at === 0 || /[\s:,[{]/.test(line[at - 1])) quote = c;
+        continue;
+      }
+
+      if (
+        shell &&
+        c === "<" &&
+        line[at + 1] === "<" &&
+        !substitutions[substitutions.length - 1]?.arithmetic
+      ) {
+        // `<<<` is a here-string: its operand is on the same line, so no body follows.
+        if (line[at + 2] === "<") {
+          at += 2;
+          continue;
+        }
+        const opened = heredocDelimiter(line, at + 2);
+        if (opened) {
+          pending.push({ delim: opened.delim, stripTabs: opened.stripTabs });
+          at = opened.end - 1;
+        } else {
+          at += 1;
+        }
+        continue;
+      }
+
+      // In shell a control operator ends a word, so `x && #c` is a comment. YAML has no such
+      // operators: there a # needs whitespace before it, and applying the shell rule would read
+      // `key: a;#b` - a legal scalar - as one.
+      const boundary = shell ? /[\s;&|()]/ : /\s/;
+      if (c === "#" && (at === 0 || boundary.test(line[at - 1]))) {
+        found = at;
+        break;
+      }
+    }
+    if (found !== -1) comments.push(line.slice(found + 1));
+    // A YAML single-quoted scalar CAN span lines, so this is a deliberate trade rather than a
+    // property of the grammar. An apostrophe in a plain scalar - `name: Don't panic` - is
+    // indistinguishable from an opening quote, and carrying the state would then treat the whole
+    // rest of the document as string data and report nothing in it. Resetting costs the opposite
+    // and much narrower error: a `#` on the continuation line of a genuinely multi-line
+    // single-quoted scalar reads as a comment.
+    if (!shell && quote === "'") quote = "";
+    if (!heredoc && pending.length > 0) heredoc = pending.shift();
+  }
+  return comments;
+}
+
+/**
+ * Tokens after which a `/` DIVIDES, because each ends a value.
+ *
+ * Enumerated in this direction on purpose: being wrong towards "regular expression" would consume
+ * code as literal text and hide whatever comments it contained, while being wrong towards
+ * "division" at worst reports a comment that was really regex data. The first failure is silent
+ * and the second is visible.
+ */
+/**
+ * CSS comments, which are only ever `/* ... *\/`.
+ *
+ * A quoted `/*` inside a CSS string would be read as opening one. That is accepted rather than
+ * parsed around: it can only ever cause a comment to be reported that was really string data,
+ * which is visible and correctable, and CSS strings holding comment syntax are vanishingly rare
+ * next to the cost of a second parser.
+ */
+function cssBlockComments(source) {
+  const comments = [];
+  let at = source.indexOf("/*");
+  while (at !== -1) {
+    const end = source.indexOf("*/", at + 2);
+    const stop = end === -1 ? source.length : end + 2;
+    comments.push(source.slice(at, stop));
+    at = source.indexOf("/*", stop);
+  }
+  return comments;
+}
+
+/** Every forbidden shape found in `source`, as `{ why, comment }`. */
+export function offencesIn(source, options) {
+  // A review-domain file is exempt from the pull-request VOCABULARY and from nothing else.
+  // Naming a review tool or quoting a reviewer is narration wherever it appears, including in
+  // the tooling that reads pull requests, so skipping the whole pattern set there left a hole
+  // exactly the size of the rule.
+  const patterns = options?.domainVocabularyAllowed
+    ? FORBIDDEN.filter(entry => entry.domainVocabulary !== true)
+    : FORBIDDEN;
+  const found = [];
+  for (const comment of commentText(source, options)) {
+    for (const { pattern, why } of patterns) {
+      if (pattern.test(comment)) {
+        // Whole. Truncating here would cap what every caller sees, including the digest, so a long
+      // comment could be rewritten past the cut and keep its identity. Shortening is the print
+      // sites' job.
+      found.push({ why, comment: comment.trim() });
+      }
+    }
+  }
+  return found;
+}
+
+/**
+ * Scanned when no roots are given, which is how CI invokes it — so this list IS the enforced
+ * scope, and anything missing from it is unchecked rather than checked elsewhere. `templates`
+ * carries authored source that ships to users.
+ */
+/**
+ * The default scan.
+ *
+ * `.` is first and covers the other five, which are kept because they are what the scope MEANS:
+ * a reader checking whether a directory is enforced can see it named, and the accompanying test
+ * asserts each one contributes files. Paths are de-duplicated in `main`, so the overlap costs a
+ * set insertion and nothing else.
+ *
+ * Without `.` the two tracked config files at the repository root - `eslint.config.mjs` and
+ * `lint-staged.config.mjs` - sit outside every named root, so a forbidden comment in either
+ * leaves the repository-wide gate reporting clean.
+ */
+export const DEFAULT_ROOTS = [
+  ".",
+  "packages",
+  "apps",
+  "e2e",
+  "templates",
+  "scripts",
+];
+
+function main() {
+  const requested = process.argv.slice(2);
+  const explicit = requested.length > 0;
+  const roots = explicit ? requested : DEFAULT_ROOTS;
+
+  const isDirectory = root => {
+    try {
+      return statSync(root).isDirectory();
+    } catch {
+      return false;
+    }
+  };
+
+  // EVERY requested root must exist. Filtering the missing ones away lets a typo scan a smaller
+  // scope than asked for and still report success — `packages templats` would check `packages`
+  // and announce a clean result for a scope nobody requested.
+  const missing = roots.filter(root => !isDirectory(root));
+  if (missing.length > 0) {
+    console.error(
+      `Not a directory: ${missing.join(", ")}. Nothing was scanned; a partial scan would report ` +
+        "a clean result for a scope that was never requested."
+    );
+    process.exit(1);
+  }
+
+  // De-duplicated because the default roots overlap deliberately: `.` covers the named ones, and
+  // a file listed twice would be scanned twice and counted twice against its allowlist entry.
+  const files = [...new Set(roots.flatMap(root => sourceFiles(root)))];
+
+  // A control on the walk, before any verdict is read from it: a broken walk reports every file
+  // clean by reading none, and the check below is satisfied by absence.
+  //
+  // Applied only to the DEFAULT scan, whose expected size is a property of this repository. An
+  // explicit root is a scope the caller chose and may legitimately hold a handful of files, so
+  // the floor there is one — enough to catch a path that resolves to an empty directory.
+  const floor = explicit ? 1 : 100;
+  if (files.length < floor) {
+    console.error(
+      `Only ${files.length} source file(s) found under ${roots.join(", ")}, expected at least ` +
+        `${floor}. That is a walk reading nothing rather than a clean result.`
+    );
+    process.exit(1);
+  }
+
+  const byFile = new Map();
+  let skipped = 0;
+  for (const file of files) {
+    // Review tooling is READ, not skipped. It is exempt from the pull-request vocabulary only,
+    // which readOptionsFor carries; every other pattern still applies to it.
+    if (isReviewDomain(file)) skipped += 1;
+    for (const { why, comment } of offencesIn(readFileSync(file, "utf8"), readOptionsFor(file))) {
+      // Stored WHOLE, and shortened only where it is printed.
+      //
+      // The digest is taken over these strings, so anything dropped here is text the identity
+      // check cannot see: truncating first would let the tail of a long comment be rewritten
+      // while its first hundred characters, and therefore its digest, stayed the same.
+      //
+      // Whitespace is collapsed because that is not a difference worth failing on - a comment
+      // reflowed across lines is the same comment - and doing it here keeps the stored form and
+      // the hashed form identical rather than normalising twice.
+      const text = normaliseComment(comment);
+      const path = relative(process.cwd(), file).split(sep).join("/");
+      byFile.set(path, [...(byFile.get(path) ?? []), `${why} — ${text}`]);
+    }
+  }
+
+  const allowlist = readAllowlist();
+  const failures = [];
+
+  for (const [path, found] of byFile) {
+    const entry = allowlist.get(path);
+    if (!entry) {
+      failures.push(
+        `${path} — ${found.length} offence(s), 0 allowed:\n` +
+          found.map(one => `      ${shorten(one)}`).join("\n")
+      );
+      continue;
+    }
+    // A SUBSET rule rather than count-plus-combined-hash, because only a subset can express
+    // "offences may be removed and never replaced". A combined digest cannot: shrinking
+    // legitimately changes it, so a rule keyed on that value must accept some new hash whenever
+    // the count falls - and once it accepts one, deleting two offences and adding a third passes
+    // with every number moving downward. Per-offence hashes make removal expressible and
+    // substitution unrepresentable, at any count.
+    // A MULTISET, because the same comment written twice is two offences. Membership in a Set
+    // would let a copy of an already-recorded comment pass unrecorded, and the shrink check below
+    // accepts `found >= allowed`, so nothing else would notice it either.
+    const remaining = new Map();
+    for (const hash of entry.digests) remaining.set(hash, (remaining.get(hash) ?? 0) + 1);
+    const unrecorded = digestOffences(found).filter(hash => {
+      const left = remaining.get(hash) ?? 0;
+      if (left === 0) return true;
+      remaining.set(hash, left - 1);
+      return false;
+    });
+    if (unrecorded.length > 0) {
+      failures.push(
+        `${path} — ${unrecorded.length} offence(s) the record does not contain:\n` +
+          found.map(one => `      ${shorten(one)}`).join("\n")
+      );
+    }
+  }
+
+  // Entries whose file now holds fewer offences than recorded, which is what makes the allowlist
+  // shrink rather than merely stop growing.
+  //
+  // Checked only on the DEFAULT scan. An explicit root deliberately reads part of the repository,
+  // so every allowlisted path outside it holds zero offences as far as that scan can tell, and
+  // treating those as fixed would walk the allowlist to nothing on the strength of files nobody
+  // opened.
+  if (!explicit) {
+    for (const [path, entry] of allowlist) {
+      const allowed = entry.count;
+      const found = byFile.get(path)?.length ?? 0;
+      if (found >= allowed) continue;
+      failures.push(
+        found === 0
+          ? `${path} — no offences remain; delete its entry from ${ALLOWLIST_FILE}`
+          : `${path} — ${found} offence(s) remain but ${allowed} allowed; lower it to ${found}`
+      );
+    }
+  }
+
+  // Split by dialect BEFORE deciding the exit status. Advisory findings are printed with the
+  // blocking ones - they are real and worth fixing - but they cannot fail the run.
+  const blocking = failures.filter(one => !isAdvisory(one.split(" — ")[0]));
+  const advisory = failures.filter(one => isAdvisory(one.split(" — ")[0]));
+
+  if (advisory.length > 0) {
+    console.warn(
+      `${advisory.length} shell/YAML file(s) disagree with ${ALLOWLIST_FILE}. ` +
+        "ADVISORY: these do not fail the run, because that reader is a line scan rather than a " +
+        "parser and has reported against valid input.\n"
+    );
+    for (const one of advisory) console.warn(`  ${one}\n`);
+  }
+
+  if (blocking.length > 0) {
+    console.error(`${blocking.length} file(s) disagree with ${ALLOWLIST_FILE}:\n`);
+    for (const failure of blocking) console.error(`  ${failure}\n`);
+    console.error(
+      "Comments describe the code only: state what the code does and why, with no reference to " +
+        "reviews, tools, or the change itself.\n" +
+        "The allowlist records what predated this check and may only shrink. Do not add an entry " +
+        "to silence a new comment; rewrite the comment."
+    );
+    process.exit(1);
+  }
+
+  // Both counts are reported rather than left implicit. A file the scan declined to read and a
+  // file it read and cleared produce the same silence, so without these a growing allowlist or a
+  // widening path exemption would shrink what is actually checked while this line kept saying the
+  // same thing.
+  const exempt = [...allowlist.values()].reduce((sum, entry) => sum + entry.count, 0);
+  console.log(
+    `${files.length - skipped} of ${files.length} source files across ${roots.join(", ")}: ` +
+      "no new comment names a review, tool or change" +
+      (skipped > 0 ? `; ${skipped} read with the pull-request vocabulary allowed` : "") +
+      (exempt > 0 ? `; ${exempt} pre-existing offence(s) still allowlisted` : "") +
+      "."
+  );
+}
+
+// Only when run directly, so the test can import the parts without the process exiting.
+if (process.argv[1] && process.argv[1].endsWith("check-comment-convention.mjs")) {
+  main();
+}

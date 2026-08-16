@@ -43,6 +43,19 @@ export interface ComponentReference {
 
 export interface UpdateComponentOptions {
   source?: FieldGroupSource;
+  /**
+   * Advance `schema_version` even though this write carries no new shape.
+   *
+   * For the caller whose DDL already landed and whose row write then failed: the tables moved, so
+   * every editor loaded before that moment is now describing a shape that no longer exists.
+   * `assertSchemaVersionMatch` is the only thing standing between such an editor and an apply
+   * against the moved tables, and it compares versions — so a divergence that leaves the version
+   * untouched lets a stale preview pass the optimistic lock.
+   *
+   * The caller states the INTENT and the registry still owns the arithmetic; letting a caller
+   * supply the number would let one regress it.
+   */
+  invalidateSchemaVersion?: boolean;
 }
 
 /**
@@ -336,10 +349,41 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       updateData.description = data.description;
     }
 
+    // 🔴 The version advances when the PHYSICAL SHAPE changes, not when `fields` happens to be
+    // present. `schema_version` is an optimistic lock: `assertSchemaVersionMatch` rejects a save
+    // whose editor was loaded before someone else changed the schema, so anything that moves
+    // storage has to invalidate an in-flight editor.
+    //
+    // Toggling `localized` moves every translatable column between the main table and
+    // `comp_<slug>_locales`. Tying the bump to `fields` alone left that transition invisible to the
+    // guard: a preview taken beforehand still matched, and applying it wrote a stale field set over
+    // a shape that had already moved. `applyComponentSchemaChanges` bumps after the same physical
+    // transition, so this is two paths performing one move and only one of them advancing the lock.
+    //
+    // Compared against the STORED value rather than merely being present, so a request that resends
+    // the current setting does not invalidate every open editor for no reason.
+    const localizationChanged =
+      data.localized !== undefined &&
+      (data.localized === true) !== (existing.localized === true);
+
     if (data.fields) {
       updateData.fields = JSON.stringify(data.fields);
-      updateData.schema_version = existing.schemaVersion + 1;
       updateData.migration_status = data.migrationStatus || "pending";
+    } else if (data.migrationStatus !== undefined) {
+      // How far a schema change GOT is not a property of the field list, and coupling the two made
+      // it unwritable on its own. That left the one caller who has an outcome and nothing else to
+      // say — a write that failed after its DDL committed — unable to record it, so a row went on
+      // describing a shape the tables no longer have with nothing marking the divergence.
+      updateData.migration_status = data.migrationStatus;
+    }
+
+    if (
+      data.fields ||
+      localizationChanged ||
+      options?.invalidateSchemaVersion
+    ) {
+      // One increment however many reasons applied: the row moved to the next version, once.
+      updateData.schema_version = existing.schemaVersion + 1;
     }
 
     if (data.admin !== undefined) {

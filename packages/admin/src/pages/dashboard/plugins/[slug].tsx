@@ -1,7 +1,7 @@
 "use client";
 
 import { Badge } from "@nextlyhq/ui";
-import { useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
+import { useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { Suspense } from "react";
 
 import {
@@ -20,10 +20,7 @@ import {
 } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { Breadcrumbs } from "@admin/components/shared";
-import {
-  PageErrorFallback,
-  SectionErrorFallback,
-} from "@admin/components/shared/error-fallbacks";
+import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { PluginIcon } from "@admin/components/shared/plugin-icon";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { Link } from "@admin/components/ui/link";
@@ -36,8 +33,13 @@ import { API_PATH_PREFIX } from "@admin/lib/api/fetcher";
 import { categoryLabel } from "@admin/lib/plugins/plugin-categories";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 import { staticRegistrySource } from "@admin/lib/plugins/registry/static-source";
+import {
+  type ApiPermissionEntry,
+  fetchPermissionsFromApi,
+} from "@admin/services/realPermissionsApi";
 import type { PluginMetadata } from "@admin/types/branding";
 
+import { InstalledPluginsUnavailable } from "./components/InstalledPluginsUnavailable";
 import { NotInstalledPlugin } from "./components/NotInstalledPlugin";
 import { PluginPageLoading } from "./components/PluginPageLoading";
 import { PluginStatusPill } from "./components/PluginsTable";
@@ -138,27 +140,6 @@ function UninstalledOrMissing({ activeSlug }: { activeSlug?: string }) {
         </p>
       </div>
     </div>
-  );
-}
-
-/**
- * Shown when admin-meta failed, so whether this plugin is installed is
- * unknown.
- *
- * Not the catalogue view: that one states the plugin is absent, which is a
- * claim this page cannot make when the request that would have told it failed.
- */
-function InstalledPluginsUnavailable() {
-  const queryClient = useQueryClient();
-
-  return (
-    <SectionErrorFallback
-      title="Could not load your installed plugins"
-      description="This page cannot tell whether the plugin is installed until the admin metadata loads."
-      reset={() => {
-        void queryClient.invalidateQueries({ queryKey: ["admin-meta"] });
-      }}
-    />
   );
 }
 
@@ -361,6 +342,152 @@ interface ContributionGroup {
  * the serialized metadata the server already computed. Honest by
  * construction — an empty group simply is not rendered.
  */
+/**
+ * A plugin's permissions, read from the SEEDED ROWS rather than folded from the
+ * configuration.
+ *
+ * The rows are what the seeder actually wrote, so Schema Builder entities,
+ * `setup` transformers and orphan repair are all already accounted for — none
+ * of which a fold over the configuration can see, because a Builder collection
+ * exists only in `dynamic_collections`. It also keeps the permission vocabulary
+ * off the public `admin-meta` payload, which served it to anonymous callers.
+ *
+ * `owner` is the DECLARING PLUGIN NAME, and the host's own sentinel is the
+ * literal string `"app"`. A plugin legally named `app` is therefore
+ * indistinguishable here from host-declared permissions, because the row
+ * carries no `source` column to separate them — the collector computes that
+ * distinction in memory and never persists it. Accepted rather than guarded:
+ * the ambiguity needs a schema change to close, and it is recorded here so the
+ * next reader is not surprised by it.
+ *
+ * Its own query rather than a suspending one, so a caller without the roles
+ * read permission degrades THIS card instead of the page.
+ */
+/** Retries left to a failure that says nothing about this viewer's access. */
+const DEFAULT_QUERY_RETRIES = 2;
+
+/** Rows per request. The endpoint caps a page; the loop below spans them. */
+const PERMISSION_PAGE_SIZE = 200;
+
+/**
+ * Whether an error is the server REFUSING rather than failing.
+ *
+ * A refusal is an answer about this viewer and repeating it changes nothing. A
+ * network error or a 5xx is the absence of an answer, and the two must not
+ * share a branch: conflating them suppresses the retry that would have
+ * recovered the second, and reports missing permissions to someone who has
+ * them.
+ */
+function isAccessDenial(error: unknown): boolean {
+  const status = (error as { status?: unknown } | null)?.status;
+  return status === 401 || status === 403;
+}
+
+/**
+ * Every permission row, across pages.
+ *
+ * The endpoint sorts globally by resource, so ONE plugin's rows are scattered
+ * rather than grouped — a single page filtered by owner therefore omits rows
+ * silently, and reports "none" for a plugin whose rows all sort late. Paging is
+ * what makes the owner filter answer about the whole set.
+ *
+ * Orphans are requested because this card DISCLOSES what a plugin owns rather
+ * than offering permissions to grant. A row the plugin no longer declares is
+ * still attributed to it and still carries whatever grants it was given, so
+ * omitting it would understate what the plugin left behind.
+ */
+async function fetchAllPermissions(): Promise<ApiPermissionEntry[]> {
+  const first = await fetchPermissionsFromApi({
+    limit: PERMISSION_PAGE_SIZE,
+    page: 1,
+    includeOrphaned: true,
+  });
+  const rows = [...first.data];
+  // Bounded by the total the server reported, and re-read from each response,
+  // so a shrinking result set cannot spin here.
+  for (let page = 2; page <= (first.meta?.totalPages ?? 1); page += 1) {
+    const next = await fetchPermissionsFromApi({
+      limit: PERMISSION_PAGE_SIZE,
+      page,
+      includeOrphaned: true,
+    });
+    if (next.data.length === 0) break;
+    rows.push(...next.data);
+  }
+  return rows;
+}
+
+function PluginPermissions({ pluginName }: { pluginName: string }) {
+  const { data, isPending, isError, error } = useQuery({
+    queryKey: ["plugin-permissions", pluginName],
+    queryFn: () => fetchAllPermissions(),
+    // Only a DENIAL is an answer about this viewer, so only a denial stops the
+    // retries. A network failure or a 5xx says nothing about access, and
+    // treating it as one both skips the retry that would have recovered it and
+    // tells the viewer they lack a permission they may well hold.
+    retry: (failureCount, err) =>
+      !isAccessDenial(err) && failureCount < DEFAULT_QUERY_RETRIES,
+  });
+
+  const denied = isError && isAccessDenial(error);
+  const owned = (data ?? []).filter(entry => entry.owner === pluginName);
+
+  // Rendered even when empty, unlike the configuration-fed groups beside it.
+  // An absent section reads as "this plugin declares none", which is a claim
+  // this card cannot make while the request is pending or refused.
+  return (
+    <div className="rounded-lg border border-border bg-card p-4">
+      <div className="mb-2 flex items-center gap-2">
+        <Shield className="h-4 w-4 text-muted-foreground" />
+        <h3 className="text-sm font-medium text-foreground">Permissions</h3>
+      </div>
+      {isPending && (
+        <p className="text-xs text-muted-foreground">Loading permissions…</p>
+      )}
+      {denied && (
+        <p className="text-xs text-muted-foreground">
+          Not available. Reading permissions needs the roles read permission, so
+          this list is hidden rather than empty.
+        </p>
+      )}
+      {isError && !denied && (
+        <p className="text-xs text-muted-foreground">
+          Could not load permissions. This is a failure to ask, not an answer —
+          the plugin may well own some.
+        </p>
+      )}
+      {!isPending && !isError && owned.length === 0 && (
+        <p className="text-xs text-muted-foreground">
+          No permission rows are attributed to this plugin.
+        </p>
+      )}
+      {!isPending && !isError && owned.length > 0 && (
+        <ul className="space-y-1.5">
+          {owned.map(entry => (
+            <li key={entry.id} className="text-sm text-foreground">
+              {entry.name || `${entry.action}-${entry.resource}`}
+              {entry.danger === true && (
+                <span className="ml-2 text-xs text-muted-foreground">
+                  danger
+                </span>
+              )}
+              {/* Marked rather than omitted: the row still exists and still
+                  carries its grants, so hiding it would understate what this
+                  plugin left behind. It enforces nothing until the plugin
+                  declares it again. */}
+              {entry.orphaned === true && (
+                <span className="ml-2 text-xs text-muted-foreground">
+                  no longer declared
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function Contributions({ plugin }: { plugin: PluginMetadata }) {
   const enabled = plugin.enabled !== false;
 
@@ -423,15 +550,6 @@ function Contributions({ plugin }: { plugin: PluginMetadata }) {
       items: (plugin.fieldTypes ?? []).map(ft => ({ primary: ft.type })),
     },
     {
-      key: "permissions",
-      label: "Permissions",
-      icon: Shield,
-      items: (plugin.permissions ?? []).map(p => ({
-        primary: p.label ?? `${p.action}-${p.resource}`,
-        secondary: p.danger ? "danger" : undefined,
-      })),
-    },
-    {
       key: "routes",
       label: "API routes",
       icon: Route,
@@ -441,7 +559,9 @@ function Contributions({ plugin }: { plugin: PluginMetadata }) {
     },
   ].filter(group => group.items.length > 0);
 
-  if (groups.length === 0) return null;
+  // NOT `groups.length === 0`: permissions come from their own query now, so a
+  // plugin whose only contribution is a permission would have had the whole
+  // section removed by a check that cannot see them.
 
   return (
     <section className="mb-8">
@@ -514,6 +634,7 @@ function Contributions({ plugin }: { plugin: PluginMetadata }) {
             </ul>
           </div>
         ))}
+        <PluginPermissions pluginName={plugin.name} />
       </div>
     </section>
   );

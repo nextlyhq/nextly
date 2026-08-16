@@ -10,14 +10,16 @@
  */
 import { DragDropProvider, DragOverlay } from "@dnd-kit/react";
 import { type LucideIcon } from "lucide-react";
+import { useState } from "react";
 
 import { defaultBlockRegistry } from "../core/registry";
 
 import { Canvas } from "./canvas/Canvas";
-import { Monitor, Smartphone, Tablet } from "./icons";
+import { Ban, Monitor, Smartphone, Tablet } from "./icons";
 import { InvalidSlotBanner } from "./InvalidSlotBanner";
 import { dragLabel } from "./logic/dragLabel";
-import { planDrop } from "./logic/dropPlan";
+import { planDrop, type DropOutcome, type DropRefusal } from "./logic/dropPlan";
+import { dropRefusalMessage } from "./logic/dropRefusal";
 import { BlockLibrary } from "./panels/BlockLibrary";
 import { Inspector } from "./panels/Inspector";
 import { useEditor } from "./store/EditorProvider";
@@ -28,31 +30,78 @@ const BREAKPOINTS: { id: string; label: string; Icon: LucideIcon }[] = [
   { id: "mobile", label: "Mobile", Icon: Smartphone },
 ];
 
+/** The source and target a drag event carries, which is all either handler below reads. */
+interface DragOperation {
+  source: { id: string | number; data?: unknown } | null;
+  target: { id: string | number; data?: unknown } | null;
+}
+
 export function EditorSurface() {
   const { state, dispatch } = useEditor();
   const root = state.document.root;
+  /**
+   * Why the CURRENT target refuses this block, while the drag is still in the air.
+   *
+   * Held here rather than derived at render: the overlay renders on every pointer move and
+   * planning is a tree walk, so it is computed when the target CHANGES — which is exactly when
+   * `dragover` fires.
+   */
+  const [refusal, setRefusal] = useState<DropRefusal | null>(null);
 
-  const onDragEnd = (event: {
-    operation: {
-      source: { id: string | number; data?: unknown } | null;
-      target: { id: string | number; data?: unknown } | null;
-    };
-    canceled: boolean;
-  }) => {
-    if (event.canceled) return;
-    const { source, target } = event.operation;
-    if (!source || !target) return;
-    const action = planDrop(
+  const outcomeOf = (operation: DragOperation): DropOutcome => {
+    const { source, target } = operation;
+    if (!source || !target) return { kind: "unresolved" };
+    return planDrop(
       source.data ?? {},
       target.data ?? {},
       root,
       defaultBlockRegistry
     );
-    if (action) dispatch(action);
+  };
+
+  /**
+   * Feedback lands DURING the drag, not on release. A refusal the author only discovers after
+   * letting go is the failure this is here to remove: they aim at a container, nothing happens,
+   * and nothing says why.
+   */
+  const onDragOver = (event: { operation: DragOperation }) => {
+    const outcome = outcomeOf(event.operation);
+    setRefusal(outcome.kind === "refused" ? outcome.reason : null);
+  };
+
+  /**
+   * The first target needs its own read, because `dragover` cannot report it.
+   *
+   * `setDropTarget` returns early when the identifier is unchanged, and dispatches only once the
+   * operation is already `dragging`. A target resolved while the drag is still initialising
+   * therefore sets the identifier WITHOUT emitting — and every later resolution of that same
+   * target takes the early return. So a drag that begins over a refusing container would say
+   * nothing until the pointer left and came back, which is exactly the case a node dragged inside
+   * its own formatted parent hits first.
+   */
+  const onDragStart = (event: { operation: DragOperation }) => {
+    const outcome = outcomeOf(event.operation);
+    setRefusal(outcome.kind === "refused" ? outcome.reason : null);
+  };
+
+  const onDragEnd = (event: {
+    operation: DragOperation;
+    canceled: boolean;
+  }) => {
+    // Cleared on EVERY end, cancels included: the overlay unmounts but this state does not, and a
+    // refusal left behind would be the message shown at the start of the next drag.
+    setRefusal(null);
+    if (event.canceled) return;
+    const outcome = outcomeOf(event.operation);
+    if (outcome.kind === "action") dispatch(outcome.action);
   };
 
   return (
-    <DragDropProvider onDragEnd={onDragEnd}>
+    <DragDropProvider
+      onDragStart={onDragStart}
+      onDragOver={onDragOver}
+      onDragEnd={onDragEnd}
+    >
       <div className="nx-pb-editor">
         <div className="nx-pb-toolbar">
           <div className="nx-pb-seg" role="group" aria-label="Preview device">
@@ -99,26 +148,108 @@ export function EditorSurface() {
         </div>
       </div>
 
-      <DragOverlay>
+      {/*
+       * Named, because everything inside it is an anonymous inline-styled div otherwise. The chip
+       * and the refusal below it are the editor's only feedback during a drag, and neither the
+       * stylesheet nor anything reading the surface has a handle on them without a class on the
+       * element dnd-kit positions.
+       */}
+      <DragOverlay className="nx-pb-drag-overlay">
         {source => (
           <div
+            data-refused={refusal ? "true" : undefined}
             style={{
               display: "inline-flex",
-              alignItems: "center",
-              gap: 6,
-              padding: "6px 12px",
-              borderRadius: "var(--radius)",
-              background: "var(--nx-primary)",
-              color: "var(--nx-primary-foreground)",
-              fontSize: 13,
-              fontWeight: 600,
-              boxShadow: "0 8px 24px rgb(0 0 0 / 0.25)",
+              flexDirection: "column",
+              alignItems: "flex-start",
+              gap: 4,
               pointerEvents: "none",
-              whiteSpace: "nowrap",
             }}
           >
-            <span aria-hidden>⠿</span>
-            {dragLabel(source?.data ?? {}, root, defaultBlockRegistry)}
+            <span
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "6px 12px",
+                borderRadius: "var(--radius)",
+                background: "var(--nx-primary)",
+                color: "var(--nx-primary-foreground)",
+                fontSize: 13,
+                fontWeight: 600,
+                boxShadow:
+                  "0 8px 24px color-mix(in srgb, var(--nx-shadow-color) 25%, transparent)",
+                whiteSpace: "nowrap",
+              }}
+            >
+              <span aria-hidden>⠿</span>
+              {dragLabel(source?.data ?? {}, root, defaultBlockRegistry)}
+            </span>
+            {/*
+             * Mounted for the WHOLE drag and only its text changes. A polite live region that
+             * enters the accessibility tree already carrying its first message is not reliably
+             * announced, so a region created at the moment of refusal can stay silent for the one
+             * case it exists to speak for. Empty, it renders nothing and occupies no space.
+             *
+             * Polite rather than assertive: this text changes on every target the pointer crosses,
+             * and an assertive region would interrupt on each one.
+             */}
+            <span
+              role="status"
+              aria-live="polite"
+              style={
+                refusal
+                  ? {
+                      // The explanation is normal-weight body text, so it needs the 4.5:1 text
+                      // ratio rather than the 3:1 allowed for UI boundaries. Painting it on the
+                      // destructive FILL cannot reach that: measured through the repository's own
+                      // resolver, `--nx-destructive-foreground` on `--nx-destructive` is 3.84:1 in
+                      // light mode. It sits on the page surface instead, where
+                      // `--nx-foreground` on `--nx-background` measures 20.41:1 light and 21:1
+                      // dark — a pairing the contrast suite already asserts.
+                      //
+                      // Refusal is then carried by the border, the mark and the words rather than
+                      // by a fill. `--nx-destructive` on `--nx-background` measures 3.73:1 light
+                      // and 6.90:1 dark, clearing the 3:1 a non-text boundary needs in both modes,
+                      // and the sentence says which rule applied where no colour could.
+                      display: "inline-flex",
+                      // Centred rather than on the baseline: an SVG's baseline is its bottom edge,
+                      // so a baseline-aligned icon rides above the text it sits beside.
+                      alignItems: "center",
+                      gap: 6,
+                      maxWidth: 260,
+                      padding: "5px 10px",
+                      borderRadius: "var(--radius)",
+                      border: "2px solid var(--nx-destructive)",
+                      background: "var(--nx-background)",
+                      color: "var(--nx-foreground)",
+                      fontSize: 12,
+                      fontWeight: 500,
+                      boxShadow:
+                        "0 8px 24px color-mix(in srgb, var(--nx-shadow-color) 25%, transparent)",
+                    }
+                  : undefined
+              }
+            >
+              {refusal ? (
+                <>
+                  {/*
+                   * An icon rather than a character. The obvious glyph for this is U+20E0
+                   * COMBINING ENCLOSING CIRCLE BACKSLASH, which is an enclosing MARK: it has no
+                   * form of its own and needs a base character to enclose, so standing alone it
+                   * draws a dotted-circle placeholder or nothing at all depending on the font.
+                   * A component renders the same everywhere and contributes no text to the live
+                   * region beside it.
+                   */}
+                  <Ban
+                    size={13}
+                    aria-hidden
+                    style={{ color: "var(--nx-destructive)", flexShrink: 0 }}
+                  />
+                  {dropRefusalMessage(refusal)}
+                </>
+              ) : null}
+            </span>
           </div>
         )}
       </DragOverlay>

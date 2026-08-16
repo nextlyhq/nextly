@@ -6,6 +6,57 @@ an act rather than a file type, and the checks below are needed before any file
 of the merged work has been opened.
 -->
 
+## The decisions in this file are also code
+
+**Run it, do not retype it:**
+
+```sh
+node scripts/verify-merge.mjs <pr-number>
+```
+
+It reads the tip from `git ls-remote` rather than the API's cached head, refuses
+when the branch cannot answer, names every blocking job rather than counting
+them, and reports a second reviewer that never ran as distinct from one that
+found nothing. A gate typed out again by hand is a second implementation of the
+same question, which this repository has a rule about.
+
+**It answers a different question before and after the merge**, because the two
+questions have different subjects. Open, it judges the branch tip — the thing
+being proposed. Merged, it judges `merge_commit_sha`: a squash commit is `main`
+plus the change rather than the tree CI ran on, and the two disagree. Measured
+on one merged pull request here, the branch head reported the CI job and one
+integration leg as `success` while the merge commit had them queued.
+
+**Know its range before trusting it.** The script's module header lists what it
+does not cover, and the four worth carrying in your head are: it snapshots
+threads and checks once rather than holding them still; `REQUIRED_CHECKS` is a
+floor listing workflows whose absence is known to mean no coverage, not every
+workflow; `refs/pull/N/merge` is resolved rather than pinned; and the
+landed-whole range screens without certifying. The project runs this advisory,
+so those windows are closed by the merge precondition below, not by the script.
+
+**Exit status distinguishes three outcomes, and the third is not a softer
+second.** `0` passed, `1` blocked, `2` did not get to answer — a rewritten
+history, or a candidate list from the landed-whole screen that nobody has
+settled by content yet. A caller may retry or escalate a `2`; it must never read
+one as a pass.
+
+`scripts/verify-merge.mjs` implements the judgements below as pure functions —
+whether a branch can answer the question at all, whether a job counts as
+passing, whether a check was ever DUE to report given the paths the pull request
+touches, whether a review verdict belongs to the revision being merged, and
+whether a second reviewer looked. `scripts/verify-merge.test.mjs` runs them
+against the inputs that produced this repository's actual false cleans, and
+`pnpm test:scripts` runs it in CI.
+
+Prefer them to re-deriving the logic in shell. The snippets here stay because
+the reasoning is worth reading, but a snippet is not a control: every one of
+them was wrong at least once — a count computed and never read, an exit status
+swallowed by the pipeline that consumed it, a comparison against a base that
+moves — and each was found by a person executing it mentally rather than by
+anything running it. When a rule and the script disagree, the script is the one
+with tests.
+
 ## A squash merge makes every ancestry check unsound
 
 Merging squashes the branch into one new commit, so the branch head is **never**
@@ -275,6 +326,15 @@ They are easy to run together and none substitutes for another:
    answers the same way whether or not the commit landed. Match it as a FIXED
    string: a marker containing `.`, `[` or `*` is otherwise a pattern, and can
    match text it was never taken from.
+
+   **The marker must fit on ONE line.** `git grep` matches per line, so a marker
+   spanning a wrapped comment or a formatted call finds nothing in a merge
+   commit that contains it — which reads exactly like a lost tail, in the
+   alarming direction. Measured here while verifying a merge by content: the
+   control is what separated the two, because the same marker was absent from
+   the BRANCH HEAD as well, and content the branch does not have cannot have
+   been lost by the merge. Pick a marker from a single line, and when the search
+   comes back empty run it against the head before believing it.
    - it ADDED content → `git grep -F -e "$marker" <mergeCommit> -- <path>`;
      expect a hit. The `-e` is not optional: a marker beginning with `-`, which
      a Markdown list item usually does, is otherwise parsed as an option and
@@ -370,6 +430,45 @@ is what makes it safe, because it is the server that refuses. Both take
 `$VERIFIED`, never `$NOW`. Bind it to that variable rather than retyping a SHA:
 a merge precondition naming the wrong revision either refuses a correct merge or,
 worse, permits the one it was added to stop.
+
+**Copy a full object name; never extend an abbreviated one.** The flag needs all
+forty characters, and both forms are in circulation: `git rev-parse HEAD`,
+`git log --format=%H` and the `ls-remote | cut -f1` above print the object name
+in full, while `--oneline`, `%h` and most of what `gh` displays print a prefix.
+So the rule is not "distrust printed SHAs" — it is to know which of the two you
+are looking at, and to take the full form when one is available rather than
+lengthening a short one. The two failures are not symmetric. A fabricated value that happens to prefix
+the real head still refuses — which is the flag working. A fabricated value is
+never accidentally CORRECT, so the danger is not this command; it is every other
+place a hand-assembled SHA is used where nothing checks it.
+
+Measured while merging the pull request that added `scripts/verify-merge.mjs`: a
+ten-character prefix was padded out to full length and passed here, and GitHub
+answered `Head branch was modified`. That message names a race, and no race had
+occurred — the head was untouched and the SHA was invented. Reading the error at
+face value would have sent the next step chasing a phantom push.
+
+So capture it in full when you VERIFY, from the ref rather than from any
+printed abbreviation, and carry that value into `$VERIFIED`. Not at merge time:
+re-reading the tip here binds the flag to whatever is newest, which after a push
+is the unverified revision this precondition exists to reject — the rubber stamp
+this section warns about three paragraphs above. The point is to avoid
+retyping a SHA, never to refresh one.
+
+Derive the remote the same way the tail check above does, from
+`isCrossRepository`: `origin` is the BASE repository, so for a fork it does not
+own `refs/heads/$BR` and returns nothing — or, where the base has a branch of the
+same name, an unrelated revision. That derivation already exists in this file;
+reuse it rather than writing a second one.
+
+Then read `Head branch was modified` as EITHER a moved head or a wrong value.
+The two are indistinguishable from the message, and one of them is a typing
+error rather than an event.
+
+This is the case that argues for the flag most directly, and it is not the race
+this section otherwise describes. A race is narrow and needs bad timing. A
+mistyped revision needs only a person, and care does not prevent it, because the
+wrong value looks exactly like the right one.
 
 Re-reading `ls-remote` immediately before merging is better than not, and it is
 still two operations: a push arriving between the read and the merge is exactly

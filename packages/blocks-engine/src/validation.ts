@@ -23,6 +23,9 @@ import { describeValue, pointer } from "./issue-text";
 import { DEFAULT_LIMITS, LIMIT_WARNING_RATIO } from "./limits";
 import type { DocumentLimits } from "./limits";
 import { surveyDocument } from "./measure-bytes";
+import type { DocumentSurvey } from "./measure-bytes";
+import { canBeRoot, canNest } from "./nesting";
+import type { NestingSource } from "./nesting";
 import { isPlainRecord } from "./plain-record";
 import type { TokenKind } from "./style/catalog-types";
 import { MAX_NAMED_CLASS_NAME_LENGTH } from "./style/named-class";
@@ -145,6 +148,20 @@ export interface ValidationContext {
    */
   tokens?: TokenLookup;
   classes?: ClassLookup;
+  /**
+   * How to resolve a block's declared parents, for checking that each node sits
+   * somewhere its own definition permits.
+   *
+   * Separate from {@link registry} because that lookup answers whether a type is
+   * registered and nothing else, and widening it would make every existing
+   * caller owe an answer about nesting to keep reporting unknown types.
+   *
+   * Absent means nesting is not checked, the same terms as tokens and classes: a
+   * document is validated against what the caller can answer for. That is
+   * fail-open and worth naming as such — a caller that omits this gets no
+   * placement issues rather than an error saying it could not look.
+   */
+  nesting?: NestingSource;
 }
 
 /**
@@ -165,6 +182,10 @@ export const ISSUE_CODES = {
   "document-too-large": "The serialized document exceeds the byte limit.",
   "document-unwritable":
     "The document holds a value JSON cannot write, so it has no stored form.",
+  "document-lossy":
+    "The document holds a value JSON rewrites, so the stored form differs from it.",
+  "document-unreadable":
+    "The document holds a member the validator will not read, so it cannot be measured.",
   "document-size-warning":
     "The serialized document is approaching the byte limit.",
   "missing-node-id": "A node is missing its id or the id is empty.",
@@ -220,6 +241,13 @@ export const ISSUE_CODES = {
     "Some token and class names were not checked against the site, so any that do not resolve are not reported.",
   "invalid-scope":
     "The compile scope is not a single class, so the document's rules were not scoped.",
+  // Spelled the same as the `NestingRefusal` members they report, so the code a
+  // caller matches on and the reason the rule gave are one string rather than a
+  // mapping that has to be kept in step.
+  "wrong-parent":
+    "A node declares the block types it may sit under, and its container is not one of them.",
+  "restricted-at-root":
+    "A node declares the block types it may sit under, and it sits at the top level, which is inside none of them.",
 } as const;
 
 /** A stable validation issue code. */
@@ -270,12 +298,57 @@ const ENGINE_NODE_TYPES = new Set<string>([COMPONENT_INSTANCE_TYPE]);
  * renderer can still show what it can. Structural corruption (missing ids,
  * malformed shapes, exceeded limits) is always an error.
  */
+/**
+ * What one validation produced: the issues, and the survey they were derived
+ * from.
+ *
+ * The survey is published because a caller that goes on to walk the same
+ * document needs to know whether the engine measured it in FULL, and issue
+ * codes are the wrong channel for that question. A code says what is wrong with
+ * the document; `complete` says whether these numbers can be trusted, and the
+ * two do not line up — a document JSON merely rewrites is fully measured and
+ * safe to walk, while one holding an accessor is neither, and both are errors.
+ *
+ * Reconstructing the second answer from the first means keeping a list of codes
+ * in the consumer, which is a copy of a fact the engine already established and
+ * goes stale in silence when a verdict is added.
+ */
+export interface ValidationResult {
+  issues: ValidationIssue[];
+  survey: DocumentSurvey;
+}
+
+/**
+ * Issues only — the narrow view, DERIVED from {@link validateDocument} rather
+ * than computed beside it.
+ *
+ * Most callers want exactly this and should keep using it. Reach for the richer
+ * function when the answer decides whether to do more work on the same
+ * document.
+ */
 export function validate(
   doc: BlockDocument,
   ctx: ValidationContext
 ): ValidationIssue[] {
+  return validateDocument(doc, ctx).issues;
+}
+
+export function validateDocument(
+  doc: BlockDocument,
+  ctx: ValidationContext
+): ValidationResult {
   const issues: ValidationIssue[] = [];
   const limits = ctx.limits ?? DEFAULT_LIMITS;
+  // Taken before ANY return, so every path can hand back the measurement it
+  // judged the document with. The walk accepts arbitrary input by design, so a
+  // malformed document surveys as readily as a well-formed one — and a caller
+  // that gets issues without a survey would have to guess whether the absence
+  // means "not measured" or "nothing to measure".
+  const survey = surveyDocument(doc, {
+    maxBytes: limits.maxBytes,
+    maxDepth: limits.maxDepth,
+    maxNodes: limits.maxNodes,
+  });
   const unknownSeverity: IssueSeverity =
     ctx.mode === "strict" ? "error" : "warning";
 
@@ -291,7 +364,7 @@ export function validate(
       severity: "error",
       message: "The document must be an object.",
     });
-    return issues;
+    return { issues, survey };
   }
 
   const knownBreakpoints = collectBreakpointIds(ctx.breakpoints, issues);
@@ -330,15 +403,10 @@ export function validate(
       message: "The document nodes field must be an array.",
     });
     // Nothing further to check without a node forest.
-    return issues;
+    return { issues, survey };
   }
 
-  const beforeLimits = issues.length;
-  checkLimits(doc, limits, issues);
-  // Any limit rejection, not the byte one alone. A forest over the node or
-  // depth cap is refused BEFORE its bytes are measured, so asking only about
-  // size would leave the expensive per-value work running on a document already
-  // known to be invalid.
+  checkLimits(survey, issues);
   //
   // `document-unwritable` belongs here for a sharper reason than tidiness: the
   // byte pass could not measure what it refused. A `styles` accessor is
@@ -347,15 +415,24 @@ export function validate(
   // access, runs the getter, and parses everything it returns. Leaving it out
   // meant the one document whose size is UNKNOWN was the one whose values were
   // parsed in full.
-  const overLimits = issues
-    .slice(beforeLimits)
-    .some(
-      issue =>
-        issue.code === "document-too-large" ||
-        issue.code === "document-unwritable" ||
-        issue.code === "node-count-exceeded" ||
-        issue.code === "depth-exceeded"
-    );
+  // Asked of the SURVEY rather than reconstructed from the issues it produced.
+  // Matching issue codes re-derives, from four strings, a fact the walk already
+  // established — and a code list is a second statement of when the numbers are
+  // untrustworthy, which goes stale the first time a fifth way to stop short is
+  // added. `complete` is that fact, derived where it is known.
+  //
+  // `traversed`, NOT `complete`, and the difference is a fail-open. `complete`
+  // additionally requires the counts to be the writer's, so a node hook
+  // returning a replacement makes it false on a document the walk read from end
+  // to end — and every per-value check below was then skipped on a document
+  // with nothing wrong with it. Coverage silently dropped, no issue raised.
+  //
+  // The narrow question is the one this needs. A document JSON merely REWRITES
+  // was measured in full, so the per-value work below is bounded and skipping it
+  // would drop real issues on a document whose only fault is that a value comes
+  // back changed. It is a measurement that STOPPED SHORT which leaves nothing
+  // bounded, and that is exactly what `traversed` reports.
+  const overLimits = !survey.traversed;
 
   const styleBudget = newStyleIssueBudget();
   const nodeState: NodeCheckState = {
@@ -396,34 +473,156 @@ export function validate(
   // Index-based reads (not .map/.forEach) so a sparse array's holes become
   // explicit undefined entries reported as invalid nodes, and the queue is
   // capped at maxNodes so an oversized forest cannot grow it without bound.
-  const queue: Array<{ node: BlockNode; path: string }> = [];
+  // Where this node was reached from, carried on the queue entry: a
+  // breadth-first walk has already left the parent behind by the time a node is
+  // dequeued, and re-deriving it would mean a second traversal answering a
+  // question this one already knew.
+  //
+  // THREE states, not a nullable type. "At the top level" and "inside a
+  // container whose type is malformed" are different facts, and one absent value
+  // standing for both makes a child in a slot answer the ROOT question — which
+  // reports it as sitting nowhere while its own path says which slot holds it.
+  const queue: Array<{
+    node: BlockNode;
+    path: string;
+    placement: Placement;
+  }> = [];
   for (
     let i = 0;
-    i < doc.nodes.length && queue.length <= limits.maxNodes;
+    i < doc.nodes.length && queue.length <= survey.limits.maxNodes;
     i++
   ) {
-    queue.push({ node: doc.nodes[i], path: pointer("/nodes", i) });
+    queue.push({
+      node: doc.nodes[i],
+      path: pointer("/nodes", i),
+      placement: { at: "root" },
+    });
   }
-  for (let i = 0; i < queue.length && i < limits.maxNodes; i++) {
-    const { node, path } = queue[i];
+  for (let i = 0; i < queue.length && i < survey.limits.maxNodes; i++) {
+    const { node, path, placement } = queue[i];
     validateNode(node, path, nodeState);
+    checkNesting(node, path, placement, nodeState);
     if (isPlainRecord(node) && isPlainRecord(node.slots)) {
+      // The container's placement for every child beneath it, read once.
+      //
+      // `isNodeType`, NOT a `typeof` check, and they are not the same boundary:
+      // `"columns"` and `"core/columns/"` are strings that no block can be
+      // named, so a weaker guard admits them as container NAMES and a restricted
+      // child is then refused against a name nothing could ever match. The
+      // predicate used here is the one that decides `invalid-node-type`, so a
+      // container reported as malformed is exactly a container this cannot name.
+      //
+      // Children are still walked and still checked for everything else. Only
+      // the one question that needs the container's name is recorded as
+      // unanswerable rather than answered from a name that does not exist.
+      const childPlacement: Placement = isNodeType(node.type)
+        ? { at: "container", type: node.type }
+        : { at: "unnameable-container" };
       for (const [slot, children] of Object.entries(node.slots)) {
         if (Array.isArray(children)) {
           const slotPath = pointer(pointer(path, "slots"), slot);
           for (
             let c = 0;
-            c < children.length && queue.length <= limits.maxNodes;
+            c < children.length && queue.length <= survey.limits.maxNodes;
             c++
           ) {
-            queue.push({ node: children[c], path: pointer(slotPath, c) });
+            queue.push({
+              node: children[c],
+              path: pointer(slotPath, c),
+              placement: childPlacement,
+            });
           }
         }
       }
     }
   }
 
-  return issues;
+  return { issues, survey };
+}
+
+/**
+ * Where the walk reached a node from.
+ *
+ * `unnameable-container` is its own member rather than an absent type, because
+ * the alternative — one nullable field for both "no container" and "a container
+ * I cannot name" — makes the two indistinguishable at the point of use, and the
+ * rule then answers the root question for a node that is plainly in a slot.
+ */
+type Placement =
+  | { at: "root" }
+  | { at: "container"; type: string }
+  | { at: "unnameable-container" };
+
+/**
+ * Report a node sitting somewhere its own definition does not permit.
+ *
+ * The rule is asked of `canNest`/`canBeRoot` rather than restated here, so the
+ * canvas refusing a drag and this refusing a save cannot drift: one of them
+ * would otherwise start permitting a placement the other writes, and a drag that
+ * is refused leaves nothing behind to compare against.
+ *
+ * An ERROR in both modes. `parent` is the child stating where it is meaningful,
+ * so a violation is a document that renders somewhere its author never said it
+ * could — not a forward-compatible value to preserve, which is what the lenient
+ * mode exists for.
+ */
+function checkNesting(
+  node: BlockNode,
+  path: string,
+  placement: Placement,
+  state: NodeCheckState
+): void {
+  const source = state.ctx.nesting;
+  if (source === undefined) return;
+  // A container this walk cannot name cannot be judged against. The container's
+  // own malformed type is already reported, and answering anyway would mean
+  // either inventing a name or treating a node in a slot as a root — the second
+  // being the trap, because it produces a confident refusal saying the node
+  // sits nowhere while its own path names the slot holding it.
+  if (placement.at === "unnameable-container") return;
+  // The same predicate the container is judged by, for the same reason. A
+  // malformed type is reported by `validateNode`; asking the rule about it would
+  // get "no restriction" back for a name no definition carries, which is a
+  // confident answer to a question the document cannot pose.
+  const raw: unknown = node;
+  if (!isPlainRecord(raw) || !isNodeType(raw.type)) return;
+  const verdict =
+    placement.at === "root"
+      ? canBeRoot(raw.type, source)
+      : canNest(raw.type, placement.type, source);
+  if (verdict.allowed) return;
+  // The refusal's own reason IS the issue code, so a rule added to
+  // `NestingRefusal` reaches the document already named rather than through a
+  // mapping that answers for the members it was written with.
+  state.issues.push({
+    path,
+    code: verdict.reason,
+    severity: "error",
+    message: messageForRefusal(raw.type, placement, verdict.permitted),
+  });
+}
+
+/**
+ * Names the containers the block WILL go in, because that is the author's next
+ * action. A sentence saying only that the placement is wrong leaves them to find
+ * the permitted set by trying positions.
+ *
+ * Takes the restriction the REFUSAL carried, never the source. Asking the source
+ * again would be a second answer to the question the verdict already settled,
+ * and nothing requires a caller-supplied lookup to be idempotent — so a stateful
+ * or lazily-resolved one could name a set other than the one that refused this
+ * placement. Both inputs now come from the verdict, so the sentence cannot
+ * describe a position or a permitted set other than the ones that were judged.
+ */
+function messageForRefusal(
+  childType: string,
+  placement: Placement,
+  permitted: readonly string[]
+): string {
+  const where = permitted.map(name => describeValue(name)).join(" or ");
+  return placement.at === "container"
+    ? `A "${describeValue(childType)}" may only sit inside ${where}, not inside "${describeValue(placement.type)}".`
+    : `A "${describeValue(childType)}" may only sit inside ${where}, and a top-level node sits inside nothing.`;
 }
 
 /**
@@ -468,12 +667,63 @@ function collectBreakpointIds(
   return ids;
 }
 
-function checkLimits(
-  doc: BlockDocument,
-  limits: DocumentLimits,
-  issues: ValidationIssue[]
-): void {
-  // ONE traversal answers all three bounds.
+/**
+ * Whole-document verdicts, which a per-value walk can restate more precisely.
+ *
+ * Each of these describes the document as a WHOLE — its size, or what the
+ * writer would do to it — rather than naming a place in it. A consumer that
+ * walks the document itself can report the same fact against the actual key,
+ * so it needs to know which issues are summaries it is entitled to replace.
+ *
+ * Exported because that consumer would otherwise keep its own list, and a list
+ * in another package is a second statement of this one: `plugin-page-builder`
+ * held exactly such a set, naming two of these, and adding a third verdict here
+ * silently reclassified it there — the precise per-key report was dropped in
+ * favour of the summary it was meant to replace.
+ *
+ * `invalid-document` is deliberately NOT here. It says the walk cannot run at
+ * all, so nothing can restate it.
+ *
+ * Kept beside the code that emits them: a new document-level verdict is added
+ * in this file, and belongs in this set in the same edit.
+ */
+/**
+ * Verdicts meaning the engine did NOT measure the document in full.
+ *
+ * The bounded walk stopped early — at the byte cap, at a structural cap, or at
+ * a member it refused to read — so `bytes`, `nodes` and `depth` are lower
+ * bounds. A consumer that responds by making a second, UNBOUNDED pass over the
+ * same document undoes the bound the engine exists to impose.
+ *
+ * Serializing is the pass that matters, and for an unreadable document it is
+ * worse than expensive. The survey declines to invoke an accessor precisely so
+ * that document-supplied code does not run inside a precondition;
+ * `JSON.stringify` invokes it happily. A caller that reaches for the whole
+ * document after this verdict executes exactly the code the refusal existed to
+ * avoid, and materializes whatever it returns.
+ *
+ * Exported for the same reason as {@link DOCUMENT_VERDICT_CODES}: the consumer
+ * would otherwise name these itself, and a name kept in step by hand is how a
+ * new verdict silently joins the safe list.
+ */
+export const INCOMPLETE_SURVEY_CODES: ReadonlySet<IssueCode> = new Set([
+  "document-too-large",
+  "document-unreadable",
+  "node-count-exceeded",
+  "depth-exceeded",
+]);
+
+export const DOCUMENT_VERDICT_CODES: ReadonlySet<IssueCode> = new Set([
+  "document-too-large",
+  "document-unwritable",
+  "document-unreadable",
+  "document-lossy",
+  "document-size-warning",
+]);
+
+function checkLimits(survey: DocumentSurvey, issues: ValidationIssue[]): void {
+  // ONE traversal answers all three bounds, taken by the caller and handed
+  // here.
   //
   // Depth, node count and serialized size were measured by two separate walks,
   // and the second of them had to decide what counts as a node and how deep it
@@ -482,18 +732,12 @@ function checkLimits(
   // keep them agreeing — and a document sits between them only when they
   // disagree, which is exactly when nobody is looking. Every accepted document
   // also paid for the tree twice.
-  const survey = surveyDocument(doc, {
-    maxBytes: limits.maxBytes,
-    maxDepth: limits.maxDepth,
-    maxNodes: limits.maxNodes,
-  });
-
   if (survey.tooDeep) {
     issues.push({
       path: "/nodes",
       code: "depth-exceeded",
       severity: "error",
-      message: `Node tree is nested deeper than the maximum of ${limits.maxDepth}.`,
+      message: `Node tree is nested deeper than the maximum of ${survey.limits.maxDepth}.`,
     });
   }
   if (survey.tooManyNodes) {
@@ -501,7 +745,7 @@ function checkLimits(
       path: "/nodes",
       code: "node-count-exceeded",
       severity: "error",
-      message: `Document exceeds the maximum of ${limits.maxNodes} nodes.`,
+      message: `Document exceeds the maximum of ${survey.limits.maxNodes} nodes.`,
     });
   }
   // A structurally over-cap document is already rejected, and the walk stopped
@@ -526,9 +770,9 @@ function checkLimits(
       path: "",
       code: "document-too-large",
       severity: "error",
-      message: `Document exceeds the maximum of ${limits.maxBytes} bytes.`,
+      message: `Document exceeds the maximum of ${survey.limits.maxBytes} bytes.`,
     });
-  } else if (survey.unserializable) {
+  } else if (survey.unwritable) {
     issues.push({
       path: "",
       code: "document-unwritable",
@@ -536,14 +780,43 @@ function checkLimits(
       message:
         "Document holds a value JSON cannot write, so it has no stored form.",
     });
-  } else if (bytes > limits.maxBytes * LIMIT_WARNING_RATIO) {
+  } else if (survey.unreadable) {
+    // `unreadable`, not `!complete`. A survey is ALSO incomplete when its byte
+    // count is approximate — a node hook returning a replacement — and such a
+    // document was read perfectly well; JSON merely rewrites it. Reporting that
+    // here told an author the validator refused to read a member it had read,
+    // and sent them looking for a member that is not the problem.
+    //
+    // After `unwritable`, because a cycle is both and "no stored form" is the
+    // more actionable of the two. Before `lossy`, because a walk that stopped
+    // short cannot describe what it never reached.
+    issues.push({
+      path: "",
+      code: "document-unreadable",
+      severity: "error",
+      message:
+        "Document holds a member the validator will not read, so it cannot be measured.",
+    });
+  } else if (survey.lossy) {
+    // A DIFFERENT statement, because the document has a stored form and it is
+    // not this one. Reporting it as unwritable said the content could not be
+    // saved at all, which sent an author looking for a value that JSON refuses
+    // when the real answer is that a value they hold will come back changed.
+    issues.push({
+      path: "",
+      code: "document-lossy",
+      severity: "error",
+      message:
+        "Document holds a value JSON rewrites, so the stored form differs from it.",
+    });
+  } else if (bytes > survey.limits.maxBytes * LIMIT_WARNING_RATIO) {
     issues.push({
       path: "",
       code: "document-size-warning",
       severity: "warning",
       message: `Document is ${bytes} bytes, over ${Math.round(
         LIMIT_WARNING_RATIO * 100
-      )}% of the ${limits.maxBytes}-byte limit.`,
+      )}% of the ${survey.limits.maxBytes}-byte limit.`,
     });
   }
 }
@@ -751,6 +1024,17 @@ function validateClasses(
   budget?: ReadyStyleIssueBudget,
   overLimits = false
 ): void {
+  // Before the field is READ, not after. Every check below walks a list whose
+  // length the document controls, and each re-reads `node.classes`, so the
+  // field is reached about twice per member — the unbounded work the caps exist
+  // to prevent, on a document whose measurement never bounded anything.
+  //
+  // Safe to skip only because this flag is now the NARROW question. A document
+  // JSON merely rewrites was measured in full, so it does not reach here and
+  // still has its classes validated; a sparse array is exactly that case, and
+  // gating on the wider "not serializable" dropped its `invalid-classes` report
+  // entirely.
+  if (overLimits) return;
   if (node.classes === undefined) return;
   // Index-based, not `.every` (which skips array holes), so a sparse classes
   // array — which serializes to `[null, …]` — is rejected, not accepted.

@@ -1201,8 +1201,11 @@ export async function generatePackageJson(
       "db:setup": "nextly db:sync",
       "db:migrate": "nextly migrate",
       "db:migrate:status": "nextly migrate:status",
+      // No `db:migrate:reset`: `nextly migrate:reset` is not a command the CLI
+      // registers, so the script it generated failed for every scaffolded
+      // project. `migrate:fresh` is the one that drops all tables and re-runs
+      // the migrations, and it is already exposed above.
       "db:migrate:fresh": "nextly migrate:fresh",
-      "db:migrate:reset": "nextly migrate:reset",
       "types:generate": "nextly generate:types",
     },
     dependencies,

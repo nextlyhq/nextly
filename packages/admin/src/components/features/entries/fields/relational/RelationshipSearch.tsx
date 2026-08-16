@@ -133,6 +133,11 @@ export function RelationshipSearch({
 }: RelationshipSearchProps) {
   const [search, setSearch] = useState("");
   const [selectedCollection, setSelectedCollection] = useState(collections[0]);
+  // Not `usePagination`, because this list does not paginate: it ACCUMULATES.
+  // The page number only ever increments to fetch more, results append to what
+  // is already shown, and there is no page size selector and no way back to a
+  // previous page. The hook models navigation between pages of a fixed set,
+  // which is a different thing that happens to count with the same word.
   const [currentPage, setCurrentPage] = useState(1);
   const [accumulatedResults, setAccumulatedResults] = useState<
     SearchResultItem[]

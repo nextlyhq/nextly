@@ -21,7 +21,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { BulkActionBar } from "@admin/components/features/entries/EntryList/BulkActionBar";
 import { UserDeleteDialog } from "@admin/components/features/user-dialog";
 import { BulkDeleteDialog } from "@admin/components/shared/bulk-action-dialogs";
-import { Pagination } from "@admin/components/shared/pagination";
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { toast } from "@admin/components/ui";
 import { DataTableView } from "@admin/components/ui/table/data-table";
@@ -31,6 +30,7 @@ import type {
   RowAction,
 } from "@admin/components/ui/table/data-table";
 import { ListShell } from "@admin/components/ui/table/list-shell";
+import { PAGINATION } from "@admin/constants/pagination";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useUserFields } from "@admin/hooks/queries/useUserFields";
 import {
@@ -40,6 +40,7 @@ import {
 } from "@admin/hooks/queries/useUsers";
 import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
 import { useDebouncedValue } from "@admin/hooks/useDebouncedValue";
+import { usePagination } from "@admin/hooks/usePagination";
 import { useRowSelection } from "@admin/hooks/useRowSelection";
 import { navigateTo } from "@admin/lib/navigation";
 import type { UserFieldDefinitionRecord } from "@admin/services/userFieldsApi";
@@ -127,8 +128,7 @@ const ALWAYS_VISIBLE = new Set(["name"]);
  * DataTableView.
  */
 export default function UserTable() {
-  const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState(10);
+  const { page, pageSize, setPage, setPageSize, resetPage } = usePagination();
   const [search, setSearch] = useState("");
   const [roleFilter] = useState<string>("all");
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
@@ -156,8 +156,8 @@ export default function UserTable() {
   // Reset to the first page when the search term changes so a later page does not
   // request out-of-range results and show a false empty state.
   useEffect(() => {
-    setPage(0);
-  }, [debouncedSearch]);
+    resetPage();
+  }, [debouncedSearch, resetPage]);
 
   // Selection is page-scoped: clear it whenever the page or search changes so a
   // bulk action never targets rows that are no longer shown/confirmed.
@@ -385,11 +385,6 @@ export default function UserTable() {
     });
   }, []);
 
-  const handlePageSizeChange = (newPageSize: number) => {
-    setPageSize(newPageSize);
-    setPage(0);
-  };
-
   // Controlled selection wired to the page-level selection hook.
   const selection = useMemo<DataTableSelection<UserApiResponse>>(
     () => ({
@@ -502,19 +497,19 @@ export default function UserTable() {
           rowActions={rowActions}
           registryKey="users"
           ariaLabel="Users table"
-          footer={
-            data && data.meta.totalPages > 0 ? (
-              <Pagination
-                currentPage={page}
-                totalPages={data.meta.totalPages}
-                totalItems={data.meta.total}
-                pageSize={pageSize}
-                pageSizeOptions={[10, 25, 50]}
-                onPageChange={setPage}
-                onPageSizeChange={handlePageSizeChange}
-                isLoading={isLoading}
-              />
-            ) : undefined
+          pagination={
+            data && data.meta.totalPages > 0
+              ? {
+                  currentPage: page,
+                  totalPages: data.meta.totalPages,
+                  totalItems: data.meta.total,
+                  pageSize,
+                  pageSizeOptions: PAGINATION.TABLE_PAGE_SIZE_OPTIONS,
+                  onPageChange: setPage,
+                  onPageSizeChange: setPageSize,
+                  isLoading,
+                }
+              : undefined
           }
           error={
             isError

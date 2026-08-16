@@ -17,7 +17,6 @@ import type { DataFetcher, PaginationConfig } from "@nextlyhq/ui";
 import { X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
-import { Pagination } from "@admin/components/shared/pagination";
 import { useServerTable } from "@admin/hooks/useServerTable";
 
 import { DataTableView } from "./DataTableView";
@@ -282,21 +281,23 @@ export function DataTable<Row extends object>({
           error={error}
           emptyMessage={emptyMessage}
           bordered={false}
-        />
-
-        {/* paginationMeta.page is the 1-indexed wire value; the controls and
-            handlePageChange both work in 0-indexed page numbers. */}
-        <Pagination
-          currentPage={paginationMeta.page - 1}
-          totalPages={paginationMeta.totalPages}
-          totalItems={paginationMeta.total}
-          pageSize={paginationMeta.limit}
-          pageSizeOptions={paginationConfig.pageSizeOptions}
-          showPageSizeSelector={paginationConfig.showPageSizeSelector}
-          maxVisiblePages={paginationConfig.maxVisiblePages}
-          onPageChange={handlePageChange}
-          onPageSizeChange={handlePageSizeChange}
-          isLoading={loading}
+          // The table owns its pager. This is the surface plugin code renders
+          // through, so a pager left beside the table here would put every
+          // consumer outside the responsive placement rather than just this
+          // component. paginationMeta.page is the 1-indexed wire value; the
+          // controls and handlePageChange both work in 0-indexed page numbers.
+          pagination={{
+            currentPage: paginationMeta.page - 1,
+            totalPages: paginationMeta.totalPages,
+            totalItems: paginationMeta.total,
+            pageSize: paginationMeta.limit,
+            pageSizeOptions: paginationConfig.pageSizeOptions,
+            showPageSizeSelector: paginationConfig.showPageSizeSelector,
+            maxVisiblePages: paginationConfig.maxVisiblePages,
+            onPageChange: handlePageChange,
+            onPageSizeChange: handlePageSizeChange,
+            isLoading: loading,
+          }}
         />
       </div>
 

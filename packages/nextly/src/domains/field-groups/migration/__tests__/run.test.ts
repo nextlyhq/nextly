@@ -35,6 +35,11 @@ import {
 } from "../manifest";
 import { readRegistryRows, runFieldGroupMigration } from "../run";
 import { MIGRATION_LOCK_TABLE } from "../session";
+import {
+  classifyLockStatement,
+  createLockRow,
+  interpretLockStatement,
+} from "./helpers/migration-lock-double";
 
 const PRESERVING = identifierCaseRules({ dialect: "postgresql" });
 
@@ -162,44 +167,33 @@ function createRunWorld(world: RunWorld) {
   const writes = { marker: 0 };
   let lockReads = 0;
   let catalogReads = 0;
-  const lock: { seeded: boolean; owner: string | null } = {
-    seeded: true,
-    owner: world.lockOwner ?? null,
-  };
+  // Seeded with a NULL expiry, which the session reads as a claim that has not lapsed — so a world
+  // declaring `lockOwner` still means "somebody holds this", exactly as it did before the column
+  // existed. A test that wants a LAPSED claim is a different world and says so.
+  const lock = createLockRow(world.lockOwner ?? null);
 
   function interpret(statement: SQL): Record<string, unknown>[] {
     const { sql: text, params } = new PgDialect().sqlToQuery(statement);
     const flat = text.replace(/\s+/g, " ").trim();
 
-    if (
-      /^SELECT "\w+" FROM "nextly_field_group_lock" WHERE "id" = \$1$/.test(
-        flat
-      )
-    ) {
-      const answer = lock.seeded ? [{ id: 1, owner: lock.owner }] : [];
-      lockReads += 1;
-      world.onLockRead?.(lockReads);
-      return answer;
-    }
-    if (
-      /^UPDATE "nextly_field_group_lock" SET "owner" = \$1 WHERE "id" = \$2$/.test(
-        flat
-      )
-    ) {
-      // An occupied row refuses a new claim, exactly as the real one does.
-      if (lock.owner === null) {
-        lock.owner = params[0] as string | null;
+    // The lock's own semantics come from the shared model rather than a copy kept here. A second
+    // interpreter of the same statements agrees the day it is written and drifts silently
+    // afterwards, and this file only ever needed to OBSERVE the lock, not to define it.
+    const lockKind = classifyLockStatement(statement);
+    if (lockKind !== undefined) {
+      const heldBefore = lock.owner;
+      const answer = interpretLockStatement(lock, statement);
+      if (lockKind === "state") {
+        // Counted and reported AFTER the answer is computed, so a callback that hands the lock to
+        // somebody changes what the NEXT read sees rather than the one in flight — which is what
+        // lets a test place a writer's arrival at a chosen point.
+        lockReads += 1;
+        world.onLockRead?.(lockReads);
+      }
+      if (lockKind === "claim" && heldBefore === null && lock.owner !== null) {
         trace.push("lock");
       }
-      return [];
-    }
-    if (
-      /^UPDATE "nextly_field_group_lock" SET "owner" = NULL WHERE "id" = \$1 AND "owner" = \$2$/.test(
-        flat
-      )
-    ) {
-      if (lock.owner === params[1]) lock.owner = null;
-      return [];
+      return answer;
     }
     // Two spellings, because production tries the localized column first and
     // falls back when the database predates it. A double that answered only one
@@ -355,6 +349,9 @@ function createRunWorld(world: RunWorld) {
      */
     claimLock: (owner: string | null) => {
       lock.owner = owner;
+      // A claim handed over mid-test is a live one, and a row handed back is free: NULL means
+      // "nothing to expire" in both readings, which is what these worlds meant before the column.
+      lock.expiresAt = null;
     },
   };
 }
@@ -1667,7 +1664,7 @@ describe("a preview that meets a writer mid-run", () => {
     expect(outcome.renames.length).toBeGreaterThan(0);
   });
 
-  // 🔴 The control Codex asked for: owners rotate, storage does not. Several invocations acquiring
+  // 🔴 The control that separates the two: owners rotate, storage does not. Several invocations acquiring
   // the lock in turn and failing on ONE permanent conflict each present a fresh claim UUID, so an
   // owner folded into the movement signature makes an unmoving database look like a moving one —
   // and a persistent storage conflict is then reported as contention.
@@ -1694,9 +1691,11 @@ describe("a preview that meets a writer mid-run", () => {
     );
   });
 
-  // 🔴 THE control for the durable-claim hole. This lock has no TTL and no auto-steal by design, so
-  // a process that dies holding it leaves the row held until an operator clears it. A held row
-  // therefore proves ownership was RECORDED, not that anyone is moving — and combined with a
+  // 🔴 THE control for the durable-claim hole. A claim outlives the process that made it until its
+  // expiry passes, and a run that dies stops renewing rather than releasing — so for that window
+  // the row still reads as held with nobody behind it, and every attempt of a retry cycle falls
+  // inside it. A held row therefore proves ownership was RECORDED, not that anyone is moving — and
+  // combined with a
   // genuinely permanent mismatch it would spend three attempts and then report a storage conflict
   // as contention, which is the answer this whole path exists to remove arriving by another door.
   // Nothing changes across the attempts here, and an unchanged world is the signature of a claim
