@@ -950,16 +950,24 @@ test.describe("a canvas any Nextly editor could ship", () => {
     note(
       PLAN_POINT.oneDropOneUndo,
       "B-9",
-      "this canvas keeps no undo history to count"
+      "this canvas publishes no undo depth a test can read"
     );
     await driver.mountTree(await seedPage(request, FLAT_LIST_FIXTURE));
 
-    // The canvas cannot answer this at all, and that refusal IS the
-    // shortfall. Asserted as the reader's OWN error type BEFORE the
-    // expectation is marked, so a broken selector, a missing iframe or a
-    // failed seed stays a real failure instead of becoming another
-    // expected one. It also fires the day the capability arrives: this
-    // line goes red first and forces the target below to be rewritten.
+    // The canvas cannot answer this, and that refusal IS the shortfall — but the
+    // refusal is about the SEAM, not the feature. The editor keeps a bounded undo
+    // history in its store; nothing publishes a depth to the DOM, so no test can
+    // read one. Directing a maintainer to implement undo would send them to build
+    // what already exists.
+    //
+    // Asserted as the reader's OWN error type BEFORE the expectation is marked, so
+    // a broken selector, a missing iframe or a failed seed stays a real failure
+    // instead of becoming another expected one.
+    //
+    // Unlike the placed-block reader this file used to guard the same way, this
+    // refusal is a genuine one: it reports what it looked for and did not find. A
+    // guard on a refusal that never looked would only detect the reader being
+    // edited, which is why that other assertion was removed rather than kept.
     //
     // Wrapped in an async thunk because these readers throw SYNCHRONOUSLY:
     // `expect(reader())` never receives a promise, so `.rejects` cannot see
@@ -995,7 +1003,7 @@ test.describe("a canvas any Nextly editor could ship", () => {
       .toBe(treeBefore.length + 1);
 
     // Marked only now. Everything above ran unprotected.
-    test.fail(true, "this canvas keeps no undo history to count");
+    test.fail(true, "this canvas publishes no undo depth a test can read");
 
     const before = await chrome.undoDepth();
     await dragOntoZone(driver);
