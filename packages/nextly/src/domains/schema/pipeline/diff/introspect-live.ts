@@ -120,12 +120,17 @@ function modifierFromDeclaredType(type: string): string | undefined {
  * carry a length, exact-numeric types carry precision and scale.
  */
 function pgTypeModifier(row: PgRow): string | undefined {
-  if (row.character_maximum_length !== null) {
+  // 🔴 Tested for a NUMBER rather than against null. `information_schema` yields null for a type
+  // with no modifier, but a row that simply lacks the key — an older snapshot, a driver that omits
+  // nulls, a hand-built row — is `undefined`, and `undefined !== null` is true. That branch then
+  // stringifies to the literal "undefined" and records it as a width, which is a fabricated
+  // modifier of exactly the kind the gating below exists to prevent.
+  if (typeof row.character_maximum_length === "number") {
     return String(row.character_maximum_length);
   }
   const exactNumeric = row.udt_name === "numeric" || row.udt_name === "decimal";
-  if (exactNumeric && row.numeric_precision !== null) {
-    return row.numeric_scale !== null
+  if (exactNumeric && typeof row.numeric_precision === "number") {
+    return typeof row.numeric_scale === "number"
       ? `${row.numeric_precision},${row.numeric_scale}`
       : String(row.numeric_precision);
   }
