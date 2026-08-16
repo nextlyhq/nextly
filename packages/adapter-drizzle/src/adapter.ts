@@ -1359,6 +1359,57 @@ export abstract class DrizzleAdapter {
   }
 
   /**
+   * Update records in a table and report how many rows the statement affected.
+   *
+   * The count is the whole return value, mirroring `delete`. `update` cannot answer this: without
+   * `returning` it discards the driver's count, and WITH `returning` on a dialect that lacks
+   * RETURNING it re-SELECTs using the same WHERE — so a conditional update that just changed a
+   * column named in that WHERE reads back zero rows and a write that landed reports as unmatched.
+   * Reading the driver's own count has no second query to disagree with the first.
+   *
+   * 🔴 MySQL reports CHANGED rows, not matched rows: an UPDATE that matches a row but writes values
+   * identical to what it holds counts zero. A caller using this as a compare-and-set must therefore
+   * include a column the write always moves — a version bump, a timestamp with enough resolution —
+   * so that matched implies changed. Postgres (`rowCount`) and SQLite (`changes`) count matched
+   * rows and do not need the precaution, which is exactly why it cannot be dropped: the dialect
+   * where the distinction exists is the one with no RETURNING to fall back on.
+   */
+  async updateCount(
+    table: string,
+    data: Record<string, unknown>,
+    where: WhereClause,
+    executor?: unknown
+  ): Promise<number> {
+    const tableObj = this.getTableObject(table);
+    if (tableObj) {
+      try {
+        // Transaction executor when supplied, otherwise the pooled instance.
+        // getDrizzle() returns unknown - explicit any generic for dialect-specific Drizzle API
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const db = executor ?? this.getDrizzle<any>();
+        const mappedData = this.mapDataToColumnNames(tableObj, data);
+        let query = db.update(tableObj).set(mappedData);
+
+        const whereCondition = buildDrizzleWhere(tableObj as never, where);
+        if (whereCondition) {
+          query = query.where(whereCondition);
+        }
+
+        const result = await query;
+        return affectedRowCount(result);
+      } catch (error) {
+        throw this.handleQueryError(error, "update", table);
+      }
+    }
+
+    throw this.createDatabaseError(
+      "query",
+      `Table "${table}" not found in schema registry. Ensure setTableResolver() has been called during boot.`,
+      undefined
+    );
+  }
+
+  /**
    * Delete records from a table.
    *
    * @remarks

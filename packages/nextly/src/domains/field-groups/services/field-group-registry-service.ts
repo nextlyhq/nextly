@@ -337,17 +337,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       });
     }
 
-    const updateData: Record<string, unknown> = {
-      updated_at: this.formatDateForDb(),
-    };
-
-    if (data.label !== undefined) {
-      updateData.label = data.label;
-    }
-
-    if (data.description !== undefined) {
-      updateData.description = data.description;
-    }
+    const updateData = this.buildComponentUpdateColumns(data);
 
     // 🔴 The version advances when the PHYSICAL SHAPE changes, not when `fields` happens to be
     // present. `schema_version` is an optimistic lock: `assertSchemaVersionMatch` rejects a save
@@ -366,6 +356,65 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       data.localized !== undefined &&
       (data.localized === true) !== (existing.localized === true);
 
+    if (
+      data.fields ||
+      localizationChanged ||
+      options?.invalidateSchemaVersion
+    ) {
+      // One increment however many reasons applied: the row moved to the next version, once.
+      updateData.schema_version = existing.schemaVersion + 1;
+    }
+
+    try {
+      const results = await this.adapter.update<DynamicFieldGroupRecord>(
+        await this.resolveRegistryTableName(),
+        updateData,
+        this.whereEq("slug", slug),
+        { returning: "*" }
+      );
+
+      if (results.length === 0) {
+        // Generic "Not found."; slug in logContext.
+        throw NextlyError.notFound({ logContext: { slug } });
+      }
+
+      this.logger.info("Component updated", { slug });
+
+      return this.deserializeRecord(results[0]);
+    } catch (error) {
+      // Preserve already-mapped NextlyErrors (the notFound above, or a
+      // forbidden from the locked-check). Anything else is a raw DB error.
+      // Normalise raw driver errors first so unique/fk/etc. produce the right kind.
+      if (NextlyError.is(error)) {
+        throw error;
+      }
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
+    }
+  }
+
+  /**
+   * The column writes an update carries, shared by the unconditional and the conditional update.
+   *
+   * Everything EXCEPT `schema_version`: the two callers derive the version differently — one from
+   * the row it just read, one from the version its caller's decision was computed against — and
+   * that arithmetic is the whole difference between them, so it stays at the call sites while the
+   * column mapping lives once here.
+   */
+  private buildComponentUpdateColumns(
+    data: Partial<DynamicFieldGroupInsert>
+  ): Record<string, unknown> {
+    const updateData: Record<string, unknown> = {
+      updated_at: this.formatDateForDb(),
+    };
+
+    if (data.label !== undefined) {
+      updateData.label = data.label;
+    }
+
+    if (data.description !== undefined) {
+      updateData.description = data.description;
+    }
+
     if (data.fields) {
       updateData.fields = JSON.stringify(data.fields);
       updateData.migration_status = data.migrationStatus || "pending";
@@ -375,15 +424,6 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       // say — a write that failed after its DDL committed — unable to record it, so a row went on
       // describing a shape the tables no longer have with nothing marking the divergence.
       updateData.migration_status = data.migrationStatus;
-    }
-
-    if (
-      data.fields ||
-      localizationChanged ||
-      options?.invalidateSchemaVersion
-    ) {
-      // One increment however many reasons applied: the row moved to the next version, once.
-      updateData.schema_version = existing.schemaVersion + 1;
     }
 
     if (data.admin !== undefined) {
@@ -415,26 +455,91 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       updateData.table_name = data.tableName;
     }
 
+    return updateData;
+  }
+
+  /**
+   * Update a Component only if its `schema_version` is still the one the caller decided from.
+   *
+   * A compare-and-set: the WHERE clause carries the expected version, so the DATABASE decides in
+   * one statement whether the row still is what the caller believed — there is no read between the
+   * decision and the write for another writer, or a transient failure, to slip through. The two
+   * callers this exists for both hold a decision computed against a version they read earlier: a
+   * divergence marker that must not stamp a row the original write reached after all, and a
+   * reconcile whose repair must not overwrite an edit that landed while it was planning.
+   *
+   * `{ matched: false }` is a THIRD outcome, not an error: the row at that version no longer
+   * exists, because it advanced or because it was deleted. The two are indistinguishable without
+   * another read — which is exactly the dependency this method removes — and every caller treats
+   * them the same way: the decision is stale, do not write, re-derive. It is not squeezed into the
+   * NOT_FOUND throw, whose meaning here would be false for the commoner (advanced) case.
+   *
+   * The version ALWAYS advances, to `expectedSchemaVersion + 1`, computed against the value the
+   * WHERE pins rather than a fresh read. That is also what makes the matched count trustworthy on
+   * MySQL, which counts CHANGED rows: a write that matches always moves `schema_version`, so
+   * matched implies changed — see `DrizzleAdapter.updateCount`.
+   *
+   * No returned row, deliberately. On a dialect without RETURNING a returning read re-runs the
+   * WHERE — whose version this write just moved past — so a landed write would read back as
+   * missing. The caller already knows the whole write it requested; there is nothing a read-back
+   * could add except a second query able to fail after the first committed.
+   */
+  async updateComponentIfVersion(
+    slug: string,
+    data: Partial<DynamicFieldGroupInsert>,
+    expectedSchemaVersion: number,
+    options?: UpdateComponentOptions
+  ): Promise<{ matched: true; newSchemaVersion: number } | { matched: false }> {
+    this.logger.debug("Conditionally updating Component", {
+      slug,
+      expectedSchemaVersion,
+    });
+
+    const existing = await this.getComponent(slug);
+
+    if (existing.locked && options?.source !== "code") {
+      // Generic FORBIDDEN; slug and source go to logContext only.
+      throw NextlyError.forbidden({
+        logContext: {
+          reason: "component-locked",
+          slug,
+          source: options?.source ?? "UI",
+        },
+      });
+    }
+
+    const updateData = this.buildComponentUpdateColumns(data);
+    const newSchemaVersion = expectedSchemaVersion + 1;
+    updateData.schema_version = newSchemaVersion;
+
     try {
-      const results = await this.adapter.update<DynamicFieldGroupRecord>(
+      const matched = await this.adapter.updateCount(
         await this.resolveRegistryTableName(),
         updateData,
-        this.whereEq("slug", slug),
-        { returning: "*" }
+        {
+          and: [
+            { column: "slug", op: "=", value: slug },
+            {
+              column: "schema_version",
+              op: "=",
+              value: expectedSchemaVersion,
+            },
+          ],
+        }
       );
 
-      if (results.length === 0) {
-        // Generic "Not found."; slug in logContext.
-        throw NextlyError.notFound({ logContext: { slug } });
+      if (matched === 0) {
+        this.logger.info("Component conditional update did not match", {
+          slug,
+          expectedSchemaVersion,
+        });
+        return { matched: false };
       }
 
       this.logger.info("Component updated", { slug });
-
-      return this.deserializeRecord(results[0]);
+      return { matched: true, newSchemaVersion };
     } catch (error) {
-      // Preserve already-mapped NextlyErrors (the notFound above, or a
-      // forbidden from the locked-check). Anything else is a raw DB error.
-      // Normalise raw driver errors first so unique/fk/etc. produce the right kind.
+      // Preserve already-mapped NextlyErrors; anything else is a raw DB error.
       if (NextlyError.is(error)) {
         throw error;
       }
