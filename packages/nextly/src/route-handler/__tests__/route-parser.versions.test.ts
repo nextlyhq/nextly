@@ -206,28 +206,40 @@ describe("version routes", () => {
     expect(parsed.routeParams?.versionNo).toBeUndefined();
   });
 
-  it("records a recovery point on PUT only", () => {
-    // Only PUT writes the autosave row; no other verb may reach that handler.
-    //
-    // Asserted as "not the autosave method" rather than "no route at all",
-    // because a GET on this path resolves to the ordinary version read with
-    // `autosave` in the version-number position -- which is what `working-draft`
-    // has always done too, and which those handlers reject when they coerce the
-    // segment to a number. That fallthrough is the parser's existing shape for
-    // named sub-resources, not something autosave introduces.
-    for (const httpMethod of ["GET", "POST", "PATCH", "DELETE"]) {
-      expect(
-        parseRestRoute(
-          ["collections", "posts", "entries", "e1", "versions", "autosave"],
-          httpMethod
-        ).method
-      ).not.toBe("autosaveEntry");
-      expect(
-        parseRestRoute(
-          ["singles", "settings", "versions", "autosave"],
-          httpMethod
-        ).method
-      ).not.toBe("autosaveSingle");
+  it("resolves each verb on the autosave path to its own route", () => {
+    // Asserted as an exact method per verb rather than "not the write method".
+    // The weaker form passes when a verb resolves to something else wrong, and
+    // it passed here while GET fell through to the ordinary version read with
+    // `autosave` in the version-NUMBER position -- which is no longer true now
+    // that the read has its own route, and would have gone unnoticed.
+    const entry = [
+      "collections",
+      "posts",
+      "entries",
+      "e1",
+      "versions",
+      "autosave",
+    ];
+    const single = ["singles", "settings", "versions", "autosave"];
+
+    expect(parseRestRoute(entry, "PUT").method).toBe("autosaveEntry");
+    expect(parseRestRoute(entry, "GET").method).toBe("getEntryAutosave");
+    expect(parseRestRoute(single, "PUT").method).toBe("autosaveSingle");
+    expect(parseRestRoute(single, "GET").method).toBe("getSingleAutosave");
+
+    // A rename on this path is a version LABEL write, and the handler coerces
+    // the segment to a number, so `autosave` is rejected there rather than
+    // reaching a route that would treat it as a version.
+    expect(parseRestRoute(entry, "PATCH").method).toBe("setEntryVersionLabel");
+    expect(parseRestRoute(single, "PATCH").method).toBe(
+      "setSingleVersionLabel"
+    );
+
+    // Neither verb owns a route on this path, and neither may fall through to
+    // one that writes or reads a recovery point.
+    for (const httpMethod of ["POST", "DELETE"]) {
+      expect(parseRestRoute(entry, httpMethod).method).toBeUndefined();
+      expect(parseRestRoute(single, httpMethod).method).toBeUndefined();
     }
   });
 

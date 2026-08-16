@@ -105,17 +105,23 @@ describe("VersionsRepository.upsertAutosave", () => {
 
     await new VersionsRepository(db).upsertAutosave(input);
 
+    // The WHOLE predicate, not just the author clause. Asserting one condition
+    // in isolation passes even if the document conditions were dropped, which
+    // would address every document's autosave row at once -- the failure this
+    // test exists to catch, wearing the shape of a pass.
     const conditions = updates[0]?.where.and ?? [];
-    expect(conditions).toContainEqual({
-      column: "createdBy",
-      op: "=",
-      value: "user-1",
-    });
-    expect(conditions).toContainEqual({
-      column: "isAutosave",
-      op: "=",
-      value: true,
-    });
+    expect(conditions).toEqual(
+      expect.arrayContaining([
+        { column: "scopeKind", op: "=", value: "collection" },
+        { column: "scopeSlug", op: "=", value: "posts" },
+        { column: "entryId", op: "=", value: "entry-1" },
+        { column: "isAutosave", op: "=", value: true },
+        { column: "createdBy", op: "=", value: "user-1" },
+      ])
+    );
+    // And nothing else: an extra condition would narrow the lookup in a way
+    // this test would otherwise not notice.
+    expect(conditions).toHaveLength(5);
   });
 
   /**
