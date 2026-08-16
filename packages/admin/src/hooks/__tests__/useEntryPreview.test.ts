@@ -57,6 +57,39 @@ describe("isPreviewAvailable", () => {
     expect(result.current.isPreviewAvailable).toBe(false);
   });
 
+  it("is true from a stored template alone, with no boolean present", () => {
+    // A UI-created collection stores its template directly and never goes
+    // through the code-first sync that writes the boolean, so requiring the
+    // boolean would hide a preview the stored data plainly declares. Every row
+    // written before the boolean existed is this case.
+    const { result } = renderHook(() =>
+      useEntryPreview({
+        collection: {
+          name: "posts",
+          admin: { preview: { urlTemplate: "/preview/{slug}" } },
+        },
+        entry: { id: "1" },
+      })
+    );
+
+    expect(result.current.isPreviewAvailable).toBe(true);
+  });
+
+  it("is false for an empty stored template", () => {
+    // What a cleared field yields; it declares nothing.
+    const { result } = renderHook(() =>
+      useEntryPreview({
+        collection: {
+          name: "posts",
+          admin: { preview: { urlTemplate: "" } },
+        },
+        entry: { id: "1" },
+      })
+    );
+
+    expect(result.current.isPreviewAvailable).toBe(false);
+  });
+
   it("is false when the collection stores hasPreview: false", () => {
     const { result } = renderHook(() =>
       useEntryPreview({
@@ -194,9 +227,12 @@ describe("openPreview", () => {
   it("sends unsaved form values, not the saved row", async () => {
     const tab = fakeTab();
     openSpy.mockReturnValue(tab as unknown as Window);
+    // Same-origin on purpose: this test is about WHICH VALUES reach the
+    // resolver, and a cross-origin URL would additionally drop the session-key
+    // handoff, mixing a second behaviour into the assertion.
     resolve.mockResolvedValue({
       status: "resolved",
-      url: "https://s.dev/p/new",
+      url: `${window.location.origin}/p/new`,
     });
 
     const { result } = renderHook(() =>
@@ -216,7 +252,9 @@ describe("openPreview", () => {
       collection: "posts",
       entry: { id: "1", slug: "edited" },
     });
-    expect(tab.location.href).toBe("https://s.dev/p/new?__preview=preview-key");
+    expect(tab.location.href).toBe(
+      `${window.location.origin}/p/new?__preview=preview-key`
+    );
   });
 
   it("stores unsaved data BEFORE opening the tab, not after", async () => {
@@ -272,6 +310,66 @@ describe("openPreview", () => {
     expect(onUnavailable).toHaveBeenCalledWith("popupBlocked");
     // And it must not even ask: the click cannot succeed either way.
     expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it("drops the unsaved-data key cross-origin and says so, rather than sending a dead one", async () => {
+    const tab = fakeTab();
+    openSpy.mockReturnValue(tab as unknown as Window);
+    // jsdom serves the admin from localhost; the site is elsewhere, which is
+    // what a configured site URL now routinely means.
+    resolve.mockResolvedValue({
+      status: "resolved",
+      url: "https://site.example.com/p/1",
+    });
+    const onUnsavedChangesNotSent = vi.fn();
+
+    const { result } = renderHook(() =>
+      useEntryPreview({
+        collection,
+        entry: { id: "1" },
+        getFormValues: () => ({ slug: "edited" }),
+        onUnsavedChangesNotSent,
+      })
+    );
+    await act(async () => {
+      await result.current.openPreview();
+    });
+
+    // Session storage is partitioned per origin, so the key would name a
+    // payload the preview page cannot reach. Appending it would look like it
+    // worked while quietly rendering stale content.
+    expect(tab.location.href).toBe("https://site.example.com/p/1");
+    expect(tab.location.href).not.toContain("__preview");
+    // Reported, because silently previewing saved data is the failure mode this
+    // whole path exists to prevent.
+    expect(onUnsavedChangesNotSent).toHaveBeenCalled();
+  });
+
+  it("still sends the key when the site is same-origin", async () => {
+    // The positive control for the drop above: without it, a hook that never
+    // appended the key would satisfy that test perfectly.
+    const tab = fakeTab();
+    openSpy.mockReturnValue(tab as unknown as Window);
+    resolve.mockResolvedValue({
+      status: "resolved",
+      url: `${window.location.origin}/p/1`,
+    });
+    const onUnsavedChangesNotSent = vi.fn();
+
+    const { result } = renderHook(() =>
+      useEntryPreview({
+        collection,
+        entry: { id: "1" },
+        getFormValues: () => ({ slug: "edited" }),
+        onUnsavedChangesNotSent,
+      })
+    );
+    await act(async () => {
+      await result.current.openPreview();
+    });
+
+    expect(tab.location.href).toContain("__preview=preview-key");
+    expect(onUnsavedChangesNotSent).not.toHaveBeenCalled();
   });
 
   it("navigates the current window when the collection opts out of a new tab", async () => {

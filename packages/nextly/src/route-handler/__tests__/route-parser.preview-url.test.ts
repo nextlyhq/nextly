@@ -29,6 +29,21 @@ describe("preview-url routes", () => {
     expect(parseRestRoute(["preview-url", "123", "extra"], "POST")).toEqual({});
   });
 
+  it("refuses every method but POST", () => {
+    // The entry travels in the body, so nothing else can carry a request. Left
+    // matching, a GET would reach the JSON-body handler rather than being
+    // answered method-not-allowed — the adjacent preview-links parser rejects
+    // non-POST on its first line for the same reason.
+    for (const method of ["GET", "PUT", "PATCH", "DELETE", "HEAD"]) {
+      expect(parseRestRoute(["preview-url"], method)).toEqual({});
+    }
+    // Positive control: the same route with the right method still resolves, so
+    // the assertions above are about the METHOD and not a broken route.
+    expect(parseRestRoute(["preview-url"], "POST")).toMatchObject({
+      service: "previewUrl",
+    });
+  });
+
   it("stays distinct from the preview-links routes", () => {
     // Same first word, different resource, and they must not answer for each
     // other: one returns a URL, the other mints a credential.

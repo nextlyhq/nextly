@@ -1784,8 +1784,13 @@ function parsePreviewLinkRoutes(
 function parsePreviewUrlRoutes(
   id: string | undefined,
   subresource: string | undefined,
+  httpMethod: string,
   routeParams: Record<string, string>
 ): ParsedRoute | null {
+  // The entry travels in the body, so only POST can carry a request at all.
+  // Matching regardless of method would hand a GET straight to the JSON-body
+  // handler rather than answering method-not-allowed.
+  if (httpMethod !== "POST") return null;
   if (id !== undefined || subresource !== undefined) return null;
 
   return {
@@ -2396,7 +2401,12 @@ export function parseRestRoute(
 
   // Handle resolving where an entry previews
   if (resource === "preview-url") {
-    const result = parsePreviewUrlRoutes(id, subresource, routeParams);
+    const result = parsePreviewUrlRoutes(
+      id,
+      subresource,
+      httpMethod,
+      routeParams
+    );
     if (result) return result;
   }
 
