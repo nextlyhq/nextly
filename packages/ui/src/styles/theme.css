@@ -890,6 +890,16 @@
   --nx-control-height-md: calc(var(--nx-control-height) - 0.25rem);
   --nx-control-height-lg: calc(var(--nx-control-height) + 0.25rem);
 
+  /* Field width caps — bound how wide a form control grows so a short value
+   * (a slug, a toggle, a single date) does not stretch to the full content
+   * width. `FieldShell` reads these with a literal fallback, so a consumer
+   * theme that predates these tokens still renders correctly; the token is
+   * what lets a theme retune the caps centrally instead. A length, not a
+   * colour, so it is declared once here rather than per light/dark block —
+   * a field's width does not change with the theme. */
+  --nx-field-half: 380px;
+  --nx-field-full: 760px;
+
   /* Focus ring colors */
   --nx-focus-ring: var(--nx-primary);
   --nx-focus-ring-offset: oklch(1 0 0);
