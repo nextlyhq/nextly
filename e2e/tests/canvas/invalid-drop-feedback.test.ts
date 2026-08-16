@@ -23,7 +23,7 @@
  */
 import { expect, test, type Page } from "@playwright/test";
 
-import { dragUntilTarget } from "./driver";
+import { dragSourceUntilTarget } from "./driver";
 import type { CanvasFixture } from "./driver";
 import { FLAT_LIST_FIXTURE, seedPage } from "./fixtures";
 import { createPocDriver } from "./poc-driver";
@@ -56,7 +56,9 @@ const WRONG_PARENT_TEXT = "This block can only go inside certain containers.";
  *
  * WHICH block each source is belongs to the driver, not here: it is the canvas's own structural
  * rule that decides what a container refuses, and naming a block by label in this file would make
- * the test unretargetable and duplicate a lookup that already exists.
+ * the test unretargetable and duplicate a lookup that already exists. The transport is shared for
+ * the same reason — the two drags must differ only in the block, so any difference the assertions
+ * see is the rule rather than the gesture.
  */
 async function dragOntoZone(
   page: Page,
@@ -69,10 +71,7 @@ async function dragOntoZone(
     pick === "restricted"
       ? await driver.restrictedDragSourceCentre()
       : await driver.acceptedDragSourceCentre();
-  const target = await driver.canvasCentre();
-  await driver.startDragAt(source);
-  await driver.moveBy(target.x - source.x, target.y - source.y);
-  const active = await dragUntilTarget(driver);
+  const active = await dragSourceUntilTarget(driver, source);
   expect(
     active,
     `the ${pick} drag must reach a drop zone before the overlay is read`
@@ -102,13 +101,13 @@ test("tells the author which rule refused the drop", async ({
   // what a sighted author reads, and `role="status"` is what carries it to one who is not looking
   // at the cursor.
   //
-  // Containment rather than equality, because the region also holds an `aria-hidden` refusal mark.
-  // A screen reader does not announce that glyph and `textContent` does see it, so an exact match
-  // here would be asserting the decoration rather than the sentence.
+  // EXACTLY the sentence. The refusal mark beside it is an SVG, so it contributes no text of its
+  // own, and equality then rejects a region that has accumulated a second reason rather than
+  // replaced the first.
   await expect(
     overlay.locator('[role="status"]'),
     "the refusal must name the rule where the author reads it"
-  ).toContainText(WRONG_PARENT_TEXT);
+  ).toHaveText(WRONG_PARENT_TEXT);
 });
 
 test("says nothing over a target that accepts the block", async ({

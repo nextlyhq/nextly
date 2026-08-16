@@ -41,6 +41,7 @@ import { mapFramePointToHost } from "./coordinate-mapping";
 import {
   CanvasCapabilityError,
   dragPointerTo,
+  dragSourceUntilTarget,
   dragToZoneEdge,
   dragUntilInsideZone,
   dragUntilTarget,
@@ -50,7 +51,7 @@ import {
   settledTarget,
   settledValue,
 } from "./driver";
-import type { CanvasChromeReader, CanvasDriver, Point } from "./driver";
+import type { CanvasChromeReader, CanvasDriver } from "./driver";
 import { createPocChromeReader, createPocDriver } from "./poc-driver";
 
 test.describe.configure({ timeout: 240_000 });
@@ -112,30 +113,21 @@ async function dragOntoZone(driver: CanvasDriver): Promise<number> {
 }
 
 /**
- * Carry a NAMED panel source onto a drop zone and report which zone it reached.
+ * The two sources the invalid-target point needs, each carried onto a zone.
  *
- * Returns rather than asserts, so the caller says what reaching no zone means to it. The two
- * wrappers below pick the source by whether the canvas accepts it — the pair the invalid-target
- * point needs, since either drag alone is satisfied by a canvas that treats both the same way.
+ * A pair, because either drag alone is satisfied by a canvas that treats every target the same
+ * way. Both go through the shared transport so the gesture is identical and only the block differs.
  */
-async function dragSourceOntoZone(
-  driver: CanvasDriver,
-  source: Point
-): Promise<number> {
-  const target = await driver.canvasCentre();
-  await driver.startDragAt(source);
-  await driver.moveBy(target.x - source.x, target.y - source.y);
-  return dragUntilTarget(driver);
-}
-
-/** A drag no ordinary container will take. */
 async function dragRestrictedOntoZone(driver: CanvasDriver): Promise<number> {
-  return dragSourceOntoZone(driver, await driver.restrictedDragSourceCentre());
+  return dragSourceUntilTarget(
+    driver,
+    await driver.restrictedDragSourceCentre()
+  );
 }
 
-/** A drag it will. */
+/** A drag an ordinary container will take. */
 async function dragAcceptedOntoZone(driver: CanvasDriver): Promise<number> {
-  return dragSourceOntoZone(driver, await driver.acceptedDragSourceCentre());
+  return dragSourceUntilTarget(driver, await driver.acceptedDragSourceCentre());
 }
 
 /**
@@ -717,11 +709,9 @@ test.describe("a canvas any Nextly editor could ship", () => {
     note(PLAN_POINT.invalidTargetVisible, "B-7");
     await driver.mountTree(await seedPage(request, NESTED_FIXTURE));
 
-    // An earlier version of this test dragged whatever the panel listed first and expected the
-    // reader to refuse, because the only refusal reachable then was `not-allowed-in-slot` and no
-    // block declares an `allowedBlocks` slot. A block restricting its own PARENT reaches a refusal
-    // without any such slot, so the illegal target this point is about is now enterable — which is
-    // what the driver's restricted source supplies.
+    // The driver's restricted source is a block restricting its own PARENT, which is what makes an
+    // illegal target reachable at all: no block in the shipped registry declares an `allowedBlocks`
+    // slot, so a slot-side refusal has nothing to refuse and a container-side one has everything.
     const refused = await dragRestrictedOntoZone(driver);
     expect(
       refused,

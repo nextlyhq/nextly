@@ -15,7 +15,7 @@ import { useState } from "react";
 import { defaultBlockRegistry } from "../core/registry";
 
 import { Canvas } from "./canvas/Canvas";
-import { Monitor, Smartphone, Tablet } from "./icons";
+import { Ban, Monitor, Smartphone, Tablet } from "./icons";
 import { InvalidSlotBanner } from "./InvalidSlotBanner";
 import { dragLabel } from "./logic/dragLabel";
 import { planDrop, type DropOutcome, type DropRefusal } from "./logic/dropPlan";
@@ -213,7 +213,9 @@ export function EditorSurface() {
                       // and 6.90:1 dark, clearing the 3:1 a non-text boundary needs in both modes,
                       // and the sentence says which rule applied where no colour could.
                       display: "inline-flex",
-                      alignItems: "baseline",
+                      // Centred rather than on the baseline: an SVG's baseline is its bottom edge,
+                      // so a baseline-aligned icon rides above the text it sits beside.
+                      alignItems: "center",
                       gap: 6,
                       maxWidth: 260,
                       padding: "5px 10px",
@@ -231,9 +233,19 @@ export function EditorSurface() {
             >
               {refusal ? (
                 <>
-                  <span aria-hidden style={{ color: "var(--nx-destructive)" }}>
-                    ⃠
-                  </span>
+                  {/*
+                   * An icon rather than a character. The obvious glyph for this is U+20E0
+                   * COMBINING ENCLOSING CIRCLE BACKSLASH, which is an enclosing MARK: it has no
+                   * form of its own and needs a base character to enclose, so standing alone it
+                   * draws a dotted-circle placeholder or nothing at all depending on the font.
+                   * A component renders the same everywhere and contributes no text to the live
+                   * region beside it.
+                   */}
+                  <Ban
+                    size={13}
+                    aria-hidden
+                    style={{ color: "var(--nx-destructive)", flexShrink: 0 }}
+                  />
                   {dropRefusalMessage(refusal)}
                 </>
               ) : null}
