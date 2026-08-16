@@ -591,6 +591,15 @@ export class VersionsRepository {
       limit: 1,
     });
     if (existing[0]) {
+      // Compare-and-set on the timestamp, not a blind overwrite. Two tabs
+      // belonging to the same author race here: A can read the row, pause, and
+      // then write after B has already stored a NEWER snapshot. An
+      // unconditional update would replace B's work with A's older values and
+      // stamp them newer, so the next recovery would offer the stale one.
+      //
+      // A losing write matches no row and is simply dropped, which is correct:
+      // the newer snapshot already describes the author's work, and this is a
+      // recovery point rather than an acknowledgement anybody is waiting on.
       await this.db.update(
         TABLE,
         {
@@ -599,7 +608,14 @@ export class VersionsRepository {
           locale: input.locale ?? null,
           updatedAt: now,
         },
-        where
+        // Flattened into the same conjunction rather than nested, so the
+        // predicate stays one readable list of conditions.
+        {
+          and: [
+            ...(where.and ?? []),
+            { column: "updatedAt", op: "<" as const, value: now },
+          ],
+        }
       );
       return { updatedAt: now, locale: input.locale ?? null };
     }

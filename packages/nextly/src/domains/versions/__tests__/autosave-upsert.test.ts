@@ -119,9 +119,15 @@ describe("VersionsRepository.upsertAutosave", () => {
         { column: "createdBy", op: "=", value: "user-1" },
       ])
     );
+    // The compare-and-set clause. Two tabs belonging to one author race on
+    // this row, and without it the slower request overwrites the newer
+    // snapshot and stamps it newer still.
+    expect(conditions).toContainEqual(
+      expect.objectContaining({ column: "updatedAt", op: "<" })
+    );
     // And nothing else: an extra condition would narrow the lookup in a way
     // this test would otherwise not notice.
-    expect(conditions).toHaveLength(5);
+    expect(conditions).toHaveLength(6);
   });
 
   /**

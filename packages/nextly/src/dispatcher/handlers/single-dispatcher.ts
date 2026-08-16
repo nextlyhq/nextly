@@ -78,6 +78,7 @@ import {
   listEffectivePermissions,
 } from "../../services/lib/permissions";
 import { assertGlobalResourceSlugAvailable } from "../../services/lib/resource-slug-guard";
+import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
 import {
   readAuthenticatedActor,
   readAuthenticatedScope,
@@ -361,7 +362,16 @@ export const SINGLE_VERSION_METHODS: Record<
       // it to a different authenticated user without authorization running
       // again. Uses the same helper the session-bearing routes in the route
       // handler use rather than restating the header pair.
-      return withSessionCacheHeaders(respondDoc(item));
+      // Opaque to the timezone pass. The snapshot is the author's raw form
+      // values, so a TEXT field whose literal content happens to look like an
+      // ISO timestamp would be shifted by the global rewrite and come back
+      // different from what they typed -- a recovery point that does not
+      // recover. The row's own metadata is UTC and the client formats it.
+      return withSessionCacheHeaders(
+        respondDoc(item, {
+          headers: { [SKIP_TIMEZONE_FORMAT_HEADER]: "1" },
+        })
+      );
     },
   },
 };
