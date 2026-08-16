@@ -503,16 +503,21 @@ export function validateDocument(
     validateNode(node, path, nodeState);
     checkNesting(node, path, placement, nodeState);
     if (isPlainRecord(node) && isPlainRecord(node.slots)) {
-      // The container's placement for every child beneath it, read once. Only a
-      // string can name a block, and a node whose type is malformed is already
-      // reported by `validateNode` — so its children are still walked and still
-      // checked for everything else, while the one question that needs the
-      // container's NAME is recorded as unanswerable rather than answered from a
-      // name that does not exist.
-      const childPlacement: Placement =
-        typeof node.type === "string"
-          ? { at: "container", type: node.type }
-          : { at: "unnameable-container" };
+      // The container's placement for every child beneath it, read once.
+      //
+      // `isNodeType`, NOT a `typeof` check, and they are not the same boundary:
+      // `"columns"` and `"core/columns/"` are strings that no block can be
+      // named, so a weaker guard admits them as container NAMES and a restricted
+      // child is then refused against a name nothing could ever match. The
+      // predicate used here is the one that decides `invalid-node-type`, so a
+      // container reported as malformed is exactly a container this cannot name.
+      //
+      // Children are still walked and still checked for everything else. Only
+      // the one question that needs the container's name is recorded as
+      // unanswerable rather than answered from a name that does not exist.
+      const childPlacement: Placement = isNodeType(node.type)
+        ? { at: "container", type: node.type }
+        : { at: "unnameable-container" };
       for (const [slot, children] of Object.entries(node.slots)) {
         if (Array.isArray(children)) {
           const slotPath = pointer(pointer(path, "slots"), slot);
@@ -575,12 +580,12 @@ function checkNesting(
   // being the trap, because it produces a confident refusal saying the node
   // sits nowhere while its own path names the slot holding it.
   if (placement.at === "unnameable-container") return;
-  // Only a string can name a block. A malformed type is reported by
-  // `validateNode`; passing it here would ask the rule about a name no
-  // definition carries and get "no restriction" back, which is a confident
-  // answer to a question the document cannot pose.
+  // The same predicate the container is judged by, for the same reason. A
+  // malformed type is reported by `validateNode`; asking the rule about it would
+  // get "no restriction" back for a name no definition carries, which is a
+  // confident answer to a question the document cannot pose.
   const raw: unknown = node;
-  if (!isPlainRecord(raw) || typeof raw.type !== "string") return;
+  if (!isPlainRecord(raw) || !isNodeType(raw.type)) return;
   const verdict =
     placement.at === "root"
       ? canBeRoot(raw.type, source)
