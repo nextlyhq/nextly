@@ -51,6 +51,11 @@ const EVERY_SHAPE = [
   { name: "a_email", type: "email" },
   { name: "a_textarea", type: "textarea" },
   { name: "a_number", type: "number" },
+  // A number's storage is decided by `options.format`, not by its type alone: this one is
+  // floating-point where `a_number` above is an integer, and the two are separate column types on
+  // every dialect. Listing only the integer form leaves the whole floating-point branch of the
+  // creator unexercised, which is a storage shape rather than a variation of one already covered.
+  { name: "a_float", type: "number", options: { format: "float" } },
   { name: "a_checkbox", type: "checkbox" },
   { name: "a_date", type: "date" },
   { name: "a_json", type: "json" },

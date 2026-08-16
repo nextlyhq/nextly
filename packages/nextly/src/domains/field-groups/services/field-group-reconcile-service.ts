@@ -25,7 +25,6 @@ import type { DynamicFieldGroupInsert } from "../../../schemas/dynamic-field-gro
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { Logger } from "../../../shared/types";
 import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
-import { normalizeType } from "../../schema/pipeline/diff/normalize-type";
 import type { SupportedDialect } from "../../schema/services/field-column-descriptor";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
 
@@ -35,6 +34,7 @@ import {
   type ReconcileAdoption,
   type ReconcileRemoval,
   type ReconcileRepair,
+  type ReconcileTable,
 } from "./reconcile-field-group-plan";
 
 /**
@@ -56,74 +56,55 @@ export interface ReconcileFieldGroupResult {
 }
 
 /**
- * What THIS database's creator would write for each of a field group's columns, normalised.
+ * Ask the code that BUILDS these tables what type it gives a field in a given table.
  *
- * 🔴 Read out of the creator's own rendered DDL rather than from the column descriptor, because
- * the two disagree and the creator is the one that made the tables. `FieldGroupSchemaService`
- * carries its own dialect type table: measured live, a `date` becomes `DATETIME` on MySQL and an
- * `email` becomes `VARCHAR(255)` on PostgreSQL, where the descriptor answers `timestamp` and
- * `text`. Comparing a live column against the descriptor reported drift on healthy groups and
- * refused to repair them.
+ * 🔴 Asked, never recovered from rendered SQL. Both builders already return the type as a value:
+ * reading it back out of a printed CREATE TABLE re-derives an answer that was in hand, and does it
+ * through a channel that cannot carry the whole answer — a type spelled with more than one word
+ * (PostgreSQL's `DOUBLE PRECISION`) comes back truncated, and the resulting mismatch refuses a
+ * group nothing is wrong with.
  *
- * The same extraction `assertNoUnappliableSchemaChange` uses, for the same reason — a column
- * definition is one INDENTED, QUOTED line, which no statement in the script is.
+ * The two tables have DIFFERENT builders, which is why this is keyed by table rather than resolved
+ * once. `FieldGroupSchemaService` builds the main table; the localization renderer builds the
+ * companion, and it spells the same field differently — a PostgreSQL `email` is `VARCHAR(255)` on
+ * one and `TEXT` on the other. The planner supplies the table it OBSERVED the column in, so a
+ * stored placement flag that is itself wrong cannot select the wrong builder.
  *
- * A column this cannot parse is simply absent from the map, and the planner skips comparing it.
- * That direction is deliberate: an underivable expectation is not evidence of drift, and treating
- * it as such is what produced the false refusal in the first place.
+ * Returns `undefined` where neither builder claims the field, which the planner skips rather than
+ * blocks: an underivable expectation is not evidence of drift.
+ *
+ * Async only to resolve the imports once; the function it returns is pure, which is what lets the
+ * planner stay free of both.
  */
-async function expectedColumnTypes(args: {
-  dialect: SupportedDialect;
-  tableName: string;
-  fields: FieldDefinition[];
-  localized: boolean;
-}): Promise<ReadonlyMap<string, string>> {
-  const out = new Map<string, string>();
-
+async function expectedColumnTypeResolver(
+  dialect: SupportedDialect
+): Promise<
+  (field: FieldDefinition, table: ReconcileTable) => string | undefined
+> {
   const { FieldGroupSchemaService } = await import(
     "./field-group-schema-service"
   );
-  const sql = new FieldGroupSchemaService(args.dialect).generateMigrationSQL(
-    args.tableName,
-    args.fields as unknown as Parameters<
-      InstanceType<typeof FieldGroupSchemaService>["generateMigrationSQL"]
-    >[1],
-    { localized: args.localized }
+  const { fieldToLocalizedColumnSpec } = await import(
+    "../../i18n/migration/field-to-column-spec"
   );
-  for (const line of sql.split("\n")) {
-    // Name then type, from an indented quoted definition. The type runs to the first space that
-    // begins a constraint keyword, so `VARCHAR(255) NOT NULL` yields `VARCHAR(255)`.
-    const match =
-      /^\s+["`]([A-Za-z0-9_]+)["`]\s+([A-Za-z0-9_]+(?:\([^)]*\))?)/.exec(line);
-    if (!match) continue;
-    const [, column, type] = match;
-    const normalised = normalizeType(type);
-    if (column !== undefined && normalised !== undefined) {
-      out.set(column, normalised);
-    }
-  }
+  const { ddlType } = await import("../../i18n/migration/ddl-types");
 
-  // The companion's columns come from the localization renderer, which is what actually adds them.
-  if (args.localized) {
-    const { isFieldLocalized } = await import("../../i18n/classify-fields");
-    const { fieldToLocalizedColumnSpec } = await import(
-      "../../i18n/migration/field-to-column-spec"
+  const creator = new FieldGroupSchemaService(dialect);
+
+  return (field, table) => {
+    if (table === "companion") {
+      const spec = fieldToLocalizedColumnSpec(field, dialect, "fieldGroup");
+      return spec ? ddlType(spec, dialect) : undefined;
+    }
+    // The parameter's own declared type. `FieldDefinition` and the config shape describe the same
+    // stored field from two layers, and naming the target keeps the compiler checking this call.
+    const type = creator.columnTypeFor(
+      field as unknown as Parameters<
+        InstanceType<typeof FieldGroupSchemaService>["columnTypeFor"]
+      >[0]
     );
-    const { ddlType } = await import("../../i18n/migration/ddl-types");
-    for (const field of args.fields) {
-      if (!isFieldLocalized(field, true)) continue;
-      const spec = fieldToLocalizedColumnSpec(
-        field,
-        args.dialect,
-        "fieldGroup"
-      );
-      if (!spec) continue;
-      const normalised = normalizeType(ddlType(spec, args.dialect));
-      if (normalised !== undefined) out.set(spec.name, normalised);
-    }
-  }
-
-  return out;
+    return type ?? undefined;
+  };
 }
 
 /**
@@ -220,12 +201,7 @@ export async function reconcileFieldGroup(args: {
     liveMain,
     liveCompanion,
     typeColumn,
-    expectedColumnTypes: await expectedColumnTypes({
-      dialect,
-      tableName: existing.tableName,
-      fields: storedFields,
-      localized: existing.localized === true,
-    }),
+    expectedColumnType: await expectedColumnTypeResolver(dialect),
   });
 
   // 🔴 REFUSE before writing anything when the tables hold a state the planner can see but must
@@ -248,14 +224,17 @@ export async function reconcileFieldGroup(args: {
     });
   }
 
-  // The finished field set goes through the SAME validator every other definition write uses, so
-  // a repair cannot persist something the builder would later refuse. The planner already filters
-  // unrepresentable column names; this is the boundary rather than a second opinion — it covers
-  // whatever the shared contract gains next without this module being told.
-  const { assertValidFieldsPayload } = await import(
+  // The finished field set goes through the validator the OTHER registry writers use — the same one
+  // `createComponent` and `updateComponent` run — because this writes the rows they write.
+  //
+  // Not the manifest validator: that one gates the `ui-schema.json` mirror and rejects declarations
+  // the registry has always accepted, camelCase field names among them. Running it here would refuse
+  // to repair any group whose definition came from code or the Direct API, which is precisely the
+  // set that cannot repair itself by re-saving through the builder.
+  const { assertValidPluginFieldOptions } = await import(
     "../../../api/fields-payload"
   );
-  assertValidFieldsPayload(plan.fields, { kind: "component" });
+  assertValidPluginFieldOptions(plan.fields);
 
   // A standing `diverged` mark is itself part of what this operation repairs: once the definition
   // describes the tables, leaving the mark would keep refusing schema edits on a group that is

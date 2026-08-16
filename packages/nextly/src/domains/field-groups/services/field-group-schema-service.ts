@@ -763,11 +763,29 @@ export class FieldGroupSchemaService {
     return mapped as unknown as DataFieldConfig;
   }
 
+  /**
+   * The column type this dialect gives `field`, spelled exactly as the CREATE TABLE spells it.
+   *
+   * The same value `generateColumnSQL` puts into its column definition, exposed so a caller that
+   * needs only the type can ask for it instead of recovering it from rendered SQL. Recovering it
+   * that way loses information the moment a type is more than one word — `DOUBLE PRECISION` reads
+   * back as `DOUBLE` — and no amount of parsing makes a printed statement a reliable channel for a
+   * value the function already returns.
+   *
+   * `null` where this service would emit no column at all, which is the same condition that makes
+   * `generateColumnSQL` skip a field.
+   */
+  columnTypeFor(field: DataFieldConfig): string | null {
+    return this.getColumnType(this.asMappableField(field));
+  }
+
   private generateColumnSQL(field: DataFieldConfig): string | null {
     if (!("name" in field) || !field.name) return null;
 
     const columnName = this.toSnakeCase(field.name);
-    const columnType = this.getColumnType(this.asMappableField(field));
+    // Through the public accessor, so the type a caller can ask for and the type that reaches the
+    // table are the same expression rather than two that agree until one is edited.
+    const columnType = this.columnTypeFor(field);
     if (!columnType) return null;
 
     const parts = [`${this.q}${columnName}${this.q}`, columnType];

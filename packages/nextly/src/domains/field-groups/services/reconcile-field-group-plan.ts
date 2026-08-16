@@ -157,22 +157,30 @@ export interface ReconcileInput<F extends ReconcilableField> {
    */
   typeColumn?: string;
   /**
-   * What the CREATOR would write for each column, by column name, already normalised.
+   * The column type the code that BUILDS these tables would give `field` in `table`.
    *
-   * 🔴 The creator, not the column descriptor, and the distinction is the whole reason this input
-   * exists. `FieldGroupSchemaService` owns its own dialect type table and it deliberately differs
-   * from `getColumnDescriptor`: measured on live databases, a `date` field is `DATETIME` on MySQL
-   * and an `email` is `VARCHAR(255)` on PostgreSQL, where the descriptor answers `timestamp` and
-   * `text`. Comparing against the descriptor therefore reported drift on perfectly healthy groups
-   * and refused to repair them — the opposite of this operation's purpose.
+   * 🔴 Asked per (field, table) rather than supplied as a finished map, because the answer depends
+   * on BOTH and only this module knows the second one. The two tables are built by different code —
+   * the main table by `FieldGroupSchemaService`, the companion by the localization renderer — and
+   * they spell the same field differently: a PostgreSQL `email` is `VARCHAR(255)` on the main table
+   * and `TEXT` in the companion. A map keyed by column name alone has to pick one of those before
+   * placement is known, and the placement it would have to guess from is the stored flag, which is
+   * exactly the value this operation exists to correct. Guessing it wrong reports drift on the
+   * PRIMARY divergence being repaired.
    *
-   * Supplied by the caller rather than computed here so this module stays pure: the creator is a
-   * service, and the seam that already owns I/O is the right place to instantiate it.
+   * Also the reason this takes the type rather than the rendered DDL: `getColumnDescriptor` answers
+   * differently again (a MySQL `date` is `DATETIME` here and `timestamp` there), and reading a type
+   * back out of printed SQL silently truncates any type spelled with more than one word.
    *
-   * A column ABSENT from this map is not compared. Absence means "no expectation could be derived",
-   * which is not evidence of drift, and blocking on it would re-create the false refusal.
+   * Returns the type as that code spells it; this module normalises both sides before comparing.
+   * `undefined` means no expectation could be derived, which is NOT evidence of drift — those
+   * columns are skipped rather than blocked, since treating an underivable answer as a mismatch is
+   * what made an earlier version refuse healthy groups.
+   *
+   * A function rather than data so this module stays pure: the callers own the services and the
+   * imports, and nothing here reaches for either.
    */
-  expectedColumnTypes?: ReadonlyMap<string, string>;
+  expectedColumnType?: (field: F, table: ReconcileTable) => string | undefined;
 }
 
 /**
@@ -410,7 +418,13 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
     // logical type would mark `synced` a definition the next diff instantly disagrees with. Which
     // logical type now belongs there cannot be derived — many map to one physical column — so this
     // refuses and names the drift rather than guessing.
-    const expectedType = input.expectedColumnTypes?.get(descriptor.name);
+    //
+    // Asked for the table the column was actually FOUND in, which is `table` above rather than the
+    // placement the stored flag implies: the two disagree precisely when a group has diverged, and
+    // the tables spell the same field differently, so asking about the wrong one manufactures a
+    // mismatch on the case this operation exists to repair.
+    const expectedSpelling = input.expectedColumnType?.(field, table);
+    const expectedType = normalizeType(expectedSpelling);
     const liveType = normalizeType(live.type);
     if (
       expectedType !== undefined &&
@@ -421,7 +435,10 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
         fieldName: field.name,
         columnName: descriptor.name,
         kind: "physical-type-changed",
-        detail: `"${field.name}" is declared ${field.type}, whose column this database would create as ${expectedType}, but the live column is ${live.type}; the logical type that now belongs there cannot be derived from the column alone.`,
+        // Both sides named as they are actually SPELLED, not as they compare. The canonical forms
+        // decide the verdict, and an operator reading "double vs float8" has to work out which
+        // declaration and which column those stand for.
+        detail: `"${field.name}" is declared ${field.type}, whose column this database would create as ${expectedSpelling}, but the live column is ${live.type}; the logical type that now belongs there cannot be derived from the column alone.`,
       });
     }
 

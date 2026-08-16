@@ -5,6 +5,7 @@ import type { TableSpec } from "../../../schema/pipeline/diff/types";
 import {
   planFieldGroupReconcile,
   type ReconcilableField,
+  type ReconcileTable,
 } from "../reconcile-field-group-plan";
 
 const TABLE = "comp_hero";
@@ -53,8 +54,14 @@ function plan(args: {
   liveCompanion?: TableSpec | null;
   /** Defaults to false — the flag the row of a never-localized group records. */
   storedLocalized?: boolean;
-  /** The creator-derived expectation; absent means the type check has nothing to compare. */
-  expectedColumnTypes?: ReadonlyMap<string, string>;
+  /**
+   * What the table builders would write, asked per (field, table). Absent means the type check has
+   * nothing to compare and must stay silent.
+   */
+  expectedColumnType?: (
+    field: ReconcilableField,
+    table: ReconcileTable
+  ) => string | undefined;
 }) {
   return planFieldGroupReconcile({
     storedFields: args.storedFields,
@@ -63,8 +70,8 @@ function plan(args: {
     tableName: TABLE,
     liveMain: args.liveMain,
     liveCompanion: args.liveCompanion ?? null,
-    ...(args.expectedColumnTypes
-      ? { expectedColumnTypes: args.expectedColumnTypes }
+    ...(args.expectedColumnType
+      ? { expectedColumnType: args.expectedColumnType }
       : {}),
   });
 }
@@ -409,11 +416,11 @@ describe("planFieldGroupReconcile", () => {
     const result = plan({
       storedFields: stored,
       liveMain: live,
-      // 🔴 The expectation comes from the CREATOR, so the test must supply one — without it the
-      // check has nothing to compare against and correctly stays silent. Passing an empty map here
+      // 🔴 The expectation comes from the table builders, so the test must supply one — without it
+      // the check has nothing to compare against and correctly stays silent. Supplying nothing here
       // is what made this case inert when the comparison moved off the column descriptor, and the
-      // suite caught it; the entry is the check's real input rather than scaffolding.
-      expectedColumnTypes: new Map([["weight", "int4"]]),
+      // suite caught it; this is the check's real input rather than scaffolding.
+      expectedColumnType: () => "int4",
     });
 
     expect(result.blockers).toEqual([
@@ -422,6 +429,44 @@ describe("planFieldGroupReconcile", () => {
         kind: "physical-type-changed",
       }),
     ]);
+  });
+
+  /**
+   * The two tables are built by different code and spell the same field differently, so the type
+   * check must ask about the table the column was FOUND in.
+   *
+   * The case that makes this load-bearing is the one below: the column has moved to the companion
+   * while the stored flag still says the group is not localized. That disagreement is the primary
+   * divergence this operation repairs, so resolving the expectation from the stored flag would
+   * report drift on precisely the input reconcile exists to fix — and would do it while the column
+   * is perfectly healthy.
+   *
+   * Asserted on the ARGUMENTS the check actually passes rather than only on the absence of a
+   * blocker: a planner that stopped consulting the expectation at all would also produce no
+   * blocker, and this must not pass for that reason.
+   */
+  it("asks for the expected type of the table the column was found in", () => {
+    const stored: ReconcilableField[] = [{ name: "contact", type: "email" }];
+    const live = liveTableFor([]);
+    const companion = companionWith([{ name: "contact", type: "text" }]);
+
+    const asked: Array<{ field: string; table: ReconcileTable }> = [];
+    const result = plan({
+      storedFields: stored,
+      liveMain: live,
+      liveCompanion: companion,
+      // The real spellings this pair produces on PostgreSQL: the main table's builder gives an
+      // `email` a length-capped varchar, the companion's builder gives it unbounded text. Asking
+      // about the wrong table therefore compares `varchar` against a live `text` and blocks.
+      storedLocalized: false,
+      expectedColumnType: (field, table) => {
+        asked.push({ field: field.name, table });
+        return table === "companion" ? "TEXT" : "VARCHAR(255)";
+      },
+    });
+
+    expect(asked).toEqual([{ field: "contact", table: "companion" }]);
+    expect(result.blockers).toEqual([]);
   });
 
   // The control that keeps the check from firing on a column it has no expectation for. Absence
