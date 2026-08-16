@@ -100,6 +100,14 @@ const REFUSED = "[data-refused]";
 /** Where the refusal's sentence goes, so it reaches an author not watching the cursor. */
 const LIVE_REGION = '[role="status"]';
 
+/**
+ * How long a refusal may take to appear after the drag reaches the target it refuses.
+ *
+ * One React commit, so this is generous by two orders of magnitude on purpose: it is the cost of
+ * reporting "not refused" about a target that IS refused, and only a permitted target ever pays it.
+ */
+const REFUSAL_RENDER_MS = 2_000;
+
 /** Past dnd-kit's activation distance in one move, so a drag actually starts. */
 const DRAG_THRESHOLD_PX = 12;
 
@@ -122,6 +130,14 @@ export function createPocDriver(page: Page): CanvasDriver {
    * `getComputedStyle` reports `"none"` there and `DOMMatrixReadOnly` parses
    * that to the identity, whose `a` is already 1.
    */
+  async function frameScale(): Promise<number> {
+    return page.evaluate(() => {
+      const frame = document.querySelector("iframe");
+      if (!(frame instanceof HTMLElement)) return 1;
+      return new DOMMatrixReadOnly(getComputedStyle(frame).transform).a;
+    });
+  }
+
   /**
    * The centre of the library entry carrying exactly this label.
    *
@@ -146,14 +162,6 @@ export function createPocDriver(page: Page): CanvasDriver {
     const box = await entry.boundingBox();
     if (!box) throw new Error(`library entry "${label}" has no box`);
     return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
-  }
-
-  async function frameScale(): Promise<number> {
-    return page.evaluate(() => {
-      const frame = document.querySelector("iframe");
-      if (!(frame instanceof HTMLElement)) return 1;
-      return new DOMMatrixReadOnly(getComputedStyle(frame).transform).a;
-    });
   }
 
   /**
@@ -787,7 +795,24 @@ export function createPocChromeReader(page: Page): CanvasChromeReader {
       }
       // Marked AND worded. The marker alone is a state the canvas draws for itself; what the
       // requirement asks for is something the author can read, and the two break independently.
-      if ((await overlay.locator(REFUSED).count()) === 0) return false;
+      //
+      // WAITED FOR, not counted. `count()` resolves against the DOM as it stands, and the two
+      // things this reader correlates are written by different systems: the active zone that got
+      // the drag here is a dnd-kit attribute write on an element inside the canvas frame, while
+      // the marker is a React commit in the host document. They land in either order, so an
+      // immediate read reports a refusal that has not rendered yet as no refusal at all — a
+      // canvas defect, from a race.
+      //
+      // The wait is bounded, and the bound is the honest instrument here: nothing signals "this
+      // canvas has decided and the answer is no", so a permitted target is only distinguishable
+      // from a slow refusal by having stayed unmarked for longer than a refusal takes to draw.
+      // It errs toward WAITING — a slow machine costs the timeout rather than a false verdict.
+      const marked = await overlay
+        .locator(REFUSED)
+        .waitFor({ state: "attached", timeout: REFUSAL_RENDER_MS })
+        .then(() => true)
+        .catch(() => false);
+      if (!marked) return false;
       const said = await overlay.locator(LIVE_REGION).innerText();
       return said.trim().length > 0;
     },

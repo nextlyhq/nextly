@@ -1283,6 +1283,26 @@ export async function jitterAcrossEdge(
  * In steps rather than one jump, because a single move is a teleport and a
  * canvas that commits on dwell answers a teleport differently from a gesture.
  */
+/**
+ * Start a panel drag at `source` and carry it until a drop zone is active.
+ *
+ * The whole sequence in one place because it is three steps that only work together, and a
+ * per-suite copy gets the middle one wrong invisibly: computing the delta from the SOURCE point
+ * rather than from where the pointer actually is overshoots by whatever the driver moved to cross
+ * the activation threshold, and the drag still runs and still ends somewhere plausible.
+ *
+ * Returns the zone's ordinal, or -1 when the descent found none. The CALLER asserts on that:
+ * reaching no zone means different things to a test about refusals and one about geometry.
+ */
+export async function dragSourceUntilTarget(
+  driver: CanvasDriver,
+  source: Point
+): Promise<number> {
+  await driver.startDragAt(source);
+  await dragPointerTo(driver, await driver.canvasCentre());
+  return dragUntilTarget(driver);
+}
+
 export async function dragPointerTo(
   driver: CanvasDriver,
   target: Point,
