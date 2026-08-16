@@ -354,6 +354,27 @@ export function latestBaseChange(pages) {
   return at.length > 0 ? at[at.length - 1] : undefined;
 }
 
+/**
+ * The pull request's revisions, or `undefined` when the list may be short.
+ *
+ * The commits endpoint serves at most 250 and reports no error when it
+ * truncates, so a short list answers "no other revision shares this prefix"
+ * from a sample. `reportedCount` is what the pull request says it has; without
+ * it there is nothing to compare against and the set is withheld.
+ *
+ * Pure and exported so the WITHHOLDING is a property a test can hold inputs
+ * against. Left inline in each command it is reachable only by the network.
+ */
+export function completeRevisionSet(shas, reportedCount) {
+  if (!Array.isArray(shas) || typeof reportedCount !== "number") {
+    return undefined;
+  }
+  const unique = [
+    ...new Set(shas.filter(value => typeof value === "string")),
+  ];
+  return unique.length >= reportedCount ? unique : undefined;
+}
+
 export function abbreviationIsAmbiguous(named, head, knownRevisions) {
   // `knownRevisions` must be the pull request's COMPLETE revision set, or
   // absent. A partial set is worse than none: it answers "nothing else shares
@@ -1009,18 +1030,10 @@ async function main(argv) {
   // asking whether an abbreviation identifies more than one revision does not,
   // and folding the two together makes a single merge commit anywhere in the
   // pull request refuse every comment verdict.
-  const revisionShas = commits
-    .map(commit => commit?.sha)
-    .filter(value => typeof value === "string");
-  // Withheld unless every revision was returned. That endpoint serves at most
-  // 250 commits and reports no error when it truncates, so a short list answers
-  // "no other revision shares this prefix" from a sample of the history, and an
-  // omitted one carrying an old verdict is exactly what the question is about.
-  const knownRevisions =
-    typeof pullObject.commits === "number" &&
-    new Set(revisionShas).size >= pullObject.commits
-      ? revisionShas
-      : undefined;
+  const knownRevisions = completeRevisionSet(
+    commits.map(commit => commit?.sha),
+    pullObject.commits
+  );
   // GitHub serves at most 250 commits from that endpoint and `--paginate`
   // cannot reach past it, returning a short list and no error. Compared against
   // the map's SIZE rather than the array's length, because a duplicate sha
