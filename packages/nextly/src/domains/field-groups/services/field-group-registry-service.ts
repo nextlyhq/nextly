@@ -534,6 +534,20 @@ export class FieldGroupRegistryService extends BaseRegistryService<
               op: "=",
               value: expectedSchemaVersion,
             },
+            // 🔴 The lock state belongs IN the predicate, not only in the read above. Ownership can
+            // change without the version moving — a code sync claiming an existing UI group sets
+            // `locked` through the admin-only branch — so a caller that read the row unlocked still
+            // satisfies a version-only predicate and overwrites a definition that is now owned by a
+            // config file. Pinning it here makes the check and the write one statement, which is
+            // the whole reason this method exists rather than a read followed by an update.
+            //
+            // Only for a non-code caller: `source: "code"` IS the owner, and the read above already
+            // permits it, so requiring `locked = false` there would refuse every code sync.
+            // Safe as an equality because the column is NOT NULL with a default, so there is no
+            // third state for it to miss.
+            ...(options?.source !== "code"
+              ? [{ column: "locked", op: "=" as const, value: false }]
+              : []),
           ],
         }
       );
@@ -777,9 +791,21 @@ export class FieldGroupRegistryService extends BaseRegistryService<
               continue;
             }
           }
+          // 🔴 The row is RE-READ when the repair above rewrote it, because the decision below
+          // compares the config against the record and the record is no longer the one in hand.
+          // The repair writes fields, hash, localization and version from the LIVE TABLES; the
+          // stale copy still describes what the config happens to say, so the comparison reports
+          // "unchanged" and no table work is queued — leaving the mark cleared over a registry that
+          // describes the tables and a config that describes something else, which is the exact
+          // divergence this sync exists to close.
+          const settled =
+            existing.migrationStatus === "diverged"
+              ? await this.getComponent(config.slug)
+              : existing;
+
           await this.syncExistingCodeFirstComponent({
             config,
-            existing,
+            existing: settled,
             schemaHash,
             repairedTableName,
             result,

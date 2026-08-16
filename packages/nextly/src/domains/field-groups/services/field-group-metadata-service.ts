@@ -834,11 +834,41 @@ export class FieldGroupMetadataService {
           );
           return { record: settled };
         }
-        recordState = "advanced";
-        this.logger.error(
-          "[FieldGroups] The row advanced past this edit's version but could not be re-read; not marking it diverged.",
-          { slug, expectedSchemaVersion: existing.schemaVersion }
+        // 🔴 The version moved AND the row does not carry this edit — `readBackSettledRow` just
+        // established the second half. So another writer advanced the row while this edit's tables
+        // had already moved, and the definition now stored describes neither: that is divergence,
+        // and it is the state the mark exists for. Leaving it unmarked lets the next schema edit
+        // proceed from a definition known not to describe the tables, and the refusal below even
+        // invites a retry that would compound it.
+        //
+        // Marked at the version just READ rather than at this edit's, because the row is past that
+        // one by definition. Attempted ONCE: a writer racing this second attempt has itself just
+        // written the row, so retrying in a loop trades a bounded failure for an unbounded one, and
+        // the answer below still distinguishes what was actually persisted.
+        const current = await this.registry.getComponent(slug);
+        const remark = await this.registry.updateComponentIfVersion(
+          slug,
+          { migrationStatus: "diverged" },
+          current.schemaVersion,
+          { source: "code" }
         );
+        if (remark.matched) {
+          recordState = "marked";
+          this.logger.warn(
+            "[FieldGroups] The row advanced past this edit's version without carrying it; marked diverged at the version now stored.",
+            {
+              slug,
+              expectedSchemaVersion: existing.schemaVersion,
+              markedAtSchemaVersion: current.schemaVersion,
+            }
+          );
+        } else {
+          recordState = "advanced";
+          this.logger.error(
+            "[FieldGroups] The row advanced past this edit's version and moved again before it could be marked diverged.",
+            { slug, expectedSchemaVersion: existing.schemaVersion }
+          );
+        }
       }
     } catch (markError) {
       this.logger.error(

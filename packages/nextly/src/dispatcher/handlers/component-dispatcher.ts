@@ -716,9 +716,22 @@ export const COMPONENTS_METHODS: Record<
           adapter,
           logger,
           label: `reconcile field group "${slug}"`,
-          // Reads the catalog and writes one registry row; no DDL, so a database this cannot
-          // create the lock table on refuses nothing it would need.
-          issuesDdl: false,
+          // 🔴 TRUE even though this operation issues no DDL of its own, because the exclusion has
+          // to be REAL for the answer to mean anything. With `false` the session takes no lock at
+          // all on a database that has never run a storage migration, so a first migration can
+          // start mid-operation and rename the table, the discriminator or the registry while the
+          // planner is reading them — and those pointer updates need not advance `schema_version`,
+          // so the version-conditional write does not reject the mixed snapshot and records it as
+          // `synced`. An operation whose entire output is the claim "this definition describes
+          // these tables" must not be able to certify a pair that never coexisted.
+          //
+          // The cost that argues for `false` elsewhere does not apply here. Collections take that
+          // shape outside development because they record a migration FILE and must keep working
+          // for a role holding DML but no DDL. This is builder surface — refused in production
+          // unless `showBuilder` is explicitly on — so a deployment that can reach it is one that
+          // already accepts schema changes from a browser, and creating a one-time lock table is
+          // strictly less than what it has already permitted.
+          issuesDdl: true,
         },
         async () => {
           const { reconcileFieldGroup } = await import(

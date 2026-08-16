@@ -25,7 +25,7 @@
  * Self-skips per dialect on the standard rule: SQLite always runs, the servers run when their URL
  * is set, and each dialect gets its own throwaway database.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   createTestNextly,
@@ -79,6 +79,85 @@ for (const dialect of getConfiguredTestDialects()) {
       const after = await registry.getComponent(slug);
       expect(after.migrationStatus).toBe("diverged");
       expect(after.schemaVersion).toBe(row.schemaVersion + 1);
+    });
+
+    /**
+     * Ownership can change WITHOUT the version moving — a code sync claiming an existing UI group
+     * sets `locked` through the admin-only branch — so a caller that read the row unlocked still
+     * satisfies a version-only predicate and overwrites a definition a config file now owns.
+     *
+     * Written against a live database rather than a double because the predicate is the DATABASE's
+     * to evaluate: this is the half of the statement that decides, and a mock would only confirm
+     * the argument was passed.
+     */
+    it("refuses a UI write when the row was locked without the version moving", async () => {
+      const { registry } = await seed();
+
+      // Ownership changes and the version does not — the state a code sync leaves when it claims
+      // an existing UI group.
+      await registry.updateComponent(
+        slug,
+        { locked: true },
+        { source: "code" }
+      );
+      const afterClaim = await registry.getComponent(slug);
+
+      // 🔴 The race itself, and it has to be staged: the guard that runs BEFORE the statement reads
+      // the row and refuses a locked one outright, so a row already locked when the call starts
+      // never reaches the predicate under test. What this must model is the window between that
+      // read and the UPDATE — the read saw an unlocked row, the database now holds a locked one.
+      // Returning a stale unlocked snapshot from the read is exactly that window, and nothing else
+      // about the row is altered.
+      const read = vi
+        .spyOn(registry, "getComponent")
+        .mockResolvedValueOnce({ ...afterClaim, locked: false });
+
+      const outcome = await registry.updateComponentIfVersion(
+        slug,
+        { label: "Written by a UI caller that read the row unlocked" },
+        afterClaim.schemaVersion
+      );
+
+      read.mockRestore();
+
+      // The read let it past, so the WHERE clause is the only thing that can refuse it.
+      expect(outcome).toEqual({ matched: false });
+      const after = await registry.getComponent(slug);
+      expect(after.label).not.toBe(
+        "Written by a UI caller that read the row unlocked"
+      );
+      // And the row is untouched rather than merely unlabelled: a predicate that matched nothing
+      // must also not have advanced the version.
+      expect(after.schemaVersion).toBe(afterClaim.schemaVersion);
+    });
+
+    // The control that keeps the predicate from refusing the owner: `source: "code"` IS the config
+    // file, so it must still write a locked row. Without this the clause above would make every
+    // code sync a no-op, which is a worse failure than the race it closes.
+    it("still writes a locked row for the code caller that owns it", async () => {
+      const { registry, row } = await seed();
+
+      await registry.updateComponent(
+        slug,
+        { locked: true },
+        { source: "code" }
+      );
+      const afterClaim = await registry.getComponent(slug);
+
+      const outcome = await registry.updateComponentIfVersion(
+        slug,
+        { migrationStatus: "diverged" },
+        afterClaim.schemaVersion,
+        { source: "code" }
+      );
+
+      expect(outcome).toEqual({
+        matched: true,
+        newSchemaVersion: afterClaim.schemaVersion + 1,
+      });
+      expect((await registry.getComponent(slug)).migrationStatus).toBe(
+        "diverged"
+      );
     });
 
     it("refuses, and writes nothing, when the row has moved past that version", async () => {

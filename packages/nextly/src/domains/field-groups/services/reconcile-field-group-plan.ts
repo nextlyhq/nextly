@@ -344,16 +344,42 @@ function structuralBlockers(
       });
       continue;
     }
-    // 🔴 Presence is not the whole requirement. A column can survive while the CONSTRAINT that made
-    // it meaningful is dropped, and for `id` that means duplicate component rows become possible
-    // while every name-based check still reads the table as healthy. Taken from the skeleton's own
-    // `primaryKey` rather than by naming `id`, so this covers whatever the generator marks next.
+    // 🔴 Presence is not the whole requirement, and neither is the key. A system column can survive
+    // with its TYPE or its NULLABILITY changed, and both break the assumptions the runtime schema
+    // is about to be registered on: a nullable `_parent_id` admits rows belonging to no parent, and
+    // a retyped one makes the parent-scoped queries compare values that no longer correspond. Every
+    // attribute the skeleton states is therefore compared, rather than a list of the ones that have
+    // been noticed so far.
+    //
+    // The skeleton is the only side that can be authoritative here: these columns belong to no
+    // field, so nothing else in this module describes them.
+    const attributeDrift: string[] = [];
     if (column.primaryKey === true && live.primaryKey !== true) {
+      attributeDrift.push("is no longer part of the primary key");
+    }
+    const wantType = normalizeType(column.type);
+    const haveType = normalizeType(live.type);
+    if (
+      wantType !== undefined &&
+      haveType !== undefined &&
+      wantType !== haveType
+    ) {
+      attributeDrift.push(
+        `is ${live.type} where the table requires ${column.type}`
+      );
+    }
+    // Only a column the skeleton declares NOT NULL is checked. The reverse — a column the generator
+    // leaves nullable that is live NOT NULL — rejects nothing this operation can repair and would
+    // refuse tables an older generation created with a tighter constraint.
+    if (column.nullable === false && live.nullable === true) {
+      attributeDrift.push("is nullable where the table requires a value");
+    }
+    if (attributeDrift.length > 0) {
       blockers.push({
         fieldName: column.name,
         columnName: column.name,
         kind: "structural-column-missing",
-        detail: `${liveMain.name} still has "${column.name}" but it is no longer the table's primary key, so duplicate rows are possible; this operation issues no DDL and cannot restore the constraint.`,
+        detail: `${liveMain.name} still has "${column.name}" but it ${attributeDrift.join(" and ")}; this operation issues no DDL and cannot restore the structure.`,
       });
     }
   }
