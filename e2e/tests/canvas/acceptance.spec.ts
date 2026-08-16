@@ -974,18 +974,15 @@ test.describe("a canvas any Nextly editor could ship", () => {
     // a broken selector, a missing iframe or a failed seed stays a real failure
     // instead of becoming another expected one.
     //
-    // Unlike the placed-block reader this file used to guard the same way, this
-    // refusal is a genuine one: `undoDepth` QUERIES the seam in both documents and
-    // refuses only on an actual absence. That is what makes this assertion a real
-    // tripwire — publish the attribute and the reader returns a count, this line goes
-    // red, and the target below has to be rewritten. A guard on a reader that refused
-    // without looking would instead detect only the reader being edited, which is why
-    // the placed-block one was removed rather than kept.
+    // This assertion is a tripwire rather than a restatement, and it is one only
+    // because `undoDepth` QUERIES the seam in both documents and refuses on an actual
+    // absence. Publish the attribute and the reader returns a count, this line goes red,
+    // and the target below has to be rewritten. Guarding a reader that refused without
+    // looking would detect only that reader being edited, never the seam arriving.
     //
-    // The async thunk is retained. It was required when these readers threw
-    // synchronously — `expect(reader())` never receives a promise, so `.rejects`
-    // cannot see the refusal — and it stays correct now that they reject instead,
-    // so the form works whichever way a future reader signals failure.
+    // The async thunk covers a reader that signals failure either way: a synchronous
+    // throw never reaches `expect(reader())` as a promise, so `.rejects` cannot see it,
+    // while a rejected promise works through the thunk unchanged.
     await expect(async () => chrome.undoDepth()).rejects.toThrow(
       CanvasCapabilityError
     );
@@ -1094,27 +1091,17 @@ test.describe("a canvas any Nextly editor could ship", () => {
       .toBe(false);
 
     await chrome.startDragOfBlock(fixture.blockIds[1] ?? "");
-    // Asserted BEFORE any marker: this reader is new, and a reader that failed to find
-    // the block or to activate the drag would otherwise be absorbed as the shortfall
-    // below, leaving the case green having measured nothing.
     // Marked HERE, with the panel-side control and the settle above it.
     //
-    // The reason CHANGED TWICE and both earlier ones were wrong, so what is and is not
-    // established is worth stating plainly.
+    // The shortfall is an interaction between consecutive drags, not a missing capability
+    // and not a failure to cancel. `CanvasNode` makes every placed block a drag source,
+    // and started on its own this drag activates: the source inside the frame reports
+    // `aria-grabbed="true"` and carries the dragging class across repeated moves. Started
+    // after a panel drag has run and been cancelled, it does not, and waiting for the
+    // first drag to report that it ended does not change that.
     //
-    // NOT the reason: "the canvas offers no drag for a placed block". `CanvasNode` makes
-    // every placed block a drag source and the reader performs a real drag of one.
-    //
-    // NOT the reason: "Escape leaves the drag state set". Measured with Escape alone and
-    // no release, the state clears within 100ms in both documents — which is why the
-    // Escape case above no longer expects a failure.
-    //
-    // What IS established: started on its own, this drag activates — the source inside
-    // the frame reports `aria-grabbed="true"` and carries the dragging class across
-    // repeated moves. Started after a panel drag has run and been cancelled, it does
-    // not, and polling for it does not help. So the reader is exonerated by a control
-    // that does not depend on this marker, and what remains is an interaction between
-    // one drag and the next that nobody has isolated yet.
+    // So the settle above is necessary and NOT sufficient, and what survives a cancel to
+    // block the next drag is not yet isolated.
     test.fail(true, "a drag started after a cancelled drag does not activate");
     // Advanced INSIDE a zone, exactly as the panel side is. Sampling the two
     // under different conditions makes the comparison a statement about the
@@ -1217,22 +1204,20 @@ test.describe("a canvas any Nextly editor could ship", () => {
       })
       .toBe(false);
 
-    // WHAT THIS DOES AND DOES NOT ESTABLISH, stated because the title is broader than the
-    // assertion. The poll above passes: Escape genuinely clears `aria-grabbed` in both
-    // documents, within about 100ms, and the earlier reading that said otherwise was
-    // taken one React commit too early.
+    // WHAT THIS ESTABLISHES, stated because the title is broader than the assertion.
     //
-    // But clearing the source attribute is NECESSARY and not sufficient for "the drag
-    // ended", and this file has the counterexample in it. The engine-parity case above
-    // starts a drag after this same cancellation and that drag never activates — so
-    // something survives a cancel that `aria-grabbed` cannot see, and treating the one
-    // attribute as proof would certify a teardown that demonstrably leaves state behind.
+    // Escape clears the drag state: `aria-grabbed` goes false in both documents, within
+    // about 100ms. That is what the poll asserts and all it asserts.
+    //
+    // Clearing the source attribute is NECESSARY and not sufficient for "the drag ended",
+    // and this file holds the counterexample: the engine-parity case starts a drag after
+    // this same cancellation and that drag never activates, so something survives a
+    // cancel that `aria-grabbed` cannot see.
     //
     // The full property needs an observable teardown control — overlay and active target
-    // gone, AND a subsequent drag able to start. That last clause is NOT asserted here,
-    // deliberately: what survives a cancel has not been isolated, and marking this point
-    // as failing for an unisolated cause would be as wrong as graduating it without
-    // saying any of this. The claim is narrowed to what was measured.
+    // gone, AND a subsequent drag able to start. That last clause is deliberately not
+    // asserted while what survives a cancel remains unisolated, since a failure attributed
+    // to an unknown cause is not a target anyone can work.
     await driver.cancel();
   });
 });
