@@ -88,11 +88,13 @@
     "@types/picomatch": "^4.0.3",
     "@types/react": "19.2.0",
     "@types/react-dom": "19.2.0",
+    "@types/semver": "^7.5.8",
     "lucide-react": "^0.544.0",
     "nextly": "workspace:*",
     "react": "19.2.0",
     "react-dom": "19.2.0",
     "react-hook-form": "^7.66.0",
+    "semver": "^7.6.0",
     "tsup": "^8.5.0",
     "typescript": "^5.9.3",
     "vitest": "^4.1.0"
