@@ -680,6 +680,33 @@ export class VersionsRepository {
   }
 
   /**
+   * Remove every recovery point belonging to an ENTITY, across all of its
+   * documents and authors.
+   *
+   * For the entity itself going away, where `deleteAutosaves` cannot help
+   * because there is no single document id to name.
+   *
+   * Scoped to autosave rows on purpose. Durable history and working drafts for
+   * a deleted entity are a wider question with an archival dimension -- what a
+   * deletion owes a document's recorded past -- and answering it here would
+   * decide it by accident. A recovery point has no such dimension: it is one
+   * author's unsaved work on a document that no longer exists, so nothing can
+   * ever read it again.
+   */
+  async deleteAutosavesForEntity(
+    scopeKind: VersionScopeKind,
+    scopeSlug: string
+  ): Promise<number> {
+    return this.db.delete(TABLE, {
+      and: [
+        { column: "scopeKind", op: "=" as const, value: scopeKind },
+        { column: "scopeSlug", op: "=" as const, value: scopeSlug },
+        { column: "isAutosave", op: "=" as const, value: true },
+      ],
+    });
+  }
+
+  /**
    * One author's current recovery point for a document, or null when they have
    * none.
    *

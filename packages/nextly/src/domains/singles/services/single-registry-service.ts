@@ -52,6 +52,7 @@ import {
   calculateSchemaHash,
   schemaHashesMatch,
 } from "../../schema/services/schema-hash";
+import { VersionsRepository } from "../../versions/versions-repository";
 import {
   clearWebhookRecording,
   setWebhookRecording,
@@ -653,6 +654,21 @@ export class SingleRegistryService extends BaseRegistryService<
         // §13.8: generic "Not found." — slug in logContext only.
         throw NextlyError.notFound({ logContext: { slug } });
       }
+
+      // Recovery points go with the entity. They are excluded from history
+      // listings, from version reads and from retention pruning, so nothing
+      // else would ever remove them, and once the Single is gone the
+      // live-document gate makes them permanently unreachable: one author's
+      // unsaved work on a document that no longer exists.
+      //
+      // Durable history and working drafts are deliberately NOT touched here.
+      // What a deletion owes a document's recorded past is a wider question
+      // than this, and answering it as a side effect would decide it by
+      // accident. A recovery point carries no such question.
+      await new VersionsRepository(this.adapter).deleteAutosavesForEntity(
+        "single",
+        slug
+      );
 
       // Drop the in-process recording decision with the row, for the same
       // reason as collections: a slug reused later must start from the
