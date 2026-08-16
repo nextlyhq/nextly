@@ -34,6 +34,14 @@ interface DragOperation {
 
 export interface EditorSurfaceProps {
   /**
+   * Which editor surface this is, for scoping chrome preferences.
+   *
+   * A form may embed several page-builder fields; without this they share one set
+   * of panel widths and silently drive each other. Pass the same identifier used
+   * as the provider's draft key, so the two cannot disagree.
+   */
+  surface?: string;
+  /**
    * Leaving the editor, when the host has somewhere to go.
    *
    * Omitted by the FIELD mount, which renders inside an entry form: the author is
@@ -43,14 +51,14 @@ export interface EditorSurfaceProps {
   onExit?: () => void;
 }
 
-export function EditorSurface({ onExit }: EditorSurfaceProps = {}) {
+export function EditorSurface({ onExit, surface }: EditorSurfaceProps = {}) {
   const { state, dispatch } = useEditor();
   const root = state.document.root;
   /**
    * Created once. The shell reloads preferences whenever this identity changes, so a
    * new object every render would reset the author's panel choices on each keystroke.
    */
-  const [preferences] = useState(editorPreferenceStore);
+  const [preferences] = useState(() => editorPreferenceStore(surface));
   /**
    * Why the CURRENT target refuses this block, while the drag is still in the air.
    *

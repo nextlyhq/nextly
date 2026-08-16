@@ -40,7 +40,12 @@ export function PageBuilderEditView(props: CustomEditViewProps) {
     >
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         <SaveShell props={props} />
-        <EditorSurface />
+        {/*
+         * The full edit view has somewhere to go, so it supplies the exit. The
+         * field mounts do not and deliberately leave it unset, which is what makes
+         * the shell draw no exit affordance there rather than an inert one.
+         */}
+        <EditorSurface onExit={props.onCancel} />
       </div>
     </EditorProvider>
   );

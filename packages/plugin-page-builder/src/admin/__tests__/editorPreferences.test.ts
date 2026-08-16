@@ -64,6 +64,35 @@ describe("once the author has chosen", () => {
     expect(JSON.parse(stored as string).leftPanel).toBeNull();
   });
 
+  it("keeps two embedded surfaces from driving each other", () => {
+    // A form may embed several page-builder fields. Sharing one key means opening
+    // one applies the panel the OTHER last chose, which reads as the editor
+    // forgetting the author's choice at random.
+    //
+    // The separating property is that the two stores write to DIFFERENT keys —
+    // asserting only that each reads back its own value would pass on a shared
+    // key too, since the second write would simply be the last one made.
+    const a = editorPreferenceStore("field:body");
+    const b = editorPreferenceStore("field:sidebar");
+
+    a.write(JSON.stringify({ leftPanel: "layers" }));
+    b.write(JSON.stringify({ leftPanel: "tokens" }));
+
+    expect(JSON.parse(a.read() as string)).toMatchObject({
+      leftPanel: "layers",
+    });
+    expect(JSON.parse(b.read() as string)).toMatchObject({
+      leftPanel: "tokens",
+    });
+  });
+
+  it("gives an unidentified surface the bare key", () => {
+    // The standalone edit view, which is the only surface of its kind on a page.
+    editorPreferenceStore().write(JSON.stringify({ leftPanel: "fonts" }));
+
+    expect(window.localStorage.getItem(STORAGE_KEY)).not.toBeNull();
+  });
+
   it("writes through to storage under its own key", () => {
     // Its own key rather than the shell's default: two editor surfaces in one
     // document must not silently share one set of panel widths.

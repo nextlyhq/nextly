@@ -31,7 +31,23 @@ import type { PreferenceStore } from "@nextlyhq/builder";
  * a future standalone builder alongside this one, does not silently share one
  * set of panel widths between surfaces that are not the same surface.
  */
-const STORAGE_KEY = "nextly.page-builder.shell";
+const KEY_PREFIX = "nextly.page-builder.shell";
+
+/**
+ * The storage key for ONE editor surface.
+ *
+ * Namespaced per surface because a form may embed several page-builder fields,
+ * and a single shared key means opening one applies the panel selection and
+ * widths last written by another — the editors would silently drive each other.
+ *
+ * The caller passes the same identifier it gives `EditorProvider` as a draft key,
+ * so the two agree by construction rather than by two call sites remembering to
+ * match. A surface with no identifier falls back to the bare prefix, which is
+ * correct for the single standalone edit view.
+ */
+function storageKey(surface: string | undefined): string {
+  return surface === undefined ? KEY_PREFIX : `${KEY_PREFIX}.${surface}`;
+}
 
 /**
  * What the shell sees before the author has expressed any preference.
@@ -49,12 +65,13 @@ const FIRST_RUN = JSON.stringify({ leftPanel: "insert" });
  * Returns a store that forgets when there is no `window`, so a server render is a
  * default rather than a crash — the same shape the shell's own fallback uses.
  */
-export function editorPreferenceStore(): PreferenceStore {
+export function editorPreferenceStore(surface?: string): PreferenceStore {
+  const key = storageKey(surface);
   if (typeof window === "undefined") {
     return { read: () => FIRST_RUN, write: () => undefined };
   }
   return {
-    read: () => window.localStorage.getItem(STORAGE_KEY) ?? FIRST_RUN,
-    write: value => window.localStorage.setItem(STORAGE_KEY, value),
+    read: () => window.localStorage.getItem(key) ?? FIRST_RUN,
+    write: value => window.localStorage.setItem(key, value),
   };
 }
