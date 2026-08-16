@@ -410,6 +410,15 @@ export function EntryForm({
           className={className}
         >
           <div className="space-y-6">
+            {/* The embedded editor autosaves like the standalone one, so it
+                owes the same way back. Without this, work lost in a quick-edit
+                modal has a recovery point stored and no control that offers
+                it, which is worse than not storing one. */}
+            <AutosaveRecoveryNotice
+              savedAt={recovery.savedAt}
+              onRestore={recovery.restore}
+              onDismiss={recovery.dismiss}
+            />
             {/* Error summary at top of form */}
             <FormErrorSummary errors={errors} submitCount={submitCount} />
             {/* This branch renders every collection field, the editable slug among them, but not
