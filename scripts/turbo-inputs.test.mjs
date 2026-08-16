@@ -285,11 +285,13 @@ describe("a package's hash covers the program it actually compiles", () => {
 });
 
 describe("the shared TypeScript config is hashed", () => {
-  // `check-types` declares `dependsOn: []`, so no package has a graph edge to
-  // `@nextlyhq/tsconfig` — yet 22 of them extend its `base.json`, which decides
-  // `strict`, `target` and `lib`. Without a global entry, changing a compiler
-  // setting leaves every hash in the repository unmoved at once, which is the
-  // same defect as above with the blast radius of the whole monorepo.
+  // 22 packages extend `@nextlyhq/tsconfig`'s `base.json`, which decides
+  // `strict`, `target` and `lib`. The `^check-types` edge gives most of them a
+  // graph edge to it, so this is no longer the only cover — it is asserted
+  // because that edge is a property of the task graph rather than of the
+  // configs, and reaches neither a task without one nor a consumer that reads
+  // these files by relative path. Without the global entry, changing a compiler
+  // setting can leave hashes unmoved across the whole repository at once.
   it("counts packages/tsconfig among the global dependencies", () => {
     const globalFiles = Object.keys(dryRun().globalCacheInputs.files);
     expect(globalFiles).toContain("packages/tsconfig/base.json");
