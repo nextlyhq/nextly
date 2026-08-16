@@ -16,6 +16,7 @@ import { defaultBlockRegistry } from "../core/registry";
 
 import { BreakpointControl } from "./BreakpointControl";
 import { Canvas } from "./canvas/Canvas";
+import { editorPreferenceStore } from "./editorPreferences";
 import { Ban } from "./icons";
 import { InvalidSlotBanner } from "./InvalidSlotBanner";
 import { dragLabel } from "./logic/dragLabel";
@@ -45,6 +46,11 @@ export interface EditorSurfaceProps {
 export function EditorSurface({ onExit }: EditorSurfaceProps = {}) {
   const { state, dispatch } = useEditor();
   const root = state.document.root;
+  /**
+   * Created once. The shell reloads preferences whenever this identity changes, so a
+   * new object every render would reset the author's panel choices on each keystroke.
+   */
+  const [preferences] = useState(editorPreferenceStore);
   /**
    * Why the CURRENT target refuses this block, while the drag is still in the air.
    *
@@ -127,6 +133,7 @@ export function EditorSurface({ onExit }: EditorSurfaceProps = {}) {
          */}
         <BuilderShell
           className="min-h-0 flex-1"
+          store={preferences}
           topBar={<BreakpointControl />}
           renderPanel={panel => (panel === "insert" ? <BlockLibrary /> : null)}
           inspector={<Inspector />}
