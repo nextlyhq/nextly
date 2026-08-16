@@ -53,6 +53,8 @@ function plan(args: {
   liveCompanion?: TableSpec | null;
   /** Defaults to false — the flag the row of a never-localized group records. */
   storedLocalized?: boolean;
+  /** The creator-derived expectation; absent means the type check has nothing to compare. */
+  expectedColumnTypes?: ReadonlyMap<string, string>;
 }) {
   return planFieldGroupReconcile({
     storedFields: args.storedFields,
@@ -61,6 +63,9 @@ function plan(args: {
     tableName: TABLE,
     liveMain: args.liveMain,
     liveCompanion: args.liveCompanion ?? null,
+    ...(args.expectedColumnTypes
+      ? { expectedColumnTypes: args.expectedColumnTypes }
+      : {}),
   });
 }
 
@@ -401,7 +406,15 @@ describe("planFieldGroupReconcile", () => {
     const col = live.columns.find(c => c.name === "weight");
     if (col) col.type = "text";
 
-    const result = plan({ storedFields: stored, liveMain: live });
+    const result = plan({
+      storedFields: stored,
+      liveMain: live,
+      // 🔴 The expectation comes from the CREATOR, so the test must supply one — without it the
+      // check has nothing to compare against and correctly stays silent. Passing an empty map here
+      // is what made this case inert when the comparison moved off the column descriptor, and the
+      // suite caught it; the entry is the check's real input rather than scaffolding.
+      expectedColumnTypes: new Map([["weight", "int4"]]),
+    });
 
     expect(result.blockers).toEqual([
       expect.objectContaining({
@@ -409,6 +422,20 @@ describe("planFieldGroupReconcile", () => {
         kind: "physical-type-changed",
       }),
     ]);
+  });
+
+  // The control that keeps the check from firing on a column it has no expectation for. Absence
+  // must SKIP rather than block — treating "I could not derive an expectation" as drift is what
+  // made reconcile refuse healthy groups containing dates and relations.
+  it("stays silent when no expected type is known for the column", () => {
+    const stored: ReconcilableField[] = [{ name: "weight", type: "number" }];
+    const live = liveTableFor([{ name: "weight", type: "number" }]);
+    const col = live.columns.find(c => c.name === "weight");
+    if (col) col.type = "text";
+
+    const result = plan({ storedFields: stored, liveMain: live });
+
+    expect(result.blockers).toEqual([]);
   });
 
   it("refuses a live column whose identifier no field name can represent", () => {
