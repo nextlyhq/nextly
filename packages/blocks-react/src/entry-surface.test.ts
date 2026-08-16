@@ -304,6 +304,8 @@ describe("the blocks entry", () => {
       "box",
       "button",
       "collectionLoop",
+      "column",
+      "columns",
       "coreBlocks",
       "divider",
       "embed",
