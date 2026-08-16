@@ -146,6 +146,7 @@ async function geometrySpanMs(
           ms: 0,
           unclassified: [] as string[],
           nonDocumentTimelines: [] as string[],
+          liveMs: 0,
         };
 
       // A value that is not a time cannot be measured, and `|| 0` would report it as instant —
@@ -157,6 +158,16 @@ async function geometrySpanMs(
 
       const unclassified: string[] = [];
       const nonDocumentTimelines: string[] = [];
+      /**
+       * The longest span the RUNNING effects actually claim, as opposed to what the stylesheet
+       * declares.
+       *
+       * Read from the effects rather than from any longhand, because the two can disagree and
+       * only one of them moves the edge. `getComputedTiming()` reports the timing in force after
+       * every override, so this needs no matching of an effect back to the rule that created it —
+       * which is what makes one comparison cover the whole family instead of one member.
+       */
+      let liveLongest = 0;
       let longest = 0;
 
       for (const zone of zones) {
@@ -232,7 +243,79 @@ async function geometrySpanMs(
             ms: 0,
             unclassified: [] as string[],
             nonDocumentTimelines: [] as string[],
+            liveMs: 0,
           };
+        }
+
+        // What the effects THEMSELVES claim, measured before any longhand is read.
+        //
+        // `activeDuration` already folds duration x iterations and every override applied through
+        // the Web Animations API, so this needs no matching of an effect back to the declaration
+        // that produced it — which is what lets one number cover a family of divergences rather
+        // than one member of it. `updateTiming({duration})` is the instance that motivated this
+        // and it is not the interesting part: it leaves `playbackRate` at 1 and every computed
+        // longhand untouched, so nothing above it can see the change.
+        //
+        // Only the effects this element OWNS, by the same `own` predicate the filter above used.
+        // A descendant's effect is already refused there, and charging it here would report a span
+        // for movement this loop never reads.
+        //
+        // Restricted to effects that move GEOMETRY, because the declared side is. Charging every
+        // owned effect compares two different populations, and the canvas has a real
+        // `background .1s` transition that moves no edge — so an unrestricted comparison reports
+        // a 100ms divergence on a correct canvas, reinstating exactly the paint-as-geometry floor
+        // this guard exists to have removed.
+        //
+        // Which properties an effect moves is readable for both kinds, by different routes: a
+        // transition names its one property, and an animation's computed keyframes carry theirs.
+        // A `KeyframeEffect` whose keyframes cannot be read at all is charged rather than skipped,
+        // since an unreadable effect is the case this comparison is here to refuse.
+        const KEYFRAME_META = new Set([
+          "offset",
+          "composite",
+          "computedOffset",
+          "easing",
+        ]);
+        const kebab = (name: string) =>
+          name.replace(/[A-Z]/g, c => `-${c.toLowerCase()}`);
+        const movesGeometry = (a: Animation): boolean => {
+          if (a instanceof CSSTransition) {
+            return (geometry as string[]).includes(a.transitionProperty);
+          }
+          const effect = a.effect;
+          if (!(effect instanceof KeyframeEffect)) return true;
+          let frames: Keyframe[];
+          try {
+            frames = effect.getKeyframes();
+          } catch {
+            return true;
+          }
+          if (frames.length === 0) return true;
+          return frames.some(frame =>
+            Object.keys(frame).some(
+              key =>
+                !KEYFRAME_META.has(key) &&
+                (geometry as string[]).includes(kebab(key))
+            )
+          );
+        };
+
+        for (const a of el.getAnimations({ subtree: true })) {
+          if (!own(a) || !movesGeometry(a)) continue;
+          const timing = a.effect?.getComputedTiming();
+          if (!timing) continue;
+          // ZERO ITERATIONS runs nothing, so it holds the edge for nothing — not even its delay.
+          // `activeDuration` is 0 for that AND for a zero-duration effect, which is a different
+          // case: that one waits out its delay and then moves instantly, so the delay IS the span
+          // it holds. The two zeros are indistinguishable from `activeDuration` alone, and the
+          // declared path already separates them, so this reads the iteration count to agree.
+          if (Number(timing.iterations ?? 1) === 0) continue;
+          // `delay` is included because an effect that waits before moving still holds the edge
+          // for the whole interval, exactly as the declared path charges `animation-delay`.
+          const live =
+            Number(timing.activeDuration ?? 0) + Number(timing.delay ?? 0);
+          if (Number.isFinite(live)) liveLongest = Math.max(liveLongest, live);
+          else liveLongest = Infinity;
         }
 
         // The element and BOTH pseudo-elements, through one reader. A pseudo that animates or
@@ -356,6 +439,7 @@ async function geometrySpanMs(
         ms: longest,
         unclassified,
         nonDocumentTimelines,
+        liveMs: liveLongest,
       };
     },
     [
@@ -398,6 +482,29 @@ async function geometrySpanMs(
     throw new Error(
       `no elements matched "${DROP_ZONES}" in the canvas frame, so nothing was measured. A zero ` +
         "span here would be indistinguishable from a canvas whose zones do not move."
+    );
+  }
+  // AFTER the endless check below in priority terms, but expressed here because the endless one
+  // reads `result.ms`. An endlessly-declared animation is refused by that check with its own
+  // wording; this one exists for a declaration that looks finite while the effect is not, which is
+  // a different fault and deserves a different sentence.
+  //
+  // Strictly greater, with a tolerance. The declared path parses a serialized time and the live
+  // path reads a float the engine computed, so exact equality would refuse on representation
+  // rather than on divergence. Only the UNDER-reporting direction is refused: a live span SHORTER
+  // than the declaration means the probe would wait longer than the edge moves, which is safe.
+  const TIMING_TOLERANCE_MS = 1;
+  if (
+    Number.isFinite(result.ms) &&
+    result.liveMs > result.ms + TIMING_TOLERANCE_MS
+  ) {
+    throw new Error(
+      `a drop zone's running effect claims ${String(result.liveMs)}ms while its declaration ` +
+        `reads ${String(result.ms)}ms. The timing in force was changed through the Web Animations ` +
+        "API without touching the playback rate or any computed longhand — `updateTiming` does " +
+        "exactly this — so every value this probe reads still describes the stylesheet rather " +
+        "than the edge. Charging the declared number would certify an allowance SHORTER than the " +
+        "movement, which is the one direction that lets a stale measurement pass as settled."
     );
   }
   if (!Number.isFinite(result.ms)) {
@@ -1180,6 +1287,67 @@ test.describe("the drop-zone geometry the probe waits on", () => {
     await expect(
       geometrySpanMs(frame, "data-drag data-active")
     ).rejects.toThrow(/playback rate/);
+  });
+
+  test("a DECLARED animation retimed through the API is refused", async ({
+    page,
+    request,
+  }) => {
+    const frame = await canvas(page, request);
+
+    // The case NO value this probe reads can see. `updateTiming` leaves the object a
+    // `CSSAnimation`, leaves `playbackRate` at 1, and leaves every computed longhand describing
+    // the stylesheet — so the class test, the rate test and the whole declared path all agree on
+    // a number the edge stopped obeying.
+    const applied = await frame.evaluate(async () => {
+      const sheet = (
+        document.getElementById("nx-pb-style") as HTMLStyleElement | null
+      )?.sheet;
+      sheet?.insertRule(
+        "@keyframes nx-retimed { from { height: 0 } to { height: 6px } }",
+        sheet.cssRules.length
+      );
+      // FINITE and still running, for the same reason the playback-rate control is: an endless
+      // animation is refused for being endless, so an `infinite` fixture here would pass with the
+      // comparison removed and prove nothing about it. Declared 20000ms, retimed to 60000ms.
+      sheet?.insertRule(
+        ".nx-pb-dropzone { animation: nx-retimed .2s 100 }",
+        sheet.cssRules.length
+      );
+      const zone = document.querySelector(".nx-pb-dropzone");
+      if (!zone) return null;
+      const animation = zone
+        .getAnimations()
+        .find(a => a instanceof CSSAnimation);
+      if (!animation?.effect) return null;
+      animation.effect.updateTiming({ duration: 600 });
+      await animation.ready;
+      const timing = animation.effect.getComputedTiming();
+      const style = getComputedStyle(zone);
+      return {
+        isCssAnimation: true,
+        rate: animation.playbackRate,
+        // The two readings that make this control the case it claims to be: the LONGHANDS still
+        // say what the stylesheet said, and the EFFECT does not. Asserted rather than assumed,
+        // because a fixture whose longhands moved would be refused by the declared path and the
+        // comparison under test would never run.
+        declaredDuration: style.animationDuration,
+        declaredIterations: style.animationIterationCount,
+        liveActiveDuration: Number(timing.activeDuration ?? 0),
+      };
+    });
+    expect(applied).not.toBeNull();
+    expect(applied?.isCssAnimation).toBe(true);
+    // Untouched, all three: this is what makes every existing refusal blind to the change.
+    expect(applied?.rate).toBe(1);
+    expect(applied?.declaredDuration).toBe("0.2s");
+    expect(applied?.declaredIterations).toBe("100");
+    // And the effect disagrees, by more than the tolerance.
+    expect(applied?.liveActiveDuration).toBe(60000);
+
+    await expect(
+      geometrySpanMs(frame, "data-drag data-active")
+    ).rejects.toThrow(/running effect claims/);
   });
 
   test("it refuses rather than reporting a zero it cannot stand behind", async ({
