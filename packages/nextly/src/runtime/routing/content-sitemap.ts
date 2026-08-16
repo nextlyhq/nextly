@@ -76,12 +76,43 @@ export interface ContentSitemapOptions {
   /**
    * Maximum URLs to emit. Defaults to {@link SITEMAP_MAX_URLS}.
    *
-   * Lower it to carve a site into `generateSitemaps` shards; raising it past the
-   * protocol ceiling produces a file consumers reject.
+   * Raising it past the protocol ceiling produces a file consumers reject.
    */
   limit?: number;
-  /** Reader to use, for a per-tenant instance. Defaults to the process one. */
-  nextly?: NextlyContentReader;
+  /**
+   * URLs to skip before collecting, for sharding with Next's `generateSitemaps`.
+   *
+   * `limit` alone cannot shard. Every invocation would start the same scan from
+   * the beginning and return the same first `limit` URLs, so a site split into
+   * four files would publish its first shard four times and never name the rest
+   * — while looking exactly like a correctly sharded sitemap.
+   *
+   * Shard `n` is `{ offset: n * limit, limit }`, derived from the id
+   * `generateSitemaps` hands the route:
+   *
+   * ```ts
+   * export async function generateSitemaps() {
+   *   return [{ id: 0 }, { id: 1 }];
+   * }
+   * export default async function sitemap({ id }: { id: number }) {
+   *   return contentSitemapEntries({ ...config, offset: id * 50_000, limit: 50_000 });
+   * }
+   * ```
+   *
+   * Counted in URLS EMITTED rather than rows read, so a row the route serves no
+   * path for does not consume a shard's allowance and leave a gap between two
+   * shards that each look full.
+   */
+  offset?: number;
+  /**
+   * Reader to use, for a per-tenant instance. Defaults to the process one.
+   *
+   * Narrowed to `find`, which is all this scan calls. Asking for a whole
+   * `NextlyContentReader` would make a caller supply `findByID` and a media
+   * namespace to build a list of URLs, and a wrapper written to satisfy a type
+   * rather than a need is a surface nobody meant to expose.
+   */
+  nextly?: Pick<NextlyContentReader, "find">;
 }
 
 /**
@@ -106,6 +137,7 @@ export async function contentSitemapEntries(
     changeFrequency,
     priority,
     limit = SITEMAP_MAX_URLS,
+    offset = 0,
     nextly,
   } = options;
 
@@ -115,6 +147,11 @@ export async function contentSitemapEntries(
   const origin = trimTrailingSlash(baseUrl);
   const mount = normalizeBasePath(basePath);
   const entries: NextlySitemapEntry[] = [];
+  // URLs passed over for a lower shard. Counted here rather than translated
+  // into a starting page, because a page holds ROWS and a row need not yield a
+  // URL — so a page offset would drift from the URL offset by however many rows
+  // the route serves no path for.
+  let skipped = 0;
   // Two collections can hold the same slug, and the route resolves such a path
   // to the FIRST collection that answers. Emitting both would advertise one URL
   // twice, so the first wins here for the same reason it wins there.
@@ -142,23 +179,50 @@ export async function contentSitemapEntries(
           sort: "id",
           limit: PAGE_SIZE,
           page,
-          // The sitemap is served to anonymous crawlers, so it is built as one.
+          // Built as the anonymous visitor it is served to, and BOTH halves are
+          // needed to mean that. The Direct API bypasses access control by
+          // default, so `user: undefined` alone is a trusted read wearing an
+          // anonymous costume: it would list the slugs, and any timestamp asked
+          // for, of entries no visitor may read — and the access branch below
+          // would never be reached to skip that collection.
+          overrideAccess: false,
           user: undefined,
         });
       } catch (error) {
-        // An access-restricted collection has no PUBLIC paths to advertise.
-        // Skipping it is correct; failing the build over it is not. Any
-        // non-access error still surfaces.
-        if (NextlyError.is(error) && error.statusCode === 403) break;
+        // An access-restricted collection has no PUBLIC paths to advertise, so
+        // skipping it is correct; failing the build over it is not.
+        //
+        // Matched on the CODE rather than the status, because 403 is shared:
+        // `BUILDER_DISABLED` carries it too, and its own declaration says it is
+        // "separate from FORBIDDEN: the caller's permissions are not the
+        // problem". A status check would drop a whole collection for a failure
+        // that says nothing about access, and say nothing about having done so.
+        if (NextlyError.is(error) && error.code === "FORBIDDEN") break;
         throw error;
       }
 
       for (const item of result.items) {
         const param = slugToStaticParam(item[slugField]);
         if (!param) continue;
-        const url = `${origin}${mount}${param.slug.length > 0 ? `/${param.slug.join("/")}` : ""}`;
+        // Each segment is ENCODED. A stored slug may legitimately hold a
+        // space, `?`, `#`, `%` or `&`, and joining raw text changes what the
+        // URL means: `docs/a?b` would advertise the path `/docs/a` carrying the
+        // query `b`, which is not the path the route serves — besides producing
+        // characters a sitemap document cannot carry.
+        const path =
+          param.slug.length > 0
+            ? `/${param.slug.map(encodeURIComponent).join("/")}`
+            : "";
+        const url = `${origin}${mount}${path}`;
         if (seen.has(url)) continue;
         seen.add(url);
+        // Marked seen BEFORE the skip, so de-duplication spans shard
+        // boundaries: a URL two collections both claim must be dropped by the
+        // shard that skips it as well, or it reappears in the next one.
+        if (skipped < offset) {
+          skipped += 1;
+          continue;
+        }
         entries.push({
           url,
           ...lastModifiedOf(item, lastModifiedField),
@@ -192,7 +256,9 @@ function truncated(
   console.warn(
     `[nextly] sitemap reached its ${limit}-URL limit and stopped. ` +
       `Pages beyond it are absent and will not be crawled. ` +
-      `Split the sitemap with Next's generateSitemaps and give each shard its own limit.`
+      `Split it with Next's generateSitemaps, giving shard n ` +
+      `{ offset: n * ${limit}, limit: ${limit} } — a lower limit alone restarts ` +
+      `the same scan and republishes the first shard.`
   );
   return entries;
 }

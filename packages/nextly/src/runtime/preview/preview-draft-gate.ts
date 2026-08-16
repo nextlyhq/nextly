@@ -66,14 +66,18 @@ export interface PreviewDraftGateConfig extends PreviewScopeReaderConfig {
  * createBlocksPage({
  *   collections: ["pages"],
  *   field: "content",
- *   status: "all",
  *   draft: previewDraftGate({ secret, generation, cookies }),
  * });
  * ```
  *
- * Note `status: "all"` in that example: this decides whether a visitor MAY see
- * a draft, and the route's scope decides whether one is read at all. A route
- * left at the default published scope grants nothing to grant.
+ * **The route's own `status` is deliberately left alone.** It widens internally
+ * for the request a grant applies to, so configuring `status: "all"` adds
+ * nothing and takes something away: the widened scope then also covers the
+ * resolver's id/slug mismatch path, where a visitor holding a token for entry A
+ * asking for a DIFFERENT unpublished slug in the same collection can be answered
+ * with that unrelated entry. Per-entry scope is the whole point of the token, so
+ * a configuration that defeats it must not be taught alongside the thing that
+ * enforces it.
  */
 export function previewDraftGate(
   config: PreviewDraftGateConfig

@@ -9,6 +9,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import { contentSitemapEntries } from "../content-sitemap";
 import type { NextlyContentReader } from "../resolve-content";
 
@@ -184,6 +185,109 @@ describe("contentSitemapEntries", () => {
     expect(entries[1].lastModified).toBeUndefined();
     // And the column is only requested when it was asked for.
     expect(calls[0].select).toEqual({ slug: true, updatedAt: true });
+  });
+
+  it("reads with access ENFORCED, not merely without a user", async () => {
+    // Two halves, and only together do they mean "as the anonymous visitor this
+    // is served to". The Direct API bypasses access control by default, so
+    // `user: undefined` alone is a trusted read that would list the slugs of
+    // entries no visitor may see — and would never reach the access branch that
+    // skips such a collection.
+    const { reader: r, calls } = reader({ pages: [[{ slug: "a" }]] });
+
+    await contentSitemapEntries({ ...BASE, nextly: r });
+
+    expect(calls[0].overrideAccess).toBe(false);
+    expect(calls[0].user).toBeUndefined();
+  });
+
+  it("skips a collection refused for ACCESS, and surfaces any other refusal", async () => {
+    // 403 is shared: `BUILDER_DISABLED` carries it too and says in its own
+    // declaration that permissions are not the problem. Matching the status
+    // would drop a whole collection for a failure that says nothing about
+    // access, silently.
+    const forbidden = new NextlyError({
+      code: "FORBIDDEN",
+      publicMessage: "no",
+      statusCode: 403,
+    });
+    const otherAt403 = new NextlyError({
+      code: "BUILDER_DISABLED",
+      publicMessage: "off",
+      statusCode: 403,
+    });
+
+    const skipping = {
+      find: async (args: Record<string, unknown>) => {
+        if (args.collection === "locked") throw forbidden;
+        return { items: [{ slug: "a" }], meta: { hasNext: false } };
+      },
+    } as unknown as NextlyContentReader;
+    await expect(
+      contentSitemapEntries({
+        baseUrl: "https://example.com",
+        collections: ["locked", "pages"],
+        nextly: skipping,
+      })
+    ).resolves.toEqual([{ url: "https://example.com/a" }]);
+
+    const throwing = {
+      find: async () => {
+        throw otherAt403;
+      },
+    } as unknown as NextlyContentReader;
+    await expect(
+      contentSitemapEntries({ ...BASE, nextly: throwing })
+    ).rejects.toThrow(/off/);
+  });
+
+  it("encodes each path segment", async () => {
+    // A stored slug may hold a space, `?`, `#`, `%` or `&`. Joined raw, `a?b`
+    // advertises the path `/a` carrying the query `b` — a different URL from
+    // the one the route serves for that slug.
+    const { reader: r } = reader({
+      pages: [[{ slug: "docs/a?b" }, { slug: "a b" }, { slug: "x&y" }]],
+    });
+
+    const entries = await contentSitemapEntries({ ...BASE, nextly: r });
+
+    expect(entries.map(e => e.url)).toEqual([
+      "https://example.com/docs/a%3Fb",
+      "https://example.com/a%20b",
+      "https://example.com/x%26y",
+    ]);
+  });
+
+  it("shards without repeating, using offset", async () => {
+    // `limit` alone cannot shard: every invocation restarts the same scan and
+    // returns the same first `limit` URLs, so a four-file split would publish
+    // its first shard four times while looking correct.
+    const page = [
+      { slug: "a" },
+      { slug: "b" },
+      { slug: "c" },
+      { slug: "d" },
+      { slug: "e" },
+    ];
+    const shard = async (n: number) =>
+      (
+        await contentSitemapEntries({
+          ...BASE,
+          limit: 2,
+          offset: n * 2,
+          nextly: reader({ pages: [page] }).reader,
+        })
+      ).map(e => e.url);
+
+    expect(await shard(0)).toEqual([
+      "https://example.com/a",
+      "https://example.com/b",
+    ]);
+    expect(await shard(1)).toEqual([
+      "https://example.com/c",
+      "https://example.com/d",
+    ]);
+    expect(await shard(2)).toEqual(["https://example.com/e"]);
   });
 
   it("returns nothing for a non-positive limit, without reading", async () => {
