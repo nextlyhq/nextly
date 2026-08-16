@@ -582,7 +582,27 @@ export function stripPasswordsThroughComponents(
 
   for (const field of fields) {
     const name = (field as { name?: unknown }).name;
-    if (typeof name !== "string" || !(name in entry)) continue;
+
+    // An UNNAMED field is presentational -- a layout group with no key of its
+    // own -- so its children's values live at THIS level rather than nested
+    // under it. Skipping it because it has no name would leave a password
+    // declared inside it, or inside a component it references, untouched at
+    // the parent level. Recurse into the same entry with the child list.
+    if (typeof name !== "string") {
+      const nested = (field as { fields?: unknown }).fields;
+      if (Array.isArray(nested)) {
+        stripPasswordsThroughComponents(
+          entry,
+          nested as FieldConfig[],
+          componentFields,
+          strip,
+          onUnresolvedComponent
+        );
+      }
+      continue;
+    }
+
+    if (!(name in entry)) continue;
 
     const slugs: string[] = [];
     const one = (field as { component?: unknown }).component;

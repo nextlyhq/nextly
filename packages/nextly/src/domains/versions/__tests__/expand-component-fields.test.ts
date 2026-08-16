@@ -220,4 +220,40 @@ describe("stripPasswordsThroughComponents", () => {
       )
     ).toThrow();
   });
+
+  it("strips a password declared inside an UNNAMED presentational group", () => {
+    // An unnamed group has no key of its own, so its children's values live at
+    // the parent level. Skipping the group because it has no name leaves them
+    // untouched -- and nothing about the stored snapshot looks wrong.
+    const fields = [
+      f({ type: "group", fields: [f({ name: "secret", type: "password" })] }),
+    ];
+    const entry: Record<string, unknown> = { secret: "plaintext" };
+
+    stripPasswordsThroughComponents(
+      entry,
+      fields,
+      new Map<string, FieldConfig[]>(),
+      strip
+    );
+
+    expect(entry).not.toMatchObject({ secret: "plaintext" });
+  });
+
+  it("reaches a component referenced from an unnamed group", () => {
+    const fields = [
+      f({
+        type: "group",
+        fields: [f({ name: "creds", type: "component", component: "auth" })],
+      }),
+    ];
+    const map = new Map<string, FieldConfig[]>([
+      ["auth", [f({ name: "secret", type: "password" })]],
+    ]);
+    const entry: Record<string, unknown> = { creds: { secret: "plaintext" } };
+
+    stripPasswordsThroughComponents(entry, fields, map, strip);
+
+    expect(entry.creds).not.toMatchObject({ secret: "plaintext" });
+  });
 });

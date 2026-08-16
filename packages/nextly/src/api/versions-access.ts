@@ -392,7 +392,21 @@ export async function redactSnapshotForUser(
   // read path. Capture already strips password values, but a field converted to
   // `password` after a snapshot was written — or history imported from before
   // that rule existed — would otherwise hand back a value the live read hides.
-  const fields = await resolveCurrentFields(scopeKind, slug);
+  // The STRICT resolver: `null` means the lookup failed, which is different
+  // from an entity that genuinely has no user-defined fields. Collapsing the
+  // two would skip redaction entirely on a transient failure and hand back a
+  // value the live read hides -- an assertion satisfied by absence, in the one
+  // place where absence must stop the read.
+  const fields = await tryResolveCurrentFields(scopeKind, slug);
+  if (fields === null) {
+    throw NextlyError.internal({
+      logContext: {
+        reason: "version-redaction-field-resolution-failed",
+        scopeKind,
+        scopeSlug: slug,
+      },
+    });
+  }
   if (fields.length > 0) {
     // Through component REFERENCES as well. A `component` field carries only a
     // slug, so a walker given the top-level list alone sees a leaf: a password
