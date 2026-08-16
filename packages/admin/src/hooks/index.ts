@@ -87,26 +87,6 @@ export type {
   EntryFormShortcutsOptions,
 } from "./useKeyboardShortcuts";
 
-// Utility hooks - Auto-Save & Draft Recovery
-export {
-  useAutoSave,
-  getDraft,
-  clearDraftByKey,
-  cleanupExpiredDrafts,
-} from "./useAutoSave";
-export type {
-  UseAutoSaveOptions,
-  AutoSaveState,
-  UseAutoSaveReturn,
-} from "./useAutoSave";
-
-export { useDraftRecovery } from "./useDraftRecovery";
-export type {
-  Draft,
-  UseDraftRecoveryOptions,
-  UseDraftRecoveryReturn,
-} from "./useDraftRecovery";
-
 // Utility hooks - Entry JSON Viewer
 export { useEntryJSON, MAX_DEPTH, MIN_DEPTH } from "./useEntryJSON";
 export type { UseEntryJSONOptions, UseEntryJSONReturn } from "./useEntryJSON";
