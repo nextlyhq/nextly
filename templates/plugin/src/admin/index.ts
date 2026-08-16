@@ -4,7 +4,10 @@
  * admin can resolve them. The host's generated import map imports this for you;
  * the eager + lazy registration below is the fallback.
  */
-import { registerComponents, registerKnownPlugin } from "@nextlyhq/admin";
+import {
+  registerComponents,
+  registerKnownPlugin,
+} from "@nextlyhq/plugin-sdk/admin";
 
 import { SettingsPage } from "./SettingsPage";
 

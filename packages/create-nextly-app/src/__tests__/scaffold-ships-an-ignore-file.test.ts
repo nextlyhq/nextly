@@ -33,6 +33,7 @@ vi.mock("fs-extra", () => ({
     readdir: vi.fn(),
     remove: vi.fn(),
     move: vi.fn(),
+    lstat: vi.fn(),
     ensureDir: vi.fn(),
   },
 }));
@@ -79,11 +80,30 @@ describe("the ignore file survives packing", () => {
 describe("copyTemplate", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(fs.pathExists).mockResolvedValue(true as never);
+    // Answers per path rather than "true" for everything. A blanket yes would say the project
+    // ALREADY has a `.gitignore`, which is a real case the scaffolder handles by merging into it
+    // — so the rename this test exists to watch would never run, and the test would be reporting
+    // on a branch it does not name.
+    //
+    // `pathExists` and `lstat` are both derived from this one predicate. Answering them
+    // separately would describe two different filesystems, and the scaffolder asks each of them
+    // about the same path.
+    const present = (target: unknown): boolean =>
+      !String(target).endsWith(".gitignore");
+    vi.mocked(fs.pathExists).mockImplementation((target: string) =>
+      Promise.resolve(present(target))
+    );
     vi.mocked(fs.existsSync).mockReturnValue(true);
     vi.mocked(fs.copy).mockResolvedValue(undefined as never);
     vi.mocked(fs.writeFile).mockResolvedValue(undefined as never);
     vi.mocked(fs.move).mockResolvedValue(undefined as never);
+    // An ordinary file where one is present: not a link, one directory entry. `lstat` REJECTS for
+    // an absent path, exactly as the real one does — the scaffolder reads that rejection as "no
+    // destination yet", which is the branch that renames.
+    vi.mocked(fs.lstat).mockImplementation(((target: string) =>
+      present(target)
+        ? Promise.resolve({ isSymbolicLink: () => false, nlink: 1 })
+        : Promise.reject(new Error("ENOENT"))) as never);
     vi.mocked(fs.readdir).mockResolvedValue([] as never);
     vi.mocked(fs.readFile).mockResolvedValue("" as never);
   });

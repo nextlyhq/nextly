@@ -76,6 +76,11 @@ export {
 export type { NodeLocation, TreePosition } from "./tree";
 
 export { measureBytes, surveyDocument } from "./measure-bytes";
+// The nesting rule and the types it answers in. Exported together: a caller
+// that can ask the question must be able to name the verdict it gets back, and
+// a refusal reason it cannot name is one it has to re-derive from the boolean.
+export { canNest, canBeRoot } from "./nesting";
+export type { NestingSource, NestingVerdict, NestingRefusal } from "./nesting";
 // The measurement's return type travels with the function. Without it a
 // consumer naming `measureBytes`'s result has to rebuild the union by hand or
 // reach for `ReturnType`, and a hand-rebuilt copy is the second statement of a
@@ -152,6 +157,7 @@ export {
   MAX_BLOCK_VERSION,
   registryLookup,
   registryMigrationSource,
+  registryNestingSource,
 } from "./registry";
 export type { RegisterOptions, SupportDefinition } from "./registry";
 
