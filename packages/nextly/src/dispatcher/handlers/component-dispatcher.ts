@@ -166,7 +166,17 @@ function readMigrationStatus(
   return raw as FieldGroupMigrationStatus;
 }
 
-const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
+/**
+ * Exported so guards can be DERIVED from the real method registry rather than restating it.
+ *
+ * `BUILDER_METHODS` names a subset of these by string, and a rename here leaves a dead entry there
+ * that guards nothing — silently, because an unrecognised name simply means "not builder surface".
+ * A test reading these keys turns that into a failure by name.
+ */
+export const COMPONENTS_METHODS: Record<
+  string,
+  MethodHandler<ComponentsServices>
+> = {
   listComponents: {
     // Registry returns BaseListResult `{data,total}` with limit/offset
     // semantics; offsetPaginationToMeta synthesises the canonical
