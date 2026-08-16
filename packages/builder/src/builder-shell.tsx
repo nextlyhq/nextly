@@ -153,6 +153,15 @@ export interface BuilderShellProps {
   className?: string;
 }
 
+/**
+ * A measuring ref that observes nothing, for the root that is not visible.
+ *
+ * Module scope so its identity is stable: an inline arrow would be a new
+ * function every render, and the merged ref built from it would detach and
+ * reattach the element on each one.
+ */
+const NO_MEASURE = (_node: HTMLElement | null): void => undefined;
+
 /** A store that forgets, for a server render or a host that supplies its own. */
 const NO_STORAGE: PreferenceStore = {
   read: () => null,
@@ -178,18 +187,73 @@ function browserStore(): PreferenceStore {
  * the supported case and correcting after mount makes both first renders
  * identical.
  */
-function useFitsFullShell(): boolean {
+function useFitsFullShell(): [(node: HTMLElement | null) => void, boolean] {
   const [fits, setFits] = React.useState(true);
+  const observer = React.useRef<ResizeObserver | null>(null);
 
-  React.useEffect(() => {
-    const query = window.matchMedia(`(min-width: ${MIN_SHELL_WIDTH}px)`);
-    const sync = () => setFits(query.matches);
-    sync();
-    query.addEventListener("change", sync);
-    return () => query.removeEventListener("change", sync);
+  /*
+   * A CALLBACK ref, not an effect over a `useRef`.
+   *
+   * The observed element is REPLACED when the answer flips — the notice and the
+   * shell root are different nodes, and only one of them is on screen at a time
+   * — so an effect keyed on mount would observe whichever rendered first and go
+   * on observing it after React swapped it out.
+   */
+  const measure = React.useCallback((node: HTMLElement | null) => {
+    observer.current?.disconnect();
+    observer.current = null;
+    if (node === null) return;
+    // jsdom implements no `ResizeObserver`. Falling back to `fits` rather than
+    // to a notice matches the initial state's reasoning: a shell that cannot
+    // measure renders fully rather than showing a message it has no evidence
+    // for.
+    if (typeof ResizeObserver === "undefined") {
+      setFits(true);
+      return;
+    }
+    const next = new ResizeObserver(entries => {
+      const entry = entries[entries.length - 1];
+      if (entry === undefined) return;
+      // `contentRect`, not `getBoundingClientRect`: a transformed ancestor —
+      // this editor has canvas zoom — scales the latter, and the number is
+      // being compared against a minimum expressed in CSS pixels.
+      setFits(entry.contentRect.width >= MIN_SHELL_WIDTH);
+    });
+    next.observe(node);
+    observer.current = next;
   }, []);
 
-  return fits;
+  React.useEffect(
+    () => () => {
+      observer.current?.disconnect();
+      observer.current = null;
+    },
+    []
+  );
+
+  return [measure, fits];
+}
+
+/**
+ * Attach one element to a ref object and a callback ref at once.
+ *
+ * The shell root is read by the stylesheet and by F6 ownership through a ref
+ * OBJECT, and measured through a callback ref, and an element carries one
+ * `ref` attribute. Both arguments are stable — a `useRef` result and a
+ * `useCallback` result — so the merged ref is stable too and React does not
+ * detach and reattach it on every render.
+ */
+function useMergedRef(
+  object: React.MutableRefObject<HTMLDivElement | null>,
+  callback: (node: HTMLElement | null) => void
+): (node: HTMLDivElement | null) => void {
+  return React.useCallback(
+    (node: HTMLDivElement | null) => {
+      object.current = node;
+      callback(node);
+    },
+    [object, callback]
+  );
 }
 
 /**
@@ -582,9 +646,18 @@ function ShellRegions({
   className,
   active,
   loadCount,
+  measureShell,
 }: Omit<BuilderShellProps, "store"> & {
   preferences: ShellPreferences;
   update: (change: (current: ShellPreferences) => ShellPreferences) => void;
+  /**
+   * Observes this subtree's own root while it is the visible one.
+   *
+   * Passed in rather than created here so the notice branch can hold it
+   * instead when the shell is hidden — the observer has to follow whichever
+   * root has a box, and only the parent renders both.
+   */
+  measureShell: (node: HTMLElement | null) => void;
   /**
    * Whether this subtree is the one the author is using.
    *
@@ -615,6 +688,9 @@ function ShellRegions({
   useRegionCycling(regionRefs, chromeRef, active);
   const onKeyDownCapture = useSeparatorRegionEscape(regionRefs, active);
   useDesignSystemStylesheet(chromeRef);
+  // One element, three readers: the stylesheet and F6 ownership take the ref
+  // object, the container measurement takes the callback.
+  const rootRef = useMergedRef(chromeRef, measureShell);
 
   /**
    * Whether the host can fill a panel. One predicate, so the rail's disabled
@@ -655,7 +731,7 @@ function ShellRegions({
 
   return (
     <div
-      ref={chromeRef}
+      ref={rootRef}
       onKeyDownCapture={onKeyDownCapture}
       className={cn(
         "nx-builder-chrome flex h-full w-full flex-col overflow-hidden",
@@ -896,7 +972,7 @@ export function BuilderShell({ store, ...props }: BuilderShellProps) {
   fallbackStore.current ??= browserStore();
   const resolvedStore = store ?? fallbackStore.current;
   const [preferences, update, loadCount] = usePreferences(resolvedStore);
-  const fitsFullShell = useFitsFullShell();
+  const [measureShell, fitsFullShell] = useFitsFullShell();
 
   return (
     <ShortcutProvider>
@@ -907,6 +983,18 @@ export function BuilderShell({ store, ...props }: BuilderShellProps) {
       <TooltipProvider delayDuration={300}>
         {!fitsFullShell ? (
           <div
+            /*
+             * The MEASURED element while the notice is showing.
+             *
+             * Exactly one of the two roots holds the observer at a time, and it
+             * is always the visible one. That is what makes the measurement
+             * reversible: the editor's own wrapper is `display: contents` when
+             * visible and `hidden` when narrow, so observing it reports width 0
+             * in the narrow state — and a shell that measures 0 can never
+             * measure its way back above the threshold. This notice has a real
+             * box, sized by the same container the shell would occupy.
+             */
+            ref={measureShell}
             // The caller's className reaches this branch too. It is what
             // positions the shell in the host's layout — a grid area, a height,
             // a border — and dropping it on the narrow path made the fallback
@@ -990,6 +1078,13 @@ export function BuilderShell({ store, ...props }: BuilderShellProps) {
               update={update}
               active={fitsFullShell}
               loadCount={loadCount}
+              /*
+               * Handed over only while this subtree is the visible root. In the
+               * narrow state the notice holds it instead: this one is `hidden`
+               * behind the notice and would measure 0, which the comparison can
+               * never recover from.
+               */
+              measureShell={fitsFullShell ? measureShell : NO_MEASURE}
             />
           </ShellActiveContext.Provider>
         </div>
