@@ -67,6 +67,16 @@ export {
   type PreviewScopeReaderConfig,
 } from "./runtime/preview/preview-route";
 
+// The JOIN between the two above: a `draft` hook that grants exactly what the
+// request's token covers. Exported because the join is security-critical and
+// short, which is the combination that gets retyped subtly wrong — and its
+// failure grants every draft rather than erroring.
+export { previewDraftGate } from "./runtime/preview/preview-draft-gate";
+export type {
+  PreviewDraftGateConfig,
+  DraftGateRequest,
+} from "./runtime/preview/preview-draft-gate";
+
 // Content routing + sitemap/robots delivery. `next`/`react` are type-only and
 // `next/navigation` resolves lazily, so importing these never forces them.
 // `getNextly` is the documented default for `ContentRouteConfig.nextly`, and a
