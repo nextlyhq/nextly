@@ -361,6 +361,16 @@ export interface CanvasChromeReader {
   /** Begin dragging a block that is already in the canvas, by its id. */
   startDragOfBlock(id: string): Promise<void>;
 
+  /**
+   * Which block the canvas currently reports as the drag source, or `null` when none is.
+   *
+   * Named rather than counted, because "some element is being dragged" and "THIS block is
+   * being dragged" are different claims and only the second separates a working
+   * {@link startDragOfBlock} from one whose coordinates drifted onto a sibling. A control
+   * asserting the first stays green while the reader picks up the wrong block.
+   */
+  draggingBlockId(): Promise<string | null>;
+
   /** How many entries the editor's undo history holds. */
   undoDepth(): Promise<number>;
 }

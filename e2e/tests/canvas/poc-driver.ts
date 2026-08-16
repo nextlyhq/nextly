@@ -933,6 +933,28 @@ export function createPocChromeReader(
       });
     },
 
+    async draggingBlockId(): Promise<string | null> {
+      // The block's OWN id, read from the element the canvas marks as grabbed, so a caller
+      // can assert WHICH block moved rather than that something did. Matched by comparing
+      // attribute values rather than by building a selector from an id, for the same reason
+      // the drag itself is: an id is data, and one carrying selector syntax would otherwise
+      // change what is matched.
+      //
+      // Both documents, because a panel drag's source is host chrome while a placed block's
+      // is inside the frame.
+      const read = async (where: Frame | Page) =>
+        where.evaluate(attribute => {
+          const grabbed = document.querySelector('[aria-grabbed="true"]');
+          if (!grabbed) return null;
+          // The marked element may be the block itself or a wrapper inside it, so the id is
+          // taken from the nearest enclosing node that carries one.
+          return (
+            grabbed.closest(`[${attribute}]`)?.getAttribute(attribute) ?? null
+          );
+        }, "data-nx-id");
+      return (await read(page)) ?? (await read(canvasFrameOf(page)));
+    },
+
     async undoDepth(): Promise<number> {
       // LOOKED FOR, then refused — never refused on the assumption that it is absent. A
       // reader that declines unconditionally reports the same thing for "there is no seam"
