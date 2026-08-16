@@ -108,10 +108,18 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(after.schemaVersion).toBe(row.schemaVersion + 1);
     });
 
-    // 🔴 THE case that is dialect-specific and cannot be faked. Every column this write SETs
-    // already holds the value being written, so MySQL's changed-row count for the data alone is
-    // zero. It reports matched because the version bump always changes something — remove that
-    // bump and this case returns `matched: false` on MySQL while the row was matched perfectly.
+    // 🔴 The dialect-specific case, and the one a double cannot reproduce: every AUTHORED column
+    // this write SETs already holds the value being written, so MySQL's changed-row count for the
+    // caller's data alone is zero. It still reports matched.
+    //
+    // What this establishes, precisely: an all-identical payload is not mistaken for an unmatched
+    // row on any of the three dialects. What it does NOT establish is WHICH always-moving column
+    // supplies that, because two of them move together — `schema_version` and `updated_at`. A
+    // break-control removing the version bump alone still passes the matched assertion here and
+    // fails only the version one, which is how the pairing was found rather than assumed. The
+    // version is the one the code relies on, because it is strictly monotonic while two writes in
+    // one timestamp tick share an `updated_at`; that narrower property has no test, because
+    // forcing a tick collision from here would be testing the clock.
     it("reports matched even when every written value is identical to the stored one", async () => {
       const { registry, row } = await seed();
 

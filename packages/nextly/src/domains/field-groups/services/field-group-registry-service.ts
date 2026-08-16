@@ -475,9 +475,14 @@ export class FieldGroupRegistryService extends BaseRegistryService<
    * NOT_FOUND throw, whose meaning here would be false for the commoner (advanced) case.
    *
    * The version ALWAYS advances, to `expectedSchemaVersion + 1`, computed against the value the
-   * WHERE pins rather than a fresh read. That is also what makes the matched count trustworthy on
-   * MySQL, which counts CHANGED rows: a write that matches always moves `schema_version`, so
-   * matched implies changed — see `DrizzleAdapter.updateCount`.
+   * WHERE pins rather than a fresh read.
+   *
+   * 🔴 That advance is also what keeps the matched count trustworthy on MySQL, which counts CHANGED
+   * rows rather than matched ones: a matching write always moves `schema_version`, so matched
+   * implies changed — see `DrizzleAdapter.updateCount`. `updated_at` moves on every write too and
+   * masks the distinction in ordinary use, which is why the version is the one to rely on: it is
+   * strictly monotonic, while two writes inside a single timestamp tick carry the SAME `updated_at`
+   * and would leave an all-identical payload counting zero. Do not remove either without the other.
    *
    * No returned row, deliberately. On a dialect without RETURNING a returning read re-runs the
    * WHERE — whose version this write just moved past — so a landed write would read back as
