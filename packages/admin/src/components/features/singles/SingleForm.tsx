@@ -45,9 +45,11 @@ import {
   EntryLocaleProvider,
   type EntryLocaleContextValue,
 } from "@admin/components/features/entries/EntryLocaleContext";
+import { AutosaveRecoveryNotice } from "@admin/components/features/versions/AutosaveRecoveryNotice";
 import { historyEnabledFrom } from "@admin/components/features/versions/history-enabled";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useAutosave } from "@admin/hooks/useAutosave";
+import { useAutosaveRecovery } from "@admin/hooks/useAutosaveRecovery";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
 import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 import { useLocalization } from "@admin/hooks/useLocalization";
@@ -457,6 +459,8 @@ export function SingleForm({
 
   const autosave = useAutosave({
     enabled: Boolean(documentId),
+    // See EntryForm: the language switch resets this same mounted form.
+    scopeKey: `${schema.slug}:${documentId}:${locale ?? ""}`,
     // getValues, never handleSubmit: this form is `mode: "onSubmit"` for the
     // same reason EntryForm is, and submitting on a timer would fire validation
     // while the author is still mid-field.
@@ -470,9 +474,11 @@ export function SingleForm({
   const { notifyChange } = autosave;
   useEffect(() => {
     const unsubscribe = form.subscribe({
-      formState: { values: true },
-      callback: ({ type }) => {
-        if (type === "change") {
+      formState: { values: true, isDirty: true },
+      // See EntryForm: dirty rather than event type, so a `setValue` edit is
+      // not silently dropped from the recovery point.
+      callback: ({ isDirty }) => {
+        if (isDirty) {
           notifyChange();
         }
       },
@@ -508,6 +514,22 @@ export function SingleForm({
     },
     [form, onSubmit, blankPasswordFields]
   );
+
+  // The read half. See EntryForm: without it the stored snapshot is unreachable.
+  const recovery = useAutosaveRecovery({
+    enabled: Boolean(documentId),
+    scope: { kind: "single", slug: schema.slug, documentId },
+    documentUpdatedAt: document?.updatedAt,
+  });
+
+  const restoreAutosave = useCallback(() => {
+    if (!recovery.snapshot) return;
+    // `keepDefaultValues` so the restored values differ from the saved
+    // document's and the form comes back dirty: restoring shows unsaved work
+    // rather than persisting it, so the leave-page guard must keep warning.
+    form.reset(recovery.snapshot, { keepDefaultValues: true });
+    recovery.dismiss();
+  }, [form, recovery]);
 
   const handleCancel = useCallback(() => {
     onCancel?.();
@@ -617,6 +639,14 @@ export function SingleForm({
     <EntryLocaleProvider value={localeCtx}>
       <div className={cn("space-y-0", className)}>
         <EntryFormProvider form={form} onSubmit={handleSubmit}>
+          {/* See EntryForm: which values the form should hold comes before any
+              complaint about the values it currently holds. */}
+          <AutosaveRecoveryNotice
+            savedAt={recovery.savedAt}
+            onRestore={restoreAutosave}
+            onDismiss={recovery.dismiss}
+            className="mx-6 mt-3"
+          />
           <FormErrorSummary
             errors={errors}
             submitCount={submitCount}

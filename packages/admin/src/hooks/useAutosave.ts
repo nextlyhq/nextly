@@ -32,7 +32,13 @@ const DEFAULT_DEBOUNCE_MS = 2_000;
  */
 const DEFAULT_MAX_WAIT_MS = 30_000;
 
-export type AutosaveStatus = "idle" | "saving" | "saved" | "error";
+export type AutosaveStatus =
+  | "idle"
+  /** Edits are waiting for the debounce; the stored point is behind the form. */
+  | "pending"
+  | "saving"
+  | "saved"
+  | "error";
 
 export interface UseAutosaveOptions {
   /**
@@ -40,6 +46,16 @@ export interface UseAutosaveOptions {
    * attach to a stored record, and there is none until the first save.
    */
   enabled: boolean;
+  /**
+   * Identifies WHAT is being saved: the document, and the language within it.
+   *
+   * A pending write belongs to the scope it was armed under. When the editor
+   * switches document or language it resets the same mounted form, so a timer
+   * armed before the switch would fire against values that now describe a
+   * different scope and overwrite that scope's recovery point. Changing this
+   * abandons any pending write rather than retargeting it.
+   */
+  scopeKey: string;
   /**
    * Reads the form's current values.
    *
@@ -86,6 +102,7 @@ export interface UseAutosaveReturn {
 
 export function useAutosave({
   enabled,
+  scopeKey,
   getValues,
   save,
   debounceMs = DEFAULT_DEBOUNCE_MS,
@@ -103,6 +120,8 @@ export function useAutosave({
   saveRef.current = save;
   const enabledRef = useRef(enabled);
   enabledRef.current = enabled;
+  const scopeKeyRef = useRef(scopeKey);
+  scopeKeyRef.current = scopeKey;
   const debounceMsRef = useRef(debounceMs);
   debounceMsRef.current = debounceMs;
   const maxWaitMsRef = useRef(maxWaitMs);
@@ -113,6 +132,9 @@ export function useAutosave({
   const inFlightRef = useRef(false);
   const supersededRef = useRef(false);
   const mountedRef = useRef(true);
+  // The scope a pending timer was armed under, so a fire can tell whether the
+  // editor has moved on since.
+  const armedScopeRef = useRef(scopeKey);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -127,6 +149,14 @@ export function useAutosave({
       timerRef.current = null;
     }
     firstPendingAtRef.current = null;
+
+    // The editor moved to another document or language after this was armed.
+    // The form has been reset to the new scope's values, so there is nothing
+    // left of the old scope's edit to write, and writing the CURRENT values
+    // under it would corrupt the new scope's recovery point.
+    if (armedScopeRef.current !== scopeKeyRef.current) {
+      return;
+    }
 
     // One write at a time. Two saves overlapping on one row can land out of
     // order, which would leave the stored recovery point older than the one it
@@ -174,6 +204,13 @@ export function useAutosave({
       return;
     }
 
+    // A stored point that no longer matches the form must stop reading as
+    // "Saved". Without this the header keeps showing the earlier time through
+    // the whole quiet period, asserting that work is safe while it is not.
+    setStatus(current => (current === "saving" ? current : "pending"));
+
+    armedScopeRef.current = scopeKeyRef.current;
+
     const now = Date.now();
     if (firstPendingAtRef.current === null) {
       firstPendingAtRef.current = now;
@@ -201,16 +238,28 @@ export function useAutosave({
   // row rather than adding another.
   useEffect(() => {
     return () => {
+      // Through `run` rather than calling `save` directly: a save may still be
+      // in flight, and starting a second one here could let the newer snapshot
+      // finish first and then be overwritten by the older request. `run` folds
+      // it into the serialized loop instead.
       if (timerRef.current !== null && enabledRef.current) {
-        clearTimeout(timerRef.current);
-        timerRef.current = null;
-        void saveRef.current(getValuesRef.current()).catch(() => {
-          // Nothing is mounted to report this on and the editor is already
-          // gone, so the rejection is swallowed rather than left unhandled.
-        });
+        run();
       }
     };
-  }, []);
+  }, [run]);
+
+  // Abandon rather than retarget. Flushing would need the OLD scope's values,
+  // and by the time this runs the form has already been reset to the new
+  // scope's, so there is nothing correct left to write.
+  useEffect(() => {
+    return () => {
+      if (timerRef.current !== null) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+        firstPendingAtRef.current = null;
+      }
+    };
+  }, [scopeKey]);
 
   const saveNow = useCallback(() => {
     if (!enabledRef.current) {

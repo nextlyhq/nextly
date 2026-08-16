@@ -24,6 +24,9 @@ const mutations = vi.hoisted(() => ({
 
 const versionApiMock = vi.hoisted(() => ({
   autosave: vi.fn().mockResolvedValue({ message: "ok" }),
+  // The recovery read the editor makes on open. Null: these tests are about
+  // the write path, and an offered snapshot would replace the form values.
+  getAutosave: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock("@admin/hooks/queries/useCreateEntry", () => ({
@@ -55,9 +58,22 @@ const COLLECTION = {
   ],
 } as unknown as Parameters<typeof useEntryForm>[0]["collection"];
 
-const ENTRY = { id: "e1", title: "", body: "" } as unknown as Parameters<
-  typeof useEntryForm
->[0]["entry"];
+const ENTRY = {
+  id: "e1",
+  title: "",
+  body: "",
+  updatedAt: "2026-01-01T00:00:00.000Z",
+} as unknown as Parameters<typeof useEntryForm>[0]["entry"];
+
+async function flushAsync() {
+  // The recovery read settles on the microtask queue; fake timers make
+  // `waitFor` unusable because it polls on real ones.
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
 
 function renderEditForm() {
   return renderHook(() =>
@@ -122,6 +138,44 @@ describe("entry autosave", () => {
 
     expect(versionApiMock.autosave).toHaveBeenCalled();
     expect(result.current.isDirty).toBe(true);
+  });
+
+  it("offers a recovery point that is newer than the saved document", async () => {
+    versionApiMock.getAutosave.mockResolvedValueOnce({
+      updatedAt: "2026-01-02T00:00:00.000Z",
+      snapshot: { title: "recovered", body: "recovered body" },
+    });
+    const { result } = renderEditForm();
+
+    await flushAsync();
+
+    expect(result.current.recovery.savedAt).not.toBeNull();
+
+    act(() => {
+      result.current.recovery.restore();
+    });
+
+    expect(result.current.form.getValues()).toMatchObject({
+      title: "recovered",
+      body: "recovered body",
+    });
+    // Restoring shows unsaved work rather than persisting it, so the
+    // leave-page guard has to keep warning.
+    expect(result.current.isDirty).toBe(true);
+  });
+
+  it("does not offer a recovery point older than the saved document", async () => {
+    // It describes work the author has since committed; offering it would
+    // invite them to undo their own save.
+    versionApiMock.getAutosave.mockResolvedValueOnce({
+      updatedAt: "2025-12-31T00:00:00.000Z",
+      snapshot: { title: "stale" },
+    });
+    const { result } = renderEditForm();
+
+    await flushAsync();
+
+    expect(result.current.recovery.savedAt).toBeNull();
   });
 
   it("does not autosave while creating", async () => {

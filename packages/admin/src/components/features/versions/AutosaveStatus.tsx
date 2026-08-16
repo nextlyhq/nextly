@@ -52,9 +52,14 @@ export function AutosaveStatus({
       ? "Saving..."
       : isError
         ? "Draft not saved"
-        : lastSavedAt
-          ? `Saved ${formatSavedAt(lastSavedAt)}`
-          : null;
+        : // Edits are waiting for the debounce, so the stored point is already
+          // behind the form. Saying "Saved" here would assert the current work
+          // is safe during the very window in which it is not.
+          status === "pending"
+          ? "Unsaved changes"
+          : lastSavedAt
+            ? `Saved ${formatSavedAt(lastSavedAt)}`
+            : null;
 
   if (label === null) {
     return null;

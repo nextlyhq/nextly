@@ -18,6 +18,7 @@
 import { resolveLocalizedFieldNames } from "nextly/config";
 import { useMemo } from "react";
 
+import { AutosaveRecoveryNotice } from "@admin/components/features/versions/AutosaveRecoveryNotice";
 import { historyEnabledFrom } from "@admin/components/features/versions/history-enabled";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useGeneralSettings } from "@admin/hooks/queries/useGeneralSettings";
@@ -209,6 +210,7 @@ export function EntryForm({
     isSubmitting,
     isDirty,
     autosave,
+    recovery,
   } = useEntryForm({
     collection,
     entry,
@@ -453,6 +455,15 @@ export function EntryForm({
       >
         <div className={cn("space-y-0", className)}>
           <EntryFormProvider form={form} onSubmit={handleSubmit}>
+            {/* Above the error summary: recovering unsaved work is a decision
+                about which values the form should hold, so it comes before any
+                complaint about the values currently in it. */}
+            <AutosaveRecoveryNotice
+              savedAt={recovery.savedAt}
+              onRestore={recovery.restore}
+              onDismiss={recovery.dismiss}
+              className="mx-6 mt-3"
+            />
             <FormErrorSummary
               errors={errors}
               submitCount={submitCount}

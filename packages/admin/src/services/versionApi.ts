@@ -223,6 +223,18 @@ export const versionApi = {
   },
 
   /**
+   * The caller's own recovery point for a document, or null when they have
+   * none.
+   *
+   * The only way a stored autosave can be read back: history listings exclude
+   * autosave rows, and a version read addresses rows by the sequence number a
+   * recovery point deliberately does not carry. Scoped to the calling author
+   * server-side, since an autosave is unvalidated work belonging to one person.
+   */
+  getAutosave: (scope: VersionScope): Promise<VersionDetail | null> =>
+    protectedApi.get<VersionDetail | null>(`${basePath(scope)}/autosave`),
+
+  /**
    * Compare two versions. A read of history, gated and field-redacted exactly
    * like reading one version; both versions must share a locale. `from`/`to`
    * are ordered older -> newer by the caller.

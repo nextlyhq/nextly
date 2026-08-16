@@ -45,6 +45,7 @@ describe("useAutosave", () => {
     const { result } = renderHook(() =>
       useAutosave({
         enabled: true,
+        scopeKey: "posts:e1",
         getValues: () => ({ title: "typed" }),
         save,
         debounceMs: 1_000,
@@ -77,6 +78,7 @@ describe("useAutosave", () => {
     const { result } = renderHook(() =>
       useAutosave({
         enabled: true,
+        scopeKey: "posts:e1",
         getValues: () => ({ title: "still typing" }),
         save,
         debounceMs: 1_000,
@@ -103,6 +105,7 @@ describe("useAutosave", () => {
     const { result } = renderHook(() =>
       useAutosave({
         enabled: false,
+        scopeKey: "posts:e1",
         getValues: () => ({ title: "typed" }),
         save,
         debounceMs: 1_000,
@@ -130,6 +133,7 @@ describe("useAutosave", () => {
     const { result } = renderHook(() =>
       useAutosave({
         enabled: true,
+        scopeKey: "posts:e1",
         getValues: () => ({ title: "typed" }),
         save,
         debounceMs: 0,
@@ -165,6 +169,7 @@ describe("useAutosave", () => {
     const { result } = renderHook(() =>
       useAutosave({
         enabled: true,
+        scopeKey: "posts:e1",
         getValues: () => ({ title: "typed" }),
         save,
         debounceMs: 0,
@@ -198,6 +203,7 @@ describe("useAutosave", () => {
     const { result, unmount } = renderHook(() =>
       useAutosave({
         enabled: true,
+        scopeKey: "posts:e1",
         getValues: () => ({ title: "half typed" }),
         save,
         debounceMs: 10_000,
@@ -220,6 +226,7 @@ describe("useAutosave", () => {
     const { unmount } = renderHook(() =>
       useAutosave({
         enabled: true,
+        scopeKey: "posts:e1",
         getValues: () => ({ title: "untouched" }),
         save,
       })
@@ -238,6 +245,7 @@ describe("useAutosave", () => {
     const { result } = renderHook(() =>
       useAutosave({
         enabled: true,
+        scopeKey: "posts:e1",
         getValues: () => current,
         save,
         debounceMs: 1_000,

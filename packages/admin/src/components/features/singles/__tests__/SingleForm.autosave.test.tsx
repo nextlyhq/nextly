@@ -15,6 +15,9 @@ import { render } from "@admin/__tests__/utils";
 
 const versionApiMock = vi.hoisted(() => ({
   autosave: vi.fn().mockResolvedValue({ message: "ok" }),
+  // The recovery read the editor makes on open. Null: these tests are about
+  // the write path, and an offered snapshot would replace the form values.
+  getAutosave: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock("@admin/services/versionApi", () => ({ versionApi: versionApiMock }));

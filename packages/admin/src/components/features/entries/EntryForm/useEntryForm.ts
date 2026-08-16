@@ -22,6 +22,7 @@ import { useDeleteEntry } from "@admin/hooks/queries/useDeleteEntry";
 import { useDiscardWorkingDraft } from "@admin/hooks/queries/useDiscardWorkingDraft";
 import { useUpdateEntry } from "@admin/hooks/queries/useUpdateEntry";
 import { useAutosave, type UseAutosaveReturn } from "@admin/hooks/useAutosave";
+import { useAutosaveRecovery } from "@admin/hooks/useAutosaveRecovery";
 import { generateClientSchema } from "@admin/lib/field-validation";
 import { versionApi } from "@admin/services/versionApi";
 import type { EntryValue } from "@admin/types/collection";
@@ -327,6 +328,17 @@ export interface UseEntryFormReturn {
    * "Saved" and left believing their work was published would be exactly wrong.
    */
   autosave: UseAutosaveReturn;
+  /**
+   * The recovery point on offer, if any, and what to do with it. Present only
+   * when a stored autosave is NEWER than the saved document: an older one
+   * describes work the author has since committed, and offering that would
+   * invite them to undo it.
+   */
+  recovery: {
+    savedAt: Date | null;
+    restore: () => void;
+    dismiss: () => void;
+  };
   /** Form mode */
   mode: EntryFormMode;
   /** Collection being edited */
@@ -716,6 +728,9 @@ export function useEntryForm({
 
   const autosave = useAutosave({
     enabled: autosaveEnabled,
+    // Switching entry or language resets this same form, so a write armed
+    // before the switch must not fire against the new scope's values.
+    scopeKey: `${collection.name}:${entryId ?? ""}:${locale ?? ""}`,
     // getValues, never handleSubmit. This form is deliberately
     // `mode: "onSubmit"` so validation stays quiet until the user asks to save;
     // submitting on a timer would run the validator and light up inline errors
@@ -731,15 +746,45 @@ export function useEntryForm({
   const { notifyChange } = autosave;
   useEffect(() => {
     const unsubscribe = form.subscribe({
-      formState: { values: true },
-      callback: ({ type }) => {
-        if (type === "change") {
+      formState: { values: true, isDirty: true },
+      // Armed on DIRTY rather than on `type === "change"`. A user edit made
+      // through `setValue` -- the slug commit, Copy from language, plugin
+      // toolbar controls -- carries no event type, so filtering on "change"
+      // would silently drop it and leave that edit out of the recovery point.
+      // `form.reset` clears the dirty flag, so a reset still does not arm one.
+      callback: ({ isDirty }) => {
+        if (isDirty) {
           notifyChange();
         }
       },
     });
     return unsubscribe;
   }, [form, notifyChange]);
+
+  // The read half of autosave. Without it the stored snapshot is unreachable:
+  // history listings exclude autosave rows and a version read addresses rows by
+  // a sequence number a recovery point does not carry.
+  const recovery = useAutosaveRecovery({
+    enabled: autosaveEnabled,
+    scope: {
+      kind: "collection",
+      slug: collection.name,
+      entryId: entryId ?? "",
+    },
+    documentUpdatedAt:
+      typeof entry?.updatedAt === "string" ? entry.updatedAt : undefined,
+  });
+
+  const restoreAutosave = useCallback(() => {
+    if (!recovery.snapshot) return;
+    // `keepDefaultValues` leaves the defaults as the SAVED document, so the
+    // restored values differ from them and the form comes back dirty on its
+    // own. That is the property that matters: restoring puts unsaved work on
+    // screen without persisting it, so the leave-page guard has to keep
+    // warning until the author actually saves.
+    form.reset(recovery.snapshot, { keepDefaultValues: true });
+    recovery.dismiss();
+  }, [form, recovery]);
 
   // Singular label for UI
   const singularLabel = getSingularLabel(collection);
@@ -860,6 +905,11 @@ export function useEntryForm({
     isDeleting: deleteMutation.isPending,
     isDirty: form.formState.isDirty,
     autosave,
+    recovery: {
+      savedAt: recovery.savedAt,
+      restore: restoreAutosave,
+      dismiss: recovery.dismiss,
+    },
     mode,
     collection,
     entry,
