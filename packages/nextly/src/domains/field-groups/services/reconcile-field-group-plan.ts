@@ -331,16 +331,31 @@ function structuralBlockers(
   localized: boolean
 ): ReconcileBlocker[] {
   const blockers: ReconcileBlocker[] = [];
-  const liveMainColumns = new Set(liveMain.columns.map(c => c.name));
+  const liveMainByName = new Map(liveMain.columns.map(c => [c.name, c]));
 
   for (const column of skeleton.columns) {
-    if (liveMainColumns.has(column.name)) continue;
-    blockers.push({
-      fieldName: column.name,
-      columnName: column.name,
-      kind: "structural-column-missing",
-      detail: `${liveMain.name} is missing the system column "${column.name}", which every field-group table carries; the definition cannot describe a table that cannot store its own rows.`,
-    });
+    const live = liveMainByName.get(column.name);
+    if (live === undefined) {
+      blockers.push({
+        fieldName: column.name,
+        columnName: column.name,
+        kind: "structural-column-missing",
+        detail: `${liveMain.name} is missing the system column "${column.name}", which every field-group table carries; the definition cannot describe a table that cannot store its own rows.`,
+      });
+      continue;
+    }
+    // 🔴 Presence is not the whole requirement. A column can survive while the CONSTRAINT that made
+    // it meaningful is dropped, and for `id` that means duplicate component rows become possible
+    // while every name-based check still reads the table as healthy. Taken from the skeleton's own
+    // `primaryKey` rather than by naming `id`, so this covers whatever the generator marks next.
+    if (column.primaryKey === true && live.primaryKey !== true) {
+      blockers.push({
+        fieldName: column.name,
+        columnName: column.name,
+        kind: "structural-column-missing",
+        detail: `${liveMain.name} still has "${column.name}" but it is no longer the table's primary key, so duplicate rows are possible; this operation issues no DDL and cannot restore the constraint.`,
+      });
+    }
   }
 
   // 🔴 Required indexes come from what the table BUILDER creates, not from the skeleton's index

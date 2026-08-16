@@ -617,6 +617,24 @@ describe("planFieldGroupReconcile", () => {
       ]);
     });
 
+    // A column can survive while the constraint that made it meaningful is dropped: `id` present
+    // but no longer the key means duplicate component rows, which every name-based check reads as
+    // healthy. Taken from the skeleton's own `primaryKey`, so it covers whatever is marked next.
+    it("refuses a main table whose id is no longer the primary key", () => {
+      const live = liveTableFor(stored);
+      const id = live.columns.find(c => c.name === "id");
+      if (id) delete id.primaryKey;
+
+      const result = plan({ storedFields: stored, liveMain: live });
+
+      expect(result.blockers).toEqual([
+        expect.objectContaining({
+          columnName: "id",
+          kind: "structural-column-missing",
+        }),
+      ]);
+    });
+
     it("refuses a main table missing its parent index", () => {
       const live = liveTableFor(stored);
       live.indexes = (live.indexes ?? []).filter(
