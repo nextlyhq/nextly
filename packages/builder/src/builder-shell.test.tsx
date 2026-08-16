@@ -43,11 +43,16 @@ afterEach(cleanup);
 let observedWidth = MIN_SHELL_WIDTH + 160;
 
 /**
- * The narrow notice's horizontal padding, in CSS pixels — Tailwind `p-6` on
- * both sides. The shell root carries none, which is the asymmetry that makes
- * the choice of measured box observable.
+ * Horizontal padding a `p-6` class contributes, in CSS pixels — Tailwind's
+ * 1.5rem on both sides.
+ *
+ * The measured wrapper carries the CALLER's `className` and nothing else, so a
+ * caller adding padding there reduces what its children get by this much. The
+ * narrow notice also has `p-6`, inside the wrapper, where it is invisible to
+ * the measurement — which is the whole point of measuring one element rather
+ * than whichever branch is showing.
  */
-const NOTICE_PADDING = 48;
+const P6_PADDING = 48;
 
 /**
  * `ResizeObserver`, which jsdom does not implement.
@@ -89,14 +94,14 @@ class DrivenResizeObserver {
 
   private deliver() {
     const entries = [...this.targets].map(target => {
-      // The two roots the observer follows do NOT have the same padding — the
-      // narrow notice is `p-6`, the shell root has none — and `contentRect`
-      // excludes padding while `borderBoxSize` includes it. Modelling that here
-      // is what lets this file tell a border-box measurement from a content-box
-      // one; a stub reporting the same number for both cannot, and would pass
-      // on an implementation whose recovery threshold moves by the padding.
+      // `contentRect` excludes padding and `borderBoxSize` includes it, and the
+      // difference is the whole question here: what the regions get is the
+      // CONTENT box of the element the caller styled. Modelling both is what
+      // lets this file tell those two readings apart — a stub reporting one
+      // number for both would pass on either, which is how a measurement that
+      // over-reports the available space by the caller's padding would ship.
       const padding = (target as HTMLElement).className?.includes("p-6")
-        ? NOTICE_PADDING
+        ? P6_PADDING
         : 0;
       return {
         target,
@@ -570,6 +575,48 @@ describe("which shell F6 belongs to", () => {
     );
   });
 
+  it("stays reachable when the other shells are behind their notices", () => {
+    // Only became possible once each shell measured its OWN container. Two
+    // page-builder fields in columns of different widths can disagree about
+    // whether they fit, so a form can hold one usable editor beside several
+    // showing the narrow notice.
+    //
+    // Counting every MOUNTED shell there leaves the one editor that can answer
+    // seeing more than one and declining, while the others decline because
+    // their binding is disabled — and F6 reaches nothing at all. A shell behind
+    // its notice is not a candidate for the key, so it is not part of the
+    // ambiguity either.
+    //
+    // jsdom cannot give the two shells different real widths, so the narrow one
+    // is rendered while the observer reports a narrow number and the wide one
+    // after it changes — which is the same end state: one active, one not.
+    observedWidth = MIN_SHELL_WIDTH - 100;
+    render(
+      <BuilderShell store={memoryStore()}>
+        <p>narrow canvas</p>
+      </BuilderShell>
+    );
+
+    act(() => {
+      observedWidth = MIN_SHELL_WIDTH + 160;
+    });
+    render(
+      <BuilderShell store={memoryStore()}>
+        <p>wide canvas</p>
+      </BuilderShell>
+    );
+
+    // Exactly one shell is usable.
+    expect(screen.queryAllByText(/wider screen/i)).toHaveLength(1);
+    const rails = screen.getAllByRole("navigation", { name: "Editor panels" });
+    expect(rails).toHaveLength(1);
+
+    (document.activeElement as HTMLElement | null)?.blur();
+    fireEvent.keyDown(document, { key: "F6" });
+
+    expect(document.activeElement).toBe(rails[0]);
+  });
+
   it("declines that entry when a second shell makes it ambiguous", () => {
     // With two mounted, a press from nowhere names neither — and answering it
     // anyway is decided by whichever registered last, which is how a form with
@@ -730,6 +777,39 @@ describe("a viewport too narrow for the shell", () => {
     expect(screen.queryByRole("region", { name: "Canvas" })).toBeNull();
   });
 
+  it("subtracts padding the CALLER put on the shell", () => {
+    // The regions are laid out inside the caller's decoration, not across it.
+    // A root at exactly the threshold with `p-6` leaves 48px less than the
+    // layout needs, so reporting that it fits recreates the compression this
+    // whole change exists to prevent — measuring the border box says "1280"
+    // while the regions are handed 1232.
+    observedWidth = MIN_SHELL_WIDTH;
+    render(
+      <BuilderShell onExit={vi.fn()} store={memoryStore()} className="p-6">
+        <p>canvas</p>
+      </BuilderShell>
+    );
+
+    expect(screen.queryByText(/wider screen/i)).not.toBeNull();
+    expect(screen.queryByRole("region", { name: "Canvas" })).toBeNull();
+  });
+
+  it("does not subtract padding that belongs to the notice", () => {
+    // The other side, and the reason the measured element is a wrapper rather
+    // than whichever branch is showing. The notice's own `p-6` sits INSIDE the
+    // measured box, so it must not move the threshold — an earlier version
+    // measured the notice itself and could not recover into a 48px band.
+    observedWidth = MIN_SHELL_WIDTH;
+    render(
+      <BuilderShell onExit={vi.fn()} store={memoryStore()}>
+        <p>canvas</p>
+      </BuilderShell>
+    );
+
+    expect(screen.queryByRole("region", { name: "Canvas" })).not.toBeNull();
+    expect(screen.queryByText(/wider screen/i)).toBeNull();
+  });
+
   it("recovers into the band where the notice's own padding would hide it", () => {
     // The narrow band, and the only widths that separate a border-box
     // measurement from a content-box one.
@@ -746,7 +826,7 @@ describe("a viewport too narrow for the shell", () => {
     // threshold with or without the padding subtracted, which is why the first
     // version of the recovery test above passed on the broken implementation.
     const inBand = MIN_SHELL_WIDTH + 20;
-    expect(inBand).toBeLessThan(MIN_SHELL_WIDTH + NOTICE_PADDING);
+    expect(inBand).toBeLessThan(MIN_SHELL_WIDTH + P6_PADDING);
 
     stubContainerFits(false);
     render(
