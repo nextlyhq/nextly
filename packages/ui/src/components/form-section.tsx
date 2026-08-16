@@ -1,4 +1,5 @@
 import type * as React from "react";
+import { useId } from "react";
 
 import { cn } from "../lib/utils";
 
@@ -30,10 +31,19 @@ export function FormSection({
   className,
   children,
 }: FormSectionProps) {
+  // The visible label stays a `<p>` — promoting it to a heading would pick a
+  // heading LEVEL, which depends on where in the page this section lands and
+  // this component has no way to know. `aria-labelledby` names the region
+  // for assistive tech without making that document-structure claim.
+  const labelId = useId();
+
   return (
-    <section className={cn("space-y-2", className)}>
+    <section aria-labelledby={labelId} className={cn("space-y-2", className)}>
       <div className="space-y-1">
-        <p className="text-xs font-semibold tracking-[0.08em] uppercase text-muted-foreground">
+        <p
+          id={labelId}
+          className="text-xs font-semibold tracking-[0.08em] uppercase text-muted-foreground"
+        >
           {label}
         </p>
         {description ? (

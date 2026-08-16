@@ -51,6 +51,22 @@ describe("FormSection", () => {
     expect(screen.getByText("body")).toBeDefined();
   });
 
+  it("exposes the section's name via aria-labelledby", () => {
+    // A visible label that nothing references does not give the region a
+    // programmatic name. Read the ids directly rather than trusting an
+    // accessible-name query alone, which a stray `aria-label` elsewhere in
+    // the tree could satisfy without this relationship existing.
+    const { container } = render(
+      <FormSection label="Details">
+        <p>body</p>
+      </FormSection>
+    );
+    const section = container.querySelector("section");
+    const label = screen.getByText("Details");
+    expect(section?.getAttribute("aria-labelledby")).toBe(label.id);
+    expect(label.id).not.toBe("");
+  });
+
   it("uses the shared Card for its container, not a hand-rolled one", () => {
     // Card is the one container implementation and carries the documented
     // container radius tier. Re-rolling the chrome here is what produced the
