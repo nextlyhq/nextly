@@ -78,6 +78,28 @@ const EDITOR_ROOT = ".nx-pb-editor";
 /** A library entry in the left panel; the drag source for a cross-frame drag. */
 const LIBRARY_ITEM = ".nx-pb-lib-item";
 
+/** The library's filter, used to bring a named entry into view rather than scrolling to it. */
+const LIBRARY_SEARCH = "Search blocks";
+
+/**
+ * A block this canvas refuses inside an ordinary container, and one it accepts.
+ *
+ * `core/column` declares `parent: ["core/columns"]`, so a container's drop zones refuse it by the
+ * shipped registry's own rule — no fixture has to manufacture a restricted slot. `core/heading`
+ * declares no parent and sits in the same panel, so the two differ only in the rule under test.
+ */
+const RESTRICTED_BLOCK_LABEL = "Column";
+const ACCEPTED_BLOCK_LABEL = "Heading";
+
+/** The element dnd-kit positions under the cursor; the chip and any refusal are inside it. */
+const DRAG_OVERLAY = ".nx-pb-drag-overlay";
+
+/** The overlay's refusal marker, set only while a rule is stopping the drop. */
+const REFUSED = "[data-refused]";
+
+/** Where the refusal's sentence goes, so it reaches an author not watching the cursor. */
+const LIVE_REGION = '[role="status"]';
+
 /** Past dnd-kit's activation distance in one move, so a drag actually starts. */
 const DRAG_THRESHOLD_PX = 12;
 
@@ -100,6 +122,32 @@ export function createPocDriver(page: Page): CanvasDriver {
    * `getComputedStyle` reports `"none"` there and `DOMMatrixReadOnly` parses
    * that to the identity, whose `a` is already 1.
    */
+  /**
+   * The centre of the library entry carrying exactly this label.
+   *
+   * Filtered for rather than scrolled to. The library is a long scrolling list, so an entry's
+   * locator resolves happily while its box is off-screen and a drag started there begins nowhere;
+   * typing into the search remounts each category expanded and puts the match at the top of the
+   * panel.
+   *
+   * EXACT text, because "Column" and "Columns" are both registered blocks and a container refuses
+   * only one of them. A substring match returns whichever the DOM lists first, so the drag under
+   * test would be chosen by document order rather than by the rule.
+   */
+  async function libraryEntryCentre(label: string): Promise<Point> {
+    await page.getByLabel(LIBRARY_SEARCH).fill(label);
+    const entry = page
+      .locator(LIBRARY_ITEM)
+      .filter({ has: page.getByText(label, { exact: true }) });
+    await expect(
+      entry,
+      `exactly one library entry must be labelled "${label}"`
+    ).toHaveCount(1);
+    const box = await entry.boundingBox();
+    if (!box) throw new Error(`library entry "${label}" has no box`);
+    return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  }
+
   async function frameScale(): Promise<number> {
     return page.evaluate(() => {
       const frame = document.querySelector("iframe");
@@ -200,6 +248,14 @@ export function createPocDriver(page: Page): CanvasDriver {
       const box = await page.locator(LIBRARY_ITEM).first().boundingBox();
       if (!box) throw new Error(`no drag source matched ${LIBRARY_ITEM}`);
       return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    },
+
+    async restrictedDragSourceCentre() {
+      return libraryEntryCentre(RESTRICTED_BLOCK_LABEL);
+    },
+
+    async acceptedDragSourceCentre() {
+      return libraryEntryCentre(ACCEPTED_BLOCK_LABEL);
     },
 
     async canvasCentre() {
@@ -718,11 +774,22 @@ export function createPocChromeReader(page: Page): CanvasChromeReader {
       return { count: inHost + inFrame, host: "document" as const };
     },
 
-    readsInvalidTarget(): Promise<boolean> {
-      throw new CanvasCapabilityError(
-        "this canvas shows nothing over an illegal target, so there is no " +
-          "invalid state to read; absence of an indicator is not a state"
-      );
+    async readsInvalidTarget(): Promise<boolean> {
+      // The overlay first, and it THROWS rather than answering. `false` here would mean "this
+      // canvas shows nothing over an illegal target", and a drag that never started produces the
+      // same nothing — so a harness fault would be reported as the shortfall this reader exists to
+      // detect, which is the one confusion it must not make.
+      const overlay = page.locator(DRAG_OVERLAY);
+      if ((await overlay.count()) === 0) {
+        throw new Error(
+          "no drag overlay is on screen, so there is no drag whose target could be invalid"
+        );
+      }
+      // Marked AND worded. The marker alone is a state the canvas draws for itself; what the
+      // requirement asks for is something the author can read, and the two break independently.
+      if ((await overlay.locator(REFUSED).count()) === 0) return false;
+      const said = await overlay.locator(LIVE_REGION).innerText();
+      return said.trim().length > 0;
     },
 
     canvasScrollTop(): Promise<number> {

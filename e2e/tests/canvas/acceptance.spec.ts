@@ -50,7 +50,7 @@ import {
   settledTarget,
   settledValue,
 } from "./driver";
-import type { CanvasChromeReader, CanvasDriver } from "./driver";
+import type { CanvasChromeReader, CanvasDriver, Point } from "./driver";
 import { createPocChromeReader, createPocDriver } from "./poc-driver";
 
 test.describe.configure({ timeout: 240_000 });
@@ -109,6 +109,33 @@ async function dragOntoZone(driver: CanvasDriver): Promise<number> {
     "the drag must reach a drop zone before any target is read"
   ).toBeGreaterThanOrEqual(0);
   return active;
+}
+
+/**
+ * Carry a NAMED panel source onto a drop zone and report which zone it reached.
+ *
+ * Returns rather than asserts, so the caller says what reaching no zone means to it. The two
+ * wrappers below pick the source by whether the canvas accepts it — the pair the invalid-target
+ * point needs, since either drag alone is satisfied by a canvas that treats both the same way.
+ */
+async function dragSourceOntoZone(
+  driver: CanvasDriver,
+  source: Point
+): Promise<number> {
+  const target = await driver.canvasCentre();
+  await driver.startDragAt(source);
+  await driver.moveBy(target.x - source.x, target.y - source.y);
+  return dragUntilTarget(driver);
+}
+
+/** A drag no ordinary container will take. */
+async function dragRestrictedOntoZone(driver: CanvasDriver): Promise<number> {
+  return dragSourceOntoZone(driver, await driver.restrictedDragSourceCentre());
+}
+
+/** A drag it will. */
+async function dragAcceptedOntoZone(driver: CanvasDriver): Promise<number> {
+  return dragSourceOntoZone(driver, await driver.acceptedDragSourceCentre());
 }
 
 /**
@@ -687,50 +714,41 @@ test.describe("a canvas any Nextly editor could ship", () => {
   test("shows an explicit state over an invalid target", async ({
     request,
   }) => {
-    note(
-      PLAN_POINT.invalidTargetVisible,
-      "B-7",
-      "this canvas shows nothing over an illegal target"
-    );
+    note(PLAN_POINT.invalidTargetVisible, "B-7");
     await driver.mountTree(await seedPage(request, NESTED_FIXTURE));
-    await dragFromPanel(driver);
 
-    // The canvas cannot answer this at all, and that refusal IS the
-    // shortfall. Asserted as the reader's OWN error type BEFORE the
-    // expectation is marked, so a broken selector, a missing iframe or a
-    // failed seed stays a real failure instead of becoming another
-    // expected one. It also fires the day the capability arrives: this
-    // line goes red first and forces the target below to be rewritten.
-    //
-    // Wrapped in an async thunk because these readers throw SYNCHRONOUSLY:
-    // `expect(reader())` never receives a promise, so `.rejects` cannot see
-    // the refusal and the raw error escapes the assertion entirely.
-    await expect(async () => chrome.readsInvalidTarget()).rejects.toThrow(
-      CanvasCapabilityError
-    );
-
-    // Marked only now. Everything above ran unprotected.
-    test.fail(true, "nothing is shown over an illegal target");
-
-    // NOT SEPARATING YET, and the reason is in the product rather than here.
-    // `canDrop` refuses a drop for four reasons, and the only one a panel drag
-    // can reach is `not-allowed-in-slot`, which needs a slot declaring
-    // `allowedBlocks`. Measured against the shipped registry: no block declares
-    // one, so every slot accepts every child and there is no illegal target for
-    // this drag to enter. The pointer therefore rests somewhere legal, and a
-    // canvas that answered `false` here forever would satisfy the assertion the
-    // day the reader starts working.
-    //
-    // Closing this needs a block whose slot restricts its children — a product
-    // decision, not a harness one. Until then the expected failure records a
-    // capability the canvas lacks and NOT a judgement about what it draws over
-    // an illegal target, because it is never over one.
+    // An earlier version of this test dragged whatever the panel listed first and expected the
+    // reader to refuse, because the only refusal reachable then was `not-allowed-in-slot` and no
+    // block declares an `allowedBlocks` slot. A block restricting its own PARENT reaches a refusal
+    // without any such slot, so the illegal target this point is about is now enterable — which is
+    // what the driver's restricted source supplies.
+    const refused = await dragRestrictedOntoZone(driver);
+    expect(
+      refused,
+      "the refused drag must reach a drop zone before the canvas is read"
+    ).toBeGreaterThanOrEqual(0);
     const explicit = await chrome.readsInvalidTarget();
     await driver.cancel();
 
     // Showing nothing is not a state. The author cannot tell "you may not drop
     // here" from "the drag broke", and both read as an unresponsive editor.
     expect(explicit, "an invalid target must be shown, not implied").toBe(true);
+
+    // The other half, and without it the point is satisfied by a canvas that draws a refusal over
+    // EVERY target. That canvas tells the author nothing — a signal present everywhere carries no
+    // information — and it passes every assertion above.
+    await driver.mountTree(await seedPage(request, NESTED_FIXTURE));
+    const accepted = await dragAcceptedOntoZone(driver);
+    expect(
+      accepted,
+      "the permitted drag must reach a drop zone before the canvas is read"
+    ).toBeGreaterThanOrEqual(0);
+    const overLegal = await chrome.readsInvalidTarget();
+    await driver.cancel();
+    expect(
+      overLegal,
+      "a target that accepts the block must not be shown as invalid"
+    ).toBe(false);
   });
 
   test("autoscrolls toward an edge and stops at the bounds", async ({
