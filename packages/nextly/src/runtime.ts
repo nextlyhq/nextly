@@ -92,6 +92,8 @@ export {
   createContentRoute,
   createPublicContentRoute,
   slugToStaticParam,
+  contentSitemapEntries,
+  SITEMAP_MAX_URLS,
   nextlySitemap,
   nextlyRobots,
   type ContentEntry,
