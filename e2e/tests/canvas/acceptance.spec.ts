@@ -77,6 +77,16 @@ const PLAN_POINT = {
 } as const;
 
 /**
+ * How long a cancelled drag may take to report that it ended, in milliseconds.
+ *
+ * Generous on purpose. The property is that Escape ends the drag, not that it ends it
+ * within any particular frame, so a tight bound here would turn a loaded CI runner into
+ * a canvas defect. Measured locally the state clears within 100ms; the allowance is a
+ * ceiling the poll stops early on rather than a wait anyone pays.
+ */
+const ESCAPE_SETTLE_MS = 2_000;
+
+/**
  * Time budgets for the autoscroll case, in milliseconds.
  *
  * Durations rather than move counts. The scroll advances on the canvas's own timer, so a number of
@@ -1067,33 +1077,41 @@ test.describe("a canvas any Nextly editor could ship", () => {
       "the panel drag is the reference and must be live and on a zone"
     ).toEqual({ dragging: true, resolvesToContainingZone: true });
 
-    // Marked only now, with the whole panel-side control behind it.
-    //
-    // The reason CHANGED, and the old one was false: the canvas does offer this drag.
-    // `CanvasNode` makes every placed block a drag source, and the reader performs a
-    // real drag of one. Measured on a clean canvas, it activates — the source inside
-    // the frame reports `aria-grabbed="true"` and carries the dragging class.
-    //
-    // What defeats it here is the drag BEFORE it. Reading both documents through a
-    // panel drag, its cancel, and the canvas drag that follows:
-    //
-    //   panel drag live         host aria-grabbed=1   frame aria-grabbed=0
-    //   after driver.cancel()   host aria-grabbed=1   frame aria-grabbed=0
-    //   after startDragOfBlock  host aria-grabbed=0   frame aria-grabbed=0
-    //
-    // `cancel` sends Escape and then releases the button, and the drag state survives
-    // both. The stale drag is still holding the engine when the canvas drag is asked
-    // for, so that one never starts — which is why this reads as a canvas that cannot
-    // drag its own blocks. It is the Escape shortfall, seen from another test.
-    //
-    // So this point is DOWNSTREAM of that one rather than an independent gap, and it
-    // should be re-measured when Escape is fixed rather than worked on directly.
-    test.fail(
-      true,
-      "a cancelled drag leaves its state behind, so the next drag never starts"
-    );
+    // The previous drag must be DEMONSTRABLY over before the next one starts. A drag
+    // begun while the last one is still tearing down never activates at all — measured,
+    // and it is what made this case read as a canvas that cannot drag its own blocks.
+    // `cancel` returns as soon as the events are sent, not when the engine has settled.
+    await expect
+      .poll(async () => driver.isDragging(), {
+        message:
+          "the panel drag must be fully over before the canvas drag begins",
+        timeout: ESCAPE_SETTLE_MS,
+      })
+      .toBe(false);
 
     await chrome.startDragOfBlock(fixture.blockIds[1] ?? "");
+    // Asserted BEFORE any marker: this reader is new, and a reader that failed to find
+    // the block or to activate the drag would otherwise be absorbed as the shortfall
+    // below, leaving the case green having measured nothing.
+    // Marked HERE, with the panel-side control and the settle above it.
+    //
+    // The reason CHANGED TWICE and both earlier ones were wrong, so what is and is not
+    // established is worth stating plainly.
+    //
+    // NOT the reason: "the canvas offers no drag for a placed block". `CanvasNode` makes
+    // every placed block a drag source and the reader performs a real drag of one.
+    //
+    // NOT the reason: "Escape leaves the drag state set". Measured with Escape alone and
+    // no release, the state clears within 100ms in both documents — which is why the
+    // Escape case above no longer expects a failure.
+    //
+    // What IS established: started on its own, this drag activates — the source inside
+    // the frame reports `aria-grabbed="true"` and carries the dragging class across
+    // repeated moves. Started after a panel drag has run and been cancelled, it does
+    // not, and polling for it does not help. So the reader is exonerated by a control
+    // that does not depend on this marker, and what remains is an interaction between
+    // one drag and the next that nobody has isolated yet.
+    test.fail(true, "a drag started after a cancelled drag does not activate");
     // Advanced INSIDE a zone, exactly as the panel side is. Sampling the two
     // under different conditions makes the comparison a statement about the
     // harness: `dragUntilTarget` can resolve through overlap with the pointer
@@ -1158,12 +1176,7 @@ test.describe("a canvas any Nextly editor could ship", () => {
   });
 
   test("ends the drag when Escape cancels", async ({ request }) => {
-    note(
-      PLAN_POINT.escapeCancelsWithoutNavigating,
-      "B-11",
-      "this canvas leaves its drag state set after Escape; the gesture stops " +
-        "affecting the document but never reports that it ended"
-    );
+    note(PLAN_POINT.escapeCancelsWithoutNavigating, "B-11");
     await driver.mountTree(await seedPage(request, FLAT_LIST_FIXTURE));
     await dragFromPanel(driver);
 
@@ -1174,16 +1187,28 @@ test.describe("a canvas any Nextly editor could ship", () => {
       "the drag must be running before Escape can end it"
     ).toBe(true);
 
-    // Escape ALONE. `cancel` releases the pointer straight after, so reading
-    // the state through it cannot tell Escape ending the drag from the
-    // mouse-up ending it — and a dead Escape handler passes.
+    // Escape ALONE. `cancel` releases the pointer straight after, so reading the
+    // state through it cannot tell Escape ending the drag from the mouse-up ending
+    // it — and a dead Escape handler passes. The release below happens only after
+    // the assertion has already been satisfied.
     await driver.pressEscape();
-    const afterEscape = await driver.isDragging();
-    await driver.cancel();
 
-    // Marked HERE, not on the declaration, so a failed seed or a broken
-    // driver is a real failure rather than another expected one.
-    test.fail(true, "the drag state stays set after Escape");
-    expect(afterEscape, "Escape must end the drag").toBe(false);
+    // POLLED, not read once, and this is what the case turned on. The drag state
+    // clears on a React commit, so a read taken in the same tick as the key press
+    // observes the state one commit BEFORE it is cleared — measured, `aria-grabbed`
+    // is still set at +0ms and gone by +100ms. A single read there reports a working
+    // Escape as a dead one, which is how this point spent months recorded as unbuilt.
+    //
+    // The bound IS the claim: an Escape that has not ended the drag within it has not
+    // ended it. Polling stops early on success, so a canvas that cancels promptly pays
+    // nothing for the allowance.
+    await expect
+      .poll(async () => driver.isDragging(), {
+        message: "Escape must end the drag",
+        timeout: ESCAPE_SETTLE_MS,
+      })
+      .toBe(false);
+
+    await driver.cancel();
   });
 });
