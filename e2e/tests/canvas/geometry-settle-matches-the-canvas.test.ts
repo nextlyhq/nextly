@@ -1551,7 +1551,12 @@ test.describe("the drop-zone geometry the probe waits on", () => {
     });
     expect(applied).not.toBeNull();
     expect(applied?.rate).toBe(1);
-    expect(applied?.currentTime).toBe(-30000);
+    // A BOUND, not an equality. The clock keeps running between the assignment and the read, so
+    // an exact comparison measures how long that round trip took — it held locally and lost a
+    // frame (16.7ms) on CI. What makes this the case it claims to be is that the effect is rewound
+    // far into the past, which is stable; the exact value is not, and asserting it tests the
+    // runner rather than the rewind.
+    expect(applied?.currentTime).toBeLessThan(-29000);
     // The two readings a naive live span would use, both still describing the stylesheet.
     expect(applied?.activeDuration).toBe(20000);
     expect(applied?.delay).toBe(0);
