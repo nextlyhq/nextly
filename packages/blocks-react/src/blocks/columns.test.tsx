@@ -7,10 +7,14 @@
  * SEPARATE this pair from a box are the nesting rule's two halves and the
  * identity the template gives each column, so those are what is asserted.
  */
+import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
+import type { BlockResolver } from "../resolver";
+import { resolvePageStyles } from "../styles";
+
 import { column, COLUMN_BLOCK, COLUMNS_BLOCK } from "./column";
-import { columns, TEMPLATE_PLACEHOLDER_ID } from "./columns";
+import { columns, INITIAL_COLUMNS } from "./columns";
 import { box } from "./box";
 import { coreBlocks } from "./index";
 import { section } from "./section";
@@ -40,71 +44,95 @@ describe("the columns pair", () => {
   });
 
   describe("the template", () => {
-    it("starts a row with two columns, each of the column type", () => {
-      const seeded = columns.slots?.children.template ?? [];
-
-      expect(seeded).toHaveLength(2);
-      expect(seeded.map(node => node.type)).toEqual([
-        COLUMN_BLOCK,
-        COLUMN_BLOCK,
-      ]);
+    it("is EMPTY, because nothing can mint per-instance ids yet", () => {
+      // A seeded template needs its ids minted per INSTANCE: two rows expanded
+      // from one literal template carry the same node ids, and the engine
+      // reports `duplicate-node-id` on the second. Nothing reads
+      // `SlotSpec.template`, so no expansion path exists to do that minting.
+      //
+      // Naming the ids "placeholders" was the first attempt and changed no
+      // behaviour — the collision is a property of the nodes, not of what they
+      // are called. Empty makes it unreachable.
+      //
+      // A RATCHET: whoever adds an expander fails this test and has to seed
+      // the row deliberately, with per-instance ids, rather than inheriting
+      // literal ones that were only ever safe because nothing read them.
+      expect(columns.slots?.children.template).toEqual([]);
     });
 
-    it("gives each seeded column a DISTINCT id", () => {
-      // The whole reason the pair exists. Identical ids would collapse both
-      // columns onto one scoped CSS class, so styling one would style both —
-      // the anonymous-flex-child problem with extra steps, and invisible to a
-      // test that only counted the children.
-      const ids = (columns.slots?.children.template ?? []).map(node => node.id);
-
-      expect(new Set(ids).size).toBe(ids.length);
-    });
-
-    it("marks every seeded id as a PLACEHOLDER", () => {
-      // A template describes what to create, not a thing that exists. Two rows
-      // on one page seeded from the same literal ids collide, and the engine
-      // reports `duplicate-node-id` on the second — so an expansion path must
-      // mint a fresh id per node per instance. Asserting the prefix is what
-      // lets a future consumer assert these never reach a stored document.
-      for (const node of columns.slots?.children.template ?? []) {
-        expect(node.id.startsWith(TEMPLATE_PLACEHOLDER_ID)).toBe(true);
-      }
-    });
-
-    it("seeds columns at the version the column block DECLARES", () => {
-      // Restating the version here would let a row seed columns in a schema
-      // state the block no longer declares, so a row-seeded column and a
-      // directly-inserted one would start differently with nothing reporting
-      // it. Asserting equality against the definition is what couples them.
-      for (const node of columns.slots?.children.template ?? []) {
-        expect(node.version).toBe(column.version);
-      }
-    });
-
-    it("seeds columns with the column block's OWN defaults", () => {
-      // Same divergence one field over. `defaultProps` is the single
-      // declaration; the template must not carry a second copy of it.
-      for (const node of columns.slots?.children.template ?? []) {
-        expect(node.props).toEqual(column.defaultProps);
-      }
+    it("still records how many columns a fresh row wants", () => {
+      // The default did not stop being true; it moved to the layer that can
+      // implement it. Losing the number would make the expander re-derive it.
+      expect(INITIAL_COLUMNS).toBe(2);
     });
   });
 
-  describe("no dead default styles", () => {
-    it("declares no baseStyles, because nothing would deliver them", () => {
-      // `baseStyles` is declared on `BlockDefinition` and read by NOTHING —
-      // zero non-test consumers in the repository — and `blocks-react` ships
-      // no stylesheet. A declaration here would compile to nothing and render
-      // as nothing while reading in review as a working default, which is the
-      // capability-that-reaches-nothing shape this package already carries
-      // seven instances of.
+  describe("the default layout REACHES the compiled stylesheet", () => {
+    // Asserting `baseStyles` as an object proves only that a declaration was
+    // written. The compiler REJECTS properties absent from `STYLE_CATALOG`
+    // rather than passing them through, so a declaration naming one compiles
+    // to nothing while the object assertion stays green — which is exactly
+    // how an unsupported `flex` shipped here and had to be withdrawn. These
+    // assert the emitted CSS.
+    function compiledCss(): string {
+      const doc: BlockDocument = {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "row",
+            type: COLUMNS_BLOCK,
+            version: 1,
+            props: {},
+            slots: {
+              children: [
+                { id: "c1", type: COLUMN_BLOCK, version: 1, props: {} },
+              ],
+            },
+          },
+        ],
+      };
+      const resolver: BlockResolver = {
+        get: (name: string) =>
+          coreBlocks.find(block => block.name === name) as never,
+      };
+      // A context is REQUIRED: `resolvePageStyles` compiles only under
+      // `if (styleContext)`, and returns empty css otherwise — which is how
+      // the first version of this test reported a working default as missing.
       //
-      // This assertion is a RATCHET, not a preference: when a delivery path
-      // exists, this test fails and forces whoever adds it to state the
-      // default deliberately rather than reviving a declaration that was dead
-      // when it was written.
-      expect(columns.baseStyles).toBeUndefined();
-      expect(column.baseStyles).toBeUndefined();
+      // `blockBases` is deliberately OMITTED so `blockBasesFor` derives it
+      // from the definitions. Supplying it would hand the compiler the answer
+      // and assert this file's own literal instead of the block's declaration.
+      return (
+        resolvePageStyles(
+          doc,
+          undefined,
+          {
+            breakpoints: {
+              viewport: [{ id: "base", label: "Desktop" }],
+              container: [],
+            },
+          },
+          resolver
+        ).css ?? ""
+      );
+    }
+
+    it("emits the row as a grid with equal, wrapping tracks", () => {
+      const css = compiledCss();
+
+      expect(css).toContain("display: grid");
+      // The track list is what makes columns share the row. Asserting only
+      // `display:grid` passes on a grid with one implicit column, which looks
+      // identical to the stacked <div>s this block exists to replace.
+      expect(css).toContain("minmax(240px, 1fr)");
+    });
+
+    it("emits the column's min-width so a long child cannot force overflow", () => {
+      // Separate from the row assertion because it is a different node type
+      // and a different failure: the row can size correctly while one
+      // unbreakable child still pushes the page sideways.
+      expect(compiledCss()).toContain("min-width: 0");
     });
   });
 

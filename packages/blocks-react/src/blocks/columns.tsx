@@ -21,26 +21,32 @@
  * `core/column` declares `parent: ["core/columns"]`, which is the arrangement
  * `block.ts` names when it documents this field.
  *
- * **The row ships NO default layout**, and `column.tsx` documents why at
- * length: block-level default styles have no delivery mechanism in this
- * package. An author sets the row's display through the inspector. When that
- * gap closes, the row is where `display` belongs — as an overridable default,
- * never a rule in the renderer, because a default nobody can override is the
- * Elementor V4 padding complaint in another costume.
+ * **The layout is `baseStyles`, not a hardcode.** `container.tsx` establishes
+ * that display is a style rather than a block, and a default nobody can
+ * override is the Elementor V4 padding complaint in another costume.
+ * `styles.ts`'s `blockBasesFor` derives these per block TYPE and hands them to
+ * `compilePageCss`, so one rule is emitted for the type rather than copied
+ * into every node.
+ *
+ * **It is a GRID rather than a flex row, and the catalog decides that.** The
+ * compiler rejects properties it does not know, and `STYLE_CATALOG` carries
+ * flex CONTAINER properties but no flex ITEM ones — no `flex`, `flexGrow`,
+ * `flexShrink`, `flexBasis` — so a flex row could not size its children at
+ * all. `grid-template-columns` is supported, and it puts the sizing on the
+ * track list where one declaration governs every column.
+ *
+ * `repeat(auto-fit, minmax(240px, 1fr))` gives equal columns that share the
+ * row, and wraps to a new line below the minimum instead of crushing them.
+ * That is the responsive behaviour an author would otherwise write a media
+ * query for, and it is overridable like any other default.
  *
  * @module blocks/library/columns
  */
-import type { BlockNode } from "@nextlyhq/blocks-engine";
 import { defineBlock } from "@nextlyhq/blocks-engine";
 
 import type { PageContext } from "../context";
 
-import {
-  COLUMN_BLOCK,
-  COLUMN_DEFAULT_PROPS,
-  COLUMN_VERSION,
-  COLUMNS_BLOCK,
-} from "./column";
+import { COLUMN_BLOCK, COLUMNS_BLOCK } from "./column";
 import { CONTAINER_SUPPORTS, renderContainer } from "./container";
 import type { ContainerProps } from "./container";
 
@@ -53,45 +59,25 @@ export { COLUMN_BLOCK, COLUMNS_BLOCK } from "./column";
  * a box would have reached for one; and rather than three, because removing a
  * column is a click and adding one is a decision.
  */
-const INITIAL_COLUMNS = 2;
+export const INITIAL_COLUMNS = 2;
 
 /**
- * The id prefix marking a template node as a PLACEHOLDER.
+ * The row's default layout, in properties the compiler actually accepts.
  *
- * A template describes what to create, not a thing that exists, so an id here
- * is a slot for a real one rather than an identity. **An expansion path must
- * mint a fresh id per node per instance** — two rows on one page seeded with
- * the same literal ids would collide, and the engine reports that as
- * `duplicate-node-id` on the second row.
- *
- * Named rather than inlined so a consumer can assert it never reaches a stored
- * document. `template` currently has NO reader anywhere in the repository, so
- * the requirement is stated here for whoever writes the first one.
+ * `auto-fit` collapses empty tracks and `minmax(240px, 1fr)` makes every
+ * remaining column an equal share of the row that will not go below 240px —
+ * so columns share the width, and wrap to a new line rather than being
+ * crushed. Both `display` and `gridTemplateColumns` are in `STYLE_CATALOG`;
+ * an unlisted property is dropped by the compiler rather than passed through.
  */
-export const TEMPLATE_PLACEHOLDER_ID = "core-columns-placeholder";
-
-/**
- * A column node for the initial template.
- *
- * Returns `BlockNode` rather than a shape typed by `ContainerProps`: a stored
- * node's props are an open record, and `ContainerProps` is a named interface,
- * which TypeScript will not treat as one. The literal is checked against the
- * block's own prop names by validation — the layer that owns that question —
- * rather than by a cast here.
- *
- * **The version and props are IMPORTED from `column.tsx`, never restated.**
- * A template that seeds nodes at a version or with defaults the block no
- * longer declares makes row-seeded columns start in a different schema state
- * from columns inserted directly, and nothing would report the divergence.
- */
-function templateColumn(index: number): BlockNode {
-  return {
-    id: `${TEMPLATE_PLACEHOLDER_ID}-${index}`,
-    type: COLUMN_BLOCK,
-    version: COLUMN_VERSION,
-    props: { ...COLUMN_DEFAULT_PROPS },
-  };
-}
+export const COLUMNS_BASE_STYLES = {
+  base: {
+    base: {
+      display: "grid",
+      gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+    },
+  },
+} as const;
 
 export const columns = defineBlock<ContainerProps, PageContext>({
   name: COLUMNS_BLOCK,
@@ -110,11 +96,29 @@ export const columns = defineBlock<ContainerProps, PageContext>({
   slots: {
     children: {
       allow: [COLUMN_BLOCK],
-      template: Array.from({ length: INITIAL_COLUMNS }, (_, i) =>
-        templateColumn(i)
-      ),
+      /**
+       * EMPTY, deliberately, until something expands templates.
+       *
+       * A seeded template needs its ids minted per INSTANCE: two rows
+       * expanded from one literal template carry the same node ids, and the
+       * engine reports `duplicate-node-id` on the second. Nothing in the
+       * repository reads `SlotSpec.template`, so there is no expansion path
+       * to do that minting — and shipping nodes whose ids are correct only if
+       * a future reader remembers to replace them is a trap rather than a
+       * default.
+       *
+       * Naming the ids "placeholders" was the first attempt and it changed no
+       * behaviour: the collision is a property of the nodes, not of what they
+       * are called. An empty template makes it unreachable instead.
+       *
+       * The two-column default belongs with the expander, which is the layer
+       * that can mint ids. `INITIAL_COLUMNS` records the intended number so
+       * that work does not have to re-derive it.
+       */
+      template: [],
     },
   },
+  baseStyles: COLUMNS_BASE_STYLES,
   supports: CONTAINER_SUPPORTS,
   render: renderContainer,
 });

@@ -47,34 +47,28 @@ export const COLUMN_DEFAULT_PROPS: ContainerProps = {
 };
 
 /**
- * ⚠ A COLUMN SHIPS NO DEFAULT LAYOUT, and it is not for want of trying.
+ * What a column needs to stop its content forcing the row wider.
  *
- * A column wants flex-item defaults — `flex: 1 1 240px` and `min-width: 0`, as
- * `plugin-page-builder/src/render/blocks/column.tsx` supplies — because an
- * ordinary flex item keeps `flex: 0 1 auto` and `min-width: auto`, so an empty
- * column collapses and a long unbroken child overflows the row.
+ * A grid item defaults to `min-width: auto`, which floors its track at the
+ * widest unbreakable content — one long URL then pushes the whole row into
+ * horizontal overflow. `min-width: 0` lets the track shrink as the row asks.
  *
- * **There is no mechanism to deliver them.** Measured on this package:
- * `baseStyles` is declared on `BlockDefinition` (`block.ts:211`) and read by
- * NOTHING — zero non-test consumers anywhere in the repository — and
- * `blocks-react` ships no stylesheet of its own (confirmed against
- * `plugin-page-builder`, which does, so the search was capable of finding one).
- * A `baseStyles` declaration here would compile to nothing and render as
- * nothing, while reading in review as a working default.
+ * **Sizing lives on the ROW, not here.** `columns.tsx` uses
+ * `grid-template-columns`, so equal sizing is a property of the track list and
+ * each column needs no width of its own. That also keeps the pair honest about
+ * differing in relationships rather than capabilities: a column declares no
+ * dimension a box could not.
  *
- * Shipping one anyway would add another capability that reaches nothing, which
- * is the pattern this package already carries seven instances of. So the pair
- * ships what it can actually deliver — identity, the nesting rule and the
- * template — and the author styles the row through the inspector until block
- * default styles have a delivery path.
- *
- * Note also that the catalog has flex CONTAINER properties (`flexDirection`,
- * `flexWrap`, `justifyContent`, `alignItems`, `gap`) and **no flex ITEM
- * properties at all** — no `flex`, `flexGrow`, `flexShrink` or `flexBasis`.
- * So wiring `baseStyles` alone would not be enough; the catalog needs the
- * properties too, or the row has to size its children with
- * `gridTemplateColumns`, which the catalog does support.
+ * Every property here is in `STYLE_CATALOG`. The compiler REJECTS unknown
+ * properties rather than passing them through, so a declaration naming one is
+ * silently dropped — and the catalog has flex CONTAINER properties but **no
+ * flex ITEM properties at all** (no `flex`, `flexGrow`, `flexShrink`,
+ * `flexBasis`), which is why this is a grid rather than the flex layout the
+ * PoC column uses.
  */
+export const COLUMN_BASE_STYLES = {
+  base: { base: { minWidth: 0 } },
+} as const;
 
 export const column = defineBlock<ContainerProps, PageContext>({
   name: COLUMN_BLOCK,
@@ -107,6 +101,7 @@ export const column = defineBlock<ContainerProps, PageContext>({
   slots: {
     children: { template: [] },
   },
+  baseStyles: COLUMN_BASE_STYLES,
   supports: CONTAINER_SUPPORTS,
   render: renderContainer,
 });
