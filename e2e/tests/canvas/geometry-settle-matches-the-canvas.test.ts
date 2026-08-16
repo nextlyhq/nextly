@@ -147,6 +147,7 @@ async function geometrySpanMs(
           unclassified: [] as string[],
           nonDocumentTimelines: [] as string[],
           liveMs: 0,
+          unreadableClock: [] as string[],
         };
 
       // A value that is not a time cannot be measured, and `|| 0` would report it as instant —
@@ -168,6 +169,14 @@ async function geometrySpanMs(
        * which is what makes one comparison cover the whole family instead of one member.
        */
       let liveLongest = 0;
+      /**
+       * Geometry-moving effects whose clock this cannot read, with the state that stopped it.
+       *
+       * Separate from `unclassified`, which is about a PROPERTY nobody has placed. These are
+       * effects whose property is known to move an edge and whose remaining span is not a number:
+       * a paused clock does not advance, and one that has not started has no current time at all.
+       */
+      const unreadableClock: string[] = [];
       let longest = 0;
 
       for (const zone of zones) {
@@ -225,18 +234,14 @@ async function geometrySpanMs(
           if (!effect || effect.target !== el) return false;
           return READ_SURFACES.has(effect.pseudoElement ?? null);
         };
-        const unreadable = el.getAnimations({ subtree: true }).filter(
-          a =>
-            (!(a instanceof CSSAnimation) && !(a instanceof CSSTransition)) ||
-            a.playbackRate !== 1 ||
-            // A PAUSED effect's time does not advance, so every span computed from it is a
-            // remainder that never shrinks and a wait sized to it certifies nothing: the edge
-            // moves whenever something resumes the animation, which may be after the allowance
-            // has elapsed. The rate-zero case beside it is already refused and this is the same
-            // unbounded wall clock reached by a different API.
-            a.playState === "paused" ||
-            !own(a)
-        );
+        const unreadable = el
+          .getAnimations({ subtree: true })
+          .filter(
+            a =>
+              (!(a instanceof CSSAnimation) && !(a instanceof CSSTransition)) ||
+              a.playbackRate !== 1 ||
+              !own(a)
+          );
         if (unreadable.length > 0) {
           // Restored BEFORE returning. An early return that skips cleanup leaves the probe's
           // attributes on a real canvas element, so every later read in this run — and the
@@ -248,6 +253,7 @@ async function geometrySpanMs(
             unclassified: [] as string[],
             nonDocumentTimelines: [] as string[],
             liveMs: 0,
+            unreadableClock: [] as string[],
           };
         }
 
@@ -356,6 +362,14 @@ async function geometrySpanMs(
             );
             continue;
           }
+          // The clock is judged only for effects that MOVE something, and only after
+          // classification has said so. Refusing earlier rejects a paused paint transition, or a
+          // paused animation with no keyframes, neither of which can move an edge however long it
+          // stays paused.
+          if (a.playState === "paused") {
+            unreadableClock.push("paused");
+            continue;
+          }
           const timing = a.effect?.getComputedTiming();
           if (!timing) continue;
           // ZERO ITERATIONS runs nothing, so it holds the edge for nothing — not even its delay.
@@ -363,7 +377,16 @@ async function geometrySpanMs(
           // case: that one waits out its delay and then moves instantly, so the delay IS the span
           // it holds. The two zeros are indistinguishable from `activeDuration` alone, and the
           // declared path already separates them, so this reads the iteration count to agree.
-          if (Number(timing.iterations ?? 1) === 0) continue;
+          // ...unless a FILL paints outside it. `iterations: 0` with `fill: "backwards"` applies
+          // the first keyframe through the delay and drops it when the active phase would have
+          // begun, so the edge moves at that boundary even though nothing ever animated. Only a
+          // fill of `none` truly holds nothing.
+          if (
+            Number(timing.iterations ?? 1) === 0 &&
+            String(timing.fill ?? "none") === "none"
+          ) {
+            continue;
+          }
           // Measured from where the effect currently IS, over its ACTIVE interval only.
           //
           // Subtracting `currentTime` is what catches a schedule moved through the API rather than
@@ -380,9 +403,21 @@ async function geometrySpanMs(
           // For a freshly applied state `currentTime` is ~0 and this equals the declared span. It
           // can only come out SHORTER as an effect progresses, and short is the safe direction —
           // the probe then waits longer than the edge moves.
+          const active =
+            Number(timing.delay ?? 0) + Number(timing.activeDuration ?? 0);
+          // `endTime` bounds it in BOTH directions and one expression covers both. A positive
+          // `endDelay` pushes `endTime` past the active phase, and the minimum discards that tail
+          // because it is not movement. A NEGATIVE one pulls `endTime` in FRONT of the active
+          // phase, truncating it — `activeDuration` does not fold `endDelay` — so charging the
+          // untruncated interval would refuse a declaration that covers every edge change.
+          // A pre-start effect has NO current time, and zero is the RIGHT reading for it rather
+          // than a coercion that hides something: it has not begun, so the whole interval is still
+          // ahead of it. Measured — a CSS-declared `animation-delay` puts the effect in `idle`
+          // with a null current time, and the declared path charges that same delay from its own
+          // longhand, so the two agree. A delay applied through the API instead is absent from the
+          // longhands and this side still counts it, which is the divergence that gets refused.
           const live =
-            Number(timing.delay ?? 0) +
-            Number(timing.activeDuration ?? 0) -
+            Math.min(active, Number(timing.endTime ?? active)) -
             Number(a.currentTime ?? 0);
           if (Number.isFinite(live)) liveLongest = Math.max(liveLongest, live);
           else liveLongest = Infinity;
@@ -510,6 +545,7 @@ async function geometrySpanMs(
         unclassified,
         nonDocumentTimelines,
         liveMs: liveLongest,
+        unreadableClock,
       };
     },
     [
@@ -536,6 +572,15 @@ async function geometrySpanMs(
         "). Its progress is driven by scroll position rather than by elapsed time, so its " +
         "duration is not a wall-clock span and a later scroll moves the edge again. Charging " +
         "that duration would pin a number this probe cannot stand behind."
+    );
+  }
+  if (result.unreadableClock.length > 0) {
+    throw new Error(
+      `a drop zone runs a geometry effect whose clock this cannot read (` +
+        `${[...new Set(result.unreadableClock)].join(", ")}). A paused effect's time does not ` +
+        "advance and one that has not started has no current time at all, so every span computed " +
+        "from either stays true however long the probe waits — and the edge moves whenever " +
+        "something resumes or starts it, which may be after the allowance has elapsed."
     );
   }
   if (result.zones === -1) {
@@ -1551,9 +1596,11 @@ test.describe("the drop-zone geometry the probe waits on", () => {
     // Untouched, which is why the rate clause beside it cannot see this.
     expect(applied?.rate).toBe(1);
 
+    // Its OWN channel, not the catch-all. A paused effect is refused for a specific reason and the
+    // message names it, so a reader is not sent looking for a scripted animation.
     await expect(
       geometrySpanMs(frame, "data-drag data-active")
-    ).rejects.toThrow(/refuses instead of reporting a span/);
+    ).rejects.toThrow(/clock this cannot read/);
   });
 
   test("a TRANSITION whose keyframes were replaced is read from the effect", async ({
@@ -1676,6 +1723,57 @@ test.describe("the drop-zone geometry the probe waits on", () => {
 
     // The declared 200ms covers every edge change, so this must REPORT rather than refuse.
     expect(await geometrySpanMs(frame, "data-drag data-active")).toBe(200);
+  });
+
+  test("a zero-iteration effect with a FILL still holds the edge", async ({
+    page,
+    request,
+  }) => {
+    const frame = await canvas(page, request);
+
+    // Zero iterations animates nothing, but a backwards fill applies the first keyframe through
+    // the delay and drops it when the active phase would have begun. The edge moves at that
+    // boundary, so the effect is not motionless — only a fill of `none` is.
+    const applied = await frame.evaluate(async () => {
+      const sheet = (
+        document.getElementById("nx-pb-style") as HTMLStyleElement | null
+      )?.sheet;
+      sheet?.insertRule(
+        "@keyframes nx-filled { from { height: 0 } to { height: 6px } }",
+        sheet.cssRules.length
+      );
+      sheet?.insertRule(
+        ".nx-pb-dropzone { animation: nx-filled .2s 1 }",
+        sheet.cssRules.length
+      );
+      const zone = document.querySelector(".nx-pb-dropzone");
+      const animation = zone
+        ?.getAnimations()
+        .find(a => a instanceof CSSAnimation);
+      if (!animation?.effect) return null;
+      animation.effect.updateTiming({
+        iterations: 0,
+        delay: 30000,
+        fill: "backwards",
+      });
+      await animation.ready;
+      const timing = animation.effect.getComputedTiming();
+      return {
+        iterations: Number(timing.iterations ?? 1),
+        fill: String(timing.fill ?? "none"),
+        activeDuration: Number(timing.activeDuration ?? 0),
+      };
+    });
+    expect(applied).not.toBeNull();
+    // Nothing animates...
+    expect(applied?.iterations).toBe(0);
+    expect(applied?.activeDuration).toBe(0);
+    // ...and the fill still paints, which is what makes skipping it wrong.
+    expect(applied?.fill).toBe("backwards");
+
+    await expect(
+      geometrySpanMs(frame, "data-drag data-active")
+    ).rejects.toThrow(/running effect claims/);
   });
 
   test("it refuses rather than reporting a zero it cannot stand behind", async ({
