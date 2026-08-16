@@ -76,6 +76,20 @@ const PLAN_POINT = {
   escapeCancelsWithoutNavigating: 12,
 } as const;
 
+/**
+ * Time budgets for the autoscroll case, in milliseconds.
+ *
+ * Durations rather than move counts. The scroll advances on the canvas's own timer, so a number of
+ * synthesised pointer events says nothing about how far it has travelled — a faster runner sends
+ * them sooner and arrives at the same place later in wall-clock terms, which is exactly backwards.
+ *
+ * Each is a CEILING that the wait stops early on. Reaching the bound in 200ms costs 200ms; the
+ * budget is only spent when the canvas never arrives, which is the failure being reported.
+ */
+const ENGAGE_WINDOW_MS = 2_000;
+const REACH_BOUND_WINDOW_MS = 15_000;
+const HOLD_AT_BOUND_MS = 500;
+
 /** Record which property a test covers, and why it cannot pass yet. */
 function note(point: number, becomes: string, shortfall?: string): void {
   test.info().annotations.push({
@@ -779,23 +793,52 @@ test.describe("a canvas any Nextly editor could ship", () => {
     const source = await driver.dragSourceCentre();
     await driver.startDragAt(source);
     await dragPointerTo(driver, await driver.canvasBottomEdge());
+    let pointerUp = false;
 
     // Moving by a pixel each tick rather than holding still. dnd-kit recomputes the scroll intent
     // from the drag position, and a pointer that never moves again produces no further signal —
     // so a perfectly still hold can measure a canvas that simply stopped being told anything.
-    const dwell = async (ticks: number) => {
-      for (let tick = 0; tick < ticks; tick += 1) {
-        await driver.moveBy(0, tick % 2 === 0 ? 1 : -1);
+    const nudge = async () => {
+      pointerUp = !pointerUp;
+      await driver.moveBy(0, pointerUp ? 1 : -1);
+    };
+
+    /**
+     * Keep the pointer alive until `done`, or until the deadline passes.
+     *
+     * By ELAPSED TIME, not by a count of moves. The scroll advances on dnd-kit's own timer, so a
+     * number of Playwright commands is not a duration: on a fast runner the loop can finish before
+     * a correct autoscroller has crossed a 5000px range, and the bound assertion then fails on a
+     * canvas doing exactly the right thing. Counting events measures the harness.
+     */
+    const keepDragging = async (
+      untilMs: number,
+      done?: () => Promise<boolean>
+    ) => {
+      const deadline = Date.now() + untilMs;
+      while (Date.now() < deadline) {
+        await nudge();
+        if (done && (await done())) return;
       }
     };
 
-    await dwell(20);
+    // Engagement is a change, so it needs only enough time for the first tick to land.
+    await keepDragging(
+      ENGAGE_WINDOW_MS,
+      async () => (await chrome.canvasScroll()).top > range.top
+    );
     const engaged = await chrome.canvasScroll();
-    // Long enough to reach the end of a 6000px document at any plausible rate. The bound is what
-    // this half is about, so the dwell has to be generous enough to actually arrive at it.
-    await dwell(200);
+
+    // The bound is an ARRIVAL, so this waits for it rather than for a number of moves, and stops
+    // as soon as it is reached. A timeout here means autoscroll never got there, which the
+    // assertions below report as the failure it is rather than hiding in a longer wait.
+    await keepDragging(REACH_BOUND_WINDOW_MS, async () => {
+      const now = await chrome.canvasScroll();
+      return now.top >= now.max;
+    });
     const settled = await chrome.canvasScroll();
-    await dwell(40);
+    // And STAYS there while the pointer is still at the edge, which is the "stops" half.
+    await keepDragging(HOLD_AT_BOUND_MS);
     const stillSettled = await chrome.canvasScroll();
     await driver.cancel();
 
