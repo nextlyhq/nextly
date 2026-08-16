@@ -92,6 +92,15 @@ export interface CanvasDriver {
   canvasCentre(): Promise<Point>;
 
   /**
+   * A point just inside the canvas's BOTTOM edge, in host coordinates.
+   *
+   * Autoscroll is a response to the pointer approaching an edge, so a test of it has to be able
+   * to name that edge. Asking the driver rather than measuring an iframe in the suite keeps the
+   * question engine-agnostic: a replacement canvas that is not an iframe still has a bottom.
+   */
+  canvasBottomEdge(): Promise<Point>;
+
+  /**
    * Insert a block without dragging: the non-drag path WCAG 2.2 §2.5.7 requires
    * for every drag gesture. On the driver because how it is offered is a canvas
    * decision, while "it must exist" is a requirement of every canvas.
@@ -339,8 +348,15 @@ export interface CanvasChromeReader {
    */
   readsInvalidTarget(): Promise<boolean>;
 
-  /** Scroll offset inside the canvas frame, for autoscroll assertions. */
-  canvasScrollTop(): Promise<number>;
+  /**
+   * How far the canvas has scrolled, and how far it CAN.
+   *
+   * Both from one reader because "autoscroll stopped" and "autoscroll stopped AT THE BOUND" are
+   * different claims, and only the second is the requirement. Two consecutive equal offsets are
+   * satisfied by a scroll that stalled anywhere — including one that never started — so the bound
+   * is what separates stopping correctly from merely stopping.
+   */
+  canvasScroll(): Promise<{ top: number; max: number }>;
 
   /** Begin dragging a block that is already in the canvas, by its id. */
   startDragOfBlock(id: string): Promise<void>;
