@@ -39,6 +39,38 @@ export interface CaptureResult {
   versionNo: number;
 }
 
+/**
+ * Input to capture one autosave snapshot.
+ *
+ * Deliberately NOT `CaptureInput` with a flag. An autosave row must carry no
+ * `version_no` and a durable one must carry one, and the repository rejects
+ * either violation — so a shared input with a boolean puts a value in the
+ * caller's hands that makes half its combinations throw. Two inputs and two
+ * methods let each path express only states that are valid, and a durable
+ * caller cannot reach the autosave shape by passing a wrong argument.
+ *
+ * There is no `label` and no `sourceVersionNo`: a label names a version a
+ * person chose to keep, and a source records what a restore came from. An
+ * autosave is neither.
+ */
+export interface AutosaveCaptureInput {
+  ref: VersionRef;
+  status: VersionStatus;
+  snapshot: unknown;
+  createdBy?: string | null;
+  locale?: string | null;
+  /**
+   * Autosaves retained for this document; `false` or omitted leaves them
+   * unbounded. Applied in the caller's transaction right after the insert, so
+   * the cap holds without a background worker.
+   *
+   * Counted separately from the durable cap because the two answer different
+   * questions: durable retention keeps a history someone curated, autosave
+   * retention keeps a crash-recovery window.
+   */
+  maxPerDoc?: number | false;
+}
+
 export class VersionCaptureService {
   /**
    * Allocate the next durable version_no for the document and insert one row,
@@ -107,5 +139,59 @@ export class VersionCaptureService {
       }
     }
     return { versionNo };
+  }
+
+  /**
+   * Insert one autosave snapshot and trim the autosave window.
+   *
+   * Allocates NO sequence number, and that is the whole difference: the durable
+   * path reads the current maximum and takes the next, which is what makes two
+   * concurrent captures race for one number. An autosave has nothing to
+   * contend over, so it cannot raise a `VersionConflictError` and the caller
+   * needs no retry around it.
+   *
+   * Retention here is a straight newest-first window, NOT
+   * {@link selectVersionsToPrune}. That function protects the head of history
+   * and the version matching live content, because durable history is what an
+   * editor navigates. An autosave window protects nothing: every row in it is
+   * superseded by the one after it, and the only question is how far back
+   * recovery reaches. Reusing the durable selector here would apply
+   * protections that mean nothing to these rows and silently keep more than the
+   * cap.
+   */
+  async captureAutosave(
+    db: VersionsDbApi,
+    input: AutosaveCaptureInput
+  ): Promise<void> {
+    const repo = new VersionsRepository(db);
+    await repo.insertVersion({
+      ref: input.ref,
+      // Null, not omitted. The repository rejects an autosave carrying a
+      // sequence number, and the durable-sequence unique index treats a
+      // non-null value as durable.
+      versionNo: null,
+      status: input.status,
+      isAutosave: true,
+      snapshot: input.snapshot,
+      label: null,
+      locale: input.locale ?? null,
+      sourceVersionNo: null,
+      createdBy: input.createdBy ?? null,
+    });
+
+    if (typeof input.maxPerDoc === "number") {
+      const autosaves = await repo.listAutosavesForPrune(input.ref);
+      // The row just inserted is among these and is newest, so it survives any
+      // cap of one or more. A cap below one is meaningless rather than
+      // dangerous; `slice` on a non-positive count returns everything, which
+      // would delete the snapshot this call just took, so it is excluded.
+      const staleIds =
+        input.maxPerDoc >= 1
+          ? autosaves.slice(input.maxPerDoc).map(row => row.id)
+          : [];
+      if (staleIds.length > 0) {
+        await repo.deleteByIds(staleIds);
+      }
+    }
   }
 }

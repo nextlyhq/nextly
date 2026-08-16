@@ -482,6 +482,35 @@ export class VersionsRepository {
   }
 
   /**
+   * Autosave rows for one document, newest-first.
+   *
+   * Ordered by time rather than by sequence, because an autosave carries no
+   * `version_no` at all: the invariant in {@link insertVersion} requires it to
+   * be null, so there is no number to sort on. Time is the only ordering these
+   * rows have.
+   *
+   * `id` is included as a final tiebreak. Two autosaves can land in the same
+   * transaction clock tick, and an order that leaves them interchangeable makes
+   * "the newest N" ambiguous — which would let retention keep one and delete
+   * the other on one run and swap them on the next.
+   */
+  async listAutosavesForPrune(ref: VersionRef): Promise<PrunableVersion[]> {
+    return this.db.select<PrunableVersion>(TABLE, {
+      columns: ["id", "versionNo", "status"],
+      where: {
+        and: [
+          ...this.docWhere(ref),
+          { column: "isAutosave", op: "=", value: true },
+        ],
+      },
+      orderBy: [
+        { column: "createdAt", direction: "desc" },
+        { column: "id", direction: "desc" },
+      ],
+    });
+  }
+
+  /**
    * Delete the given version rows. No-op for an empty list.
    *
    * Deletes in chunks because each id binds one query parameter and SQLite caps
