@@ -43,24 +43,35 @@
   "$schema": "https://v2-9-7.turborepo.dev/schema.json",
   "ui": "tui", // Terminal UI for better task visualization
 
-  // Files OUTSIDE any package that every task's result depends on.
+  // Files OUTSIDE any package that a task's result depends on.
   //
-  // A task's hash covers its own package's files and its dependencies' hashes.
-  // The shared TypeScript configs belong to neither: 22 packages extend
-  // `@nextlyhq/tsconfig`, and `check-types` declares `dependsOn: []`, so there is
-  // no edge from a package to the config that decides what its compiler does.
-  // Without this entry, editing `base.json` — turning on a strict flag, moving
-  // `target`, changing `lib` — leaves every package's hash unmoved and turbo
-  // replays greens computed under the OLD settings, across the whole repository
-  // at once. Measured before adding it: appending a newline to
-  // `packages/tsconfig/base.json` left `@nextlyhq/e2e#check-types` on the
-  // identical hash `e2f45f80054274ba`.
+  // A task's hash covers its own package's files plus, through `dependsOn`, its
+  // dependencies' hashes. Anything belonging to NEITHER is invisible to it, and
+  // a file the compiler reads but the hash cannot see is a replayed green
+  // waiting to happen. Two trees are in that position:
   //
-  // Deliberately coarse. It invalidates every task rather than only the
-  // type-aware ones, because a compiler setting reaches builds and type-aware
-  // lint rules as well, and the cost of an unnecessary re-run is minutes while
-  // the cost of a missed one is a replayed green nobody can see through.
-  "globalDependencies": ["packages/tsconfig/*.json"],
+  // - `packages/tsconfig/*.json`: 22 packages extend `@nextlyhq/tsconfig`, and
+  //   it decides `strict`, `target` and `lib`. The `^check-types` edge below
+  //   now gives most of them a graph edge to it, so this is no longer the ONLY
+  //   thing covering them — it remains because that edge is a property of the
+  //   task graph rather than of the configs, and it does not reach tasks with
+  //   no such edge or consumers that read these files by relative path.
+  // - `scripts/**`: root scripts sit in no package at all, so no edge of any
+  //   kind can reach them. `apps/playground` compiles `scripts/dev-doctor.mjs`
+  //   through a test, and before this entry, editing that file left
+  //   `playground#check-types` on the identical hash `62b43e8dbf627e65`.
+  //
+  // Both are deliberately coarse, invalidating every task rather than the
+  // type-aware ones, because a compiler setting or a shared script reaches
+  // builds and type-aware lint too. The cost of an unnecessary re-run is
+  // minutes; the cost of a missed one is a green nobody can see through.
+  //
+  // `scripts/**` is the wide answer to a narrow fact: exactly ONE tracked file
+  // needs it today. Listing that file instead would be the enumeration this
+  // task's `inputs` were changed to stop doing, and the guard in
+  // `scripts/turbo-inputs.test.mjs` reports any tracked program input that no
+  // hash covers — so a future one fails CI rather than passing quietly.
+  "globalDependencies": ["packages/tsconfig/*.json", "scripts/**"],
 
   // Runtime env vars referenced from package source (not build-time inputs).
   // Listed here so eslint-plugin-turbo's no-undeclared-env-vars rule passes.
