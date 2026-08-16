@@ -1,3 +1,5 @@
+import { PUBLIC_ROUTE_PATHS } from "@admin/constants/routes";
+
 import { BASE_URL } from "./fetcher";
 
 interface AuthErrorBody {
@@ -64,19 +66,16 @@ export function setLoginRedirectPath(path: string): void {
  *   2. authFetch sees the code → redirectToLogin() → /admin/login.
  *   3. /admin/login mounts → PublicRoute checks setup-status,
  *      sees no users → navigateTo("/admin/setup"). Bounce.
+ *
+ * DERIVED from the one declaration rather than listed again here. The set that
+ * must not redirect is exactly the set reachable without a session, and a
+ * second hand-kept copy of it drifts silently: a page added to the registry and
+ * missed here bounces the visitor to login, discarding whatever the URL
+ * carried, which is how an invite token was once lost.
  */
-export const NO_REDIRECT_PUBLIC_PATHS = new Set([
-  "/admin/login",
-  "/admin/setup",
-  "/admin/register",
-  "/admin/forgot-password",
-  "/admin/reset-password",
-  "/admin/verify-email",
-  // An invited user reaching this page has no session yet, so a protected
-  // background query answers 401 exactly as it does on the others. Its absence
-  // bounced them to login and lost the invite token in the URL.
-  "/admin/accept-invite",
-]);
+export const NO_REDIRECT_PUBLIC_PATHS: ReadonlySet<string> = new Set<string>(
+  PUBLIC_ROUTE_PATHS
+);
 
 /**
  * Navigate the browser to the configured login path unless we're already
