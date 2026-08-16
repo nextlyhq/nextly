@@ -1068,9 +1068,9 @@ test.describe("a canvas any Nextly editor could ship", () => {
     ).toEqual({ dragging: true, resolvesToContainingZone: true });
 
     // The previous drag must be DEMONSTRABLY over before the next one starts. A drag
-    // begun while the last one is still tearing down never activates at all — measured,
-    // and it is what made this case read as a canvas that cannot drag its own blocks.
-    // `cancel` returns as soon as the events are sent, not when the engine has settled.
+    // begun while the last one is still tearing down never activates at all, and
+    // `cancel` returns as soon as the events are sent rather than when the engine has
+    // settled — so without this the canvas looks unable to drag its own blocks.
     await expect
       .poll(async () => driver.isDragging(), {
         message:
@@ -1177,11 +1177,10 @@ test.describe("a canvas any Nextly editor could ship", () => {
     // the assertion has already been satisfied.
     await driver.pressEscape();
 
-    // POLLED, not read once, and this is what the case turned on. The drag state
-    // clears on a React commit, so a read taken in the same tick as the key press
-    // observes the state one commit BEFORE it is cleared — measured, `aria-grabbed`
-    // is still set at +0ms and gone by +100ms. A single read there reports a working
-    // Escape as a dead one, which is how this point spent months recorded as unbuilt.
+    // POLLED, not read once. The drag state clears on a React commit, so a read taken
+    // in the same tick as the key press observes the state one commit BEFORE it is
+    // cleared — measured, `aria-grabbed` is still set at +0ms and gone by +100ms. A
+    // single read there reports a working Escape as a dead one.
     //
     // The bound IS the claim: an Escape that has not ended the drag within it has not
     // ended it. Polling stops early on success, so a canvas that cancels promptly pays

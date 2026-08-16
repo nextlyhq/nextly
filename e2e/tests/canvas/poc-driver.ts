@@ -942,11 +942,11 @@ export function createPocChromeReader(
       // BOTH documents, for the same reason `isDragging` reads both: the editor chrome is
       // host-side and the canvas is in the frame, and which of them would publish this has
       // not been decided. Searching one would refuse about a seam that exists in the other.
-      // EVERY publisher in both documents, not the first one found. `??` between the two
-      // reads always prefers the host, so a stale host depth of 0 masks a frame depth going
-      // 0 -> 1 and B-9 reports that a drop created no undo entry; `querySelector` hides a
-      // duplicate inside one document the same way. The contract is ONE publisher, so more
-      // than one is an ambiguous count and refusing is the only honest answer.
+      // EVERY publisher in both documents, not the first one found. Preferring one document
+      // over the other lets a stale host depth of 0 mask a frame depth going 0 -> 1, and the
+      // acceptance point then reports that a drop created no undo entry; taking the first
+      // match inside one document hides a duplicate the same way. The contract is ONE
+      // publisher, so more than one is an ambiguous count and refusing is the honest answer.
       const read = async (where: Frame | Page) =>
         where.evaluate(
           ([selector, attribute]) =>
@@ -983,9 +983,10 @@ export function createPocChromeReader(
         return depth;
       }
 
-      // The editor DOES keep history — a bounded past/future in its store — so a reader told
-      // "this canvas keeps no undo history" is sent to build what already exists. The
-      // attribute is named here so the refusal says what would satisfy it.
+      // The editor DOES keep history — a bounded past/future in its store — so the message
+      // names the missing SEAM rather than a missing feature, and quotes the attribute that
+      // would satisfy it. Reporting this as absent undo would send someone to build what is
+      // already there.
       throw new CanvasCapabilityError(
         `this canvas publishes no undo depth a test can read (no \`${UNDO_DEPTH_SELECTOR}\` ` +
           "in either document); the editor keeps a bounded history in its store, so the gap " +
