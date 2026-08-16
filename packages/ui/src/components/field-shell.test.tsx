@@ -85,15 +85,18 @@ describe("FieldShell", () => {
 
   it("associates the label with the control when htmlFor is omitted", () => {
     // The simplest usage the props permit: a label with no explicit id
-    // anywhere. `getByLabelText` only finds the input through a real
-    // `htmlFor`/`id` association, so this fails if the label is a bare
-    // sibling with no id to point at.
+    // anywhere. Read `for`/`id` directly rather than only through
+    // `getByLabelText`, which an `aria-label` on the control could satisfy
+    // without a real association ever existing.
     render(
       <FieldShell label="Name">
         <input />
       </FieldShell>
     );
-    expect(screen.getByLabelText("Name")).toBeDefined();
+    const label = screen.getByText("Name");
+    const control = screen.getByLabelText("Name");
+    expect(label.getAttribute("for")).toBe(control.id);
+    expect(control.id).not.toBe("");
   });
 
   it("uses an explicit htmlFor verbatim", () => {
@@ -103,18 +106,62 @@ describe("FieldShell", () => {
       </FieldShell>
     );
     const label = screen.getByText("Name");
+    const control = screen.getByLabelText("Name");
     expect(label.getAttribute("for")).toBe("custom-id");
-    expect(screen.getByLabelText("Name").id).toBe("custom-id");
+    expect(control.id).toBe("custom-id");
+    expect(label.getAttribute("for")).toBe(control.id);
   });
 
-  it("does not clobber a child's own id", () => {
+  it("targets a child's own id rather than the generated one", () => {
+    // No `aria-label` here: if the label/control association were broken,
+    // `getByLabelText` would find nothing to return, rather than silently
+    // succeeding through a second, unrelated accessible-name source.
     render(
       <FieldShell label="Name">
-        <input id="caller-id" aria-label="Name" />
+        <input id="caller-id" />
       </FieldShell>
     );
+    const label = screen.getByText("Name");
+    const control = screen.getByLabelText("Name");
     // Slot merges props onto the child rather than replacing them, so the
-    // child's own id wins over the id FieldShell generated for it.
-    expect(screen.getByLabelText("Name").id).toBe("caller-id");
+    // child's own id wins over the id FieldShell generated for it — and the
+    // label has to follow it there, not point at the id FieldShell offered.
+    expect(control.id).toBe("caller-id");
+    expect(label.getAttribute("for")).toBe("caller-id");
+  });
+
+  it("connects description and error to the control via aria-describedby", () => {
+    render(
+      <FieldShell
+        label="Name"
+        description="Shown in the key list."
+        error="Name is required"
+      >
+        <input />
+      </FieldShell>
+    );
+    const control = screen.getByLabelText("Name");
+    const describedBy = control.getAttribute("aria-describedby") ?? "";
+    const ids = describedBy.split(" ").filter(Boolean);
+    const description = screen.getByText("Shown in the key list.");
+    const error = screen.getByText("Name is required");
+    expect(ids).toContain(description.id);
+    expect(ids).toContain(error.id);
+    expect(description.id).not.toBe("");
+    expect(error.id).not.toBe("");
+    expect(control.getAttribute("aria-invalid")).toBe("true");
+  });
+
+  it("omits aria-describedby ids for messages that are not rendered", () => {
+    render(
+      <FieldShell label="Name">
+        <input />
+      </FieldShell>
+    );
+    const control = screen.getByLabelText("Name");
+    // Neither description nor error is present, so the control must not
+    // point at ids nothing carries.
+    expect(control.getAttribute("aria-describedby")).toBeNull();
+    expect(control.getAttribute("aria-invalid")).toBeNull();
   });
 });
