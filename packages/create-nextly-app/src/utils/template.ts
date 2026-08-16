@@ -536,23 +536,25 @@ async function pointsAtItself(
   while (queue.length > 0) {
     const { name, depth, from } = queue.shift()!;
     const targetPath = path.resolve(from, name);
-    if (visited.has(targetPath)) continue;
-    visited.add(targetPath);
 
     // Reaching the file being written closes the loop, whether directly or through a chain.
     if (targetPath === destination) return true;
 
     const resolved = await fs.realpath(targetPath).catch(() => null);
 
-    // Deduplicate on the RESOLVED path, not the lexical one. A directory symlink pointing back
-    // into the project makes every expansion produce a new spelling — `loop/AGENTS.md`,
-    // `loop/loop/AGENTS.md` — of one file, so a lexical `visited` never matches, the queue never
-    // empties and the scaffold HANGS before restoring anything. The lexical check above stays as
-    // a cheap filter; this is the one that terminates.
-    if (resolved !== null) {
-      if (visited.has(resolved)) continue;
-      visited.add(resolved);
-    }
+    // ONE identity for a visited node, and it is the RESOLVED path where there is one. A
+    // directory symlink pointing back into the project makes every expansion produce a new
+    // spelling of one file — `loop/AGENTS.md`, `loop/loop/AGENTS.md` — which a lexical key never
+    // collapses, so the queue never empties and the scaffold hangs.
+    //
+    // Keeping a lexical key ALONGSIDE it is what broke: on Linux a resolved path equals its
+    // lexical one, so a node marked lexically was then seen as already-resolved and skipped
+    // before its contents were ever read — no includes expanded, no cycle found. On macOS the
+    // temporary directory resolves through `/private`, so the two never collided and the defect
+    // was invisible locally. Two keys for one question, disagreeing per platform.
+    const identity = resolved ?? targetPath;
+    if (visited.has(identity)) continue;
+    visited.add(identity);
 
     if (resolved === null) {
       // A DIRECT target that does not resolve means the pointer would install nothing, so there
