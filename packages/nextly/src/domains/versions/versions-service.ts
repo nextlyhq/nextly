@@ -21,6 +21,7 @@ import type { VersionStatus } from "../../schemas/versions/types";
 import type { VersionsDbApi } from "./db-api";
 import {
   VersionsRepository,
+  type AutosaveWriteResult,
   type VersionMeta,
   type VersionRef,
   type VersionRow,
@@ -126,7 +127,23 @@ export class VersionsService {
     snapshot: unknown;
     locale?: string | null;
     createdBy?: string | null;
-  }): Promise<void> {
+  }): Promise<AutosaveWriteResult> {
     return this.repo.upsertAutosave(input);
+  }
+
+  /**
+   * One author's current recovery point, or undefined when they have none.
+   *
+   * Scoped to the caller rather than the document: an autosave is unpublished,
+   * unvalidated work in progress, so one author's must never be offered to
+   * another. This is the only way a stored autosave can be read back --
+   * history listings and version reads both exclude them by construction,
+   * since a recovery point carries no version number to be addressed by.
+   */
+  async getAutosave(
+    ref: VersionRef,
+    createdBy: string | null
+  ): Promise<VersionRow | undefined> {
+    return this.repo.findAutosave(ref, createdBy);
   }
 }

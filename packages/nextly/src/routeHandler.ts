@@ -582,6 +582,8 @@ export const COLLECTION_ENTRY_METHODS = new Set([
   // Storing a recovery point writes the entry's content into history, so it is
   // authorized as an update of the entry like a discard is.
   "autosaveEntry",
+  // Reading one back is a read of the entry's own content.
+  "getEntryAutosave",
 ]);
 
 /**
@@ -604,6 +606,9 @@ export const SINGLE_DOCUMENT_METHODS = new Set([
   // A write for the same reason as the collection entry's autosave, and left
   // out of the read branch below so it resolves to `update`.
   "autosaveSingle",
+  // The matching read. Named in the read branch below, so it resolves to
+  // `read` rather than demanding update permission by sharing this set.
+  "getSingleAutosave",
 ]);
 
 /**
@@ -705,7 +710,8 @@ async function resolveAuthorization(
         method === "getSingleDocument" ||
         method === "listSingleVersions" ||
         method === "getSingleVersion" ||
-        method === "getSingleVersionDiff"
+        method === "getSingleVersionDiff" ||
+        method === "getSingleAutosave"
           ? "read"
           : "update";
       const slug = routeParams?.slug || "";

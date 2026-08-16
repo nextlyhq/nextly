@@ -110,6 +110,8 @@ import { assertSchemaVersionMatch } from "./schema-version-guard";
 import {
   assertLabelRequestValid,
   autosaveForDocument,
+  getAutosaveForDocument,
+  requireSnapshotBody,
   getVersionDiffForDocument,
   getVersionForDocument,
   restoreVersionForDocument,
@@ -323,17 +325,31 @@ export const SINGLE_VERSION_METHODS: Record<
       // rather than the URL: a Single has exactly one document and the client
       // must not name which one it is writing a recovery point for.
       const entryId = await requireLiveSingleId(slug);
-      await autosaveForDocument({
+      const item = await autosaveForDocument({
         scopeKind: "single",
         slug,
         entryId,
         user: userFromParams(p),
         params: p,
-        // The body IS the snapshot, stored verbatim. See the collection handler.
-        snapshot: body,
+        // The body IS the snapshot. See the collection handler.
+        snapshot: requireSnapshotBody(body),
         locale: typeof p.locale === "string" && p.locale ? p.locale : null,
       });
-      return respondAction("Draft recovery point saved.");
+      return respondMutation("Draft recovery point saved.", item);
+    },
+  },
+  getSingleAutosave: {
+    execute: async (_svc, p) => {
+      const slug = String(p.slug ?? "");
+      const entryId = await requireLiveSingleId(slug);
+      const item = await getAutosaveForDocument({
+        scopeKind: "single",
+        slug,
+        entryId,
+        user: userFromParams(p),
+        params: p,
+      });
+      return respondDoc(item);
     },
   },
 };

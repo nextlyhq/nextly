@@ -47,6 +47,7 @@ describe("version methods are registered", () => {
     expect(Object.keys(COLLECTION_VERSION_METHODS).sort()).toEqual([
       "autosaveEntry",
       "discardWorkingDraft",
+      "getEntryAutosave",
       "getEntryVersion",
       "getEntryVersionDiff",
       "listEntryVersions",
@@ -58,6 +59,7 @@ describe("version methods are registered", () => {
   it("exposes every single version method", () => {
     expect(Object.keys(SINGLE_VERSION_METHODS).sort()).toEqual([
       "autosaveSingle",
+      "getSingleAutosave",
       "getSingleVersion",
       "getSingleVersionDiff",
       "listSingleVersions",

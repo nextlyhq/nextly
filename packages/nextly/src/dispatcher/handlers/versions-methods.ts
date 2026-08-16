@@ -17,6 +17,7 @@ import {
   diffDocumentVersions,
   hydrateVersionSnapshot,
   redactSnapshotForUser,
+  resolveCurrentFields,
 } from "../../api/versions-access";
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import {
@@ -36,6 +37,7 @@ import { restoreVersion } from "../../domains/versions/restore-version";
 import type { VersionRow } from "../../domains/versions/versions-repository";
 import { NextlyError } from "../../errors/nextly-error";
 import type { VersionScopeKind } from "../../schemas/versions/types";
+import { stripPasswordFieldValues } from "../../shared/lib/password-fields";
 import { readAuthenticatedScope } from "../helpers/authenticated-actor";
 import type { Params } from "../types";
 
@@ -67,6 +69,32 @@ function assertPositiveInteger(value: number, path: string): void {
       ],
     });
   }
+}
+
+/**
+ * Require the autosave body to be a JSON object.
+ *
+ * The CONTENTS stay unvalidated on purpose: an author part-way through a
+ * required field still has work worth keeping, so a recovery point is allowed
+ * to be incomplete. Whether a body arrived at all is a different question. An
+ * absent one reaches the handler as `undefined`, which `JSON.stringify` turns
+ * into `undefined` rather than a string, and the snapshot serializer then
+ * raises an internal error -- answering a malformed request with a 500 instead
+ * of telling the caller what was wrong.
+ */
+export function requireSnapshotBody(body: unknown): Record<string, unknown> {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "body",
+          code: "INVALID_VALUE",
+          message: "Autosave requires a JSON object body.",
+        },
+      ],
+    });
+  }
+  return body as Record<string, unknown>;
 }
 
 /** What every version method needs to identify and authorize a document. */
@@ -658,7 +686,28 @@ export async function autosaveForDocument(
     authenticatedScope
   );
 
-  await getService("versionsService").autosave({
+  // The snapshot arrives straight from the editor, so it carries whatever the
+  // author has typed -- including a NEW password, in plaintext, which no write
+  // has hashed yet. Durable capture never faces this: it snapshots the stored
+  // row, where the value is already hashed or absent. Strip before persisting,
+  // with the same schema-driven recursive helper the version reads use, so a
+  // credential never reaches the snapshot column at all.
+  const snapshot = args.snapshot;
+  if (
+    snapshot &&
+    typeof snapshot === "object" &&
+    !Array.isArray(snapshot) &&
+    // `page` scopes hold block documents rather than user-defined fields, and
+    // field resolution has no answer for them.
+    (args.scopeKind === "collection" || args.scopeKind === "single")
+  ) {
+    const fields = await resolveCurrentFields(args.scopeKind, args.slug);
+    if (fields.length > 0) {
+      stripPasswordFieldValues(snapshot as Record<string, unknown>, fields);
+    }
+  }
+
+  return getService("versionsService").autosave({
     ref: {
       scopeKind: args.scopeKind,
       scopeSlug: args.slug,
@@ -668,11 +717,62 @@ export async function autosaveForDocument(
     // has, not what the site serves. Recording it as published would put an
     // unfinished edit into surfaces that filter on status.
     status: "draft",
-    snapshot: args.snapshot,
+    snapshot,
     locale: args.locale ?? null,
-    // An empty id is the unauthenticated shape this context uses; storing it as
-    // a string would make every anonymous author share one recovery point.
+    // An empty id is this context's unauthenticated shape, and it is normalized
+    // so the column holds one spelling of "no author" rather than two. It does
+    // NOT separate anonymous authors from each other: `autosaveWhere` matches a
+    // null author with `IS NULL`, so they would share one row. Nothing reaches
+    // here anonymously today, because the read gate above refuses a caller with
+    // no id, and relaxing that gate would need a real per-caller key first.
     createdBy: args.user.id || null,
   });
-  return { ok: true };
+}
+
+/**
+ * The caller's own recovery point for one document, or null when none exists.
+ *
+ * Authorized as a READ of the document and scoped to the caller: an autosave is
+ * unvalidated work in progress, so one author's must never be handed to
+ * another. This is the only path by which a stored autosave can be read back,
+ * since history listings exclude them and a version read addresses rows by a
+ * sequence number a recovery point deliberately does not have.
+ */
+export async function getAutosaveForDocument(
+  args: Omit<VersionMethodArgs, "locale"> & { params: Params }
+): Promise<unknown> {
+  const caller = readAccessCallerFromParams(args.params, args.user);
+
+  if (!(await canReadEntity(args.slug, caller))) {
+    throw NextlyError.notFound({
+      logContext: {
+        reason: "autosave-read-denied",
+        scopeKind: args.scopeKind,
+        scopeSlug: args.slug,
+        entryId: args.entryId,
+        userId: args.user.id,
+      },
+    });
+  }
+
+  const authenticatedScope = readAuthenticatedScope(args.params);
+  await assertVersionDocumentReadable(
+    args.scopeKind,
+    args.slug,
+    args.entryId,
+    args.user,
+    authenticatedScope
+  );
+
+  const row = await getService("versionsService").getAutosave(
+    {
+      scopeKind: args.scopeKind,
+      scopeSlug: args.slug,
+      entryId: args.entryId,
+    },
+    args.user.id || null
+  );
+  // Null rather than a 404: having no recovery point is the ordinary state, not
+  // a missing resource, and the editor asks on every open.
+  return row ?? null;
 }

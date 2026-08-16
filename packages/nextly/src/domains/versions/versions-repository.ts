@@ -11,6 +11,7 @@
  * @module domains/versions/versions-repository
  */
 
+import { toDbError } from "../../database/errors";
 import { NextlyError } from "../../errors";
 import type {
   VersionScopeKind,
@@ -90,6 +91,18 @@ export interface VersionRow {
 
 /** Metadata view of a version row (everything except the snapshot). */
 export type VersionMeta = Omit<VersionRow, "snapshot">;
+
+/**
+ * What an autosave write reports back.
+ *
+ * Taken from the values the write itself used rather than re-read afterwards:
+ * autosave runs while somebody is typing, so a confirmation SELECT on every
+ * keystroke-batch would be real cost for data the write already holds.
+ */
+export interface AutosaveWriteResult {
+  updatedAt: Date;
+  locale: string | null;
+}
 
 export class VersionsRepository {
   private readonly db: VersionsDbApi;
@@ -526,7 +539,7 @@ export class VersionsRepository {
     snapshot: unknown;
     locale?: string | null;
     createdBy?: string | null;
-  }): Promise<void> {
+  }): Promise<AutosaveWriteResult> {
     const now = new Date();
     const serializedSnapshot = this.serializeSnapshot(input.snapshot);
     const createdBy = input.createdBy ?? null;
@@ -549,33 +562,87 @@ export class VersionsRepository {
         },
         where
       );
-      return;
+      return { updatedAt: now, locale: input.locale ?? null };
     }
-    await this.db.insert(
-      TABLE,
-      {
-        id: crypto.randomUUID(),
-        scopeKind: input.ref.scopeKind,
-        scopeSlug: input.ref.scopeSlug,
-        entryId: input.ref.entryId,
-        // Null, never a number. The durable-sequence index treats a non-null
-        // value as durable, so an autosave carrying one would both consume a
-        // sequence slot and appear in history.
-        versionNo: null,
-        status: input.status,
-        isAutosave: true,
-        snapshot: serializedSnapshot,
-        // Neither applies to a recovery point: a label names a version somebody
-        // chose to keep, and a source records what a restore copied from.
-        label: null,
-        locale: input.locale ?? null,
-        sourceVersionNo: null,
-        createdBy,
-        createdAt: now,
-        updatedAt: now,
-      },
-      { returning: [] }
-    );
+    try {
+      await this.db.insert(
+        TABLE,
+        {
+          id: crypto.randomUUID(),
+          scopeKind: input.ref.scopeKind,
+          scopeSlug: input.ref.scopeSlug,
+          entryId: input.ref.entryId,
+          // Null, never a number. The durable-sequence index treats a non-null
+          // value as durable, so an autosave carrying one would both consume a
+          // sequence slot and appear in history.
+          versionNo: null,
+          status: input.status,
+          isAutosave: true,
+          snapshot: serializedSnapshot,
+          // Neither applies to a recovery point: a label names a version
+          // somebody chose to keep, and a source records what a restore copied
+          // from.
+          label: null,
+          locale: input.locale ?? null,
+          sourceVersionNo: null,
+          createdBy,
+          createdAt: now,
+          updatedAt: now,
+        },
+        { returning: [] }
+      );
+    } catch (error) {
+      // The existence check and this insert are two statements, so one author
+      // saving from two tabs can pass the check twice before either row lands.
+      // Where the unique index exists the loser is rejected here, and rejecting
+      // a PUT that is idempotent by definition would be wrong: rewrite the row
+      // the winner just inserted instead.
+      //
+      // This closes the race on Postgres only, which is where the index is
+      // declared. MySQL and SQLite cannot express a partial unique index, so
+      // there both inserts succeed and the document briefly carries two of one
+      // author's recovery points. That is bounded: both rows are the same
+      // author's own work, and `findAutosave` reads the newest, so a recovery
+      // still returns the later snapshot rather than an arbitrary one.
+      // Rethrow when the handle cannot say which engine it is: constraint
+      // codes differ per dialect, so classifying without one would be a guess,
+      // and a wrong guess here would swallow a real failure as a retry.
+      const dialect = this.db.dialect;
+      if (!dialect) throw error;
+      if (toDbError(dialect, error).kind !== "unique-violation") throw error;
+      await this.db.update(
+        TABLE,
+        {
+          snapshot: serializedSnapshot,
+          status: input.status,
+          locale: input.locale ?? null,
+          updatedAt: now,
+        },
+        where
+      );
+    }
+    return { updatedAt: now, locale: input.locale ?? null };
+  }
+
+  /**
+   * One author's current recovery point for a document, or null when they have
+   * none.
+   *
+   * Newest first rather than arbitrary: on MySQL and SQLite the insert race
+   * above can leave two rows for one author, and the later snapshot is the one
+   * that describes their work. Ordering makes that harmless instead of a
+   * coin toss.
+   */
+  async findAutosave(
+    ref: VersionRef,
+    createdBy: string | null
+  ): Promise<VersionRow | undefined> {
+    const rows = await this.db.select<VersionRow>(TABLE, {
+      where: this.autosaveWhere(ref, createdBy),
+      orderBy: [{ column: "updatedAt", direction: "desc" }],
+      limit: 1,
+    });
+    return rows[0];
   }
 
   /**

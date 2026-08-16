@@ -875,6 +875,25 @@ function parseCollectionEntryVersionRoutes(
     };
   }
 
+  // The matching read. Claimed here rather than left to the generic version
+  // read below, which would take `autosave` as a version NUMBER and answer a
+  // validation error for a path that has a real handler. Authorized as a read:
+  // it returns the caller's own recovery point and nothing else.
+  if (
+    additionalParams.length === 2 &&
+    additionalParams[1] === "autosave" &&
+    httpMethod === "GET"
+  ) {
+    routeParams.collectionName = id;
+    routeParams.entryId = subId;
+    return {
+      service: "collections",
+      operation: "single",
+      method: "getEntryAutosave",
+      routeParams,
+    };
+  }
+
   if (
     // Only `versions` or `versions/{versionNo}`; anything deeper is not a
     // route this owns and must not be silently truncated to one that is.
@@ -972,6 +991,21 @@ function parseSingleVersionRoutes(
       service: "singles",
       operation: "update",
       method: "autosaveSingle",
+      routeParams,
+    };
+  }
+
+  // The matching read, claimed here for the same reason as the collection one.
+  if (
+    subId === "autosave" &&
+    additionalParams.length === 0 &&
+    httpMethod === "GET"
+  ) {
+    routeParams.slug = id;
+    return {
+      service: "singles",
+      operation: "single",
+      method: "getSingleAutosave",
       routeParams,
     };
   }

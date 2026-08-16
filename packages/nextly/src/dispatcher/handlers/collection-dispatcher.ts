@@ -125,6 +125,8 @@ import {
   setVersionLabelForDocument,
   userFromParams,
   autosaveForDocument,
+  getAutosaveForDocument,
+  requireSnapshotBody,
 } from "./versions-methods";
 
 type CollectionsHandlerType = CollectionsHandler;
@@ -234,23 +236,34 @@ export const COLLECTION_VERSION_METHODS: Record<
   },
   autosaveEntry: {
     execute: async (_svc, p, body) => {
-      await autosaveForDocument({
+      const item = await autosaveForDocument({
         scopeKind: "collection",
         slug: String(p.collectionName ?? ""),
         entryId: String(p.entryId ?? ""),
         user: userFromParams(p),
         params: p,
-        // The body IS the snapshot. It is stored verbatim rather than validated
-        // into a shape, because a recovery point records what the author had
-        // and an author part-way through a required field still has something
-        // worth not losing.
-        snapshot: body,
+        // The body IS the snapshot. Its CONTENTS are stored unvalidated,
+        // because a recovery point records what the author had and someone
+        // part-way through a required field still has work worth not losing.
+        // That it is an object at all is a different question, and one a
+        // malformed request must be told about rather than being answered with
+        // a serialization failure.
+        snapshot: requireSnapshotBody(body),
         locale: typeof p.locale === "string" && p.locale ? p.locale : null,
       });
-      // No document echoed back. The caller already holds these values, and a
-      // response body would be one more thing to keep in step with the form on
-      // a request that runs while somebody is typing.
-      return respondAction("Draft recovery point saved.");
+      return respondMutation("Draft recovery point saved.", item);
+    },
+  },
+  getEntryAutosave: {
+    execute: async (_svc, p) => {
+      const item = await getAutosaveForDocument({
+        scopeKind: "collection",
+        slug: String(p.collectionName ?? ""),
+        entryId: String(p.entryId ?? ""),
+        user: userFromParams(p),
+        params: p,
+      });
+      return respondDoc(item);
     },
   },
   getEntryVersion: {
