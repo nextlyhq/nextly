@@ -426,6 +426,31 @@ describe("which shell F6 belongs to", () => {
     );
   });
 
+  it("still enters after a shell has been mounted and torn down", () => {
+    // The counter deciding "is this the only shell" must come back DOWN. A
+    // leak drifts it upward and never returns, which declines the entry above
+    // permanently — the same defect as the one this rule fixes, arriving from
+    // the other side and first in dev, where a hot reload remounts.
+    //
+    // Asserting the count is 1 after one mount would not catch that: it passes
+    // on a leaky counter the first time. The cycle is what separates them.
+    const first = render(
+      <BuilderShell store={memoryStore()}>
+        <p>canvas</p>
+      </BuilderShell>
+    );
+    first.unmount();
+
+    renderShell({ renderPanel: panel => <p>{panel} panel</p> });
+    (document.activeElement as HTMLElement | null)?.blur();
+
+    fireEvent.keyDown(document, { key: "F6" });
+
+    expect(document.activeElement).toBe(
+      screen.getByRole("navigation", { name: "Editor panels" })
+    );
+  });
+
   it("declines that entry when a second shell makes it ambiguous", () => {
     // With two mounted, a press from nowhere names neither — and answering it
     // anyway is decided by whichever registered last, which is how a form with
