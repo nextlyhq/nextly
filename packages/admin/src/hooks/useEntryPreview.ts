@@ -33,8 +33,21 @@ import { previewUrlApi } from "@admin/services/previewUrlApi";
  * What the panel needs is whether to draw a button and how to label it.
  */
 export interface PreviewConfig {
-  /** Whether this collection previews at all, decided when the config synced. */
+  /**
+   * Whether this collection previews at all, decided when the config synced.
+   *
+   * Written only by the code-first sync, because that is the path whose
+   * declaration — a function — cannot itself be stored.
+   */
   hasPreview?: boolean;
+  /**
+   * A UI-created collection's stored template.
+   *
+   * Read here ONLY to answer whether a preview exists. The URL is never built
+   * from it in the browser: that is the resolver's job, and interpolating it
+   * here would be the second implementation this design exists to avoid.
+   */
+  urlTemplate?: string;
   /** Whether to open the preview in a new tab. @default true */
   openInNewTab?: boolean;
   /** Custom label for the preview button. @default "Preview" */
@@ -58,6 +71,17 @@ export interface UseEntryPreviewOptions {
   getFormValues?: () => Record<string, unknown>;
   /** Told why a click could not open anything. */
   onUnavailable?: (reason: PreviewUnavailableReason) => void;
+  /**
+   * Told when the preview OPENED but could not carry the editor's unsaved
+   * edits, so it is showing the last saved version instead.
+   *
+   * Deliberately not folded into `onUnavailable`. That reports a click which
+   * produced nothing; this reports one that produced something less than was
+   * asked for. Merging them would either suppress a real warning or label a
+   * working preview as a failure — and the editor's response differs: here
+   * they can save and click again.
+   */
+  onUnsavedChangesNotSent?: () => void;
 }
 
 /**
@@ -94,6 +118,26 @@ export interface UseEntryPreviewResult {
 }
 
 // ============================================================================
+// Helpers
+// ============================================================================
+
+/**
+ * Whether `url` is served from the origin this admin is running on.
+ *
+ * Decides only whether the session-storage handoff can work: that storage is
+ * partitioned per origin, so a payload written here is unreachable from a
+ * preview page served anywhere else. Compared by parsed origin rather than by
+ * string prefix, which `https://site.example.com.evil.test` would satisfy.
+ */
+function isSameOrigin(url: string): boolean {
+  try {
+    return new URL(url).origin === window.location.origin;
+  } catch {
+    return false;
+  }
+}
+
+// ============================================================================
 // Hook
 // ============================================================================
 
@@ -115,13 +159,22 @@ export function useEntryPreview({
   entry,
   getFormValues,
   onUnavailable,
+  onUnsavedChangesNotSent,
 }: UseEntryPreviewOptions): UseEntryPreviewResult {
   const previewConfig = collection.admin?.preview;
 
-  // From the stored boolean, so the button does not flicker in after a fetch
+  // Answered from stored data, so the button does not flicker in after a fetch
   // and does not appear for a collection that has no preview at all.
+  //
+  // EITHER signal counts, because the two authoring paths store different
+  // things: code-first syncs the boolean, since its function cannot be stored,
+  // while a UI-created collection has its template stored directly and may
+  // carry no boolean at all. Requiring the boolean alone would hide a preview
+  // that a stored template plainly declares — and every row written before the
+  // boolean existed is exactly that case.
   const isPreviewAvailable = useMemo(
-    () => previewConfig?.hasPreview === true,
+    () =>
+      previewConfig?.hasPreview === true || Boolean(previewConfig?.urlTemplate),
     [previewConfig]
   );
 
@@ -194,17 +247,34 @@ export function useEntryPreview({
       // Unsaved values travel through session storage rather than the URL, so
       // the preview renders what is on screen instead of what was last saved.
       // The payload was written above; only the key is appended here.
+      //
+      // Session storage is partitioned by ORIGIN, and a resolved preview URL is
+      // now routinely on a different one — that is what a configured site URL
+      // means. The key would then name a payload the preview page cannot reach,
+      // so it is omitted and the caller is told the preview shows saved content.
+      // Appending it anyway would look like it worked and quietly show stale
+      // data, which is the failure this whole path exists to prevent.
+      const sameOrigin = isSameOrigin(resolution.url);
       const url =
-        previewKey === undefined
+        previewKey === undefined || !sameOrigin
           ? resolution.url
           : generatePreviewUrlWithData(resolution.url, previewKey);
+
+      if (previewKey !== undefined && !sameOrigin) onUnsavedChangesNotSent?.();
 
       if (target) target.location.href = url;
       else window.location.href = url;
     } catch {
       abandon("failed");
     }
-  }, [collection.name, entry, getFormValues, onUnavailable, previewConfig]);
+  }, [
+    collection.name,
+    entry,
+    getFormValues,
+    onUnavailable,
+    onUnsavedChangesNotSent,
+    previewConfig,
+  ]);
 
   return {
     isPreviewAvailable,
