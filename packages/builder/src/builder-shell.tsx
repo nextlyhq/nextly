@@ -387,6 +387,59 @@ function useDesignSystemStylesheet(
 }
 
 /**
+ * How many shells are mounted right now.
+ *
+ * Read only to decide whether "focus is nowhere in particular" identifies a
+ * shell unambiguously. With one on the page it does; with several it does not,
+ * and the tie has to be declined rather than won by whichever registered last.
+ */
+let mountedShells = 0;
+
+function useMountedShellCount(): () => number {
+  React.useEffect(() => {
+    mountedShells += 1;
+    return () => {
+      mountedShells -= 1;
+    };
+  }, []);
+  return () => mountedShells;
+}
+
+/**
+ * Whether THIS shell should act on F6 right now.
+ *
+ * The binding is registered on the document, so on a page holding a shell
+ * beside other controls — the field mount, embedded in an entry form — every
+ * shell sees every press. Eligibility therefore cannot come from viewport
+ * state alone: with several page-builder fields in one form, all of them were
+ * eligible at once and the most recently registered answered, which moved
+ * focus into an editor the author was not in.
+ *
+ * Containment is asked of the REGIONS rather than of a separate root element.
+ * They are what cycling already moves between, so a shell that contains the
+ * focus is exactly a shell one of whose regions does, and a second ref for the
+ * same question could disagree with the first.
+ *
+ * The `document.body` case is what keeps the key working from a cold page: the
+ * full Edit view owns its page and nothing inside it has focus yet, and
+ * refusing there would make F6 look broken until focus happened to land
+ * somewhere it recognised. It is allowed only while this is the sole shell,
+ * because with more than one the press names none of them.
+ */
+function shellClaimsRegionCycling(
+  map: Record<Region, HTMLElement | null> | null,
+  shellCount: number
+): boolean {
+  if (!map) return false;
+  const active = document.activeElement;
+  if (REGIONS.some(region => map[region]?.contains(active))) return true;
+  // `null` as well as `body`: a document that has never been clicked reports
+  // no active element at all in some engines, which is the same "nowhere".
+  const nowhere = active === null || active === document.body;
+  return nowhere && shellCount === 1;
+}
+
+/**
  * F6 region cycling, registered with the shared shortcut manager.
  *
  * Through the manager rather than a private key listener, because two
@@ -397,6 +450,7 @@ function useRegionCycling(
   regionRefs: React.RefObject<Record<Region, HTMLElement | null>>,
   enabled: boolean
 ): void {
+  const shellCount = useMountedShellCount();
   // Read through a ref so the binding's `when` sees the CURRENT answer. The
   // manager checks it at press time, and a value captured when the binding was
   // registered would keep reporting whatever was true then.
@@ -418,7 +472,12 @@ function useRegionCycling(
         // manager's own way of saying "not right now": a binding whose
         // condition is false is passed over and the key goes on to the next
         // layer, which is exactly the behaviour the host needs back.
-        when: () => enabledRef.current,
+        //
+        // Focus is consulted for the same reason it is passed on: a shell the
+        // author is not in should let the key reach whatever they ARE in.
+        when: () =>
+          enabledRef.current &&
+          shellClaimsRegionCycling(regionRefs.current, shellCount()),
         description: "Move to the next area of the editor",
         // The manager's default asks whether the FIRST chord carries a modifier
         // or is Escape, and answers no for a bare function key — so F6 would be

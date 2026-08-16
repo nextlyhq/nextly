@@ -383,6 +383,71 @@ describe("F6 region cycling", () => {
   });
 });
 
+describe("which shell F6 belongs to", () => {
+  /**
+   * The binding is registered on the document, so every mounted shell sees
+   * every press. What decides the answer has to be where focus IS — a shell
+   * the author is not in should let the key reach whatever they are in.
+   */
+  it("leaves the key alone when focus is in a control outside the shell", () => {
+    // The field mount's real situation: an editor embedded in an entry form,
+    // beside ordinary inputs. Enabling from viewport state alone made this
+    // press move focus into the editor from a field the author was typing in.
+    render(
+      <div>
+        <input aria-label="Page title" />
+        <BuilderShell store={memoryStore()}>
+          <p>canvas</p>
+        </BuilderShell>
+      </div>
+    );
+
+    const outside = screen.getByRole("textbox", { name: "Page title" });
+    outside.focus();
+    expect(document.activeElement).toBe(outside);
+
+    fireEvent.keyDown(outside, { key: "F6" });
+
+    expect(document.activeElement).toBe(outside);
+  });
+
+  it("still enters from a page where nothing has focus yet", () => {
+    // The positive control, and the behaviour the rule above must not cost:
+    // the full Edit view owns its page and nothing inside it has focus on
+    // load, so refusing there would make the key look broken until focus
+    // happened to land somewhere it recognised.
+    renderShell({ renderPanel: panel => <p>{panel} panel</p> });
+    (document.activeElement as HTMLElement | null)?.blur();
+
+    fireEvent.keyDown(document, { key: "F6" });
+
+    expect(document.activeElement).toBe(
+      screen.getByRole("navigation", { name: "Editor panels" })
+    );
+  });
+
+  it("declines that entry when a second shell makes it ambiguous", () => {
+    // With two mounted, a press from nowhere names neither — and answering it
+    // anyway is decided by whichever registered last, which is how a form with
+    // several page-builder fields moved focus into an arbitrary one.
+    render(
+      <div>
+        <BuilderShell store={memoryStore()}>
+          <p>first canvas</p>
+        </BuilderShell>
+        <BuilderShell store={memoryStore()}>
+          <p>second canvas</p>
+        </BuilderShell>
+      </div>
+    );
+    (document.activeElement as HTMLElement | null)?.blur();
+
+    fireEvent.keyDown(document, { key: "F6" });
+
+    expect(document.activeElement).toBe(document.body);
+  });
+});
+
 describe("an embedded host with nowhere to exit to", () => {
   it("renders no exit affordance at all", () => {
     // The editor also mounts as a FIELD inside an entry form, where the author is
