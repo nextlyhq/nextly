@@ -593,7 +593,7 @@ function checkNesting(
     path,
     code: verdict.reason,
     severity: "error",
-    message: messageForRefusal(raw.type, placement, source),
+    message: messageForRefusal(raw.type, placement, verdict.permitted),
   });
 }
 
@@ -601,19 +601,20 @@ function checkNesting(
  * Names the containers the block WILL go in, because that is the author's next
  * action. A sentence saying only that the placement is wrong leaves them to find
  * the permitted set by trying positions.
+ *
+ * Takes the restriction the REFUSAL carried, never the source. Asking the source
+ * again would be a second answer to the question the verdict already settled,
+ * and nothing requires a caller-supplied lookup to be idempotent — so a stateful
+ * or lazily-resolved one could name a set other than the one that refused this
+ * placement. Both inputs now come from the verdict, so the sentence cannot
+ * describe a position or a permitted set other than the ones that were judged.
  */
 function messageForRefusal(
   childType: string,
   placement: Placement,
-  source: NestingSource
+  permitted: readonly string[]
 ): string {
-  const permitted = source.parentsOf(childType);
-  const where =
-    Array.isArray(permitted) && permitted.length > 0
-      ? permitted.map(name => describeValue(name)).join(" or ")
-      : "certain containers";
-  // Takes the same `Placement` the verdict was decided from, so the sentence
-  // cannot describe a position other than the one that was judged.
+  const where = permitted.map(name => describeValue(name)).join(" or ");
   return placement.at === "container"
     ? `A "${describeValue(childType)}" may only sit inside ${where}, not inside "${describeValue(placement.type)}".`
     : `A "${describeValue(childType)}" may only sit inside ${where}, and a top-level node sits inside nothing.`;
