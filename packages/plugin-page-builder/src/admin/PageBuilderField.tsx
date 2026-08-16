@@ -66,7 +66,7 @@ function FieldEditorWithCss({ name, control }: PageBuilderFieldProps) {
       onDocumentChange={next => field.onChange(next)}
       onCustomCssChange={css => cssField.onChange(css)}
     >
-      <EditorSurface />
+      <EditorSurface surface={draftKeyFor("field", name)} />
     </EditorProvider>
   );
 }
@@ -84,7 +84,7 @@ function FieldEditor({ name, control }: PageBuilderFieldProps) {
       remotePatterns={remotePatterns}
       onDocumentChange={next => field.onChange(next)}
     >
-      <EditorSurface />
+      <EditorSurface surface={draftKeyFor("field", name)} />
     </EditorProvider>
   );
 }

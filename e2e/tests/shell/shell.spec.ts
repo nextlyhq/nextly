@@ -220,7 +220,7 @@ test.describe("a viewport below the supported width", () => {
     await page.goto("/builder-shell");
 
     await expect(page.getByText(/needs a wider screen/i)).toBeVisible();
-    await expect(page.getByRole("main", { name: "Canvas" })).toHaveCount(0);
+    await expect(page.getByRole("region", { name: "Canvas" })).toHaveCount(0);
     // The way out has to survive every degraded state.
     await expect(
       page.getByRole("button", { name: "Exit editor" })

@@ -56,7 +56,7 @@ function regionLocator(page: Page, region: keyof typeof REGION_NAMES): Locator {
     case "rail":
       return page.getByRole("navigation", { name: REGION_NAMES.rail });
     case "canvas":
-      return page.getByRole("main", { name: REGION_NAMES.canvas });
+      return page.getByRole("region", { name: REGION_NAMES.canvas });
     case "inspector":
       return page.getByRole("complementary", { name: REGION_NAMES.inspector });
     case "panel":
