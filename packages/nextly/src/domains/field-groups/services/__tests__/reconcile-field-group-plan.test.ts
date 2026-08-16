@@ -678,6 +678,25 @@ describe("planFieldGroupReconcile", () => {
       ]);
     });
 
+    /**
+     * The key must BE the skeleton's key, not merely contain it.
+     *
+     * A composite `(id, some_column)` leaves `id` marked as part of a key while enforcing
+     * uniqueness over the pair — so the same component id can repeat whenever the other value
+     * differs, which is precisely the guarantee `id` exists to provide.
+     */
+    it("refuses a main table whose primary key carries extra columns", () => {
+      const live = liveTableFor(stored);
+      const extra = live.columns.find(c => c.name === "title");
+      if (extra) extra.primaryKey = true;
+
+      const result = plan({ storedFields: stored, liveMain: live });
+
+      expect(result.blockers).toEqual([
+        expect.objectContaining({ kind: "structural-column-missing" }),
+      ]);
+    });
+
     // A column can survive while the constraint that made it meaningful is dropped: `id` present
     // but no longer the key means duplicate component rows, which every name-based check reads as
     // healthy. Taken from the skeleton's own `primaryKey`, so it covers whatever is marked next.
@@ -747,6 +766,67 @@ describe("planFieldGroupReconcile", () => {
       if (nullableInSkeleton) nullableInSkeleton.nullable = false;
 
       const result = plan({ storedFields: stored, liveMain: live });
+
+      expect(result.blockers).toEqual([]);
+    });
+
+    /**
+     * The system columns' DEFAULTS are load-bearing rather than cosmetic: the generated runtime
+     * schema declares them as DATABASE defaults, so Drizzle omits those columns from an INSERT and
+     * the database supplies the value. A dropped default fails a NOT NULL insert outright, or
+     * silently stores NULL where a zero was intended.
+     *
+     * The skeleton records no default for any system column, so the expectation has to come from
+     * the creator — supplied here the way the service supplies it.
+     */
+    it("refuses a system column whose database default was dropped", () => {
+      const live = liveTableFor(stored);
+      const order = live.columns.find(
+        c => c.name === STORAGE_FORMAT.columns.order
+      );
+      if (order) order.default = undefined;
+
+      const result = planFieldGroupReconcile({
+        storedFields: stored,
+        storedLocalized: false,
+        dialect: DIALECT,
+        tableName: TABLE,
+        liveMain: live,
+        liveCompanion: null,
+        structuralColumnDefaults: new Map([
+          [STORAGE_FORMAT.columns.order, "0"],
+        ]),
+      });
+
+      expect(result.blockers).toEqual([
+        expect.objectContaining({
+          columnName: STORAGE_FORMAT.columns.order,
+          kind: "structural-column-missing",
+        }),
+      ]);
+    });
+
+    // The negative control, and the one that matters most here: the dialects spell the same default
+    // differently from the DDL that wrote it, so a raw string compare would refuse every healthy
+    // table. This is the pair that proves the comparison runs through the normaliser.
+    it("accepts a system default that matches after normalisation", () => {
+      const live = liveTableFor(stored);
+      const order = live.columns.find(
+        c => c.name === STORAGE_FORMAT.columns.order
+      );
+      if (order) order.default = "0";
+
+      const result = planFieldGroupReconcile({
+        storedFields: stored,
+        storedLocalized: false,
+        dialect: DIALECT,
+        tableName: TABLE,
+        liveMain: live,
+        liveCompanion: null,
+        structuralColumnDefaults: new Map([
+          [STORAGE_FORMAT.columns.order, "0"],
+        ]),
+      });
 
       expect(result.blockers).toEqual([]);
     });
