@@ -481,33 +481,101 @@ export class VersionsRepository {
     });
   }
 
-  /**
-   * Autosave rows for one document, newest-first.
-   *
-   * Ordered by time rather than by sequence, because an autosave carries no
-   * `version_no` at all: the invariant in {@link insertVersion} requires it to
-   * be null, so there is no number to sort on. Time is the only ordering these
-   * rows have.
-   *
-   * `id` is included as a final tiebreak. Two autosaves can land in the same
-   * transaction clock tick, and an order that leaves them interchangeable makes
-   * "the newest N" ambiguous — which would let retention keep one and delete
-   * the other on one run and swap them on the next.
-   */
-  async listAutosavesForPrune(ref: VersionRef): Promise<PrunableVersion[]> {
-    return this.db.select<PrunableVersion>(TABLE, {
-      columns: ["id", "versionNo", "status"],
-      where: {
-        and: [
-          ...this.docWhere(ref),
-          { column: "isAutosave", op: "=", value: true },
-        ],
-      },
-      orderBy: [
-        { column: "createdAt", direction: "desc" },
-        { column: "id", direction: "desc" },
+  /** Where the ONE rolling autosave row for a document and author lives. */
+  private autosaveWhere(
+    ref: VersionRef,
+    createdBy: string | null
+  ): VersionsWhere {
+    return {
+      and: [
+        ...this.docWhere(ref),
+        { column: "isAutosave", op: "=", value: true },
+        createdBy === null
+          ? { column: "createdBy", op: "IS NULL" }
+          : { column: "createdBy", op: "=", value: createdBy },
       ],
+    };
+  }
+
+  /**
+   * Insert or update the rolling autosave snapshot for one document and author.
+   *
+   * There is exactly ONE such row per (document, author). Editing rewrites it in
+   * place, so `updatedAt` advances and the snapshot always holds the newest
+   * recovery point. Nothing accumulates: an editing session costs one row, not
+   * one row per pause, so history never has to be pruned back.
+   *
+   * Keyed by AUTHOR as well as document because two people editing the same
+   * document have two different recovery points. A single row per document would
+   * let one author's snapshot overwrite the other's, and the loser would recover
+   * somebody else's work.
+   *
+   * The live row and the working draft are both untouched. An autosave is a
+   * recovery point, never a statement about what should be served or published,
+   * so it can hold a half-finished edit safely.
+   *
+   * Enforced HERE rather than left to the unique index, because that index is
+   * declared for Postgres only: it is keyed on `created_by`, which is populated,
+   * so it has no nullable column to lean on the way the durable-sequence index
+   * does, and neither MySQL nor SQLite can express a partial unique index. The
+   * index is a backstop where it exists; this is the mechanism everywhere.
+   */
+  async upsertAutosave(input: {
+    ref: VersionRef;
+    status: VersionStatus;
+    snapshot: unknown;
+    locale?: string | null;
+    createdBy?: string | null;
+  }): Promise<void> {
+    const now = new Date();
+    const serializedSnapshot = this.serializeSnapshot(input.snapshot);
+    const createdBy = input.createdBy ?? null;
+    const where = this.autosaveWhere(input.ref, createdBy);
+    // Project only the id: the existence check must not transfer the (possibly
+    // large) snapshot of the row it is about to overwrite.
+    const existing = await this.db.select<{ id: string }>(TABLE, {
+      columns: ["id"],
+      where,
+      limit: 1,
     });
+    if (existing[0]) {
+      await this.db.update(
+        TABLE,
+        {
+          snapshot: serializedSnapshot,
+          status: input.status,
+          locale: input.locale ?? null,
+          updatedAt: now,
+        },
+        where
+      );
+      return;
+    }
+    await this.db.insert(
+      TABLE,
+      {
+        id: crypto.randomUUID(),
+        scopeKind: input.ref.scopeKind,
+        scopeSlug: input.ref.scopeSlug,
+        entryId: input.ref.entryId,
+        // Null, never a number. The durable-sequence index treats a non-null
+        // value as durable, so an autosave carrying one would both consume a
+        // sequence slot and appear in history.
+        versionNo: null,
+        status: input.status,
+        isAutosave: true,
+        snapshot: serializedSnapshot,
+        // Neither applies to a recovery point: a label names a version somebody
+        // chose to keep, and a source records what a restore copied from.
+        label: null,
+        locale: input.locale ?? null,
+        sourceVersionNo: null,
+        createdBy,
+        createdAt: now,
+        updatedAt: now,
+      },
+      { returning: [] }
+    );
   }
 
   /**
