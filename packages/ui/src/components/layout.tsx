@@ -32,6 +32,23 @@ const COLS: Record<Cols, string> = {
   6: "grid-cols-6",
 };
 
+/**
+ * Container-query column counts, used when `responsive` is set.
+ *
+ * The grid starts at one column and widens at the content container's
+ * breakpoint rather than the viewport's. The admin content region is 328px
+ * narrower than the window whenever both sidebars are open, so a viewport
+ * breakpoint reports space the form does not have. Literal class names, not
+ * template strings, so Tailwind's scanner emits them.
+ */
+const RESPONSIVE_COLS: Record<Cols, string> = {
+  1: "grid-cols-1",
+  2: "grid-cols-1 @2xl/content:grid-cols-2",
+  3: "grid-cols-1 @2xl/content:grid-cols-3",
+  4: "grid-cols-1 @2xl/content:grid-cols-4",
+  6: "grid-cols-1 @2xl/content:grid-cols-6",
+};
+
 /** @experimental */
 export interface StackProps extends HTMLAttributes<HTMLDivElement> {
   /** Main-axis direction. Default `col`. */
@@ -65,16 +82,26 @@ export interface GridProps extends HTMLAttributes<HTMLDivElement> {
   cols?: Cols;
   /** Gap between cells. Default `4`. */
   gap?: Gap;
+  /**
+   * Collapse to one column in a narrow container. Off by default so existing
+   * callers keep the fixed column count they were written against.
+   */
+  responsive?: boolean;
 }
 
-/** Simple fixed-column grid.
+/** Simple fixed-column grid, or a container-responsive one via `responsive`.
  * @experimental
  */
 export const Grid = forwardRef<HTMLDivElement, GridProps>(
-  ({ cols = 2, gap = 4, className, ...props }, ref) => (
+  ({ cols = 2, gap = 4, responsive = false, className, ...props }, ref) => (
     <div
       ref={ref}
-      className={cn("grid", COLS[cols], GAP[gap], className)}
+      className={cn(
+        "grid",
+        responsive ? RESPONSIVE_COLS[cols] : COLS[cols],
+        GAP[gap],
+        className
+      )}
       {...props}
     />
   )

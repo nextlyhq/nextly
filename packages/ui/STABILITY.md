@@ -131,6 +131,11 @@ tier. It has no footer slot — a form commits as one document, so its action be
 to the page rather than to a section. No first-party plugin exercises it yet, so it
 has not met the graduation bar.
 
+`Grid` gained an opt-in `responsive` prop: off by default (so every existing caller
+keeps its fixed column count), and when set the grid starts at one column and widens
+on the content container's own breakpoint rather than the viewport's. No first-party
+plugin exercises this prop yet, so `Grid` stays on the experimental list above.
+
 ## Peer dependency policy
 
 `@nextlyhq/ui` is a **peer** dependency of `@nextlyhq/admin`, not a bundled one, and must
