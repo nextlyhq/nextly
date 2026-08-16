@@ -34,14 +34,16 @@ import { defineBlock } from "@nextlyhq/blocks-engine";
 
 import type { PageContext } from "../context";
 
+import {
+  COLUMN_BLOCK,
+  COLUMN_DEFAULT_PROPS,
+  COLUMN_VERSION,
+  COLUMNS_BLOCK,
+} from "./column";
 import { renderContainer } from "./container";
 import type { ContainerProps } from "./container";
 
-/** The block name a `core/columns` slot accepts, in one place. */
-export const COLUMN_BLOCK = "core/column";
-
-/** The block name a `core/column` may sit inside, in one place. */
-export const COLUMNS_BLOCK = "core/columns";
+export { COLUMN_BLOCK, COLUMNS_BLOCK } from "./column";
 
 /**
  * How many columns a freshly placed row starts with.
@@ -53,26 +55,40 @@ export const COLUMNS_BLOCK = "core/columns";
 const INITIAL_COLUMNS = 2;
 
 /**
- * A column node for the initial template, distinct per index.
+ * The id prefix marking a template node as a PLACEHOLDER.
+ *
+ * A template describes what to create, not a thing that exists, so an id here
+ * is a slot for a real one rather than an identity. **An expansion path must
+ * mint a fresh id per node per instance** — two rows on one page seeded with
+ * the same literal ids would collide, and the engine reports that as
+ * `duplicate-node-id` on the second row.
+ *
+ * Named rather than inlined so a consumer can assert it never reaches a stored
+ * document. `template` currently has NO reader anywhere in the repository, so
+ * the requirement is stated here for whoever writes the first one.
+ */
+export const TEMPLATE_PLACEHOLDER_ID = "core-columns-placeholder";
+
+/**
+ * A column node for the initial template.
  *
  * Returns `BlockNode` rather than a shape typed by `ContainerProps`: a stored
  * node's props are an open record, and `ContainerProps` is a named interface,
- * which TypeScript will not treat as one. The literal below is checked against
- * the block's own prop names by `column.tsx`'s schema at validation time —
- * which is the layer that owns that question — rather than by a cast here.
+ * which TypeScript will not treat as one. The literal is checked against the
+ * block's own prop names by validation — the layer that owns that question —
+ * rather than by a cast here.
+ *
+ * **The version and props are IMPORTED from `column.tsx`, never restated.**
+ * A template that seeds nodes at a version or with defaults the block no
+ * longer declares makes row-seeded columns start in a different schema state
+ * from columns inserted directly, and nothing would report the divergence.
  */
 function templateColumn(index: number): BlockNode {
   return {
-    // Deterministic, because a template is expanded on READ as well as on
-    // insert. A random id here would differ between the server and the client
-    // render of the same stored document, and the id drives the scoped CSS
-    // class — so the two would disagree about which rules apply and the page
-    // would hydrate mismatched. `normalizeLegacySlots` learned this the
-    // expensive way with `crypto.randomUUID()`.
-    id: `core-columns-template-${index}`,
+    id: `${TEMPLATE_PLACEHOLDER_ID}-${index}`,
     type: COLUMN_BLOCK,
-    version: 1,
-    props: { as: "div", contained: false },
+    version: COLUMN_VERSION,
+    props: { ...COLUMN_DEFAULT_PROPS },
   };
 }
 

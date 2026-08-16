@@ -9,9 +9,9 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { column, COLUMN_BLOCK, COLUMNS_BLOCK } from "./column";
+import { columns, TEMPLATE_PLACEHOLDER_ID } from "./columns";
 import { coreBlocks } from "./index";
-import { column } from "./column";
-import { columns, COLUMN_BLOCK, COLUMNS_BLOCK } from "./columns";
 
 describe("the columns pair", () => {
   describe("the nesting rule, both halves", () => {
@@ -58,16 +58,49 @@ describe("the columns pair", () => {
       expect(new Set(ids).size).toBe(ids.length);
     });
 
-    it("gives each seeded column a STABLE id across expansions", () => {
-      // A template is expanded on read as well as on insert, and the id drives
-      // the scoped class. A non-deterministic id renders differently on the
-      // server and the client, so the page hydrates with the two disagreeing
-      // about which rules apply. `normalizeLegacySlots` shipped exactly this
-      // defect with `crypto.randomUUID()`.
-      const first = (columns.slots?.children.template ?? []).map(n => n.id);
-      const second = (columns.slots?.children.template ?? []).map(n => n.id);
+    it("marks every seeded id as a PLACEHOLDER", () => {
+      // A template describes what to create, not a thing that exists. Two rows
+      // on one page seeded from the same literal ids collide, and the engine
+      // reports `duplicate-node-id` on the second — so an expansion path must
+      // mint a fresh id per node per instance. Asserting the prefix is what
+      // lets a future consumer assert these never reach a stored document.
+      for (const node of columns.slots?.children.template ?? []) {
+        expect(node.id.startsWith(TEMPLATE_PLACEHOLDER_ID)).toBe(true);
+      }
+    });
 
-      expect(second).toEqual(first);
+    it("seeds columns at the version the column block DECLARES", () => {
+      // Restating the version here would let a row seed columns in a schema
+      // state the block no longer declares, so a row-seeded column and a
+      // directly-inserted one would start differently with nothing reporting
+      // it. Asserting equality against the definition is what couples them.
+      for (const node of columns.slots?.children.template ?? []) {
+        expect(node.version).toBe(column.version);
+      }
+    });
+
+    it("seeds columns with the column block's OWN defaults", () => {
+      // Same divergence one field over. `defaultProps` is the single
+      // declaration; the template must not carry a second copy of it.
+      for (const node of columns.slots?.children.template ?? []) {
+        expect(node.props).toEqual(column.defaultProps);
+      }
+    });
+  });
+
+  describe("a column behaves like a flex item", () => {
+    it("can grow, shrink, and shrink BELOW its content", () => {
+      // Without these a column is an ordinary flex item — `flex: 0 1 auto`
+      // and `min-width: auto` — so an empty seeded column collapses to
+      // nothing, a populated one sizes from content instead of sharing the
+      // row, and one long unbroken child overflows the row. A row whose
+      // columns vanish on insert is not a usable default.
+      //
+      // `minWidth: 0` is asserted separately from `flex` because it is the
+      // part that stops the overflow, and a fix that dropped only it would
+      // leave the visible defect intact while the flex assertion stayed green.
+      expect(column.baseStyles?.base?.base?.flex).toBe("1 1 240px");
+      expect(column.baseStyles?.base?.base?.minWidth).toBe(0);
     });
   });
 
