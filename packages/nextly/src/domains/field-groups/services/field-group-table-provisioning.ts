@@ -70,15 +70,30 @@ export function registerComponentRuntimeSchema(
         })
       : null;
 
+    /**
+     * Register the pair through whichever sink is available.
+     *
+     * 🔴 Both tables, always. A localized field group's reads and writes go through the COMPANION,
+     * so registering only the main table leaves the half that actually serves translated values
+     * stale — and a caller that reports this as a completed refresh then tells an operator the
+     * group is usable when the localized half is not. Written once and applied to both sinks
+     * because the two branches answer the same question, and the fallback previously answered it
+     * differently while returning the same verdict.
+     */
+    const registerBoth = (
+      register: (name: string, table: unknown) => void
+    ): void => {
+      register(tableName, runtimeTable);
+      if (companion) {
+        register(companion.companionTableName, companion.table);
+      }
+    };
+
     const registry = getSchemaRegistryFromDI();
     if (registry) {
-      registry.registerDynamicSchema(tableName, runtimeTable);
-      if (companion) {
-        registry.registerDynamicSchema(
-          companion.companionTableName,
-          companion.table
-        );
-      }
+      registerBoth((name, table) =>
+        registry.registerDynamicSchema(name, table)
+      );
       return { registered: true };
     }
 
@@ -90,8 +105,11 @@ export function registerComponentRuntimeSchema(
         };
       }
     ).tableResolver;
-    if (resolver && typeof resolver.registerDynamicSchema === "function") {
-      resolver.registerDynamicSchema(tableName, runtimeTable);
+    const fallbackRegister = resolver?.registerDynamicSchema;
+    if (typeof fallbackRegister === "function") {
+      registerBoth((name, table) =>
+        fallbackRegister.call(resolver, name, table)
+      );
       return { registered: true };
     }
 
