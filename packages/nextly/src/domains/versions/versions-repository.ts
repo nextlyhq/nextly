@@ -618,16 +618,19 @@ export class VersionsRepository {
         {
           and: [
             ...(where.and ?? []),
-            // Inequality against the value this read OBSERVED, not `<` against
-            // a clock. SQLite stores this column as integer epoch SECONDS, so
-            // a rewrite inside the same second serializes identically and `<`
-            // would match nothing -- silently dropping the newest snapshot
-            // while still reporting success. What the clause must prevent is
-            // writing over a row that changed since it was read, and that is
-            // what inequality says, at any clock resolution.
+            // EQUALITY against the value this read observed: apply only while
+            // the row still holds it, which is what compare-and-set means. A
+            // concurrent writer changes the value, this matches nothing, and
+            // the slower write is dropped rather than overwriting newer work.
+            //
+            // Not `<` against a clock: SQLite stores this column as integer
+            // epoch SECONDS, so a rewrite inside the same second serializes
+            // identically and an ordering comparison would match nothing even
+            // with no contention, silently dropping every autosave after the
+            // first.
             {
               column: "updatedAt",
-              op: "!=" as const,
+              op: "=" as const,
               value: existing[0].updatedAt,
             },
           ],

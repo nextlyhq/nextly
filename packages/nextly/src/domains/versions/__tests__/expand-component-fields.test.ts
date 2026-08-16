@@ -201,4 +201,23 @@ describe("stripPasswordsThroughComponents", () => {
     expect(node).toMatchObject({ label: "outer" });
     expect(node.child).toMatchObject({ label: "inner" });
   });
+
+  it("refuses rather than silently skipping an unresolved component", () => {
+    // `resolveComponentFieldMap` records a component only when the lookup
+    // returned fields, so an unknown slug is ABSENT from the map. Treating
+    // absence as "no fields" would descend into that value stripping nothing
+    // and leave any password inside it in the snapshot -- a fail-open in the
+    // one place that must fail closed.
+    const fields = [f({ name: "creds", type: "component", component: "gone" })];
+    const entry: Record<string, unknown> = { creds: { secret: "plaintext" } };
+
+    expect(() =>
+      stripPasswordsThroughComponents(
+        entry,
+        fields,
+        new Map<string, FieldConfig[]>(),
+        strip
+      )
+    ).toThrow();
+  });
 });

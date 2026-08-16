@@ -123,11 +123,13 @@ describe("VersionsRepository.upsertAutosave", () => {
     // this row, and without it the slower request overwrites the newer
     // snapshot and stamps it newer still.
     //
-    // `!=` against the OBSERVED value rather than `<` against a clock: SQLite
-    // stores this column as integer epoch seconds, so a rewrite within the
-    // same second compares equal and `<` would silently match nothing.
+    // EQUALITY against the observed value, which is the DIRECTION of a
+    // compare-and-set: apply only while the row still holds what was read.
+    // Inverting it to `!=` makes every uncontended write match nothing and
+    // silently do nothing, so the operator is pinned here rather than left to
+    // read correctly at a glance.
     expect(conditions).toContainEqual(
-      expect.objectContaining({ column: "updatedAt", op: "!=" })
+      expect.objectContaining({ column: "updatedAt", op: "=" })
     );
     // And nothing else: an extra condition would narrow the lookup in a way
     // this test would otherwise not notice.

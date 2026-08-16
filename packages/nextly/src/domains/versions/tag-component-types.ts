@@ -17,6 +17,7 @@
  */
 
 import type { FieldConfig } from "../../collections/fields/types";
+import { NextlyError } from "../../errors";
 import { storageTypeToken } from "../../shared/lib/plugin-storage";
 import {
   clearFieldGroupType,
@@ -543,7 +544,20 @@ export function stripPasswordsThroughComponents(
   value: unknown,
   fields: FieldConfig[],
   componentFields: Map<string, FieldConfig[]>,
-  strip: (entry: Record<string, unknown>, fields: FieldConfig[]) => void
+  strip: (entry: Record<string, unknown>, fields: FieldConfig[]) => void,
+  /**
+   * Called with a slug the map does not carry. `resolveComponentFieldMap`
+   * records a component only when the lookup RETURNED fields, so an unknown
+   * slug is simply absent -- and treating absence as "no fields" would descend
+   * into that value stripping nothing, leaving any password inside it in the
+   * snapshot. Absence is missing information, never permission, so the caller
+   * decides and the default refuses.
+   */
+  onUnresolvedComponent: (slug: string) => void = slug => {
+    throw NextlyError.internal({
+      logContext: { reason: "unresolved-component-schema", slug },
+    });
+  }
 ): void {
   if (!value || typeof value !== "object") return;
 
@@ -551,7 +565,13 @@ export function stripPasswordsThroughComponents(
   // against the same field list.
   if (Array.isArray(value)) {
     for (const row of value) {
-      stripPasswordsThroughComponents(row, fields, componentFields, strip);
+      stripPasswordsThroughComponents(
+        row,
+        fields,
+        componentFields,
+        strip,
+        onUnresolvedComponent
+      );
     }
     return;
   }
@@ -577,13 +597,20 @@ export function stripPasswordsThroughComponents(
       // only strip a value another candidate names the same, never miss one
       // the actual component declares.
       const inner: FieldConfig[] = [];
-      for (const slug of slugs)
-        inner.push(...(componentFields.get(slug) ?? []));
+      for (const slug of slugs) {
+        const resolved = componentFields.get(slug);
+        if (resolved === undefined) {
+          onUnresolvedComponent(slug);
+          continue;
+        }
+        inner.push(...resolved);
+      }
       stripPasswordsThroughComponents(
         entry[name],
         inner,
         componentFields,
-        strip
+        strip,
+        onUnresolvedComponent
       );
       continue;
     }
@@ -594,7 +621,8 @@ export function stripPasswordsThroughComponents(
         entry[name],
         children as FieldConfig[],
         componentFields,
-        strip
+        strip,
+        onUnresolvedComponent
       );
     }
   }
