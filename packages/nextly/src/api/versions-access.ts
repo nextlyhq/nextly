@@ -18,12 +18,18 @@
 import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import type { FieldConfig } from "../collections/fields/types";
 import { getService } from "../di";
+import { container } from "../di/container";
+import type { FieldGroupDataService } from "../domains/field-groups/services/field-group-data-service";
 import { checkSingleAccess } from "../domains/singles";
 import type { UserContext } from "../domains/singles/types";
 import { computeVersionDiff } from "../domains/versions/diff";
 import type { VersionDiff } from "../domains/versions/diff";
 import { hydrateDiffReferences } from "../domains/versions/diff-references";
 import { hydrateSnapshotReferences } from "../domains/versions/snapshot-references";
+import {
+  resolveComponentFieldMap,
+  stripPasswordsThroughComponents,
+} from "../domains/versions/tag-component-types";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import type {
@@ -388,7 +394,27 @@ export async function redactSnapshotForUser(
   // that rule existed — would otherwise hand back a value the live read hides.
   const fields = await resolveCurrentFields(scopeKind, slug);
   if (fields.length > 0) {
-    stripPasswordFieldValues(entry, fields);
+    // Through component REFERENCES as well. A `component` field carries only a
+    // slug, so a walker given the top-level list alone sees a leaf: a password
+    // declared inside a referenced component would be handed back even though
+    // the live read hides it. Same reasoning as the field converted to
+    // `password` after the fact -- the CURRENT schema decides, wherever the
+    // field is declared.
+    const dataService = container.has("fieldGroupDataService")
+      ? container.get<FieldGroupDataService>("fieldGroupDataService")
+      : null;
+    const componentFields = dataService
+      ? await resolveComponentFieldMap(fields, componentSlug =>
+          dataService.getComponentFields(componentSlug)
+        )
+      : new Map<string, FieldConfig[]>();
+
+    stripPasswordsThroughComponents(
+      entry,
+      fields,
+      componentFields,
+      stripPasswordFieldValues
+    );
   }
 
   await applyFieldReadAccess({
