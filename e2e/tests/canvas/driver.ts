@@ -715,18 +715,24 @@ const INSET_APPROACH_PX = 4;
 const EDGE_SETTLE_ATTEMPTS = 3;
 
 /**
- * The longest a zone edge may still be moving after the pointer enters it.
+ * The longest a zone edge may still be moving after the pointer enters it, for a driver that
+ * declares nothing.
  *
- * The canvas animates a drop zone's height and margin over 100ms when it becomes
- * the active target, and an animation is CONTINUOUS: two brackets taken back to
- * back can quantize to the same whole pixel while the edge is still travelling
- * inside it. Agreement between adjacent samples is therefore necessary and not
- * sufficient, and no purely positional method can close that — "has an animation
- * finished" is a question about an interval.
+ * An animation is CONTINUOUS: two brackets taken back to back can quantize to the same whole pixel
+ * while the edge is still travelling inside it. Agreement between adjacent samples is therefore
+ * necessary and not sufficient, and no purely positional method can close that — "has an animation
+ * finished" is a question about an interval. So this is a clock, deliberately, paired with the
+ * agreement check: the wait covers the animation, the agreement confirms it is over.
  *
- * So this is a clock, deliberately, and it is the canvas's own transition
- * duration rather than a guess. Paired with the agreement check: the wait covers
- * the animation, the agreement confirms it is over.
+ * It is a FALLBACK and it is generous on purpose. A driver that declares its own allowance has
+ * measured its canvas; one that declares nothing has not, and this is the only thing standing
+ * between an unmeasured canvas and a bracket taken mid-animation. It is therefore tuned to no
+ * canvas in particular — an earlier version of this comment justified the number with the page
+ * builder's 100ms zone transition, which made a shared default read as a fact about one caller and
+ * invited lowering it when that caller's animation went away.
+ *
+ * Understating it is self-punishing rather than self-serving: measurements come back stale and the
+ * assertions built on them fail. That asymmetry is what makes it safe to leave high.
  */
 const DEFAULT_GEOMETRY_SETTLE_MS = 120;
 
