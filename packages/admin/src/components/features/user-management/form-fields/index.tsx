@@ -2,6 +2,7 @@
 
 import {
   Checkbox,
+  FieldShell,
   Input,
   Label,
   RadioGroup,
@@ -133,6 +134,10 @@ export function UserFormFields({
   const showPasswordField = !isInviteMode;
 
   return (
+    // Not a `Grid` candidate: this is the page's own two-column split, not a
+    // row of same-sized fields, and it needs an asymmetric row/column gap
+    // (`gap-y-12`, `gap-x-[10rem]`) that `Grid`'s single `gap` prop — capped
+    // at `8` (2rem) — cannot express. Left as its original viewport grid.
     <div className="grid grid-cols-1 md:grid-cols-2 gap-y-12 md:gap-x-[10rem] w-full">
       {/* Left Column - User Details */}
       <div className="space-y-4">
@@ -141,43 +146,37 @@ export function UserFormFields({
         </h3>
 
         {/* Full Name Field */}
-        <div>
-          <Label htmlFor="fullName" className="mb-2">
-            Full Name <span className="text-destructive">*</span>
-          </Label>
+        <FieldShell
+          label={
+            <>
+              Full Name <span className="text-destructive">*</span>
+            </>
+          }
+          error={errors.fullName?.message}
+        >
           <Input
-            id="fullName"
             placeholder="John Doe"
-            aria-invalid={!!errors.fullName}
             aria-required="true"
             {...register("fullName")}
           />
-          {errors.fullName && (
-            <p className="text-sm text-destructive mt-1">
-              {errors.fullName.message}
-            </p>
-          )}
-        </div>
+        </FieldShell>
 
         {/* Email Field */}
-        <div>
-          <Label htmlFor="email" className="mb-2">
-            Email <span className="text-destructive">*</span>
-          </Label>
+        <FieldShell
+          label={
+            <>
+              Email <span className="text-destructive">*</span>
+            </>
+          }
+          error={errors.email?.message}
+        >
           <Input
-            id="email"
             type="email"
             placeholder="john.doe@nextly.local"
-            aria-invalid={!!errors.email}
             aria-required="true"
             {...register("email")}
           />
-          {errors.email && (
-            <p className="text-sm text-destructive mt-1">
-              {errors.email.message}
-            </p>
-          )}
-        </div>
+        </FieldShell>
 
         {/* Sign-in method (create only). The choice changes what the form
             means: an invite link the person redeems, or a password the admin
@@ -241,49 +240,54 @@ export function UserFormFields({
           </div>
         )}
 
-        {/* Password Field - always in edit; create only when setting one now */}
+        {/* Password Field - always in edit; create only when setting one now.
+            Rendered via FieldShell's render-function children: the reveal
+            button sits beside the Input inside one wrapping div, so the
+            single-element clone form would attach the id to that div instead
+            of the real control. */}
         {showPasswordField && (
-          <div>
-            <Label htmlFor="password" className="mb-2">
-              Password{" "}
-              {isCreateMode && <span className="text-destructive">*</span>}
-              {!isCreateMode && " (optional)"}
-            </Label>
-            <div className="relative">
-              <Input
-                id="password"
-                type={showPassword ? "text" : "password"}
-                placeholder="Min 8 chars, uppercase, lowercase, number, special (@$!%*?&#.)"
-                aria-invalid={!!errors.password}
-                aria-required={isCreateMode}
-                {...register("password")}
-                className="pr-10"
-              />
-              <button
-                type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                aria-label={showPassword ? "Hide password" : "Show password"}
-              >
-                {showPassword ? (
-                  <EyeOff className="h-4 w-4" />
-                ) : (
-                  <Eye className="h-4 w-4" />
-                )}
-              </button>
-            </div>
-            {!isCreateMode && (
-              <p className="text-xs text-muted-foreground mt-1">
-                Only enter a new password if you want to reset it. Leave empty
-                to keep the current password.
-              </p>
+          <FieldShell
+            label={
+              <>
+                Password{" "}
+                {isCreateMode && <span className="text-destructive">*</span>}
+                {!isCreateMode && " (optional)"}
+              </>
+            }
+            description={
+              !isCreateMode
+                ? "Only enter a new password if you want to reset it. Leave empty to keep the current password."
+                : undefined
+            }
+            error={errors.password?.message}
+          >
+            {({ id, describedBy, invalid }) => (
+              <div className="relative">
+                <Input
+                  id={id}
+                  aria-describedby={describedBy}
+                  aria-invalid={invalid}
+                  type={showPassword ? "text" : "password"}
+                  placeholder="Min 8 chars, uppercase, lowercase, number, special (@$!%*?&#.)"
+                  aria-required={isCreateMode}
+                  {...register("password")}
+                  className="pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                >
+                  {showPassword ? (
+                    <EyeOff className="h-4 w-4" />
+                  ) : (
+                    <Eye className="h-4 w-4" />
+                  )}
+                </button>
+              </div>
             )}
-            {errors.password && (
-              <p className="text-sm text-destructive mt-1">
-                {errors.password.message}
-              </p>
-            )}
-          </div>
+          </FieldShell>
         )}
       </div>
 
