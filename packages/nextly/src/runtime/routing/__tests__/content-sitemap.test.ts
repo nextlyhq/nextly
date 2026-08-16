@@ -163,6 +163,41 @@ describe("contentSitemapEntries", () => {
     warn.mockRestore();
   });
 
+  it("stays silent at a SHARD boundary, which is not a cut", async () => {
+    // A non-final shard reads one URL past its limit exactly as a truncated
+    // whole sitemap does, and the URL it read is published by the next shard.
+    // No count separates the two — only the caller knows which this is, and
+    // supplying an offset at all is how they say so.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const page = [
+      { slug: "a" },
+      { slug: "b" },
+      { slug: "c" },
+      { slug: "d" },
+      { slug: "e" },
+    ];
+
+    for (const shard of [0, 1, 2]) {
+      await contentSitemapEntries({
+        ...BASE,
+        limit: 2,
+        offset: shard * 2,
+        nextly: reader({ pages: [page] }).reader,
+      });
+    }
+    expect(warn).not.toHaveBeenCalled();
+
+    // The positive control, and it is what stops "never warn" passing this: an
+    // UNSHARDED call over the same data still reports the cut.
+    await contentSitemapEntries({
+      ...BASE,
+      limit: 2,
+      nextly: reader({ pages: [page] }).reader,
+    });
+    expect(warn).toHaveBeenCalledOnce();
+    warn.mockRestore();
+  });
+
   it("carries a timestamp only when the caller names a field holding one", async () => {
     const { reader: r, calls } = reader({
       pages: [

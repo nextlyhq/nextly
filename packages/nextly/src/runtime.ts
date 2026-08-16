@@ -105,6 +105,7 @@ export {
   type RenderContext,
   type NextlyContentReader,
   type ResolvedContext,
+  type ContentSitemapOptions,
   type NextlySitemapEntry,
   type NextlySitemapOptions,
   type NextlyRobotsOptions,

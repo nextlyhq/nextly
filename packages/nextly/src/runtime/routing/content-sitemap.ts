@@ -172,6 +172,16 @@ export async function contentSitemapEntries(
     nextly,
   } = options;
 
+  // Whether the caller SUPPLIED an offset, not what it is. Passing one at all —
+  // including the `0` shard zero gets — is the declaration that this call is one
+  // shard of a deliberate split, and a boundary between shards is not a cut.
+  //
+  // No value of `entries.length` can separate the two: a non-final shard reads
+  // one URL past its limit exactly as a truncated whole sitemap does, and the
+  // URL it read is published by the next shard. Only the caller knows which
+  // situation this is, so only the caller can say.
+  const sharded = options.offset !== undefined;
+
   if (limit <= 0) return [];
 
   const reader = nextly ?? getNextly();
@@ -262,10 +272,12 @@ export async function contentSitemapEntries(
         });
         // One PAST the limit before reporting a cut. Stopping at exactly
         // `limit` cannot tell a site with that many pages from one with more,
-        // so a complete sitemap — and every full shard of a correctly split
-        // one — would announce that pages were omitted. The extra URL is the
-        // evidence that something was, and it is dropped rather than emitted.
-        if (entries.length > limit) return truncated(entries, limit);
+        // so a complete sitemap would announce that pages were omitted. The
+        // extra URL is the evidence that some were, and it is dropped rather
+        // than emitted.
+        if (entries.length > limit) {
+          return sharded ? entries.slice(0, limit) : truncated(entries, limit);
+        }
       }
 
       if (!result.meta.hasNext) break;
