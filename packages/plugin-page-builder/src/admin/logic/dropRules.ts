@@ -7,6 +7,8 @@
  * independent — neither is derivable from the other — and a block is only placeable where both
  * agree.
  */
+import { canNest, type NestingRefusal } from "@nextlyhq/blocks-engine";
+
 import {
   isContainerType,
   isDeclaredHere,
@@ -45,6 +47,25 @@ export type DropCheck =
   | { ok: true; reason?: undefined }
   | { ok: false; reason: DropReason };
 
+/**
+ * The editor's word for each refusal the nesting rule can produce.
+ *
+ * A total `Record` rather than a narrowing check, because the two vocabularies are allowed to
+ * diverge and only this table may decide how. Narrowing on the one reason `canNest` produces today
+ * would fail OPEN the moment the engine adds another — the drop would simply be permitted — while
+ * an exhaustive map stops compiling until somebody chooses the editor's word for it.
+ *
+ * `restricted-at-root` maps to the same reason rather than gaining one of its own, and that is a
+ * judgement about the SENTENCE rather than about the rule. "This block can only go inside certain
+ * containers" is exactly what an author needs to hear about a block that restricts its parents and
+ * is sitting where there are none. `canNest` cannot return it — only `canBeRoot` can, and nothing
+ * here calls that — so this arm is unreachable today and costs nothing while it stays so.
+ */
+const NESTING_REASONS: Record<NestingRefusal, DropReason> = {
+  "wrong-parent": "wrong-parent",
+  "restricted-at-root": "wrong-parent",
+};
+
 export function canDrop(
   parentType: string,
   slotName: string,
@@ -76,11 +97,19 @@ export function canDrop(
     return { ok: false, reason: "not-allowed-in-slot" };
   }
   // The child's own restriction, which the parent's allowlist cannot express. A slot that takes
-  // anything still may not be a home for a block that only means something under one parent, and
-  // asking here rather than at each caller is what makes drag, Insert, paste and reorder agree.
-  const parents = parentsOf(childType, registry);
-  if (parents && !parents.includes(parentType)) {
-    return { ok: false, reason: "wrong-parent" };
+  // anything still may not be a home for a block that only means something under one parent.
+  //
+  // ASKED of the engine rather than answered here. The same rule decides whether a stored document
+  // is valid and whether a drag may land, and two implementations of it agree on the day they are
+  // written — so this calls `canNest` rather than re-reading `parentsOf` itself. What stays here is
+  // the editor's own concern: which RESOLVER the rule reads through, since this package resolves a
+  // definition first and falls back to declared structure so a plugin-contributed block is not
+  // reported as unrestricted.
+  const verdict = canNest(childType, parentType, {
+    parentsOf: type => parentsOf(type, registry),
+  });
+  if (!verdict.allowed) {
+    return { ok: false, reason: NESTING_REASONS[verdict.reason] };
   }
   return { ok: true };
 }
