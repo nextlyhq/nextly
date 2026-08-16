@@ -972,10 +972,20 @@ describe("planFieldGroupReconcile", () => {
   describe("type width", () => {
     const stored: ReconcilableField[] = [{ name: "title", type: "text" }];
 
-    function planWithWidths(liveType: string, expected: string) {
+    function planWithWidths(
+      liveType: string,
+      expected: string,
+      liveModifier?: string
+    ) {
       const live = liveTableFor(stored);
       const col = live.columns.find(c => c.name === "title");
-      if (col) col.type = liveType;
+      if (col) {
+        col.type = liveType;
+        // The modifier is carried in its OWN field, because the live type string cannot always hold
+        // it: PostgreSQL introspection reports `udt_name`, which never does. A fixture that only
+        // set the type would be modelling a snapshot no PostgreSQL database produces.
+        if (liveModifier !== undefined) col.typeModifier = liveModifier;
+      }
       return plan({
         storedFields: stored,
         liveMain: live,
@@ -984,7 +994,7 @@ describe("planFieldGroupReconcile", () => {
     }
 
     it("refuses when both sides report a width and they differ", () => {
-      const result = planWithWidths("varchar(32)", "VARCHAR(255)");
+      const result = planWithWidths("varchar", "VARCHAR(255)", "32");
       expect(result.blockers).toEqual([
         expect.objectContaining({
           fieldName: "title",
@@ -994,7 +1004,7 @@ describe("planFieldGroupReconcile", () => {
     });
 
     it("accepts equal widths", () => {
-      expect(planWithWidths("varchar(255)", "VARCHAR(255)").blockers).toEqual(
+      expect(planWithWidths("varchar", "VARCHAR(255)", "255").blockers).toEqual(
         []
       );
     });
