@@ -257,11 +257,11 @@ export class FieldGroupSchemaService {
     const indexStatements: string[] = [];
 
     const parentIndexName = `${STORAGE_FORMAT.indexPrefix}${tableName}_parent`;
-    const parentColumns = [
-      `${this.q}${STORAGE_FORMAT.columns.parentId}${this.q}`,
-      `${this.q}${STORAGE_FORMAT.columns.parentTable}${this.q}`,
-      `${this.q}${STORAGE_FORMAT.columns.parentField}${this.q}`,
-    ].join(", ");
+    // From the shared constant rather than listed here, so the index this CREATES and any check
+    // asking whether a live table still has it cannot disagree about which columns or what order.
+    const parentColumns = STORAGE_FORMAT.parentIndexColumns
+      .map(column => `${this.q}${column}${this.q}`)
+      .join(", ");
 
     if (this.dialect === "mysql") {
       indexStatements.push(
@@ -763,11 +763,53 @@ export class FieldGroupSchemaService {
     return mapped as unknown as DataFieldConfig;
   }
 
+  /**
+   * The column type this dialect gives `field`, spelled exactly as the CREATE TABLE spells it.
+   *
+   * The same value `generateColumnSQL` puts into its column definition, exposed so a caller that
+   * needs only the type can ask for it instead of recovering it from rendered SQL. Recovering it
+   * that way loses information the moment a type is more than one word — `DOUBLE PRECISION` reads
+   * back as `DOUBLE` — and no amount of parsing makes a printed statement a reliable channel for a
+   * value the function already returns.
+   *
+   * `null` where this service would emit no column at all, which is the same condition that makes
+   * `generateColumnSQL` skip a field.
+   */
+  columnTypeFor(field: DataFieldConfig): string | null {
+    return this.getColumnType(this.asMappableField(field));
+  }
+
+  /**
+   * The DEFAULT expression this dialect gives `field`, or `null` where it writes none.
+   *
+   * The companion of {@link columnTypeFor}, and exposed for the same reason: a caller comparing a
+   * live column against what this service would have created needs the value, and the only other
+   * way to obtain it is to render a statement and read it back out. `null` is a real answer here —
+   * most field types carry no default — which is why it is distinct from the "could not decide"
+   * a caller may need to represent separately.
+   */
+  columnDefaultFor(field: DataFieldConfig): string | null {
+    const mappable = this.asMappableField(field);
+    if (!isCheckboxField(mappable) || mappable.defaultValue === undefined) {
+      return null;
+    }
+    // SQLite has no boolean literal, so the same declaration is stored as 1/0 there.
+    const value =
+      this.dialect === "sqlite"
+        ? mappable.defaultValue
+          ? 1
+          : 0
+        : mappable.defaultValue;
+    return String(value);
+  }
+
   private generateColumnSQL(field: DataFieldConfig): string | null {
     if (!("name" in field) || !field.name) return null;
 
     const columnName = this.toSnakeCase(field.name);
-    const columnType = this.getColumnType(this.asMappableField(field));
+    // Through the public accessor, so the type a caller can ask for and the type that reaches the
+    // table are the same expression rather than two that agree until one is edited.
+    const columnType = this.columnTypeFor(field);
     if (!columnType) return null;
 
     const parts = [`${this.q}${columnName}${this.q}`, columnType];
@@ -776,14 +818,11 @@ export class FieldGroupSchemaService {
       parts.push("NOT NULL");
     }
 
-    if (isCheckboxField(field) && field.defaultValue !== undefined) {
-      const defaultVal =
-        this.dialect === "sqlite"
-          ? field.defaultValue
-            ? 1
-            : 0
-          : field.defaultValue;
-      parts.push(`DEFAULT ${String(defaultVal)}`);
+    // Same accessor rule as the type above: one expression decides the default a caller can ask
+    // about and the default the table actually gets.
+    const columnDefault = this.columnDefaultFor(field);
+    if (columnDefault !== null) {
+      parts.push(`DEFAULT ${columnDefault}`);
     }
 
     return parts.join(" ");

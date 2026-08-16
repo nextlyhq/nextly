@@ -59,6 +59,20 @@ export const STORAGE_FORMAT = {
   indexPrefix: "idx_",
   uniqueIndexPrefix: "uq_",
 
+  /**
+   * Columns of the one index every component data table carries, in index order.
+   *
+   * ORDERED deliberately: this arrangement is what serves a lookup by parent id, and a differently
+   * ordered index over the same three columns does not. Stated once here because two very different
+   * consumers need the same answer — the DDL that CREATES the index, and any check asking whether a
+   * live table still has it — and a check that restated the list would agree until one side moved.
+   *
+   * Deliberately NOT the whole set of indexes a component table can carry: per-field indexes come
+   * from the field definitions, and the migrate snapshot builder additionally models a `created_at`
+   * index that the table-creating DDL does not emit. This is only the structural one.
+   */
+  parentIndexColumns: ["_parent_id", "_parent_table", "_parent_field"],
+
   /** Directory segment recorded in a registry row's `config_path`. */
   configPathDir: "components",
 

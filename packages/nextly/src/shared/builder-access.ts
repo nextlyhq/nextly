@@ -96,6 +96,10 @@ const BUILDER_METHODS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
       "deleteComponent",
       "previewComponentSchemaChanges",
       "applyComponentSchemaChanges",
+      // Rewrites the stored definition, so it is builder surface exactly as the apply is: where
+      // the builder cannot run, the repair it feeds cannot either — and leaving it out would let
+      // a direct call rewrite schema on a deployment whose builder is disabled.
+      "reconcileComponent",
     ]),
   ],
 ]);

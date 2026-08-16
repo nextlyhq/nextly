@@ -337,17 +337,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       });
     }
 
-    const updateData: Record<string, unknown> = {
-      updated_at: this.formatDateForDb(),
-    };
-
-    if (data.label !== undefined) {
-      updateData.label = data.label;
-    }
-
-    if (data.description !== undefined) {
-      updateData.description = data.description;
-    }
+    const updateData = this.buildComponentUpdateColumns(data);
 
     // 🔴 The version advances when the PHYSICAL SHAPE changes, not when `fields` happens to be
     // present. `schema_version` is an optimistic lock: `assertSchemaVersionMatch` rejects a save
@@ -366,6 +356,65 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       data.localized !== undefined &&
       (data.localized === true) !== (existing.localized === true);
 
+    if (
+      data.fields ||
+      localizationChanged ||
+      options?.invalidateSchemaVersion
+    ) {
+      // One increment however many reasons applied: the row moved to the next version, once.
+      updateData.schema_version = existing.schemaVersion + 1;
+    }
+
+    try {
+      const results = await this.adapter.update<DynamicFieldGroupRecord>(
+        await this.resolveRegistryTableName(),
+        updateData,
+        this.whereEq("slug", slug),
+        { returning: "*" }
+      );
+
+      if (results.length === 0) {
+        // Generic "Not found."; slug in logContext.
+        throw NextlyError.notFound({ logContext: { slug } });
+      }
+
+      this.logger.info("Component updated", { slug });
+
+      return this.deserializeRecord(results[0]);
+    } catch (error) {
+      // Preserve already-mapped NextlyErrors (the notFound above, or a
+      // forbidden from the locked-check). Anything else is a raw DB error.
+      // Normalise raw driver errors first so unique/fk/etc. produce the right kind.
+      if (NextlyError.is(error)) {
+        throw error;
+      }
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
+    }
+  }
+
+  /**
+   * The column writes an update carries, shared by the unconditional and the conditional update.
+   *
+   * Everything EXCEPT `schema_version`: the two callers derive the version differently — one from
+   * the row it just read, one from the version its caller's decision was computed against — and
+   * that arithmetic is the whole difference between them, so it stays at the call sites while the
+   * column mapping lives once here.
+   */
+  private buildComponentUpdateColumns(
+    data: Partial<DynamicFieldGroupInsert>
+  ): Record<string, unknown> {
+    const updateData: Record<string, unknown> = {
+      updated_at: this.formatDateForDb(),
+    };
+
+    if (data.label !== undefined) {
+      updateData.label = data.label;
+    }
+
+    if (data.description !== undefined) {
+      updateData.description = data.description;
+    }
+
     if (data.fields) {
       updateData.fields = JSON.stringify(data.fields);
       updateData.migration_status = data.migrationStatus || "pending";
@@ -375,15 +424,6 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       // say — a write that failed after its DDL committed — unable to record it, so a row went on
       // describing a shape the tables no longer have with nothing marking the divergence.
       updateData.migration_status = data.migrationStatus;
-    }
-
-    if (
-      data.fields ||
-      localizationChanged ||
-      options?.invalidateSchemaVersion
-    ) {
-      // One increment however many reasons applied: the row moved to the next version, once.
-      updateData.schema_version = existing.schemaVersion + 1;
     }
 
     if (data.admin !== undefined) {
@@ -415,26 +455,115 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       updateData.table_name = data.tableName;
     }
 
+    return updateData;
+  }
+
+  /**
+   * Update a Component only if its `schema_version` is still the one the caller decided from.
+   *
+   * A compare-and-set: the WHERE clause carries the expected version, so the DATABASE decides in
+   * one statement whether the row still is what the caller believed — there is no read between the
+   * decision and the write for another writer, or a transient failure, to slip through. The two
+   * callers this exists for both hold a decision computed against a version they read earlier: a
+   * divergence marker that must not stamp a row the original write reached after all, and a
+   * reconcile whose repair must not overwrite an edit that landed while it was planning.
+   *
+   * `{ matched: false }` is a THIRD outcome, not an error: the row at that version no longer
+   * exists, because it advanced or because it was deleted. The two are indistinguishable without
+   * another read — which is exactly the dependency this method removes — and every caller treats
+   * them the same way: the decision is stale, do not write, re-derive. It is not squeezed into the
+   * NOT_FOUND throw, whose meaning here would be false for the commoner (advanced) case.
+   *
+   * The version ALWAYS advances, to `expectedSchemaVersion + 1`, computed against the value the
+   * WHERE pins rather than a fresh read.
+   *
+   * 🔴 That advance is also what keeps the matched count trustworthy on MySQL, which counts CHANGED
+   * rows rather than matched ones: a matching write always moves `schema_version`, so matched
+   * implies changed — see `DrizzleAdapter.updateCount`. `updated_at` moves on every write too and
+   * masks the distinction in ordinary use, which is why the version is the one to rely on: it is
+   * strictly monotonic, while two writes inside a single timestamp tick carry the SAME `updated_at`
+   * and would leave an all-identical payload counting zero. Do not remove either without the other.
+   *
+   * No returned row, deliberately. On a dialect without RETURNING a returning read re-runs the
+   * WHERE — whose version this write just moved past — so a landed write would read back as
+   * missing. The caller already knows the whole write it requested; there is nothing a read-back
+   * could add except a second query able to fail after the first committed.
+   */
+  async updateComponentIfVersion(
+    slug: string,
+    data: Partial<DynamicFieldGroupInsert>,
+    expectedSchemaVersion: number,
+    options?: UpdateComponentOptions
+  ): Promise<{ matched: true; newSchemaVersion: number } | { matched: false }> {
+    this.logger.debug("Conditionally updating Component", {
+      slug,
+      expectedSchemaVersion,
+    });
+
+    const existing = await this.getComponent(slug);
+
+    if (existing.locked && options?.source !== "code") {
+      // Generic FORBIDDEN; slug and source go to logContext only.
+      throw NextlyError.forbidden({
+        logContext: {
+          reason: "component-locked",
+          slug,
+          source: options?.source ?? "UI",
+        },
+      });
+    }
+
+    const updateData = this.buildComponentUpdateColumns(data);
+    const newSchemaVersion = expectedSchemaVersion + 1;
+    updateData.schema_version = newSchemaVersion;
+
     try {
-      const results = await this.adapter.update<DynamicFieldGroupRecord>(
+      const matched = await this.adapter.updateCount(
         await this.resolveRegistryTableName(),
         updateData,
-        this.whereEq("slug", slug),
-        { returning: "*" }
+        {
+          and: [
+            { column: "slug", op: "=", value: slug },
+            // 🔴 The Drizzle PROPERTY name, not the database column name. A WHERE clause is
+            // resolved against the table object's properties, while the SET payload above is
+            // mapped from snake_case by `mapDataToColumnNames` — so the two halves of this one
+            // statement legitimately spell the same column differently, and `schema_version` here
+            // raises "Column not found" rather than matching nothing.
+            {
+              column: "schemaVersion",
+              op: "=",
+              value: expectedSchemaVersion,
+            },
+            // 🔴 The lock state belongs IN the predicate, not only in the read above. Ownership can
+            // change without the version moving — a code sync claiming an existing UI group sets
+            // `locked` through the admin-only branch — so a caller that read the row unlocked still
+            // satisfies a version-only predicate and overwrites a definition that is now owned by a
+            // config file. Pinning it here makes the check and the write one statement, which is
+            // the whole reason this method exists rather than a read followed by an update.
+            //
+            // Only for a non-code caller: `source: "code"` IS the owner, and the read above already
+            // permits it, so requiring `locked = false` there would refuse every code sync.
+            // Safe as an equality because the column is NOT NULL with a default, so there is no
+            // third state for it to miss.
+            ...(options?.source !== "code"
+              ? [{ column: "locked", op: "=" as const, value: false }]
+              : []),
+          ],
+        }
       );
 
-      if (results.length === 0) {
-        // Generic "Not found."; slug in logContext.
-        throw NextlyError.notFound({ logContext: { slug } });
+      if (matched === 0) {
+        this.logger.info("Component conditional update did not match", {
+          slug,
+          expectedSchemaVersion,
+        });
+        return { matched: false };
       }
 
       this.logger.info("Component updated", { slug });
-
-      return this.deserializeRecord(results[0]);
+      return { matched: true, newSchemaVersion };
     } catch (error) {
-      // Preserve already-mapped NextlyErrors (the notFound above, or a
-      // forbidden from the locked-check). Anything else is a raw DB error.
-      // Normalise raw driver errors first so unique/fk/etc. produce the right kind.
+      // Preserve already-mapped NextlyErrors; anything else is a raw DB error.
       if (NextlyError.is(error)) {
         throw error;
       }
@@ -621,39 +750,66 @@ export class FieldGroupRegistryService extends BaseRegistryService<
             schemaHash,
           });
           result.created.push(config.slug);
-        } else if (
-          repairedTableName !== undefined ||
-          !schemaHashesMatch(schemaHash, existing.schemaHash) ||
-          (config.localized === true) !== (existing.localized === true)
-        ) {
-          await this.updateComponent(
-            config.slug,
-            {
-              label: config.label,
-              description: config.description,
-              fields: config.fields,
-              admin: config.admin,
-              configPath: config.configPath,
-              schemaHash,
-              locked: true,
-              localized: config.localized === true,
-              tableName: repairedTableName,
-            },
-            { source: "code" }
-          );
-          result.updated.push(config.slug);
-        } else if (this.adminConfigChanged(config.admin, existing.admin)) {
-          await this.updateComponent(
-            config.slug,
-            {
-              admin: config.admin,
-              locked: true,
-            },
-            { source: "code" }
-          );
-          result.updated.push(config.slug);
         } else {
-          result.unchanged.push(config.slug);
+          // 🔴 Clear a `diverged` mark BEFORE deciding what this sync writes, because that state
+          // is otherwise a dead end for a code-managed group: the admin refuses it for being
+          // locked and this path is refused for being diverged, so neither direction can reach it.
+          // The sync is the right caller — it holds the config file, which IS the definition for a
+          // locked group — and `fromCode` is what lets the repair past the lock check.
+          //
+          // Best effort, and deliberately so: the repair describes the row against its tables,
+          // while the write below describes it against the config file. If the repair cannot
+          // decide (it refuses on genuinely ambiguous tables) the error is RECORDED and the sync
+          // continues to the next component, leaving the mark in place rather than failing every
+          // remaining component behind one unrepairable row.
+          if (existing.migrationStatus === "diverged") {
+            try {
+              const { reconcileFieldGroup } = await import(
+                "./field-group-reconcile-service"
+              );
+              await reconcileFieldGroup({
+                registry: this,
+                adapter: this.adapter,
+                logger: this.logger,
+                slug: config.slug,
+                fromCode: true,
+              });
+              this.logger.info(
+                "[FieldGroups] Cleared a diverged mark on a code-managed field group",
+                { slug: config.slug }
+              );
+            } catch (reconcileError) {
+              const detail =
+                reconcileError instanceof Error
+                  ? reconcileError.message
+                  : String(reconcileError);
+              this.logger.error(
+                "[FieldGroups] Could not clear the diverged mark on a code-managed field group",
+                { slug: config.slug, error: detail }
+              );
+              result.errors.push({ slug: config.slug, error: detail });
+              continue;
+            }
+          }
+          // 🔴 The row is RE-READ when the repair above rewrote it, because the decision below
+          // compares the config against the record and the record is no longer the one in hand.
+          // The repair writes fields, hash, localization and version from the LIVE TABLES; the
+          // stale copy still describes what the config happens to say, so the comparison reports
+          // "unchanged" and no table work is queued — leaving the mark cleared over a registry that
+          // describes the tables and a config that describes something else, which is the exact
+          // divergence this sync exists to close.
+          const settled =
+            existing.migrationStatus === "diverged"
+              ? await this.getComponent(config.slug)
+              : existing;
+
+          await this.syncExistingCodeFirstComponent({
+            config,
+            existing: settled,
+            schemaHash,
+            repairedTableName,
+            result,
+          });
         }
       } catch (error) {
         result.errors.push({
@@ -663,7 +819,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       }
     }
 
-    this.logger.info("Code-first Component sync completed", {
+    this.logger.info("Code-first Component sync complete", {
       created: result.created.length,
       updated: result.updated.length,
       unchanged: result.unchanged.length,
@@ -671,6 +827,56 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     });
 
     return result;
+  }
+
+  /**
+   * Write the config file's definition onto a component the registry already holds.
+   *
+   * Extracted so the divergence repair above reads as one step rather than being buried in the
+   * branch it guards; the decision of WHAT to write is unchanged.
+   */
+  private async syncExistingCodeFirstComponent(args: {
+    config: CodeFirstComponentConfig;
+    existing: DynamicFieldGroupRecord;
+    schemaHash: string;
+    repairedTableName: string | undefined;
+    result: SyncComponentResult;
+  }): Promise<void> {
+    const { config, existing, schemaHash, repairedTableName, result } = args;
+    if (
+      repairedTableName !== undefined ||
+      !schemaHashesMatch(schemaHash, existing.schemaHash) ||
+      (config.localized === true) !== (existing.localized === true)
+    ) {
+      await this.updateComponent(
+        config.slug,
+        {
+          label: config.label,
+          description: config.description,
+          fields: config.fields,
+          admin: config.admin,
+          configPath: config.configPath,
+          schemaHash,
+          locked: true,
+          localized: config.localized === true,
+          tableName: repairedTableName,
+        },
+        { source: "code" }
+      );
+      result.updated.push(config.slug);
+    } else if (this.adminConfigChanged(config.admin, existing.admin)) {
+      await this.updateComponent(
+        config.slug,
+        {
+          admin: config.admin,
+          locked: true,
+        },
+        { source: "code" }
+      );
+      result.updated.push(config.slug);
+    } else {
+      result.unchanged.push(config.slug);
+    }
   }
 
   /**

@@ -1410,6 +1410,25 @@ function parseComponentRoutes(
     };
   }
 
+  // POST /api/field-groups/schema/[slug]/reconcile → repair the stored definition to describe the
+  // live tables. Classified as `update`: it writes the registry row, so it takes the same
+  // authorization as the other definition writes — a reader must not be able to rewrite a
+  // definition by way of repairing it.
+  if (
+    id === "schema" &&
+    subresource &&
+    subId === "reconcile" &&
+    httpMethod === "POST"
+  ) {
+    routeParams.slug = subresource;
+    return {
+      service: "field-groups",
+      operation: "update",
+      method: "reconcileComponent",
+      routeParams,
+    };
+  }
+
   const slug = id;
 
   // GET /api/field-groups → list all components

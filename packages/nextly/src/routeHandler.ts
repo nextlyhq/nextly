@@ -775,7 +775,18 @@ async function resolveAuthorization(
 
   // --- Field groups → manage-settings ---
   if (service === "field-groups") {
-    const action = getActionFromMethod(httpMethod);
+    // 🔴 The HTTP verb is a PROXY for the action, and these two methods are where the proxy is
+    // wrong: both travel over POST while rewriting an EXISTING definition. Verb-derived
+    // authorization therefore demands `create` from a principal who may only update — and, in the
+    // direction that matters, lets a create-only principal rewrite definitions they may not touch.
+    // The route parser already classifies both as `update`; this map is what makes the permission
+    // agree with that classification rather than re-deriving a second, contradictory answer.
+    const FIELD_GROUP_ACTION_OVERRIDES: Readonly<Record<string, string>> = {
+      applyComponentSchemaChanges: "update",
+      reconcileComponent: "update",
+    };
+    const action =
+      FIELD_GROUP_ACTION_OVERRIDES[method] ?? getActionFromMethod(httpMethod);
     return requireAnyPermission(req, [
       { action, resource: "settings" },
       { action: "manage", resource: "settings" },

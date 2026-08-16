@@ -222,6 +222,23 @@ function affectedRowCount(result: unknown): number {
   return 0;
 }
 
+/**
+ * The fragment of Drizzle's update builder `updateCount` uses, spelled dialect-neutrally.
+ *
+ * Declared rather than reached for through a permissive generic: the three dialects' builders carry
+ * different type parameters but agree on this chain, so naming just the chain keeps the compiler
+ * checking the call while leaving the parts that genuinely differ outside the contract. `set` is
+ * awaitable on its own, which is what makes an update with no WHERE a complete statement rather
+ * than a builder waiting for one.
+ */
+interface UpdateCapableDb {
+  update(table: unknown): {
+    set(values: Record<string, unknown>): PromiseLike<unknown> & {
+      where(condition: unknown): PromiseLike<unknown>;
+    };
+  };
+}
+
 export abstract class DrizzleAdapter {
   // ============================================================
   // Abstract Methods (MUST be implemented by subclasses)
@@ -1346,6 +1363,58 @@ export abstract class DrizzleAdapter {
         }
 
         return [] as T[];
+      } catch (error) {
+        throw this.handleQueryError(error, "update", table);
+      }
+    }
+
+    throw this.createDatabaseError(
+      "query",
+      `Table "${table}" not found in schema registry. Ensure setTableResolver() has been called during boot.`,
+      undefined
+    );
+  }
+
+  /**
+   * Update records in a table and report how many rows the statement affected.
+   *
+   * The count is the whole return value, mirroring `delete`. `update` cannot answer this: without
+   * `returning` it discards the driver's count, and WITH `returning` on a dialect that lacks
+   * RETURNING it re-SELECTs using the same WHERE — so a conditional update that just changed a
+   * column named in that WHERE reads back zero rows and a write that landed reports as unmatched.
+   * Reading the driver's own count has no second query to disagree with the first.
+   *
+   * 🔴 MySQL reports CHANGED rows, not matched rows: an UPDATE that matches a row but writes values
+   * identical to what it holds counts zero. A caller using this as a compare-and-set must therefore
+   * include a column the write always moves — a version bump, a timestamp with enough resolution —
+   * so that matched implies changed. Postgres (`rowCount`) and SQLite (`changes`) count matched
+   * rows and do not need the precaution, which is exactly why it cannot be dropped: the dialect
+   * where the distinction exists is the one with no RETURNING to fall back on.
+   */
+  async updateCount(
+    table: string,
+    data: Record<string, unknown>,
+    where: WhereClause,
+    executor?: unknown
+  ): Promise<number> {
+    const tableObj = this.getTableObject(table);
+    if (tableObj) {
+      try {
+        // Transaction executor when supplied, otherwise the pooled instance — narrowed to the
+        // fragment of the update builder this method uses rather than the whole dialect-specific
+        // surface, which is the same seam `getDrizzle<{ execute }>()` above takes. `where` returns
+        // a thenable rather than a further builder, so awaiting either branch is what the type
+        // says: the statement is issued whether or not a condition was added.
+        const db = (executor ??
+          this.getDrizzle<UpdateCapableDb>()) as UpdateCapableDb;
+        const mappedData = this.mapDataToColumnNames(tableObj, data);
+        const statement = db.update(tableObj).set(mappedData);
+
+        const whereCondition = buildDrizzleWhere(tableObj as never, where);
+        const result = await (whereCondition
+          ? statement.where(whereCondition)
+          : statement);
+        return affectedRowCount(result);
       } catch (error) {
         throw this.handleQueryError(error, "update", table);
       }
