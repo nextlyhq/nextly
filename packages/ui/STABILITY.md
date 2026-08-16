@@ -119,6 +119,11 @@ expect them to move.
 `@experimental` as entry points: the functions are trivial and unlikely to change, but
 the subpaths are new and unexercised by any third party.
 
+`FieldShell` (with `FieldShellProps` and `FieldWidth`) is the atom of the form-layout
+kit: a labelled row that caps its control's width to a named token rather than a
+one-off measurement. No first-party plugin exercises it yet, so it has not met the
+graduation bar.
+
 ## Peer dependency policy
 
 `@nextlyhq/ui` is a **peer** dependency of `@nextlyhq/admin`, not a bundled one, and must

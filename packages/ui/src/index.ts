@@ -543,3 +543,8 @@ export { parseKeys } from "./lib/shortcuts/key-spec";
  * uses rather than re-splitting the string.
  */
 export type { KeyChord, KeySequence } from "./lib/shortcuts/key-spec";
+
+/** @experimental Form layout. No first-party plugin has exercised it in production yet. */
+export { FieldShell } from "./components/field-shell";
+/** @experimental */
+export type { FieldShellProps, FieldWidth } from "./types/form-layout";
