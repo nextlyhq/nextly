@@ -281,9 +281,17 @@ test.describe("a narrow CONTAINER inside a wide window", () => {
     await expect(page.getByText(/needs a wider screen/i)).toBeVisible();
 
     // Grow the CONTAINER, not the window: the window never changed.
+    //
+    // Grown to JUST above the threshold rather than comfortably past it. The
+    // narrow notice carries padding the shell root does not, so a measurement
+    // read from the CONTENT box reports this container narrower than it is
+    // while the notice is up, and recovery into that band never happens. A
+    // target of `+200` clears the threshold with or without the padding
+    // subtracted, so it cannot tell the two implementations apart — which is
+    // exactly what an earlier version of this test failed to do.
     await page.getByTestId("shell-container").evaluate((node, width) => {
       node.style.width = `${width}px`;
-    }, MIN_SHELL_WIDTH + 200);
+    }, MIN_SHELL_WIDTH + 20);
 
     await expect(page.getByRole("region", { name: "Canvas" })).toBeVisible();
     await expect(page.getByText(/needs a wider screen/i)).toHaveCount(0);

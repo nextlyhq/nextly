@@ -221,15 +221,40 @@ function useFitsFullShell(): [(node: HTMLElement | null) => void, boolean] {
     const next = new ResizeObserver(entries => {
       const entry = entries[entries.length - 1];
       if (entry === undefined) return;
-      // `contentRect`, not `getBoundingClientRect`: a transformed ancestor —
-      // this editor has canvas zoom — scales the latter, and the number is
-      // being compared against a minimum expressed in CSS pixels.
+      // The BORDER box, and this is load-bearing rather than a detail.
       //
+      // The observer follows whichever root is visible, and those two roots do
+      // not have the same padding: the narrow notice is `p-6` and the shell
+      // root has none. `contentRect` excludes padding, so the same container
+      // measures 48px narrower while the notice is up — which reopens the
+      // deadlock this hook exists to close, just inside a 48px band. A
+      // container sitting between the threshold and the threshold plus its
+      // padding would show the notice for ever after narrowing once, while a
+      // fresh render at that same width shows the editor. Behaviour that
+      // depends on how a width was ARRIVED AT is the defect, not the width.
+      //
+      // Reading the border box makes the measurement a property of the
+      // container rather than of whichever root happens to be observing it, so
+      // padding can change on either without moving the threshold. Like
+      // `contentRect` and unlike `getBoundingClientRect`, it is a layout size,
+      // so a transformed ancestor — this editor has canvas zoom — does not
+      // scale it against a minimum expressed in CSS pixels.
+      //
+      // `offsetWidth` is the same box, for anything not reporting
+      // `borderBoxSize`; falling back to `contentRect` would reinstate exactly
+      // the padding sensitivity above.
+      const border = entry.borderBoxSize?.[0]?.inlineSize;
+      const width =
+        border ??
+        (entry.target instanceof HTMLElement
+          ? entry.target.offsetWidth
+          : entry.contentRect.width);
+
       // The comparison itself comes from `shell-state`, which exports and tests
       // it. Repeating `>= MIN_SHELL_WIDTH` here would be a second answer to one
       // question, and the two would first disagree exactly at the boundary the
       // helper's tests pin.
-      setFits(fitsFullShell(entry.contentRect.width));
+      setFits(fitsFullShell(width));
     });
     next.observe(node);
     observer.current = next;

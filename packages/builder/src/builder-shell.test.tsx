@@ -43,6 +43,13 @@ afterEach(cleanup);
 let observedWidth = MIN_SHELL_WIDTH + 160;
 
 /**
+ * The narrow notice's horizontal padding, in CSS pixels — Tailwind `p-6` on
+ * both sides. The shell root carries none, which is the asymmetry that makes
+ * the choice of measured box observable.
+ */
+const NOTICE_PADDING = 48;
+
+/**
  * `ResizeObserver`, which jsdom does not implement.
  *
  * Previously stubbed INERT, on the reasoning that a fake reporting invented
@@ -81,13 +88,22 @@ class DrivenResizeObserver {
   }
 
   private deliver() {
-    const entries = [...this.targets].map(
-      target =>
-        ({
-          target,
-          contentRect: { width: observedWidth, height: 900 },
-        }) as unknown as ResizeObserverEntry
-    );
+    const entries = [...this.targets].map(target => {
+      // The two roots the observer follows do NOT have the same padding — the
+      // narrow notice is `p-6`, the shell root has none — and `contentRect`
+      // excludes padding while `borderBoxSize` includes it. Modelling that here
+      // is what lets this file tell a border-box measurement from a content-box
+      // one; a stub reporting the same number for both cannot, and would pass
+      // on an implementation whose recovery threshold moves by the padding.
+      const padding = (target as HTMLElement).className?.includes("p-6")
+        ? NOTICE_PADDING
+        : 0;
+      return {
+        target,
+        borderBoxSize: [{ inlineSize: observedWidth, blockSize: 900 }],
+        contentRect: { width: observedWidth - padding, height: 900 },
+      } as unknown as ResizeObserverEntry;
+    });
     if (entries.length > 0) this.callback(entries, this as never);
   }
 
@@ -712,6 +728,41 @@ describe("a viewport too narrow for the shell", () => {
 
     expect(screen.queryByText(/wider screen/i)).not.toBeNull();
     expect(screen.queryByRole("region", { name: "Canvas" })).toBeNull();
+  });
+
+  it("recovers into the band where the notice's own padding would hide it", () => {
+    // The narrow band, and the only widths that separate a border-box
+    // measurement from a content-box one.
+    //
+    // The notice is `p-6` and the shell root is not, so `contentRect` reports
+    // this container 48px narrower while the notice is up. A container growing
+    // back to anywhere in [MIN_SHELL_WIDTH, MIN_SHELL_WIDTH + 48) therefore
+    // measures below the threshold and the notice never leaves — while a fresh
+    // render at that same width shows the editor, because the shell root is
+    // what gets observed first. Behaviour that depends on how a width was
+    // ARRIVED AT rather than on the width.
+    //
+    // Growing to a comfortably wide value cannot see this: it clears the
+    // threshold with or without the padding subtracted, which is why the first
+    // version of the recovery test above passed on the broken implementation.
+    const inBand = MIN_SHELL_WIDTH + 20;
+    expect(inBand).toBeLessThan(MIN_SHELL_WIDTH + NOTICE_PADDING);
+
+    stubContainerFits(false);
+    render(
+      <BuilderShell onExit={vi.fn()} store={memoryStore()}>
+        <p>canvas</p>
+      </BuilderShell>
+    );
+    expect(screen.queryByText(/wider screen/i)).not.toBeNull();
+
+    act(() => {
+      observedWidth = inBand;
+      DrivenResizeObserver.redeliver();
+    });
+
+    expect(screen.queryByRole("region", { name: "Canvas" })).not.toBeNull();
+    expect(screen.queryByText(/wider screen/i)).toBeNull();
   });
 
   it("re-renders the editor when the measured width comes back up", () => {
