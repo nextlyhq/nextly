@@ -907,8 +907,19 @@ export function createPocChromeReader(
       // drag started with a bare `page.mouse` here would begin correctly and then move from
       // wherever the driver last thought the pointer was, which is a harness fault that reads as
       // the canvas resolving the wrong target.
-      const block = canvasFrameOf(page).locator(`[data-nx-id="${id}"]`);
-      const box = await block.boundingBox();
+      // Matched by comparing the ATTRIBUTE VALUE, never by interpolating the id into a
+      // selector. Block validation requires only a nonempty string, so an imported id
+      // carrying `"` or `]` either makes the selector invalid or silently changes what it
+      // matches — the second being the dangerous one, since it drags the wrong node while
+      // looking like it worked.
+      const handle = await canvasFrameOf(page).evaluateHandle(
+        ([attribute, wanted]) =>
+          [...document.querySelectorAll(`[${attribute}]`)].find(
+            el => el.getAttribute(attribute) === wanted
+          ) ?? null,
+        ["data-nx-id", id] as const
+      );
+      const box = await handle.asElement()?.boundingBox();
       // Refused only when the block is genuinely absent, which is a fixture fault rather than a
       // canvas shortfall — and named as one, so it is not read as the capability being missing.
       if (!box) {
@@ -931,13 +942,27 @@ export function createPocChromeReader(
       // BOTH documents, for the same reason `isDragging` reads both: the editor chrome is
       // host-side and the canvas is in the frame, and which of them would publish this has
       // not been decided. Searching one would refuse about a seam that exists in the other.
+      // EVERY publisher in both documents, not the first one found. `??` between the two
+      // reads always prefers the host, so a stale host depth of 0 masks a frame depth going
+      // 0 -> 1 and B-9 reports that a drop created no undo entry; `querySelector` hides a
+      // duplicate inside one document the same way. The contract is ONE publisher, so more
+      // than one is an ambiguous count and refusing is the only honest answer.
       const read = async (where: Frame | Page) =>
         where.evaluate(
           ([selector, attribute]) =>
-            document.querySelector(selector)?.getAttribute(attribute) ?? null,
+            [...document.querySelectorAll(selector)].map(el =>
+              el.getAttribute(attribute)
+            ),
           [UNDO_DEPTH_SELECTOR, UNDO_DEPTH_ATTR] as const
         );
-      const published = (await read(page)) ?? (await read(canvasFrameOf(page)));
+      const all = [...(await read(page)), ...(await read(canvasFrameOf(page)))];
+      if (all.length > 1) {
+        throw new Error(
+          `${String(all.length)} elements publish ${UNDO_DEPTH_SELECTOR} across the host and ` +
+            "canvas documents; exactly one may, so which count is authoritative is undecidable"
+        );
+      }
+      const published = all[0] ?? null;
 
       if (published !== null) {
         // A seam that publishes something unreadable is a DEFECT in the seam, not a canvas
