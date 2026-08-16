@@ -11,7 +11,9 @@ import { describe, expect, it } from "vitest";
 
 import { column, COLUMN_BLOCK, COLUMNS_BLOCK } from "./column";
 import { columns, TEMPLATE_PLACEHOLDER_ID } from "./columns";
+import { box } from "./box";
 import { coreBlocks } from "./index";
+import { section } from "./section";
 
 describe("the columns pair", () => {
   describe("the nesting rule, both halves", () => {
@@ -88,19 +90,21 @@ describe("the columns pair", () => {
     });
   });
 
-  describe("a column behaves like a flex item", () => {
-    it("can grow, shrink, and shrink BELOW its content", () => {
-      // Without these a column is an ordinary flex item — `flex: 0 1 auto`
-      // and `min-width: auto` — so an empty seeded column collapses to
-      // nothing, a populated one sizes from content instead of sharing the
-      // row, and one long unbroken child overflows the row. A row whose
-      // columns vanish on insert is not a usable default.
+  describe("no dead default styles", () => {
+    it("declares no baseStyles, because nothing would deliver them", () => {
+      // `baseStyles` is declared on `BlockDefinition` and read by NOTHING —
+      // zero non-test consumers in the repository — and `blocks-react` ships
+      // no stylesheet. A declaration here would compile to nothing and render
+      // as nothing while reading in review as a working default, which is the
+      // capability-that-reaches-nothing shape this package already carries
+      // seven instances of.
       //
-      // `minWidth: 0` is asserted separately from `flex` because it is the
-      // part that stops the overflow, and a fix that dropped only it would
-      // leave the visible defect intact while the flex assertion stayed green.
-      expect(column.baseStyles?.base?.base?.flex).toBe("1 1 240px");
-      expect(column.baseStyles?.base?.base?.minWidth).toBe(0);
+      // This assertion is a RATCHET, not a preference: when a delivery path
+      // exists, this test fails and forces whoever adds it to state the
+      // default deliberately rather than reviving a declaration that was dead
+      // when it was written.
+      expect(columns.baseStyles).toBeUndefined();
+      expect(column.baseStyles).toBeUndefined();
     });
   });
 
@@ -126,12 +130,17 @@ describe("the columns pair", () => {
     });
   });
 
-  describe("layout is a default, not a rule", () => {
-    it("carries the row layout as overridable baseStyles", () => {
-      // `container.tsx` establishes that display is a style rather than a
-      // block. A hardcoded row in the renderer would be the Elementor V4
-      // padding complaint again: a default every project starts by removing.
-      expect(columns.baseStyles?.base?.base).toEqual({ display: "flex" });
+  describe("relationships, never capabilities", () => {
+    it("shares ONE support declaration with every container preset", () => {
+      // The pair promises to differ from a box in relationships, never in
+      // capabilities. Four parallel supports lists would let a later addition
+      // reach some presets and not others, silently giving one container
+      // different editor controls from the rest — and each list would read as
+      // correct on its own. Asserting identity against `box` is what couples
+      // them; asserting the VALUES would pass on four copies that agree today.
+      expect(columns.supports).toBe(box.supports);
+      expect(column.supports).toBe(box.supports);
+      expect(section.supports).toBe(box.supports);
     });
 
     it("shares the container implementation rather than forking it", () => {

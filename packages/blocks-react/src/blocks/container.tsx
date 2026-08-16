@@ -68,6 +68,27 @@ export type ContainerTag = (typeof CONTAINER_TAGS)[number];
  */
 export const CONTENT_WIDTH_CLASS = "nx-pb-contained";
 
+/**
+ * The style capabilities every container preset opts into.
+ *
+ * Declared ONCE and shared, because a preset differs from its siblings in what
+ * it starts as, never in what it can be told to do — the property this file's
+ * header argues for. Four parallel copies of this list would let a later
+ * addition or removal reach some presets and not others, silently giving one
+ * container different editor controls and accepted styles from the rest. The
+ * divergence would be invisible: each list reads as correct on its own.
+ */
+export const CONTAINER_SUPPORTS = {
+  spacing: true,
+  layout: true,
+  dimensions: true,
+  background: true,
+  border: true,
+  effects: true,
+  position: true,
+  container: true,
+} as const;
+
 /** Whether a stored value is a tag a container may render. */
 function isContainerTag(value: unknown): value is ContainerTag {
   return CONTAINER_TAGS.some(tag => tag === value);

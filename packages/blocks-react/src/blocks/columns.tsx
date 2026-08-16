@@ -21,11 +21,12 @@
  * `core/column` declares `parent: ["core/columns"]`, which is the arrangement
  * `block.ts` names when it documents this field.
  *
- * **The layout is `baseStyles`, not a hardcode.** `container.tsx` establishes
- * that display is a style rather than a block, and a default that cannot be
- * overridden is the Elementor V4 padding complaint in another costume. A row
- * that an author restyles into a stack at one breakpoint is still a row of
- * columns, and nothing here has to know.
+ * **The row ships NO default layout**, and `column.tsx` documents why at
+ * length: block-level default styles have no delivery mechanism in this
+ * package. An author sets the row's display through the inspector. When that
+ * gap closes, the row is where `display` belongs — as an overridable default,
+ * never a rule in the renderer, because a default nobody can override is the
+ * Elementor V4 padding complaint in another costume.
  *
  * @module blocks/library/columns
  */
@@ -40,7 +41,7 @@ import {
   COLUMN_VERSION,
   COLUMNS_BLOCK,
 } from "./column";
-import { renderContainer } from "./container";
+import { CONTAINER_SUPPORTS, renderContainer } from "./container";
 import type { ContainerProps } from "./container";
 
 export { COLUMN_BLOCK, COLUMNS_BLOCK } from "./column";
@@ -114,19 +115,6 @@ export const columns = defineBlock<ContainerProps, PageContext>({
       ),
     },
   },
-  // The row layout, as an overridable default rather than a rule in the
-  // renderer. This is what `baseStyles` is for, and a row is its first real
-  // consumer.
-  baseStyles: { base: { base: { display: "flex" } } },
-  supports: {
-    spacing: true,
-    layout: true,
-    dimensions: true,
-    background: true,
-    border: true,
-    effects: true,
-    position: true,
-    container: true,
-  },
+  supports: CONTAINER_SUPPORTS,
   render: renderContainer,
 });
