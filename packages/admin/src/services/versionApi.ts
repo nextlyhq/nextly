@@ -114,6 +114,15 @@ export interface SetVersionLabelResponse {
   item: VersionMeta;
 }
 
+/**
+ * What an autosave reports back: the canonical mutation envelope, whose item
+ * is the stored row's metadata rather than the snapshot.
+ */
+export interface AutosaveResponse {
+  message: string;
+  item: { updatedAt: string; locale: string | null };
+}
+
 /** What a discard reports back: the live published document, now authoritative. */
 export interface DiscardWorkingDraftResponse {
   message: string;
@@ -194,9 +203,13 @@ export const versionApi = {
    *
    * PUT because it is idempotent by construction: the server keeps one autosave
    * row per document and author and rewrites it in place, so repeating this
-   * leaves one row rather than accumulating history. Nothing is echoed back --
-   * the caller already holds these values, and a response body would be one more
-   * thing to keep in step with a form somebody is still typing into.
+   * leaves one row rather than accumulating history.
+   *
+   * The reply carries the canonical mutation envelope. Its `item` is metadata
+   * only, never the snapshot: the caller already holds those values, and
+   * echoing them back would be one more thing to keep in step with a form
+   * somebody is still typing into. `updatedAt` is the server's own clock,
+   * which is what the recovery read compares against the document.
    *
    * The snapshot goes up as-is and is stored unvalidated. An author part-way
    * through a required field still has work worth not losing, so a recovery
@@ -210,13 +223,13 @@ export const versionApi = {
     scope: VersionScope,
     snapshot: Record<string, unknown>,
     opts: { locale?: string } = {}
-  ): Promise<{ message: string }> => {
+  ): Promise<AutosaveResponse> => {
     // Only sent when a content language is active; absent means the
     // unlocalized row rather than "every locale".
     const query = opts.locale
       ? `?${new URLSearchParams({ locale: opts.locale }).toString()}`
       : "";
-    return protectedApi.put<{ message: string }>(
+    return protectedApi.put<AutosaveResponse>(
       `${basePath(scope)}/autosave${query}`,
       snapshot
     );

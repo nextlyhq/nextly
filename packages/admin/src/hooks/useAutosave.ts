@@ -273,7 +273,17 @@ export function useAutosave({
       if (timerRef.current !== null) {
         clearTimeout(timerRef.current);
         timerRef.current = null;
-        firstPendingAtRef.current = null;
+      }
+      firstPendingAtRef.current = null;
+      // The reported state describes the scope being left, so it cannot carry
+      // into the next one. Without this, switching language shows the previous
+      // language's "Saved 14:32", or its failure, for a scope in which nothing
+      // has run. Guarded because this cleanup also runs on unmount, after the
+      // mount tracker has already cleared.
+      if (mountedRef.current) {
+        setStatus("idle");
+        setLastSavedAt(null);
+        setError(null);
       }
     };
   }, [scopeKey]);

@@ -39,29 +39,6 @@ export interface CaptureResult {
   versionNo: number;
 }
 
-/**
- * Input to record one autosave snapshot.
- *
- * Deliberately NOT `CaptureInput` with a flag. A durable version carries a
- * sequence number and an autosave must not, and the repository rejects either
- * violation, so a shared input with a boolean would put a value in the caller's
- * hands that makes half its combinations throw. Two inputs and two methods let
- * each path express only states that are valid.
- *
- * There is no retention setting and no `maxPerDoc`. One row exists per document
- * and author and is rewritten in place, so nothing accumulates and there is
- * nothing to cap. There is no `label` or `sourceVersionNo` either: a label names
- * a version somebody chose to keep and a source records what a restore copied
- * from, and a recovery point is neither.
- */
-export interface AutosaveCaptureInput {
-  ref: VersionRef;
-  status: VersionStatus;
-  snapshot: unknown;
-  createdBy?: string | null;
-  locale?: string | null;
-}
-
 export class VersionCaptureService {
   /**
    * Allocate the next durable version_no for the document and insert one row,
@@ -130,33 +107,5 @@ export class VersionCaptureService {
       }
     }
     return { versionNo };
-  }
-
-  /**
-   * Record the author's current work as their rolling recovery point.
-   *
-   * Allocates NO sequence number, and that is the whole difference from
-   * {@link capture}: the durable path reads the current maximum and takes the
-   * next, which is what makes two concurrent captures race for one number. This
-   * writes one row addressed by document and author, so there is nothing to
-   * contend over, it cannot raise a `VersionConflictError`, and the caller needs
-   * no retry around it.
-   *
-   * Nothing is pruned because nothing accumulates. An hour of editing leaves one
-   * row, not one row per pause, which is what keeps this cheap enough to run on
-   * a timer and keeps version history readable without filtering.
-   */
-  async captureAutosave(
-    db: VersionsDbApi,
-    input: AutosaveCaptureInput
-  ): Promise<void> {
-    const repo = new VersionsRepository(db);
-    await repo.upsertAutosave({
-      ref: input.ref,
-      status: input.status,
-      snapshot: input.snapshot,
-      locale: input.locale ?? null,
-      createdBy: input.createdBy ?? null,
-    });
   }
 }
