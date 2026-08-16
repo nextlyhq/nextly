@@ -68,8 +68,24 @@ export type NestingRefusal = "wrong-parent" | "restricted-at-root";
  * placement a second time.
  */
 export type NestingVerdict =
-  | { allowed: true; reason?: undefined }
-  | { allowed: false; reason: NestingRefusal };
+  | { allowed: true; reason?: undefined; permitted?: undefined }
+  | {
+      allowed: false;
+      reason: NestingRefusal;
+      /**
+       * The restriction that produced this refusal, carried rather than left to
+       * be looked up again.
+       *
+       * A caller explaining the refusal needs the permitted set, and asking the
+       * source a second time is a second answer: `NestingSource` is
+       * caller-supplied and nothing requires it to be idempotent, so a stateful
+       * or lazily-resolved one can name a different set from the one that
+       * actually decided the verdict. Non-empty by construction, because an
+       * empty restriction is what `restrictionFor` reads as no restriction at
+       * all and no refusal can come from it.
+       */
+      permitted: readonly string[];
+    };
 
 const ALLOWED: NestingVerdict = { allowed: true };
 
@@ -106,7 +122,7 @@ export function canNest(
   const parents = restrictionFor(childType, source);
   if (parents === undefined) return ALLOWED;
   if (parents.includes(parentType)) return ALLOWED;
-  return { allowed: false, reason: "wrong-parent" };
+  return { allowed: false, reason: "wrong-parent", permitted: parents };
 }
 
 /**
@@ -128,5 +144,5 @@ export function canBeRoot(
 ): NestingVerdict {
   const parents = restrictionFor(childType, source);
   if (parents === undefined) return ALLOWED;
-  return { allowed: false, reason: "restricted-at-root" };
+  return { allowed: false, reason: "restricted-at-root", permitted: parents };
 }

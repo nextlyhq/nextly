@@ -51,6 +51,9 @@ describe("canNest", () => {
     expect(canNest("acme/column", "core/container", source)).toEqual({
       allowed: false,
       reason: "wrong-parent",
+      // The refusal carries the restriction that produced it, so a caller
+      // explaining it never has to ask the source a second time.
+      permitted: ["core/columns"],
     });
   });
 
@@ -86,6 +89,9 @@ describe("canNest", () => {
     expect(canNest("acme/column", "core/container", source)).toEqual({
       allowed: false,
       reason: "wrong-parent",
+      // The refusal carries the restriction that produced it, so a caller
+      // explaining it never has to ask the source a second time.
+      permitted: ["core/columns"],
     });
   });
 
@@ -120,6 +126,7 @@ describe("canBeRoot", () => {
     expect(canBeRoot("acme/column", source)).toEqual({
       allowed: false,
       reason: "restricted-at-root",
+      permitted: ["core/columns"],
     });
   });
 });

@@ -396,6 +396,35 @@ describe("issue-code vocabulary is stable and complete", () => {
     expect(asked).toContain("acme/column");
   });
 
+  it("explains a refusal from the restriction that produced it", () => {
+    // `NestingSource` is caller-supplied and nothing requires it to be
+    // idempotent. A source answering differently on a second call is what
+    // separates a message DERIVED from the verdict from one that re-asks: both
+    // name a permitted set, and only one names the set that actually refused
+    // this placement.
+    let call = 0;
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "cell", type: "acme/column", version: 1, props: {} }],
+    });
+
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+      nesting: {
+        parentsOf: () => {
+          call += 1;
+          return call === 1 ? ["core/columns"] : ["acme/somewhere-else"];
+        },
+      },
+    });
+
+    const placement = issues.find(i => i.code === "restricted-at-root");
+    expect(placement?.message).toContain("core/columns");
+    expect(placement?.message).not.toContain("acme/somewhere-else");
+  });
+
   it("does not call a child of an unnameable container a root", () => {
     // "No container" and "a container this walk cannot name" are different
     // facts. One absent value standing for both makes a node in a slot answer
