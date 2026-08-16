@@ -27,6 +27,7 @@ import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { isFieldLocalized } from "../../i18n/classify-fields";
 import { COMPANION_STRUCTURAL_COLUMNS } from "../../i18n/migration/generate-up";
 import { buildDesiredTableFromComponentFields } from "../../schema/pipeline/diff/build-from-fields";
+import { normalizeType } from "../../schema/pipeline/diff/normalize-type";
 import type {
   ColumnSpec,
   IndexSpec,
@@ -40,6 +41,16 @@ import {
 
 /** Which of a field group's two tables a column lives in. */
 export type ReconcileTable = "main" | "companion";
+
+/**
+ * What a field name may be, mirroring the payload validator every other write path enforces.
+ *
+ * Stated here rather than imported because that validator takes a whole payload and throws; this
+ * planner is pure and reports instead. Kept identical on purpose — a live column that cannot pass
+ * the real validator must never be adopted, and the service re-validates the finished field set
+ * through the shared validator before writing, so this is a filter rather than the boundary.
+ */
+const FIELD_NAME_PATTERN = /^[a-z][a-z0-9_]*$/;
 
 /**
  * The properties this planner reads or rewrites. A caller's field carries more than this and keeps
@@ -66,9 +77,26 @@ export interface ReconcileRepair {
   fieldName: string;
   columnName: string;
   table: ReconcileTable;
-  attribute: "required" | "unique" | "index";
+  attribute: "required" | "unique" | "index" | "localized";
   from: boolean;
   to: boolean;
+}
+
+/**
+ * A drift the planner can SEE but must not decide, so the whole repair refuses.
+ *
+ * Reported rather than resolved because each of these is genuinely ambiguous — the database holds
+ * two readings and nothing in it says which the operator meant. Guessing would write a definition
+ * that describes neither, and this operation's whole value is that its output describes the tables.
+ */
+export interface ReconcileBlocker {
+  fieldName: string;
+  columnName: string;
+  kind:
+    | "column-on-both-tables"
+    | "physical-type-changed"
+    | "unrepresentable-column-name";
+  detail: string;
 }
 
 /** A live column no stored field described, adopted with a type this planner had to guess. */
@@ -85,11 +113,20 @@ export interface ReconcileAdoption {
 export interface ReconcilePlan<F extends ReconcilableField> {
   /** The repaired field set, in the stored order, with adoptions appended. */
   fields: F[];
-  /** Re-derived from which table holds the columns — never read from a flag. */
+  /**
+   * Re-derived from WHERE the columns are, except where the tables cannot say.
+   *
+   * A companion holding only structural columns is the ambiguous case: it is what both a
+   * never-localized group and a localized group whose last translatable field was removed leave
+   * behind. The stored flag breaks that tie — the one place it is evidence rather than the value
+   * in doubt.
+   */
   localized: boolean;
   removed: ReconcileRemoval[];
   repaired: ReconcileRepair[];
   adopted: ReconcileAdoption[];
+  /** Non-empty means the caller must REFUSE rather than write. */
+  blockers: ReconcileBlocker[];
   /** True when nothing needed changing, so a caller can skip the write entirely. */
   unchanged: boolean;
 }
@@ -129,7 +166,7 @@ export interface ReconcileInput<F extends ReconcilableField> {
  */
 function withOverride<F extends ReconcilableField>(
   field: F,
-  key: "required" | "unique" | "index",
+  key: "required" | "unique" | "index" | "localized",
   value: boolean
 ): F {
   return { ...field, [key]: value };
@@ -168,11 +205,27 @@ function mainSystemColumnNames(
  * that a companion exists and carries at least one column that is not structural: an empty
  * companion holding only `_parent`/`_locale` is a table nothing was moved into.
  */
-function deriveLocalized(liveCompanion: TableSpec | null): boolean {
+function deriveLocalized(
+  liveCompanion: TableSpec | null,
+  storedLocalized: boolean
+): boolean {
+  // No companion at all is unambiguous: nothing was ever moved out.
   if (!liveCompanion) return false;
-  return liveCompanion.columns.some(
-    column => !COMPANION_STRUCTURAL_COLUMNS.has(column.name)
-  );
+  if (
+    liveCompanion.columns.some(
+      column => !COMPANION_STRUCTURAL_COLUMNS.has(column.name)
+    )
+  ) {
+    return true;
+  }
+  // 🔴 A companion holding ONLY structural columns is physically ambiguous, and reading it as
+  // "not localized" is wrong in a way that compounds: a healthy localized group whose last
+  // translatable field was removed looks exactly like this, and rewriting it as non-localized
+  // would send the next default-translatable field to the main table instead of the companion —
+  // making the documented idempotent repair the thing that breaks the group. The tables cannot
+  // separate the two readings, so the stored flag decides, which is the one case where it is
+  // evidence rather than the value under repair.
+  return storedLocalized;
 }
 
 /**
@@ -234,7 +287,7 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
 ): ReconcilePlan<F> {
   const { storedFields, dialect, liveMain, liveCompanion } = input;
 
-  const localized = deriveLocalized(liveCompanion);
+  const localized = deriveLocalized(liveCompanion, input.storedLocalized);
 
   const mainColumns = new Map(liveMain.columns.map(c => [c.name, c]));
   const companionColumns = new Map(
@@ -244,6 +297,7 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
   const removed: ReconcileRemoval[] = [];
   const repaired: ReconcileRepair[] = [];
   const adopted: ReconcileAdoption[] = [];
+  const blockers: ReconcileBlocker[] = [];
   const fields: F[] = [];
 
   /** Column names a stored field accounted for, so the leftovers can be adopted. */
@@ -273,11 +327,33 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
       continue;
     }
 
-    const inCompanion = localized && isFieldLocalized(field, true);
-    const table: ReconcileTable = inCompanion ? "companion" : "main";
-    const live = inCompanion
-      ? companionColumns.get(descriptor.name)
-      : mainColumns.get(descriptor.name);
+    // 🔴 Located across BOTH tables rather than only the one the stored flag implies. A `localized`
+    // toggle on a single field MOVES its column between them, and a half-applied toggle is exactly
+    // what this repairs — so searching only the expected table would report the field as removed
+    // and then re-adopt its column from the other table as a minimal guess, discarding the logical
+    // type, options and admin config the operator authored. Finding it where it actually IS keeps
+    // all of that and corrects the placement flag instead.
+    const expectedInCompanion = localized && isFieldLocalized(field, true);
+    const onMain = mainColumns.get(descriptor.name);
+    const onCompanion = companionColumns.get(descriptor.name);
+
+    if (onMain && onCompanion) {
+      // Both tables hold it: a localization enable that created and seeded the companion without
+      // finishing the main-table drops. Which copy carries the live values is not something the
+      // catalog can answer, and choosing wrong strands content silently — so the repair refuses.
+      blockers.push({
+        fieldName: field.name,
+        columnName: descriptor.name,
+        kind: "column-on-both-tables",
+        detail: `"${descriptor.name}" exists on both ${input.tableName} and its companion, so which copy holds the live values cannot be determined from the schema.`,
+      });
+      claimedMain.add(descriptor.name);
+      claimedCompanion.add(descriptor.name);
+      fields.push(field);
+      continue;
+    }
+
+    const live = onMain ?? onCompanion;
 
     if (!live) {
       // 🔴 REPORTED by identity and removed, never silently dropped. The summary is the only thing
@@ -287,9 +363,42 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
       continue;
     }
 
+    const inCompanion = onCompanion !== undefined;
+    const table: ReconcileTable = inCompanion ? "companion" : "main";
     (inCompanion ? claimedCompanion : claimedMain).add(descriptor.name);
 
     let repairedField = field;
+
+    // The column moved between tables, so the field's own placement flag is what is stale. The
+    // authored meaning is kept and only that flag corrected.
+    if (inCompanion !== expectedInCompanion) {
+      repaired.push({
+        fieldName: field.name,
+        columnName: descriptor.name,
+        table,
+        attribute: "localized",
+        from: expectedInCompanion,
+        to: inCompanion,
+      });
+      repairedField = withOverride(repairedField, "localized", inCompanion);
+    }
+
+    // 🔴 The PHYSICAL type, through the diff engine's own canonical form so `varchar(255)` and
+    // `varchar` are one answer. A name match is not evidence the column still stores what the field
+    // declares: a confirmed apply can change `number` to `text` and then fail its registry write,
+    // and keeping the stored logical type would mark `synced` a definition the next diff instantly
+    // disagrees with. Which logical type now belongs there cannot be derived — many map to one
+    // physical column — so this refuses and names the drift rather than guessing.
+    const liveType = normalizeType(live.type);
+    const declaredType = normalizeType(descriptor.dialectType);
+    if (liveType !== undefined && declaredType !== liveType) {
+      blockers.push({
+        fieldName: field.name,
+        columnName: descriptor.name,
+        kind: "physical-type-changed",
+        detail: `"${field.name}" is declared ${field.type} (${descriptor.dialectType}) but its column is ${live.type}; the logical type that now belongs there cannot be derived from the column alone.`,
+      });
+    }
 
     // `required` is the field's spelling of NOT NULL, and only the MAIN table can testify to it:
     // companion columns are created nullable regardless of the field's declaration, because a row
@@ -359,6 +468,38 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
     system: ReadonlySet<string>
   ): void => {
     if (claimed.has(column.name) || system.has(column.name)) return;
+    // The same user column present on BOTH tables and claimed by no stored field. Adopting it
+    // twice would write two fields under one name and mark the ambiguity synced, so the same
+    // refusal the stored-field path makes applies here — reported once, from the main side.
+    const otherTable =
+      table === "main" ? companionColumns : new Map(mainColumns);
+    if (
+      otherTable.has(column.name) &&
+      !COMPANION_STRUCTURAL_COLUMNS.has(column.name)
+    ) {
+      if (table === "main") {
+        blockers.push({
+          fieldName: column.name,
+          columnName: column.name,
+          kind: "column-on-both-tables",
+          detail: `"${column.name}" exists on both tables and no stored field describes it, so which copy to adopt cannot be determined from the schema.`,
+        });
+      }
+      return;
+    }
+    // 🔴 A live identifier is not necessarily a legal field name — `Legacy-Title`, `2fa_code` and
+    // anything added by hand outside the builder reach here verbatim. Adopting one would persist a
+    // definition that violates the field contract and mark it synced, so the next builder save or
+    // manifest validation fails on the row this operation just "repaired".
+    if (!FIELD_NAME_PATTERN.test(column.name)) {
+      blockers.push({
+        fieldName: column.name,
+        columnName: column.name,
+        kind: "unrepresentable-column-name",
+        detail: `"${column.name}" is not a usable field name, so it cannot be adopted into the definition; rename the column or remove it before reconciling.`,
+      });
+      return;
+    }
     // A columnless field under this very name is what a half-applied type change leaves behind:
     // the DDL created the scalar column, the row still declares the columnless field. One name
     // must map to one field, so the columnless declaration gives way — as a REPORTED removal —
@@ -414,6 +555,7 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
     removed,
     repaired,
     adopted,
+    blockers,
     unchanged:
       removed.length === 0 &&
       repaired.length === 0 &&

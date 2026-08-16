@@ -70,15 +70,30 @@ export async function reconcileFieldGroup(args: {
   adapter: DrizzleAdapter;
   logger: Logger;
   slug: string;
+  /**
+   * The code sync is asking, so a LOCKED group may be repaired.
+   *
+   * Never settable from the HTTP surface: the dispatcher does not pass it. It exists so the one
+   * caller that owns a code-managed definition can clear a marker that would otherwise leave the
+   * group unreachable from both directions.
+   */
+  fromCode?: boolean;
 }): Promise<ReconcileFieldGroupResult> {
   const { registry, adapter, logger, slug } = args;
 
   const existing = await registry.getComponent(slug);
 
-  if (existing.locked) {
+  // 🔴 A LOCKED group is code-managed, so its config file is the definition and a repaired row
+  // would be overwritten by the next sync — but refusing outright makes the state TERMINAL, and it
+  // is reachable: `updateFieldGroup` accepts `source: "code"`, so a code sync whose companion DDL
+  // commits and whose row write fails marks a locked row `diverged`, after which
+  // `assertNotDiverged` also blocks the very sync that would correct it. `fromCode` is the way out:
+  // the sync itself asks for the repair, having the file's definition in hand. A human-initiated
+  // reconcile is still refused, with the file named as the thing to fix.
+  if (existing.locked && !args.fromCode) {
     throw NextlyError.conflict({
       reason: "state",
-      message: `"${slug}" is managed via code. Reconciling would repair the database row, and the next code sync would overwrite that repair with the config file's definition — fix the definition in its config file instead.`,
+      message: `"${slug}" is managed via code, so its definition lives in a config file — repairing the database row here would be overwritten by the next code sync. Fix the definition in its config file and re-sync; the sync clears this state itself.`,
       logContext: { reason: "component-locked-for-reconcile", slug },
     });
   }
@@ -128,6 +143,35 @@ export async function reconcileFieldGroup(args: {
     liveCompanion,
     typeColumn,
   });
+
+  // 🔴 REFUSE before writing anything when the tables hold a state the planner can see but must
+  // not decide — a column on both tables, a column whose physical type no longer matches its
+  // declared field, an identifier no field name can represent. Each has two readings and nothing
+  // in the database says which the operator meant, so writing either one would produce a
+  // definition describing neither and mark it `synced`. The blockers are named individually
+  // because the operator's next action differs per kind.
+  if (plan.blockers.length > 0) {
+    throw NextlyError.conflict({
+      reason: "state",
+      message: `"${slug}" cannot be reconciled automatically: ${plan.blockers
+        .map(b => b.detail)
+        .join(" ")} Nothing was changed.`,
+      logContext: {
+        reason: "reconcile-ambiguous",
+        slug,
+        blockers: plan.blockers,
+      },
+    });
+  }
+
+  // The finished field set goes through the SAME validator every other definition write uses, so
+  // a repair cannot persist something the builder would later refuse. The planner already filters
+  // unrepresentable column names; this is the boundary rather than a second opinion — it covers
+  // whatever the shared contract gains next without this module being told.
+  const { assertValidFieldsPayload } = await import(
+    "../../../api/fields-payload"
+  );
+  assertValidFieldsPayload(plan.fields, { kind: "component" });
 
   // A standing `diverged` mark is itself part of what this operation repairs: once the definition
   // describes the tables, leaving the mark would keep refusing schema edits on a group that is

@@ -336,6 +336,114 @@ describe("planFieldGroupReconcile", () => {
     });
   });
 
+  // 🔴 The finding that would have DESTROYED authored meaning. Toggling one field's `localized`
+  // moves its column between tables; searching only the table the stale flag implies reports the
+  // field as removed and re-adopts its column as a minimal guess, discarding the logical type and
+  // every authored option. Located where the column actually is, the field survives intact.
+  it("keeps a field whose column moved between tables, correcting only its placement", () => {
+    const stored: ReconcilableField[] = [
+      { name: "title", type: "text", localized: true },
+      // Declared as living on the MAIN table, but the apply moved it to the companion.
+      { name: "contact", type: "email", localized: false, required: true },
+    ];
+    const result = plan({
+      storedFields: stored,
+      liveMain: liveTableFor(
+        [{ name: "title", type: "text", localized: true }],
+        {
+          localized: true,
+        }
+      ),
+      liveCompanion: companionWith([{ name: "title" }, { name: "contact" }]),
+      storedLocalized: true,
+    });
+
+    const contact = result.fields.find(f => f.name === "contact");
+    // The authored LOGICAL type survives — an adoption would have guessed `text`.
+    expect(contact).toMatchObject({ type: "email", localized: true });
+    expect(result.removed).toEqual([]);
+    expect(result.adopted).toEqual([]);
+    expect(result.repaired).toContainEqual({
+      fieldName: "contact",
+      columnName: "contact",
+      table: "companion",
+      attribute: "localized",
+      from: false,
+      to: true,
+    });
+  });
+
+  it("refuses when one column exists on both tables", () => {
+    const stored: ReconcilableField[] = [
+      { name: "title", type: "text", localized: true },
+    ];
+    // A localization enable that seeded the companion without finishing the main-table drops.
+    const live = liveTableFor([{ name: "title", type: "text" }]);
+    const result = plan({
+      storedFields: stored,
+      liveMain: live,
+      liveCompanion: companionWith([{ name: "title" }]),
+      storedLocalized: true,
+    });
+
+    expect(result.blockers).toEqual([
+      expect.objectContaining({
+        fieldName: "title",
+        kind: "column-on-both-tables",
+      }),
+    ]);
+  });
+
+  it("refuses when a column's physical type no longer matches its declared field", () => {
+    const stored: ReconcilableField[] = [{ name: "weight", type: "number" }];
+    // The apply changed the column to text and then failed its registry write.
+    const live = liveTableFor([{ name: "weight", type: "number" }]);
+    const col = live.columns.find(c => c.name === "weight");
+    if (col) col.type = "text";
+
+    const result = plan({ storedFields: stored, liveMain: live });
+
+    expect(result.blockers).toEqual([
+      expect.objectContaining({
+        fieldName: "weight",
+        kind: "physical-type-changed",
+      }),
+    ]);
+  });
+
+  it("refuses a live column whose identifier no field name can represent", () => {
+    const live = liveTableFor([{ name: "title", type: "text" }]);
+    live.columns.push({ name: "Legacy-Title", type: "text", nullable: true });
+
+    const result = plan({
+      storedFields: [{ name: "title", type: "text" }],
+      liveMain: live,
+    });
+
+    expect(result.blockers).toEqual([
+      expect.objectContaining({ kind: "unrepresentable-column-name" }),
+    ]);
+    // And it is NOT adopted: persisting it would violate the field contract.
+    expect(result.fields.find(f => f.name === "Legacy-Title")).toBeUndefined();
+  });
+
+  // 🔴 A localized group whose last translatable field was removed leaves a companion holding only
+  // structural columns — physically identical to a never-localized group. Reading that as "not
+  // localized" would make the documented idempotent repair the thing that breaks the group, by
+  // routing the next default-translatable field to the wrong table.
+  it("keeps localization when the companion is structurally empty but the row says localized", () => {
+    const stored: ReconcilableField[] = [{ name: "weight", type: "number" }];
+    const result = plan({
+      storedFields: stored,
+      liveMain: liveTableFor(stored, { localized: true }),
+      liveCompanion: companionWith([]),
+      storedLocalized: true,
+    });
+
+    expect(result.localized).toBe(true);
+    expect(result.unchanged).toBe(true);
+  });
+
   it("adopts a companion-resident unknown column as a localized field", () => {
     const stored: ReconcilableField[] = [
       { name: "title", type: "text", localized: true },
