@@ -561,7 +561,17 @@ async function pointsAtItself(
     // It still terminates. The symlink loop this guards against produces endless LEXICAL
     // spellings of one file, but only finitely many (file, directory) pairs — the directory set
     // is bounded by the real tree, which the spellings are not.
-    const identity = `${resolved ?? targetPath}\u0000${path.dirname(targetPath)}`;
+    // The directory is CANONICALISED, not taken lexically. Under `loop -> .` the lexical
+    // dirname grows without bound — `project/loop`, `project/loop/loop` — so a lexical pair is
+    // not finite and the walk would not terminate.
+    //
+    // It is the directory that is resolved rather than the file's own parent: two aliases of one
+    // file in genuinely different directories must stay distinct, and `dirname(resolved)` would
+    // collapse them back to the referent's parent.
+    const fromDirectory = await fs
+      .realpath(path.dirname(targetPath))
+      .catch(() => path.dirname(targetPath));
+    const identity = `${resolved ?? targetPath}\u0000${fromDirectory}`;
     if (visited.has(identity)) continue;
     visited.add(identity);
 
