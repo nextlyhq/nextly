@@ -278,30 +278,65 @@ async function geometrySpanMs(
         ]);
         const kebab = (name: string) =>
           name.replace(/[A-Z]/g, c => `-${c.toLowerCase()}`);
-        const movesGeometry = (a: Animation): boolean => {
-          if (a instanceof CSSTransition) {
-            return (geometry as string[]).includes(a.transitionProperty);
-          }
+        /**
+         * Which properties an effect animates, or `null` when they cannot be read.
+         *
+         * A transition names its one property. An animation's computed keyframes carry theirs,
+         * minus the per-frame metadata that is not a property at all.
+         */
+        const propertiesOf = (a: Animation): string[] | null => {
+          if (a instanceof CSSTransition) return [a.transitionProperty];
           const effect = a.effect;
-          if (!(effect instanceof KeyframeEffect)) return true;
+          if (!(effect instanceof KeyframeEffect)) return null;
           let frames: Keyframe[];
           try {
             frames = effect.getKeyframes();
           } catch {
-            return true;
+            return null;
           }
-          if (frames.length === 0) return true;
-          return frames.some(frame =>
-            Object.keys(frame).some(
-              key =>
-                !KEYFRAME_META.has(key) &&
-                (geometry as string[]).includes(kebab(key))
-            )
+          if (frames.length === 0) return null;
+          return frames.flatMap(frame =>
+            Object.keys(frame)
+              .filter(key => !KEYFRAME_META.has(key))
+              .map(kebab)
           );
         };
 
+        /**
+         * THREE outcomes, matching the declared path exactly.
+         *
+         * Two would be a hole rather than a simplification. A property on neither list can move an
+         * edge — `border-bottom-width` does, and a custom property consumed by `height` does —
+         * so reading "not in GEOMETRY_PROPERTIES" as "does not move geometry" silently drops the
+         * effect from the comparison. Retime that effect and the helper reports the shorter
+         * declared span, which is the exact under-reporting this comparison exists to catch.
+         *
+         * So an unknown property is REFUSED, through the same channel the declared path uses, and
+         * the message it produces already tells the reader which list to add it to.
+         */
+        const classify = (a: Animation): "geometry" | "safe" | "unknown" => {
+          const names = propertiesOf(a);
+          if (names === null) return "unknown";
+          let movesGeometry = false;
+          for (const name of names) {
+            if ((geometry as string[]).includes(name)) movesGeometry = true;
+            else if (!(safe as string[]).includes(name)) return "unknown";
+          }
+          return movesGeometry ? "geometry" : "safe";
+        };
+
         for (const a of el.getAnimations({ subtree: true })) {
-          if (!own(a) || !movesGeometry(a)) continue;
+          if (!own(a)) continue;
+          const kind = classify(a);
+          if (kind === "safe") continue;
+          if (kind === "unknown") {
+            unclassified.push(
+              a instanceof CSSTransition
+                ? a.transitionProperty
+                : `${a instanceof CSSAnimation ? a.animationName : "(effect)"} (running effect)`
+            );
+            continue;
+          }
           const timing = a.effect?.getComputedTiming();
           if (!timing) continue;
           // ZERO ITERATIONS runs nothing, so it holds the edge for nothing — not even its delay.
@@ -310,10 +345,19 @@ async function geometrySpanMs(
           // it holds. The two zeros are indistinguishable from `activeDuration` alone, and the
           // declared path already separates them, so this reads the iteration count to agree.
           if (Number(timing.iterations ?? 1) === 0) continue;
-          // `delay` is included because an effect that waits before moving still holds the edge
-          // for the whole interval, exactly as the declared path charges `animation-delay`.
-          const live =
-            Number(timing.activeDuration ?? 0) + Number(timing.delay ?? 0);
+          // Measured from where the effect currently IS, not from its declared length.
+          //
+          // `endTime` is delay + activeDuration + endDelay — the whole interval the effect holds
+          // the edge for, which is what `delay` was here to include. Subtracting `currentTime` is
+          // what catches a schedule moved through the API: an animation rewound to
+          // `currentTime = -1000` is still an owned `CSSAnimation` at playback rate 1, and both
+          // `activeDuration` and `delay` are unchanged, so a sum of those reports the declared
+          // span while the edge keeps moving for a second longer.
+          //
+          // For a freshly applied state `currentTime` is ~0 and this equals the declared span. It
+          // can only come out SHORTER as an effect progresses, and short is the safe direction —
+          // the probe then waits longer than the edge moves.
+          const live = Number(timing.endTime ?? 0) - Number(a.currentTime ?? 0);
           if (Number.isFinite(live)) liveLongest = Math.max(liveLongest, live);
           else liveLongest = Infinity;
         }
@@ -1344,6 +1388,102 @@ test.describe("the drop-zone geometry the probe waits on", () => {
     expect(applied?.declaredIterations).toBe("100");
     // And the effect disagrees, by more than the tolerance.
     expect(applied?.liveActiveDuration).toBe(60000);
+
+    await expect(
+      geometrySpanMs(frame, "data-drag data-active")
+    ).rejects.toThrow(/running effect claims/);
+  });
+
+  test("a running effect on an UNCLASSIFIED property is refused, not skipped", async ({
+    page,
+    request,
+  }) => {
+    const frame = await canvas(page, request);
+
+    // `border-bottom-width` moves the zone's lower edge and is on NEITHER list. Reading "not in
+    // GEOMETRY_PROPERTIES" as "does not move geometry" would drop this effect from the live
+    // comparison entirely — and a retimed effect on such a property is then invisible, which is
+    // the hole the three-state classification closes.
+    const applied = await frame.evaluate(async () => {
+      const sheet = (
+        document.getElementById("nx-pb-style") as HTMLStyleElement | null
+      )?.sheet;
+      sheet?.insertRule(
+        "@keyframes nx-unclassified { from { border-bottom-width: 0 } to { border-bottom-width: 4px } }",
+        sheet.cssRules.length
+      );
+      sheet?.insertRule(
+        ".nx-pb-dropzone { animation: nx-unclassified .2s 100; border-bottom-style: solid }",
+        sheet.cssRules.length
+      );
+      const zone = document.querySelector(".nx-pb-dropzone");
+      if (!zone) return null;
+      const animation = zone
+        .getAnimations()
+        .find(a => a instanceof CSSAnimation);
+      if (!animation?.effect) return null;
+      await animation.ready;
+      // The property really is absent from the element's own transition longhands, so the
+      // DECLARED path never sees it — only the live classification can.
+      return {
+        running: true,
+        transitionProperty: getComputedStyle(zone).transitionProperty,
+      };
+    });
+    expect(applied).not.toBeNull();
+    expect(applied?.running).toBe(true);
+    expect(applied?.transitionProperty).not.toContain("border-bottom-width");
+
+    await expect(
+      geometrySpanMs(frame, "data-drag data-active")
+    ).rejects.toThrow(/cannot place/);
+  });
+
+  test("an effect REWOUND through the API is refused", async ({
+    page,
+    request,
+  }) => {
+    const frame = await canvas(page, request);
+
+    // The schedule moved rather than the timing. `activeDuration` and `delay` are both unchanged,
+    // the object is still a `CSSAnimation`, and the playback rate is still 1 — so a live span
+    // computed as `activeDuration + delay` equals the declaration exactly while the edge keeps
+    // moving for a second longer.
+    const applied = await frame.evaluate(async () => {
+      const sheet = (
+        document.getElementById("nx-pb-style") as HTMLStyleElement | null
+      )?.sheet;
+      sheet?.insertRule(
+        "@keyframes nx-rewound { from { height: 0 } to { height: 6px } }",
+        sheet.cssRules.length
+      );
+      sheet?.insertRule(
+        ".nx-pb-dropzone { animation: nx-rewound .2s 100 }",
+        sheet.cssRules.length
+      );
+      const zone = document.querySelector(".nx-pb-dropzone");
+      if (!zone) return null;
+      const animation = zone
+        .getAnimations()
+        .find(a => a instanceof CSSAnimation);
+      if (!animation?.effect) return null;
+      animation.currentTime = -30000;
+      await animation.ready;
+      const timing = animation.effect.getComputedTiming();
+      return {
+        rate: animation.playbackRate,
+        currentTime: Number(animation.currentTime ?? 0),
+        // Unchanged by the rewind, which is what makes the naive sum blind to it.
+        activeDuration: Number(timing.activeDuration ?? 0),
+        delay: Number(timing.delay ?? 0),
+      };
+    });
+    expect(applied).not.toBeNull();
+    expect(applied?.rate).toBe(1);
+    expect(applied?.currentTime).toBe(-30000);
+    // The two readings a naive live span would use, both still describing the stylesheet.
+    expect(applied?.activeDuration).toBe(20000);
+    expect(applied?.delay).toBe(0);
 
     await expect(
       geometrySpanMs(frame, "data-drag data-active")
