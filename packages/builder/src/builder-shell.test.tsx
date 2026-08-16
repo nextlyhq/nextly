@@ -27,6 +27,7 @@ import { BuilderShell } from "./builder-shell";
 import { CommandPalette } from "./command-palette";
 import {
   DEFAULT_PREFERENCES,
+  fitsFullShell,
   MIN_SHELL_WIDTH,
   type PreferenceStore,
 } from "./shell-state";
@@ -673,6 +674,43 @@ describe("a viewport too narrow for the shell", () => {
     expect(hiddenWrapper).not.toBeNull();
     expect(hiddenWrapper?.hasAttribute("inert")).toBe(true);
     // And the canvas is genuinely out of the accessibility tree.
+    expect(screen.queryByRole("region", { name: "Canvas" })).toBeNull();
+  });
+
+  it("decides at the boundary the exported predicate defines", () => {
+    // ONE implementation of "does this fit". The hook used to repeat
+    // `width >= MIN_SHELL_WIDTH` inline, which is a second answer to a question
+    // `shell-state` already exports and tests — and the two would first diverge
+    // at exactly the boundary those tests pin.
+    //
+    // Asserted AT the boundary rather than well inside it: the shell must agree
+    // with `fitsFullShell(MIN_SHELL_WIDTH) === true`, so a hook that had drifted
+    // to a strict `>` shows the notice here while the helper's own tests stay
+    // green.
+    observedWidth = MIN_SHELL_WIDTH;
+    expect(fitsFullShell(observedWidth)).toBe(true);
+    render(
+      <BuilderShell onExit={vi.fn()} store={memoryStore()}>
+        <p>canvas</p>
+      </BuilderShell>
+    );
+
+    expect(screen.queryByRole("region", { name: "Canvas" })).not.toBeNull();
+    expect(screen.queryByText(/wider screen/i)).toBeNull();
+  });
+
+  it("refuses one pixel below that boundary", () => {
+    // The other side, so the test above cannot be satisfied by a shell that
+    // renders fully at every width.
+    observedWidth = MIN_SHELL_WIDTH - 1;
+    expect(fitsFullShell(observedWidth)).toBe(false);
+    render(
+      <BuilderShell onExit={vi.fn()} store={memoryStore()}>
+        <p>canvas</p>
+      </BuilderShell>
+    );
+
+    expect(screen.queryByText(/wider screen/i)).not.toBeNull();
     expect(screen.queryByRole("region", { name: "Canvas" })).toBeNull();
   });
 

@@ -26,6 +26,7 @@ import * as React from "react";
 import { devWarnOnce } from "./dev-warn";
 import {
   DEFAULT_PREFERENCES,
+  fitsFullShell,
   LEFT_PANELS,
   MIN_CANVAS_WIDTH,
   MIN_SHELL_WIDTH,
@@ -179,7 +180,13 @@ function browserStore(): PreferenceStore {
 }
 
 /**
- * Whether the viewport can carry the full shell, tracked as it changes.
+ * Whether the shell's own CONTAINER can carry the full layout, as it changes.
+ *
+ * The container rather than the viewport, because that is what the shell sizes
+ * to — `h-full w-full`, no viewport units anywhere. The two agree only when the
+ * shell happens to fill the window, so an editor embedded in a narrow column on
+ * a wide display was told it fitted and compressed its regions past their
+ * minimums.
  *
  * Starts as `true` on purpose. The alternative is measuring during render,
  * which the server cannot do — it would emit the narrow-viewport message and the
@@ -217,7 +224,12 @@ function useFitsFullShell(): [(node: HTMLElement | null) => void, boolean] {
       // `contentRect`, not `getBoundingClientRect`: a transformed ancestor —
       // this editor has canvas zoom — scales the latter, and the number is
       // being compared against a minimum expressed in CSS pixels.
-      setFits(entry.contentRect.width >= MIN_SHELL_WIDTH);
+      //
+      // The comparison itself comes from `shell-state`, which exports and tests
+      // it. Repeating `>= MIN_SHELL_WIDTH` here would be a second answer to one
+      // question, and the two would first disagree exactly at the boundary the
+      // helper's tests pin.
+      setFits(fitsFullShell(entry.contentRect.width));
     });
     next.observe(node);
     observer.current = next;
@@ -972,7 +984,7 @@ export function BuilderShell({ store, ...props }: BuilderShellProps) {
   fallbackStore.current ??= browserStore();
   const resolvedStore = store ?? fallbackStore.current;
   const [preferences, update, loadCount] = usePreferences(resolvedStore);
-  const [measureShell, fitsFullShell] = useFitsFullShell();
+  const [measureShell, shellFits] = useFitsFullShell();
 
   return (
     <ShortcutProvider>
@@ -981,7 +993,7 @@ export function BuilderShell({ store, ...props }: BuilderShellProps) {
           them depends on this and should not make it someone else's setup step.
           Radix nests providers safely — a host with its own keeps its delay. */}
       <TooltipProvider delayDuration={300}>
-        {!fitsFullShell ? (
+        {!shellFits ? (
           <div
             /*
              * The MEASURED element while the notice is showing.
@@ -1060,23 +1072,23 @@ export function BuilderShell({ store, ...props }: BuilderShellProps) {
             deliberate trade: an author's unsaved work is worth more than the
             allocation. */}
         <div
-          hidden={!fitsFullShell}
-          inert={!fitsFullShell}
+          hidden={!shellFits}
+          inert={!shellFits}
           // `display: contents` while visible, so this wrapper adds no box of
           // its own and the shell keeps sizing against the caller's container.
           // Omitted while hidden, where the `hidden` attribute's own
           // `display: none` has to be the one that applies.
-          className={fitsFullShell ? "contents" : undefined}
+          className={shellFits ? "contents" : undefined}
         >
           {/* Published as context as well as applied as attributes, because `hidden` and `inert`
               only reach what renders INSIDE this wrapper. Slot content that portals to the body
               escapes both, and needs to be told rather than contained. */}
-          <ShellActiveContext.Provider value={fitsFullShell}>
+          <ShellActiveContext.Provider value={shellFits}>
             <ShellRegions
               {...props}
               preferences={preferences}
               update={update}
-              active={fitsFullShell}
+              active={shellFits}
               loadCount={loadCount}
               /*
                * Handed over only while this subtree is the visible root. In the
@@ -1084,7 +1096,7 @@ export function BuilderShell({ store, ...props }: BuilderShellProps) {
                * behind the notice and would measure 0, which the comparison can
                * never recover from.
                */
-              measureShell={fitsFullShell ? measureShell : NO_MEASURE}
+              measureShell={shellFits ? measureShell : NO_MEASURE}
             />
           </ShellActiveContext.Provider>
         </div>
