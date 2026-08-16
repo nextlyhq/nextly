@@ -764,7 +764,12 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
     // modifier says nothing about the column and treating that as a mismatch would refuse every
     // healthy group on that dialect.
     const expectedWidth = typeModifier(expectedSpelling);
-    const liveWidth = typeModifier(live.type);
+    // 🔴 From what introspection REPORTED, not from the live type string. On PostgreSQL that
+    // string is `udt_name`, which never carries a modifier — so parsing it made this comparison
+    // permanently inert on the dialect where a varchar length or numeric precision change is most
+    // likely to be the whole edit. The snapshot records the modifier separately, gated per dialect
+    // to what was actually declared.
+    const liveWidth = live.typeModifier;
     const widthDiffers =
       expectedWidth !== undefined &&
       liveWidth !== undefined &&
