@@ -124,23 +124,36 @@ kit: a labelled row that caps its control's width to a named token rather than a
 one-off measurement. `htmlFor` is optional: when omitted, `FieldShell` generates an id
 with `useId()`, puts it on the label, and injects it onto the control via Radix `Slot` —
 so the label/control association works out of the box, and a child that sets its own
-`id` still wins. Pass `htmlFor` explicitly only when the caller already manages its own
-id. No first-party plugin exercises it yet, so it has not met the graduation bar.
+`id` still wins, with the label following it there. Pass `htmlFor` explicitly only when
+the caller already manages its own id. `FieldShell` also owns the control's ARIA wiring:
+it generates ids for `description` and `error` (only for whichever are actually
+rendered), lists them on the control's `aria-describedby`, and sets `aria-invalid` when
+`error` is present. `children` is typed as a single `ReactElement`, not `ReactNode`:
+`Slot` clones exactly one child and throws at runtime if handed more, so a caller with
+several elements to slot in wraps them in one. No first-party plugin exercises it yet,
+so it has not met the graduation bar.
 
 `FormSection` (with `FormSectionProps`) is the form-layout kit's section: a labelled
 card holding a group of fields. It composes `Card` for its container rather than
 hand-rolling its own border and background, so it carries `Card`'s CONTAINER radius
 tier. It has no footer slot — a form commits as one document, so its action belongs
-to the page rather than to a section. No first-party plugin exercises it yet, so it
-has not met the graduation bar.
+to the page rather than to a section. The visible label stays a `<p>`, not a heading —
+heading level is a document-structure decision this component cannot make on its
+own — and the `<section>` names itself via `aria-labelledby` pointing at that label's
+generated id, so the region still has a programmatic name for landmark navigation. No
+first-party plugin exercises it yet, so it has not met the graduation bar.
 
 `Grid` gained an opt-in `responsive` prop: off by default (so every existing caller
 keeps its fixed column count, with no wrapper element added), and when set the grid
 renders its own unnamed `@container` wrapper and starts at one column, widening on
 that wrapper's own breakpoint rather than the viewport's or any ancestor's — so it
 works wherever it is mounted, with no dependency on a named container declared
-elsewhere in the tree. No first-party plugin exercises this prop yet, so `Grid` stays
-on the experimental list above.
+elsewhere in the tree. In responsive mode the wrapper is what actually participates
+in the parent's layout, so `className`, `style`, the remaining HTML attributes and
+`ref` land on IT rather than the inner grid; `cols` and `gap` describe the grid's own
+internal layout and stay on the inner element in both modes. Non-responsive mode is
+unchanged: one element, everything on it. No first-party plugin exercises this prop
+yet, so `Grid` stays on the experimental list above.
 
 `FormLayout` (with `FormLayoutProps` and `FormMeasure`) is the form-layout kit's page
 measure: it centres a bounded column so pages stop each hand-rolling their own width,
