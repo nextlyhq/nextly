@@ -333,6 +333,45 @@ export class VersionsRepository {
   }
 
   /**
+   * Remove recovery points for a document, returning how many were deleted.
+   *
+   * Every author's by default; one author's when `createdBy` is given.
+   *
+   * Autosave rows are excluded from history listings, from version reads and
+   * from retention pruning, so nothing else in the system will ever remove
+   * one. Without this a deleted document leaves a snapshot per author behind
+   * permanently: unreachable, since the live-document gate refuses a document
+   * that no longer exists, and never pruned. That is unpublished content
+   * outliving the document it belonged to, which is a retention problem rather
+   * than only a storage one.
+   *
+   * Locale is deliberately NOT a parameter. A recovery point is keyed by
+   * document and author alone, so there is no per-locale row to address --
+   * unlike the working draft, which keeps one per language.
+   */
+  async deleteAutosaves(
+    ref: VersionRef,
+    createdBy?: string | null
+  ): Promise<number> {
+    const and: (VersionsWhereCondition | VersionsWhere)[] = [
+      ...this.docWhere(ref),
+      { column: "isAutosave", op: "=" as const, value: true },
+    ];
+    // Only narrows when an author is named. `undefined` means every author,
+    // which is what a deleted document needs; `null` is a real author value
+    // (the unauthenticated bucket) and must still narrow, so the check is on
+    // `undefined` specifically rather than on falsiness.
+    if (createdBy !== undefined) {
+      and.push(
+        createdBy === null
+          ? { column: "createdBy", op: "IS NULL" as const }
+          : { column: "createdBy", op: "=" as const, value: createdBy }
+      );
+    }
+    return this.db.delete(TABLE, { and });
+  }
+
+  /**
    * Highest durable (non-autosave) version_no for a document, or 0 if none.
    * The caller allocates the next number as `getMaxVersionNo(ref) + 1`. When
    * invoked with the transaction context this read runs inside the caller's
