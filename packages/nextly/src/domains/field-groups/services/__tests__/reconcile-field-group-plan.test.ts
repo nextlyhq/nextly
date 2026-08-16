@@ -175,6 +175,66 @@ describe("planFieldGroupReconcile", () => {
     });
   });
 
+  /**
+   * An adopted column's DEFAULT is part of what the column does, and the matched-field check never
+   * sees an adoption. Dropping it writes a definition that understates the column, and the next
+   * apply — diffing that definition against the table — removes the default outright.
+   */
+  describe("adopted column defaults", () => {
+    const stored: ReconcilableField[] = [{ name: "title", type: "text" }];
+
+    it("carries a boolean default onto the adopted field", () => {
+      const live = liveTableFor(stored);
+      live.columns.push({
+        name: "featured",
+        type: "boolean",
+        nullable: true,
+        default: "true",
+      });
+
+      const result = plan({ storedFields: stored, liveMain: live });
+
+      expect(result.blockers).toEqual([]);
+      expect(result.fields.find(f => f.name === "featured")).toMatchObject({
+        type: "checkbox",
+        defaultValue: true,
+      });
+    });
+
+    // A default the field contract cannot record must refuse rather than be dropped: the creator
+    // only ever emits checkbox defaults, so anything else here is not something the pipeline wrote.
+    it("refuses an adoption whose default cannot be represented", () => {
+      const live = liveTableFor(stored);
+      live.columns.push({
+        name: "headline",
+        type: "text",
+        nullable: true,
+        default: "untitled",
+      });
+
+      const result = plan({ storedFields: stored, liveMain: live });
+
+      expect(result.blockers).toEqual([
+        expect.objectContaining({
+          columnName: "headline",
+          kind: "column-default-changed",
+        }),
+      ]);
+    });
+
+    // The negative control: a column with NO default still adopts cleanly, so the check has not
+    // simply turned every adoption into a refusal.
+    it("still adopts a column that carries no default", () => {
+      const live = liveTableFor(stored);
+      live.columns.push({ name: "subtitle", type: "text", nullable: true });
+
+      const result = plan({ storedFields: stored, liveMain: live });
+
+      expect(result.blockers).toEqual([]);
+      expect(result.adopted.map(a => a.fieldName)).toEqual(["subtitle"]);
+    });
+  });
+
   it("never adopts a system column, including the probed discriminator spelling", () => {
     const stored: ReconcilableField[] = [{ name: "title", type: "text" }];
     // A table the storage migration moved carries the new discriminator name; naming it via
@@ -684,9 +744,35 @@ describe("planFieldGroupReconcile", () => {
         liveCompanion: companion,
       });
 
-      expect(result.blockers.map(b => b.columnName).sort()).toEqual([
-        "_locale",
-        "_parent",
+      expect(result.blockers).toEqual([
+        expect.objectContaining({ kind: "structural-column-missing" }),
+      ]);
+    });
+
+    /**
+     * Membership of the key is not the property; being the WHOLE key is.
+     *
+     * A key of `(_parent, _locale, title)` contains both required columns and enforces uniqueness
+     * over three values, so PostgreSQL and SQLite have no constraint matching the runtime's
+     * `(_parent, _locale)` conflict target and MySQL admits several rows per parent and locale.
+     */
+    it("refuses a companion whose primary key carries extra columns", () => {
+      const localizedStored: ReconcilableField[] = [
+        { name: "title", type: "text", localized: true },
+      ];
+      const companion = companionWith([{ name: "title" }]);
+      const extra = companion.columns.find(c => c.name === "title");
+      if (extra) extra.primaryKey = true;
+
+      const result = plan({
+        storedFields: localizedStored,
+        storedLocalized: true,
+        liveMain: liveTableFor(localizedStored, { localized: true }),
+        liveCompanion: companion,
+      });
+
+      expect(result.blockers).toEqual([
+        expect.objectContaining({ kind: "structural-column-missing" }),
       ]);
     });
 

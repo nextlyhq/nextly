@@ -405,19 +405,31 @@ function structuralBlockers(
     // PostgreSQL and SQLite, and silently accepting duplicate locale rows on MySQL — which is the
     // worse outcome, because nothing reports it. Checked only where the columns are present, so a
     // table already refused above is not reported twice for the same cause.
-    const keyed = new Set(
-      liveCompanion.columns
-        .filter(column => column.primaryKey === true)
-        .map(column => column.name)
-    );
-    for (const keyColumn of COMPANION_KEY_COLUMNS) {
-      if (!liveCompanionColumns.has(keyColumn) || keyed.has(keyColumn))
-        continue;
+    // 🔴 The WHOLE key, not membership of it. A key of `(_parent, _locale, title)` contains both
+    // required columns and provides none of the guarantee they exist for: the uniqueness it
+    // enforces is over three values, so PostgreSQL and SQLite have no constraint matching the
+    // runtime's `(_parent, _locale)` conflict target and MySQL admits several rows per parent and
+    // locale whenever the third value differs. Membership passes that table; equality is what the
+    // claim actually needs.
+    //
+    // Compared as a SET rather than as an ordered list, and that limit is real: a snapshot records
+    // `primaryKey` per column and carries no key ordinal, so a key over the right columns in the
+    // wrong order is indistinguishable here. It is reported as unchecked rather than assumed
+    // correct — the uniqueness guarantee, which is what the runtime depends on, does not vary with
+    // key order.
+    const liveKey = liveCompanion.columns
+      .filter(column => column.primaryKey === true)
+      .map(column => column.name);
+    const required = [...COMPANION_KEY_COLUMNS];
+    const keyMatches =
+      liveKey.length === required.length &&
+      required.every(column => liveKey.includes(column));
+    if (!keyMatches) {
       blockers.push({
-        fieldName: keyColumn,
-        columnName: keyColumn,
+        fieldName: required.join(", "),
+        columnName: required.join(", "),
         kind: "structural-column-missing",
-        detail: `${liveCompanion.name} has "${keyColumn}" but it is not part of the table's primary key; localized writes match rows on (${COMPANION_KEY_COLUMNS.join(", ")}) and cannot do so without it.`,
+        detail: `${liveCompanion.name} has the primary key (${liveKey.join(", ") || "none"}) where localized writes match rows on (${required.join(", ")}); without exactly that key the write has no matching constraint and duplicate locale rows are possible.`,
       });
     }
   }
@@ -838,6 +850,35 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
       displacedRemovals.add(displaced.name);
     }
     const guessedType = guessFieldType(column.type);
+    // 🔴 A live DEFAULT is part of what the column does, and the matched-field check above never
+    // sees an adoption. Dropping it writes a definition that understates the column — inserts
+    // omitting the field keep receiving the database's value while the definition says there is
+    // none — and the next apply, diffing that definition against the table, removes the default
+    // outright. So it is carried where the field contract can express it and refused where it
+    // cannot, rather than silently discarded.
+    //
+    // Only a checkbox default is representable: it is the one default this schema's creator emits,
+    // so a live default on any other adopted column is something the pipeline did not write, and
+    // guessing a logical form for it would invent authored intent. System columns carry defaults
+    // (`_order`, the timestamps) and never reach here — they are excluded from adoption above.
+    const liveDefault = normalizeDefault(column.default, column.type);
+    let adoptedDefault: boolean | undefined;
+    if (liveDefault !== undefined) {
+      if (
+        guessedType === "checkbox" &&
+        (liveDefault === "true" || liveDefault === "false")
+      ) {
+        adoptedDefault = liveDefault === "true";
+      } else {
+        blockers.push({
+          fieldName: column.name,
+          columnName: column.name,
+          kind: "column-default-changed",
+          detail: `"${column.name}" is described by no field and its column defaults to ${liveDefault}, which a ${guessedType} field cannot record; adopting it would drop the default from the definition and the next schema change would remove it from the table.`,
+        });
+        return;
+      }
+    }
     adopted.push({
       fieldName: column.name,
       columnName: column.name,
@@ -860,6 +901,7 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
         table === "main" && !column.nullable && column.primaryKey !== true,
       ...(unique ? { unique: true } : {}),
       ...(present && !unique ? { index: true } : {}),
+      ...(adoptedDefault !== undefined ? { defaultValue: adoptedDefault } : {}),
       // The flag is written in BOTH directions, because for text-like guesses silence is not
       // neutral: `isFieldLocalized` defaults them to translatable in a localized group, which
       // would re-home a column the planner just found on the MAIN table — recording, on the
