@@ -22,3 +22,27 @@ export interface FieldShellProps {
   className?: string;
   children: React.ReactNode;
 }
+
+/**
+ * The page measure. "form" suits most pages; "wide" is opt-in for dense ones.
+ * @experimental
+ */
+export type FormMeasure = "form" | "wide";
+
+/** @experimental */
+export interface FormLayoutProps {
+  width?: FormMeasure;
+  className?: string;
+  children: React.ReactNode;
+}
+
+/** @experimental */
+export interface FormActionsProps {
+  /**
+   * Whether the form has unsaved changes. Supplied by the page from the form
+   * state that already tracks it; never computed here.
+   */
+  dirty?: boolean;
+  className?: string;
+  children: React.ReactNode;
+}

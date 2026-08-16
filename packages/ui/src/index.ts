@@ -557,3 +557,15 @@ export type { FieldShellProps, FieldWidth } from "./types/form-layout";
 export { FormSection } from "./components/form-section";
 /** @experimental */
 export type { FormSectionProps } from "./components/form-section";
+
+/**
+ * @experimental The form-layout kit's page measure and its single action bar.
+ * No first-party plugin has exercised either in production yet.
+ */
+export { FormActions, FormLayout } from "./components/form-layout";
+/** @experimental */
+export type {
+  FormActionsProps,
+  FormLayoutProps,
+  FormMeasure,
+} from "./types/form-layout";
