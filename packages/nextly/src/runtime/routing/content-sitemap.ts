@@ -67,6 +67,26 @@ export interface ContentSitemapOptions {
   status?: "published" | "draft" | "all";
   /** Locale to read in, matching the route's. */
   locale?: string;
+  /**
+   * Whether the listed collections are PUBLIC, matching the route serving them.
+   *
+   * The same decision `createContentRoute` and `createPublicContentRoute` make
+   * by which one you call, in the same words they use for it — because a
+   * sitemap enumerating under a different posture than the route disagrees with
+   * it in one direction or the other, and both are silent:
+   *
+   * - reading `"restricted"` for a PUBLIC route makes an anonymous scan of a
+   *   collection whose stored policy denies anonymous access throw, so the
+   *   whole collection is skipped and every page the route happily serves goes
+   *   unlisted;
+   * - reading `"public"` for a RESTRICTED route bypasses access control, and
+   *   publishes the slugs of entries no visitor may read.
+   *
+   * Defaults to `"restricted"`, the same secure default the route factories
+   * take. Naming the decision does not relax it — a site saying `"public"` here
+   * is stating what it already stated by calling the public factory.
+   */
+  content?: "public" | "restricted";
   /** Field carrying the last-modified timestamp, e.g. `"updatedAt"`. */
   lastModifiedField?: string;
   /** `changeFrequency` applied to every entry, if the site wants one. */
@@ -94,8 +114,18 @@ export interface ContentSitemapOptions {
    * export async function generateSitemaps() {
    *   return [{ id: 0 }, { id: 1 }];
    * }
-   * export default async function sitemap({ id }: { id: number }) {
-   *   return contentSitemapEntries({ ...config, offset: id * 50_000, limit: 50_000 });
+   * export default async function sitemap(props: { id: number | Promise<string> }) {
+   *   // Next 16 hands the id as a PROMISE; 14 and 15 hand it synchronously,
+   *   // and this package supports all three. `await` accepts both, and the
+   *   // conversion is what makes the arithmetic below real — multiplying the
+   *   // un-awaited value yields NaN, which floors `offset` to nothing and
+   *   // republishes the first shard from every file while looking correct.
+   *   const shard = Number(await props.id);
+   *   return contentSitemapEntries({
+   *     ...config,
+   *     offset: shard * 50_000,
+   *     limit: 50_000,
+   *   });
    * }
    * ```
    *
@@ -136,6 +166,7 @@ export async function contentSitemapEntries(
     lastModifiedField,
     changeFrequency,
     priority,
+    content = "restricted",
     limit = SITEMAP_MAX_URLS,
     offset = 0,
     nextly,
@@ -179,13 +210,13 @@ export async function contentSitemapEntries(
           sort: "id",
           limit: PAGE_SIZE,
           page,
-          // Built as the anonymous visitor it is served to, and BOTH halves are
-          // needed to mean that. The Direct API bypasses access control by
-          // default, so `user: undefined` alone is a trusted read wearing an
-          // anonymous costume: it would list the slugs, and any timestamp asked
-          // for, of entries no visitor may read — and the access branch below
-          // would never be reached to skip that collection.
-          overrideAccess: false,
+          // The route's posture, not a fixed one, and BOTH halves are needed
+          // to mean it. The Direct API bypasses access control by DEFAULT, so
+          // omitting this entirely is a trusted read wearing an anonymous
+          // costume — it would list the slugs, and any timestamp asked for, of
+          // entries no visitor may read, and the access branch below would
+          // never be reached to skip that collection.
+          overrideAccess: content === "public",
           user: undefined,
         });
       } catch (error) {
@@ -229,7 +260,12 @@ export async function contentSitemapEntries(
           ...(changeFrequency ? { changeFrequency } : {}),
           ...(priority === undefined ? {} : { priority }),
         });
-        if (entries.length >= limit) return truncated(entries, limit);
+        // One PAST the limit before reporting a cut. Stopping at exactly
+        // `limit` cannot tell a site with that many pages from one with more,
+        // so a complete sitemap — and every full shard of a correctly split
+        // one — would announce that pages were omitted. The extra URL is the
+        // evidence that something was, and it is dropped rather than emitted.
+        if (entries.length > limit) return truncated(entries, limit);
       }
 
       if (!result.meta.hasNext) break;
@@ -253,6 +289,7 @@ function truncated(
   entries: NextlySitemapEntry[],
   limit: number
 ): NextlySitemapEntry[] {
+  const emitted = entries.slice(0, limit);
   console.warn(
     `[nextly] sitemap reached its ${limit}-URL limit and stopped. ` +
       `Pages beyond it are absent and will not be crawled. ` +
@@ -260,7 +297,7 @@ function truncated(
       `{ offset: n * ${limit}, limit: ${limit} } — a lower limit alone restarts ` +
       `the same scan and republishes the first shard.`
   );
-  return entries;
+  return emitted;
 }
 
 /** The entry's timestamp, when the caller named a field carrying one. */

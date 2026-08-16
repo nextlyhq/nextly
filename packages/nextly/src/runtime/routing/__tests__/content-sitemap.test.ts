@@ -201,6 +201,56 @@ describe("contentSitemapEntries", () => {
     expect(calls[0].user).toBeUndefined();
   });
 
+  it("takes the ROUTE's access posture, in both directions", async () => {
+    // A sitemap enumerating under a different posture than the route it
+    // describes disagrees with it silently, and it can do so either way: a
+    // restricted scan of a PUBLIC collection skips it entirely and omits pages
+    // the route serves, while a public scan of a RESTRICTED one publishes slugs
+    // no visitor may read. Neither direction errors.
+    const restricted = reader({ pages: [[{ slug: "a" }]] });
+    await contentSitemapEntries({ ...BASE, nextly: restricted.reader });
+    expect(restricted.calls[0].overrideAccess).toBe(false);
+
+    const pub = reader({ pages: [[{ slug: "a" }]] });
+    await contentSitemapEntries({
+      ...BASE,
+      content: "public",
+      nextly: pub.reader,
+    });
+    expect(pub.calls[0].overrideAccess).toBe(true);
+  });
+
+  it("does not claim truncation for a sitemap that is merely FULL", async () => {
+    // Stopping at exactly `limit` cannot tell a site with that many pages from
+    // one with more, so a complete sitemap — and every full shard of a
+    // correctly split one — would announce that pages were omitted. A warning
+    // that fires on correct output is the kind that gets ignored.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const exact = reader({ pages: [[{ slug: "a" }, { slug: "b" }]] });
+    const full = await contentSitemapEntries({
+      ...BASE,
+      limit: 2,
+      nextly: exact.reader,
+    });
+    expect(full).toHaveLength(2);
+    expect(warn).not.toHaveBeenCalled();
+
+    const more = reader({
+      pages: [[{ slug: "a" }, { slug: "b" }, { slug: "c" }]],
+    });
+    const cut = await contentSitemapEntries({
+      ...BASE,
+      limit: 2,
+      nextly: more.reader,
+    });
+    // The extra URL is the EVIDENCE that something was omitted, and is dropped
+    // rather than emitted — so the returned list still honours the limit.
+    expect(cut).toHaveLength(2);
+    expect(warn).toHaveBeenCalledOnce();
+    warn.mockRestore();
+  });
+
   it("skips a collection refused for ACCESS, and surfaces any other refusal", async () => {
     // 403 is shared: `BUILDER_DISABLED` carries it too and says in its own
     // declaration that permissions are not the problem. Matching the status
