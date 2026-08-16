@@ -166,7 +166,17 @@ function readMigrationStatus(
   return raw as FieldGroupMigrationStatus;
 }
 
-const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
+/**
+ * Exported so guards can be DERIVED from the real method registry rather than restating it.
+ *
+ * `BUILDER_METHODS` names a subset of these by string, and a rename here leaves a dead entry there
+ * that guards nothing — silently, because an unrecognised name simply means "not builder surface".
+ * A test reading these keys turns that into a failure by name.
+ */
+export const COMPONENTS_METHODS: Record<
+  string,
+  MethodHandler<ComponentsServices>
+> = {
   listComponents: {
     // Registry returns BaseListResult `{data,total}` with limit/offset
     // semantics; offsetPaginationToMeta synthesises the canonical
@@ -672,6 +682,77 @@ const COMPONENTS_METHODS: Record<string, MethodHandler<ComponentsServices>> = {
               ? newSchemaVersion
               : currentVersion,
           });
+        }
+      );
+    },
+  },
+
+  // Repair a field group's stored definition to describe its live tables.
+  //
+  // The exit from `diverged`, so `assertNotDiverged` is deliberately NOT called: this is the one
+  // operation the state exists to permit. Also deliberately not gated on the status being
+  // `diverged` — a recording write that failed after its DDL committed leaves a divergence with no
+  // mark, and the operation is idempotent on a healthy group.
+  reconcileComponent: {
+    execute: async (svc, p) => {
+      const slug = requireParam(p, "slug", "Component slug");
+
+      const adapter = getAdapterFromDI();
+      if (!adapter) {
+        // Without a database there are no live tables, so there is nothing to reconcile AGAINST —
+        // unlike the schema services' generate-only mode, this operation is meaningless dry.
+        throw NextlyError.internal({
+          logContext: { reason: "reconcile-requires-adapter", slug },
+        });
+      }
+      const logger = getLoggerFromDI() ?? DISCARDED_LOG;
+
+      // Inside the exclusion even though no DDL runs: the plan is computed from a read of the
+      // registry AND the catalog, and an apply committing between those reads would hand the
+      // planner a pair that never coexisted. The version-conditional write catches the registry
+      // half of that race; holding the exclusion closes the catalog half too.
+      return withSchemaChangeExcluded(
+        {
+          adapter,
+          logger,
+          label: `reconcile field group "${slug}"`,
+          // 🔴 TRUE even though this operation issues no DDL of its own, because the exclusion has
+          // to be REAL for the answer to mean anything. With `false` the session takes no lock at
+          // all on a database that has never run a storage migration, so a first migration can
+          // start mid-operation and rename the table, the discriminator or the registry while the
+          // planner is reading them — and those pointer updates need not advance `schema_version`,
+          // so the version-conditional write does not reject the mixed snapshot and records it as
+          // `synced`. An operation whose entire output is the claim "this definition describes
+          // these tables" must not be able to certify a pair that never coexisted.
+          //
+          // The cost that argues for `false` elsewhere does not apply here. Collections take that
+          // shape outside development because they record a migration FILE and must keep working
+          // for a role holding DML but no DDL. This is builder surface — refused in production
+          // unless `showBuilder` is explicitly on — so a deployment that can reach it is one that
+          // already accepts schema changes from a browser, and creating a one-time lock table is
+          // strictly less than what it has already permitted.
+          issuesDdl: true,
+        },
+        async () => {
+          const { reconcileFieldGroup } = await import(
+            "../../domains/field-groups/services/field-group-reconcile-service"
+          );
+          const report = await reconcileFieldGroup({
+            registry: svc.registry,
+            adapter,
+            logger,
+            slug,
+          });
+
+          // The canonical mutation envelope: this method can rewrite the registry row, so its
+          // result is `item` like every other definition write — not a bespoke top-level key a
+          // consumer would need special handling for.
+          return respondMutation(
+            report.unchanged
+              ? `"${slug}" already describes its tables; nothing was changed.`
+              : `Reconciled "${slug}" against its live tables.`,
+            report
+          );
         }
       );
     },
