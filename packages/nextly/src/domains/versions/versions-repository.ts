@@ -678,7 +678,16 @@ export class VersionsRepository {
   ): Promise<VersionRow | undefined> {
     const rows = await this.db.select<VersionRow>(TABLE, {
       where: this.autosaveWhere(ref, createdBy),
-      orderBy: [{ column: "updatedAt", direction: "desc" }],
+      // `id` breaks the tie, and it is not decoration. SQLite stores
+      // `updatedAt` as integer epoch SECONDS, so two rows written in the same
+      // second compare equal and `LIMIT 1` would return either -- which on the
+      // dialects with no autosave uniqueness constraint is exactly when two
+      // rows can exist. A deterministic order makes the read repeatable even
+      // where the write race is not yet closed.
+      orderBy: [
+        { column: "updatedAt", direction: "desc" },
+        { column: "id", direction: "desc" },
+      ],
       limit: 1,
     });
     return rows[0];

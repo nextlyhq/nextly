@@ -1430,7 +1430,7 @@ function respondAdminMeta(payload: Record<string, unknown>): Response {
  * request that does carry a session is the same defect pointing the other way,
  * and it is the direction that looks like a working gate.
  */
-function withSessionCacheHeaders(response: Response): Response {
+export function withSessionCacheHeaders(response: Response): Response {
   response.headers.set("Cache-Control", "private, no-store");
   response.headers.set("Vary", "Cookie");
   return response;

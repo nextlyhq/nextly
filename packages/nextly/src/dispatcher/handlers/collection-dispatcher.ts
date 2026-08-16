@@ -66,6 +66,7 @@ import {
   type CollectionWithAdmin,
 } from "../../plugins/admin-views";
 import { getHandlerConfig } from "../../route-handler/auth-handler";
+import { withSessionCacheHeaders } from "../../routeHandler";
 import { getProductionNotifier } from "../../runtime/notifications/index";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import {
@@ -263,7 +264,12 @@ export const COLLECTION_VERSION_METHODS: Record<
         user: userFromParams(p),
         params: p,
       });
-      return respondDoc(item);
+      // Private, never shared. This returns one author's unpublished snapshot
+      // under a session cookie, so a shared HTTP cache holding it could serve
+      // it to a different authenticated user without authorization running
+      // again. Uses the same helper the session-bearing routes in the route
+      // handler use rather than restating the header pair.
+      return withSessionCacheHeaders(respondDoc(item));
     },
   },
   getEntryVersion: {

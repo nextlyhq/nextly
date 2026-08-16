@@ -69,6 +69,7 @@ import { resolveBuilderWebhooks } from "../../domains/webhooks/builder-webhooks"
 import { NextlyError } from "../../errors";
 import { transformRichTextFields } from "../../lib/field-transform";
 import { resolveBuilderRevalidate } from "../../revalidation/builder-revalidate";
+import { withSessionCacheHeaders } from "../../routeHandler";
 import { getProductionNotifier } from "../../runtime/notifications/index";
 import { isReservedResourceSlug } from "../../schemas/_zod/rbac";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
@@ -321,6 +322,12 @@ export const SINGLE_VERSION_METHODS: Record<
   autosaveSingle: {
     execute: async (_svc, p, body) => {
       const slug = String(p.slug ?? "");
+      // Validate the body BEFORE resolving the live document. Otherwise one
+      // malformed request answers 404 for an unmaterialized Single and 400 for
+      // a materialized one, which tells a caller whose per-document rule has
+      // not been evaluated yet whether the document exists. Same ordering the
+      // label handler uses, and for the same reason.
+      const snapshot = requireSnapshotBody(body);
       // As everywhere in this handler, the document id comes from the live row
       // rather than the URL: a Single has exactly one document and the client
       // must not name which one it is writing a recovery point for.
@@ -332,7 +339,7 @@ export const SINGLE_VERSION_METHODS: Record<
         user: userFromParams(p),
         params: p,
         // The body IS the snapshot. See the collection handler.
-        snapshot: requireSnapshotBody(body),
+        snapshot,
         locale: typeof p.locale === "string" && p.locale ? p.locale : null,
       });
       return respondMutation("Draft recovery point saved.", item);
@@ -349,7 +356,12 @@ export const SINGLE_VERSION_METHODS: Record<
         user: userFromParams(p),
         params: p,
       });
-      return respondDoc(item);
+      // Private, never shared. This returns one author's unpublished snapshot
+      // under a session cookie, so a shared HTTP cache holding it could serve
+      // it to a different authenticated user without authorization running
+      // again. Uses the same helper the session-bearing routes in the route
+      // handler use rather than restating the header pair.
+      return withSessionCacheHeaders(respondDoc(item));
     },
   },
 };
