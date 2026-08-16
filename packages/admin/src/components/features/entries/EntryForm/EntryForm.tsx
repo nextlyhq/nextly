@@ -208,6 +208,7 @@ export function EntryForm({
     handleCancel,
     isSubmitting,
     isDirty,
+    autosave,
   } = useEntryForm({
     collection,
     entry,
@@ -476,6 +477,7 @@ export function EntryForm({
                   draftsEnabled={collection.draftsEnabled === true}
                   isSubmitting={isSubmitting}
                   isDirty={isDirty}
+                  autosave={autosave}
                   entry={entry}
                   collectionSlug={collection.name}
                   historyFields={getCollectionFields(collection)}

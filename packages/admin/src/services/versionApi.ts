@@ -190,6 +190,39 @@ export const versionApi = {
     ),
 
   /**
+   * Record the author's rolling recovery point for a document.
+   *
+   * PUT because it is idempotent by construction: the server keeps one autosave
+   * row per document and author and rewrites it in place, so repeating this
+   * leaves one row rather than accumulating history. Nothing is echoed back --
+   * the caller already holds these values, and a response body would be one more
+   * thing to keep in step with a form somebody is still typing into.
+   *
+   * The snapshot goes up as-is and is stored unvalidated. An author part-way
+   * through a required field still has work worth not losing, so a recovery
+   * point is allowed to be incomplete; it records what they had rather than
+   * claiming it is publishable.
+   *
+   * Applies to both scopes: a Single's autosave nests under its own history and
+   * carries no entry id, which `basePath` already handles.
+   */
+  autosave: (
+    scope: VersionScope,
+    snapshot: Record<string, unknown>,
+    opts: { locale?: string } = {}
+  ): Promise<{ message: string }> => {
+    // Only sent when a content language is active; absent means the
+    // unlocalized row rather than "every locale".
+    const query = opts.locale
+      ? `?${new URLSearchParams({ locale: opts.locale }).toString()}`
+      : "";
+    return protectedApi.put<{ message: string }>(
+      `${basePath(scope)}/autosave${query}`,
+      snapshot
+    );
+  },
+
+  /**
    * Compare two versions. A read of history, gated and field-redacted exactly
    * like reading one version; both versions must share a locale. `from`/`to`
    * are ordered older -> newer by the caller.

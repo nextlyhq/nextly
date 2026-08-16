@@ -21,7 +21,9 @@ import { useCreateEntry } from "@admin/hooks/queries/useCreateEntry";
 import { useDeleteEntry } from "@admin/hooks/queries/useDeleteEntry";
 import { useDiscardWorkingDraft } from "@admin/hooks/queries/useDiscardWorkingDraft";
 import { useUpdateEntry } from "@admin/hooks/queries/useUpdateEntry";
+import { useAutosave, type UseAutosaveReturn } from "@admin/hooks/useAutosave";
 import { generateClientSchema } from "@admin/lib/field-validation";
+import { versionApi } from "@admin/services/versionApi";
 import type { EntryValue } from "@admin/types/collection";
 
 // ============================================================================
@@ -317,6 +319,14 @@ export interface UseEntryFormReturn {
   isDeleting: boolean;
   /** Whether form has unsaved changes */
   isDirty: boolean;
+  /**
+   * Rolling recovery point for this entry, for the status line beside Save.
+   *
+   * Autosave never clears `isDirty`: a recovery point is not a save, so the
+   * unsaved-changes guard must keep warning on the way out. Someone who saw
+   * "Saved" and left believing their work was published would be exactly wrong.
+   */
+  autosave: UseAutosaveReturn;
   /** Form mode */
   mode: EntryFormMode;
   /** Collection being edited */
@@ -683,6 +693,54 @@ export function useEntryForm({
     entryId: entry?.id ?? "",
   });
 
+  // A recovery point has to attach to a stored record, so autosave stays off
+  // while creating: there is no id to write against until the first save, and
+  // materializing one from a half-typed form would put an entry nobody asked
+  // for into the list.
+  const entryId = entry?.id;
+  const autosaveEnabled = mode === "edit" && Boolean(entryId);
+
+  const autosaveEntry = useCallback(
+    async (values: Record<string, unknown>) => {
+      if (!entryId) return;
+      await versionApi.autosave(
+        { kind: "collection", slug: collection.name, entryId },
+        values,
+        // Route the recovery point to the language being edited, as the
+        // update mutation does; absent means the unlocalized row.
+        locale ? { locale } : {}
+      );
+    },
+    [collection.name, entryId, locale]
+  );
+
+  const autosave = useAutosave({
+    enabled: autosaveEnabled,
+    // getValues, never handleSubmit. This form is deliberately
+    // `mode: "onSubmit"` so validation stays quiet until the user asks to save;
+    // submitting on a timer would run the validator and light up inline errors
+    // and the toast while they are still mid-field.
+    getValues: form.getValues,
+    save: autosaveEntry,
+  });
+
+  // Restart the debounce on user edits only. `subscribe` delivers changes
+  // without re-rendering, so watching every field costs no render per
+  // keystroke; `type` is "change" for user input and undefined for programmatic
+  // updates, which keeps `form.reset` after a save from arming a fresh autosave.
+  const { notifyChange } = autosave;
+  useEffect(() => {
+    const unsubscribe = form.subscribe({
+      formState: { values: true },
+      callback: ({ type }) => {
+        if (type === "change") {
+          notifyChange();
+        }
+      },
+    });
+    return unsubscribe;
+  }, [form, notifyChange]);
+
   // Singular label for UI
   const singularLabel = getSingularLabel(collection);
 
@@ -801,6 +859,7 @@ export function useEntryForm({
       discardMutation.isPending,
     isDeleting: deleteMutation.isPending,
     isDirty: form.formState.isDirty,
+    autosave,
     mode,
     collection,
     entry,

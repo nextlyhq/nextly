@@ -47,6 +47,7 @@ import {
 } from "@admin/components/features/entries/EntryLocaleContext";
 import { historyEnabledFrom } from "@admin/components/features/versions/history-enabled";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
+import { useAutosave } from "@admin/hooks/useAutosave";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
 import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 import { useLocalization } from "@admin/hooks/useLocalization";
@@ -57,6 +58,7 @@ import {
 } from "@admin/lib/builder/takeoverLayout";
 import { generateClientSchema } from "@admin/lib/field-validation";
 import { cn } from "@admin/lib/utils";
+import { versionApi } from "@admin/services/versionApi";
 
 import { relaxIdentityRequired } from "./identity-fields";
 
@@ -434,6 +436,50 @@ export function SingleForm({
   const { errors, submitCount } = form.formState;
   const isDirty = form.formState.isDirty;
 
+  // A recovery point attaches to the stored document, so autosave waits until
+  // the Single has been materialized. The id is carried for cache identity
+  // only: the server resolves the live document itself rather than trusting a
+  // client-supplied id.
+  const documentId = document?.id ? String(document.id) : "";
+  const autosaveSingle = useCallback(
+    async (values: Record<string, unknown>) => {
+      if (!documentId) return;
+      await versionApi.autosave(
+        { kind: "single", slug: schema.slug, documentId },
+        values,
+        // Route the recovery point to the language being edited, matching the
+        // save; absent means the unlocalized row.
+        locale ? { locale } : {}
+      );
+    },
+    [schema.slug, documentId, locale]
+  );
+
+  const autosave = useAutosave({
+    enabled: Boolean(documentId),
+    // getValues, never handleSubmit: this form is `mode: "onSubmit"` for the
+    // same reason EntryForm is, and submitting on a timer would fire validation
+    // while the author is still mid-field.
+    getValues: form.getValues,
+    save: autosaveSingle,
+  });
+
+  // Restart the debounce on user edits only. `subscribe` reports changes without
+  // re-rendering, and `type` is undefined for programmatic updates, so the
+  // `form.reset` after a save does not arm a fresh autosave.
+  const { notifyChange } = autosave;
+  useEffect(() => {
+    const unsubscribe = form.subscribe({
+      formState: { values: true },
+      callback: ({ type }) => {
+        if (type === "change") {
+          notifyChange();
+        }
+      },
+    });
+    return unsubscribe;
+  }, [form, notifyChange]);
+
   // ---------------------------------------------------------------------------
   // Handlers
   // ---------------------------------------------------------------------------
@@ -592,6 +638,7 @@ export function SingleForm({
                 hasStatus={hasStatus}
                 isSubmitting={isSubmitting}
                 isDirty={isDirty}
+                autosave={autosave}
                 entry={entryLike}
                 collectionSlug={schema.slug}
                 /* i18n: forward the active locale + switch handler so a localized single shows

@@ -101,3 +101,11 @@ export type {
   UseFieldBuilderReturn,
   FieldBuilderValidationResult,
 } from "./useFieldBuilder";
+
+// Utility hooks - server-side autosave (rolling recovery points)
+export { useAutosave } from "./useAutosave";
+export type {
+  AutosaveStatus,
+  UseAutosaveOptions,
+  UseAutosaveReturn,
+} from "./useAutosave";
