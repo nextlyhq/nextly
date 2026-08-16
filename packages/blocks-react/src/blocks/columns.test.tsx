@@ -125,7 +125,7 @@ describe("the columns pair", () => {
       // The track list is what makes columns share the row. Asserting only
       // `display:grid` passes on a grid with one implicit column, which looks
       // identical to the stacked <div>s this block exists to replace.
-      expect(css).toContain("minmax(240px, 1fr)");
+      expect(css).toContain("minmax(min(240px, 100%), 1fr)");
     });
 
     it("emits the column's min-width so a long child cannot force overflow", () => {

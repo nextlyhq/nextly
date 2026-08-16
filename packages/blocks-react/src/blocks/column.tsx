@@ -7,10 +7,11 @@
  * drop target — not to give it a capability a box lacks. See `columns.tsx` for
  * why that distinction is the one Elementor V3 got wrong.
  *
- * **It carries no width prop, deliberately.** Width is a style, and the style
- * catalog already expresses it per breakpoint; a `width` prop would be a
- * second way to say the same thing, disagreeing with the first at whichever
- * breakpoint nobody checked. `container.tsx` makes the same call for padding.
+ * **It carries no width prop, and a width STYLE will not widen it either.**
+ * The row is a grid, so its track list allocates the width; a `width` here
+ * resizes the item inside its track and leaves the track unchanged. Unequal
+ * columns are made by editing the ROW's `grid-template-columns` (e.g. `7fr
+ * 3fr`). Worth knowing because the opposite is the natural assumption.
  *
  * **This module owns both halves' names and the column's own defaults**, so
  * `columns.tsx` imports from here and never the reverse. A cycle between the

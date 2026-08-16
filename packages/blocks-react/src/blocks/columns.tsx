@@ -7,11 +7,18 @@
  * `core/column`. Nothing it can be told to do is unavailable to a box.
  *
  * **Why a pair of blocks rather than a box with a flex display.** The pair is
- * what makes each column ADDRESSABLE. An anonymous flex child created by the
- * row's own renderer has no node id, so it has no scoped class, so it cannot
- * be selected, styled, targeted by a drop, or named in a rule — and the author
- * who wants one column wider than another has nowhere to put that. Giving the
- * child a block name buys identity; it deliberately buys nothing else.
+ * what makes each column ADDRESSABLE. An anonymous child created by the row's
+ * own renderer has no node id, so it has no scoped class, so it cannot be
+ * selected, styled, targeted by a drop, or named in a rule. Giving the child a
+ * block name buys identity; it deliberately buys nothing else.
+ *
+ * **Unequal columns are set on the ROW, not on a column.** In a grid the track
+ * list allocates the width, so a `width` style on a column resizes the ITEM
+ * inside its track and leaves the track alone — it cannot produce a 70/30
+ * layout. An author makes one column wider by editing this row's
+ * `grid-template-columns` (a catalog property this block supports through
+ * `layout`), e.g. `7fr 3fr`. Stated because the opposite is the natural
+ * assumption, and because a per-column `width` will look like it did nothing.
  *
  * That is the distinction `container.tsx` draws when it rejects Elementor V3's
  * Section/Column: what broke live sites there was columns with CAPABILITIES a
@@ -74,7 +81,13 @@ export const COLUMNS_BASE_STYLES = {
   base: {
     base: {
       display: "grid",
-      gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+      // `min(240px, 100%)` rather than a bare `240px`. `auto-fit` collapses
+      // empty tracks but never drops the LAST one, so a flat minimum makes a
+      // single remaining track overflow any container narrower than it —
+      // reachable in a nested row or a narrow embed, and not saved by the
+      // column's `min-width: 0`, which governs the item rather than the track.
+      // Capping the minimum by the available width lets that last track fit.
+      gridTemplateColumns: "repeat(auto-fit, minmax(min(240px, 100%), 1fr))",
     },
   },
 } as const;
