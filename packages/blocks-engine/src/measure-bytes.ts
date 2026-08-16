@@ -507,6 +507,27 @@ export interface DocumentSurvey {
    * {@link unreadable} — and will not learn about a fourth.
    */
   complete: boolean;
+
+  /**
+   * Whether the walk VISITED every member, regardless of what it made of them.
+   *
+   * Narrower than {@link complete} by exactly one term. `complete` answers "are
+   * these numbers the writer's totals?", and a document whose byte count is
+   * merely {@link approximate} — a node hook returning a replacement — fails
+   * that while having been read from end to end.
+   *
+   * The distinction decides whether a caller may do its own per-value work.
+   * That work is bounded by what the walk reached, so an approximate count
+   * bounds it exactly as well as an exact one; a walk that STOPPED — refused a
+   * member, or passed a cap and returned early — bounds nothing.
+   *
+   * Published rather than left to the caller because the two questions are one
+   * character apart at the call site and the wrong one fails OPEN: skipping
+   * per-value checks silently drops real issues on a document nothing was wrong
+   * with. `complete` is derived FROM this, so a new way to stop short sets this
+   * and both stay correct.
+   */
+  traversed: boolean;
 }
 
 export interface SurveyLimits {
@@ -676,38 +697,49 @@ export function surveyDocument(
   // `deepest` and `nodes` are advanced immediately before the check that ends
   // the walk, so reading them here reports the same breach the exit detected
   // rather than a stale one.
-  const done = (): DocumentSurvey => ({
-    limits: enforced,
-    unwritable,
-    lossy,
-    unreadable,
-    // DERIVED from every way the walk can stop short, so a new one is covered
-    // here the moment it sets its own flag. A caller asking "are these numbers
-    // totals?" must not have to re-list the reasons they might not be.
-    complete:
+  const done = (): DocumentSurvey => {
+    const traversed =
       !unreadable &&
-      !approximate &&
       bytes <= maxBytes &&
       deepest <= maxDepth &&
-      nodes <= maxNodes,
-    bytes,
-    tooLarge: bytes > maxBytes,
-    tooDeep: deepest > maxDepth,
-    tooManyNodes: nodes > maxNodes,
-    // DERIVED, never accumulated alongside. It is the published union of ALL
-    // THREE questions above, and computing it separately would let a value set
-    // one of them without setting this.
-    //
-    // `unreadable` belongs in it, and leaving it out is fail-OPEN rather than a
-    // narrowing: `measureBytes` refuses on this field, so a document the walk
-    // declined to read would come back `exceeded: false` and be accepted by a
-    // caller that asks nothing else. The published contract already named this
-    // case — "an accessor that threw" — so excluding it would also be a silent
-    // change to what the field means.
-    unserializable: unwritable || lossy || unreadable,
-    nodes,
-    depth: deepest,
-  });
+      nodes <= maxNodes;
+    return {
+      limits: enforced,
+      unwritable,
+      lossy,
+      unreadable,
+      // DERIVED from every way the walk can stop short, so a new one is covered
+      // here the moment it sets its own flag. A caller asking "did this visit
+      // everything?" must not have to re-list the reasons it might not have.
+      //
+      // The caps belong here because the counter RETURNS once a budget is passed,
+      // so exceeding one is a stop rather than a verdict about a document that
+      // was read whole.
+      traversed,
+      // DERIVED FROM `traversed`, one term narrower: the numbers are the writer's
+      // only if the walk both reached everything AND counted what will be
+      // written. Restating the stop conditions here instead would let a new one
+      // set `traversed` and leave this answering the old question.
+      complete: traversed && !approximate,
+      bytes,
+      tooLarge: bytes > maxBytes,
+      tooDeep: deepest > maxDepth,
+      tooManyNodes: nodes > maxNodes,
+      // DERIVED, never accumulated alongside. It is the published union of ALL
+      // THREE questions above, and computing it separately would let a value set
+      // one of them without setting this.
+      //
+      // `unreadable` belongs in it, and leaving it out is fail-OPEN rather than a
+      // narrowing: `measureBytes` refuses on this field, so a document the walk
+      // declined to read would come back `exceeded: false` and be accepted by a
+      // caller that asks nothing else. The published contract already named this
+      // case — "an accessor that threw" — so excluding it would also be a silent
+      // change to what the field means.
+      unserializable: unwritable || lossy || unreadable,
+      nodes,
+      depth: deepest,
+    };
+  };
 
   /** Account for a value that cannot contain others. */
   const takeScalar = (held: unknown): boolean => {

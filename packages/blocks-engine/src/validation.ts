@@ -24,6 +24,8 @@ import { DEFAULT_LIMITS, LIMIT_WARNING_RATIO } from "./limits";
 import type { DocumentLimits } from "./limits";
 import { surveyDocument } from "./measure-bytes";
 import type { DocumentSurvey } from "./measure-bytes";
+import { canBeRoot, canNest } from "./nesting";
+import type { NestingSource } from "./nesting";
 import { isPlainRecord } from "./plain-record";
 import type { TokenKind } from "./style/catalog-types";
 import { MAX_NAMED_CLASS_NAME_LENGTH } from "./style/named-class";
@@ -146,6 +148,20 @@ export interface ValidationContext {
    */
   tokens?: TokenLookup;
   classes?: ClassLookup;
+  /**
+   * How to resolve a block's declared parents, for checking that each node sits
+   * somewhere its own definition permits.
+   *
+   * Separate from {@link registry} because that lookup answers whether a type is
+   * registered and nothing else, and widening it would make every existing
+   * caller owe an answer about nesting to keep reporting unknown types.
+   *
+   * Absent means nesting is not checked, the same terms as tokens and classes: a
+   * document is validated against what the caller can answer for. That is
+   * fail-open and worth naming as such — a caller that omits this gets no
+   * placement issues rather than an error saying it could not look.
+   */
+  nesting?: NestingSource;
 }
 
 /**
@@ -225,6 +241,13 @@ export const ISSUE_CODES = {
     "Some token and class names were not checked against the site, so any that do not resolve are not reported.",
   "invalid-scope":
     "The compile scope is not a single class, so the document's rules were not scoped.",
+  // Spelled the same as the `NestingRefusal` members they report, so the code a
+  // caller matches on and the reason the rule gave are one string rather than a
+  // mapping that has to be kept in step.
+  "wrong-parent":
+    "A node declares the block types it may sit under, and its container is not one of them.",
+  "restricted-at-root":
+    "A node declares the block types it may sit under, and it sits at the top level, which is inside none of them.",
 } as const;
 
 /** A stable validation issue code. */
@@ -398,12 +421,18 @@ export function validateDocument(
   // untrustworthy, which goes stale the first time a fifth way to stop short is
   // added. `complete` is that fact, derived where it is known.
   //
-  // The narrow question, deliberately. A document JSON merely REWRITES was
-  // measured in full, so the per-value work below is bounded and skipping it
+  // `traversed`, NOT `complete`, and the difference is a fail-open. `complete`
+  // additionally requires the counts to be the writer's, so a node hook
+  // returning a replacement makes it false on a document the walk read from end
+  // to end — and every per-value check below was then skipped on a document
+  // with nothing wrong with it. Coverage silently dropped, no issue raised.
+  //
+  // The narrow question is the one this needs. A document JSON merely REWRITES
+  // was measured in full, so the per-value work below is bounded and skipping it
   // would drop real issues on a document whose only fault is that a value comes
-  // back changed. It is a measurement that stopped short which leaves nothing
-  // bounded.
-  const overLimits = !survey.complete;
+  // back changed. It is a measurement that STOPPED SHORT which leaves nothing
+  // bounded, and that is exactly what `traversed` reports.
+  const overLimits = !survey.traversed;
 
   const styleBudget = newStyleIssueBudget();
   const nodeState: NodeCheckState = {
@@ -444,18 +473,41 @@ export function validateDocument(
   // Index-based reads (not .map/.forEach) so a sparse array's holes become
   // explicit undefined entries reported as invalid nodes, and the queue is
   // capped at maxNodes so an oversized forest cannot grow it without bound.
-  const queue: Array<{ node: BlockNode; path: string }> = [];
+  // `parentType` is the container this node was reached through, and undefined
+  // means top level. Carried on the queue entry rather than recovered later: a
+  // breadth-first walk has already left the parent behind by the time a node is
+  // dequeued, and re-deriving it would mean a second traversal answering a
+  // question this one already knew.
+  const queue: Array<{
+    node: BlockNode;
+    path: string;
+    parentType: string | undefined;
+  }> = [];
   for (
     let i = 0;
     i < doc.nodes.length && queue.length <= survey.limits.maxNodes;
     i++
   ) {
-    queue.push({ node: doc.nodes[i], path: pointer("/nodes", i) });
+    queue.push({
+      node: doc.nodes[i],
+      path: pointer("/nodes", i),
+      parentType: undefined,
+    });
   }
   for (let i = 0; i < queue.length && i < survey.limits.maxNodes; i++) {
-    const { node, path } = queue[i];
+    const { node, path, parentType } = queue[i];
     validateNode(node, path, nodeState);
+    checkNesting(node, path, parentType, nodeState);
     if (isPlainRecord(node) && isPlainRecord(node.slots)) {
+      // The container's type, read once for every child beneath it. Only a
+      // string can name a block: a node whose type is malformed is already
+      // reported by `validateNode`, and asking where it may hold children would
+      // add a second complaint about the same defect in terms the author cannot
+      // act on. Its children are still walked, so nothing beneath a bad
+      // container goes unchecked — they are checked against no restriction
+      // rather than against a name that does not exist.
+      const containerType =
+        typeof node.type === "string" ? node.type : undefined;
       for (const [slot, children] of Object.entries(node.slots)) {
         if (Array.isArray(children)) {
           const slotPath = pointer(pointer(path, "slots"), slot);
@@ -464,7 +516,11 @@ export function validateDocument(
             c < children.length && queue.length <= survey.limits.maxNodes;
             c++
           ) {
-            queue.push({ node: children[c], path: pointer(slotPath, c) });
+            queue.push({
+              node: children[c],
+              path: pointer(slotPath, c),
+              parentType: containerType,
+            });
           }
         }
       }
@@ -472,6 +528,69 @@ export function validateDocument(
   }
 
   return { issues, survey };
+}
+
+/**
+ * Report a node sitting somewhere its own definition does not permit.
+ *
+ * The rule is asked of `canNest`/`canBeRoot` rather than restated here, so the
+ * canvas refusing a drag and this refusing a save cannot drift: one of them
+ * would otherwise start permitting a placement the other writes, and a drag that
+ * is refused leaves nothing behind to compare against.
+ *
+ * An ERROR in both modes. `parent` is the child stating where it is meaningful,
+ * so a violation is a document that renders somewhere its author never said it
+ * could — not a forward-compatible value to preserve, which is what the lenient
+ * mode exists for.
+ */
+function checkNesting(
+  node: BlockNode,
+  path: string,
+  parentType: string | undefined,
+  state: NodeCheckState
+): void {
+  const source = state.ctx.nesting;
+  if (source === undefined) return;
+  // Only a string can name a block. A malformed type is reported by
+  // `validateNode`; passing it here would ask the rule about a name no
+  // definition carries and get "no restriction" back, which is a confident
+  // answer to a question the document cannot pose.
+  const raw: unknown = node;
+  if (!isPlainRecord(raw) || typeof raw.type !== "string") return;
+  const verdict =
+    parentType === undefined
+      ? canBeRoot(raw.type, source)
+      : canNest(raw.type, parentType, source);
+  if (verdict.allowed) return;
+  // The refusal's own reason IS the issue code, so a rule added to
+  // `NestingRefusal` reaches the document already named rather than through a
+  // mapping that answers for the members it was written with.
+  state.issues.push({
+    path,
+    code: verdict.reason,
+    severity: "error",
+    message: messageForRefusal(raw.type, parentType, source),
+  });
+}
+
+/**
+ * Names the containers the block WILL go in, because that is the author's next
+ * action. A sentence saying only that the placement is wrong leaves them to find
+ * the permitted set by trying positions.
+ */
+function messageForRefusal(
+  childType: string,
+  parentType: string | undefined,
+  source: NestingSource
+): string {
+  const permitted = source.parentsOf(childType);
+  const where =
+    Array.isArray(permitted) && permitted.length > 0
+      ? permitted.map(name => describeValue(name)).join(" or ")
+      : "certain containers";
+  return parentType === undefined
+    ? `A "${describeValue(childType)}" may only sit inside ${where}, and a top-level node sits inside nothing.`
+    : `A "${describeValue(childType)}" may only sit inside ${where}, not inside "${describeValue(parentType)}".`;
 }
 
 /**

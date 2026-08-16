@@ -13,6 +13,7 @@ import type { AnyBlockDefinition, BlockSupports } from "./block";
 import { COMPONENT_INSTANCE_TYPE } from "./document";
 import type { MigrationSource } from "./migration";
 import { MAX_MIGRATION_STEPS, findMigrationGaps } from "./migration";
+import type { NestingSource } from "./nesting";
 import { styleSupportDefinitions } from "./style/supports-map";
 import type { BlockTypeLookup } from "./validation";
 
@@ -439,6 +440,22 @@ export function clearBlocks(): void {
  */
 export function registryLookup(): BlockTypeLookup {
   return { has: hasBlock };
+}
+
+/**
+ * The registry as the nesting source, exposing each block's declared parents so
+ * a document can be checked against where its blocks say they belong.
+ *
+ * A block the registry does not hold answers `undefined`, which the rule reads
+ * as "declares no restriction" rather than as "unknown". That is deliberate: an
+ * unregistered type is reported by the block-type lookup, and refusing its
+ * placement as well would describe a missing registration as a layout mistake.
+ *
+ * Reads through to the live registry on every call, so it stays correct across a
+ * re-register rather than capturing the definitions present when it was built.
+ */
+export function registryNestingSource(): NestingSource {
+  return { parentsOf: name => getBlock(name)?.parent };
 }
 
 /**
