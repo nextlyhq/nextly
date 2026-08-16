@@ -46,7 +46,7 @@ function SettingRow({
 }) {
   return (
     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6 py-2">
-      <div className="space-y-1 max-w-xl">
+      <div className="space-y-1">
         <Label
           htmlFor={htmlFor}
           className="text-[13px] font-semibold text-foreground tracking-tight"
@@ -135,7 +135,8 @@ export function FormSettingsTab({ spamDefaults }: FormSettingsTabProps) {
   const { settings, updateSettings } = useFormBuilder();
 
   return (
-    <div className="w-full max-w-3xl flex flex-col gap-10">
+    // The measure belongs to `FormLayout` now, not to this tab.
+    <div className="flex flex-col gap-10">
       {/* Submission */}
       <section>
         <SectionHeading>Submission</SectionHeading>

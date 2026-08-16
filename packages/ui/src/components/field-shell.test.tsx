@@ -14,11 +14,33 @@
  * precedence happened to produce.
  */
 import { cleanup, render, screen } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { resetDevWarnings } from "../lib/dev-warn";
+import type { FieldShellRenderProps } from "../types/form-layout";
 
 import { FieldShell } from "./field-shell";
+
+/**
+ * Stands in for `@radix-ui/react-select`'s `Root`: it destructures a fixed,
+ * named prop list and never spreads the remainder, so anything cloned onto
+ * it — `id`, `aria-describedby`, `aria-invalid` — never reaches a real DOM
+ * node. Using this shape rather than the real `Select` keeps the suite
+ * independent of `@radix-ui/react-select` while exercising precisely the
+ * failure mode the render-function contract and the mount assertion exist
+ * for.
+ */
+function DropsPropsRoot({
+  children,
+}: {
+  id?: string;
+  "aria-describedby"?: string;
+  "aria-invalid"?: boolean;
+  children: ReactNode;
+}) {
+  return <div data-testid="drops-props-root">{children}</div>;
+}
 
 // Several cases below share the label text "Name" and query for it through
 // the shared jsdom document via `screen`, so a leftover mount from an earlier
@@ -265,5 +287,149 @@ describe("FieldShell", () => {
     } finally {
       warn.mockRestore();
     }
+  });
+
+  describe("a render-function child", () => {
+    it("receives a computed id that lands on the element the caller applies it to, matching the label's htmlFor", () => {
+      render(
+        <FieldShell label="Status">
+          {({ id }: FieldShellRenderProps) => (
+            <input aria-label="Status" id={id} />
+          )}
+        </FieldShell>
+      );
+      const label = screen.getByText("Status");
+      const control = screen.getByLabelText("Status");
+      expect(control.id).not.toBe("");
+      expect(label.getAttribute("for")).toBe(control.id);
+    });
+
+    it("computes the same id, describedBy and invalid as the element path for the same props", () => {
+      // Re-rendering the SAME FieldShell instance — rather than mounting two
+      // separate ones — is what makes this comparison meaningful: `useId()`
+      // is stable across a re-render of one instance but differs between
+      // two independent mounts, so only a re-render lets the two paths be
+      // compared by identical id values rather than merely similar shapes.
+      // If the render-function path re-derived its own answer instead of
+      // sharing the element path's computation, swapping `children` here
+      // would change what the function receives even though nothing else
+      // did.
+      let received: FieldShellRenderProps | undefined;
+      const { rerender } = render(
+        <FieldShell
+          label="Name"
+          description="Shown in the key list."
+          error="Name is required"
+        >
+          <input aria-label="Name" />
+        </FieldShell>
+      );
+      const elementControl = screen.getByLabelText("Name");
+      const elementId = elementControl.id;
+      const elementDescribedBy =
+        elementControl.getAttribute("aria-describedby");
+      const elementInvalid = elementControl.getAttribute("aria-invalid");
+
+      rerender(
+        <FieldShell
+          label="Name"
+          description="Shown in the key list."
+          error="Name is required"
+        >
+          {(field: FieldShellRenderProps) => {
+            received = field;
+            return (
+              <input
+                aria-label="Name"
+                id={field.id}
+                aria-describedby={field.describedBy}
+                aria-invalid={field.invalid}
+              />
+            );
+          }}
+        </FieldShell>
+      );
+
+      expect(received?.id).toBe(elementId);
+      expect(received?.describedBy).toBe(elementDescribedBy ?? undefined);
+      expect(String(received?.invalid)).toBe(elementInvalid);
+    });
+  });
+
+  describe("the post-mount id assertion", () => {
+    it("warns when the computed id lands on no element in the document", () => {
+      // `DropsPropsRoot` is the failure mode itself: a component that takes
+      // `id` as a prop and never puts it anywhere in the DOM, exactly like
+      // `@radix-ui/react-select`'s `Root`.
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        render(
+          <FieldShell label="Status">
+            <DropsPropsRoot>
+              <button type="button">Status trigger</button>
+            </DropsPropsRoot>
+          </FieldShell>
+        );
+        expect(warn).toHaveBeenCalled();
+        const messages = warn.mock.calls.map(call => String(call[0]));
+        expect(messages.some(message => message.includes('"Status"'))).toBe(
+          true
+        );
+        expect(
+          messages.some(message =>
+            message.includes("never appeared on any element")
+          )
+        ).toBe(true);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it("stays silent for a correctly wired atomic control", () => {
+      // The positive control for the case above: without it, a check that
+      // fired unconditionally — or that never ran at all and let the
+      // `toHaveBeenCalled()` assertion above pass on some other warning —
+      // would pass this too.
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        render(
+          <FieldShell label="Name">
+            <input aria-label="Name" />
+          </FieldShell>
+        );
+        expect(warn).not.toHaveBeenCalled();
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it("stays silent for a correctly wired render-function control", () => {
+      // The render-function counterpart of the atomic-control control above:
+      // the caller applies the computed wiring to the real, focusable
+      // element nested inside the compound root, so the id lands and the
+      // check has nothing to report.
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        render(
+          <FieldShell label="Status">
+            {({ id, describedBy, invalid }: FieldShellRenderProps) => (
+              <DropsPropsRoot>
+                <button
+                  type="button"
+                  id={id}
+                  aria-describedby={describedBy}
+                  aria-invalid={invalid}
+                >
+                  Status trigger
+                </button>
+              </DropsPropsRoot>
+            )}
+          </FieldShell>
+        );
+        expect(warn).not.toHaveBeenCalled();
+      } finally {
+        warn.mockRestore();
+      }
+    });
   });
 });
