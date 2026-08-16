@@ -319,6 +319,31 @@ describe("F6 region cycling", () => {
   });
 });
 
+describe("an embedded host with nowhere to exit to", () => {
+  it("renders no exit affordance at all", () => {
+    // The editor also mounts as a FIELD inside an entry form, where the author is
+    // already on the page they would be sent back to. An inert button there
+    // teaches them that leaving does nothing.
+    stubViewport(true);
+    render(<BuilderShell store={memoryStore()} />);
+
+    expect(screen.queryByRole("button", { name: "Exit editor" })).toBeNull();
+  });
+
+  it("still renders the editor itself", () => {
+    // The positive control for the assertion above: without it, a shell that
+    // failed to render anything would satisfy "no exit button" perfectly.
+    stubViewport(true);
+    render(
+      <BuilderShell store={memoryStore()}>
+        <div data-testid="canvas-slot" />
+      </BuilderShell>
+    );
+
+    expect(screen.getByTestId("canvas-slot")).toBeTruthy();
+  });
+});
+
 describe("a viewport too narrow for the shell", () => {
   it("says where to edit instead of compressing", () => {
     // An editor that merely gets cramped is worse than one that says it needs a
@@ -339,6 +364,20 @@ describe("a viewport too narrow for the shell", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Exit editor" }));
     expect(onExit).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops the escape sentence WITH the button when no host can be exited to", () => {
+    // The copy and the control are one unit. Keeping the sentence while dropping
+    // the button instructs the author to go somewhere and offers nothing to get
+    // there; keeping the button with no handler is worse, because it looks
+    // operable. Asserting only the button's absence would pass on the version
+    // that still promises an escape, so the sentence is asserted too.
+    stubViewport(false);
+    render(<BuilderShell store={memoryStore()} />);
+
+    expect(screen.getByText(/needs a wider screen/i)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Exit editor" })).toBeNull();
+    expect(screen.queryByText(/from the admin/i)).toBeNull();
   });
 
   it("keeps the caller's slots mounted behind the notice", () => {

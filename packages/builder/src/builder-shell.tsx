@@ -101,8 +101,20 @@ export interface BuilderShellProps {
    * Leaving the editor. Explicit and LABELLED, never an unmarked X: the author
    * is one click from losing a canvas full of work, and an ambiguous glyph is
    * how that happens.
+   *
+   * **Optional, because not every host has a destination.** The editor mounts
+   * both as a standalone view, where leaving means navigating away from unsaved
+   * canvas state, and EMBEDDED as a field inside an entry form, where there is
+   * nowhere to go — the form is already on screen around it. Omitting this
+   * renders no exit affordance anywhere, including in the narrow-viewport
+   * notice, whose escape sentence travels with the button.
+   *
+   * The handler IS the capability rather than a mode flag beside it, so the
+   * control cannot exist without something to do. A `standalone` boolean would
+   * be a second thing to keep in sync, and the state where the two disagree
+   * would be representable.
    */
-  onExit: () => void;
+  onExit?: () => void;
   /**
    * Where chrome preferences live. Defaults to `localStorage` in a browser and
    * to a store that remembers nothing anywhere else, so a server render is a
@@ -550,14 +562,22 @@ function ShellRegions({
         className="border-[color:var(--nx-builder-border)] flex h-12 shrink-0 items-center gap-2 border-b px-2"
         aria-label="Editor actions"
       >
-        <button
-          type="button"
-          onClick={onExit}
-          data-builder-animates
-          className="border-[color:var(--nx-builder-border)] focus-visible:ring-ring rounded-md border px-3 py-1.5 text-sm font-medium focus-visible:ring-2 focus-visible:outline-none"
-        >
-          Exit editor
-        </button>
+        {/*
+         * Rendered only when there is somewhere to go. A button carrying no
+         * handler still looks operable — it takes focus, it depresses — and
+         * teaches the author that leaving does nothing, which is worse than
+         * offering no exit at all.
+         */}
+        {onExit ? (
+          <button
+            type="button"
+            onClick={onExit}
+            data-builder-animates
+            className="border-[color:var(--nx-builder-border)] focus-visible:ring-ring rounded-md border px-3 py-1.5 text-sm font-medium focus-visible:ring-2 focus-visible:outline-none"
+          >
+            Exit editor
+          </button>
+        ) : null}
         <div className="flex min-w-0 flex-1 items-center gap-2">{topBar}</div>
       </header>
 
@@ -767,17 +787,37 @@ export function BuilderShell({ store, ...props }: BuilderShellProps) {
             <p className="text-sm font-medium">
               The page editor needs a wider screen
             </p>
-            <p className="text-[color:var(--nx-builder-text-muted)] max-w-sm text-sm">
-              Editing a layout needs at least {MIN_SHELL_WIDTH}px. On a smaller
-              screen you can still edit this page&apos;s content from the admin.
-            </p>
-            <button
-              type="button"
-              onClick={props.onExit}
-              className="border-[color:var(--nx-builder-border)] focus-visible:ring-ring rounded-md border px-3 py-1.5 text-sm font-medium focus-visible:ring-2 focus-visible:outline-none"
-            >
-              Exit editor
-            </button>
+            {/*
+             * The escape sentence and the button below it are ONE UNIT with the
+             * handler: all three present, or all three absent.
+             *
+             * Keeping the copy while dropping the control would instruct the
+             * author to go somewhere and then offer nothing to get there — and
+             * keeping a button with no handler is worse, because it looks
+             * operable. A host that supplies no `onExit` has no destination to
+             * offer, and an embedded one needs none: the author is already
+             * inside the surrounding form and can scroll to the rest of it.
+             */}
+            {props.onExit ? (
+              <>
+                <p className="text-[color:var(--nx-builder-text-muted)] max-w-sm text-sm">
+                  Editing a layout needs at least {MIN_SHELL_WIDTH}px. On a
+                  smaller screen you can still edit this page&apos;s content
+                  from the admin.
+                </p>
+                <button
+                  type="button"
+                  onClick={props.onExit}
+                  className="border-[color:var(--nx-builder-border)] focus-visible:ring-ring rounded-md border px-3 py-1.5 text-sm font-medium focus-visible:ring-2 focus-visible:outline-none"
+                >
+                  Exit editor
+                </button>
+              </>
+            ) : (
+              <p className="text-[color:var(--nx-builder-text-muted)] max-w-sm text-sm">
+                Editing a layout needs at least {MIN_SHELL_WIDTH}px.
+              </p>
+            )}
           </div>
         ) : null}
 
