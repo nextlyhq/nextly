@@ -1024,7 +1024,7 @@ export function main(argv) {
     "api",
     `repos/${REPO}/pulls/${pr}`,
     "--jq",
-    "{cross:.head.repo.full_name!=.base.repo.full_name,repo:.head.repo.full_name,branch:.head.ref,merged:.merged,mergeSha:.merge_commit_sha,head:.head.sha,state:.state,draft:.draft,changedFiles:.changed_files,baseRepo:.base.repo.full_name,commits:.commits}",
+    "{cross:.head.repo.full_name!=.base.repo.full_name,repo:.head.repo.full_name,branch:.head.ref,merged:.merged,mergeSha:.merge_commit_sha,head:.head.sha,state:.state,draft:.draft,changedFiles:.changed_files,baseRepo:.base.repo.full_name,baseRef:.base.ref,commits:.commits}",
   ]);
   const remotes = configuredRemotes();
   REMOTE_FOR_FETCH = remoteForRepo(meta.repo, remotes);
@@ -1208,9 +1208,17 @@ export function main(argv) {
     "--slurp",
     `repos/${REPO}/pulls/${pr}/commits?per_page=100`,
   ]).flat();
-  const knownRevisions = prCommits
+  const revisionShas = prCommits
     .map(commit => commit?.sha)
     .filter(value => typeof value === "string");
+  // Withheld unless the endpoint returned every revision. It serves at most 250
+  // and truncates silently, so a short list can omit an earlier revision that
+  // shares the head's prefix while still looking unanimous.
+  const knownRevisions =
+    typeof meta.commits === "number" &&
+    new Set(revisionShas).size >= meta.commits
+      ? revisionShas
+      : undefined;
   const timeline = timelinePages(pr);
   const historyRewritten = countRewriteEvents(timeline) > 0;
   const reviewedSha = reviewedRevision({
@@ -1222,7 +1230,7 @@ export function main(argv) {
     baseChangedAt: latestBaseChange(timeline),
     // The tip is the revision being judged and is not always the last commit
     // the API lists, so it is named explicitly rather than assumed present.
-    knownRevisions: [...new Set([...knownRevisions, tip])],
+    knownRevisions,
   });
   // Scoped to THIS revision: a review of an earlier one is not coverage of it.
   const coderabbit = reviewsCoveringTip(
@@ -1298,7 +1306,11 @@ export function main(argv) {
   // Every mutable fact a blocker depends on, read once at the start and once
   // here. The whole snapshot is compared, so a fact added to the projection is
   // covered without editing the comparison.
-  const MUTABLE = "{merged:.merged,state:.state,draft:.draft}";
+  // `base` rides along because a retarget widens `base..head` without moving
+  // the head, so every other field here would compare equal while the diff a
+  // verdict describes had changed underneath it.
+  const MUTABLE =
+    "{merged:.merged,state:.state,draft:.draft,base:.base.ref}";
   const after = ghJson(["api", `repos/${REPO}/pulls/${pr}`, "--jq", MUTABLE]);
   // Comment evidence is MUTABLE in a way a review record is not: it can be
   // edited or deleted on an unchanged head, so none of the facts above would
@@ -1315,11 +1327,20 @@ export function main(argv) {
     tip,
     login: CODEX,
     historyRewritten,
-    baseChangedAt: latestBaseChange(timeline),
-    knownRevisions: [...new Set([...knownRevisions, tip])],
+    // Re-read, not reused: a retarget landing mid-run changes the cutoff while
+    // leaving the head and every other compared field untouched.
+    baseChangedAt: latestBaseChange(timelinePages(pr)),
+    knownRevisions,
   });
   const stale = staleVerification(
-    { merged, state: meta.state, draft: meta.draft, tip, reviewedSha },
+    {
+      merged,
+      state: meta.state,
+      draft: meta.draft,
+      tip,
+      reviewedSha,
+      base: meta.baseRef,
+    },
     {
       ...after,
       tip: lsRemoteTip(REMOTE_FOR_FETCH, meta.branch),
