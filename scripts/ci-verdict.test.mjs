@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   EXIT_NOT_CLEAN,
   changesRequested,
+  completeRevisionSet,
   fingerprint,
   missingReviewers,
   rateLimited,
@@ -221,6 +222,40 @@ describe("verdictCommentReviewers", () => {
     expect(verdictCommentReviewers([verdictComment(CODEX, HEAD)], "")).toEqual(
       []
     );
+  });
+});
+
+describe("completeRevisionSet", () => {
+  const A = "a".repeat(40);
+  const B = "b".repeat(40);
+
+  it("returns the revisions when every one was seen", () => {
+    expect(completeRevisionSet([A, B], 2)).toEqual([A, B]);
+  });
+
+  // The endpoint truncates without erroring, so a short list is the shape a
+  // long history arrives in. Withholding is what stops the uniqueness question
+  // being answered from a sample.
+  it("withholds a set shorter than the count reported", () => {
+    expect(completeRevisionSet([A], 2)).toBeUndefined();
+  });
+
+  it("withholds when the count is unavailable", () => {
+    expect(completeRevisionSet([A, B], undefined)).toBeUndefined();
+  });
+
+  // Compared by DISTINCT revisions: a duplicate would otherwise pad the length
+  // and make a truncated list reach the reported total.
+  it("counts distinct revisions rather than entries", () => {
+    expect(completeRevisionSet([A, A], 2)).toBeUndefined();
+  });
+
+  it("drops entries that are not revisions rather than counting them", () => {
+    expect(completeRevisionSet([A, undefined, null], 2)).toBeUndefined();
+  });
+
+  it("survives input that is not a list", () => {
+    expect(completeRevisionSet(undefined, 2)).toBeUndefined();
   });
 });
 

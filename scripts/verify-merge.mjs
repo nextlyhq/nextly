@@ -811,6 +811,8 @@ export const reviewedCommitFrom = verdict.reviewedCommitFrom;
 export const verdictCommentReviewers = verdict.verdictCommentReviewers;
 /** When the base last moved, from the sibling, for the same reason. */
 export const latestBaseChange = verdict.latestBaseChange;
+/** The revision set, withheld when truncated, from the sibling that owns it. */
+export const completeRevisionSet = verdict.completeRevisionSet;
 
 /**
  * Whether the merge took everything the branch had.
@@ -1208,17 +1210,10 @@ export function main(argv) {
     "--slurp",
     `repos/${REPO}/pulls/${pr}/commits?per_page=100`,
   ]).flat();
-  const revisionShas = prCommits
-    .map(commit => commit?.sha)
-    .filter(value => typeof value === "string");
-  // Withheld unless the endpoint returned every revision. It serves at most 250
-  // and truncates silently, so a short list can omit an earlier revision that
-  // shares the head's prefix while still looking unanimous.
-  const knownRevisions =
-    typeof meta.commits === "number" &&
-    new Set(revisionShas).size >= meta.commits
-      ? revisionShas
-      : undefined;
+  const knownRevisions = completeRevisionSet(
+    prCommits.map(commit => commit?.sha),
+    meta.commits
+  );
   const timeline = timelinePages(pr);
   const historyRewritten = countRewriteEvents(timeline) > 0;
   const reviewedSha = reviewedRevision({
