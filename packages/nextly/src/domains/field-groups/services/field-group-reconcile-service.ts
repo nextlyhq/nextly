@@ -29,8 +29,10 @@ import type { SupportedDialect } from "../../schema/services/field-column-descri
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
 
 import type { FieldGroupRegistryService } from "./field-group-registry-service";
+import type { FieldGroupSchemaService } from "./field-group-schema-service";
 import {
   planFieldGroupReconcile,
+  type ExpectedColumnDefault,
   type ReconcileAdoption,
   type ReconcileRemoval,
   type ReconcileRepair,
@@ -64,6 +66,21 @@ export interface ReconcileFieldGroupResult {
   runtimeRefreshed: boolean;
   /** Why the refresh did not happen; present only when `runtimeRefreshed` is false. */
   runtimeRefreshReason?: string;
+}
+
+/**
+ * A stored field as the table builder's own parameter type.
+ *
+ * `FieldDefinition` and the config shape describe the same stored field from two layers; naming the
+ * builder's declared parameter keeps the compiler checking these calls rather than waving them
+ * through, and stating it once stops the two resolvers spelling the seam differently.
+ */
+function asCreatorField(
+  field: FieldDefinition
+): Parameters<FieldGroupSchemaService["columnTypeFor"]>[0] {
+  return field as unknown as Parameters<
+    FieldGroupSchemaService["columnTypeFor"]
+  >[0];
 }
 
 /**
@@ -109,12 +126,35 @@ async function expectedColumnTypeResolver(
     }
     // The parameter's own declared type. `FieldDefinition` and the config shape describe the same
     // stored field from two layers, and naming the target keeps the compiler checking this call.
-    const type = creator.columnTypeFor(
-      field as unknown as Parameters<
-        InstanceType<typeof FieldGroupSchemaService>["columnTypeFor"]
-      >[0]
-    );
+    const type = creator.columnTypeFor(asCreatorField(field));
     return type ?? undefined;
+  };
+}
+
+/**
+ * The DEFAULT each builder would give a field, alongside the type resolver above.
+ *
+ * Split from it rather than folded in because the two answers have different shapes: a type is a
+ * value or nothing, while a default has to distinguish "writes none" from "cannot say" — and the
+ * companion is exactly the case that needs the distinction. Its columns are rendered by the
+ * localization path, which this module does not model defaults for, so a companion-resident column
+ * reports `known: false` and is skipped rather than being claimed to have no default. Claiming
+ * that would turn every localized checkbox carrying a default into a refusal.
+ */
+async function expectedColumnDefaultResolver(
+  dialect: SupportedDialect
+): Promise<
+  (field: FieldDefinition, table: ReconcileTable) => ExpectedColumnDefault
+> {
+  const { FieldGroupSchemaService } = await import(
+    "./field-group-schema-service"
+  );
+  const creator = new FieldGroupSchemaService(dialect);
+
+  return (field, table) => {
+    if (table === "companion") return { known: false };
+    const value = creator.columnDefaultFor(asCreatorField(field));
+    return value === null ? { known: true } : { known: true, value };
   };
 }
 
@@ -213,6 +253,7 @@ export async function reconcileFieldGroup(args: {
     liveCompanion,
     typeColumn,
     expectedColumnType: await expectedColumnTypeResolver(dialect),
+    expectedColumnDefault: await expectedColumnDefaultResolver(dialect),
   });
 
   // 🔴 REFUSE before writing anything when the tables hold a state the planner can see but must

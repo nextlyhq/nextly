@@ -257,11 +257,11 @@ export class FieldGroupSchemaService {
     const indexStatements: string[] = [];
 
     const parentIndexName = `${STORAGE_FORMAT.indexPrefix}${tableName}_parent`;
-    const parentColumns = [
-      `${this.q}${STORAGE_FORMAT.columns.parentId}${this.q}`,
-      `${this.q}${STORAGE_FORMAT.columns.parentTable}${this.q}`,
-      `${this.q}${STORAGE_FORMAT.columns.parentField}${this.q}`,
-    ].join(", ");
+    // From the shared constant rather than listed here, so the index this CREATES and any check
+    // asking whether a live table still has it cannot disagree about which columns or what order.
+    const parentColumns = STORAGE_FORMAT.parentIndexColumns
+      .map(column => `${this.q}${column}${this.q}`)
+      .join(", ");
 
     if (this.dialect === "mysql") {
       indexStatements.push(
@@ -779,6 +779,30 @@ export class FieldGroupSchemaService {
     return this.getColumnType(this.asMappableField(field));
   }
 
+  /**
+   * The DEFAULT expression this dialect gives `field`, or `null` where it writes none.
+   *
+   * The companion of {@link columnTypeFor}, and exposed for the same reason: a caller comparing a
+   * live column against what this service would have created needs the value, and the only other
+   * way to obtain it is to render a statement and read it back out. `null` is a real answer here —
+   * most field types carry no default — which is why it is distinct from the "could not decide"
+   * a caller may need to represent separately.
+   */
+  columnDefaultFor(field: DataFieldConfig): string | null {
+    const mappable = this.asMappableField(field);
+    if (!isCheckboxField(mappable) || mappable.defaultValue === undefined) {
+      return null;
+    }
+    // SQLite has no boolean literal, so the same declaration is stored as 1/0 there.
+    const value =
+      this.dialect === "sqlite"
+        ? mappable.defaultValue
+          ? 1
+          : 0
+        : mappable.defaultValue;
+    return String(value);
+  }
+
   private generateColumnSQL(field: DataFieldConfig): string | null {
     if (!("name" in field) || !field.name) return null;
 
@@ -794,14 +818,11 @@ export class FieldGroupSchemaService {
       parts.push("NOT NULL");
     }
 
-    if (isCheckboxField(field) && field.defaultValue !== undefined) {
-      const defaultVal =
-        this.dialect === "sqlite"
-          ? field.defaultValue
-            ? 1
-            : 0
-          : field.defaultValue;
-      parts.push(`DEFAULT ${String(defaultVal)}`);
+    // Same accessor rule as the type above: one expression decides the default a caller can ask
+    // about and the default the table actually gets.
+    const columnDefault = this.columnDefaultFor(field);
+    if (columnDefault !== null) {
+      parts.push(`DEFAULT ${columnDefault}`);
     }
 
     return parts.join(" ");

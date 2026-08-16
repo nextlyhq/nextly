@@ -62,6 +62,11 @@ function plan(args: {
     field: ReconcilableField,
     table: ReconcileTable
   ) => string | undefined;
+  /** The builder's DEFAULT for a column; `known: false` means the check must stay silent. */
+  expectedColumnDefault?: (
+    field: ReconcilableField,
+    table: ReconcileTable
+  ) => { known: boolean; value?: string };
 }) {
   return planFieldGroupReconcile({
     storedFields: args.storedFields,
@@ -72,6 +77,9 @@ function plan(args: {
     liveCompanion: args.liveCompanion ?? null,
     ...(args.expectedColumnType
       ? { expectedColumnType: args.expectedColumnType }
+      : {}),
+    ...(args.expectedColumnDefault
+      ? { expectedColumnDefault: args.expectedColumnDefault }
       : {}),
   });
 }
@@ -467,6 +475,176 @@ describe("planFieldGroupReconcile", () => {
 
     expect(asked).toEqual([{ field: "contact", table: "companion" }]);
     expect(result.blockers).toEqual([]);
+  });
+
+  /**
+   * The DEFAULT is physical, and drifts exactly as the type does.
+   *
+   * Three-valued on purpose: the removal case below is the one a `string | undefined` expectation
+   * cannot express, because "the definition declares no default" and "no expectation could be
+   * derived" would be the same value, and the first must block while the second must not.
+   */
+  describe("column defaults", () => {
+    const storedCheckbox: ReconcilableField[] = [
+      { name: "featured", type: "checkbox" },
+    ];
+
+    function planWithDefaults(
+      liveDefault: string | undefined,
+      expected: { known: boolean; value?: string }
+    ) {
+      const live = liveTableFor(storedCheckbox);
+      const col = live.columns.find(c => c.name === "featured");
+      if (col) {
+        col.default = liveDefault;
+        // Stated rather than assumed: the normaliser only collapses 1/0 to a boolean when it is
+        // told the column is one, so a fixture that left the type to chance would be testing the
+        // fallback path while reading as though it tested the boolean one.
+        col.type = "boolean";
+      }
+      return plan({
+        storedFields: storedCheckbox,
+        liveMain: live,
+        expectedColumnDefault: () => expected,
+      });
+    }
+
+    it("refuses when the live default no longer matches the declared one", () => {
+      const result = planWithDefaults("false", { known: true, value: "true" });
+      expect(result.blockers).toEqual([
+        expect.objectContaining({
+          fieldName: "featured",
+          kind: "column-default-changed",
+        }),
+      ]);
+    });
+
+    // The case the third state exists for: the authored default was REMOVED while the column kept
+    // its own. A two-valued expectation reports this as nothing to compare.
+    it("refuses when the definition declares no default and the column has one", () => {
+      const result = planWithDefaults("true", { known: true });
+      expect(result.blockers).toEqual([
+        expect.objectContaining({ kind: "column-default-changed" }),
+      ]);
+    });
+
+    // The dialects spell one value differently — SQLite stores a boolean default as 1 where
+    // PostgreSQL reports `true` — so a raw string compare would report drift on every healthy
+    // SQLite group. This is the pair that proves the comparison runs through the normaliser.
+    it("accepts a live default that matches after normalisation", () => {
+      const result = planWithDefaults("1", { known: true, value: "true" });
+      expect(result.blockers).toEqual([]);
+    });
+
+    // The negative control. `known: false` must SKIP, never block — the companion reports it for
+    // every column, so blocking here would refuse every localized group.
+    it("stays silent when no default expectation could be derived", () => {
+      const result = planWithDefaults("true", { known: false });
+      expect(result.blockers).toEqual([]);
+    });
+  });
+
+  /**
+   * Structural integrity: a table missing a system column or its parent index cannot do its job,
+   * and this operation issues no DDL, so the only honest answer is to refuse.
+   *
+   * The positive controls below REMOVE something from a table the generator produced, rather than
+   * hand-building a broken one — so each asserts on the absence of exactly what the real generator
+   * emits, and cannot drift from it.
+   */
+  describe("structural integrity", () => {
+    const stored: ReconcilableField[] = [{ name: "title", type: "text" }];
+
+    it("refuses a main table missing a system column", () => {
+      const live = liveTableFor(stored);
+      live.columns = live.columns.filter(c => c.name !== "_parent_id");
+
+      const result = plan({ storedFields: stored, liveMain: live });
+
+      expect(result.blockers).toEqual([
+        expect.objectContaining({
+          columnName: "_parent_id",
+          kind: "structural-column-missing",
+        }),
+      ]);
+    });
+
+    it("refuses a main table missing its parent index", () => {
+      const live = liveTableFor(stored);
+      live.indexes = (live.indexes ?? []).filter(
+        index => index.columns.length === 1
+      );
+
+      const result = plan({ storedFields: stored, liveMain: live });
+
+      expect(result.blockers).toEqual([
+        expect.objectContaining({ kind: "system-index-missing" }),
+      ]);
+    });
+
+    // An index over the same columns in a different ORDER is a different object: only this order
+    // serves a lookup by parent id. Matched by ordered list rather than by name or by set.
+    it("refuses a parent index whose columns are in the wrong order", () => {
+      const live = liveTableFor(stored);
+      for (const index of live.indexes ?? []) {
+        if (index.columns.length > 1)
+          index.columns = [...index.columns].reverse();
+      }
+
+      const result = plan({ storedFields: stored, liveMain: live });
+
+      expect(result.blockers).toEqual([
+        expect.objectContaining({ kind: "system-index-missing" }),
+      ]);
+    });
+
+    // The negative control that keeps the companion check honest: a field group is never
+    // Draft/Published, so its companion has no `_status` and requiring one would refuse every
+    // localized group.
+    it("does not require a status column on a field group's companion", () => {
+      const localizedStored: ReconcilableField[] = [
+        { name: "title", type: "text", localized: true },
+      ];
+      const result = plan({
+        storedFields: localizedStored,
+        storedLocalized: true,
+        liveMain: liveTableFor(localizedStored, { localized: true }),
+        liveCompanion: companionWith([{ name: "title" }]),
+      });
+
+      expect(result.blockers).toEqual([]);
+    });
+  });
+
+  /**
+   * A vanished field standing beside an unclaimed column is equally a rename and a drop-plus-add,
+   * and resolving it silently discards authored configuration that nothing in the database retains.
+   */
+  it("refuses when a removal and an adoption could be one rename", () => {
+    const stored: ReconcilableField[] = [{ name: "headline", type: "text" }];
+    // The table the rename produced: the old column is gone, the new one is described by no field.
+    const live = liveTableFor([{ name: "title", type: "text" }]);
+
+    const result = plan({ storedFields: stored, liveMain: live });
+
+    expect(result.blockers).toEqual([
+      expect.objectContaining({ kind: "ambiguous-rename" }),
+    ]);
+  });
+
+  // The negative control: a removal with NO unclaimed column beside it is an unambiguous drop and
+  // must still be repaired, or the commonest divergence stops being fixable.
+  it("still removes a vanished field when nothing appeared to pair it with", () => {
+    const stored: ReconcilableField[] = [
+      { name: "title", type: "text" },
+      { name: "subtitle", type: "text" },
+    ];
+    const live = liveTableFor([{ name: "title", type: "text" }]);
+
+    const result = plan({ storedFields: stored, liveMain: live });
+
+    expect(result.blockers).toEqual([]);
+    expect(result.removed.map(r => r.fieldName)).toEqual(["subtitle"]);
   });
 
   // The control that keeps the check from firing on a column it has no expectation for. Absence

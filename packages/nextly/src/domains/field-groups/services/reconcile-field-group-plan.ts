@@ -24,9 +24,14 @@
  */
 
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { isFieldLocalized } from "../../i18n/classify-fields";
-import { COMPANION_STRUCTURAL_COLUMNS } from "../../i18n/migration/generate-up";
+import {
+  COMPANION_STATUS_COLUMN,
+  COMPANION_STRUCTURAL_COLUMNS,
+} from "../../i18n/migration/generate-up";
 import { buildDesiredTableFromComponentFields } from "../../schema/pipeline/diff/build-from-fields";
+import { normalizeDefault } from "../../schema/pipeline/diff/normalize-default";
 import { normalizeType } from "../../schema/pipeline/diff/normalize-type";
 import type {
   ColumnSpec,
@@ -41,6 +46,17 @@ import {
 
 /** Which of a field group's two tables a column lives in. */
 export type ReconcileTable = "main" | "companion";
+
+/**
+ * What the table builder would write as a column's DEFAULT, with "no expectation" kept distinct
+ * from "expected to have none".
+ */
+export interface ExpectedColumnDefault {
+  /** False when no expectation could be derived at all; the comparison is then skipped. */
+  known: boolean;
+  /** The default expression, or `undefined` when the builder writes none. Read only when `known`. */
+  value?: string;
+}
 
 /**
  * What a field name may be, mirroring the payload validator every other write path enforces.
@@ -95,7 +111,17 @@ export interface ReconcileBlocker {
   kind:
     | "column-on-both-tables"
     | "physical-type-changed"
-    | "unrepresentable-column-name";
+    | "unrepresentable-column-name"
+    // A system column or index the generator always emits is absent from the live table. Repairing
+    // it needs DDL, which this operation deliberately never issues.
+    | "structural-column-missing"
+    | "system-index-missing"
+    // The column's DEFAULT no longer matches the authored one. Physical, and not recoverable from
+    // the column alone: which side is intended is a question only the operator can answer.
+    | "column-default-changed"
+    // A stored field vanished while an unclaimed column appeared, which is equally a rename and a
+    // drop-plus-add. Resolving it either way discards authored configuration or invents it.
+    | "ambiguous-rename";
   detail: string;
 }
 
@@ -181,6 +207,23 @@ export interface ReconcileInput<F extends ReconcilableField> {
    * imports, and nothing here reaches for either.
    */
   expectedColumnType?: (field: F, table: ReconcileTable) => string | undefined;
+  /**
+   * The DEFAULT the code that builds `table` would give `field`.
+   *
+   * 🔴 Three-valued on purpose, and the third state is what makes the check correct rather than
+   * merely present. "I could not derive an expectation" and "the builder writes no default" are
+   * different claims that a bare `string | undefined` collapses into one value — and collapsing
+   * them costs the case most worth catching, where an authored default was REMOVED from the
+   * definition while the live column still carries it. Under the collapsed shape that reads as
+   * nothing to compare, so the drift the check exists for is exactly what it cannot see.
+   *
+   * `known: false` is skipped, matching `expectedColumnType`: an underivable expectation is not
+   * evidence of drift.
+   */
+  expectedColumnDefault?: (
+    field: F,
+    table: ReconcileTable
+  ) => ExpectedColumnDefault;
 }
 
 /**
@@ -198,16 +241,22 @@ function withOverride<F extends ReconcilableField>(
 }
 
 /**
- * The columns a field group's main table has regardless of its fields.
+ * What a field group's main table carries regardless of its fields — columns AND indexes.
  *
  * Derived by asking the desired-state builder for a table with NO fields, rather than listing the
  * system columns here. A hand-kept list is a second opinion about what the generator writes, and it
  * would present a newly added system column to the operator as an unknown user column to adopt.
+ *
+ * 🔴 The WHOLE spec is kept, not just the names. An earlier version narrowed this to a name set at
+ * the point of derivation, which silently discarded the parent-link composite index — and a
+ * discarded requirement cannot be checked, so the plan could report a table healthy while the index
+ * every parent-scoped query depends on was absent. Whatever the builder adds next is carried here
+ * for free; narrowing it again is what makes the next addition an unchecked requirement.
  */
-function mainSystemColumnNames(
+function mainSkeleton(
   input: Pick<ReconcileInput<never>, "tableName" | "dialect" | "typeColumn">
-): Set<string> {
-  const skeleton = buildDesiredTableFromComponentFields(
+): TableSpec {
+  return buildDesiredTableFromComponentFields(
     input.tableName,
     [],
     input.dialect,
@@ -218,7 +267,103 @@ function mainSystemColumnNames(
         : {}),
     }
   );
-  return new Set(skeleton.columns.map(column => column.name));
+}
+
+/**
+ * Whether a live table carries an index covering exactly these columns, in this order.
+ *
+ * Matched by the ordered column LIST and uniqueness rather than by NAME: an engine appends a
+ * collision suffix and truncates at its identifier limit, so the name is the engine's choice rather
+ * than a property of the object. Order is significant — only `(a, b)` serves a left-prefix lookup on
+ * `a` — which is why `indexKey` from the diff utilities is deliberately not reused here: it SORTS
+ * the columns and so reads `(a, b)` and `(b, a)` as one index.
+ */
+function hasIndexOverColumns(
+  indexes: readonly IndexSpec[] | undefined,
+  columns: readonly string[],
+  unique: boolean
+): boolean {
+  return (indexes ?? []).some(
+    index =>
+      index.columns.length === columns.length &&
+      index.columns.every((column, at) => column === columns[at]) &&
+      (index.unique === true) === unique
+  );
+}
+
+/**
+ * Structural requirements the live tables must already meet before any repair is planned.
+ *
+ * 🔴 These are BLOCKERS rather than repairs, because this operation never issues DDL. A missing
+ * `_parent_id` or a missing parent-link index is a defect in the TABLE, and the only honest thing a
+ * definition-only repair can do about it is refuse — writing `synced` over it would certify a table
+ * that cannot answer the queries the runtime is about to register against it.
+ *
+ * Checked against the skeleton the generator produces rather than a list kept here, so a structural
+ * column or index added later is required the moment the generator emits it.
+ */
+function structuralBlockers(
+  skeleton: TableSpec,
+  liveMain: TableSpec,
+  liveCompanion: TableSpec | null,
+  localized: boolean
+): ReconcileBlocker[] {
+  const blockers: ReconcileBlocker[] = [];
+  const liveMainColumns = new Set(liveMain.columns.map(c => c.name));
+
+  for (const column of skeleton.columns) {
+    if (liveMainColumns.has(column.name)) continue;
+    blockers.push({
+      fieldName: column.name,
+      columnName: column.name,
+      kind: "structural-column-missing",
+      detail: `${liveMain.name} is missing the system column "${column.name}", which every field-group table carries; the definition cannot describe a table that cannot store its own rows.`,
+    });
+  }
+
+  // 🔴 Required indexes come from what the table BUILDER creates, not from the skeleton's index
+  // list. The two disagree: the migrate snapshot builder additionally emits a `created_at` index
+  // that `FieldGroupSchemaService` never creates, so requiring the skeleton's whole list refuses
+  // every healthy table — measured on all three dialects, which is how this was caught. Columns
+  // rather than a name, because the engine picks the name and truncates or suffixes it.
+  const requiredIndexColumns = STORAGE_FORMAT.parentIndexColumns;
+  if (!hasIndexOverColumns(liveMain.indexes, requiredIndexColumns, false)) {
+    blockers.push({
+      fieldName: requiredIndexColumns.join(", "),
+      columnName: requiredIndexColumns.join(", "),
+      kind: "system-index-missing",
+      detail: `${liveMain.name} is missing its required index over (${requiredIndexColumns.join(", ")}); parent-scoped reads depend on it, and this operation issues no DDL to restore it.`,
+    });
+  }
+
+  // Only meaningful once the companion is genuinely in use: a companion holding nothing but
+  // structural columns is the ambiguous case `deriveLocalized` resolves from the stored flag, and
+  // demanding structure from a table nothing was moved into would refuse a healthy group.
+  if (localized && liveCompanion) {
+    const liveCompanionColumns = new Set(
+      liveCompanion.columns.map(c => c.name)
+    );
+    // 🔴 `_status` is subtracted rather than required. The structural set describes companions in
+    // general and is right for its own purpose — subtracting it from a table leaves the translated
+    // columns — but a FIELD GROUP is never Draft/Published, so its companion is built with
+    // `status: false` and never has that column. Requiring the whole set refuses every localized
+    // field group. Derived by exclusion rather than by listing the two that remain, so a genuinely
+    // unconditional column added to the set later is required here without this being touched.
+    const requiredCompanionColumns = [...COMPANION_STRUCTURAL_COLUMNS].filter(
+      column => column !== COMPANION_STATUS_COLUMN
+    );
+    for (const required of requiredCompanionColumns) {
+      if (liveCompanionColumns.has(required)) continue;
+      blockers.push({
+        fieldName: required,
+        columnName: required,
+        kind: "structural-column-missing",
+        detail: `${liveCompanion.name} holds translated values but is missing the system column "${required}", so its rows cannot be matched back to a parent or a locale.`,
+      });
+    }
+  }
+
+  return blockers;
 }
 
 /**
@@ -322,8 +467,22 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
   const removed: ReconcileRemoval[] = [];
   const repaired: ReconcileRepair[] = [];
   const adopted: ReconcileAdoption[] = [];
-  const blockers: ReconcileBlocker[] = [];
   const fields: F[] = [];
+
+  // What the generator says this table always has. Derived once and used for BOTH questions it
+  // answers — which live columns are system columns rather than adoptable user ones, and which
+  // structural columns and indexes the table is required to already have.
+  const skeleton = mainSkeleton(input);
+
+  // Structural integrity first: these describe a table that cannot do its job, and no amount of
+  // definition repair changes that. Collected before any field is examined so a refusal names the
+  // real problem rather than the field-level symptoms a broken table produces downstream.
+  const blockers: ReconcileBlocker[] = structuralBlockers(
+    skeleton,
+    liveMain,
+    liveCompanion,
+    localized
+  );
 
   /** Column names a stored field accounted for, so the leftovers can be adopted. */
   const claimedMain = new Set<string>();
@@ -336,6 +495,14 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
    * columnless field — reported as a removal — rather than preserving both.
    */
   const columnlessByColumnName = new Map<string, F>();
+  /**
+   * Removals whose replacement column is known, so they are NOT candidates for a rename pairing.
+   *
+   * The columnless case above pairs a field and a column that share a name; every other removal is
+   * a field whose column simply vanished, and those are the ones an unclaimed column could equally
+   * well be a rename of.
+   */
+  const displacedRemovals = new Set<string>();
 
   for (const field of storedFields) {
     const descriptor = getColumnDescriptor(
@@ -442,6 +609,29 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
       });
     }
 
+    // The DEFAULT is physical exactly as the type is, and it drifts the same way: an apply that
+    // changed a checkbox's default can commit its DDL and then fail its registry write, leaving a
+    // column whose name, type, nullability and indexes all still match. Nothing above notices, so
+    // without this the plan reports no repair and marks the row `synced` while every insert that
+    // omits the field keeps receiving a value the definition does not specify.
+    //
+    // Refuses rather than repairs, for the same reason the type does: the column cannot say whether
+    // the authored default or the live one is the intended survivor. Both sides go through the
+    // diff engine's normaliser so `true`, `'true'::boolean` and `1` are one answer per dialect.
+    const expectedDefault = input.expectedColumnDefault?.(field, table);
+    if (expectedDefault?.known === true) {
+      const want = normalizeDefault(expectedDefault.value, live.type);
+      const have = normalizeDefault(live.default, live.type);
+      if (want !== have) {
+        blockers.push({
+          fieldName: field.name,
+          columnName: descriptor.name,
+          kind: "column-default-changed",
+          detail: `"${field.name}" declares ${want === undefined ? "no default" : `the default ${want}`}, but the live column ${have === undefined ? "has none" : `defaults to ${have}`}; rows inserted without this field would not get the value the definition specifies.`,
+        });
+      }
+    }
+
     // `required` is the field's spelling of NOT NULL, and only the MAIN table can testify to it:
     // companion columns are created nullable regardless of the field's declaration, because a row
     // may legitimately have no value for a locale. A primary key is exempt for the same reason the
@@ -502,7 +692,7 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
   }
 
   // Whatever is left in the live tables is a column no stored field described.
-  const systemMain = mainSystemColumnNames(input);
+  const systemMain = new Set(skeleton.columns.map(column => column.name));
   const adopt = (
     column: ColumnSpec,
     table: ReconcileTable,
@@ -551,6 +741,10 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
       const at = fields.indexOf(displaced);
       if (at !== -1) fields.splice(at, 1);
       removed.push({ fieldName: displaced.name, columnName: column.name });
+      // Paired with THIS adoption by construction — the field and the column share a name, so
+      // nothing about the correspondence is guessed. Recorded so the rename check below does not
+      // read this documented case as an unexplained removal standing beside an unexplained column.
+      displacedRemovals.add(displaced.name);
     }
     const guessedType = guessFieldType(column.type);
     adopted.push({
@@ -589,6 +783,31 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
   }
   for (const column of liveCompanion?.columns ?? []) {
     adopt(column, "companion", claimedCompanion, COMPANION_STRUCTURAL_COLUMNS);
+  }
+
+  // 🔴 A vanished field standing beside an unclaimed column is TWO stories the schema cannot
+  // separate: a rename whose DDL landed and whose registry write did not, or a deliberate drop and
+  // a deliberate add. Resolving it silently costs something real either way — reading it as a drop
+  // discards the authored validation, options, defaults and admin configuration the renamed field
+  // carried, while reading it as a rename invents a correspondence nobody stated.
+  //
+  // So it refuses and names both sides. That is a precondition rather than a preference: the plan
+  // is about to be written and marked `synced`, and the discarded configuration is not recoverable
+  // from anything left in the database afterwards. The operator resolves it by renaming the field
+  // in the definition (making it a match) or by deleting it (making the column a plain adoption),
+  // and either edit is cheap next to reconstructing lost field configuration.
+  const unexplainedRemovals = removed.filter(
+    entry => !displacedRemovals.has(entry.fieldName)
+  );
+  if (unexplainedRemovals.length > 0 && adopted.length > 0) {
+    const gone = unexplainedRemovals.map(entry => `"${entry.fieldName}"`);
+    const appeared = adopted.map(entry => `"${entry.columnName}"`);
+    blockers.push({
+      fieldName: unexplainedRemovals[0]?.fieldName ?? "",
+      columnName: adopted[0]?.columnName ?? "",
+      kind: "ambiguous-rename",
+      detail: `${gone.join(", ")} lost ${gone.length === 1 ? "its column" : "their columns"} while ${appeared.join(", ")} ${appeared.length === 1 ? "is" : "are"} described by no field, which is equally a rename and a drop-plus-add; rename the field in the definition to keep its configuration, or delete it to accept the column as new.`,
+    });
   }
 
   return {
