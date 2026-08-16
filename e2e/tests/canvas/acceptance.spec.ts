@@ -1039,18 +1039,24 @@ test.describe("a canvas any Nextly editor could ship", () => {
     const fixture = await seedPage(request, FLAT_LIST_FIXTURE);
     await driver.mountTree(fixture);
 
-    await chrome.startDragOfBlock(fixture.blockIds[1] ?? "");
+    const wanted = fixture.blockIds[1] ?? "";
+    await chrome.startDragOfBlock(wanted);
 
+    // The block BY NAME, not merely that a drag is running. `isDragging` answers for any
+    // grabbed element in either document, so a coordinate offset that pressed a sibling
+    // would satisfy it while the reader picked up the wrong block — and the case below
+    // would then rest on an instrument that had quietly stopped doing what it claims.
+    //
     // POLLED for the same reason the Escape case polls: the drag state is written on a
     // React commit, so a read taken in the tick that started the drag sees the state one
     // commit before it is set and reports a working drag as a dead one.
     await expect
-      .poll(async () => driver.isDragging(), {
+      .poll(async () => chrome.draggingBlockId(), {
         message:
-          "a placed block must be draggable on a canvas with no prior drag",
+          "the block asked for must be the one the canvas reports dragging",
         timeout: ESCAPE_SETTLE_MS,
       })
-      .toBe(true);
+      .toBe(wanted);
 
     await driver.cancel();
   });
