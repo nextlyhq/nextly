@@ -396,6 +396,51 @@ describe("issue-code vocabulary is stable and complete", () => {
     expect(asked).toContain("acme/column");
   });
 
+  it("does not call a child of an unnameable container a root", () => {
+    // "No container" and "a container this walk cannot name" are different
+    // facts. One absent value standing for both makes a node in a slot answer
+    // the ROOT question, which reports it as sitting nowhere while its own path
+    // names the slot holding it — a refusal that contradicts itself and that an
+    // author cannot act on, because the placement it describes is not the one
+    // the node is in.
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "bad",
+          type: 42,
+          version: 1,
+          props: {},
+          slots: {
+            default: [
+              { id: "cell", type: "acme/column", version: 1, props: {} },
+            ],
+          },
+        },
+      ],
+    });
+
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+      nesting: nestingOf({ "acme/column": ["core/columns"] }),
+    });
+
+    expect(
+      issues.filter(
+        i => i.code === "restricted-at-root" || i.code === "wrong-parent"
+      )
+    ).toEqual([]);
+    // The container's own defect is still reported, so declining the placement
+    // question leaves the document refused rather than silently accepted.
+    expect(
+      issues.some(
+        i => i.code === "invalid-node-type" && i.path === "/nodes/0/type"
+      )
+    ).toBe(true);
+  });
+
   it("does not ask about placement when the node type is malformed", () => {
     // A malformed type is already reported as an invalid node. Asking where it
     // may sit would answer for a name no definition carries, and add a second
