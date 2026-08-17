@@ -1,0 +1,523 @@
+/**
+ * What the inserter offers, and where a chosen entry lands.
+ *
+ * Driven through the real registry wherever a definition is involved, and
+ * through the engine's real nesting source, rather than a hand-written stub
+ * that restates what the registry would have answered. A stub reproduces the
+ * resolution instead of observing it, so it keeps passing after the registry
+ * changes what a definition means.
+ *
+ * @module inserter.test
+ */
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import {
+  allBlocks,
+  clearBlocks,
+  registerBlocks,
+  registryNestingSource,
+  type BlockDocument,
+} from "@nextlyhq/blocks-engine";
+
+import {
+  UNCATEGORISED,
+  allowedEntries,
+  catalogFrom,
+  entryAllowedAt,
+  filterEntries,
+  groupByCategory,
+  insertionPointFor,
+  nodeForEntry,
+  type InsertEntry,
+} from "./inserter";
+
+const base = {
+  version: 1,
+  description: "A block.",
+  example: { props: {} },
+  render: () => null,
+};
+
+afterEach(() => {
+  clearBlocks();
+});
+
+/** Register a palette and return the catalog the panel would be handed. */
+function catalog(definitions: readonly unknown[]): InsertEntry[] {
+  registerBlocks(definitions as never, { source: "acme" });
+  return catalogFrom(allBlocks());
+}
+
+function entry(entries: readonly InsertEntry[], id: string): InsertEntry {
+  const found = entries.find(candidate => candidate.id === id);
+  if (found === undefined) {
+    throw new Error(
+      `no entry ${id}; the catalog holds ${entries.map(e => e.id).join(", ")}`
+    );
+  }
+  return found;
+}
+
+function documentOf(nodes: BlockDocument["nodes"]): BlockDocument {
+  return { formatVersion: 1, kind: "page", nodes } as BlockDocument;
+}
+
+describe("catalogFrom", () => {
+  it("offers every registered block, named by its editor label", () => {
+    const entries = catalog([
+      { ...base, name: "acme/zeta", editor: { label: "Zeta" } },
+      { ...base, name: "acme/alpha", editor: { label: "Alpha" } },
+    ]);
+
+    // Membership, not a count: a selector that dropped one block and duplicated
+    // another matches any total this could be compared against.
+    expect(entries.map(e => e.id)).toEqual(["acme/alpha", "acme/zeta"]);
+    expect(entry(entries, "acme/alpha").label).toBe("Alpha");
+  });
+
+  it("orders by the label an author reads, not by registration order", () => {
+    // The separating property. Registration order here is the REVERSE of label
+    // order, so a catalog that simply preserved input order would produce the
+    // opposite list and no assertion on membership alone would notice.
+    const entries = catalog([
+      { ...base, name: "acme/one", editor: { label: "Zulu" } },
+      { ...base, name: "acme/two", editor: { label: "Alpha" } },
+    ]);
+
+    expect(entries.map(e => e.label)).toEqual(["Alpha", "Zulu"]);
+  });
+
+  it("falls back to the namespaced name when a block declares no label", () => {
+    const entries = catalog([{ ...base, name: "acme/unlabelled" }]);
+
+    expect(entry(entries, "acme/unlabelled").label).toBe("acme/unlabelled");
+    expect(entry(entries, "acme/unlabelled").category).toBe(UNCATEGORISED);
+  });
+
+  it("emits one entry per variation, directly after its block", () => {
+    const entries = catalog([
+      {
+        ...base,
+        name: "acme/card",
+        editor: {
+          label: "Card",
+          variations: [{ name: "wide", label: "Wide card" }, { name: "tall" }],
+        },
+      },
+    ]);
+
+    expect(entries.map(e => e.id)).toEqual([
+      "acme/card",
+      "acme/card#wide",
+      "acme/card#tall",
+    ]);
+    expect(entry(entries, "acme/card#wide").label).toBe("Wide card");
+    // A variation with no label is named by its own `name`. Falling back to the
+    // block's label would render two rows reading "Card" with nothing to choose
+    // between them.
+    expect(entry(entries, "acme/card#tall").label).toBe("tall");
+    expect(entry(entries, "acme/card#tall").variationName).toBe("tall");
+    expect(entry(entries, "acme/card").variationName).toBeUndefined();
+  });
+
+  it("overlays a variation's props onto the block's defaults", () => {
+    const entries = catalog([
+      {
+        ...base,
+        name: "acme/card",
+        defaultProps: { tone: "plain", size: "md" },
+        editor: { variations: [{ name: "loud", props: { tone: "shout" } }] },
+      },
+    ]);
+
+    // The overlay REPLACES the named prop and leaves the rest, which is what
+    // distinguishes an overlay from a replacement of the whole props object.
+    expect(entry(entries, "acme/card#loud").props).toEqual({
+      tone: "shout",
+      size: "md",
+    });
+    expect(entry(entries, "acme/card").props).toEqual({
+      tone: "plain",
+      size: "md",
+    });
+  });
+
+  it("gives an entry its own props, so the definition cannot be reached through it", () => {
+    const defaults = { tone: "plain" };
+    const entries = catalog([
+      { ...base, name: "acme/card", defaultProps: defaults },
+    ]);
+
+    (entry(entries, "acme/card").props as Record<string, unknown>).tone =
+      "mutated";
+
+    expect(defaults.tone).toBe("plain");
+  });
+
+  it("returns nothing when nothing is registered", () => {
+    // The vacuity control for every case above: they assert what a populated
+    // catalog contains, and none of them would fail if `catalogFrom` returned
+    // its input unread. This pins the empty case as empty rather than as
+    // whatever a broken read happens to produce.
+    expect(catalogFrom([])).toEqual([]);
+  });
+});
+
+describe("filterEntries", () => {
+  // Registered once per case rather than per call. `registerBlocks` refuses a
+  // redefinition, so a helper invoked twice inside one test fails on the
+  // collision rather than on anything it was asserting.
+  let palette: InsertEntry[];
+  const entries = (): InsertEntry[] => palette;
+
+  const register = (): InsertEntry[] =>
+    catalog([
+      {
+        ...base,
+        name: "acme/heading",
+        description: "A title for a section.",
+        editor: { label: "Heading", keywords: ["title", "h1"] },
+      },
+      {
+        ...base,
+        name: "acme/image",
+        description: "A picture.",
+        editor: { label: "Image" },
+      },
+    ]);
+
+  beforeEach(() => {
+    palette = register();
+  });
+
+  it("matches the label", () => {
+    expect(filterEntries(entries(), "head").map(e => e.id)).toEqual([
+      "acme/heading",
+    ]);
+  });
+
+  it("matches the namespaced block name", () => {
+    // Someone reading docs or an agent's output knows `acme/image`, not
+    // necessarily that it is labelled "Image".
+    expect(filterEntries(entries(), "acme/image").map(e => e.id)).toEqual([
+      "acme/image",
+    ]);
+  });
+
+  it("matches a declared keyword", () => {
+    expect(filterEntries(entries(), "h1").map(e => e.id)).toEqual([
+      "acme/heading",
+    ]);
+  });
+
+  it("matches the description", () => {
+    expect(filterEntries(entries(), "picture").map(e => e.id)).toEqual([
+      "acme/image",
+    ]);
+  });
+
+  it("ignores case", () => {
+    expect(filterEntries(entries(), "HEADING").map(e => e.id)).toEqual([
+      "acme/heading",
+    ]);
+  });
+
+  it("returns everything for an empty or whitespace query", () => {
+    // The panel opens with no query. A filter treating that as "match nothing"
+    // would show an empty palette on open, which is the state this guards.
+    expect(filterEntries(entries(), "").map(e => e.id)).toEqual([
+      "acme/heading",
+      "acme/image",
+    ]);
+    expect(filterEntries(entries(), "   ")).toHaveLength(2);
+  });
+
+  it("returns nothing when nothing matches", () => {
+    // The negative control. Without it every assertion above is satisfied by a
+    // filter that returns its input unchanged.
+    expect(filterEntries(entries(), "nonexistent")).toEqual([]);
+  });
+});
+
+describe("groupByCategory", () => {
+  it("groups under declared categories and preserves arrival order", () => {
+    const entries = catalog([
+      { ...base, name: "acme/b", editor: { label: "B", category: "media" } },
+      { ...base, name: "acme/a", editor: { label: "A", category: "text" } },
+      { ...base, name: "acme/c", editor: { label: "C", category: "media" } },
+    ]);
+
+    // Sorted by label, so arrival order is A(text), B(media), C(media) — which
+    // makes "text" the first category even though "media" is alphabetically
+    // first. That is the separating property between preserving arrival order
+    // and sorting the headings.
+    expect(groupByCategory(entries)).toEqual([
+      { category: "text", entries: [entry(entries, "acme/a")] },
+      {
+        category: "media",
+        entries: [entry(entries, "acme/b"), entry(entries, "acme/c")],
+      },
+    ]);
+  });
+
+  it("puts uncategorised blocks under one heading rather than dropping them", () => {
+    const entries = catalog([{ ...base, name: "acme/loose" }]);
+
+    expect(groupByCategory(entries)).toEqual([
+      { category: UNCATEGORISED, entries: [entry(entries, "acme/loose")] },
+    ]);
+  });
+});
+
+describe("entryAllowedAt and allowedEntries", () => {
+  function palette(): InsertEntry[] {
+    return catalog([
+      { ...base, name: "acme/columns" },
+      { ...base, name: "acme/column", parent: ["acme/columns"] },
+      { ...base, name: "acme/text" },
+    ]);
+  }
+
+  it("refuses a parent-restricted block at the root, naming the rule", () => {
+    const entries = palette();
+    const verdict = entryAllowedAt(
+      entry(entries, "acme/column"),
+      { at: "root" },
+      registryNestingSource()
+    );
+
+    expect(verdict.allowed).toBe(false);
+    // The REASON, not just the refusal. "Restricted at root" and "wrong parent"
+    // need different sentences: one says choose another container, the other
+    // says put it inside something.
+    expect(verdict.reason).toBe("restricted-at-root");
+    expect(verdict.permitted).toEqual(["acme/columns"]);
+  });
+
+  it("permits that block inside the container it declares", () => {
+    const entries = palette();
+
+    expect(
+      entryAllowedAt(
+        entry(entries, "acme/column"),
+        { at: "slot", parentType: "acme/columns", slot: "children" },
+        registryNestingSource()
+      ).allowed
+    ).toBe(true);
+  });
+
+  it("refuses it inside a container it does not declare", () => {
+    const entries = palette();
+    const verdict = entryAllowedAt(
+      entry(entries, "acme/column"),
+      { at: "slot", parentType: "acme/text", slot: "children" },
+      registryNestingSource()
+    );
+
+    expect(verdict.allowed).toBe(false);
+    expect(verdict.reason).toBe("wrong-parent");
+  });
+
+  it("permits an unrestricted block everywhere", () => {
+    // The control for the three refusals above. A rule that refused by default
+    // would satisfy all of them while making the palette permanently empty.
+    const entries = palette();
+    const source = registryNestingSource();
+
+    expect(
+      entryAllowedAt(entry(entries, "acme/text"), { at: "root" }, source)
+        .allowed
+    ).toBe(true);
+    expect(
+      entryAllowedAt(
+        entry(entries, "acme/text"),
+        { at: "slot", parentType: "acme/columns", slot: "children" },
+        source
+      ).allowed
+    ).toBe(true);
+  });
+
+  it("removes refused entries from the palette and keeps the rest", () => {
+    const entries = palette();
+    const offered = allowedEntries(
+      entries,
+      { at: "root" },
+      registryNestingSource()
+    );
+
+    // Both halves asserted: the refused one is gone AND the permitted ones
+    // remain. Asserting only the absence passes on a filter that returns
+    // nothing at all.
+    expect(offered.map(e => e.id)).toEqual(["acme/columns", "acme/text"]);
+  });
+
+  it("derives a variation's placement from its block, not from its own name", () => {
+    // A variation is an instance of its block, so it inherits the block's
+    // nesting rule. Keying the rule on the entry id would look up
+    // "acme/column#narrow", find no definition, and permit it everywhere.
+    const entries = catalog([
+      {
+        ...base,
+        name: "acme/column",
+        parent: ["acme/columns"],
+        editor: { variations: [{ name: "narrow" }] },
+      },
+    ]);
+
+    expect(
+      entryAllowedAt(
+        entry(entries, "acme/column#narrow"),
+        { at: "root" },
+        registryNestingSource()
+      ).allowed
+    ).toBe(false);
+  });
+});
+
+describe("insertionPointFor", () => {
+  it("appends at the end of the document when nothing is selected", () => {
+    const document = documentOf([
+      { id: "a", type: "acme/text", version: 1, props: {} },
+    ]);
+
+    expect(insertionPointFor(document, null)).toEqual({
+      kind: "document-end",
+      at: { index: 1 },
+      target: { at: "root" },
+    });
+  });
+
+  it("places a new block directly after the selected one", () => {
+    const document = documentOf([
+      { id: "a", type: "acme/text", version: 1, props: {} },
+      { id: "b", type: "acme/text", version: 1, props: {} },
+    ]);
+
+    // Index 1, not 0 and not 2: after "a" and before "b". A position that
+    // merely named the selection's own index would insert BEFORE it.
+    expect(insertionPointFor(document, "a")).toEqual({
+      kind: "after-selection",
+      at: { index: 1 },
+      target: { at: "root" },
+    });
+  });
+
+  it("stays inside the selected block's own region", () => {
+    const document = documentOf([
+      {
+        id: "wrap",
+        type: "acme/columns",
+        version: 1,
+        props: {},
+        slots: {
+          children: [{ id: "inner", type: "acme/text", version: 1, props: {} }],
+        },
+      },
+    ]);
+
+    const point = insertionPointFor(document, "inner");
+
+    // The position AND the target, together. This is the property the module
+    // exists for: a panel filtering against the root while inserting into a
+    // slot would offer blocks the op layer then refuses.
+    expect(point).toEqual({
+      kind: "after-selection",
+      at: { parentId: "wrap", slot: "children", index: 1 },
+      target: { at: "slot", parentType: "acme/columns", slot: "children" },
+    });
+  });
+
+  it("falls back to the end when the selection names a node the document lost", () => {
+    // A stale id after an undo, or a selection made against a document that has
+    // since been replaced. Appending is right here because there is no
+    // surrounding region to be surprised about.
+    const document = documentOf([
+      { id: "a", type: "acme/text", version: 1, props: {} },
+    ]);
+
+    expect(insertionPointFor(document, "gone")?.kind).toBe("document-end");
+    expect(insertionPointFor(document, "gone")?.at).toEqual({ index: 1 });
+  });
+
+  it("is empty-document safe", () => {
+    expect(insertionPointFor(documentOf([]), null)).toEqual({
+      kind: "document-end",
+      at: { index: 0 },
+      target: { at: "root" },
+    });
+  });
+});
+
+describe("nodeForEntry", () => {
+  it("stamps the type and the version the entry carries", () => {
+    // Version 3 with its migration steps, rather than the default 1: a stamp
+    // hardcoded to 1 would pass every assertion a version-1 fixture can make.
+    const entries = catalog([
+      {
+        ...base,
+        name: "acme/text",
+        version: 3,
+        migrate: {
+          1: (p: Record<string, unknown>) => p,
+          2: (p: Record<string, unknown>) => p,
+        },
+      },
+    ]);
+    const node = nodeForEntry(entry(entries, "acme/text"));
+
+    expect(node.type).toBe("acme/text");
+    expect(node.version).toBe(3);
+    expect(typeof node.id).toBe("string");
+    expect(node.id.length).toBeGreaterThan(0);
+  });
+
+  it("inserts a variation as its block, carrying the variation's props", () => {
+    // The node records what it IS — a block — not which palette row produced
+    // it. A node typed "acme/card#loud" would match no registered block and
+    // would render as unknown.
+    const entries = catalog([
+      {
+        ...base,
+        name: "acme/card",
+        defaultProps: { tone: "plain" },
+        editor: { variations: [{ name: "loud", props: { tone: "shout" } }] },
+      },
+    ]);
+
+    const node = nodeForEntry(entry(entries, "acme/card#loud"));
+
+    expect(node.type).toBe("acme/card");
+    expect(node.props).toEqual({ tone: "shout" });
+  });
+
+  it("gives every inserted node its own props, nested values included", () => {
+    // The failure this prevents is delayed and looks unrelated: editing one
+    // inserted block changes another inserted long before it, because both
+    // share the catalog's object. A shallow copy passes a top-level check and
+    // still shares the array.
+    const entries = catalog([
+      {
+        ...base,
+        name: "acme/list",
+        defaultProps: { items: ["one"], meta: { deep: true } },
+      },
+    ]);
+    const source = entry(entries, "acme/list");
+
+    const first = nodeForEntry(source);
+    const second = nodeForEntry(source);
+    (first.props.items as string[]).push("two");
+    (first.props.meta as { deep: boolean }).deep = false;
+
+    expect(second.props.items).toEqual(["one"]);
+    expect(second.props.meta).toEqual({ deep: true });
+    expect(source.props.items).toEqual(["one"]);
+  });
+
+  it("gives two inserts distinct ids", () => {
+    const entries = catalog([{ ...base, name: "acme/text" }]);
+    const source = entry(entries, "acme/text");
+
+    expect(nodeForEntry(source).id).not.toBe(nodeForEntry(source).id);
+  });
+});
