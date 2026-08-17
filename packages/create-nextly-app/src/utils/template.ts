@@ -163,7 +163,15 @@ export type NextlyDistTag = "latest" | "alpha";
  * `nextly` missing the helpers its pages import, and fail to build. Non-content
  * scaffolds (blank, plugin) stay on `latest`.
  */
-const CONTENT_TEMPLATE_TYPES: ReadonlySet<ProjectType> = new Set(["blog"]);
+const CONTENT_TEMPLATE_TYPES: ReadonlySet<ProjectType> = new Set([
+  "blog",
+  // The plugin template installs `@nextlyhq/eslint-plugin` for the design-token
+  // rules, and that package exists on `alpha` only — `latest` is the conservative
+  // tag and lags the active release line. Pinned to `latest` a plugin scaffold
+  // would resolve a version of it that predates the rules, exactly as a content
+  // scaffold would resolve a `nextly` missing the helpers its pages import.
+  "plugin",
+]);
 
 /**
  * The npm dist-tag a scaffold of `projectType` installs `nextly` + `@nextlyhq/*`
@@ -1001,6 +1009,7 @@ const NEXTLY_PACKAGES = [
   "@nextlyhq/adapter-sqlite",
   "@nextlyhq/plugin-form-builder",
   "@nextlyhq/plugin-sdk",
+  "@nextlyhq/eslint-plugin",
 ];
 
 /** Cache so we only fetch once per channel per CLI run. */
@@ -1315,6 +1324,10 @@ async function generatePluginPackageJson(
     eslint: PINNED_VERSIONS.eslint,
     "@eslint/js": PINNED_VERSIONS.eslint,
     "typescript-eslint": "^8.0.0",
+    // The design-token rules the admin holds itself to. Shipped to the author
+    // rather than documented at them: a rule that runs only in Nextly's own
+    // repository governs the first-party plugins and nothing anyone else builds.
+    "@nextlyhq/eslint-plugin": range("@nextlyhq/eslint-plugin"),
   };
 
   const pkg = {

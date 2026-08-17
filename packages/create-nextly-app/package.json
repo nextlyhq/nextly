@@ -42,11 +42,13 @@
   },
   "devDependencies": {
     "@nextlyhq/eslint-config": "workspace:*",
+    "@nextlyhq/eslint-plugin": "workspace:*",
     "@nextlyhq/telemetry": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
     "@types/fs-extra": "^11.0.4",
     "@types/node": "^20.19.17",
     "@types/tar": "^6.1.13",
+    "@typescript-eslint/parser": "^8.59.0",
     "@vitest/coverage-v8": "^4.1.0",
     "@vitest/ui": "^4.1.0",
     "eslint": "^9.39.1",

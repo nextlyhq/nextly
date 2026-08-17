@@ -4,7 +4,10 @@
  * Content templates (blog) render CMS content through `nextly/runtime` cache
  * helpers, which ship on the active `alpha` channel; the conservative `latest`
  * tag can lag behind it during the alpha. So a blog scaffold must pin nextly +
- * @nextlyhq/* to `alpha`, while blank/plugin stay on `latest`.
+ * @nextlyhq/* to `alpha`, while blank stays on `latest`. The plugin template
+ * tracks `alpha` too, for the same reason applied to a different package:
+ * `@nextlyhq/eslint-plugin` ships the design-token rules on the active release
+ * line, and `latest` lags it.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -26,10 +29,10 @@ const LATEST = "0.0.2-alpha.37";
 const ALPHA = "0.0.2-alpha.42";
 
 describe("templateNextlyChannel", () => {
-  it("routes content templates to alpha and everything else to latest", () => {
+  it("routes templates that track the active release line to alpha", () => {
     expect(templateNextlyChannel("blog")).toBe("alpha");
     expect(templateNextlyChannel("blank")).toBe("latest");
-    expect(templateNextlyChannel("plugin")).toBe("latest");
+    expect(templateNextlyChannel("plugin")).toBe("alpha");
   });
 });
 
