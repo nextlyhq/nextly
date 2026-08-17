@@ -27,6 +27,7 @@
 import {
   canBeRoot,
   canNest,
+  canNestInSlot,
   locateNode,
   makeNode,
   type AnyBlockDefinition,
@@ -201,11 +202,17 @@ function labelOf(definition: AnyBlockDefinition): string {
  * refusal is the only place the reason is still known — and recovering it means
  * classifying the placement a second time.
  *
- * Only the CHILD's half of the rule is asked here, because only that half is
- * exported by the engine on this base. The container's half — a slot's
- * `allow` list — is answered by `canNestInSlot`, and this is the single place
- * that call belongs when it becomes available: one line, at one call site,
- * because the target already carries the slot.
+ * BOTH halves are asked, and the child's first. `block.ts` is explicit that
+ * neither implies the other: a slot naming a type does not confine that type to
+ * it, and a child restricting its parents says nothing about which of that
+ * parent's slots may hold it. Asking only the allow-list would offer a column
+ * at the page root; asking only `parent` would let anything into a slot that
+ * names what it holds.
+ *
+ * The child's half runs first so its reason survives when both would refuse.
+ * "This block belongs inside a Columns" tells an author where to go; "this
+ * region does not take that block" leaves them looking for a region, which is
+ * the less actionable of the two sentences.
  */
 export function entryAllowedAt(
   entry: InsertEntry,
@@ -213,7 +220,9 @@ export function entryAllowedAt(
   source: NestingSource
 ): NestingVerdict {
   if (target.at === "root") return canBeRoot(entry.blockName, source);
-  return canNest(entry.blockName, target.parentType, source);
+  const child = canNest(entry.blockName, target.parentType, source);
+  if (!child.allowed) return child;
+  return canNestInSlot(entry.blockName, target.parentType, target.slot, source);
 }
 
 /**

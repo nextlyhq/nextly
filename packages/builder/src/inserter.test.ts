@@ -372,6 +372,72 @@ describe("entryAllowedAt and allowedEntries", () => {
       ).allowed
     ).toBe(false);
   });
+
+  it("refuses a block a slot's allow-list does not admit", () => {
+    // The CONTAINER's half. This block declares no `parent`, so the child's
+    // half permits it everywhere — only the slot's allow-list can refuse it,
+    // which is what makes this case separate rather than a restatement.
+    registerBlocks(
+      [
+        {
+          ...base,
+          name: "acme/gallery",
+          slots: { children: { allow: ["acme/photo"] } },
+        },
+        { ...base, name: "acme/photo" },
+        { ...base, name: "acme/text" },
+      ] as never,
+      { source: "acme" }
+    );
+    const entries = catalogFrom(allBlocks());
+    const source = registryNestingSource();
+
+    const refused = entryAllowedAt(
+      entry(entries, "acme/text"),
+      { at: "slot", parentType: "acme/gallery", slot: "children" },
+      source
+    );
+    expect(refused.allowed).toBe(false);
+    expect(refused.reason).toBe("not-allowed-in-slot");
+    expect(refused.permitted).toEqual(["acme/photo"]);
+
+    // The control: the admitted block passes the same call. Without it a rule
+    // refusing everything in a slot would satisfy the assertion above.
+    expect(
+      entryAllowedAt(
+        entry(entries, "acme/photo"),
+        { at: "slot", parentType: "acme/gallery", slot: "children" },
+        source
+      ).allowed
+    ).toBe(true);
+  });
+
+  it("reports the CHILD's reason when both halves would refuse", () => {
+    // Both rules reject this placement. The child's reason is the actionable
+    // one — it names a container to aim at — so it is the one that survives.
+    registerBlocks(
+      [
+        {
+          ...base,
+          name: "acme/grid",
+          slots: { cells: { allow: ["acme/cell"] } },
+        },
+        { ...base, name: "acme/cell", parent: ["acme/grid"] },
+        { ...base, name: "acme/stray", parent: ["acme/elsewhere"] },
+        { ...base, name: "acme/elsewhere" },
+      ] as never,
+      { source: "acme" }
+    );
+    const entries = catalogFrom(allBlocks());
+
+    const verdict = entryAllowedAt(
+      entry(entries, "acme/stray"),
+      { at: "slot", parentType: "acme/grid", slot: "cells" },
+      registryNestingSource()
+    );
+    expect(verdict.allowed).toBe(false);
+    expect(verdict.reason).toBe("wrong-parent");
+  });
 });
 
 describe("insertionPointFor", () => {
