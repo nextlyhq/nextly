@@ -43,7 +43,7 @@ import type {
   NextlyColumn,
   RowAction,
 } from "@admin/components/ui/table/data-table";
-import { ListView } from "@admin/components/ui/table/list-view";
+import { ListView, useListColumns } from "@admin/components/ui/table/list-view";
 import { PAGINATION } from "@admin/constants/pagination";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import {
@@ -309,16 +309,6 @@ function EmailProviderTable() {
   // clearing the filter. The sentinel below exists only for the Select, which
   // cannot hold an empty value, and never reaches the request.
   const [type, setType] = useState<string | undefined>(undefined);
-  const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
-
-  const toggleColumn = useCallback((key: string) => {
-    setHiddenColumns(prev => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  }, []);
 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [providerToDelete, setProviderToDelete] = useState<{
@@ -582,15 +572,24 @@ function EmailProviderTable() {
     [descriptorsByType]
   );
 
-  const columns = useMemo(
-    () =>
-      allColumns.map(col => ({ ...col, hidden: hiddenColumns.has(col.name) })),
-    [allColumns, hiddenColumns]
-  );
-
   const toggleableColumns = useMemo(
     () => allColumns.filter(col => !ALWAYS_VISIBLE.has(col.name)),
     [allColumns]
+  );
+
+  /* The reader's column choice outlives the tab it was made in. */
+  const columnsControl = useListColumns({
+    storageKey: "email-providers",
+    columns: toggleableColumns,
+  });
+
+  const columns = useMemo(
+    () =>
+      allColumns.map(col => ({
+        ...col,
+        hidden: !columnsControl.isColumnVisible(col.name),
+      })),
+    [allColumns, columnsControl]
   );
 
   const rowActions = useCallback(
@@ -681,11 +680,7 @@ function EmailProviderTable() {
           </SelectContent>
         </Select>
       }
-      columnsControl={{
-        columns: toggleableColumns,
-        isColumnVisible: name => !hiddenColumns.has(name),
-        onToggleColumn: toggleColumn,
-      }}
+      columnsControl={columnsControl}
       // Loading and failure are TABLE states, so the toolbar stays mounted and
       // the reader keeps the search field they just typed in.
       loading={isLoading && !data}

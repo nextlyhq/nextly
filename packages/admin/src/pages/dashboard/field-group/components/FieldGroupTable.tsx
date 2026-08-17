@@ -26,7 +26,7 @@ import type {
   NextlyColumn,
   RowAction,
 } from "@admin/components/ui/table/data-table";
-import { ListView } from "@admin/components/ui/table/list-view";
+import { ListView, useListColumns } from "@admin/components/ui/table/list-view";
 import { PAGINATION } from "@admin/constants/pagination";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { UI } from "@admin/constants/ui";
@@ -161,16 +161,6 @@ export default function FieldGroupTable() {
     null
   );
   const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false);
-  const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
-
-  const toggleColumn = (key: string) => {
-    setHiddenColumns(prev => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  };
 
   // 🔴 Both filters go to the SERVER, and the table renders exactly what comes back.
   //
@@ -409,15 +399,24 @@ export default function FieldGroupTable() {
     [getFieldCount]
   );
 
-  const columns = useMemo(
-    () =>
-      allColumns.map(col => ({ ...col, hidden: hiddenColumns.has(col.name) })),
-    [allColumns, hiddenColumns]
-  );
-
   const toggleableColumns = useMemo(
     () => allColumns.filter(col => !ALWAYS_VISIBLE.has(col.name)),
     [allColumns]
+  );
+
+  /* The reader's column choice outlives the tab it was made in. */
+  const columnsControl = useListColumns({
+    storageKey: "field-groups",
+    columns: toggleableColumns,
+  });
+
+  const columns = useMemo(
+    () =>
+      allColumns.map(col => ({
+        ...col,
+        hidden: !columnsControl.isColumnVisible(col.name),
+      })),
+    [allColumns, columnsControl]
   );
 
   const handleSourceFilterChange = (value: string) => {
@@ -567,15 +566,7 @@ export default function FieldGroupTable() {
             </>
           )
         }
-        columnsControl={
-          showLoadingSkeleton
-            ? undefined
-            : {
-                columns: toggleableColumns,
-                isColumnVisible: name => !hiddenColumns.has(name),
-                onToggleColumn: toggleColumn,
-              }
-        }
+        columnsControl={showLoadingSkeleton ? undefined : columnsControl}
         toolbarActions={
           showLoadingSkeleton ? (
             <>
