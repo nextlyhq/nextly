@@ -1,42 +1,33 @@
 name: Code hygiene
 
-# Per-PR check that a change does not leave dead code, a broken import or a
-# stray dependency behind.
+# Two jobs, because the two questions have different answers and only one of
+# them can be enforced honestly.
 #
 # ESLint reads one file at a time, so nothing in CI could see an export with no
 # consumers, a `vi.mock` pointing at a module that no longer exists, or a
 # package listed in a manifest that no code imports. Fallow reads the whole
 # module graph, which is what makes those visible.
 #
-# It analyses the WHOLE repository, not the diff, because the file a change
-# breaks is often one it never opened: deleting the last call to an exported
-# helper orphans that export somewhere else entirely, and a diff-scoped reader
-# cannot see it. `templates/` is the one tree left out — those four are
-# fragments with no package.json of their own, composed into a project by
-# create-nextly-app at scaffold time, so read in place every specifier in them
-# is unresolvable.
+# GATE analyses the changed files and fails on what the change introduced.
+# `fallow audit --gate new-only` does that natively: it snapshots the base
+# alongside the head, attributes each finding to a side, and reports a
+# severity-aware pass/warn/fail. The attribution is the tool's own, so a rename
+# does not read as a new finding the way baseline-identity matching does.
 #
-# What keeps a whole-repo verdict usable is the BASELINE. The tree carries debt
-# this job is not here to relitigate — 47 import cycles through the admin page
-# registry, ~846 clone groups, ~1200 functions over the complexity thresholds —
-# and a bare whole-repo run reports every one of them on every pull request. So
-# the base commit is analysed too and the head compared against it: only what
-# the change ADDS can fail, and only what it adds is annotated. Nothing here is
-# `continue-on-error`; a red run means the change introduced something.
+# WHOLE-REPO is advisory and cannot block. It exists for the one class the gate
+# structurally cannot see: a change deleting the last call to an exported helper
+# orphans that export in a file the diff never opened. Reading the whole
+# repository finds it, and also finds every piece of inherited debt, which is
+# why it reports rather than enforces. Of the three analyses only dead code
+# could gate anyway: `fallow dupes` exits 0 whatever it finds, and `fallow
+# health` matches its baseline per file and category, which does not survive
+# the two sides being different trees.
 #
-# Three analyses rather than one, because a single `fallow --baseline` applies
-# its baseline to dead code alone and the combined run then fails on inherited
-# duplication and complexity. Of the three, only dead code GATES — the step
-# below records which of the other two can be enforced and why they cannot.
+# `templates/` is left out of both. Those four are fragments with no
+# package.json of their own, composed into a project by create-nextly-app at
+# scaffold time, so read in place every specifier in them is unresolvable.
 #
-# The baselines are computed per run rather than committed. A checked-in
-# baseline is a second copy of a fact the repository already holds, and it goes
-# stale silently — every pull request after a merge would measure against
-# whatever main looked like when someone last remembered to refresh it.
-# Deriving them from the base commit costs one extra install and three
-# short scans, and cannot be wrong.
-#
-# Separate from ci.yml because of that: it needs full history and a second
+# Separate from ci.yml because the advisory job needs full history and a second
 # working tree, and ci.yml checks out with `fetch-depth: 2`.
 #
 # pull_request only. A push to main has no base to compare against.
@@ -47,20 +38,100 @@ on:
 
 permissions:
   contents: read
-  # The sticky summary comment. The other two outputs — inline annotations and
-  # the job summary — are workflow commands and need no token, which is what
-  # lets them render on pull requests from forks.
+  # The sticky comment and inline annotations the gate posts.
   pull-requests: write
+  checks: write
 
 concurrency:
   group: code-hygiene-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  audit:
-    name: Audit the repository
+  gate:
+    name: Changed files
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # The audit derives its own base snapshot from history, so a shallow
+          # clone leaves it nothing to attribute against.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      # Resolution needs the store: an import is only "unresolved" once its
+      # package is known to be absent, and workspace-to-workspace imports
+      # resolve through pnpm's virtual store rather than a path.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The action resolves the CLI from this repository's own `fallow`
+      # devDependency rather than taking latest, so the binary and
+      # .fallowrc.jsonc are always a matched pair. The action ref and the CLI
+      # version are independent, and both are pinned.
+      - name: Audit the changed files
+        id: audit
+        uses: fallow-rs/fallow@ecf5a314fd3e10974acb4f5a7f867c433030522d # v3.17.0
+        with:
+          command: audit
+          config: .fallowrc.jsonc
+          gate: new-only
+          fail-on-issues: true
+          comment: true
+          annotations: true
+          comment-id: code-hygiene
+
+      # A degraded run reports nothing and reads exactly like a clean one, so
+      # the states the action exposes for that are read rather than trusted.
+      # `changed-files-unavailable` means it could not enumerate the pull
+      # request's files and therefore analysed everything; the other two mean a
+      # dedup lookup failed, so the comment either duplicated or was dropped.
+      # None of them is a finding in the change, so each says so in its own
+      # words instead of arriving as a bare red check.
+      - name: Refuse a degraded verdict
+        if: always() && steps.audit.conclusion != 'skipped'
+        env:
+          UNSCOPED: ${{ steps.audit.outputs.changed-files-unavailable }}
+          POST_SKIPPED: ${{ steps.audit.outputs.post-skipped-reason }}
+          DEDUP_FAILED: ${{ steps.audit.outputs.dedup-lookup-failed }}
+          VERDICT: ${{ steps.audit.outputs.verdict }}
+          GATE: ${{ steps.audit.outputs.gate }}
+        run: |
+          echo "verdict=${VERDICT:-<none>} gate=${GATE:-<none>}"
+          if [ "$UNSCOPED" = "true" ]; then
+            echo "::error::fallow could not enumerate the changed files, so the audit ran unscoped. That is a tooling failure rather than a finding in the change. Re-run the job."
+            exit 1
+          fi
+          if [ "$DEDUP_FAILED" = "true" ] || { [ -n "$POST_SKIPPED" ] && [ "$POST_SKIPPED" != "none" ]; }; then
+            echo "::warning::fallow could not reconcile its own pull-request comment (dedup-lookup-failed=$DEDUP_FAILED, post-skipped-reason=$POST_SKIPPED). The verdict still stands; only the comment is unreliable."
+          fi
+          # An empty verdict is the gate never having produced one, which is not
+          # a pass. Absence of a failure is not a verdict.
+          if [ -z "$VERDICT" ]; then
+            echo "::error::fallow produced no audit verdict."
+            exit 1
+          fi
+
+  whole-repo:
+    name: Whole repository (advisory)
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Advisory by construction: this job reports and never decides. The class it
+    # covers is worth surfacing on every pull request, and it carries enough
+    # inherited noise that putting it in front of a merge would teach people to
+    # wave it through, which is worse than not gating on it at all.
+    continue-on-error: true
 
     steps:
       - name: Checkout
@@ -80,9 +151,6 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
 
-      # Resolution needs the store: an import is only "unresolved" once its
-      # package is known to be absent, and workspace-to-workspace imports
-      # resolve through pnpm's virtual store rather than a path.
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -96,18 +164,17 @@ jobs:
           git worktree add /tmp/fallow-base "$BASE_SHA"
           # Its own install, so imports resolve against what the base declared.
           (cd /tmp/fallow-base && pnpm install --frozen-lockfile)
-          # Run from HERE, pointed at there. The base predates this branch, so
-          # it has neither the fallow devDependency nor .fallowrc.jsonc: `pnpm
-          # exec fallow` inside it fails outright, and a scan that found the
-          # binary would still read no config and baseline a different policy —
-          # comparing two sides under different rules measures nothing.
+          # Run from HERE, pointed at there. The base can predate this branch,
+          # so it can have neither the fallow devDependency nor .fallowrc.jsonc:
+          # `pnpm exec fallow` inside it fails outright, and a scan that found
+          # the binary would still read no config and baseline a different
+          # policy. Comparing two sides under different rules measures nothing.
           #
           # `--save-baseline` exits 1 when the tree it recorded has findings,
-          # which the base has by definition — that is not a failure. Anything
-          # ABOVE 1 is fallow failing to run, and `|| true` would swallow it:
-          # the baseline file would be missing or truncated, every finding in
-          # the head would then read as introduced, and the gate would blame
-          # the change for the whole repository's debt.
+          # which the base has by definition, and that is not a failure.
+          # Anything ABOVE 1 is fallow failing to run, which `|| true` would
+          # swallow: the baseline would be missing or truncated and every
+          # finding in the head would then read as introduced.
           set +e
           for analysis in dead-code dupes health; do
             pnpm exec fallow "$analysis" \
@@ -127,108 +194,58 @@ jobs:
           done
           set -e
 
-      # One run per analysis. Its exit code IS the verdict, so a second
-      # human-format run to read one would recompute the same answer.
-      #
-      # Only `dead-code` gates, and only it can. Measured at fallow 3.15.0 on
-      # this tree:
-      #
-      #   dead-code  exits 1 on findings, 0 against a baseline that covers them
-      #   dupes      exits 0 ALWAYS — 846 clone groups and `--fail-on-issues`
-      #              both still exit 0, and its JSON carries no per-group
-      #              new-vs-inherited flag to count instead
-      #   health     exits 1, but its baseline matches per file and category
-      #              (or per function identity) and neither survives the two
-      #              sides being different trees: a branch touching none of
-      #              them still reported ~50 findings in `admin` and
-      #              `plugin-form-builder`
-      #
-      # So gating on those two would have been theatre: dupes could never fail
-      # and health could fail for functions the author never wrote. They are
-      # analysed and reported; dead code is analysed, reported and enforced —
-      # and it is the one that catches an export orphaned in a file the change
-      # never opened, which is why this job reads the whole repository.
+      # One run per analysis, because a single `fallow --baseline` applies its
+      # baseline to dead code alone and the combined run then reports inherited
+      # duplication and complexity as though the change had added them.
       #
       # `set +e` because a findings exit would otherwise abort the step under
-      # GitHub's `bash -e`, taking the annotations, the summary and the gate
-      # with it and leaving the author a bare red check.
-      - name: Analyse the pull request
+      # GitHub's `bash -e`, taking the summary with it.
+      - name: Analyse the whole repository
         id: analyse
         run: |
           set +e
-          failed=""
           crashed=""
           for analysis in dead-code dupes health; do
             pnpm exec fallow "$analysis" \
               --baseline "/tmp/base-$analysis.json" \
               --format json > "/tmp/head-$analysis.json" 2> "/tmp/err-$analysis.txt"
             code=$?
-            case "$code" in
-              0) ;;
-              # 1 is "found something". Only dead-code turns that into a verdict.
-              1) [ "$analysis" = "dead-code" ] && failed="$failed $analysis" ;;
-              # Anything else is fallow failing to run — a bad config, a parse
-              # error, a missing baseline. Reporting that as "findings" sends
-              # the author hunting for code that is not the problem, so it is
-              # surfaced separately and its stderr is not swallowed.
-              *) crashed="$crashed $analysis($code)"; cat "/tmp/err-$analysis.txt" >&2 ;;
-            esac
+            # 1 is "found something", which is this job's normal output. Above
+            # that is fallow failing to run: a bad config, a parse error, a
+            # missing baseline. Reporting that as findings would send the author
+            # hunting for code that is not the problem.
+            if [ "$code" -gt 1 ]; then
+              crashed="$crashed $analysis($code)"
+              cat "/tmp/err-$analysis.txt" >&2
+            fi
           done
-          echo "failed=$failed" >> "$GITHUB_OUTPUT"
           echo "crashed=$crashed" >> "$GITHUB_OUTPUT"
 
-      # Inline on the offending lines, for the two analyses that gate. Only
-      # findings absent from the baseline reach this point, so an unchanged
-      # tree annotates nothing.
-      #
-      # Health is left out for the reason it does not gate: its residue lands
-      # on functions the author never touched — 51 of them on a branch that
-      # touched none — and an annotation pinned to a line nobody edited reads
-      # as a demand rather than a signal. It stays in the job summary, where a
-      # repository-wide number belongs.
-      - name: Annotate findings
-        if: always() && steps.analyse.conclusion != 'skipped'
-        run: |
-          for analysis in dead-code dupes; do
-            pnpm exec fallow report --from "/tmp/head-$analysis.json" \
-              --format github-annotations
-          done
-
+      # The job summary is this job's only output. Annotations and a sticky
+      # comment both belong to the gate above, and duplicating them here would
+      # put two verdicts on the same lines, one of which cannot block, leaving
+      # the author to work out which was which.
       - name: Write the job summary
         if: always() && steps.analyse.conclusion != 'skipped'
         run: |
+          {
+            echo "## Whole-repository scan (advisory)"
+            echo
+            echo "Compared against a baseline of this branch's base, so only what"
+            echo "the change adds is listed. Nothing here blocks a merge — the"
+            echo "enforced check is the \`Changed files\` job."
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
           for analysis in dead-code dupes health; do
             pnpm exec fallow report --from "/tmp/head-$analysis.json" \
-              --format github-summary >> /tmp/fallow-summary.md
+              --format github-summary >> "$GITHUB_STEP_SUMMARY"
           done
-          cat /tmp/fallow-summary.md >> "$GITHUB_STEP_SUMMARY"
 
-      # One comment per pull request, edited in place on each push rather than
-      # appended, so the thread does not fill with superseded verdicts.
-      #
-      # Skipped for forks: their token is read-only by design, and a step that
-      # cannot post should not fail a check the fork author cannot influence.
-      # Annotations and the job summary still render for them.
-      - name: Comment on the pull request
-        if: >-
-          always() && steps.analyse.conclusion != 'skipped'
-          && github.event.pull_request.head.repo.full_name == github.repository
-        env:
-          GH_TOKEN: ${{ github.token }}
+      # Reported even though the job cannot fail the workflow. A tooling failure
+      # that leaves the summary empty is indistinguishable from a clean scan, and
+      # silence is the one outcome this job must not produce.
+      - name: Report a tooling failure
+        if: always() && steps.analyse.outputs.crashed != ''
         run: |
-          pnpm exec fallow ci post-pr-comment \
-            --provider github \
-            --pr "${{ github.event.pull_request.number }}" \
-            --body /tmp/fallow-summary.md \
-            --marker-id code-hygiene \
-            ${{ steps.analyse.outputs.failed == '' && '--clean' || '' }}
-
-      - name: Gate
-        if: always() && (steps.analyse.outputs.failed != '' || steps.analyse.outputs.crashed != '')
-        run: |
-          if [ -n "${{ steps.analyse.outputs.crashed }}" ]; then
-            echo "::error::fallow failed to run:${{ steps.analyse.outputs.crashed }}. This is a tooling failure, not a finding in the change — its stderr is in the analysis step above."
-            exit 1
-          fi
-          echo "::error::fallow reported dead code introduced by this pull request:${{ steps.analyse.outputs.failed }}. See the annotations above and the job summary."
+          echo "::error::fallow failed to run:${{ steps.analyse.outputs.crashed }}. That is a tooling failure rather than a finding in the change — its stderr is in the analysis step above."
           exit 1
