@@ -32,6 +32,9 @@ export function mountBasePath(mountPath: string): string {
 /** Join a mount base with a relative operation path (one leading "/" kept). */
 export function joinPath(base: string, relative: string): string {
   const left = base.endsWith("/") ? base.slice(0, -1) : base;
+  // A mount-root operation ("/") IS the base — OpenAPI paths carry no trailing
+  // slash, and appending one would create a key nothing looks up.
+  if (relative === "/" || relative === "") return left || "/";
   const right = relative.startsWith("/") ? relative : `/${relative}`;
   return `${left}${right}`;
 }
@@ -51,7 +54,17 @@ export function buildOperation(
     schema: op.responseSchema,
     description: op.responseSchema ? "The document." : undefined,
   });
-  const responses = { ...success, ...errorResponses };
+  // Error responses are SHARED: every operation references the one
+  // components.responses entry per status instead of inlining twelve full
+  // objects — the document stays small and the raw JSON readable, while
+  // renderers resolve the identical content through the $ref.
+  const errorRefs = Object.fromEntries(
+    Object.keys(errorResponses).map(status => [
+      status,
+      { $ref: `#/components/responses/${status}` },
+    ])
+  );
+  const responses = { ...success, ...errorRefs };
   const operation: OpenApiOperation = {
     operationId: op.operation,
     tags: [op.tag],
@@ -59,12 +72,28 @@ export function buildOperation(
     responses,
   };
   if (op.method === "POST" || op.method === "PATCH" || op.method === "PUT") {
-    operation.requestBody = op.requestSchema
+    operation.requestBody = op.requestMultipart
       ? {
           required: true,
-          content: { "application/json": { schema: op.requestSchema } },
+          content: {
+            // File upload: a binary file part plus JSON metadata fields.
+            "multipart/form-data": {
+              schema: {
+                type: "object",
+                properties: {
+                  file: { type: "string", format: "binary" },
+                },
+                additionalProperties: true,
+              },
+            },
+          },
         }
-      : genericJsonRequest();
+      : op.requestSchema
+        ? {
+            required: true,
+            content: { "application/json": { schema: op.requestSchema } },
+          }
+        : genericJsonRequest();
   }
   // Extra tags (a plugin's openapi.tags) merge with the primary tag.
   if (op.tags && op.tags.length > 0) {

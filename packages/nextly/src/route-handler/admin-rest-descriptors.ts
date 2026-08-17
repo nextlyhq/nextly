@@ -1230,6 +1230,199 @@ const auth = ops("auth", "Auth", [
 ]);
 
 // ============================================================
+// Mounted standalone surfaces — media factory + health check
+//
+// The catch-all tables above cover the admin REST surface; these are the OTHER
+// first-party surfaces a host app mounts as standalone route files: the media
+// factory (`createMediaHandlers` — mounted twice: auth'd CRUD + public reads)
+// and the health check. Operations are TEMPLATES relative to wherever the user
+// mounted the handler — the consumer joins them with the mount path the
+// filesystem scan discovered, and filters by the verbs the route file
+// re-exports (which is exactly what distinguishes the two media mounts).
+//
+// Media auth is mount-dependent (reads are public on the public mount,
+// permission-gated on the admin mount), so read ops carry no fixed auth — the
+// consumer resolves it from the mount. Writes are admin-mount-only.
+// ============================================================
+
+/** Verbs a mounted standalone surface may use (health also answers HEAD). */
+export type MountedSurfaceMethod =
+  "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD";
+
+/** A media or health operation template. */
+export interface MountedSurfaceOperation {
+  /** Dispatcher-surface identity (operationId basis). */
+  operation: string;
+  method: MountedSurfaceMethod;
+  /** Path relative to the mount root, `{param}` placeholders. */
+  path: string;
+  /** The canonical response envelope kind. */
+  envelope: RestEnvelope;
+  /** Admin-mount-only (uploads, mutations, deletes) — never on public mounts. */
+  write: boolean;
+  /** Permission slug enforced on the ADMIN mount (reads: read-media, …). */
+  adminPermission: string;
+  /** Short human summary. */
+  summary: string;
+  /** Upload bodies are multipart/form-data, not JSON. */
+  multipart?: boolean;
+}
+
+const MEDIA_READ = "read-media";
+
+/**
+ * The media factory's operations (paths relative to the media mount root).
+ * Read set mirrors the public route's documented surface; write set mirrors the
+ * auth'd mount (upload, update, delete, bulk delete, folder CRUD).
+ */
+export function listMediaSurfaceOperations(): MountedSurfaceOperation[] {
+  return [
+    {
+      operation: "listMedia",
+      method: "GET",
+      path: "/",
+      envelope: "list",
+      write: false,
+      adminPermission: MEDIA_READ,
+      summary: "List media with pagination.",
+    },
+    {
+      operation: "getMediaById",
+      method: "GET",
+      path: "/{id}",
+      envelope: "doc",
+      write: false,
+      adminPermission: MEDIA_READ,
+      summary: "Get a media file by id.",
+    },
+    {
+      operation: "listMediaFolders",
+      method: "GET",
+      path: "/folders",
+      envelope: "list",
+      write: false,
+      adminPermission: MEDIA_READ,
+      summary: "List media folders.",
+    },
+    {
+      operation: "getMediaFolder",
+      method: "GET",
+      path: "/folders/{id}",
+      envelope: "doc",
+      write: false,
+      adminPermission: MEDIA_READ,
+      summary: "Get a folder by id.",
+    },
+    {
+      operation: "getMediaFolderContents",
+      method: "GET",
+      path: "/folders/{id}/contents",
+      envelope: "list",
+      write: false,
+      adminPermission: MEDIA_READ,
+      summary: "List a folder's contents.",
+    },
+    {
+      operation: "getRootFolderContents",
+      method: "GET",
+      path: "/folders/root/contents",
+      envelope: "list",
+      write: false,
+      adminPermission: MEDIA_READ,
+      summary: "List the root folder's contents.",
+    },
+    {
+      operation: "uploadMedia",
+      method: "POST",
+      path: "/",
+      envelope: "mutation",
+      write: true,
+      adminPermission: "create-media",
+      summary: "Upload a file (multipart/form-data).",
+      multipart: true,
+    },
+    {
+      operation: "updateMedia",
+      method: "PATCH",
+      path: "/{id}",
+      envelope: "mutation",
+      write: true,
+      adminPermission: "update-media",
+      summary: "Update a media file's metadata.",
+    },
+    {
+      operation: "deleteMedia",
+      method: "DELETE",
+      path: "/{id}",
+      envelope: "action",
+      write: true,
+      adminPermission: "delete-media",
+      summary: "Delete a media file.",
+    },
+    {
+      operation: "bulkDeleteMedia",
+      method: "POST",
+      path: "/bulk-delete",
+      envelope: "bulk",
+      write: true,
+      adminPermission: "delete-media",
+      summary: "Bulk delete media files and folders.",
+    },
+    {
+      operation: "createMediaFolder",
+      method: "POST",
+      path: "/folders",
+      envelope: "mutation",
+      write: true,
+      adminPermission: "manage-media",
+      summary: "Create a media folder.",
+    },
+    {
+      operation: "updateMediaFolder",
+      method: "PATCH",
+      path: "/folders/{id}",
+      envelope: "mutation",
+      write: true,
+      adminPermission: "manage-media",
+      summary: "Rename / update a folder.",
+    },
+    {
+      operation: "deleteMediaFolder",
+      method: "DELETE",
+      path: "/folders/{id}",
+      envelope: "action",
+      write: true,
+      adminPermission: "manage-media",
+      summary: "Delete a folder.",
+    },
+  ];
+}
+
+/** The health check's operations (public, unauthenticated). */
+export function listHealthSurfaceOperations(): MountedSurfaceOperation[] {
+  return [
+    {
+      operation: "health",
+      method: "GET",
+      path: "/",
+      envelope: "data",
+      write: false,
+      adminPermission: MEDIA_READ,
+      summary: "Liveness + database connectivity probe.",
+    },
+    {
+      operation: "healthHead",
+      method: "HEAD",
+      path: "/",
+      envelope: "data",
+      write: false,
+      adminPermission: MEDIA_READ,
+      summary: "Liveness probe (headers only).",
+    },
+  ];
+}
+
+// ============================================================
 // Assembly
 // ============================================================
 

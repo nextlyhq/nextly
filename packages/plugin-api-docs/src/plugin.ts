@@ -23,6 +23,7 @@ import { createRequire } from "node:module";
 
 import {
   definePlugin,
+  isAuthenticatedApiRequest,
   listAdminRestOperations,
   listContentSurfaces,
   listPluginRoutes,
@@ -217,11 +218,14 @@ async function resolveContent(config: unknown): Promise<ContentConfig> {
  * Assemble the OpenAPI document for THIS app, on demand. Reads the sources
  * (filesystem scan, admin REST seam, plugin routes, runtime content
  * registries), applies the service excludes before generation and the
- * path/code excludes after.
+ * path/code excludes after. On a published surface, an ANONYMOUS caller gets
+ * the public-only view (gated operations and content shapes stay private);
+ * a caller with a valid session/API key gets the full document.
  */
 async function buildSpec(
   options: ApiDocsPluginOptions,
-  config: unknown
+  config: unknown,
+  req: Request
 ): Promise<Record<string, unknown>> {
   const scan = applyMountOverrides(
     scanAppDirectory(process.cwd()),
@@ -245,6 +249,11 @@ async function buildSpec(
     // config view is the fallback.
     content: await resolveContent(config),
     info: { title: options.title },
+    // Anonymous viewers of a published spec see the public surface only. On an
+    // admin-gated surface every caller already passed auth, so no filtering.
+    publicOnly:
+      options.visibility === "public" &&
+      !(await isAuthenticatedApiRequest(req)),
   });
   return applyExcludes(doc, options);
 }
@@ -264,9 +273,11 @@ async function buildSpec(
  *
  * Contributes the docs surface directly at the admin API root (default
  * `/admin/api/docs`, moved with `docsPath`): `GET <docsPath>` (the Scalar
- * reference page), `GET <docsPath>/spec.json` (the OpenAPI document,
- * admin-gated unless `visibility: "public"`), and `GET <docsPath>/scalar.js`
- * (the self-hosted bundle), plus a sidebar entry linking to the docs page.
+ * reference page), `GET <docsPath>/spec.json` (the OpenAPI document), and
+ * `GET <docsPath>/scalar.js` (the self-hosted bundle), plus a sidebar entry
+ * linking to the docs page. All three are admin-gated by default;
+ * `visibility: "public"` publishes the WHOLE surface (page + spec + bundle) —
+ * publishing only the JSON would leave no way to read it.
  */
 export function apiDocsPlugin(
   options?: ApiDocsPluginOptions
@@ -276,6 +287,11 @@ export function apiDocsPlugin(
   const docsPath = normalizeDocsPath(opts.docsPath);
   const paths = docsRoutePaths(docsPath);
   const docsUrl = `/admin/api${docsPath}`;
+  // Secure by default: admin-gated unless the operator explicitly publishes.
+  // The page and bundle carry nothing the spec doesn't (an HTML shell and a
+  // public OSS library), so publishing means the whole surface — otherwise a
+  // logged-out visitor gets a 401 page for docs they were meant to read.
+  const isPublic = opts.visibility === "public";
 
   const contributes: PluginContributions = {
     routes: [
@@ -286,6 +302,7 @@ export function apiDocsPlugin(
         // plugin namespace — `/admin/api/docs` reads as product, not as plugin
         // plumbing.
         mount: "admin-api",
+        public: isPublic,
         handler: () =>
           new Response(
             renderDocsHtml(specUrl(docsPath), scalarJsUrl(docsPath)),
@@ -301,22 +318,20 @@ export function apiDocsPlugin(
         method: "GET",
         path: paths.spec,
         mount: "admin-api",
-        // Secure by default: admin-gated unless the operator explicitly
-        // publishes the spec. The docs page reads this URL with the caller's own
-        // credentials, so an admin session sees it either way.
-        public: opts.visibility === "public",
-        handler: async (_req, ctx) =>
-          Response.json(await buildSpec(opts, ctx.config), {
+        public: isPublic,
+        handler: async (req, ctx) =>
+          Response.json(await buildSpec(opts, ctx.config, req), {
             headers: { "cache-control": "no-store" },
           }),
       },
       {
-        // The Scalar bundle, served same-origin by the plugin. The library
-        // itself is public OSS; gating matches the other routes for consistency
-        // (a <script> fetch is same-origin, so the admin session reaches it).
+        // The Scalar bundle, served same-origin by the plugin — the library
+        // itself is public OSS, and the docs <script> fetch must succeed for
+        // logged-out visitors on a published surface.
         method: "GET",
         path: paths.scalar,
         mount: "admin-api",
+        public: isPublic,
         handler: () =>
           new Response(scalarBundleSource, {
             headers: {

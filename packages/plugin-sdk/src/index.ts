@@ -186,6 +186,28 @@ export {
 } from "nextly";
 
 /**
+ * Operation templates for the standalone first-party handlers a host app
+ * mounts as route files — the media factory (auth'd CRUD + public reads) and
+ * the health check. Paths are relative to the mount; consumers join them with
+ * the filesystem scan's mount path and filter by the scanned verbs.
+ * @public
+ */
+export {
+  listMediaSurfaceOperations,
+  listHealthSurfaceOperations,
+  type MountedSurfaceOperation,
+} from "nextly";
+
+/**
+ * Whether a request carries a valid session cookie or Bearer API key — the
+ * dispatcher's own auth pipeline, exposed read-only. Lets a plugin serving a
+ * PUBLIC route distinguish an anonymous visitor from a logged-in caller
+ * (public routes receive `user: null` by design).
+ * @public
+ */
+export { isAuthenticatedApiRequest } from "nextly";
+
+/**
  * Read-only view of every registered plugin's contributed routes (paths, verbs,
  * auth flags, optional OpenAPI annotations). The safe introspection mirror of
  * `listAdminRestOperations` for plugin-contributed surfaces.

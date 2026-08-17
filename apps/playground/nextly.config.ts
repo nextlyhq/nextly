@@ -97,7 +97,7 @@ export default defineConfig({
   plugins: [
     pageBuilder(),
     formBuilderPlugin,
-    apiDocsPlugin(),
+    apiDocsPlugin({ visibility: "public" }),
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
       ? [styleFixturePlugin]
       : []),

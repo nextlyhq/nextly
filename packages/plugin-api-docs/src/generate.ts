@@ -15,7 +15,11 @@
  * @module generate
  * @since alpha
  */
-import type { AdminRestOperation } from "@nextlyhq/plugin-sdk";
+import {
+  listHealthSurfaceOperations,
+  listMediaSurfaceOperations,
+  type AdminRestOperation,
+} from "@nextlyhq/plugin-sdk";
 
 import { buildEnvelopeSchemas } from "./components/envelopes";
 import { buildErrorComponents } from "./components/errors";
@@ -44,6 +48,12 @@ export interface OpenApiInput {
   pluginOperations?: readonly DocsOperation[];
   /** The app's content surfaces; enables dynamic per-slug expansion. */
   content?: ContentConfig;
+  /**
+   * Anonymous-viewer mode: emit ONLY public operations (auth === "public") and
+   * skip content expansion entirely — collection/single shapes describe gated
+   * surfaces. Used when a published spec is read by an unauthenticated caller.
+   */
+  publicOnly?: boolean;
   /** `info.title` / `info.version` overrides. */
   info?: { title?: string; version?: string };
   /** Optional `servers[0].url`. */
@@ -164,12 +174,74 @@ export function generateOpenApiDocument(input: OpenApiInput): OpenApiDocument {
   const pluginOperations = input.pluginOperations ?? [];
   const { errorResponseSchema, responsesByStatus } = buildErrorComponents();
 
+  // Anonymous-viewer mode keeps only public operations and skips content
+  // expansion: gated operations (and the collection/single field shapes, which
+  // describe gated surfaces) are not an anonymous reader's business.
+  const visibilityFilter = (ops: readonly DocsOperation[]): DocsOperation[] =>
+    input.publicOnly ? ops.filter(op => op.auth === "public") : [...ops];
+
   // Dynamic expansion replaces templated per-slug entry ops with concrete ones.
   const expanded = expandContentOperations(
-    [...restOperations, ...pluginOperations],
-    input.content,
+    visibilityFilter([...restOperations, ...pluginOperations]),
+    input.publicOnly ? undefined : input.content,
     components
   );
+
+  // Standalone mounted surfaces FIRST: the public-facing surface (health,
+  // public media reads) is what an API consumer reaches for first, so it leads
+  // the document and the docs sidebar instead of hiding under 30 admin groups.
+  // The media factory is mounted twice — auth'd CRUD + public reads — and the
+  // health check; ops attach at each mount's base, filtered by the verbs the
+  // route file re-exports (that is exactly what distinguishes the two media
+  // mounts), with auth resolved from the mount.
+  let paths: OpenApiPaths = {};
+  for (const mount of input.scan.routes) {
+    if (mount.source.kind === "media") {
+      const isAdminMount = mount.mountPath.startsWith("/admin");
+      const base = mountBasePath(mount.mountPath);
+      const ops = listMediaSurfaceOperations()
+        // A mount only serves the verbs its route file re-exports; writes never
+        // appear on the public (GET-only) mount.
+        .filter(op => mount.verbs.includes(op.method))
+        .map((op): DocsOperation => ({
+          service: "media",
+          operation: op.operation,
+          method: op.method,
+          path: op.path,
+          auth: isAdminMount ? "permission" : "public",
+          permissionSlug: isAdminMount ? op.adminPermission : undefined,
+          tag: isAdminMount ? "Media" : "Media (Public)",
+          envelope: op.envelope,
+          summary: op.summary,
+          ...(op.multipart ? { requestMultipart: true } : {}),
+        }));
+      paths = {
+        ...paths,
+        ...buildPaths(base, visibilityFilter(ops), responsesByStatus),
+      };
+    } else if (
+      mount.source.kind === "api-subpath" &&
+      mount.source.subpath === "health"
+    ) {
+      const base = mountBasePath(mount.mountPath);
+      const ops = listHealthSurfaceOperations()
+        .filter(op => mount.verbs.includes(op.method))
+        .map((op): DocsOperation => ({
+          service: "health",
+          operation: op.operation,
+          method: op.method,
+          path: op.path,
+          auth: "public",
+          tag: "Health",
+          envelope: op.envelope,
+          summary: op.summary,
+        }));
+      paths = {
+        ...paths,
+        ...buildPaths(base, visibilityFilter(ops), responsesByStatus),
+      };
+    }
+  }
 
   const catchAllMounts = input.scan.routes.filter(
     r => r.source.kind === "dynamic-catchall"
@@ -179,7 +251,6 @@ export function generateOpenApiDocument(input: OpenApiInput): OpenApiDocument {
       ? catchAllMounts.map(m => mountBasePath(m.mountPath))
       : [DEFAULT_CATCHALL_BASE];
 
-  let paths: OpenApiPaths = {};
   for (const base of bases) {
     paths = {
       ...paths,

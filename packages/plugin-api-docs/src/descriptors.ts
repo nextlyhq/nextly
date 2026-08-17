@@ -50,6 +50,8 @@ export interface DocsOperation {
   responseSchema?: Record<string, unknown>;
   /** Surface-specific request-body schema for write operations. */
   requestSchema?: Record<string, unknown>;
+  /** Upload bodies are multipart/form-data (file part + metadata), not JSON. */
+  requestMultipart?: boolean;
   /** Success status override (e.g. 201 for creates). */
   successStatus?: number;
 }

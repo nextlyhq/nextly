@@ -33,9 +33,14 @@ describe("apiDocsPlugin routes", () => {
     expect(spec?.public).toBeFalsy();
   });
 
-  it("publishes the spec when visibility is explicitly 'public'", () => {
-    const spec = routesOf("public").find(r => r.path === "/docs/spec.json");
-    expect(spec?.public).toBe(true);
+  it("admin-gates the whole surface by default (no `public` flags)", () => {
+    for (const r of routesOf()) expect(r.public).toBeFalsy();
+  });
+
+  it("publishes the WHOLE surface (page + spec + bundle) when visibility is 'public'", () => {
+    // A logged-out visitor must reach the page, the spec it reads, and the
+    // Scalar bundle it loads — publishing only the JSON leaves nothing readable.
+    for (const r of routesOf("public")) expect(r.public).toBe(true);
   });
 
   it("keeps the docs page free of a permission requirement (it self-gates)", () => {

@@ -845,6 +845,19 @@ export {
   type ContentSurfaces,
 } from "./route-handler/content-surfaces";
 
+// Mounted-surface introspection: operation templates for the standalone
+// first-party handlers (media factory, health check) a host app mounts. Lives
+// beside the catch-all tables in admin-rest-descriptors — one routes file.
+export {
+  listMediaSurfaceOperations,
+  listHealthSurfaceOperations,
+  type MountedSurfaceOperation,
+} from "./route-handler/admin-rest-descriptors";
+
+// Request-auth introspection: is this caller carrying a valid session/API key?
+// Lets a plugin serving a public route distinguish anonymous from logged-in.
+export { isAuthenticatedApiRequest } from "./route-handler/request-auth";
+
 // Read-only view of plugin-contributed routes (the plugin-route mirror of the
 // admin REST introspection above).
 export {
