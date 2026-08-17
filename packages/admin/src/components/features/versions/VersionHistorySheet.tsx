@@ -14,7 +14,6 @@
  * @module components/features/versions/VersionHistorySheet
  */
 
-import type { FieldConfig } from "nextly/config";
 import { useEffect, useRef, useState } from "react";
 
 import {
@@ -38,11 +37,11 @@ import {
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import type { VersionScope } from "@admin/services/versionApi";
 
+import { useDocumentHistory } from "./document-history-context";
 import { RestoreConfirmDialog } from "./RestoreConfirmDialog";
 import { VersionCompareDialog } from "./VersionCompareDialog";
 import { VersionLabelDialog } from "./VersionLabelDialog";
 import { VersionLocaleFilter } from "./VersionLocaleFilter";
-import { VersionPreview } from "./VersionPreview";
 import { VersionRow } from "./VersionRow";
 
 // How many extra history pages the panel will auto-fetch while searching for a
@@ -55,8 +54,6 @@ export interface VersionHistorySheetProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   scope: VersionScope;
-  /** Current schema fields, used to render a snapshot. */
-  fields: FieldConfig[];
   /**
    * Whether this caller may write the document. Restore uses the ordinary edit
    * permission, so someone who can only read history is offered no way to
@@ -98,7 +95,6 @@ export function VersionHistorySheet({
   open,
   onOpenChange,
   scope,
-  fields,
   canRestore = false,
   liveStatus = null,
   entityLocalized,
@@ -179,6 +175,47 @@ export function VersionHistorySheet({
     fetchNextPage,
   } = list;
   const detail = useVersion({ scope, versionNo: selected, enabled: open });
+
+  // Hand the chosen version to the document area, and take it back whenever
+  // nothing is chosen — including when the panel closes, so dismissing it never
+  // strands the editor on a version it can no longer see the list for.
+  const { setViewing } = useDocumentHistory();
+  const viewedSnapshot = detail.data?.snapshot;
+  const viewedLocale = detail.data?.locale ?? null;
+  const viewedLoading = detail.isLoading;
+  const viewedError = detail.error ?? null;
+  useEffect(() => {
+    if (!open || selected === null) {
+      setViewing(null);
+      return;
+    }
+    // Published on SELECTION rather than on arrival: the document has to show
+    // that it is fetching, or a click that leaves the live document on screen
+    // reads as a control that did nothing.
+    setViewing({
+      versionNo: selected,
+      snapshot: viewedSnapshot,
+      locale: viewedLocale,
+      isLoading: viewedLoading,
+      error: viewedError,
+    });
+  }, [
+    open,
+    selected,
+    viewedSnapshot,
+    viewedLocale,
+    viewedLoading,
+    viewedError,
+    setViewing,
+  ]);
+
+  // Returning to the live document from the banner clears the selection here
+  // too, so the list stops showing a row as active for a version that is no
+  // longer on screen.
+  useEffect(() => {
+    if (!open) return;
+    return () => setViewing(null);
+  }, [open, setViewing]);
 
   const restore = useRestoreVersion({
     scope,
@@ -421,19 +458,13 @@ export function VersionHistorySheet({
           </div>
         ) : null}
 
+        {/* The panel is a timeline: the list stays on screen and the chosen
+            version is rendered in the DOCUMENT rather than in here. Previewing
+            inside a 480px panel was always the compromise — the question an
+            editor is asking is how the page read then, and only the page can
+            answer it. */}
         <div className="flex-1 overflow-y-auto">
-          {selected !== null ? (
-            <VersionPreview
-              versionNo={selected}
-              fields={fields}
-              snapshot={detail.data?.snapshot}
-              isLoading={detail.isLoading}
-              error={detail.error}
-              onRetry={() => void detail.refetch()}
-              locale={detail.data?.locale ?? null}
-              sourceVersionNo={detail.data?.sourceVersionNo ?? null}
-            />
-          ) : list.isLoading ? (
+          {list.isLoading ? (
             <ListSkeleton />
           ) : list.isError && versions.length === 0 ? (
             // Only a genuine load failure (no pages) replaces the panel. A failed
@@ -456,8 +487,15 @@ export function VersionHistorySheet({
             </div>
           ) : isEmpty ? (
             <div className="px-4 py-8 text-center">
-              <p className="text-sm text-muted-foreground">
-                No versions recorded for this document yet.
+              {/* A heading rather than a paragraph: when the panel is empty
+                  this is the only content in it, and a paragraph gives
+                  assistive technology nothing to land on. `h3` because the
+                  panel's own title is the heading above it. */}
+              <h3 className="text-base font-semibold text-foreground">
+                No versions yet
+              </h3>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Saving this document will record its first version.
               </p>
             </div>
           ) : (

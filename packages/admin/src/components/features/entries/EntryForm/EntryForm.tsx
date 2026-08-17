@@ -16,9 +16,16 @@
  */
 
 import { resolveLocalizedFieldNames } from "nextly/config";
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 
+import {
+  DocumentHistoryContext,
+  type ViewedVersion,
+} from "@admin/components/features/versions/document-history-context";
+import { HistoricalDocumentBanner } from "@admin/components/features/versions/HistoricalDocumentBanner";
 import { historyEnabledFrom } from "@admin/components/features/versions/history-enabled";
+import { VersionSnapshotForm } from "@admin/components/features/versions/VersionSnapshotForm";
+import { Alert, AlertDescription, Skeleton } from "@admin/components/ui";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useGeneralSettings } from "@admin/hooks/queries/useGeneralSettings";
 import { useAutosaveRecovery } from "@admin/hooks/useAutosaveRecovery";
@@ -303,6 +310,17 @@ export function EntryForm({
   // reads `railCollapsed` to decide whether to render. Persisted in
   // localStorage so the choice survives reloads.
   const { collapsed: railCollapsed, toggle: toggleRail } = useRailCollapsed();
+  // Which past version the document area is showing, or null for the live
+  // document. Held here because this is the component that swaps the document,
+  // and published downward because the panel that chooses it is mounted from
+  // the header, several levels below.
+  const [viewingVersion, setViewingVersion] = useState<ViewedVersion | null>(
+    null
+  );
+  const documentHistory = useMemo(
+    () => ({ viewing: viewingVersion, setViewing: setViewingVersion }),
+    [viewingVersion]
+  );
 
   // Whether this collection has Draft/Published status enabled at the meta
   // level. When true, the system header splits into Save Draft + Publish/Update
@@ -484,23 +502,24 @@ export function EntryForm({
   // page title h1; the title input lives inside EntrySystemHeader.
   return (
     <EntryLocaleProvider value={localeCtx}>
-      <EntryFormContextProvider
-        entryId={entry?.id}
-        collectionSlug={collection.name}
-        isCreateMode={mode === "create"}
-      >
-        <div className={cn("space-y-0", className)}>
-          <EntryFormProvider form={form} onSubmit={handleSubmit}>
-            <FormErrorSummary
-              errors={errors}
-              submitCount={submitCount}
-              className="mx-6 mt-3"
-            />
+      <DocumentHistoryContext.Provider value={documentHistory}>
+        <EntryFormContextProvider
+          entryId={entry?.id}
+          collectionSlug={collection.name}
+          isCreateMode={mode === "create"}
+        >
+          <div className={cn("space-y-0", className)}>
+            <EntryFormProvider form={form} onSubmit={handleSubmit}>
+              <FormErrorSummary
+                errors={errors}
+                submitCount={submitCount}
+                className="mx-6 mt-3"
+              />
 
-            <div className="flex flex-col @4xl/content:flex-row @4xl/content:min-h-[calc(100vh-4rem)] items-stretch @4xl/content:-m-8">
-              {/* Main column */}
-              <div className="flex-1 min-w-0 flex flex-col">
-                {/* Why: the parent flex's @4xl/content:-m-8 already cancels
+              <div className="flex flex-col @4xl/content:flex-row @4xl/content:min-h-[calc(100vh-4rem)] items-stretch @4xl/content:-m-8">
+                {/* Main column */}
+                <div className="flex-1 min-w-0 flex flex-col">
+                  {/* Why: the parent flex's @4xl/content:-m-8 already cancels
                   PageContainer's px-8 padding so the form runs edge-to-edge
                   once the panel is wide enough. Wrapping the system
                   header / meta strip in another -mx-8 doubled the negative
@@ -508,109 +527,157 @@ export function EntryForm({
                   each side — clipping the title's first character on the
                   left and the rail toggle / right-edge buttons on the right.
                   Letting them fill the Main column naturally fixes that. */}
-                <EntrySystemHeader
-                  mode={mode}
-                  titleField={titleField}
-                  hasStatus={hasStatus}
-                  draftsEnabled={collection.draftsEnabled === true}
-                  isSubmitting={isSubmitting}
-                  isDirty={isDirty}
-                  autosaveEnabled={autosaveScope !== null}
-                  autosaveStatus={autosave.status}
-                  autosaveLastSavedAt={autosave.lastSavedAt}
-                  entry={entry}
-                  collectionSlug={collection.name}
-                  historyFields={getCollectionFields(collection)}
-                  historyEnabled={historyEnabledFrom(collection)}
-                  locale={locale}
-                  onLocaleChange={onLocaleChange}
-                  localized={collection.localized === true}
-                  // Withheld while the language is unknown as well as while
-                  // the entry is unsaved: a link minted without a resolvable
-                  // locale is either refused by the mint route or, if the claim
-                  // were dropped to avoid that, a grant over every translation.
-                  isLinkAvailable={
-                    savedEntryId !== "" && linkLocale.kind !== "unresolved"
-                  }
-                  {...(savedEntryId === ""
-                    ? {}
-                    : {
-                        onCopyLink: () => {
-                          previewLink.mutate();
-                        },
-                      })}
-                  isCopyingLink={previewLink.isPending}
-                  toolbarSlot={
-                    <EntryFormToolbarSlots
-                      context="collection"
-                      controllerField={controllerNames[0]}
-                    />
-                  }
-                  onSaveDraft={() => {
-                    void handleSubmit(undefined, "save-draft");
-                  }}
-                  onPublish={() => {
-                    void handleSubmit(undefined, "publish");
-                  }}
-                  onSaveChanges={() => {
-                    void handleSubmit(undefined, "save-changes");
-                  }}
-                  onSaveWorkingDraft={() => {
-                    void handleSubmit(undefined, "save-working-draft");
-                  }}
-                  onUnpublish={() => {
-                    void handleSubmit(undefined, "unpublish");
-                  }}
-                  onCancel={handleCancel}
-                  onDelete={handleDelete}
-                  onDiscardWorkingDraft={handleDiscardWorkingDraft}
-                  isRailCollapsed={railCollapsed}
-                  onToggleRail={mode === "edit" ? toggleRail : undefined}
-                />
-                {/* Above the fields and below the header: the reader sees
-                    the document it refers to without the offer covering it. */}
-                {recovery.offer ? (
-                  <AutosaveRecoveryBanner
-                    savedAt={recovery.offer.savedAt}
-                    onRestore={restoreRecovery}
-                    onDismiss={recovery.dismiss}
+                  <EntrySystemHeader
+                    mode={mode}
+                    titleField={titleField}
+                    hasStatus={hasStatus}
+                    draftsEnabled={collection.draftsEnabled === true}
+                    isSubmitting={isSubmitting}
+                    isDirty={isDirty}
+                    autosaveEnabled={autosaveScope !== null}
+                    autosaveStatus={autosave.status}
+                    autosaveLastSavedAt={autosave.lastSavedAt}
+                    entry={entry}
+                    collectionSlug={collection.name}
+                    historyFields={getCollectionFields(collection)}
+                    historyEnabled={historyEnabledFrom(collection)}
+                    locale={locale}
+                    onLocaleChange={onLocaleChange}
+                    localized={collection.localized === true}
+                    // Withheld while the language is unknown as well as while
+                    // the entry is unsaved: a link minted without a resolvable
+                    // locale is either refused by the mint route or, if the claim
+                    // were dropped to avoid that, a grant over every translation.
+                    isLinkAvailable={
+                      savedEntryId !== "" && linkLocale.kind !== "unresolved"
+                    }
+                    {...(savedEntryId === ""
+                      ? {}
+                      : {
+                          onCopyLink: () => {
+                            previewLink.mutate();
+                          },
+                        })}
+                    isCopyingLink={previewLink.isPending}
+                    toolbarSlot={
+                      <EntryFormToolbarSlots
+                        context="collection"
+                        controllerField={controllerNames[0]}
+                      />
+                    }
+                    onSaveDraft={() => {
+                      void handleSubmit(undefined, "save-draft");
+                    }}
+                    onPublish={() => {
+                      void handleSubmit(undefined, "publish");
+                    }}
+                    onSaveChanges={() => {
+                      void handleSubmit(undefined, "save-changes");
+                    }}
+                    onSaveWorkingDraft={() => {
+                      void handleSubmit(undefined, "save-working-draft");
+                    }}
+                    onUnpublish={() => {
+                      void handleSubmit(undefined, "unpublish");
+                    }}
+                    onCancel={handleCancel}
+                    onDelete={handleDelete}
+                    onDiscardWorkingDraft={handleDiscardWorkingDraft}
+                    isRailCollapsed={railCollapsed}
+                    onToggleRail={mode === "edit" ? toggleRail : undefined}
                   />
-                ) : null}
-                <EntryMetaStrip
-                  slugField={slugField}
-                  hasStatus={hasStatus}
-                  // The pill reports the language being edited, matching the header's submit
-                  // affordances. Reading the main row instead would show "Published" beside a
-                  // Publish button whenever a translation lags its default language.
-                  status={
-                    effectiveEntryStatus(entry, locale, defaultLocale) ??
-                    "draft"
-                  }
-                  hasWorkingDraft={
-                    (entry as { _isWorkingDraft?: boolean } | null | undefined)
-                      ?._isWorkingDraft === true
-                  }
-                  isRailCollapsed={railCollapsed}
-                  hasPublicAddress={hasPublicAddress}
-                />
+                  {/* Above the fields and below the header: the reader sees
+                    the document it refers to without the offer covering it. */}
+                  {recovery.offer ? (
+                    <AutosaveRecoveryBanner
+                      savedAt={recovery.offer.savedAt}
+                      onRestore={restoreRecovery}
+                      onDismiss={recovery.dismiss}
+                    />
+                  ) : null}
+                  {viewingVersion ? (
+                    <HistoricalDocumentBanner
+                      versionNo={viewingVersion.versionNo}
+                      locale={viewingVersion.locale}
+                      onReturnToCurrent={() => setViewingVersion(null)}
+                    />
+                  ) : null}
+                  <EntryMetaStrip
+                    slugField={slugField}
+                    hasStatus={hasStatus}
+                    // The pill reports the language being edited, matching the header's submit
+                    // affordances. Reading the main row instead would show "Published" beside a
+                    // Publish button whenever a translation lags its default language.
+                    status={
+                      effectiveEntryStatus(entry, locale, defaultLocale) ??
+                      "draft"
+                    }
+                    hasWorkingDraft={
+                      (
+                        entry as
+                          | { _isWorkingDraft?: boolean }
+                          | null
+                          | undefined
+                      )?._isWorkingDraft === true
+                    }
+                    isRailCollapsed={railCollapsed}
+                    hasPublicAddress={hasPublicAddress}
+                  />
 
-                {mainFields.length > 0 && (
-                  <div className="@4xl/content:p-8 pt-6">
-                    {/* Forward the form mode: in edit mode a blank password
+                  {/* Reading a past version replaces the document rather than
+                    opening beside it: the question an editor is asking is how
+                    this page read then, and that is answered by the page. The
+                    live form stays mounted underneath — the historical values
+                    are rendered against a form of their own, so nothing typed
+                    here is disturbed and nothing historical can reach a save. */}
+                  {viewingVersion ? (
+                    <div className="@4xl/content:p-8 pt-6">
+                      {viewingVersion.error ? (
+                        // A failed read must not render as an empty document:
+                        // that is a different and wrong claim about the version.
+                        <Alert variant="destructive">
+                          <AlertDescription>
+                            This version could not be loaded.
+                          </AlertDescription>
+                        </Alert>
+                      ) : viewingVersion.isLoading ? (
+                        <div className="flex flex-col gap-4" aria-busy="true">
+                          <span className="sr-only" role="status">
+                            Loading version {viewingVersion.versionNo}
+                          </span>
+                          {[0, 1, 2, 3].map(i => (
+                            <div key={i} className="flex flex-col gap-1">
+                              <Skeleton className="h-3 w-24" />
+                              <Skeleton className="h-9 w-full" />
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <VersionSnapshotForm
+                          fields={mainFields}
+                          snapshot={viewingVersion.snapshot}
+                        />
+                      )}
+                    </div>
+                  ) : (
+                    mainFields.length > 0 && (
+                      <div className="@4xl/content:p-8 pt-6">
+                        {/* Forward the form mode: in edit mode a blank password
                       field means "keep the current password" rather than a
                       required-field violation (see note on the layout form
                       above). */}
-                    <EntryFormContent
-                      fields={mainFields}
-                      disabled={isSubmitting}
-                      withCard
-                      mode={mode}
-                    />
-                  </div>
-                )}
-              </div>
+                        <EntryFormContent
+                          fields={mainFields}
+                          disabled={isSubmitting}
+                          withCard
+                          mode={mode}
+                        />
+                      </div>
+                    )
+                  )}
+                </div>
 
-              {/* Rail (collapsible). Width 320px. Hidden until the content panel
+                {/* Rail (collapsible). Width 320px. Hidden until the content panel
                 is wide enough (@4xl) to fit it beside the main column, until a
                 future mobile sheet ships.
 
@@ -619,22 +686,23 @@ export function EntryForm({
                 nothing to show. Rendering it anyway left an empty 320px
                 strip down the right side of the page, which reads as a
                 failed load rather than as an absence. */}
-              {mode === "edit" && !railCollapsed && (
-                <div className="hidden @4xl/content:flex w-[320px] shrink-0 border-l border-border bg-background flex-col relative z-10">
-                  <div className="@4xl/content:sticky @4xl/content:top-0 @4xl/content:h-[calc(100vh-4rem)] overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col">
-                    <EntryFormSidebar
-                      mode={mode}
-                      entry={entry}
-                      hasStatus={hasStatus}
-                      isDirty={isDirty}
-                    />
+                {mode === "edit" && !railCollapsed && (
+                  <div className="hidden @4xl/content:flex w-[320px] shrink-0 border-l border-border bg-background flex-col relative z-10">
+                    <div className="@4xl/content:sticky @4xl/content:top-0 @4xl/content:h-[calc(100vh-4rem)] overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col">
+                      <EntryFormSidebar
+                        mode={mode}
+                        entry={entry}
+                        hasStatus={hasStatus}
+                        isDirty={isDirty}
+                      />
+                    </div>
                   </div>
-                </div>
-              )}
-            </div>
-          </EntryFormProvider>
-        </div>
-      </EntryFormContextProvider>
+                )}
+              </div>
+            </EntryFormProvider>
+          </div>
+        </EntryFormContextProvider>
+      </DocumentHistoryContext.Provider>
     </EntryLocaleProvider>
   );
 }
