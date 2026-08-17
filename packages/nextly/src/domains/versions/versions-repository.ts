@@ -11,6 +11,7 @@
  * @module domains/versions/versions-repository
  */
 
+import { toDbError } from "../../database/errors";
 import { NextlyError } from "../../errors";
 import type {
   VersionScopeKind,
@@ -90,6 +91,18 @@ export interface VersionRow {
 
 /** Metadata view of a version row (everything except the snapshot). */
 export type VersionMeta = Omit<VersionRow, "snapshot">;
+
+/**
+ * What an autosave write reports back.
+ *
+ * Taken from the values the write itself used rather than re-read afterwards:
+ * autosave runs while somebody is typing, so a confirmation SELECT on every
+ * keystroke-batch would be real cost for data the write already holds.
+ */
+export interface AutosaveWriteResult {
+  updatedAt: Date;
+  locale: string | null;
+}
 
 export class VersionsRepository {
   private readonly db: VersionsDbApi;
@@ -320,6 +333,45 @@ export class VersionsRepository {
   }
 
   /**
+   * Remove recovery points for a document, returning how many were deleted.
+   *
+   * Every author's by default; one author's when `createdBy` is given.
+   *
+   * Autosave rows are excluded from history listings, from version reads and
+   * from retention pruning, so nothing else in the system will ever remove
+   * one. Without this a deleted document leaves a snapshot per author behind
+   * permanently: unreachable, since the live-document gate refuses a document
+   * that no longer exists, and never pruned. That is unpublished content
+   * outliving the document it belonged to, which is a retention problem rather
+   * than only a storage one.
+   *
+   * Locale is deliberately NOT a parameter. A recovery point is keyed by
+   * document and author alone, so there is no per-locale row to address --
+   * unlike the working draft, which keeps one per language.
+   */
+  async deleteAutosaves(
+    ref: VersionRef,
+    createdBy?: string | null
+  ): Promise<number> {
+    const and: (VersionsWhereCondition | VersionsWhere)[] = [
+      ...this.docWhere(ref),
+      { column: "isAutosave", op: "=" as const, value: true },
+    ];
+    // Only narrows when an author is named. `undefined` means every author,
+    // which is what a deleted document needs; `null` is a real author value
+    // (the unauthenticated bucket) and must still narrow, so the check is on
+    // `undefined` specifically rather than on falsiness.
+    if (createdBy !== undefined) {
+      and.push(
+        createdBy === null
+          ? { column: "createdBy", op: "IS NULL" as const }
+          : { column: "createdBy", op: "=" as const, value: createdBy }
+      );
+    }
+    return this.db.delete(TABLE, { and });
+  }
+
+  /**
    * Highest durable (non-autosave) version_no for a document, or 0 if none.
    * The caller allocates the next number as `getMaxVersionNo(ref) + 1`. When
    * invoked with the transaction context this read runs inside the caller's
@@ -479,6 +531,242 @@ export class VersionsRepository {
         { column: "createdAt", direction: "desc" },
       ],
     });
+  }
+
+  /** Where the ONE rolling autosave row for a document and author lives. */
+  private autosaveWhere(
+    ref: VersionRef,
+    createdBy: string | null
+  ): VersionsWhere {
+    return {
+      and: [
+        ...this.docWhere(ref),
+        { column: "isAutosave", op: "=", value: true },
+        createdBy === null
+          ? { column: "createdBy", op: "IS NULL" }
+          : { column: "createdBy", op: "=", value: createdBy },
+      ],
+    };
+  }
+
+  /**
+   * Insert or update the rolling autosave snapshot for one document and author.
+   *
+   * There is exactly ONE such row per (document, author). Editing rewrites it in
+   * place, so `updatedAt` advances and the snapshot always holds the newest
+   * recovery point. Nothing accumulates: an editing session costs one row, not
+   * one row per pause, so history never has to be pruned back.
+   *
+   * Keyed by AUTHOR as well as document because two people editing the same
+   * document have two different recovery points. A single row per document would
+   * let one author's snapshot overwrite the other's, and the loser would recover
+   * somebody else's work.
+   *
+   * The live row and the working draft are both untouched. An autosave is a
+   * recovery point, never a statement about what should be served or published,
+   * so it can hold a half-finished edit safely.
+   *
+   * Enforced HERE rather than left to the unique index, because that index is
+   * declared for Postgres only: it is keyed on `created_by`, which is populated,
+   * so it has no nullable column to lean on the way the durable-sequence index
+   * does, and neither MySQL nor SQLite can express a partial unique index. The
+   * index is a backstop where it exists; this is the mechanism everywhere.
+   */
+  async upsertAutosave(input: {
+    ref: VersionRef;
+    status: VersionStatus;
+    snapshot: unknown;
+    locale?: string | null;
+    createdBy?: string | null;
+  }): Promise<AutosaveWriteResult> {
+    const now = new Date();
+    const serializedSnapshot = this.serializeSnapshot(input.snapshot);
+    const createdBy = input.createdBy ?? null;
+    const where = this.autosaveWhere(input.ref, createdBy);
+    // Project only the id: the existence check must not transfer the (possibly
+    // large) snapshot of the row it is about to overwrite.
+    const existing = await this.db.select<{ id: string; updatedAt: Date }>(
+      TABLE,
+      {
+        // `updatedAt` rides along so the update can compare against the value
+        // this read OBSERVED rather than against a clock.
+        columns: ["id", "updatedAt"],
+        where,
+        limit: 1,
+      }
+    );
+    if (existing[0]) {
+      // Compare-and-set on the timestamp, not a blind overwrite. Two tabs
+      // belonging to the same author race here: A can read the row, pause, and
+      // then write after B has already stored a NEWER snapshot. An
+      // unconditional update would replace B's work with A's older values and
+      // stamp them newer, so the next recovery would offer the stale one.
+      //
+      // A losing write matches no row and is simply dropped, which is correct:
+      // the newer snapshot already describes the author's work, and this is a
+      // recovery point rather than an acknowledgement anybody is waiting on.
+      await this.db.update(
+        TABLE,
+        {
+          snapshot: serializedSnapshot,
+          status: input.status,
+          locale: input.locale ?? null,
+          updatedAt: now,
+        },
+        // Flattened into the same conjunction rather than nested, so the
+        // predicate stays one readable list of conditions.
+        {
+          and: [
+            ...(where.and ?? []),
+            // EQUALITY against the value this read observed: apply only while
+            // the row still holds it, which is what compare-and-set means. A
+            // concurrent writer changes the value, this matches nothing, and
+            // the slower write is dropped rather than overwriting newer work.
+            //
+            // Not `<` against a clock: SQLite stores this column as integer
+            // epoch SECONDS, so a rewrite inside the same second serializes
+            // identically and an ordering comparison would match nothing even
+            // with no contention, silently dropping every autosave after the
+            // first.
+            {
+              column: "updatedAt",
+              op: "=" as const,
+              value: existing[0].updatedAt,
+            },
+          ],
+        }
+      );
+      return { updatedAt: now, locale: input.locale ?? null };
+    }
+    try {
+      await this.db.insert(
+        TABLE,
+        {
+          id: crypto.randomUUID(),
+          scopeKind: input.ref.scopeKind,
+          scopeSlug: input.ref.scopeSlug,
+          entryId: input.ref.entryId,
+          // Null, never a number. The durable-sequence index treats a non-null
+          // value as durable, so an autosave carrying one would both consume a
+          // sequence slot and appear in history.
+          versionNo: null,
+          status: input.status,
+          isAutosave: true,
+          snapshot: serializedSnapshot,
+          // Neither applies to a recovery point: a label names a version
+          // somebody chose to keep, and a source records what a restore copied
+          // from.
+          label: null,
+          locale: input.locale ?? null,
+          sourceVersionNo: null,
+          createdBy,
+          createdAt: now,
+          updatedAt: now,
+        },
+        { returning: [] }
+      );
+    } catch (error) {
+      // The existence check and this insert are two statements, so one author
+      // saving from two tabs can pass the check twice before either row lands.
+      // Where the unique index exists the loser is rejected here.
+      //
+      // The loser then DROPS its write rather than rewriting the winner's row.
+      // Losing this race is proof of ordering: this request read an empty
+      // result, the winner inserted afterwards, so the stored row is strictly
+      // newer than the snapshot in hand. Overwriting it would replace newer
+      // work with older and stamp it newer still -- the same inversion the
+      // existing-row branch guards against with its compare-and-set, arriving
+      // by a different path.
+      //
+      // Only Postgres reaches this branch at all: MySQL and SQLite cannot
+      // express a partial unique index, so there both inserts succeed and the
+      // document briefly carries two of one author's recovery points. That is
+      // bounded -- both rows are the same author's own work, and `findAutosave`
+      // reads the newest.
+      // Rethrow when the handle cannot say which engine it is: constraint
+      // codes differ per dialect, so classifying without one would be a guess,
+      // and a wrong guess here would swallow a real failure as a retry.
+      const dialect = this.db.dialect;
+      if (!dialect) throw error;
+      if (toDbError(dialect, error).kind !== "unique-violation") throw error;
+    }
+    return { updatedAt: now, locale: input.locale ?? null };
+  }
+
+  /**
+   * Remove every recovery point belonging to an ENTITY, across all of its
+   * documents and authors.
+   *
+   * For the entity itself going away, where `deleteAutosaves` cannot help
+   * because there is no single document id to name.
+   *
+   * Scoped to autosave rows on purpose. Durable history and working drafts for
+   * a deleted entity are a wider question with an archival dimension -- what a
+   * deletion owes a document's recorded past -- and answering it here would
+   * decide it by accident. A recovery point has no such dimension: it is one
+   * author's unsaved work on a document that no longer exists, so nothing can
+   * ever read it again.
+   */
+  async deleteAutosavesForEntity(
+    scopeKind: VersionScopeKind,
+    scopeSlug: string
+  ): Promise<number> {
+    return this.db.delete(TABLE, {
+      and: [
+        { column: "scopeKind", op: "=" as const, value: scopeKind },
+        { column: "scopeSlug", op: "=" as const, value: scopeSlug },
+        { column: "isAutosave", op: "=" as const, value: true },
+      ],
+    });
+  }
+
+  /**
+   * Remove every recovery point belonging to one AUTHOR, across every document.
+   *
+   * For the account going away. Deliberately a delete rather than the scrub
+   * the audit surfaces perform: an audit row is a record, and stripping the
+   * person from it keeps a trail worth keeping, whereas a recovery point is
+   * that person's unsaved draft. Scrubbing its author would leave the snapshot
+   * in the table with nobody able to claim it, which is worse than either
+   * keeping or removing it cleanly.
+   */
+  async deleteAutosavesByAuthor(createdBy: string): Promise<number> {
+    return this.db.delete(TABLE, {
+      and: [
+        { column: "isAutosave", op: "=" as const, value: true },
+        { column: "createdBy", op: "=" as const, value: createdBy },
+      ],
+    });
+  }
+
+  /**
+   * One author's current recovery point for a document, or null when they have
+   * none.
+   *
+   * Newest first rather than arbitrary: on MySQL and SQLite the insert race
+   * above can leave two rows for one author, and the later snapshot is the one
+   * that describes their work. Ordering makes that harmless instead of a
+   * coin toss.
+   */
+  async findAutosave(
+    ref: VersionRef,
+    createdBy: string | null
+  ): Promise<VersionRow | undefined> {
+    const rows = await this.db.select<VersionRow>(TABLE, {
+      where: this.autosaveWhere(ref, createdBy),
+      // `id` breaks the tie, and it is not decoration. SQLite stores
+      // `updatedAt` as integer epoch SECONDS, so two rows written in the same
+      // second compare equal and `LIMIT 1` would return either -- which on the
+      // dialects with no autosave uniqueness constraint is exactly when two
+      // rows can exist. A deterministic order makes the read repeatable even
+      // where the write race is not yet closed.
+      orderBy: [
+        { column: "updatedAt", direction: "desc" },
+        { column: "id", direction: "desc" },
+      ],
+      limit: 1,
+    });
+    return rows[0];
   }
 
   /**

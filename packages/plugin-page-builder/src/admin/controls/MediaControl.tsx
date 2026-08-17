@@ -30,14 +30,14 @@ export function MediaControl({ value, onChange, label }: ControlProps) {
   /*
    * The picker renders through a portal, so the shell cannot contain it.
    *
-   * When the viewport is too narrow the shell hides and inerts the inspector
-   * while deliberately keeping it MOUNTED, which preserves half-finished work.
-   * Both of those reach the subtree only; this dialog's content is portalled to
-   * `document.body`, outside it, so it stayed visible and clickable on top of
-   * the "needs a wider screen" notice.
+   * When the space the shell was given is too narrow it hides and inerts the
+   * inspector while deliberately keeping it MOUNTED, which preserves
+   * half-finished work. Both of those reach the subtree only; this dialog's
+   * content is portalled to `document.body`, outside it, so it stayed visible
+   * and clickable on top of the notice the shell shows instead.
    *
    * DERIVED rather than closed by an effect. An effect would write `open`
-   * false, which discards the author's intent: widening the window again
+   * false, which discards the author's intent: giving the editor room again
    * should bring back the picker they had opened, exactly as it brings back
    * everything else the shell kept mounted. Deriving also means there is no
    * second source of truth to fall out of step with the shell.

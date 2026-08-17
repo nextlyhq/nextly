@@ -17,6 +17,8 @@ import {
   diffDocumentVersions,
   hydrateVersionSnapshot,
   redactSnapshotForUser,
+  resolveVersionsPolicy,
+  tryResolveCurrentFields,
 } from "../../api/versions-access";
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import {
@@ -24,7 +26,10 @@ import {
   type ReadAccessCaller,
 } from "../../auth/entity-read-access";
 import type { RequestActor } from "../../auth/request-actor";
+import type { FieldConfig } from "../../collections/fields/types";
 import { getService } from "../../di";
+import { container } from "../../di/container";
+import type { FieldGroupDataService } from "../../domains/field-groups/services/field-group-data-service";
 import type { UserContext } from "../../domains/singles/types";
 import {
   attachVersionAuthors,
@@ -33,9 +38,14 @@ import {
 import type { VersionDiff } from "../../domains/versions/diff";
 import { discardWorkingDraft } from "../../domains/versions/discard-working-draft";
 import { restoreVersion } from "../../domains/versions/restore-version";
+import {
+  resolveComponentFieldMap,
+  stripPasswordsThroughComponents,
+} from "../../domains/versions/tag-component-types";
 import type { VersionRow } from "../../domains/versions/versions-repository";
 import { NextlyError } from "../../errors/nextly-error";
 import type { VersionScopeKind } from "../../schemas/versions/types";
+import { stripPasswordFieldValues } from "../../shared/lib/password-fields";
 import { readAuthenticatedScope } from "../helpers/authenticated-actor";
 import type { Params } from "../types";
 
@@ -67,6 +77,56 @@ function assertPositiveInteger(value: number, path: string): void {
       ],
     });
   }
+}
+
+/**
+ * Require the autosave body to be a JSON object.
+ *
+ * The CONTENTS stay unvalidated on purpose: an author part-way through a
+ * required field still has work worth keeping, so a recovery point is allowed
+ * to be incomplete. Whether a body arrived at all is a different question. An
+ * absent one reaches the handler as `undefined`, which `JSON.stringify` turns
+ * into `undefined` rather than a string, and the snapshot serializer then
+ * raises an internal error -- answering a malformed request with a 500 instead
+ * of telling the caller what was wrong.
+ */
+export function requireSnapshotBody(body: unknown): Record<string, unknown> {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "body",
+          code: "INVALID_VALUE",
+          message: "Autosave requires a JSON object body.",
+        },
+      ],
+    });
+  }
+  return body as Record<string, unknown>;
+}
+
+/**
+ * Whether any field in this schema references a component by slug, at any
+ * depth. Used to decide whether an unavailable component registry is a problem
+ * for THIS entity: a schema with no references has nothing unresolvable in it.
+ */
+function declaresComponentReference(fields: FieldConfig[]): boolean {
+  for (const field of fields) {
+    if (typeof (field as { component?: unknown }).component === "string") {
+      return true;
+    }
+    if (Array.isArray((field as { components?: unknown }).components)) {
+      return true;
+    }
+    const children = (field as { fields?: unknown }).fields;
+    if (
+      Array.isArray(children) &&
+      declaresComponentReference(children as FieldConfig[])
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** What every version method needs to identify and authorize a document. */
@@ -597,4 +657,244 @@ export async function discardWorkingDraftForDocument(
     user: args.user,
     authenticatedScope,
   });
+}
+
+/**
+ * Record the caller's rolling recovery point for one document.
+ *
+ * Writes the autosave row and nothing else. The live row and the working draft
+ * are both untouched, so this cannot change what a reader sees or what publish
+ * would promote — which is what makes it safe to run on a timer while somebody
+ * is still typing, and why the snapshot is allowed to be incomplete.
+ *
+ * Authorization is the same chain a discard runs, and for the same reason: a
+ * recovery point holds the document's content, so storing one owes every rule
+ * that reading and updating the document owe. The coarse `update-<slug>`
+ * permission ran at the route; a per-document rule can still refuse THIS
+ * document, and a read refusal is reported as "not found" so it does not
+ * confirm the document exists.
+ */
+export async function autosaveForDocument(
+  args: Omit<VersionMethodArgs, "locale"> & {
+    params: Params;
+    snapshot: unknown;
+    /**
+     * Null and undefined are the SAME here, unlike on a listing where absent
+     * means "every locale" and a value narrows. A snapshot belongs to exactly
+     * one locale or to an unlocalized document, so both spellings of "none"
+     * mean the unlocalized row.
+     */
+    locale?: string | null;
+  }
+): Promise<unknown> {
+  const caller = readAccessCallerFromParams(args.params, args.user);
+
+  if (!(await canReadEntity(args.slug, caller))) {
+    throw NextlyError.notFound({
+      logContext: {
+        reason: "autosave-read-denied",
+        scopeKind: args.scopeKind,
+        scopeSlug: args.slug,
+        entryId: args.entryId,
+        userId: args.user.id,
+      },
+    });
+  }
+
+  const authenticatedScope = readAuthenticatedScope(args.params);
+
+  await assertVersionDocumentReadable(
+    args.scopeKind,
+    args.slug,
+    args.entryId,
+    args.user,
+    authenticatedScope
+  );
+  await assertVersionDocumentUpdatable(
+    args.scopeKind,
+    args.slug,
+    args.entryId,
+    args.user,
+    authenticatedScope
+  );
+
+  // The owner's setting is enforced HERE, not in whichever editor happens to
+  // be calling. A REST or plugin client holding update access can reach this
+  // endpoint directly, so a client-side check would be a suggestion rather
+  // than a rule -- and storing unpublished content for an entity whose owner
+  // switched autosave off, or which records no versions at all, is exactly
+  // what the setting exists to prevent.
+  if (args.scopeKind === "collection" || args.scopeKind === "single") {
+    const policy = await resolveVersionsPolicy(args.scopeKind, args.slug);
+    if (!policy?.drafts?.autosave?.enabled) {
+      throw NextlyError.forbidden({
+        logContext: {
+          reason: "autosave-not-enabled",
+          scopeKind: args.scopeKind,
+          scopeSlug: args.slug,
+        },
+      });
+    }
+  }
+
+  // The snapshot arrives straight from the editor, so it carries whatever the
+  // author has typed -- including a NEW password, in plaintext, which no write
+  // has hashed yet. Durable capture never faces this: it snapshots the stored
+  // row, where the value is already hashed or absent. Strip before persisting,
+  // with the same schema-driven recursive helper the version reads use, so a
+  // credential never reaches the snapshot column at all.
+  const snapshot = args.snapshot;
+  if (
+    snapshot &&
+    typeof snapshot === "object" &&
+    !Array.isArray(snapshot) &&
+    // `page` scopes hold block documents rather than user-defined fields, and
+    // field resolution has no answer for them.
+    (args.scopeKind === "collection" || args.scopeKind === "single")
+  ) {
+    // Fail CLOSED on a failed LOOKUP, which is what `null` means here. An
+    // empty list is a different answer: a valid entity can have no
+    // user-defined fields at all (a freshly created Single, whose identity
+    // columns alone form a document), and there is genuinely nothing to strip
+    // from one. Treating those alike would refuse every autosave for such an
+    // entity, while treating a failed lookup as "nothing to strip" would write
+    // whatever the editor sent, credentials included, exactly when the lookup
+    // meant to find them had broken.
+    const fields = await tryResolveCurrentFields(args.scopeKind, args.slug);
+    if (fields === null) {
+      throw NextlyError.internal({
+        logContext: {
+          reason: "autosave-field-resolution-failed",
+          scopeKind: args.scopeKind,
+          scopeSlug: args.slug,
+        },
+      });
+    }
+    if (fields.length > 0) {
+      // A `component` field is a REFERENCE: its schema lives under another
+      // slug, so the stripper sees `{ type: "component" }` and has nothing to
+      // descend into. A password declared inside a referenced component would
+      // survive in the snapshot. Resolve those schemas, rewrite the references
+      // into the container shapes the stripper already walks, and strip once.
+      const dataService = container.has("fieldGroupDataService")
+        ? container.get<FieldGroupDataService>("fieldGroupDataService")
+        : null;
+      // No executor: autosave runs outside any transaction by design, and the
+      // parameter exists so an in-transaction caller can read on its own
+      // connection rather than take a second one.
+      const componentFields = dataService
+        ? await resolveComponentFieldMap(fields, slug =>
+            dataService.getComponentFields(slug)
+          )
+        : new Map<string, FieldConfig[]>();
+
+      // Fail CLOSED where a reference cannot be resolved. `resolveComponentFieldMap`
+      // propagates a lookup error rather than reporting the component absent,
+      // so an unresolvable schema arrives here as a thrown error and refuses
+      // the write; what this guards is the other case, a registry that is not
+      // wired at all while the schema still declares references.
+      if (!dataService && declaresComponentReference(fields)) {
+        throw NextlyError.internal({
+          logContext: {
+            reason: "autosave-component-schema-unavailable",
+            scopeKind: args.scopeKind,
+            scopeSlug: args.slug,
+          },
+        });
+      }
+
+      // Walks the SNAPSHOT rather than an expanded schema. A component may
+      // reference itself, so a schema-side expansion has to stop at some
+      // depth, and everything below that cut-off would keep its passwords.
+      // The data is finite, so this terminates on its own and strips every
+      // level that actually exists.
+      stripPasswordsThroughComponents(
+        snapshot,
+        fields,
+        componentFields,
+        stripPasswordFieldValues
+      );
+    }
+  }
+
+  return getService("versionsService").autosave({
+    ref: {
+      scopeKind: args.scopeKind,
+      scopeSlug: args.slug,
+      entryId: args.entryId,
+    },
+    // A recovery point always describes unpublished work: it is what the author
+    // has, not what the site serves. Recording it as published would put an
+    // unfinished edit into surfaces that filter on status.
+    status: "draft",
+    snapshot,
+    locale: args.locale ?? null,
+    // An empty id is this context's unauthenticated shape, and it is normalized
+    // so the column holds one spelling of "no author" rather than two. It does
+    // NOT separate anonymous authors from each other: `autosaveWhere` matches a
+    // null author with `IS NULL`, so they would share one row. Nothing reaches
+    // here anonymously today, because the read gate above refuses a caller with
+    // no id, and relaxing that gate would need a real per-caller key first.
+    createdBy: args.user.id || null,
+  });
+}
+
+/**
+ * The caller's own recovery point for one document, or null when none exists.
+ *
+ * Authorized as a READ of the document and scoped to the caller: an autosave is
+ * unvalidated work in progress, so one author's must never be handed to
+ * another. This is the only path by which a stored autosave can be read back,
+ * since history listings exclude them and a version read addresses rows by a
+ * sequence number a recovery point deliberately does not have.
+ */
+export async function getAutosaveForDocument(
+  args: Omit<VersionMethodArgs, "locale"> & { params: Params }
+): Promise<unknown> {
+  const caller = readAccessCallerFromParams(args.params, args.user);
+
+  if (!(await canReadEntity(args.slug, caller))) {
+    throw NextlyError.notFound({
+      logContext: {
+        reason: "autosave-read-denied",
+        scopeKind: args.scopeKind,
+        scopeSlug: args.slug,
+        entryId: args.entryId,
+        userId: args.user.id,
+      },
+    });
+  }
+
+  const authenticatedScope = readAuthenticatedScope(args.params);
+  await assertVersionDocumentReadable(
+    args.scopeKind,
+    args.slug,
+    args.entryId,
+    args.user,
+    authenticatedScope
+  );
+
+  const row = await getService("versionsService").getAutosave(
+    {
+      scopeKind: args.scopeKind,
+      scopeSlug: args.slug,
+      entryId: args.entryId,
+    },
+    args.user.id || null
+  );
+  // Null rather than a 404: having no recovery point is the ordinary state, not
+  // a missing resource, and the editor asks on every open.
+  if (!row) return null;
+
+  // Same redaction a version read applies. Document-level access is not the
+  // whole question: a field's `access.read` rule can deny this caller today
+  // even though the snapshot was stored while they could see it, and handing
+  // the row back verbatim would serve that field's old value from history.
+  await redactSnapshotForUser(
+    row.snapshot,
+    args.scopeKind,
+    args.slug,
+    args.user
+  );
+  return row;
 }

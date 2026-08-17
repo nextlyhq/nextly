@@ -6854,6 +6854,16 @@ export class CollectionMutationService extends BaseService {
           null
         );
 
+        // Recovery points go with it, every author's. They are excluded from
+        // history, from version reads and from retention pruning, so nothing
+        // else would ever remove them and each would outlive its document as
+        // unreachable unpublished content.
+        await new VersionsRepository(tx).deleteAutosaves({
+          scopeKind: "collection",
+          scopeSlug: params.collectionName,
+          entryId: params.entryId,
+        });
+
         // The removed document's final state ships as `data`; there is no
         // post-delete state, so `previous` is null (mirroring create, which
         // carries only `data`). `locale` is set only for a localized collection,
@@ -8400,6 +8410,13 @@ export class CollectionMutationService extends BaseService {
         },
         null
       );
+
+      // Recovery points go with it; see the single-delete path.
+      await new VersionsRepository(tx).deleteAutosaves({
+        scopeKind: "collection",
+        scopeSlug: params.collectionName,
+        entryId: params.entryId,
+      });
 
       // Append the outbox event in the same transaction so a delete performed
       // through this helper (batch/cascade/internal) is observable too, in the
@@ -10034,6 +10051,13 @@ export class CollectionMutationService extends BaseService {
         },
         null
       );
+
+      // Recovery points go with it; see the single-delete path.
+      await new VersionsRepository(tx).deleteAutosaves({
+        scopeKind: "collection",
+        scopeSlug: params.collectionName,
+        entryId,
+      });
 
       // Append the outbox event in the same transaction so a batch delete
       // through this helper is observable too, in the same shape as the

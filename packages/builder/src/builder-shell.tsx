@@ -213,33 +213,24 @@ function useFitsFullShell(): [(node: HTMLElement | null) => void, boolean] {
       const entry = entries[entries.length - 1];
       if (entry === undefined) return;
       // The CONTENT box of the measuring wrapper, which is by construction the
-      // space the regions will be laid out in.
+      // space the regions are laid out in.
       //
-      // Getting this right took two wrong answers, and both were wrong for the
-      // same underlying reason — the observed element kept being something
-      // other than the box the regions actually get.
+      // Two properties make that the right quantity, and both are easy to lose:
       //
-      // Observing whichever ROOT was visible made the answer depend on that
-      // root's own padding: the notice is `p-6` and the shell root is not, so
-      // the content box reported the same container 48px narrower while the
-      // notice was up, and a container growing back into that band could never
-      // recover. Switching to the border box fixed the asymmetry and introduced
-      // the opposite error, because a border box INCLUDES whatever padding or
-      // border the caller put on `className` — decoration the regions never
-      // receive — so a 1280px root with `p-6` reported that it fitted while
-      // leaving 1232px to lay out in.
+      // The wrapper carries the caller's `className` and nothing else, so its
+      // content box is the space INSIDE whatever padding or border the host
+      // applied — decoration the regions never receive. A border box would
+      // report a 1280px root with `p-6` as fitting while leaving 1232px to lay
+      // out in.
       //
-      // Both disappear once the measured element is a single always-rendered
-      // wrapper that carries the caller's `className` and nothing else. Its
-      // content box is the space inside the caller's decoration, which is
-      // exactly what its children are given, and it is the same element in both
-      // states so no branch's padding can move the threshold. The notice's own
-      // `p-6` is inside it and cannot be seen from here.
+      // It is also the SAME element whichever branch renders, so no branch's
+      // own padding can move the threshold. The notice is `p-6` and sits inside
+      // this box, where it is invisible to the measurement; measuring a branch
+      // instead would make the answer depend on which one happened to be up.
       //
-      // `contentRect` rather than `getBoundingClientRect` for the reason it
-      // always was: both are layout sizes, so a transformed ancestor — this
-      // editor has canvas zoom — does not scale the number against a minimum
-      // expressed in CSS pixels.
+      // `contentRect` rather than `getBoundingClientRect`: both are layout
+      // sizes, so a transformed ancestor — this editor has canvas zoom — does
+      // not scale the number against a minimum expressed in CSS pixels.
 
       // The comparison itself comes from `shell-state`, which exports and tests
       // it. Repeating `>= MIN_SHELL_WIDTH` here would be a second answer to one
@@ -961,8 +952,8 @@ function ShellRegions({
  *
  * Below the supported width the shell does not try to compress: the rail, both
  * panels and a usable canvas do not fit at their minimums, and an editor that
- * merely gets cramped is worse than one that says it needs a wider screen —
- * the author otherwise discovers the limit by failing at a task.
+ * merely gets cramped is worse than one that says it needs more width — the
+ * author otherwise discovers the limit by failing at a task.
  *
  * @experimental
  */
@@ -1015,8 +1006,15 @@ export function BuilderShell({ store, ...props }: BuilderShellProps) {
                 "nx-builder-chrome flex h-full w-full flex-col items-center justify-center gap-3 p-6 text-center"
               )}
             >
+              {/*
+               * Worded as WIDTH rather than as a screen, because the shell
+               * measures the space it was given. An editor embedded in a narrow
+               * column on a large display is the case that named the wrong
+               * cause: the author's screen is fine and widening it changes
+               * nothing.
+               */}
               <p className="text-sm font-medium">
-                The page editor needs a wider screen
+                The page editor needs more width
               </p>
               {/*
                * The escape sentence and the button below it are ONE UNIT with the
@@ -1032,9 +1030,9 @@ export function BuilderShell({ store, ...props }: BuilderShellProps) {
               {props.onExit ? (
                 <>
                   <p className="text-[color:var(--nx-builder-text-muted)] max-w-sm text-sm">
-                    Editing a layout needs at least {MIN_SHELL_WIDTH}px. On a
-                    smaller screen you can still edit this page&apos;s content
-                    from the admin.
+                    Editing a layout needs at least {MIN_SHELL_WIDTH}px of
+                    width. In a narrower space you can still edit this
+                    page&apos;s content from the admin.
                   </p>
                   <button
                     type="button"
@@ -1046,7 +1044,7 @@ export function BuilderShell({ store, ...props }: BuilderShellProps) {
                 </>
               ) : (
                 <p className="text-[color:var(--nx-builder-text-muted)] max-w-sm text-sm">
-                  Editing a layout needs at least {MIN_SHELL_WIDTH}px.
+                  Editing a layout needs at least {MIN_SHELL_WIDTH}px of width.
                 </p>
               )}
             </div>
