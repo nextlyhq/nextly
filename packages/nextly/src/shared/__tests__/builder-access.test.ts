@@ -217,6 +217,7 @@ describe("the builder-guarded set stays joined to the dispatcher", () => {
       "previewComponentSchemaChanges",
       "applyComponentSchemaChanges",
       "reconcileComponent",
+      "previewComponentReconcile",
     ].filter(method => isBuilderRoute("field-groups", method));
 
     // The population first: an empty list would satisfy every assertion below while proving that
