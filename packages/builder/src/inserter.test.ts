@@ -138,6 +138,28 @@ describe("catalogFrom", () => {
     expect(entry(entries, "acme/card").variationName).toBeUndefined();
   });
 
+  it("inserts the block's worked example, not its empty defaults", () => {
+    // THE case an author sees. A block's defaults are deliberately blank —
+    // `core/heading` defaults to `text: ""` — so inserting them renders an
+    // empty element with no height and nothing to read: the block is added and
+    // the page looks unchanged.
+    const entries = catalog([
+      {
+        ...base,
+        name: "acme/heading",
+        defaultProps: { text: "", level: "h2" },
+        example: { props: { text: "A section title" } },
+      },
+    ]);
+
+    expect(entry(entries, "acme/heading").props).toEqual({
+      // From the example: real content.
+      text: "A section title",
+      // From the defaults: the example says nothing about it, so it survives.
+      level: "h2",
+    });
+  });
+
   it("overlays a variation's props onto the block's defaults", () => {
     const entries = catalog([
       {

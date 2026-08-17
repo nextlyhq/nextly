@@ -145,10 +145,28 @@ export function catalogFrom(
     const editor = definition.editor;
     const category = editor?.category ?? UNCATEGORISED;
     const keywords = editor?.keywords ?? [];
-    // `defaultProps` is the block's own object. Spreading here means the entry
-    // owns its copy, so the clone taken at insert time cannot reach back into
-    // the definition — and two inserts of one entry cannot share substructure.
-    const defaults = { ...(definition.defaultProps ?? {}) };
+    // The block's DEFAULTS, overlaid by its EXAMPLE.
+    //
+    // Defaults alone are what an author was getting, and they are deliberately
+    // empty: `core/heading` defaults to `text: ""`, `core/text` to `text: ""`,
+    // `core/button` to `label: ""`. Inserting those renders an empty `<h2>` —
+    // an element with no height and nothing to read — so the block was added
+    // and the page looked unchanged. An author cannot edit what they cannot
+    // find, and cannot tell it from the insert having failed.
+    //
+    // `example` is the right source and needs no new contract: the engine
+    // REQUIRES it on every definition, describing it as a worked instance, so
+    // every block already carries one and a third-party block gets this for
+    // free. Defaults stay underneath it, because an example states what is
+    // worth showing rather than every prop — `core/image` illustrates a `src`
+    // while its `loading: "lazy"` default still applies.
+    //
+    // Spread rather than referenced, so the entry owns its copy and the clone
+    // taken at insert time cannot reach back into the definition.
+    const defaults = {
+      ...(definition.defaultProps ?? {}),
+      ...(definition.example?.props ?? {}),
+    };
 
     entries.push({
       id: definition.name,
