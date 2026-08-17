@@ -10,6 +10,7 @@
  */
 import { DragDropProvider, DragOverlay } from "@dnd-kit/react";
 import { BuilderShell } from "@nextlyhq/builder/shell";
+import { useSuppressAdminChrome } from "@nextlyhq/plugin-sdk/admin";
 import { useMemo, useState } from "react";
 
 import { defaultBlockRegistry } from "../core/registry";
@@ -95,6 +96,34 @@ export function EditorSurface({ onExit, surface }: EditorSurfaceProps = {}) {
       if (leave) onExit();
     };
   }, [onExit, state.dirty]);
+  /*
+   * The editor takes the window while it is mounted: the shell already draws its
+   * own rail, panels, top bar and bottom bar, so admin chrome around it is a
+   * second set of the same furniture, and the canvas is the one surface whose
+   * whole purpose is the space it is given.
+   *
+   * `canExit` is read from `exitWithGuard` — the very value passed to the shell
+   * as `onExit`, and therefore the same thing that decides whether an Exit
+   * button is rendered at all. Derived rather than declared, so the claim "this
+   * surface can be left" and the affordance that leaves it cannot disagree:
+   * mounted as a field inside an entry form there is nowhere to go, no button
+   * appears, and the navigation rail correctly stays.
+   *
+   * `documentSidebar` is requested for completeness rather than for effect here.
+   * A custom Edit view replaces the entry form outright, so no document rail is
+   * rendered on this route — but a future host may mount the editor beside one,
+   * and a request that describes the surface honestly outlives this mount.
+   */
+  useSuppressAdminChrome({
+    layers: [
+      "primaryRail",
+      "subSidebar",
+      "documentSidebar",
+      "header",
+      "pageFrame",
+    ],
+    canExit: exitWithGuard !== undefined,
+  });
   /**
    * Why the CURRENT target refuses this block, while the drag is still in the air.
    *
