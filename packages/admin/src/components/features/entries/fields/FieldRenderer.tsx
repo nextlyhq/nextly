@@ -331,11 +331,27 @@ export function FieldRenderer({
   // to match the vertical layout of radio buttons.
   const useHorizontalLayout = false;
 
+  // Whether the editor for this field comes from a plugin rather than from the
+  // built-in type dispatch — either a per-field `admin.component` override
+  // (D24) or a plugin-registered field type (C7/D16). Both render through
+  // `PluginSlot`, so nothing here can know whether the result exposes a single
+  // labelable control, and it must not claim one does.
+  //
+  // This is deliberately a STRUCTURAL question rather than a check against the
+  // field's type name: an override leaves the type untouched while replacing
+  // the component entirely, so no list of composite type names can see it.
+  const hasPluginEditor =
+    Boolean(adminOptions?.component) ||
+    (branding?.plugins ?? [])
+      .flatMap(p => p.fieldTypes ?? [])
+      .some(ft => ft.type === (field.type as string));
+
   return (
     <FieldWrapper
       field={field}
       error={error?.message}
       horizontal={useHorizontalLayout}
+      editorIsOpaque={hasPluginEditor}
     >
       {renderField()}
     </FieldWrapper>

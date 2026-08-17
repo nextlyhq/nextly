@@ -59,6 +59,25 @@ export interface FieldWrapperProps {
    * @default false
    */
   horizontal?: boolean;
+
+  /**
+   * Whether the editor rendering this field comes from a plugin rather than
+   * from the built-in type dispatch.
+   *
+   * Such a field is exposed as a GROUP, because nothing here can know whether
+   * plugin-supplied markup contains a single labelable control — and a
+   * `<label for>` aimed at an id no element carries names nothing at all.
+   *
+   * Classifying by the field's TYPE cannot answer this, which is why it is a
+   * prop rather than another entry in {@link GROUP_FIELD_TYPES}: an override
+   * replaces the component while leaving the type untouched. Measured — the
+   * page builder renders over a `json` field and its label pointed at nothing,
+   * while an ordinary `json` field on another collection was labelled
+   * correctly.
+   *
+   * @default false
+   */
+  editorIsOpaque?: boolean;
 }
 
 // ============================================================
@@ -168,6 +187,7 @@ export function FieldWrapper({
   className,
   fieldPath,
   horizontal = false,
+  editorIsOpaque = false,
 }: FieldWrapperProps) {
   // i18n M7: active content-language direction (RTL for Arabic/Hebrew/…).
   const entryLocale = useEntryLocale();
@@ -204,7 +224,7 @@ export function FieldWrapper({
 
   // A group is named by `aria-labelledby` on a `role="group"` container rather
   // than by a `<label for>`, because there is no single control to point at.
-  const isGroup = GROUP_FIELD_TYPES.has(_fieldType);
+  const isGroup = GROUP_FIELD_TYPES.has(_fieldType) || editorIsOpaque;
   // Only the non-group path claims a control carries the id, so only it is
   // checked. A group makes no such claim and cannot fail this way.
   useLabelLandingCheck(!isGroup && !isHidden, fieldId, label, _fieldType);
