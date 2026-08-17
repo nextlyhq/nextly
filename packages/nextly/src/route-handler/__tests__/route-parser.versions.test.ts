@@ -387,6 +387,34 @@ describe("version label routes", () => {
     ).toBeUndefined();
   });
 
+  /**
+   * A path deeper than the autosave sub-resource belongs to no route, and the
+   * parser must say so rather than truncate it to the nearest one it does own.
+   *
+   * The failure this guards is quiet in a way a 404 is not: the segments after
+   * `autosave` would simply be dropped, and the request would answer 200 from
+   * the caller's recovery point while naming a resource that does not exist.
+   * Nothing downstream can detect that, because by then the route looks like an
+   * ordinary autosave read.
+   *
+   * Asserted for both scopes. The two parsers reach this through different
+   * guards, so one can lose it while the other keeps it.
+   */
+  it("claims no route deeper than the autosave sub-resource", () => {
+    expect(
+      parseRestRoute(
+        ["collections", "posts", "entries", "e1", "versions", "autosave", "x"],
+        "GET"
+      ).method
+    ).toBeUndefined();
+    expect(
+      parseRestRoute(
+        ["singles", "settings", "versions", "autosave", "x"],
+        "GET"
+      ).method
+    ).toBeUndefined();
+  });
+
   it("leaves other methods on a version alone", () => {
     expect(
       parseRestRoute(
