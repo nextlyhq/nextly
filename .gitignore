@@ -31,6 +31,18 @@ apps/playground/src/db/schemas/dynamic/*.ts
 .claude/*
 !.claude/rules/
 !.claude/skills/
+# The fallow agent gate is a control, not a preference: it blocks an agent's
+# `git commit`/`git push` when a whole-graph audit fails. Shared for the same
+# reason rules and skills are — one that only exists on the machine that ran
+# the installer enforces nothing for anyone else.
+#
+# Committing it also puts a script that RUNS ON A MAINTAINER'S MACHINE into a
+# public repository, so a pull request can propose a change to it. Claude Code
+# prompts when hook configuration changes and the gate fails open, so this is
+# not an open door — but treat `.claude/hooks/` as review-critical rather than
+# as configuration, and read a diff to it the way you would read one to CI.
+!.claude/settings.json
+!.claude/hooks/
 
 # Testing
 coverage
@@ -105,6 +117,11 @@ docs/guides/testing-migrations.md
 packages/nextly/src/db/migrations/dynamic/*.sql
 .nextly-review/
 
+# fallow's analysis cache: the resolved module graph, per-file churn and
+# incremental state, rebuilt from the tree on demand. It self-ignores, so its
+# contents stay out of `git status` either way — named here so the directory
+# reads as build output rather than as something git merely happens to miss.
+.fallow/
 # Task trackers and working notes live beside the task files at the workspace
 # root, outside this repository: they are internal planning, and this repo is
 # public. Ignored here so a worktree cannot commit one by accident.

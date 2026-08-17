@@ -15,7 +15,10 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../../services/collections-handler";
-import type { SingleEntryService } from "../services/single-entry-service";
+// `SingleEntryService` belongs to the singles domain; versions only consumes
+// it. `services/singles` re-exports the same class for legacy import paths,
+// so this names the definition rather than the alias.
+import type { SingleEntryService } from "../../singles/services/single-entry-service";
 
 let current: TestNextly | undefined;
 

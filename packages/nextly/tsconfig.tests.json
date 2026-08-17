@@ -204,7 +204,6 @@
     "src/services/__tests__/media-focal-regeneration.test.ts",
     "src/services/__tests__/media-storage-config.test.ts",
     "src/services/__tests__/media.test.ts",
-    "src/services/dynamic-collections.test.ts",
     "src/services/lib/__tests__/reserved-slug-orphan.integration.test.ts",
     "src/services/users.test.ts",
     "src/shared/__tests__/builder-access.test.ts",

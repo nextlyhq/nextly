@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../errors";
 import type { NextlyServiceConfig } from "../../../di/register";
-import type { PluginDefinition } from "../../types";
+// `plugin-context` declares `PluginDefinition`; the sibling plugin suites
+// import it from there too.
+import type { PluginDefinition } from "../../plugin-context";
 import { applyPluginSchemaContributions } from "../apply-contributions";
 
 const field = { type: "text" as const, name: "title" };

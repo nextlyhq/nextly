@@ -45,6 +45,7 @@
     "@eslint/eslintrc": "^3",
     "@nextlyhq/admin-css": "workspace:^",
     "@tailwindcss/postcss": "^4.3.2",
+    "@testing-library/react": "^16.3.0",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^20.19.17",
     "@types/pg": "^8.15.5",
