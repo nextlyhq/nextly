@@ -31,6 +31,8 @@ import { FormProvider, useForm } from "react-hook-form";
 
 import { EntryFormContent } from "@admin/components/features/entries/EntryForm/EntryFormContent";
 
+import { snapshotToFormValues } from "./snapshot-to-form-values";
+
 export interface VersionSnapshotFormProps {
   /** The document's current schema, which decides what is shown. */
   fields: FieldConfig[];
@@ -42,21 +44,21 @@ export function VersionSnapshotForm({
   fields,
   snapshot,
 }: VersionSnapshotFormProps) {
-  // A snapshot that is not an object (absent, or a stored primitive) becomes an
-  // empty document rather than throwing: every field then renders as it does
-  // when it holds nothing, which is the truthful reading of a version that
-  // carries no value for it.
+  // Read into runtime shapes before the inputs see them. A snapshot comes from
+  // the persisted row, so a JSON-backed field arrives as text on SQLite and as
+  // an object elsewhere; handing the raw value to a control renders a
+  // structured field empty instead of showing what it held.
   const values = useMemo(
-    () =>
-      typeof snapshot === "object" && snapshot !== null
-        ? (snapshot as Record<string, unknown>)
-        : {},
-    [snapshot]
+    () => snapshotToFormValues(fields, snapshot),
+    [fields, snapshot]
   );
 
-  // Keyed by the caller, so a different version mounts a fresh form rather than
-  // needing a reset — the panel already remounts this on selection.
-  const form = useForm<Record<string, unknown>>({ defaultValues: values });
+  // `values`, not `defaultValues`. `defaultValues` is read once per mounted
+  // form, so selecting a second version while this stays mounted would leave
+  // the previous version's fields under the new version's heading. `values`
+  // reapplies when it changes, which makes the correct behaviour a property of
+  // this component rather than an obligation on every caller to remount it.
+  const form = useForm<Record<string, unknown>>({ values });
 
   return (
     <FormProvider {...form}>
