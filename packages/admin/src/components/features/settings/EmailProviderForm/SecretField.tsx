@@ -118,8 +118,16 @@ export function SecretField({
         return (
           <FormItem className="m-0">
             <SettingsRow label={label} description={helperText}>
-              <FormControl>
-                <div className="relative">
+              {/* FormControl sits on the Input rather than around this wrapper.
+                  It is a Radix Slot, so it clones onto its single child: with
+                  the wrapper inside it, the row's id, aria-describedby and
+                  aria-invalid all landed on a positioning <div>. A <label for>
+                  cannot name a div, so this field had no accessible name and
+                  its error was never announced — while the id resolved, so
+                  every check short of asking what KIND of element received it
+                  reported the field as correctly wired. */}
+              <div className="relative">
+                <FormControl>
                   <Input
                     {...field}
                     ref={node => {
@@ -148,57 +156,57 @@ export function SecretField({
                       field.onBlur();
                     }}
                   />
-                  {showClear && (
-                    <button
-                      type="button"
-                      className="absolute right-10 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-destructive transition-colors"
-                      disabled={disabled}
-                      onClick={() => {
-                        // The keyboard cannot express this. The field shows
-                        // itself as empty while the form holds the mask, so
-                        // Backspace over the displayed blank changes no value
-                        // and fires no `onChange` — leaving an operator who
-                        // wants the credential GONE with no gesture that says
-                        // so. This is that gesture.
-                        setReplaced(true);
-                        field.onChange("");
-                        // The button is about to stop rendering, so focus has
-                        // to be put somewhere deliberate rather than dropped
-                        // onto the document.
-                        inputRef.current?.focus();
-                      }}
-                      aria-label="Remove stored value"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
-                  )}
+                </FormControl>
+                {showClear && (
                   <button
                     type="button"
-                    tabIndex={-1}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                    // Disabled with the field, as the clear button beside it
-                    // is. Revealing exposes nothing the server did not send,
-                    // but the click also focuses the input, so a submitting
-                    // form would move the caret into a field it has locked.
+                    className="absolute right-10 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-destructive transition-colors"
                     disabled={disabled}
                     onClick={() => {
-                      // A stored secret cannot be revealed — the server never
-                      // sent it. Focusing lets the user type a replacement and
-                      // watch it as they do; typing nothing leaves the stored
-                      // credential exactly as it was.
-                      setVisible(current => !current);
+                      // The keyboard cannot express this. The field shows
+                      // itself as empty while the form holds the mask, so
+                      // Backspace over the displayed blank changes no value
+                      // and fires no `onChange` — leaving an operator who
+                      // wants the credential GONE with no gesture that says
+                      // so. This is that gesture.
+                      setReplaced(true);
+                      field.onChange("");
+                      // The button is about to stop rendering, so focus has
+                      // to be put somewhere deliberate rather than dropped
+                      // onto the document.
                       inputRef.current?.focus();
                     }}
-                    aria-label={visible ? "Hide value" : "Show value"}
+                    aria-label="Remove stored value"
                   >
-                    {visible ? (
-                      <EyeOff className="h-4 w-4" />
-                    ) : (
-                      <Eye className="h-4 w-4" />
-                    )}
+                    <X className="h-4 w-4" />
                   </button>
-                </div>
-              </FormControl>
+                )}
+                <button
+                  type="button"
+                  tabIndex={-1}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                  // Disabled with the field, as the clear button beside it
+                  // is. Revealing exposes nothing the server did not send,
+                  // but the click also focuses the input, so a submitting
+                  // form would move the caret into a field it has locked.
+                  disabled={disabled}
+                  onClick={() => {
+                    // A stored secret cannot be revealed — the server never
+                    // sent it. Focusing lets the user type a replacement and
+                    // watch it as they do; typing nothing leaves the stored
+                    // credential exactly as it was.
+                    setVisible(current => !current);
+                    inputRef.current?.focus();
+                  }}
+                  aria-label={visible ? "Hide value" : "Show value"}
+                >
+                  {visible ? (
+                    <EyeOff className="h-4 w-4" />
+                  ) : (
+                    <Eye className="h-4 w-4" />
+                  )}
+                </button>
+              </div>
               <FormMessage className="mt-1.5" />
             </SettingsRow>
           </FormItem>

@@ -14,8 +14,9 @@ import { Label } from "@nextlyhq/ui";
 import { Globe } from "lucide-react";
 import { isFieldLocalized, type FieldConfig } from "nextly/config";
 import type { ReactNode } from "react";
-import { useEffect, useId } from "react";
+import { useId } from "react";
 
+import { useLabelLandingCheck } from "@admin/lib/forms/label-landing";
 import { cn } from "@admin/lib/utils";
 
 import { useEntryLocale } from "../EntryLocaleContext";
@@ -115,9 +116,10 @@ const WIDTH_STYLES: Record<string, string> = {
  * `relationship:tags`, `upload:featuredImage`.
  *
  * The list covers the types this codebase has evidence for. It is deliberately
- * NOT a guess at the rest: `assertLabelLanded` below fires in development for
- * any other type whose label finds no target, so a missing entry announces
- * itself the first time the field is opened instead of failing silently.
+ * NOT a guess at the rest: `useFieldLabelLandingCheck` below fires in
+ * development for any other type whose label finds no usable target, so a
+ * missing entry announces itself the first time the field is opened instead of
+ * failing silently.
  */
 const GROUP_FIELD_TYPES: ReadonlySet<string> = new Set([
   "richText",
@@ -126,29 +128,36 @@ const GROUP_FIELD_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Development-time check that a `<label for>` actually found something.
+ * Development-time check that this field's `<label for>` actually found a
+ * control that can carry a name.
  *
- * The failure this guards is silent by construction: the label renders, the
- * input renders, and only the association is missing. `FieldShell` in
- * `@nextlyhq/ui` carries the same check for the same reason.
+ * The mechanism lives in `@admin/lib/forms/label-landing` and is shared with
+ * the settings rows, which emit their own `<label for>` and can fail in exactly
+ * these two ways. This wrapper supplies only the remedies, since what to do
+ * about a dangling label differs by where the label came from.
  */
-function useLabelLandingCheck(
+function useFieldLabelLandingCheck(
   enabled: boolean,
   targetId: string,
   label: string,
   fieldType: string
 ): void {
-  useEffect(() => {
-    if (!enabled || process.env.NODE_ENV === "production") return;
-    if (typeof document === "undefined") return;
-    if (document.getElementById(targetId)) return;
-    console.warn(
-      `[Nextly] The label "${label}" points at #${targetId}, but no element carries that id. ` +
-        `Field type "${fieldType}" renders no single control the id can attach to, so its label ` +
-        `names nothing. Add "${fieldType}" to GROUP_FIELD_TYPES in FieldWrapper.tsx so the field ` +
-        `is exposed as a group instead.`
-    );
-  }, [enabled, targetId, label, fieldType]);
+  useLabelLandingCheck({
+    enabled,
+    targetId,
+    label,
+    remedies: {
+      absent:
+        `Field type "${fieldType}" renders no single control the id can attach to. ` +
+        `Add "${fieldType}" to GROUP_FIELD_TYPES in FieldWrapper.tsx so the field is ` +
+        `exposed as a group instead.`,
+      notLabelable:
+        `Field type "${fieldType}" put the id on an element a label cannot name — a ` +
+        `wrapper or an editing surface rather than a control. Either move the id onto ` +
+        `the field's focusable control, or add "${fieldType}" to GROUP_FIELD_TYPES in ` +
+        `FieldWrapper.tsx so the field is exposed as a group.`,
+    },
+  });
 }
 
 // ============================================================
@@ -227,7 +236,7 @@ export function FieldWrapper({
   const isGroup = GROUP_FIELD_TYPES.has(_fieldType) || editorIsOpaque;
   // Only the non-group path claims a control carries the id, so only it is
   // checked. A group makes no such claim and cannot fail this way.
-  useLabelLandingCheck(!isGroup && !isHidden, fieldId, label, _fieldType);
+  useFieldLabelLandingCheck(!isGroup && !isHidden, fieldId, label, _fieldType);
   // Announced with the group. The single-control path cannot do this from here:
   // the id lives on an element this component never touches.
   const groupDescribedBy =

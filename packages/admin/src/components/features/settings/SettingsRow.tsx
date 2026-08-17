@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 
 import { useFormField } from "@admin/components/ui/form";
+import { useLabelLandingCheck } from "@admin/lib/forms/label-landing";
 
 interface SettingsRowProps {
   label: string;
@@ -15,6 +16,13 @@ interface SettingsRowProps {
  * Two-column grid: label + help on the left, control on the right.
  * Uses the form-field id linkage from useFormField so the <label> targets
  * the input rendered through FormControl.
+ *
+ * The `<label for>` is emitted unconditionally, while whether anything claims
+ * that id depends entirely on what the caller passes as `children` — nothing
+ * here can require a `FormControl`, and a `FormControl` wrapping a positioning
+ * `<div>` puts the id on the div rather than on the control inside it. Both
+ * shapes render and read as finished, which is how three of these shipped. The
+ * landing check below turns that silence into a development warning.
  */
 export function SettingsRow({
   label,
@@ -22,6 +30,21 @@ export function SettingsRow({
   children,
 }: SettingsRowProps) {
   const { formItemId } = useFormField();
+
+  useLabelLandingCheck({
+    targetId: formItemId,
+    label,
+    remedies: {
+      absent:
+        "Wrap the control in <FormControl> so it receives the id, or — if this row " +
+        "holds a GROUP of controls rather than one — use <SettingsRowGroup>, which " +
+        "names the whole group with role=group and aria-labelledby instead.",
+      notLabelable:
+        "<FormControl> clones onto its single child, so a wrapper element around the " +
+        "control absorbs the id. Put <FormControl> directly on the focusable control " +
+        "and move the wrapper outside it.",
+    },
+  });
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-[2fr_3fr] gap-4 md:gap-8 py-5 items-start">
