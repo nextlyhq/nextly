@@ -10,6 +10,7 @@ import { defineBlock } from "@nextlyhq/blocks-engine";
 
 import type { PageContext } from "../context";
 
+import { LAYOUT } from "./categories";
 import { CONTAINER_SUPPORTS, renderContainer } from "./container";
 import type { ContainerProps } from "./container";
 
@@ -22,6 +23,14 @@ export const section = defineBlock<ContainerProps, PageContext>({
   version: 1,
   description:
     "A page region. Renders a landmark element, and opts into the site's content width once the site stylesheet defines it.",
+  // Palette metadata. The category is imported rather than spelled here so
+  // nineteen blocks cannot drift into nineteen headings; keywords are what
+  // let a search for a word the description never uses still find this.
+  editor: {
+    label: "Section",
+    category: LAYOUT,
+    keywords: ["container", "wrapper", "band", "region"],
+  },
   props: {
     as: { type: "select", options: ["section", "header", "footer", "main"] },
     contained: { type: "checkbox" },

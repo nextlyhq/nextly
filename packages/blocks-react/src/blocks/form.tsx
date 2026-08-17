@@ -36,6 +36,7 @@ import type { ReactElement, ReactNode } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
 
+import { INTERACTIVE } from "./categories";
 import { flag, oneOf, text, url } from "./props";
 
 /** The control types a field may declare. */
@@ -225,6 +226,14 @@ export const form = defineBlock<FormProps, PageContext>({
   version: 1,
   description:
     "A plain HTML form that posts to a URL you choose. Stores nothing and ships no JavaScript; the form-builder plugin is the one that collects submissions.",
+  // Palette metadata. The category is imported rather than spelled here so
+  // nineteen blocks cannot drift into nineteen headings; keywords are what
+  // let a search for a word the description never uses still find this.
+  editor: {
+    label: "Form",
+    category: INTERACTIVE,
+    keywords: ["contact", "input", "submit", "fields"],
+  },
   props: {
     action: { type: "url" },
     method: { type: "select", options: [...FORM_METHODS] },

@@ -308,14 +308,22 @@ export interface InsertGroup {
 }
 
 /**
- * Group entries under their categories, preserving the order they arrive in.
+ * Group entries under their categories.
  *
- * First appearance decides category order rather than an alphabetical sort of
- * the headings, so a block and its variations stay adjacent and the sort
- * applied upstream is not undone here by a second ordering rule.
+ * `preferred` names the headings a library wants offered first — a page starts
+ * as structure, so "layout" belongs above "interactive", and neither
+ * first-appearance nor an alphabetical sort produces that. It is a caller's
+ * declaration rather than a constant here, because categories are free strings
+ * contributed by any plugin and this module has no standing to rank them.
+ *
+ * Categories outside `preferred` follow, in first-appearance order. A plugin
+ * that ships an unranked category still gets a heading rather than being hidden
+ * behind a list it was never named in — dropping it would make a block
+ * unreachable through the very panel that exists to reach it.
  */
 export function groupByCategory(
-  entries: readonly InsertEntry[]
+  entries: readonly InsertEntry[],
+  preferred: readonly string[] = []
 ): InsertGroup[] {
   const groups = new Map<string, InsertEntry[]>();
   for (const entry of entries) {
@@ -323,9 +331,18 @@ export function groupByCategory(
     if (bucket === undefined) groups.set(entry.category, [entry]);
     else bucket.push(entry);
   }
-  return [...groups].map(([category, grouped]) => ({
+
+  // Ranked first, in the order declared; then everything else as it arrived.
+  // `preferred` may name categories nothing claims, so it is filtered against
+  // what is actually present rather than trusted to describe this catalogue.
+  const ranked = preferred.filter(category => groups.has(category));
+  const rest = [...groups.keys()].filter(
+    category => !ranked.includes(category)
+  );
+
+  return [...ranked, ...rest].map(category => ({
     category,
-    entries: grouped,
+    entries: groups.get(category) ?? [],
   }));
 }
 

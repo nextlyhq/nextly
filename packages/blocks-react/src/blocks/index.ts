@@ -107,8 +107,27 @@ export type { CollectionLoopProps } from "./collection-loop";
  * own registration service, and a test can take a subset. Exported as a plain
  * array because that is the shape both of those want.
  */
+/**
+ * The palette's headings and the order they are offered in.
+ *
+ * Re-exported from the library's own entry because a host that registers these
+ * blocks is the same host that ranks their categories, and making it import
+ * from two places to do one thing invites the two to be versioned apart.
+ */
+// Only the ordered list is public. The individual constants are how the block
+// files in this directory spell their own category, which is a relative import
+// — publishing them too would widen the surface by four names no consumer needs
+// and which could then never be renamed.
+export { CORE_CATEGORIES } from "./categories";
+export type { CoreCategory } from "./categories";
+
 export const coreBlocks = [
-  // Layout
+  // The comments below record ORDER, which is load-bearing: a resolver built by
+  // iterating this list must meet a container before the child whose slot names
+  // it. How the library is GROUPED is declared on the blocks themselves, as
+  // `editor.category`, because that is where the palette reads it — a second
+  // grouping here would agree today and drift silently, with nothing checking
+  // either against the other.
   section,
   box,
   // Registered after `columns`, because a row's slot template names the column
@@ -121,20 +140,16 @@ export const coreBlocks = [
   accordion,
   accordionItem,
   spacer,
-  // Typography
   heading,
   paragraph,
   list,
-  // Media and interaction
   image,
   button,
   form,
   // Registered after `image`, the only block its slot allows.
   gallery,
-  // Structure
   divider,
   quote,
   embed,
-  // Dynamic
   collectionLoop,
 ];

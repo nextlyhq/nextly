@@ -55,6 +55,8 @@ import type { ReactElement } from "react";
 // `ReactNode` so a slot's output can be placed straight into JSX.
 import type { BlockRenderArgs, PageContext } from "../context";
 
+import { INTERACTIVE } from "./categories";
+
 /** This block's registered name, so the tests and its parent name it once. */
 export const ACCORDION_ITEM_BLOCK = "core/accordion-item";
 
@@ -126,6 +128,14 @@ export const accordionItem = defineBlock<AccordionItemProps, PageContext>({
   version: 1,
   description:
     "One section of an accordion: a title that is always visible and children the browser reveals when it is open.",
+  // Palette metadata. The category is imported rather than spelled here so
+  // nineteen blocks cannot drift into nineteen headings; keywords are what
+  // let a search for a word the description never uses still find this.
+  editor: {
+    label: "Accordion item",
+    category: INTERACTIVE,
+    keywords: ["disclosure", "panel", "faq"],
+  },
   props: {
     title: { type: "text" },
     open: { type: "checkbox" },

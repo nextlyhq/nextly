@@ -16,6 +16,7 @@ import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
 
+import { CONTENT } from "./categories";
 import { text, url } from "./props";
 
 export interface QuoteProps {
@@ -77,6 +78,14 @@ export const quote = defineBlock<QuoteProps, PageContext>({
   version: 1,
   description:
     "Quoted text with an optional attribution, kept outside the quotation so the speaker is not quoted saying their own name.",
+  // Palette metadata. The category is imported rather than spelled here so
+  // nineteen blocks cannot drift into nineteen headings; keywords are what
+  // let a search for a word the description never uses still find this.
+  editor: {
+    label: "Quote",
+    category: CONTENT,
+    keywords: ["blockquote", "pull quote", "citation"],
+  },
   props: {
     text: { type: "textarea" },
     attribution: { type: "text" },

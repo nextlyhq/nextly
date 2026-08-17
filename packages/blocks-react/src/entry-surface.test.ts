@@ -299,6 +299,13 @@ describe("the blocks entry", () => {
       "BUTTON_TYPES",
       "CONTAINER_TAGS",
       "CONTENT_WIDTH_CLASS",
+      // Added deliberately: the palette's headings and the order they are
+      // offered in. A host registering these blocks is the same host ranking
+      // their categories, so the ordered list ships from this entry. The four
+      // individual category constants stay internal — the block files reach
+      // them by relative import, and publishing them would add four names no
+      // consumer needs and which could then never be renamed.
+      "CORE_CATEGORIES",
       "FORM_FIELD_TYPES",
       "FORM_METHODS",
       "HEADING_LEVELS",

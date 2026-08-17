@@ -38,7 +38,7 @@ import {
   registerBlocks,
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
-import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
+import { CORE_CATEGORIES, coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import {
   BuilderShell,
   Canvas,
@@ -237,7 +237,9 @@ function BlocksEditor({
         // opened, and a renderer ignoring that argument would draw the inserter
         // under every heading the moment a second panel is listed above.
         renderPanel={panel =>
-          panel === "insert" ? <InsertPanel editor={editor} /> : null
+          panel === "insert" ? (
+            <InsertPanel editor={editor} categoryOrder={CORE_CATEGORIES} />
+          ) : null
         }
       >
         <Canvas

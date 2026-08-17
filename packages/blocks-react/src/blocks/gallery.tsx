@@ -60,6 +60,7 @@ import { defineBlock } from "@nextlyhq/blocks-engine";
 
 import type { PageContext } from "../context";
 
+import { MEDIA } from "./categories";
 import { CONTAINER_SUPPORTS, renderContainer } from "./container";
 import type { ContainerProps } from "./container";
 
@@ -98,6 +99,14 @@ export const gallery = defineBlock<ContainerProps, PageContext>({
   version: 1,
   description:
     "A reflowing grid of pictures. Restricts its slot to core/image so every item carries alt text and an intrinsic size, and a stray block cannot be laid out as though it were a photograph.",
+  // Palette metadata. The category is imported rather than spelled here so
+  // nineteen blocks cannot drift into nineteen headings; keywords are what
+  // let a search for a word the description never uses still find this.
+  editor: {
+    label: "Gallery",
+    category: MEDIA,
+    keywords: ["images", "photos", "grid", "carousel"],
+  },
   props: {
     as: { type: "select", options: ["div", "section", "article"] },
     contained: { type: "checkbox" },

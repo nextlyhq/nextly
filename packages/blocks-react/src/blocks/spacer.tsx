@@ -17,6 +17,8 @@ import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
 
+import { LAYOUT } from "./categories";
+
 export type SpacerProps = Record<string, never>;
 
 export function renderSpacer({
@@ -34,6 +36,14 @@ export const spacer = defineBlock<SpacerProps, PageContext>({
   version: 1,
   description:
     "Deliberate empty space, sized by the style system so it can differ per breakpoint. Hidden from assistive technology.",
+  // Palette metadata. The category is imported rather than spelled here so
+  // nineteen blocks cannot drift into nineteen headings; keywords are what
+  // let a search for a word the description never uses still find this.
+  editor: {
+    label: "Spacer",
+    category: LAYOUT,
+    keywords: ["gap", "space", "whitespace"],
+  },
   props: {},
   defaultProps: {},
   example: { props: {} },

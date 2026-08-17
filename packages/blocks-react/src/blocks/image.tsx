@@ -17,6 +17,7 @@ import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
 
+import { MEDIA } from "./categories";
 import { flag, isAuthoredText, oneOf, text, url } from "./props";
 
 /** How the browser should schedule the image. */
@@ -139,6 +140,14 @@ export const image = defineBlock<ImageProps, PageContext>({
   version: 1,
   description:
     "A picture, resolved through the host's media library so its URL, alt text and intrinsic size stay current.",
+  // Palette metadata. The category is imported rather than spelled here so
+  // nineteen blocks cannot drift into nineteen headings; keywords are what
+  // let a search for a word the description never uses still find this.
+  editor: {
+    label: "Image",
+    category: MEDIA,
+    keywords: ["picture", "photo", "img", "media"],
+  },
   props: {
     mediaId: { type: "media" },
     src: { type: "url" },

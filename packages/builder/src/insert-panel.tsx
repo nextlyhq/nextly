@@ -76,6 +76,15 @@ export interface InsertPanelProps {
   definitions?: readonly AnyBlockDefinition[];
   /** How nesting is resolved. Defaults to the live registry. */
   nesting?: NestingSource;
+  /**
+   * Category headings to offer first, in order.
+   *
+   * Supplied by the host rather than ranked here: categories are free strings
+   * any plugin may contribute, and a panel that hardcoded an order would rank
+   * the first-party library above whatever a user installed. Unranked
+   * categories still appear, after these.
+   */
+  categoryOrder?: readonly string[];
   /** Notified after a successful insert, with the node that was added. */
   onInsert?: (node: BlockNode) => void;
 }
@@ -91,6 +100,7 @@ export function InsertPanel({
   editor,
   definitions,
   nesting,
+  categoryOrder,
   onInsert,
 }: InsertPanelProps): React.JSX.Element {
   const [query, setQuery] = React.useState("");
@@ -124,7 +134,8 @@ export function InsertPanel({
         // search is a different message from "nothing can go here", and
         // filtering first would collapse them into one.
         groupByCategory(
-          filterEntries(allowedEntries(catalog, point.target, source), query)
+          filterEntries(allowedEntries(catalog, point.target, source), query),
+          categoryOrder
         );
 
   const insert = (entry: InsertEntry) => {

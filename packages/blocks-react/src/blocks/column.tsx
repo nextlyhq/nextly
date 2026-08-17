@@ -24,6 +24,7 @@ import { defineBlock } from "@nextlyhq/blocks-engine";
 
 import type { PageContext } from "../context";
 
+import { LAYOUT } from "./categories";
 import { CONTAINER_SUPPORTS, renderContainer } from "./container";
 import type { ContainerProps } from "./container";
 
@@ -76,6 +77,14 @@ export const column = defineBlock<ContainerProps, PageContext>({
   version: COLUMN_VERSION,
   description:
     "One column of a core/columns row. A container with an identity, so it can be selected, styled and dropped into.",
+  // Palette metadata. The category is imported rather than spelled here so
+  // nineteen blocks cannot drift into nineteen headings; keywords are what
+  // let a search for a word the description never uses still find this.
+  editor: {
+    label: "Column",
+    category: LAYOUT,
+    keywords: ["cell", "track"],
+  },
   props: {
     // Narrower than a box's list: a column is a layout child, and `aside` or
     // `article` inside a row is nearly always a mistake the author meant to
