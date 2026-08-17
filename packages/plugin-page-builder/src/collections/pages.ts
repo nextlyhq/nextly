@@ -1,8 +1,7 @@
 import { defineCollection, text, code } from "nextly/config";
 
+import { blocks } from "../fields/blocksHelper";
 import { CUSTOM_CSS_GRANT } from "../permissions";
-
-import { editorChoiceFields } from "./editorChoice";
 /**
  * Sibling field for page-level custom CSS. When the host entity has a field
  * with this name, the builder's page settings edit it.
@@ -25,11 +24,26 @@ export const PAGE_BUILDER_CUSTOM_CSS_FIELD = "customCss";
  */
 
 /**
- * The plugin-owned `pages` collection. Each page CHOOSES its editor (Elementor-style):
- *  - "Page Builder" → the visual block tree (`content`, a `blocks` field).
- *  - "Normal editor" → Nextly's default rich-text form (`body`).
- * The front-end renders whichever was chosen. Using field conditions (not an Edit-view
- * override) keeps the normal editor available — a single Edit view can't offer both.
+ * The plugin-owned `pages` collection. A page is built from blocks.
+ *
+ * The FIELD decides how an entry is edited, and nothing decides it per entry.
+ * This previously carried a stored `editorMode` select beside both a blocks
+ * field and a rich-text one, either of which an entry could use.
+ *
+ * Three things were wrong with that, and only the first is cosmetic:
+ *
+ * A UI preference was stored as CONTENT. `editorMode` was a real column, so it
+ * travelled in API responses and exports, could be set by any writer, and formed
+ * part of the document a consumer reads.
+ *
+ * Both editors' content persisted at once. What hid one of them was
+ * `admin.condition`, which reaches the admin form and nothing else, so both
+ * columns stayed real and writable. An entry could hold a block document AND
+ * rich text with only one rendered, and switching neither migrated nor warned.
+ *
+ * And it applied HERE only. A collection built in the schema builder gets a
+ * blocks field and no switcher, so one capability behaved differently depending
+ * on who declared the collection.
  */
 export function pagesCollection() {
   return defineCollection({
@@ -38,8 +52,10 @@ export function pagesCollection() {
     fields: [
       text({ name: "title", required: true }),
       text({ name: "slug", required: true, unique: true }),
-      // The Elementor-style editor choice (select + Page Builder + normal rich text).
-      ...editorChoiceFields(),
+      // Named `content` because that is what the retired choice called its
+      // builder arm: a page already holding a block document keeps rendering
+      // rather than reading as empty against a field with a new name.
+      blocks({ name: "content", label: "Page Builder" }),
       code({
         name: PAGE_BUILDER_CUSTOM_CSS_FIELD,
         admin: { language: "css" },
