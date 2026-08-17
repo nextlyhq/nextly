@@ -79,7 +79,17 @@ export { measureBytes, surveyDocument } from "./measure-bytes";
 // The nesting rule and the types it answers in. Exported together: a caller
 // that can ask the question must be able to name the verdict it gets back, and
 // a refusal reason it cannot name is one it has to re-derive from the boolean.
-export { canNest, canBeRoot } from "./nesting";
+//
+// BOTH halves ship, because a placement needs both to agree and neither is
+// derivable from the other: `canNest` is the child naming the parents it may
+// sit under, `canNestInSlot` is the container naming what a given slot admits.
+// Exporting only one leaves a caller — an inserter offering block types, a
+// canvas judging a drop — able to ask half the question and obliged to compute
+// the other half itself, which is the second implementation this module exists
+// to prevent. The validator reaches them by relative path and would not have
+// noticed: a module the entry does not name is absent from `dist` however
+// thoroughly it is tested.
+export { canNest, canBeRoot, canNestInSlot } from "./nesting";
 export type { NestingSource, NestingVerdict, NestingRefusal } from "./nesting";
 // The measurement's return type travels with the function. Without it a
 // consumer naming `measureBytes`'s result has to rebuild the union by hand or

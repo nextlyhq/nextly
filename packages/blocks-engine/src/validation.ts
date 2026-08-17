@@ -24,7 +24,7 @@ import { DEFAULT_LIMITS, LIMIT_WARNING_RATIO } from "./limits";
 import type { DocumentLimits } from "./limits";
 import { surveyDocument } from "./measure-bytes";
 import type { DocumentSurvey } from "./measure-bytes";
-import { canBeRoot, canNest } from "./nesting";
+import { canBeRoot, canNest, canNestInSlot } from "./nesting";
 import type { NestingSource } from "./nesting";
 import { isPlainRecord } from "./plain-record";
 import type { TokenKind } from "./style/catalog-types";
@@ -246,6 +246,8 @@ export const ISSUE_CODES = {
   // mapping that has to be kept in step.
   "wrong-parent":
     "A node declares the block types it may sit under, and its container is not one of them.",
+  "not-allowed-in-slot":
+    "A container's slot declares the block types it holds, and this node is not one of them.",
   "restricted-at-root":
     "A node declares the block types it may sit under, and it sits at the top level, which is inside none of them.",
 } as const;
@@ -515,10 +517,16 @@ export function validateDocument(
       // Children are still walked and still checked for everything else. Only
       // the one question that needs the container's name is recorded as
       // unanswerable rather than answered from a name that does not exist.
-      const childPlacement: Placement = isNodeType(node.type)
-        ? { at: "container", type: node.type }
-        : { at: "unnameable-container" };
+      // The container's name, resolved once; the SLOT differs per iteration, so
+      // the placement is built inside the loop. Hoisting it would carry one
+      // slot's name to every sibling slot's children and check each against the
+      // wrong allow-list — a refusal naming a slot the node is not in.
+      const containerType = isNodeType(node.type) ? node.type : undefined;
       for (const [slot, children] of Object.entries(node.slots)) {
+        const childPlacement: Placement =
+          containerType === undefined
+            ? { at: "unnameable-container" }
+            : { at: "container", type: containerType, slot };
         if (Array.isArray(children)) {
           const slotPath = pointer(pointer(path, "slots"), slot);
           for (
@@ -550,7 +558,7 @@ export function validateDocument(
  */
 type Placement =
   | { at: "root" }
-  | { at: "container"; type: string }
+  | { at: "container"; type: string; slot: string }
   | { at: "unnameable-container" };
 
 /**
@@ -586,10 +594,24 @@ function checkNesting(
   // confident answer to a question the document cannot pose.
   const raw: unknown = node;
   if (!isPlainRecord(raw) || !isNodeType(raw.type)) return;
+  // Both halves, and the CHILD's first. Either refusal is enough, so the order
+  // decides only which reason an author is shown, and "this block belongs
+  // elsewhere" is the more actionable of the two — a slot refusal for a block
+  // that never belonged under this parent describes the symptom rather than the
+  // mistake.
   const verdict =
     placement.at === "root"
       ? canBeRoot(raw.type, source)
-      : canNest(raw.type, placement.type, source);
+      : (() => {
+          const child = canNest(raw.type, placement.type, source);
+          if (!child.allowed) return child;
+          return canNestInSlot(
+            raw.type,
+            placement.type,
+            placement.slot,
+            source
+          );
+        })();
   if (verdict.allowed) return;
   // The refusal's own reason IS the issue code, so a rule added to
   // `NestingRefusal` reaches the document already named rather than through a
