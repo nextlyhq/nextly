@@ -223,3 +223,63 @@ describe("canNestInSlot — the parent's half of the rule", () => {
     ).toBe(true);
   });
 });
+
+describe("the nesting rule is reachable from the package entry", () => {
+  // Imported as a NAMESPACE and asserted by key at runtime, rather than as
+  // named bindings. A named import of something the entry does not export is a
+  // COMPILE error, so the file would stop building and no assertion in it would
+  // ever run — a red that says the import was malformed and nothing about the
+  // surface. Reading keys off the loaded module makes a missing export a
+  // runtime failure, which is the only kind this file can observe.
+  it("exports both halves of the rule and the registry's source", async () => {
+    const entry = await import("./index");
+
+    // The population first. An entry that failed to load, or that resolved to
+    // something empty, satisfies every membership check below by having no keys
+    // to contradict them — and reports as a clean pass.
+    expect(Object.keys(entry).length).toBeGreaterThan(0);
+    expect(entry).toHaveProperty("canNest");
+
+    // The child's half, the parent's half, and the root case. A caller deciding
+    // a placement needs all three: `block.ts` is explicit that neither half
+    // implies the other, so an entry offering one obliges a consumer to compute
+    // the rest itself.
+    expect(typeof entry.canNest).toBe("function");
+    expect(typeof entry.canNestInSlot).toBe("function");
+    expect(typeof entry.canBeRoot).toBe("function");
+
+    // The adapter that answers both halves from the live registry. Without it a
+    // consumer holding only the rules has to build its own `NestingSource`,
+    // which is where the resolution — not the rule — gets restated.
+    expect(typeof entry.registryNestingSource).toBe("function");
+  });
+
+  it("answers the same verdict through the entry as through the module", async () => {
+    // Membership alone is satisfied by a re-export that resolves to a different
+    // implementation — a shadowing local, a stale barrel, a name rebound during
+    // a refactor. Asking both spellings the same question is what pins the
+    // export to THIS rule rather than to something that merely shares its name.
+    const entry = await import("./index");
+    clearBlocks();
+    registerBlocks([
+      {
+        ...base,
+        name: "core/accordion",
+        slots: { children: { allow: ["core/accordion-item"] } },
+      },
+      { ...base, name: "core/accordion-item" },
+      { ...base, name: "core/heading" },
+    ]);
+    const live = registryNestingSource();
+
+    expect(
+      entry.canNestInSlot("core/heading", "core/accordion", "children", live)
+    ).toEqual(
+      canNestInSlot("core/heading", "core/accordion", "children", live)
+    );
+    expect(
+      entry.canNestInSlot("core/heading", "core/accordion", "children", live)
+        .allowed
+    ).toBe(false);
+  });
+});
