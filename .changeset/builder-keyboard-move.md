@@ -1,5 +1,4 @@
 ---
-
 "nextly": patch
 "create-nextly-app": patch
 "@nextlyhq/admin": patch
@@ -24,6 +23,7 @@
 "@nextlyhq/tsconfig": patch
 "@nextlyhq/builder": patch
 "@nextlyhq/module-specifiers": patch
+---
 
 feat(builder): move a block with the keyboard, on two axes
 
