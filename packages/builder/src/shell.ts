@@ -56,3 +56,14 @@ export type { BuilderCommand, CommandPaletteProps } from "./command-palette";
  */
 export { CANVAS_ROOT_CLASS, Canvas, nodeIdFromEvent } from "./canvas";
 export type { CanvasProps } from "./canvas";
+
+/**
+ * The editor's document state, published beside the canvas because it is a hook
+ * and therefore client-only for the same reason the shell is.
+ *
+ * It is the ONLY place a document changes: the canvas, the panels, a keyboard
+ * handler and an agent all reach the same `apply`, so undo covers every one of
+ * them rather than only the path that happened to implement it.
+ */
+export { MAX_HISTORY, useEditorState } from "./editor-state";
+export type { EditorState, UseEditorStateArgs } from "./editor-state";
