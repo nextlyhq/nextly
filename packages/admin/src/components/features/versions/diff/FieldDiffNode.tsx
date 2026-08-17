@@ -2,11 +2,16 @@
  * Renders one node of a version diff.
  *
  * The engine produces a typed, UI-independent tree (`FieldDiff`); this walks it
- * and paints each kind: text as inline insert/delete runs, scalars as
- * before/after values (reusing the read-only value-display kit), groups and
- * components nested, lists item-by-item with add/remove/move/change badges, and
+ * and paints each kind: text as insert/delete runs, scalars as before/after
+ * values (reusing the read-only value-display kit), groups and components
+ * nested, lists item-by-item with add/remove/move/change badges, and
  * relationships as added/removed target chips. All colours are theme tokens, so
  * it reads in light and dark alike.
+ *
+ * A changed field states its two sides in COLUMNS, which is the shape a
+ * comparison has. There is one such layout rather than a narrow variant beside
+ * it: a container query folds the columns into a stack where the surface cannot
+ * hold two, so the available width decides the arrangement and no caller has to.
  *
  * Each value node carries its own display config (`display`), which the engine
  * copied from the real field while it walked, so a `hasMany` array, a `select`
@@ -27,6 +32,8 @@ import type {
 } from "@admin/services/versionApi";
 
 import { FieldValue } from "../value-display/FieldValueDisplay";
+
+import { splitTextSegments } from "./text-segment-sides";
 
 type DiffStatus = FieldDiff["status"];
 
@@ -110,34 +117,58 @@ function TextSegmentSpan({ segment }: { segment: TextSegment }) {
 }
 
 /**
- * A screen-reader label ("Before" / "After") plus its value, struck through
- * when it reads as removed. The label keeps the two sides distinguishable for
- * assistive technology, which cannot perceive the strikethrough alone.
+ * A side of a comparison the field did not reach: it was introduced after this
+ * version, or dropped before the other one. Stated rather than left blank, so
+ * an absent field is distinguishable from one holding an empty value.
  */
-function ValueSide({
-  label,
-  struck = false,
-  children,
+function AbsentSide() {
+  return <p className="text-sm italic text-muted-foreground">Not present</p>;
+}
+
+/**
+ * The two sides of a comparison, in columns.
+ *
+ * Columns are the shape a comparison has, so the markup states them once and a
+ * container query folds them into a stack only where the surface is genuinely
+ * too narrow to hold two. The per-side caption carries the labelling in that
+ * folded state and goes screen-reader-only once the column headings above sit
+ * over the columns instead — assistive technology needs the label either way,
+ * since neither position nor a rule is perceivable to it.
+ */
+function SplitPair({
+  before,
+  after,
 }: {
-  label: string;
-  struck?: boolean;
-  children: React.ReactNode;
+  before: React.ReactNode;
+  after: React.ReactNode;
 }) {
   return (
-    <div className={struck ? "line-through text-muted-foreground" : undefined}>
-      <span className="sr-only">{label}: </span>
-      {children}
+    <div className="grid grid-cols-1 gap-3 @2xl/diff:grid-cols-2 @2xl/diff:gap-4">
+      <div className="min-w-0 @2xl/diff:border-r @2xl/diff:border-border @2xl/diff:pr-4">
+        <p className="mb-1 text-xs font-medium text-muted-foreground @2xl/diff:sr-only">
+          Before
+        </p>
+        {before}
+      </div>
+      <div className="min-w-0">
+        <p className="mb-1 text-xs font-medium text-muted-foreground @2xl/diff:sr-only">
+          After
+        </p>
+        {after}
+      </div>
     </div>
   );
 }
 
 /**
- * The before/after presentation shared by every value node: added shows one
- * value, removed shows one struck value, changed shows both labelled, and
- * unchanged shows the value once. `renderValue` draws a single side through the
- * typed value kit, so the labelling stays in one place. A relationship or upload
- * value is resolved into the kit's display shape upstream, so the kit renders
- * its label with no reference-specific handling here.
+ * The before/after presentation shared by every value node. `renderValue` draws
+ * a single side through the typed value kit, so the kit is consulted once per
+ * side and the arrangement lives here. A relationship or upload value is
+ * resolved into the kit's display shape upstream, so the kit renders its label
+ * with no reference-specific handling here.
+ *
+ * An unchanged node spans both columns rather than printing the same value
+ * twice: repeating it costs a row of height and says nothing the badge has not.
  */
 function BeforeAfter({
   status,
@@ -150,27 +181,14 @@ function BeforeAfter({
   after: unknown;
   renderValue: (value: unknown) => React.ReactNode;
 }) {
-  if (status === "added") {
-    return <ValueSide label="New value">{renderValue(after)}</ValueSide>;
-  }
-  if (status === "removed") {
-    return (
-      <ValueSide label="Removed value" struck>
-        {renderValue(before)}
-      </ValueSide>
-    );
-  }
   if (status === "unchanged") {
-    // Nothing changed: show the value once, unlabelled and not struck.
     return <>{renderValue(after)}</>;
   }
   return (
-    <div className="flex flex-col gap-1">
-      <ValueSide label="Before" struck>
-        {renderValue(before)}
-      </ValueSide>
-      <ValueSide label="After">{renderValue(after)}</ValueSide>
-    </div>
+    <SplitPair
+      before={status === "added" ? <AbsentSide /> : renderValue(before)}
+      after={status === "removed" ? <AbsentSide /> : renderValue(after)}
+    />
   );
 }
 
@@ -189,16 +207,39 @@ function targetLabel(target: RelationTarget): string {
   return target.relationTo ? `${target.relationTo}: ${display}` : display;
 }
 
+/** One sequence of text-diff runs as a paragraph of marked spans. */
+function TextRuns({ segments }: { segments: readonly TextSegment[] }) {
+  return (
+    <p className="whitespace-pre-wrap break-words leading-relaxed">
+      {segments.map((segment, index) => (
+        <TextSegmentSpan key={index} segment={segment} />
+      ))}
+    </p>
+  );
+}
+
 export function FieldDiffNode({ node }: { node: FieldDiff }) {
   switch (node.kind) {
     case "text": {
+      // An unchanged text node has only common runs, so both sides would be
+      // identical; it spans instead, matching how a value node handles the same
+      // case. A changed one distributes its runs, keeping each run's `op` so a
+      // deletion still reads as struck on the left and an insertion as inserted
+      // on the right.
+      if (node.status === "unchanged") {
+        return (
+          <FieldRow label={node.label} status={node.status}>
+            <TextRuns segments={node.segments} />
+          </FieldRow>
+        );
+      }
+      const sides = splitTextSegments(node.segments);
       return (
         <FieldRow label={node.label} status={node.status}>
-          <p className="whitespace-pre-wrap break-words leading-relaxed">
-            {node.segments.map((segment, index) => (
-              <TextSegmentSpan key={index} segment={segment} />
-            ))}
-          </p>
+          <SplitPair
+            before={<TextRuns segments={sides.before} />}
+            after={<TextRuns segments={sides.after} />}
+          />
         </FieldRow>
       );
     }
@@ -225,6 +266,11 @@ export function FieldDiffNode({ node }: { node: FieldDiff }) {
     }
 
     case "set": {
+      // A set difference spans both columns rather than splitting into them. It
+      // is not a before/after pair: it names only the targets that entered or
+      // left, so putting "removed" under a heading naming the older version
+      // would imply that version held nothing else, when the targets present in
+      // both appear on neither side.
       return (
         <FieldRow label={node.label} status={node.status}>
           <div className="flex flex-col gap-1.5">

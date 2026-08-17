@@ -7,10 +7,23 @@
  */
 import { describe, it, expect } from "vitest";
 
-import { render, screen } from "@admin/__tests__/utils";
+import { render, screen, within } from "@admin/__tests__/utils";
 import type { FieldDiff } from "@admin/services/versionApi";
 
 import { FieldDiffNode } from "../FieldDiffNode";
+
+/**
+ * The subtree holding one side of a comparison, found through the caption that
+ * names it. Asserting inside a named column is what separates "both values are
+ * somewhere on screen" from "each value is on its own side", which is the whole
+ * claim a side-by-side layout makes.
+ */
+function column(side: "Before" | "After"): HTMLElement {
+  const caption = screen.getByText(side);
+  const cell = caption.parentElement;
+  if (!cell) throw new Error(`the ${side} caption has no containing column`);
+  return cell;
+}
 
 describe("FieldDiffNode", () => {
   it("renders a text field as insert and delete runs", () => {
@@ -121,12 +134,58 @@ describe("FieldDiffNode", () => {
     };
     render(<FieldDiffNode node={node} />);
 
-    // Screen readers cannot see the strikethrough, so each side is labelled.
+    // Which column a value sits in is not perceivable to a screen reader, so
+    // each side names itself.
     expect(screen.getByText(/^Before/)).toBeInTheDocument();
     expect(screen.getByText(/^After/)).toBeInTheDocument();
   });
 
-  it("shows only the new value for an added field", () => {
+  it("puts each side of a changed scalar in its own column", () => {
+    const node: FieldDiff = {
+      kind: "value",
+      name: "views",
+      label: "Views",
+      type: "number",
+      status: "changed",
+      before: 1,
+      after: 2,
+    };
+    render(<FieldDiffNode node={node} />);
+
+    // Both values being on screen is what the older stacked layout also did.
+    // The claim here is stronger: the old value is in the older version's
+    // column and nowhere else.
+    expect(within(column("Before")).getByText("1")).toBeInTheDocument();
+    expect(within(column("Before")).queryByText("2")).toBeNull();
+    expect(within(column("After")).getByText("2")).toBeInTheDocument();
+    expect(within(column("After")).queryByText("1")).toBeNull();
+  });
+
+  it("distributes a changed text field's runs to the side each reaches", () => {
+    const node: FieldDiff = {
+      kind: "text",
+      name: "title",
+      label: "Title",
+      type: "text",
+      status: "changed",
+      segments: [
+        { op: 0, text: "Hello " },
+        { op: -1, text: "world" },
+        { op: 1, text: "there" },
+      ],
+    };
+    render(<FieldDiffNode node={node} />);
+
+    // A deletion belongs to the older version only, an insertion to the newer
+    // only, and the common run to both — so it appears in each column.
+    expect(within(column("Before")).getByText("world").tagName).toBe("DEL");
+    expect(within(column("Before")).queryByText("there")).toBeNull();
+    expect(within(column("After")).getByText("there").tagName).toBe("INS");
+    expect(within(column("After")).queryByText("world")).toBeNull();
+    expect(screen.getAllByText("Hello")).toHaveLength(2);
+  });
+
+  it("says a field was not present on the side it did not reach", () => {
     const node: FieldDiff = {
       kind: "value",
       name: "note",
@@ -138,8 +197,51 @@ describe("FieldDiffNode", () => {
     };
     render(<FieldDiffNode node={node} />);
 
-    expect(screen.getByText("brand new")).toBeInTheDocument();
+    // An added field HAS a before column, and leaving it blank would read the
+    // same as a field that existed and held nothing.
+    expect(
+      within(column("Before")).getByText("Not present")
+    ).toBeInTheDocument();
+    expect(within(column("After")).getByText("brand new")).toBeInTheDocument();
     expect(screen.getByText("Added")).toBeInTheDocument();
+  });
+
+  it("says a removed field is not present on the newer side", () => {
+    const node: FieldDiff = {
+      kind: "value",
+      name: "note",
+      label: "Note",
+      type: "text",
+      status: "removed",
+      before: "was here",
+      after: null,
+    };
+    render(<FieldDiffNode node={node} />);
+
+    expect(within(column("Before")).getByText("was here")).toBeInTheDocument();
+    expect(
+      within(column("After")).getByText("Not present")
+    ).toBeInTheDocument();
+    expect(screen.getByText("Removed")).toBeInTheDocument();
+  });
+
+  it("spans an unchanged field across both columns rather than repeating it", () => {
+    const node: FieldDiff = {
+      kind: "value",
+      name: "slug",
+      label: "Slug",
+      type: "text",
+      status: "unchanged",
+      before: "same-slug",
+      after: "same-slug",
+    };
+    render(<FieldDiffNode node={node} />);
+
+    // No columns at all for an unchanged node: two of them would print the same
+    // value twice and say nothing the badge has not.
+    expect(screen.queryByText("Before")).toBeNull();
+    expect(screen.queryByText("After")).toBeNull();
+    expect(screen.getAllByText("same-slug")).toHaveLength(1);
   });
 
   it("renders a relationship set as added and removed target chips", () => {
