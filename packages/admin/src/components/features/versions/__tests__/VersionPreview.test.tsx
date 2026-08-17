@@ -168,3 +168,32 @@ describe("VersionPreview", () => {
     expect(screen.queryByText("Not set")).not.toBeInTheDocument();
   });
 });
+
+describe("VersionPreview — switching between versions", () => {
+  it("shows the newly selected version's values, not the previous one's", () => {
+    const { rerender } = render(
+      <VersionPreview
+        versionNo={3}
+        fields={fields}
+        snapshot={{ title: "Third", subtitle: "Older" }}
+      />
+    );
+    expect(screen.getByLabelText(/Title/)).toHaveValue("Third");
+
+    // The panel does not remount this between selections, so the form has to
+    // follow a changed snapshot itself. Left to `defaultValues`, the heading
+    // would advance while the fields stayed on the previous version — which
+    // reads as the new version having those values.
+    rerender(
+      <VersionPreview
+        versionNo={5}
+        fields={fields}
+        snapshot={{ title: "Fifth", subtitle: "Newer" }}
+      />
+    );
+
+    expect(screen.getByText(/Viewing version 5/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Title/)).toHaveValue("Fifth");
+    expect(screen.getByLabelText(/Subtitle/)).toHaveValue("Newer");
+  });
+});
