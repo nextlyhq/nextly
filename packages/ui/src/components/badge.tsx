@@ -47,8 +47,16 @@ const badgeVariants = cva(
           "bg-warning-100 text-warning-700 dark:bg-warning-900 dark:text-warning-100",
         destructive:
           "bg-destructive-100 text-destructive-700 dark:bg-destructive-900 dark:text-destructive-100",
+        /*
+         * The border colour is NOT important-marked. The base sets no border
+         * colour, so nothing inside this component competes for it — the only
+         * thing a mark could win against is the caller's own class. Seven
+         * outline badges pass one, including a status pill whose comment gives
+         * a 3:1 contrast reason for the colour it asks for, and every one of
+         * them was being overridden without any sign that it had been.
+         */
         outline:
-          "border border-border! bg-transparent text-foreground dark:text-muted-foreground dark:border-border!",
+          "border border-border bg-transparent text-foreground dark:text-muted-foreground dark:border-border",
       },
     },
     defaultVariants: {
