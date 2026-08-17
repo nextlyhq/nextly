@@ -48,6 +48,15 @@ describe("subSidebarBorderClass", () => {
     }
   });
 
+  it("treats an unresolved layout as the wide one", () => {
+    // The media query has no answer on the first render. Choosing the narrow
+    // arrangement there would divide on the wrong side and then switch sides
+    // once it resolves, moving the panel on the first paint of every load.
+    expect(
+      subSidebarBorderClass({ isMobile: undefined, hasSubSidebar: true })
+    ).toBe(subSidebarBorderClass({ isMobile: false, hasSubSidebar: true }));
+  });
+
   it("emits no border utility of any side while collapsed", () => {
     // The separating property: an implementation that swapped `border-r` for
     // `border-l` when collapsed would satisfy the first case's exact-match on

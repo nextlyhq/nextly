@@ -3,24 +3,12 @@ import { DynamicPluginNav } from "@admin/components/features/dashboard/DynamicPl
 import { DynamicPluginSectionItems } from "@admin/components/features/dashboard/DynamicPluginSectionItems";
 import { DynamicSingleNav } from "@admin/components/features/dashboard/DynamicSingleNav";
 import * as Icons from "@admin/components/icons";
-import {
-  Layers,
-  Settings,
-  Puzzle,
-  Users,
-  ShieldAlert,
-  Mail,
-  Key,
-  List,
-  FileText,
-  Database,
-  Image,
-  Webhook,
-} from "@admin/components/icons";
+import { Layers, Puzzle, FileText, Database } from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import type { ApiCollection } from "@admin/types/entities";
 
+import { visibleSettingsNav } from "./lib/settings-nav";
 import { MediaSidebarContent } from "./MediaSidebarContent";
 import type { MainMenuCategory } from "./sidebar-types";
 import { SidebarSearch } from "./SidebarSearch";
@@ -202,178 +190,52 @@ export function SubSidebarContent({
   }
 
   if (selectedMain === "settings") {
+    const groups = visibleSettingsNav({
+      hasPermission,
+      canAccessApiKeys,
+      canAccessWebhooks,
+    });
+
     return (
       <div className="space-y-8 px-4 py-6">
-        {/* User Management Group — Users, User Fields, and Roles moved here
-            from the former top-level Users icon (id "manage"), which no
-            longer has its own main-menu entry. */}
-        <div className="space-y-1">
-          {(hasPermission("read-users") ||
-            hasPermission("manage-settings") ||
-            hasPermission("read-roles")) && (
-            <p className="text-xs font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
-              User Management
-            </p>
-          )}
-          <SidebarMenu>
-            {hasPermission("read-users") && (
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  asChild
-                  isActive={
-                    isActive(ROUTES.USERS) && !isActive(ROUTES.USERS_FIELDS)
-                  }
-                  className="justify-start px-3"
-                >
-                  <Link href={ROUTES.USERS}>
-                    <Users className="h-4 w-4" />
-                    <span>Users</span>
-                  </Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
+        {groups.map(group => (
+          <div key={group.id} className="space-y-1">
+            {group.items.length > 0 && (
+              <p className="text-xs font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
+                {group.label}
+              </p>
             )}
-            {hasPermission("manage-settings") && (
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  asChild
-                  isActive={isActive(ROUTES.USERS_FIELDS)}
-                  className="justify-start px-3"
-                >
-                  <Link href={ROUTES.USERS_FIELDS}>
-                    <List className="h-4 w-4" />
-                    <span>User Fields</span>
-                  </Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            )}
-            {hasPermission("read-roles") && (
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  asChild
-                  isActive={isActive(ROUTES.SECURITY_ROLES)}
-                  className="justify-start px-3"
-                >
-                  <Link href={ROUTES.SECURITY_ROLES}>
-                    <ShieldAlert className="h-4 w-4" />
-                    <span>Roles</span>
-                  </Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            )}
-          </SidebarMenu>
-          {/* Plugin collections explicitly placed under the old "users"
-              section follow User Management, matching the prior grouping. */}
-          <DynamicPluginSectionItems placement="users" isActive={isActive} />
-        </div>
+            <SidebarMenu>
+              {group.items.map(item => {
+                const ItemIcon = item.icon;
+                const active =
+                  isActive(item.href, item.exact) &&
+                  !(item.excludedBy ?? []).some(href => isActive(href));
 
-        {/* System Settings Group */}
-        <div className="space-y-1">
-          {(hasPermission("manage-settings") ||
-            canAccessApiKeys ||
-            canAccessWebhooks) && (
-            <p className="text-xs font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
-              System Settings
-            </p>
-          )}
-          <SidebarMenu>
-            {hasPermission("manage-settings") && (
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  asChild
-                  isActive={isActive(ROUTES.SETTINGS, true)}
-                  className="justify-start px-3"
-                >
-                  <Link href={ROUTES.SETTINGS}>
-                    <Settings className="h-4 w-4" />
-                    <span>General</span>
-                  </Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
+                return (
+                  <SidebarMenuItem key={item.id}>
+                    <SidebarMenuButton
+                      asChild
+                      isActive={active}
+                      className="justify-start px-3"
+                    >
+                      <Link href={item.href}>
+                        <ItemIcon className="h-4 w-4" />
+                        <span>{item.label}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                );
+              })}
+            </SidebarMenu>
+            {group.pluginPlacement && (
+              <DynamicPluginSectionItems
+                placement={group.pluginPlacement}
+                isActive={isActive}
+              />
             )}
-            {canAccessApiKeys && (
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  asChild
-                  isActive={isActive(ROUTES.SETTINGS_API_KEYS)}
-                  className="justify-start px-3"
-                >
-                  <Link href={ROUTES.SETTINGS_API_KEYS}>
-                    <Key className="h-4 w-4" />
-                    <span>API Keys</span>
-                  </Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            )}
-            {canAccessWebhooks && (
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  asChild
-                  isActive={isActive(ROUTES.SETTINGS_WEBHOOKS)}
-                  className="justify-start px-3"
-                >
-                  <Link href={ROUTES.SETTINGS_WEBHOOKS}>
-                    <Webhook className="h-4 w-4" />
-                    <span>Webhooks</span>
-                  </Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            )}
-            {hasPermission("manage-settings") && (
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  asChild
-                  isActive={isActive(ROUTES.SETTINGS_IMAGE_SIZES)}
-                  className="justify-start px-3"
-                >
-                  <Link href={ROUTES.SETTINGS_IMAGE_SIZES}>
-                    <Image className="h-4 w-4" />
-                    <span>Image Sizes</span>
-                  </Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            )}
-          </SidebarMenu>
-        </div>
-
-        {/* Email Configuration Group */}
-        <div className="space-y-1">
-          {(hasPermission("manage-email-providers") ||
-            hasPermission("manage-email-templates")) && (
-            <p className="text-xs font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
-              Email Configuration
-            </p>
-          )}
-          <SidebarMenu>
-            {hasPermission("manage-email-providers") && (
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  asChild
-                  isActive={isActive(ROUTES.SETTINGS_EMAIL_PROVIDERS)}
-                  className="justify-start px-3"
-                >
-                  <Link href={ROUTES.SETTINGS_EMAIL_PROVIDERS}>
-                    <Mail className="h-4 w-4" />
-                    <span>Providers</span>
-                  </Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            )}
-            {hasPermission("manage-email-templates") && (
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  asChild
-                  isActive={isActive(ROUTES.SETTINGS_EMAIL_TEMPLATES)}
-                  className="justify-start px-3"
-                >
-                  <Link href={ROUTES.SETTINGS_EMAIL_TEMPLATES}>
-                    <FileText className="h-4 w-4" />
-                    <span>Templates</span>
-                  </Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            )}
-          </SidebarMenu>
-        </div>
+          </div>
+        ))}
         <DynamicPluginSectionItems placement="settings" isActive={isActive} />
       </div>
     );

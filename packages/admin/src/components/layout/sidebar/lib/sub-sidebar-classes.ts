@@ -8,8 +8,15 @@
  */
 
 export interface SubSidebarClassInput {
-  /** The narrow layout, where the panel overlays instead of sitting in flow. */
-  isMobile: boolean;
+  /**
+   * The narrow layout, where the panel overlays instead of sitting in flow.
+   *
+   * Undefined until the media query resolves, which the panel's other classes
+   * already treat as the wide layout, so this does too. Rendering the narrow
+   * arrangement first and correcting it would move the panel on the first
+   * paint of every load.
+   */
+  isMobile: boolean | undefined;
   /** Whether the current rail selection owns a panel to show. */
   hasSubSidebar: boolean;
 }
