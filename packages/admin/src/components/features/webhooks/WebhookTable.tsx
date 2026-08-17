@@ -11,13 +11,11 @@ import type React from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Edit, List, Power, Send, Trash2 } from "@admin/components/icons";
-import { SearchBar } from "@admin/components/shared/search-bar";
-import { DataTableView } from "@admin/components/ui/table/data-table";
 import type {
   NextlyColumn,
   RowAction,
 } from "@admin/components/ui/table/data-table";
-import { ListShell } from "@admin/components/ui/table/list-shell";
+import { ListView } from "@admin/components/ui/table/list-view";
 import { PAGINATION } from "@admin/constants/pagination";
 import { usePagination } from "@admin/hooks/usePagination";
 import type { WebhookEndpointSummary } from "@admin/types/webhooks";
@@ -204,41 +202,37 @@ export const WebhookTable: React.FC<WebhookTableProps> = ({
   );
 
   return (
-    <ListShell
-      toolbar={
-        <div className="max-w-md">
-          <SearchBar
-            value={search}
-            onChange={setSearch}
-            placeholder="Search endpoints by name or URL..."
-            isLoading={isLoading}
-            className="w-full"
-          />
-        </div>
-      }
-    >
-      <DataTableView<WebhookEndpointSummary>
-        columns={columns}
-        rows={paginated}
-        loading={isLoading}
-        getRowId={row => row.id}
-        onRowClick={canUpdate ? onEdit : undefined}
-        primaryColumn="name"
-        rowActions={rowActions}
-        registryKey="webhooks"
-        ariaLabel="Webhook endpoints table"
-        pagination={{
-          currentPage: page,
-          totalPages: Math.max(1, totalPages),
-          pageSize,
-          pageSizeOptions: PAGINATION.TABLE_PAGE_SIZE_OPTIONS,
-          onPageChange: setPage,
-          onPageSizeChange: setPageSize,
-          totalItems,
-          isLoading,
-        }}
-        emptyMessage="No webhook endpoints yet. Create one to start receiving events."
-      />
-    </ListShell>
+    <ListView<WebhookEndpointSummary>
+      search={{
+        value: search,
+        onChange: setSearch,
+        placeholder: "Search endpoints by name or URL...",
+        isLoading,
+      }}
+      columns={columns}
+      rows={paginated}
+      loading={isLoading}
+      getRowId={row => row.id}
+      onRowClick={canUpdate ? onEdit : undefined}
+      primaryColumn="name"
+      rowActions={rowActions}
+      registryKey="webhooks"
+      ariaLabel="Webhook endpoints table"
+      pagination={{
+        currentPage: page,
+        totalPages: Math.max(1, totalPages),
+        pageSize,
+        pageSizeOptions: PAGINATION.TABLE_PAGE_SIZE_OPTIONS,
+        onPageChange: setPage,
+        onPageSizeChange: setPageSize,
+        totalItems,
+        isLoading,
+      }}
+      emptyMessage="No webhook endpoints yet. Create one to start receiving events."
+      emptyFiltered={{
+        title: "No endpoints match your search",
+        description: "Try a different name or URL.",
+      }}
+    />
   );
 };

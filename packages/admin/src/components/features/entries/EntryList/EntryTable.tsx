@@ -3,10 +3,11 @@
 /**
  * Entry Table Component
  *
- * Main data table for displaying collection entries. Renders through the unified
- * DataTableView (selection, sortable headers, row actions, responsive card view)
- * with columns generated from the collection schema, and keeps the entries
- * toolbar (search, filters, column visibility), bulk-action bar, and pagination.
+ * Main data table for displaying collection entries. Columns are generated from
+ * the collection schema, and the surface around them — search, the filter
+ * dropdown, column visibility, the selection bar, the skeleton and the pager —
+ * comes from the shared `ListView`, so this file supplies content and none of
+ * the geometry.
  *
  * @module components/entries/EntryList/EntryTable
  * @since 1.0.0
@@ -27,11 +28,11 @@ import {
 
 import { Pencil, Trash2 } from "@admin/components/icons";
 import { RangeField } from "@admin/components/shared/range-field";
-import { DataTableView } from "@admin/components/ui/table/data-table";
 import type {
   DataTableSelection,
   RowAction,
 } from "@admin/components/ui/table/data-table";
+import { ListView } from "@admin/components/ui/table/list-view";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useLocalization } from "@admin/hooks/useLocalization";
 
@@ -43,7 +44,6 @@ import {
   type CollectionForColumns,
 } from "./EntryTableColumns";
 import { EntryTableSkeleton } from "./EntryTableSkeleton";
-import { EntryTableToolbar } from "./EntryTableToolbar";
 
 // ============================================================================
 // Types
@@ -375,199 +375,192 @@ export const EntryTable = forwardRef<EntryTableRef, EntryTableProps>(
     // -------------------------------------------------------------------------
 
     return (
-      <div className="space-y-4">
-        {/* Toolbar */}
-        <EntryTableToolbar
-          collection={collection}
-          columns={columns}
-          isColumnVisible={isColumnVisible}
-          onToggleColumn={handleToggleColumn}
-          onResetColumnVisibility={onResetColumnVisibility}
-          globalFilter={globalFilter}
-          onGlobalFilterChange={handleGlobalFilterChange}
-          hasActiveFilters={hasAnyActiveFilters}
-          filters={
-            showFilterDropdown ? (
-              <>
-                {hasStatusField && onStatusChange && (
-                  <>
-                    <DropdownMenuLabel>Filter by Status</DropdownMenuLabel>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuCheckboxItem
-                      checked={status === "all"}
-                      onCheckedChange={() => onStatusChange("all")}
-                    >
-                      All Status
-                    </DropdownMenuCheckboxItem>
-                    <DropdownMenuCheckboxItem
-                      checked={status === "published"}
-                      onCheckedChange={() => onStatusChange("published")}
-                    >
-                      Published
-                    </DropdownMenuCheckboxItem>
-                    <DropdownMenuCheckboxItem
-                      checked={status === "draft"}
-                      onCheckedChange={() => onStatusChange("draft")}
-                    >
-                      Draft
-                    </DropdownMenuCheckboxItem>
-                    <DropdownMenuCheckboxItem
-                      checked={status === "archived"}
-                      onCheckedChange={() => onStatusChange("archived")}
-                    >
-                      Archived
-                    </DropdownMenuCheckboxItem>
-                  </>
-                )}
+      <ListView<EntryRow>
+        search={{
+          value: globalFilter,
+          onChange: handleGlobalFilterChange,
+          placeholder: `Search ${collection.label}...`,
+          inputProps: { "data-entry-search-input": true },
+        }}
+        columnsControl={{
+          columns,
+          isColumnVisible,
+          onToggleColumn: handleToggleColumn,
+          onReset: onResetColumnVisibility,
+        }}
+        hasActiveFilters={hasAnyActiveFilters}
+        filters={
+          showFilterDropdown ? (
+            <>
+              {hasStatusField && onStatusChange && (
+                <>
+                  <DropdownMenuLabel>Filter by Status</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuCheckboxItem
+                    checked={status === "all"}
+                    onCheckedChange={() => onStatusChange("all")}
+                  >
+                    All Status
+                  </DropdownMenuCheckboxItem>
+                  <DropdownMenuCheckboxItem
+                    checked={status === "published"}
+                    onCheckedChange={() => onStatusChange("published")}
+                  >
+                    Published
+                  </DropdownMenuCheckboxItem>
+                  <DropdownMenuCheckboxItem
+                    checked={status === "draft"}
+                    onCheckedChange={() => onStatusChange("draft")}
+                  >
+                    Draft
+                  </DropdownMenuCheckboxItem>
+                  <DropdownMenuCheckboxItem
+                    checked={status === "archived"}
+                    onCheckedChange={() => onStatusChange("archived")}
+                  >
+                    Archived
+                  </DropdownMenuCheckboxItem>
+                </>
+              )}
 
-                {hasLanguageFilter && (
-                  <>
-                    {hasStatusField && onStatusChange && (
-                      <DropdownMenuSeparator />
+              {hasLanguageFilter && (
+                <>
+                  {hasStatusField && onStatusChange && (
+                    <DropdownMenuSeparator />
+                  )}
+                  <DropdownMenuLabel>Filter by Language</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  {locales
+                    .filter(l => l.code !== defaultLocale)
+                    .flatMap(l =>
+                      (["missing", "translated"] as const).map(state => {
+                        const active =
+                          translationFilter?.locale === l.code &&
+                          translationFilter?.state === state;
+                        return (
+                          <DropdownMenuCheckboxItem
+                            key={`${l.code}-${state}`}
+                            checked={active}
+                            onCheckedChange={() =>
+                              onTranslationFilterChange?.(
+                                active ? null : { locale: l.code, state }
+                              )
+                            }
+                          >
+                            {state === "missing"
+                              ? "Missing in"
+                              : "Translated in"}{" "}
+                            {l.label}
+                          </DropdownMenuCheckboxItem>
+                        );
+                      })
                     )}
-                    <DropdownMenuLabel>Filter by Language</DropdownMenuLabel>
-                    <DropdownMenuSeparator />
-                    {locales
-                      .filter(l => l.code !== defaultLocale)
-                      .flatMap(l =>
-                        (["missing", "translated"] as const).map(state => {
-                          const active =
-                            translationFilter?.locale === l.code &&
-                            translationFilter?.state === state;
-                          return (
-                            <DropdownMenuCheckboxItem
-                              key={`${l.code}-${state}`}
-                              checked={active}
-                              onCheckedChange={() =>
-                                onTranslationFilterChange?.(
-                                  active ? null : { locale: l.code, state }
-                                )
-                              }
-                            >
-                              {state === "missing"
-                                ? "Missing in"
-                                : "Translated in"}{" "}
-                              {l.label}
-                            </DropdownMenuCheckboxItem>
-                          );
-                        })
-                      )}
-                  </>
-                )}
+                </>
+              )}
 
-                {hasDateFilters && (
-                  <>
-                    <DropdownMenuSeparator />
-                    <div className="space-y-3 px-2 py-1.5">
-                      <p className="text-xs font-medium text-muted-foreground">
-                        Created Date
-                      </p>
-                      <RangeField
-                        label="Created date"
-                        type="date"
-                        orientation="column"
-                        from={createdFrom}
-                        to={createdTo}
-                        onFromChange={value => onCreatedFromChange?.(value)}
-                        onToChange={value => onCreatedToChange?.(value)}
-                      />
+              {hasDateFilters && (
+                <>
+                  <DropdownMenuSeparator />
+                  <div className="space-y-3 px-2 py-1.5">
+                    <p className="text-xs font-medium text-muted-foreground">
+                      Created Date
+                    </p>
+                    <RangeField
+                      label="Created date"
+                      type="date"
+                      orientation="column"
+                      from={createdFrom}
+                      to={createdTo}
+                      onFromChange={value => onCreatedFromChange?.(value)}
+                      onToChange={value => onCreatedToChange?.(value)}
+                    />
 
-                      <p className="pt-1 text-xs font-medium text-muted-foreground">
-                        Updated Date
-                      </p>
-                      <RangeField
-                        label="Updated date"
-                        type="date"
-                        orientation="column"
-                        from={updatedFrom}
-                        to={updatedTo}
-                        onFromChange={value => onUpdatedFromChange?.(value)}
-                        onToChange={value => onUpdatedToChange?.(value)}
-                      />
+                    <p className="pt-1 text-xs font-medium text-muted-foreground">
+                      Updated Date
+                    </p>
+                    <RangeField
+                      label="Updated date"
+                      type="date"
+                      orientation="column"
+                      from={updatedFrom}
+                      to={updatedTo}
+                      onFromChange={value => onUpdatedFromChange?.(value)}
+                      onToChange={value => onUpdatedToChange?.(value)}
+                    />
 
-                      <button
-                        type="button"
-                        className="w-full text-left text-xs text-primary hover:underline"
-                        onClick={clearDateFilters}
-                      >
-                        Clear date filters
-                      </button>
-                    </div>
-                  </>
-                )}
-              </>
-            ) : null
-          }
-        />
-
-        {/* Bulk Action Bar */}
-        {selectedIds.length > 0 && (
-          <BulkActionBar
-            selectedCount={selectedIds.length}
-            collection={collection}
-            onDelete={() => onBulkDelete(selectedIds)}
-            onUpdate={
-              onBulkUpdate ? data => onBulkUpdate(selectedIds, data) : undefined
-            }
-            onPublish={
-              onBulkPublish ? () => onBulkPublish(selectedIds) : undefined
-            }
-            onUnpublish={
-              onBulkUnpublish ? () => onBulkUnpublish(selectedIds) : undefined
-            }
-            isPublishing={isBulkPublishing}
-            onClear={() => setSelectedIds([])}
-          />
-        )}
-
-        {/* Table + Pagination */}
-        {isLoading ? (
-          <EntryTableSkeleton />
-        ) : (
-          <div className="table-wrapper overflow-hidden rounded-md border border-border bg-card">
-            <DataTableView<EntryRow>
-              columns={columns}
-              rows={entries}
-              getRowId={rowId}
-              selection={selection}
-              rowActions={rowActions}
-              sort={sort}
-              onSortChange={onSortChange}
-              rowHref={row =>
-                buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, {
-                  slug: collection.slug,
-                  id: rowId(row),
-                })
+                    <button
+                      type="button"
+                      className="w-full text-left text-xs text-primary hover:underline"
+                      onClick={clearDateFilters}
+                    >
+                      Clear date filters
+                    </button>
+                  </div>
+                </>
+              )}
+            </>
+          ) : null
+        }
+        bulkBar={
+          selectedIds.length > 0 ? (
+            <BulkActionBar
+              selectedCount={selectedIds.length}
+              collection={collection}
+              onDelete={() => onBulkDelete(selectedIds)}
+              onUpdate={
+                onBulkUpdate
+                  ? data => onBulkUpdate(selectedIds, data)
+                  : undefined
               }
-              primaryColumn={titleField}
-              bordered={false}
-              registryKey={collection.slug}
-              ariaLabel="Entries table"
-              emptyMessage={
-                globalFilter
-                  ? "No entries found. Try adjusting your search or filters."
-                  : "No entries found."
+              onPublish={
+                onBulkPublish ? () => onBulkPublish(selectedIds) : undefined
               }
-              // Inside the table rather than beside it, so the component that
-              // knows whether the row table or the mobile card view is showing
-              // is the one that places the pager. The wrapper below draws the
-              // card and `bordered={false}` stops the table drawing a second
-              // one, so this renders in the same place it always did.
-              pagination={{
-                currentPage: pagination.page,
-                totalPages: pagination.totalPages,
-                totalItems: pagination.total,
-                pageSize: pagination.limit,
-                onPageChange,
-                onPageSizeChange: onLimitChange,
-                isLoading,
-                itemLabel: "entries",
-                ariaLabel: "Entry table pagination",
-              }}
+              onUnpublish={
+                onBulkUnpublish ? () => onBulkUnpublish(selectedIds) : undefined
+              }
+              isPublishing={isBulkPublishing}
+              onClear={() => setSelectedIds([])}
             />
-          </div>
-        )}
-      </div>
+          ) : undefined
+        }
+        skeleton={<EntryTableSkeleton />}
+        loading={isLoading}
+        columns={columns}
+        rows={entries}
+        getRowId={rowId}
+        selection={selection}
+        rowActions={rowActions}
+        sort={sort}
+        onSortChange={onSortChange}
+        rowHref={row =>
+          buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, {
+            slug: collection.slug,
+            id: rowId(row),
+          })
+        }
+        primaryColumn={titleField}
+        registryKey={collection.slug}
+        ariaLabel="Entries table"
+        emptyMessage={
+          globalFilter
+            ? "No entries found. Try adjusting your search or filters."
+            : "No entries found."
+        }
+        // Inside the table rather than beside it, so the component that knows
+        // whether the row table or the mobile card view is showing is the one
+        // that places the pager.
+        pagination={{
+          currentPage: pagination.page,
+          totalPages: pagination.totalPages,
+          totalItems: pagination.total,
+          pageSize: pagination.limit,
+          onPageChange,
+          onPageSizeChange: onLimitChange,
+          isLoading,
+          itemLabel: "entries",
+          ariaLabel: "Entry table pagination",
+        }}
+      />
     );
   }
 );
