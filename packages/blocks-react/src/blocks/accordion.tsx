@@ -28,16 +28,25 @@
  * node like any other. A value hardcoded in the render function could not be
  * overridden at all.
  *
- * **No default border, and no default background.** `defaultSiteTokens()`
- * guarantees `color.text`, `color.background`, `color.primary`, `font.body`,
- * `content.width` and `space.4` — there is no surface colour and no border
- * colour among them. The older page-builder drew its dividers with
- * `var(--nx-color-border)`, which is the ADMIN token namespace: this renderer
- * emits `--site-*`, so that declaration validates, compiles, ships, and then
- * resolves to nothing on the visitor's page while looking correct inside an
- * admin preview. Separation between sections is therefore spacing, which every
- * theme can express, and the divider is left to the author until a surface
- * token exists to carry it.
+ * **No default border, and no default background.** The older page-builder drew
+ * its dividers with `var(--nx-color-border)`, which is the ADMIN token
+ * namespace — so that declaration validates, compiles, ships, and then resolves
+ * to nothing on the visitor's page while looking correct inside an admin
+ * preview.
+ *
+ * This docblock used to continue "…this renderer emits `--site-*`", and to say
+ * `defaultSiteTokens()` "guarantees" a named set. **Both were false and the
+ * second is the load-bearing one: this renderer emits NOTHING.**
+ * `compileSiteSheet` — the only thing that turns a token set into CSS — has zero
+ * consumers outside `blocks-engine`, and `--site-` appears in no source file
+ * outside the engine (positive control: `--nx-` appears in over a hundred). So
+ * the default token set is a default nobody applies, and a `{ $token }` here
+ * would dangle for the same reason `--nx-*` does — not a different namespace,
+ * the same emptiness.
+ *
+ * Separation between sections is therefore a LENGTH, which needs no stylesheet
+ * to resolve, and the divider is left to the author until the site stylesheet
+ * is wired and a surface token can carry it.
  *
  * @module blocks/library/accordion
  */
