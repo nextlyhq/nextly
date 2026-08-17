@@ -44,8 +44,13 @@ That's it — the plugin and the pieces it depends on are now in your project.
 > install with:
 >
 > ```bash
-> npm install @nextlyhq/plugin-page-builder --legacy-peer-deps
+> npm install @nextlyhq/plugin-page-builder @nextlyhq/builder --legacy-peer-deps
 > ```
+>
+> `@nextlyhq/builder` is named explicitly on purpose. `--legacy-peer-deps` tells
+> npm to skip peer dependencies altogether, and the editor's chrome is a peer that
+> this plugin imports at runtime — so the flag on its own gives you an install that
+> resolves and then fails when the editor loads. Asking for it by name puts it back.
 >
 > This is safe for experimenting. Once the corrected version is released, the plain
 > command above works and you can delete this note.
@@ -354,7 +359,9 @@ Your built page is now served to the public. 🎉
 ## Troubleshooting
 
 **Install fails with `ERESOLVE` / peer dependency error**
-See the temporary note in Step 1 — install with `--legacy-peer-deps` for now.
+See the temporary note in Step 1. Install with `--legacy-peer-deps` for now, and
+name `@nextlyhq/builder` alongside the plugin — the flag skips peers, and that one
+is a peer the editor needs at runtime.
 
 **The `/admin` page or editor shows an error like `Can't resolve '@nextlyhq/plugin-sdk'`
 or `Cannot find module 'next/link'`**
@@ -391,7 +398,7 @@ add at least one block, and Publish again.
 
 ```bash
 # 1. Install
-npm install @nextlyhq/plugin-page-builder        # add --legacy-peer-deps for now
+npm install @nextlyhq/plugin-page-builder        # see Step 1 if this hits ERESOLVE
 
 # 2. next.config.ts  -> add plugin to transpilePackages (NOT serverExternalPackages)
 
