@@ -335,3 +335,62 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
   fails, fix the cause.
 - Pre-existing lint or type failures may be left alone (mention them in the
   PR); introducing new ones is not acceptable.
+
+---
+
+<!-- fallow:setup-hooks:start -->
+
+## Fallow local gate
+
+Before any `git commit` or `git push`, run `fallow audit --format json --quiet --explain --gate-marker agent`. If the verdict is `fail`, fix the reported findings before retrying. Treat JSON runtime errors like `{ "error": true, ... }` as non-blocking.
+
+Audit defaults to `gate=new-only`: only findings introduced by the current changeset affect the verdict. Inherited findings on touched files are reported under `attribution` and annotated with `introduced: false`, but do not block the commit. Set `"audit": { "gate": "all" }` in `.fallowrc.jsonc` to gate every finding in changed files.
+
+This gate reads the DIFF, and `.github/workflows/code-hygiene.yml` runs the same analysis on a branch in two shapes, BOTH of which can fail it. Its `Changed files` job asks what this gate asks — `audit --gate new-only`, via the official `fallow-rs/fallow` action — so a commit passing locally should pass there. Its `Whole repository` job reads everything against a baseline of the branch's base, because a change can orphan an export in a file it never opened, and a diff-scoped reader cannot see that. So a commit passing here can still fail there, and that is the case the second job exists for.
+
+What CI ENFORCES and where it enforces it are two questions, and the second is the one that surprises people. `Changed files` gates on introduced DEAD CODE and on introduced DUPLICATION, because `audit` attributes both — measured, one added 156-line clone moved `duplication_introduced` from 0 to 1 and the verdict from `warn` to `fail` with the dead-code count unchanged. Complexity is attributed too and stays warn-tier, so it reports without failing.
+
+The whole-repo job gates on dead code ALONE, and that is a limit of the analyses rather than a view about severity. Neither `dupes` nor `health` attributes a finding to a side there: `fallow dupes` carries no per-group new-versus-inherited flag and exits 0 even with `--fail-on-issues`, leaving `--threshold` (a repository-wide percentage — 7.4% here across 846 clone groups) as the only lever, which would judge a change by a number it barely moves and fail an unrelated pull request after someone else's merge nudged it up. `fallow health` matches its baseline per file and category, which does not survive the two sides being different trees, so a branch touching neither still reported ~50 findings in `admin` and `plugin-form-builder`.
+
+So do not read "the whole-repo job does not gate duplication" as "duplication is unenforced". It is enforced, in the job that can tell your clone from an inherited one.
+
+A degraded run is the failure mode worth knowing about, because it reports nothing and looks identical to a clean one. The gate job reads the action's `changed-files-unavailable`, `post-skipped-reason` and `dedup-lookup-failed` outputs and refuses on an unscoped analysis or an empty verdict, naming itself a tooling failure rather than a finding in the change.
+
+`.claude/hooks/fallow-gate.sh` is VENDORED rather than left as `fallow hooks
+install` writes it. The generated script parses JSON with `jq` and compares
+versions with `sort -V`, and neither is safe to assume here: `jq` is not a
+dependency of this repository, and BSD `sort` has no `-V`, so on macOS the
+version check aborts the hook under `set -euo pipefail`. Both are done with
+node in the vendored copy, which every contributor already has — the engines
+field requires it and nothing in this repository runs without it. So the gate
+needs no tool a contributor does not already have installed.
+
+That has a maintenance cost worth knowing: re-running `fallow hooks install
+--target agent` OVERWRITES the file and silently puts both back. Re-apply the
+vendored version if that happens. The workflows under `.github/` still use
+`jq` freely — GitHub's runners ship it, and that is not a contributor's
+machine.
+
+`FALLOW_AUDIT_BASE` is pinned to `origin/main` in `.claude/settings.json`. Left unset, the audit takes its base from the merge-base with the branch's UPSTREAM, which is the remote tracking branch — stale on any branch whose local commits are not pushed, and after a rebase that means the diff carries every commit `main` gained since. Measured here: 319 changed files and a `fail` verdict on a branch whose actual diff was nine commits. Every pull request in this repo targets `main`, so naming it removes the guesswork.
+
+For non-skill agents, treat the task map below as the local onboarding source: run the listed fallow command before destructive edits, before commits, and before pull request handoff.
+
+## Fallow task map
+
+| When the agent is about to...                                     | Run                                                                                  |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| delete an "unused" export or file                                 | `fallow dead-code --trace <file>:<export>`                                           |
+| prove a TypeScript symbol's exact consumers before refactoring    | `fallow dead-code --type-aware --symbol-impact <file>:<export-or-class.method>`      |
+| delete an "unused" dependency                                     | `fallow dead-code --trace-dependency <name>`                                         |
+| commit or open a PR                                               | `pnpm fallow:audit` (`fallow audit --base origin/main`)                              |
+| prioritize refactoring                                            | `fallow health --hotspots --targets`                                                 |
+| ask who owns code                                                 | `fallow health --ownership`                                                          |
+| check untested-but-reachable code                                 | `fallow health --coverage-gaps`                                                      |
+| consolidate duplication                                           | `fallow dupes --trace dup:<fingerprint>`                                             |
+| find feature flags                                                | `fallow flags`                                                                       |
+| check which architecture rules apply to a file before changing it | `fallow guard <files>`                                                               |
+| surface security candidates                                       | `fallow security`                                                                    |
+| understand a finding                                              | `fallow explain <issue-type>`                                                        |
+| scope a monorepo                                                  | `--workspace <glob> / --changed-workspaces <ref>` (global flags, prefix any command) |
+
+<!-- fallow:setup-hooks:end -->

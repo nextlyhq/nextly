@@ -96,6 +96,7 @@
     "@nextlyhq/module-specifiers": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
     "@tailwindcss/cli": "^4.3.2",
+    "@testing-library/react": "^16.3.0",
     "@types/culori": "^4.0.1",
     "@types/node": "^20.19.17",
     "@types/react": "19.2.0",

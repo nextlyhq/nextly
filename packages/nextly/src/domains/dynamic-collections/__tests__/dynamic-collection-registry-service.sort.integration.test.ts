@@ -12,10 +12,13 @@
 // Fix: handle sortBy="name" by ordering on the slug column. (Frontend's
 // "name" maps to backend's "slug" — they're semantically the same field.)
 
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
-import { describe, expect, it, beforeEach } from "vitest";
+import { describe, expect, it, afterEach, beforeEach } from "vitest";
 
+import { sqliteTableDdl } from "../../../__tests__/fixtures/sqlite-table-ddl";
+import { dynamicCollectionsSqlite } from "../../../schemas/dynamic-collections/sqlite";
 import { DynamicCollectionRegistryService } from "../services/dynamic-collection-registry-service";
 
 const noopLogger = {
@@ -37,105 +40,75 @@ describe("DynamicCollectionRegistryService.listCollections — sortBy parameter"
     sqlite = new Database(":memory:");
     sqlite.pragma("foreign_keys = OFF");
 
-    // Mirror the production dynamic_collections schema (sqlite dialect).
-    sqlite.exec(`
-      CREATE TABLE dynamic_collections (
-        id TEXT PRIMARY KEY,
-        slug TEXT NOT NULL,
-        table_name TEXT NOT NULL,
-        description TEXT,
-        labels TEXT NOT NULL,
-        fields TEXT NOT NULL,
-        timestamps INTEGER NOT NULL DEFAULT 1,
-        admin TEXT,
-        source TEXT NOT NULL DEFAULT 'ui',
-        locked INTEGER NOT NULL DEFAULT 0,
-        config_path TEXT,
-        schema_hash TEXT NOT NULL,
-        schema_version INTEGER NOT NULL DEFAULT 1,
-        migration_status TEXT NOT NULL DEFAULT 'pending',
-        last_migration_id TEXT,
-        access_rules TEXT,
-        hooks TEXT,
-        created_by TEXT,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      );
-      CREATE UNIQUE INDEX dynamic_collections_slug_unique ON dynamic_collections(slug);
-      CREATE UNIQUE INDEX dynamic_collections_table_name_unique ON dynamic_collections(table_name);
-    `);
+    // Built from the schema the service reads, so this fixture cannot fall
+    // behind the table it stands in for — which matters because every case
+    // here asks for a projection, and the wide one names every column.
+    for (const statement of sqliteTableDdl(dynamicCollectionsSqlite)) {
+      sqlite.exec(statement);
+    }
 
     // Insert three rows with deliberately non-alphabetical createdAt order so
     // sort-by-createdAt and sort-by-name diverge:
     //   created in this order: zebra (oldest), alpha (middle), mango (newest)
     //   alphabetical by slug:  alpha, mango, zebra
     const baseTime = 1_700_000_000;
-    sqlite
-      .prepare(
-        `INSERT INTO dynamic_collections (id, slug, table_name, labels, fields, schema_hash, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-      .run(
-        "id-zebra",
-        "zebra",
-        "dc_zebra",
-        '{"singular":"Zebra","plural":"Zebras"}',
-        "[]",
-        "h1",
-        baseTime,
-        baseTime
-      );
-    sqlite
-      .prepare(
-        `INSERT INTO dynamic_collections (id, slug, table_name, labels, fields, schema_hash, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-      .run(
-        "id-alpha",
-        "alpha",
-        "dc_alpha",
-        '{"singular":"Alpha","plural":"Alphas"}',
-        "[]",
-        "h2",
-        baseTime + 100,
-        baseTime + 100
-      );
-    sqlite
-      .prepare(
-        `INSERT INTO dynamic_collections (id, slug, table_name, labels, fields, schema_hash, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-      .run(
-        "id-mango",
-        "mango",
-        "dc_mango",
-        '{"singular":"Mango","plural":"Mangoes"}',
-        "[]",
-        "h3",
-        baseTime + 200,
-        baseTime + 200
-      );
+    const insert = sqlite.prepare(
+      `INSERT INTO dynamic_collections
+         (id, slug, table_name, labels, fields, timestamps, status, localized,
+          source, locked, schema_hash, schema_version, migration_status,
+          created_at, updated_at)
+       VALUES (@id, @slug, @tableName, @labels, '[]', 1, 0, 0,
+          'ui', 0, @schemaHash, 1, 'pending',
+          @createdAt, @createdAt)`
+    );
+    const seed = (slug: string, schemaHash: string, createdAt: number) =>
+      insert.run({
+        id: `id-${slug}`,
+        slug,
+        tableName: `dc_${slug}`,
+        labels: JSON.stringify({ singular: slug, plural: `${slug}s` }),
+        schemaHash,
+        createdAt,
+      });
+    seed("zebra", "h1", baseTime);
+    seed("alpha", "h2", baseTime + 100);
+    seed("mango", "h3", baseTime + 200);
 
     const db = drizzle({ client: sqlite });
-    const fakeAdapter = {
-      getDrizzle: () => db,
+    const adapter = {
+      getDrizzle: <T>() => db as T,
+      // The values @nextlyhq/adapter-sqlite reports. A fixture that claims a
+      // capability the real adapter does not have steers the query builder
+      // down a branch production never takes.
       getCapabilities: () => ({
         dialect: "sqlite" as const,
         supportsJsonb: false,
         supportsJson: true,
         supportsArrays: false,
+        supportsGeneratedColumns: true,
+        supportsFts: true,
         supportsIlike: false,
         supportsReturning: true,
         supportsSavepoints: true,
         supportsOnConflict: true,
-        supportsFts: false,
+        maxParamsPerQuery: 999,
+        maxIdentifierLength: 128,
       }),
-    };
+    } satisfies Pick<DrizzleAdapter, "getDrizzle" | "getCapabilities">;
+
+    // `satisfies` checks the two members the registry reaches for against the
+    // adapter's own declarations, so a signature change fails here rather than
+    // leaving this suite exercising a shape production no longer accepts.
     registry = new DynamicCollectionRegistryService(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal hand-rolled adapter for this isolated integration test
-      fakeAdapter as any,
+      adapter as unknown as DrizzleAdapter,
       noopLogger
     );
+  });
+
+  afterEach(() => {
+    // better-sqlite3 holds a native handle per in-memory database, and this
+    // suite opens one per test.
+    sqlite.close();
   });
 
   it("sortBy=name asc returns collections ordered alphabetically by slug", async () => {

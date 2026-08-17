@@ -110,6 +110,37 @@ export interface ListCollectionsResponse<
   totalPages: number;
 }
 
+/**
+ * `status` and `localized` as booleans, whichever dialect produced the row.
+ *
+ * SQLite returns them as 0|1 even with `mode: "boolean"` on some driver and
+ * dialect combinations, while postgres returns a native boolean. Callers gate
+ * on `=== true`, so an uncoerced 1 reads as false: a collection shows as Draft
+ * in a list that renders published state, and a later field-only update treats
+ * a localized collection as non-localized, emitting main-table alters for
+ * columns that live in the companion.
+ *
+ * One function rather than one per read path. Every row this service hands
+ * back passes through here, so a second read cannot be added that agrees today
+ * and drifts later — which is what happened when the list projection began
+ * returning these columns and did not coerce them.
+ *
+ * Not covered by a test, deliberately. Under better-sqlite3 the column's
+ * `mode: "boolean"` already maps 0|1 before a caller sees it, so an assertion
+ * here passes whether or not this function runs, and the combinations where it
+ * does not map are the ones this suite cannot reach. A test that cannot fail
+ * would read as coverage of a property nothing checked.
+ */
+function normalizeCollectionBooleans(
+  row: Record<string, unknown>
+): Record<string, unknown> {
+  return {
+    ...row,
+    status: row.status === 1 || row.status === true,
+    localized: row.localized === 1 || row.localized === true,
+  };
+}
+
 export class DynamicCollectionRegistryService extends BaseService {
   // Drizzle table refs differ per dialect — `any` here is intentional.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -363,6 +394,13 @@ export class DynamicCollectionRegistryService extends BaseService {
           .limit(limit)
           .offset(offset)
       : await this.db
+          // `fields` is the only column this shape drops, and the return type
+          // says so: `Omit<CollectionMetadata, "fields">`. Every other column
+          // has to be named here, because an omission is invisible — the row
+          // still satisfies the declared type while the value arrives
+          // `undefined`, so a caller reading `status` or `versions` off a list
+          // gets nothing and no error. Dropping the schema blob is what makes
+          // the shape cheap; dropping metadata alongside it only makes it wrong.
           .select({
             id: this.dynamicCollections.id,
             slug: this.dynamicCollections.slug,
@@ -370,15 +408,25 @@ export class DynamicCollectionRegistryService extends BaseService {
             description: this.dynamicCollections.description,
             labels: this.dynamicCollections.labels,
             timestamps: this.dynamicCollections.timestamps,
+            status: this.dynamicCollections.status,
+            localized: this.dynamicCollections.localized,
+            versions: this.dynamicCollections.versions,
+            revalidate: this.dynamicCollections.revalidate,
+            webhooks: this.dynamicCollections.webhooks,
             admin: this.dynamicCollections.admin,
+            hooks: this.dynamicCollections.hooks,
             source: this.dynamicCollections.source,
             locked: this.dynamicCollections.locked,
+            configPath: this.dynamicCollections.configPath,
+            schemaHash: this.dynamicCollections.schemaHash,
             schemaVersion: this.dynamicCollections.schemaVersion,
             migrationStatus: this.dynamicCollections.migrationStatus,
+            lastMigrationId: this.dynamicCollections.lastMigrationId,
+            accessRules: this.dynamicCollections.accessRules,
             createdBy: this.dynamicCollections.createdBy,
             createdAt: this.dynamicCollections.createdAt,
             updatedAt: this.dynamicCollections.updatedAt,
-            // fields is intentionally excluded for performance
+            // `fields` intentionally excluded — the reason this shape exists.
           })
           .from(this.dynamicCollections)
           .where(whereClause)
@@ -387,7 +435,11 @@ export class DynamicCollectionRegistryService extends BaseService {
           .offset(offset);
 
     return {
-      collections,
+      // Both shapes carry `status` and `localized`, so both need the same
+      // coercion `getCollection` applies — see `normalizeCollectionBooleans`.
+      collections: (collections as Record<string, unknown>[]).map(
+        normalizeCollectionBooleans
+      ) as ListCollectionsResponse<TIncludeSchema>["collections"],
       total,
       page,
       limit,
@@ -413,17 +465,7 @@ export class DynamicCollectionRegistryService extends BaseService {
     }
 
     const row = result[0] as Record<string, unknown>;
-    // Why: SQLite returns `status`/`localized` as 0|1 even with `mode: "boolean"` in
-    // some driver/dialect combinations; postgres returns native boolean. Coerce here so
-    // the API contract is dialect-agnostic and the `=== true` gates work everywhere.
-    // Without coercing `localized`, a SQLite `localized: 1` fails the `=== true` check and
-    // a later field-only update treats the collection as non-localized, emitting main-table
-    // alters for columns that live in the companion.
-    return {
-      ...row,
-      status: row.status === 1 || row.status === true,
-      localized: row.localized === 1 || row.localized === true,
-    };
+    return normalizeCollectionBooleans(row);
   }
 
   async collectionExists(slug: string): Promise<boolean> {
