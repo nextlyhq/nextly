@@ -33,7 +33,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { readRequestLocalized } from "../../../dispatcher/helpers/request-localized";
-import { NEXTLY_ERROR_STATUS, NextlyError } from "../../../errors";
+import { NextlyError } from "../../../errors";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type {
   DynamicFieldGroupInsert,
@@ -46,6 +46,7 @@ import { withSchemaChangeExcluded } from "../../schema/services/schema-change-ex
 
 import { assertNotDiverged } from "./assert-not-diverged";
 import type { FieldGroupRegistryService } from "./field-group-registry-service";
+import { recordStrandedTransition } from "./record-stranded-transition";
 
 /**
  * 🔴 The schema service and the table provisioning are loaded on demand, NOT at the top of this
@@ -794,123 +795,19 @@ export class FieldGroupMetadataService {
     existing: DynamicFieldGroupRecord,
     cause: unknown
   ): Promise<UpdateFieldGroupResult> {
-    const slug = input.slug;
-    this.logger.error(
-      "[FieldGroups] Schema transition committed but its registry row was not written.",
-      {
-        slug,
-        tableName: existing.tableName,
-        wasLocalized: existing.localized === true,
-        error: cause instanceof Error ? cause.message : String(cause),
-      }
-    );
-
-    // Three endings, and the message below must not conflate them: the mark was persisted, the row
-    // turned out to have advanced (so the CHANGE was recorded, and only the confirmation is
-    // missing), or nothing about the state could be recorded at all.
-    let recordState: "marked" | "advanced" | "unrecorded" = "unrecorded";
-    try {
-      const outcome = await this.registry.updateComponentIfVersion(
-        slug,
-        { migrationStatus: "diverged" },
-        existing.schemaVersion,
-        { source: "code" }
-      );
-      if (outcome.matched) {
-        recordState = "marked";
-      } else {
-        // The row is past the version this edit started from, which is what the original write
-        // leaves behind — so the change was recorded and the raise was in reading it back. Look
-        // once more before answering: connectivity good enough for the conditional statement is
-        // usually good enough for a read now.
-        const settled = await this.readBackSettledRow(
-          input,
-          requestedLocalized
-        );
-        if (settled) {
-          this.logger.warn(
-            "[FieldGroups] The registry write raised but the row already carries the change; the error was in reading it back.",
-            { slug }
-          );
-          return { record: settled };
-        }
-        // 🔴 The version moved AND the row does not carry this edit — `readBackSettledRow` just
-        // established the second half. So another writer advanced the row while this edit's tables
-        // had already moved, and the definition now stored describes neither: that is divergence,
-        // and it is the state the mark exists for. Leaving it unmarked lets the next schema edit
-        // proceed from a definition known not to describe the tables, and the refusal below even
-        // invites a retry that would compound it.
-        //
-        // Marked at the version just READ rather than at this edit's, because the row is past that
-        // one by definition. Attempted ONCE: a writer racing this second attempt has itself just
-        // written the row, so retrying in a loop trades a bounded failure for an unbounded one, and
-        // the answer below still distinguishes what was actually persisted.
-        const current = await this.registry.getComponent(slug);
-        const remark = await this.registry.updateComponentIfVersion(
-          slug,
-          { migrationStatus: "diverged" },
-          current.schemaVersion,
-          { source: "code" }
-        );
-        if (remark.matched) {
-          recordState = "marked";
-          this.logger.warn(
-            "[FieldGroups] The row advanced past this edit's version without carrying it; marked diverged at the version now stored.",
-            {
-              slug,
-              expectedSchemaVersion: existing.schemaVersion,
-              markedAtSchemaVersion: current.schemaVersion,
-            }
-          );
-        } else {
-          recordState = "advanced";
-          this.logger.error(
-            "[FieldGroups] The row advanced past this edit's version and moved again before it could be marked diverged.",
-            { slug, expectedSchemaVersion: existing.schemaVersion }
-          );
-        }
-      }
-    } catch (markError) {
-      this.logger.error(
-        "[FieldGroups] Could not mark the field group as diverged either.",
-        {
-          slug,
-          error:
-            markError instanceof Error ? markError.message : String(markError),
-        }
-      );
-    }
-
-    // Constructed rather than `NextlyError.internal`, which fixes the public message to "An
-    // unexpected error occurred." That is the one thing this caller must NOT be told: the whole
-    // point is that the edit half-happened and repeating it is harmful. The status still comes from
-    // the central mapping rather than a literal, so this cannot drift from the code it carries.
-    //
-    // 🔴 The message distinguishes what was PERSISTED. Claiming a durable record that does not
-    // exist is worse than admitting the log is the only trace — and claiming nothing was recorded
-    // when the row demonstrably advanced sends an operator repairing a group that likely carries
-    // the change already. Each ending tells them where to look and what not to do.
-    const publicMessages: Record<typeof recordState, string> = {
-      marked: `The field group's tables were changed, but recording the change failed. "${slug}" is marked as diverged and its stored definition still describes the previous shape. Do not retry the same edit: check the server logs and reconcile the field group before editing it again.`,
-      // 🔴 Says only what the write PROVED: the row is no longer at the version this edit started
-      // from. `matched: false` has two causes — the row advanced, or it was deleted — and a
-      // concurrent delete reaches here through the same path, because the confirming read then
-      // raises NOT_FOUND and reports the same "could not confirm". Claiming a newer version exists
-      // would send that operator to reload a field group that is gone.
-      advanced: `The field group's tables were changed, and its record is no longer at the version this edit started from — most likely the change was recorded and only confirming it failed, though the field group may also have been deleted. Reload "${slug}" before doing anything else; retry the edit only if it still exists and the reloaded definition does not show the change.`,
-      unrecorded: `The field group's tables were changed, but neither the change nor the failure could be recorded. "${slug}" still reads as though nothing happened, and the only trace is the server log. Do not retry the same edit: reconcile the field group against its tables before editing it again.`,
-    };
-    throw new NextlyError({
-      code: "INTERNAL_ERROR",
-      statusCode: NEXTLY_ERROR_STATUS.INTERNAL_ERROR,
-      publicMessage: publicMessages[recordState],
-      cause: cause instanceof Error ? cause : undefined,
-      logContext: {
-        reason: "registry write failed after committed schema transition",
-        slug,
-        recordState,
-        tableName: existing.tableName,
-      },
+    // The decision, the logging and the three public messages live in one module because the
+    // builder's apply path reaches the same state and must answer it identically. Only the
+    // "does the row already carry MY edit" question is answered here, because only this caller
+    // knows what it sent.
+    return await recordStrandedTransition<DynamicFieldGroupRecord>({
+      registry: this.registry,
+      logger: this.logger,
+      slug: input.slug,
+      expectedSchemaVersion: existing.schemaVersion,
+      tableName: existing.tableName,
+      wasLocalized: existing.localized === true,
+      cause,
+      readBackSettled: () => this.readBackSettledRow(input, requestedLocalized),
     });
   }
 
