@@ -498,6 +498,7 @@ export function EntryForm({
                   draftsEnabled={collection.draftsEnabled === true}
                   isSubmitting={isSubmitting}
                   isDirty={isDirty}
+                  autosaveEnabled={autosaveScope !== null}
                   autosaveStatus={autosave.status}
                   autosaveLastSavedAt={autosave.lastSavedAt}
                   entry={entry}
