@@ -40,6 +40,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { CORE_CATEGORIES, coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import {
+  BlockKeyboardMoves,
   BuilderShell,
   Canvas,
   InsertPanel,
@@ -242,6 +243,12 @@ function BlocksEditor({
           ) : null
         }
       >
+        {/*
+          Inside the shell, which is what provides the shortcut context — a
+          caller rendering the shell is outside it and cannot register bindings.
+          Draws nothing; it exists to run the hook where the context is.
+        */}
+        <BlockKeyboardMoves editor={editor} />
         <Canvas
           document={editor.document}
           siteStyles={siteSheet()}

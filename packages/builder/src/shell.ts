@@ -58,14 +58,6 @@ export { CANVAS_ROOT_CLASS, Canvas, nodeIdFromEvent } from "./canvas";
 export type { CanvasProps } from "./canvas";
 
 /**
- * The editor's document state, published beside the canvas because it is a hook
- * and therefore client-only for the same reason the shell is.
- *
- * It is the ONLY place a document changes: the canvas, the panels, a keyboard
- * handler and an agent all reach the same `apply`, so undo covers every one of
- * them rather than only the path that happened to implement it.
- */
-/**
  * The inserter, behind the same client banner as the shell it fills: it holds
  * search state and composes the command primitives, so it is interactive in its
  * own right.
@@ -83,5 +75,23 @@ export type { CanvasProps } from "./canvas";
 export { InsertPanel } from "./insert-panel";
 export type { InsertPanelProps } from "./insert-panel";
 
+/**
+ * Moving the selected block from the keyboard, behind the same client banner.
+ *
+ * Published as a component as well as a hook because the shell provides the
+ * shortcut context: whatever renders the shell is outside it, so only a child
+ * of the shell can register bindings.
+ */
+export { BlockKeyboardMoves, useBlockKeyboardMoves } from "./keyboard-moves";
+export type { BlockKeyboardMovesOptions } from "./keyboard-moves";
+
+/**
+ * The editor's document state, published beside the canvas because it is a hook
+ * and therefore client-only for the same reason the shell is.
+ *
+ * It is the ONLY place a document changes: the canvas, the panels, a keyboard
+ * handler and an agent all reach the same `apply`, so undo covers every one of
+ * them rather than only the path that happened to implement it.
+ */
 export { MAX_HISTORY, useEditorState } from "./editor-state";
 export type { EditorState, UseEditorStateArgs } from "./editor-state";
