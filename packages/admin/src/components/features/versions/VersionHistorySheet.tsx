@@ -350,10 +350,20 @@ export function VersionHistorySheet({
   const isEmpty = !list.isLoading && !list.isError && versions.length === 0;
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
+    // Non-modal, and that is the point rather than a detail. A modal panel
+    // scrims the page, traps focus and withdraws everything behind it from the
+    // accessibility tree — so reading a document's history made the document
+    // itself unreachable and unscrollable, which is the one thing an editor
+    // needs beside it. Nothing else about the panel changes.
+    <Sheet open={open} onOpenChange={onOpenChange} modal={false}>
       <SheetContent
         side="right"
         className="w-[480px] sm:max-w-[480px] p-0 flex flex-col"
+        // A non-modal surface closes on outside interaction by default, which
+        // would make the document unusable while history is open: the first
+        // click into the page it now leaves interactive would dismiss the
+        // panel. Closing stays with the explicit controls and Escape.
+        onInteractOutside={event => event.preventDefault()}
       >
         <SheetHeader className="p-4 border-b border-border">
           <div className="flex items-center justify-between gap-2">

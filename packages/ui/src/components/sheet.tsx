@@ -6,6 +6,24 @@ import * as React from "react";
 
 import { cn } from "../lib/utils";
 import { usePortalContainer } from "../providers/portal-provider";
+import type { SheetProps } from "../types/sheet";
+
+/**
+ * Whether the enclosing sheet is modal, published to its own parts.
+ *
+ * Radix takes `modal` at the root and uses it to decide focus trapping and
+ * whether the rest of the page is withdrawn from the accessibility tree. The
+ * scrim is that same decision expressed visually, and it is rendered a level
+ * down in `SheetContent`. Passing the root's answer down — rather than giving
+ * the content a second prop of its own — keeps one answer to one question: a
+ * caller cannot ask for a non-modal sheet and still get a scrim over the page
+ * it deliberately left interactive.
+ *
+ * Declared above the component doc blocks on purpose. The bundler attaches a
+ * doc comment to the declaration that follows it, so anything inserted between
+ * a tagged comment and its declaration silently steals the tag.
+ */
+const SheetModalContext = React.createContext(true);
 
 // Note: the close icon is not rendered by default here. Consumers should import and render their preferred icon with `SheetClose`.
 
@@ -63,8 +81,14 @@ import { usePortalContainer } from "../providers/portal-provider";
  * @see https://www.radix-ui.com/primitives/docs/components/dialog
  * @public
  */
-
-const Sheet = DialogPrimitive.Root;
+const Sheet = ({ modal = true, children, ...props }: SheetProps) => (
+  <SheetModalContext.Provider value={modal}>
+    <DialogPrimitive.Root modal={modal} {...props}>
+      {children}
+    </DialogPrimitive.Root>
+  </SheetModalContext.Provider>
+);
+Sheet.displayName = "Sheet";
 
 /** @experimental */
 const SheetTrigger = DialogPrimitive.Trigger;
@@ -156,10 +180,14 @@ const SheetContent = React.forwardRef<
   SheetContentProps
 >(({ side = "right", className, children, ...props }, ref) => {
   const portalContainer = usePortalContainer();
+  // Taken from the root rather than from a prop here: the scrim and Radix's
+  // inerting are the same decision, and two places to state it would let a
+  // sheet scrim a page it had left interactive.
+  const modal = React.useContext(SheetModalContext);
 
   return (
     <SheetPortal container={portalContainer}>
-      <SheetOverlay />
+      {modal ? <SheetOverlay /> : null}
       <DialogPrimitive.Content
         ref={ref}
         data-slot="sheet-content"
