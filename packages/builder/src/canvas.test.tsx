@@ -17,11 +17,27 @@
  * @module canvas.test
  */
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+import { createElement } from "react";
+
+import { clearBlocks, registerBlocks } from "@nextlyhq/blocks-engine";
 
 import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 
-import { CANVAS_ROOT_CLASS, nodeIdFromEvent } from "./canvas";
+import {
+  CANVAS_ROOT_CLASS,
+  Canvas,
+  SELECTED_ATTRIBUTE,
+  nodeIdFromEvent,
+} from "./canvas";
 
 // Explicit because this package does not enable vitest globals, and without
 // them testing-library never registers its own cleanup: every render stays
@@ -130,5 +146,114 @@ describe("selection", () => {
 
     fireEvent.click(screen.getByTestId("background"));
     expect(onSelect).toHaveBeenLastCalledWith(null);
+  });
+});
+
+describe("the selected block is marked on its own element", () => {
+  // A minimal registered block rather than the core library: the marking is
+  // about the node attribute the renderer emits, not about what any particular
+  // block draws, and importing `coreBlocks` here would couple a canvas test to
+  // whatever that library ships next.
+  beforeAll(() => {
+    clearBlocks();
+    registerBlocks(
+      [
+        {
+          name: "acme/leaf",
+          version: 1,
+          description: "A block.",
+          example: { props: {} },
+          render: ({ className }: { className: string }) =>
+            createElement("div", { className }),
+        },
+      ] as never,
+      { source: "canvas-test" }
+    );
+  });
+
+  afterAll(clearBlocks);
+
+  /** A canvas over two blocks, with one of them selected. */
+  function renderCanvas(selectedId: string | null) {
+    return render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              { id: "a", type: "acme/leaf", version: 1, props: {} },
+              { id: "b", type: "acme/leaf", version: 1, props: {} },
+            ],
+          } as never
+        }
+        siteStyles={{ css: "", classes: {} } as never}
+        selectedId={selectedId}
+      />
+    );
+  }
+
+  it("marks the selected element and no other", () => {
+    // Both halves. Asserting only that the selected one is marked passes on an
+    // implementation that marks every block, which draws an outline round the
+    // whole page.
+    const { container } = renderCanvas("b");
+
+    const marked = container.querySelectorAll(`[${SELECTED_ATTRIBUTE}]`);
+    expect(marked.length).toBe(1);
+    expect(marked[0]?.getAttribute(NODE_ID_ATTRIBUTE)).toBe("b");
+  });
+
+  it("marks nothing when the selection is empty", () => {
+    const { container } = renderCanvas(null);
+
+    expect(container.querySelectorAll(`[${SELECTED_ATTRIBUTE}]`).length).toBe(
+      0
+    );
+  });
+
+  it("moves the mark when the selection changes", () => {
+    // The stale-mark case: a re-render must CLEAR the previous element as well
+    // as mark the new one, or two blocks read as selected at once.
+    const { container, rerender } = renderCanvas("a");
+    expect(
+      container
+        .querySelector(`[${SELECTED_ATTRIBUTE}]`)
+        ?.getAttribute(NODE_ID_ATTRIBUTE)
+    ).toBe("a");
+
+    rerender(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              { id: "a", type: "acme/leaf", version: 1, props: {} },
+              { id: "b", type: "acme/leaf", version: 1, props: {} },
+            ],
+          } as never
+        }
+        siteStyles={{ css: "", classes: {} } as never}
+        selectedId="b"
+      />
+    );
+
+    const marked = container.querySelectorAll(`[${SELECTED_ATTRIBUTE}]`);
+    expect(marked.length).toBe(1);
+    expect(marked[0]?.getAttribute(NODE_ID_ATTRIBUTE)).toBe("b");
+  });
+
+  it("reports the selected id on the canvas root", () => {
+    // Named apart from the per-element marker on purpose: this carries an id
+    // and that one is a boolean. A caller wanting the answer without walking
+    // the tree reads this.
+    const { container } = renderCanvas("a");
+
+    expect(
+      container
+        .querySelector(`.${CANVAS_ROOT_CLASS}`)
+        ?.getAttribute("data-nx-selected-id")
+    ).toBe("a");
   });
 });

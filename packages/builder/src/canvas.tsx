@@ -33,7 +33,7 @@ import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import { NODE_ID_ATTRIBUTE, PageRenderer } from "@nextlyhq/blocks-react";
 import type { PageRendererProps } from "@nextlyhq/blocks-react";
 import { cn } from "@nextlyhq/ui/utils";
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 
 /**
  * The class marking the canvas root, and the boundary the hit-test stops at.
@@ -44,6 +44,19 @@ import { useCallback, useMemo } from "react";
  * target and climbs.
  */
 export const CANVAS_ROOT_CLASS = "nx-canvas";
+
+/**
+ * Marks the selected block's own element.
+ *
+ * Boolean by presence rather than carrying the id: the element already states
+ * its id through `NODE_ID_ATTRIBUTE`, and repeating it here would be a second
+ * copy that a partial re-mark could leave disagreeing with the first.
+ *
+ * Exported because a host styling the canvas, and a test asserting what is
+ * selected, both need to name it — and a string typed twice is a contract with
+ * no compiler behind it.
+ */
+export const SELECTED_ATTRIBUTE = "data-nx-selected";
 
 /**
  * How a pointer event on the canvas resolves to a node id, or to nothing.
@@ -121,6 +134,7 @@ export function Canvas({
   render,
   className,
 }: CanvasProps) {
+  const root = useRef<HTMLDivElement | null>(null);
   const handleClick = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
       if (!onSelect) return;
@@ -152,10 +166,43 @@ export function Canvas({
     [render, document, siteStyles]
   );
 
+  // Marked on the rendered element AFTER the renderer has produced it, rather
+  // than asked of `PageRenderer`. Which node an editor considers current is an
+  // editor's concern, and a published route renders the same document without
+  // one — pushing it into the renderer's contract would put editor state in the
+  // component that serves live pages.
+  //
+  // Compared in JavaScript rather than matched with a selector built from the
+  // id. A node id reaches this from stored data, and interpolating it into
+  // `querySelector` makes any character CSS treats specially either throw or,
+  // worse, match something else.
+  useEffect(() => {
+    const container = root.current;
+    if (container === null) return;
+    // `forEach` rather than `for…of`: a `NodeList` is only iterable under a lib
+    // that declares its iterator, and this package compiles without one — so the
+    // loop that reads more naturally does not type-check here.
+    container.querySelectorAll(`[${NODE_ID_ATTRIBUTE}]`).forEach(element => {
+      element.toggleAttribute(
+        SELECTED_ATTRIBUTE,
+        element.getAttribute(NODE_ID_ATTRIBUTE) === selectedId
+      );
+    });
+    // Re-marked whenever the rendered tree changes as well as when the
+    // selection does: a re-render replaces the elements, and an effect keyed on
+    // the selection alone would leave the new tree carrying no marker at all.
+  }, [selectedId, page]);
+
   return (
     <div
+      ref={root}
       className={cn(CANVAS_ROOT_CLASS, className)}
-      data-nx-selected={selectedId ?? undefined}
+      // The id the canvas believes is current, for a caller that wants the
+      // answer without walking the tree. Named apart from the per-element
+      // marker deliberately: one carries an id and the other is a boolean, and
+      // a single name meaning both is the kind of thing that reads correctly
+      // right up until someone writes a selector against the wrong one.
+      data-nx-selected-id={selectedId ?? undefined}
       onClick={handleClick}
     >
       {page}
