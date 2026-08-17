@@ -92,6 +92,15 @@ describe("EntrySystemHeader autosave indicator", () => {
   it("shows nothing while the document cannot be recorded against", () => {
     render(<Harness autosaveEnabled={false} isDirty />);
 
+    // Population before verdict. An assertion that something is ABSENT is
+    // satisfied by a header that failed to render, by a renamed label, and by a
+    // typo in the matcher, all identically to the rule working. Requiring a
+    // control the header always renders makes the difference observable inside
+    // this test rather than relying on a positive case elsewhere in the file
+    // continuing to exist.
+    expect(
+      screen.getByRole("button", { name: /save draft/i })
+    ).toBeInTheDocument();
     expect(screen.queryByText(/not saved/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/saving/i)).not.toBeInTheDocument();
   });
@@ -103,6 +112,9 @@ describe("EntrySystemHeader autosave indicator", () => {
   it("shows nothing when there is no change and no recovery point", () => {
     render(<Harness autosaveEnabled />);
 
+    expect(
+      screen.getByRole("button", { name: /save draft/i })
+    ).toBeInTheDocument();
     expect(screen.queryByText(/not saved/i)).not.toBeInTheDocument();
   });
 });

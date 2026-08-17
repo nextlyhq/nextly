@@ -36,15 +36,19 @@ const DEFAULT_DEBOUNCE_MS = 2000;
  *
  * @param kind - which document family this editor edits
  * @param slug - the collection or Single slug
- * @param documentId - the SAVED id, empty while the document has never been saved
+ * @param documentId - the SAVED id; absent while the document has never been saved
  * @returns an addressable scope, or `null` when recording must stay off
  */
 export function autosaveScopeFor(
   kind: "collection" | "single",
   slug: string,
-  documentId: string
+  // Accepts the absent forms rather than requiring a string, so a caller holding
+  // an optional id passes it straight through. Requiring a string pushed a `??
+  // ""` into every call site, which is a second place the rule is decided and
+  // one the helper's own tests cannot reach.
+  documentId: string | null | undefined
 ): VersionScope | null {
-  if (documentId === "" || slug === "") return null;
+  if (!documentId || slug === "") return null;
   return kind === "single"
     ? { kind: "single", slug, documentId }
     : { kind: "collection", slug, entryId: documentId };

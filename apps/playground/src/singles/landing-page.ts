@@ -1,8 +1,8 @@
 /**
- * Landing Page single — a second page-builder-backed single, to demo `pageBuilderField`
+ * Landing Page single — a second blocks-backed single, demonstrating the field
  * across multiple singles alongside the Homepage.
  */
-import { pageBuilderField } from "@nextlyhq/plugin-page-builder";
+import { blocks } from "@nextlyhq/plugin-page-builder";
 import { defineSingle, text } from "nextly/config";
 
 export const LandingPage = defineSingle({
@@ -10,6 +10,10 @@ export const LandingPage = defineSingle({
   label: { singular: "Landing Page" },
   fields: [
     text({ name: "title" }),
-    pageBuilderField("hero", { label: "Hero section" }),
+    blocks({
+      name: "hero",
+      label: "Hero section",
+      blocks: { allow: ["core/*"] },
+    }),
   ],
 });

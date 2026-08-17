@@ -15,8 +15,7 @@ import {
   CUSTOM_CSS_RESOURCE,
 } from "../permissions";
 
-import { PAGE_BUILDER_CUSTOM_CSS_FIELD } from "./pageBuilderEntry";
-import { pagesCollection } from "./pages";
+import { PAGE_BUILDER_CUSTOM_CSS_FIELD, pagesCollection } from "./pages";
 
 type AccessArgs = { permissions: string[] };
 type FieldWithAccess = {

@@ -166,6 +166,7 @@ export {
   ConditionRow,
   operatorsForType,
   operatorTakesValue,
+  ValidationNumberField,
 } from "./components/field-ui";
 export type {
   FieldTypePickerProps,
@@ -179,6 +180,7 @@ export type {
   ConditionSource,
   ConditionSourceOption,
   ConditionValue,
+  ValidationNumberFieldProps,
 } from "./components/field-ui";
 
 // Error Fallback Components
@@ -243,6 +245,13 @@ export {
 } from "@nextlyhq/ui";
 export { Stack, Grid, Stat } from "@nextlyhq/ui";
 export type { StackProps, GridProps, StatProps } from "@nextlyhq/ui";
+/**
+ * Immersive surfaces ask for admin chrome to be hidden while they are mounted.
+ * Exported for `plugin-sdk/admin`, which is the only admin surface a plugin (and
+ * `@nextlyhq/builder`) may import.
+ */
+export { useSuppressAdminChrome } from "./components/layout/ChromeSuppression";
+export type { AdminChromeLayer } from "./components/layout/lib/chrome-suppression";
 export type {
   CardActionProps,
   CardContentProps,

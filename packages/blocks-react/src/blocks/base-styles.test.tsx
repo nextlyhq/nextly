@@ -23,7 +23,11 @@
  *    still be dropped for a VALUE the grammar refuses, which the first question
  *    cannot see.
  */
-import { blockTypeClassName, getStyleProperty } from "@nextlyhq/blocks-engine";
+import {
+  blockTypeClassName,
+  defaultSiteTokens,
+  getStyleProperty,
+} from "@nextlyhq/blocks-engine";
 import type {
   AnyBlockDefinition,
   BlockDocument,
@@ -259,57 +263,70 @@ function tokenNamesIn(value: unknown): string[] {
   return Object.values(record).flatMap(tokenNamesIn);
 }
 
-describe("a default may not depend on a design token yet", () => {
+describe("a token a default depends on must be one the site set defines", () => {
   /**
-   * **A token reference compiles to a `var()` that NOTHING DEFINES.**
+   * **This REPLACES a ratchet that forbade tokens outright**, and the swap is the
+   * point rather than a relaxation.
    *
-   * `compileSiteSheet` is the only thing that turns a token set into CSS, and it
-   * has zero consumers outside `blocks-engine` — so `--site-*` is emitted by no
-   * product path, and `defaultSiteTokens()` is a default nobody applies. An
-   * undefined custom property makes the whole declaration invalid at
-   * computed-value time, so the property falls back to its initial value.
+   * That ratchet existed because nothing emitted token CSS: `compileSiteSheet`
+   * had no consumers, so `{ $token }` compiled to a `var()` with nothing behind
+   * it and three shipped blocks rendered with their children touching. Its
+   * stated expiry was "when the site stylesheet is wired into the render path",
+   * and both render paths now emit it — a route by default and `PageRenderer` by
+   * default. So it is deleted by the change that met its condition, exactly as
+   * written, rather than weakened or exempted per block.
    *
-   * `core/form` shipped that way: `gap: { $token: "space.4" }` became
-   * `gap: var(--site-space-4)`, which resolved to nothing, so a grid whose
-   * fields were supposed to be spaced rendered with them touching.
-   *
-   * **Neither check above can see it.** The property is in the catalog, and the
-   * declaration DOES reach the compiled stylesheet — it is the `var()` inside
-   * the value that dangles. Whether a reference resolves is a third question,
-   * and this is the one that asks it.
-   *
-   * **This is a ratchet with an expiry.** When the site stylesheet is wired into
-   * the render path, tokens become the RIGHT way to express a default and this
-   * case should be deleted in the change that wires it — not weakened, and not
-   * exempted per block.
+   * What replaces it is the question that actually matters now. A token is only
+   * as good as its DEFINITION: a default naming `color.nonesuch` compiles to a
+   * `var()` that dangles for the same reason the old defect did, and neither the
+   * catalog check nor the compiled-CSS check above can see it — the property is
+   * legitimate and the declaration reaches the stylesheet carrying a `var()`
+   * nobody defined.
    */
   it.each(DECLARING.map(block => [block.name, block] as const))(
-    "%s uses no token reference",
+    "%s names only tokens the guaranteed set defines",
     (name, block) => {
+      const guaranteed = new Set(defaultSiteTokens().map(token => token.name));
+      const named = tokenNamesIn(block.baseStyles);
+
+      // A block naming no token passes vacuously, which is correct — but the
+      // population is asserted below so this file cannot pass having inspected
+      // nothing.
+      const undefinedTokens = named.filter(token => !guaranteed.has(token));
+
       expect(
-        tokenNamesIn(block.baseStyles),
-        `${name} declares a { $token } default. Nothing emits token CSS yet ` +
-          `(compileSiteSheet has no consumers outside blocks-engine), so the ` +
-          `reference compiles to a var() with nothing behind it and the ` +
-          `property silently falls back to its initial value. Use a literal ` +
-          `until the site stylesheet is wired, then delete this case.`
+        undefinedTokens,
+        `${name} depends on ${undefinedTokens.join(", ")}, which no guaranteed ` +
+          `token defines. The reference compiles to a var() with nothing behind ` +
+          `it, so the property silently falls back to its initial value — the ` +
+          `same failure as the tokens nothing emitted, one level in.`
       ).toEqual([]);
     }
   );
 
+  it("inspects at least one block that DOES depend on a token", () => {
+    // The population control. Every case above passes by finding nothing, so a
+    // library that stopped using tokens entirely — or a walker that returned
+    // nothing — would leave the whole describe green while checking no token at
+    // all. `core/card` is the reason this check exists.
+    const withTokens = DECLARING.filter(
+      block => tokenNamesIn(block.baseStyles).length > 0
+    ).map(block => block.name);
+
+    expect(withTokens).toContain("core/card");
+  });
+
   it("detects a token reference at any depth, including inside an object", () => {
-    // The positive control. Every assertion above passes by finding NOTHING, so
-    // a walker that returned nothing under all circumstances would leave the
-    // whole case green — and the nested form is the one a shallow reader misses.
+    // The walker's own control, and the nested form is the one that matters:
+    // `core/card`'s border colour sits INSIDE an object-shaped declaration, so a
+    // shallow reader would report it clean.
     expect(
       tokenNamesIn({ base: { base: { gap: { $token: "space.4" } } } })
     ).toEqual(["space.4"]);
     expect(
       tokenNamesIn({
-        base: {
-          base: { borderRadius: { startStart: { $token: "radius.sm" } } },
-        },
+        base: { base: { border: { color: { $token: "color.border" } } } },
       })
-    ).toEqual(["radius.sm"]);
+    ).toEqual(["color.border"]);
   });
 });

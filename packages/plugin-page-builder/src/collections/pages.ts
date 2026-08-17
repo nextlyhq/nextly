@@ -3,7 +3,16 @@ import { defineCollection, text, code } from "nextly/config";
 import { CUSTOM_CSS_GRANT } from "../permissions";
 
 import { editorChoiceFields } from "./editorChoice";
-import { PAGE_BUILDER_CUSTOM_CSS_FIELD } from "./pageBuilderEntry";
+/**
+ * Sibling field for page-level custom CSS. When the host entity has a field
+ * with this name, the builder's page settings edit it.
+ *
+ * Declared here rather than imported because this collection is now its only
+ * reader. It previously sat beside the removed editor's field constants, where
+ * it was one of a set describing that editor's entry shape; the rest of that set
+ * described a document format nothing reads any more.
+ */
+export const PAGE_BUILDER_CUSTOM_CSS_FIELD = "customCss";
 
 /**
  * Registry path of the full-screen builder Edit view — still exported (and registered)
