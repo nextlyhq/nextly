@@ -613,18 +613,47 @@ export function stripPasswordsThroughComponents(
     }
 
     if (slugs.length > 0) {
-      // The union across candidates, for the same reason as before: it can
-      // only strip a value another candidate names the same, never miss one
-      // the actual component declares.
-      const inner: FieldConfig[] = [];
-      for (const slug of slugs) {
+      const fieldsFor = (slug: string): FieldConfig[] => {
         const resolved = componentFields.get(slug);
         if (resolved === undefined) {
           onUnresolvedComponent(slug);
-          continue;
+          return [];
         }
-        inner.push(...resolved);
+        return resolved;
+      };
+
+      // A dynamic-zone row carries its OWN `_componentType`, so judge it
+      // against that component's schema rather than the union of every
+      // candidate. The union is safe against leaks but not against damage:
+      // where two alternatives share a field name and only one declares it a
+      // password, unioning deletes that field from rows of the OTHER
+      // alternative, quietly emptying a legitimate value out of the recovery
+      // point. The tag is present, so there is no reason to guess.
+      const rows = entry[name];
+      if (Array.isArray(rows)) {
+        for (const row of rows) {
+          const tagged =
+            row && typeof row === "object"
+              ? (row as { _componentType?: unknown })._componentType
+              : undefined;
+          const rowFields =
+            typeof tagged === "string" && slugs.includes(tagged)
+              ? fieldsFor(tagged)
+              : // Untagged rows fall back to the union: without a tag there is
+                // nothing to select on, and over-stripping beats leaking.
+                slugs.flatMap(fieldsFor);
+          stripPasswordsThroughComponents(
+            row,
+            rowFields,
+            componentFields,
+            strip,
+            onUnresolvedComponent
+          );
+        }
+        continue;
       }
+
+      const inner: FieldConfig[] = slugs.flatMap(fieldsFor);
       stripPasswordsThroughComponents(
         entry[name],
         inner,

@@ -256,4 +256,48 @@ describe("stripPasswordsThroughComponents", () => {
 
     expect(entry.creds).not.toMatchObject({ secret: "plaintext" });
   });
+
+  it("judges each dynamic-zone row against its OWN component schema", () => {
+    // Two alternatives share the field name `token`; only one declares it a
+    // password. Unioning would empty it from BOTH rows, quietly destroying a
+    // legitimate value in the recovery point.
+    const fields = [
+      f({ name: "zone", type: "dynamic-zone", components: ["auth", "embed"] }),
+    ];
+    const map = new Map<string, FieldConfig[]>([
+      ["auth", [f({ name: "token", type: "password" })]],
+      ["embed", [f({ name: "token", type: "text" })]],
+    ]);
+
+    const entry: Record<string, unknown> = {
+      zone: [
+        { _componentType: "auth", token: "secret-value" },
+        { _componentType: "embed", token: "public-value" },
+      ],
+    };
+    stripPasswordsThroughComponents(entry, fields, map, strip);
+
+    const rows = entry.zone as Record<string, unknown>[];
+    expect(rows[0]).not.toMatchObject({ token: "secret-value" });
+    // The ordinary alternative keeps its value.
+    expect(rows[1]).toMatchObject({ token: "public-value" });
+  });
+
+  it("falls back to the union for an untagged row", () => {
+    // No tag means nothing to select on, and over-stripping beats leaking.
+    const fields = [
+      f({ name: "zone", type: "dynamic-zone", components: ["auth", "embed"] }),
+    ];
+    const map = new Map<string, FieldConfig[]>([
+      ["auth", [f({ name: "token", type: "password" })]],
+      ["embed", [f({ name: "token", type: "text" })]],
+    ]);
+
+    const entry: Record<string, unknown> = { zone: [{ token: "unknown" }] };
+    stripPasswordsThroughComponents(entry, fields, map, strip);
+
+    expect((entry.zone as Record<string, unknown>[])[0]).not.toMatchObject({
+      token: "unknown",
+    });
+  });
 });
