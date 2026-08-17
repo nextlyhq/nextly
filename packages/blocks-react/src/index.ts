@@ -32,6 +32,28 @@ export {
 
 export { PageRenderer } from "./page-renderer";
 export type { PageRendererProps } from "./page-renderer";
+// Re-exported because `PageRendererProps.siteStyles` NAMES it, and a prop a
+// consumer cannot type is a prop they cannot pass without reaching past this
+// package into the engine. The type-surface ratchet is what caught it: a public
+// declaration naming an engine type the entry does not export is a surface that
+// compiles here and not at the call site.
+//
+// The rest are `SiteSheetInput`'s TRANSITIVE closure, and they are not padding.
+// Naming the outer type alone lets a consumer declare a variable and not build
+// one: the tokens are a `SiteTokenSet` of `SiteToken`s whose `kind` is a
+// `TokenKind`, the fonts are `FontFaceDef`s of `FontSource`s, and `darkMode` is
+// a `DarkModeStrategy`. A caller writing a site's design system needs every one
+// of them by name, so withholding any makes the prop typeable but unusable —
+// which is the same defect as not exporting the outer type, one level in.
+export type {
+  DarkModeStrategy,
+  FontFaceDef,
+  FontSource,
+  SiteSheetInput,
+  SiteToken,
+  SiteTokenSet,
+  TokenKind,
+} from "@nextlyhq/blocks-engine";
 
 export { BlockBoundary, BlockList } from "./block-boundary";
 export type { BlockBoundaryProps, BlockListProps } from "./block-boundary";
