@@ -11,7 +11,7 @@ import {
   DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
 } from "@nextlyhq/blocks-engine";
-import type { BlockDocument } from "@nextlyhq/blocks-engine";
+import type { BlockDocument, SiteSheetInput } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -1771,6 +1771,20 @@ describe("createBlocksPage", () => {
   });
 });
 
+/**
+ * A route's site-sheet input, narrowed.
+ *
+ * `PageRendererProps.siteStyles` is `SiteSheetInput | false`, because a
+ * standalone host may refuse the sheet outright. A ROUTE never does — so this
+ * narrows by ASSERTING that rather than by casting, which keeps "a route does
+ * not disable the site sheet" a checked claim instead of a silenced one.
+ */
+function siteOf(props: PageRendererProps): SiteSheetInput | undefined {
+  const site = props.siteStyles;
+  expect(site, "a route must never disable the site sheet").not.toBe(false);
+  return site === false ? undefined : site;
+}
+
 describe("createBlocksPage and the site stylesheet", () => {
   const BREAKPOINTS = {
     viewport: [{ id: "base", label: "Desktop" }],
@@ -1790,7 +1804,7 @@ describe("createBlocksPage and the site stylesheet", () => {
     });
 
     expect(props.siteStyles).toBeDefined();
-    expect(props.siteStyles?.breakpoints).toEqual(BREAKPOINTS);
+    expect(siteOf(props)?.breakpoints).toEqual(BREAKPOINTS);
   });
 
   it("reuses the breakpoints the site already stated", async () => {
@@ -1805,7 +1819,7 @@ describe("createBlocksPage and the site stylesheet", () => {
       styleContext: { breakpoints: BREAKPOINTS },
     });
 
-    expect(props.siteStyles?.breakpoints).toBe(props.styleContext?.breakpoints);
+    expect(siteOf(props)?.breakpoints).toBe(props.styleContext?.breakpoints);
   });
 
   it("lets the route state its own breakpoints instead", async () => {
@@ -1821,7 +1835,7 @@ describe("createBlocksPage and the site stylesheet", () => {
       siteStyles: { breakpoints: own },
     });
 
-    expect(props.siteStyles?.breakpoints).toEqual(own);
+    expect(siteOf(props)?.breakpoints).toEqual(own);
   });
 
   it("carries the site's own tokens through to the sheet", async () => {
@@ -1839,7 +1853,7 @@ describe("createBlocksPage and the site stylesheet", () => {
       },
     });
 
-    expect(props.siteStyles?.tokens?.tokens[0]?.name).toBe("color.primary");
+    expect(siteOf(props)?.tokens?.tokens[0]?.name).toBe("color.primary");
   });
 
   it("emits NO site sheet when the site states no breakpoints anywhere", async () => {
