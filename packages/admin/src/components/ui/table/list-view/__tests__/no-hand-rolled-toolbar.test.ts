@@ -29,7 +29,6 @@ const SRC = resolve(dirname(fileURLToPath(import.meta.url)), "../../../../..");
  * only ever shrink, and it is empty when the migration is done.
  */
 const NOT_YET_CONVERTED = [
-  "pages/dashboard/field-group/components/FieldGroupTable.tsx",
   // Its LIST is converted; an error branch still renders a search field of its
   // own, at a fifth width. That branch shows search beside an alert and no
   // table at all, so converting it is a question about how a failed list

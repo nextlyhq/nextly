@@ -1,21 +1,17 @@
 "use client";
 
 import {
-  Alert,
   Badge,
   Button,
-  DropdownMenu,
   DropdownMenuCheckboxItem,
-  DropdownMenuContent,
   DropdownMenuLabel,
   DropdownMenuSeparator,
-  DropdownMenuTrigger,
   Skeleton,
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@nextlyhq/ui";
-import { Eye, Pencil, Trash2, Filter, RefreshCw } from "lucide-react";
+import { Eye, Pencil, Plus, Puzzle, RefreshCw, Trash2 } from "lucide-react";
 import { useState, useEffect, useMemo, useCallback } from "react";
 
 import { BulkActionBar } from "@admin/components/features/entries/EntryList/BulkActionBar";
@@ -23,14 +19,14 @@ import { ReconcileFieldGroupDialog } from "@admin/components/features/field-grou
 import * as Icons from "@admin/components/icons";
 import { Lock } from "@admin/components/icons";
 import { BulkDeleteDialog } from "@admin/components/shared/bulk-action-dialogs";
-import { SearchBar } from "@admin/components/shared/search-bar";
 import { toast } from "@admin/components/ui";
-import { DataTableView } from "@admin/components/ui/table/data-table";
+import { Link } from "@admin/components/ui/link";
 import type {
   DataTableSelection,
   NextlyColumn,
   RowAction,
 } from "@admin/components/ui/table/data-table";
+import { ListView } from "@admin/components/ui/table/list-view";
 import { PAGINATION } from "@admin/constants/pagination";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { UI } from "@admin/constants/ui";
@@ -50,7 +46,6 @@ import type {
   FieldGroupMigrationStatus,
 } from "@admin/types/entities";
 
-import { FieldGroupsEmptyState } from "./FieldGroupsEmptyState";
 import { FieldGroupTableSkeleton } from "./FieldGroupTableSkeleton";
 
 /** Source badge label + icon. */
@@ -488,208 +483,180 @@ export default function FieldGroupTable() {
 
   const showLoadingSkeleton =
     (isLoading || isFetching) && (!data || data.items.length === 0);
-  const isEmpty = filteredData.length === 0;
-  const isSearching = search.trim() !== "";
   const isFiltering = sourceFilter !== "all" || migrationFilter !== "all";
 
   return (
-    <div className="space-y-4">
-      {selectedCount > 0 && (
-        <BulkActionBar
-          selectedCount={selectedCount}
-          collection={undefined}
-          onDelete={handleBulkDelete}
-          onClear={clearSelection}
-          itemLabel="field group"
-        />
-      )}
-
-      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        <SearchBar
-          value={search}
-          onChange={setSearch}
-          placeholder="Search field groups..."
-          isLoading={isFetching}
-          className="w-full md:max-w-sm"
-        />
-
-        <div className="flex w-full items-center justify-between gap-2 sm:justify-end md:w-auto">
-          {showLoadingSkeleton ? (
+    <>
+      <ListView<ApiFieldGroup>
+        search={{
+          value: search,
+          onChange: setSearch,
+          placeholder: "Search field groups...",
+          isLoading: isFetching,
+        }}
+        hasActiveFilters={isFiltering}
+        // Withheld while the first response is outstanding: a filter menu built
+        // from data nobody has yet would open onto nothing. The skeletons below
+        // hold their place so the row does not resize when they arrive.
+        filters={
+          showLoadingSkeleton ? undefined : (
+            <>
+              <DropdownMenuLabel>Filter by</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuCheckboxItem
+                checked={sourceFilter === "all"}
+                onCheckedChange={() => handleSourceFilterChange("all")}
+              >
+                All Sources
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={sourceFilter === "code"}
+                onCheckedChange={() => handleSourceFilterChange("code")}
+              >
+                Code
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={sourceFilter === "ui"}
+                onCheckedChange={() => handleSourceFilterChange("ui")}
+              >
+                UI
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuCheckboxItem
+                checked={migrationFilter === "all"}
+                onCheckedChange={() => handleMigrationFilterChange("all")}
+              >
+                All Status
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={migrationFilter === "synced"}
+                onCheckedChange={() => handleMigrationFilterChange("synced")}
+              >
+                Synced
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={migrationFilter === "pending"}
+                onCheckedChange={() => handleMigrationFilterChange("pending")}
+              >
+                Pending
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={migrationFilter === "generated"}
+                onCheckedChange={() => handleMigrationFilterChange("generated")}
+              >
+                Generated
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={migrationFilter === "applied"}
+                onCheckedChange={() => handleMigrationFilterChange("applied")}
+              >
+                Applied
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={migrationFilter === "failed"}
+                onCheckedChange={() => handleMigrationFilterChange("failed")}
+              >
+                Failed
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={migrationFilter === "diverged"}
+                onCheckedChange={() => handleMigrationFilterChange("diverged")}
+              >
+                Diverged
+              </DropdownMenuCheckboxItem>
+            </>
+          )
+        }
+        columnsControl={
+          showLoadingSkeleton
+            ? undefined
+            : {
+                columns: toggleableColumns,
+                isColumnVisible: name => !hiddenColumns.has(name),
+                onToggleColumn: toggleColumn,
+              }
+        }
+        toolbarActions={
+          showLoadingSkeleton ? (
             <>
               <Skeleton className="h-9 w-20" />
               <Skeleton className="h-9 w-24" />
             </>
-          ) : (
-            <>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="outline"
-                    size="md"
-                    className="relative border-border bg-background text-foreground hover:bg-accent/10"
-                  >
-                    <Filter className="h-4 w-4" />
-                    Filter
-                    {isFiltering && (
-                      // Notification dot: a fixed circle, not a --radius step.
-                      <span className="absolute -right-1 -top-1 flex h-3 w-3 rounded-full bg-primary" />
-                    )}
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-48">
-                  <DropdownMenuLabel>Filter by</DropdownMenuLabel>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuCheckboxItem
-                    checked={sourceFilter === "all"}
-                    onCheckedChange={() => handleSourceFilterChange("all")}
-                  >
-                    All Sources
-                  </DropdownMenuCheckboxItem>
-                  <DropdownMenuCheckboxItem
-                    checked={sourceFilter === "code"}
-                    onCheckedChange={() => handleSourceFilterChange("code")}
-                  >
-                    Code
-                  </DropdownMenuCheckboxItem>
-                  <DropdownMenuCheckboxItem
-                    checked={sourceFilter === "ui"}
-                    onCheckedChange={() => handleSourceFilterChange("ui")}
-                  >
-                    UI
-                  </DropdownMenuCheckboxItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuCheckboxItem
-                    checked={migrationFilter === "all"}
-                    onCheckedChange={() => handleMigrationFilterChange("all")}
-                  >
-                    All Status
-                  </DropdownMenuCheckboxItem>
-                  <DropdownMenuCheckboxItem
-                    checked={migrationFilter === "synced"}
-                    onCheckedChange={() =>
-                      handleMigrationFilterChange("synced")
-                    }
-                  >
-                    Synced
-                  </DropdownMenuCheckboxItem>
-                  <DropdownMenuCheckboxItem
-                    checked={migrationFilter === "pending"}
-                    onCheckedChange={() =>
-                      handleMigrationFilterChange("pending")
-                    }
-                  >
-                    Pending
-                  </DropdownMenuCheckboxItem>
-                  <DropdownMenuCheckboxItem
-                    checked={migrationFilter === "generated"}
-                    onCheckedChange={() =>
-                      handleMigrationFilterChange("generated")
-                    }
-                  >
-                    Generated
-                  </DropdownMenuCheckboxItem>
-                  <DropdownMenuCheckboxItem
-                    checked={migrationFilter === "applied"}
-                    onCheckedChange={() =>
-                      handleMigrationFilterChange("applied")
-                    }
-                  >
-                    Applied
-                  </DropdownMenuCheckboxItem>
-                  <DropdownMenuCheckboxItem
-                    checked={migrationFilter === "failed"}
-                    onCheckedChange={() =>
-                      handleMigrationFilterChange("failed")
-                    }
-                  >
-                    Failed
-                  </DropdownMenuCheckboxItem>
-                  <DropdownMenuCheckboxItem
-                    checked={migrationFilter === "diverged"}
-                    onCheckedChange={() =>
-                      handleMigrationFilterChange("diverged")
-                    }
-                  >
-                    Diverged
-                  </DropdownMenuCheckboxItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="outline"
-                    size="md"
-                    className="border-border bg-background text-foreground hover:bg-accent/10"
-                  >
-                    <Icons.Columns className="h-4 w-4" />
-                    Columns
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-48">
-                  <DropdownMenuLabel>Toggle columns</DropdownMenuLabel>
-                  <DropdownMenuSeparator />
-                  {toggleableColumns.map(col => (
-                    <DropdownMenuCheckboxItem
-                      key={col.name}
-                      checked={!hiddenColumns.has(col.name)}
-                      onCheckedChange={() => toggleColumn(col.name)}
-                    >
-                      {typeof col.header === "string" ? col.header : col.name}
-                    </DropdownMenuCheckboxItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </>
-          )}
-        </div>
-      </div>
-
-      {isError ? (
-        <Alert variant="destructive">
-          {error instanceof Error
-            ? error.message
-            : "Failed to load field groups. Please try again."}
-        </Alert>
-      ) : showLoadingSkeleton ? (
-        <FieldGroupTableSkeleton />
-      ) : isEmpty ? (
-        <FieldGroupsEmptyState isSearching={isSearching || isFiltering} />
-      ) : (
-        <>
-          <DataTableView<ApiFieldGroup>
-            columns={columns}
-            rows={filteredData}
-            onRowClick={fieldGroup => handleEdit(fieldGroup)}
-            primaryColumn="label"
-            selection={selection}
-            rowActions={rowActions}
-            // Storage identifier, not copy: this addresses the registry the API serves.
-            registryKey="components"
-            ariaLabel="Field Groups table"
-            emptyMessage="No field groups found. Try adjusting your search or filters."
-            // The table owns the pager, so it is placed for whichever view is
-            // showing. Gated on `data` rather than on a page
-            // count because this list filters client-side after fetching, so
-            // the server's total is the only reliable signal that a response
-            // has arrived at all.
-            pagination={
-              data
-                ? {
-                    currentPage: page,
-                    totalPages:
-                      data.meta.totalPages > 0 ? data.meta.totalPages : 1,
-                    pageSize,
-                    pageSizeOptions: PAGINATION.TABLE_PAGE_SIZE_OPTIONS,
-                    onPageChange: setPage,
-                    onPageSizeChange: setPageSize,
-                    isLoading: isFetching,
-                    totalItems: data.meta.total,
-                  }
-                : undefined
-            }
-          />
-        </>
-      )}
+          ) : undefined
+        }
+        bulkBar={
+          selectedCount > 0 ? (
+            <BulkActionBar
+              selectedCount={selectedCount}
+              collection={undefined}
+              onDelete={handleBulkDelete}
+              onClear={clearSelection}
+              itemLabel="field group"
+            />
+          ) : undefined
+        }
+        loading={showLoadingSkeleton}
+        skeleton={<FieldGroupTableSkeleton />}
+        // The failure is a table state, so the list reports it the way every
+        // other list does rather than through an Alert of its own beside a
+        // table that is still drawn.
+        error={
+          isError
+            ? error instanceof Error
+              ? error.message
+              : "Failed to load field groups. Please try again."
+            : null
+        }
+        empty={{
+          icon: <Puzzle className="h-5 w-5" aria-hidden="true" />,
+          title: "No field groups yet",
+          description:
+            "Get started by creating your first reusable field group to share across your collections.",
+          action: (
+            <Link href={ROUTES.BUILDER_FIELD_GROUPS_NEW}>
+              <Button size="md">
+                <Plus className="h-4 w-4" />
+                Create Field Group
+              </Button>
+            </Link>
+          ),
+        }}
+        emptyFiltered={{
+          icon: <Puzzle className="h-5 w-5" aria-hidden="true" />,
+          title: "No field groups found",
+          description:
+            "No field groups match your search. Try adjusting your search terms or filters.",
+        }}
+        columns={columns}
+        rows={filteredData}
+        onRowClick={fieldGroup => handleEdit(fieldGroup)}
+        primaryColumn="label"
+        selection={selection}
+        rowActions={rowActions}
+        // Storage identifier, not copy: this addresses the registry the API serves.
+        registryKey="components"
+        ariaLabel="Field Groups table"
+        emptyMessage="No field groups found. Try adjusting your search or filters."
+        // The table owns the pager, so it is placed for whichever view is
+        // showing. Gated on `data` rather than on a page
+        // count because this list filters client-side after fetching, so
+        // the server's total is the only reliable signal that a response
+        // has arrived at all.
+        pagination={
+          data
+            ? {
+                currentPage: page,
+                totalPages: data.meta.totalPages > 0 ? data.meta.totalPages : 1,
+                pageSize,
+                pageSizeOptions: PAGINATION.TABLE_PAGE_SIZE_OPTIONS,
+                onPageChange: setPage,
+                onPageSizeChange: setPageSize,
+                isLoading: isFetching,
+                totalItems: data.meta.total,
+              }
+            : undefined
+        }
+      />
 
       {/* Mounted only while a target is held, so each opening fetches a fresh plan rather than
           reusing the one belonging to whichever group was picked last. */}
@@ -735,6 +702,6 @@ export default function FieldGroupTable() {
         onConfirm={handleConfirmBulkDelete}
         isLoading={isBulkDeleting}
       />
-    </div>
+    </>
   );
 }
