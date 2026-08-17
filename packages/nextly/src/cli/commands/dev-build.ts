@@ -743,7 +743,16 @@ async function detectRemovedComponents(
  * Delete orphaned components: remove registry entry and drop data table.
  * Uses raw delete to avoid re-fetch issues with getComponent/updateComponent.
  */
-async function handleRemovedComponents(
+/**
+ * Exported for its own test.
+ *
+ * The guard below is an ORDERING property — the exclusion is taken before the first drop — and the
+ * only way to observe an ordering is to invoke the thing that does it. Reaching this through
+ * `syncComponents` would mean standing up a config, a registry and a scan whose failure modes are
+ * unrelated to what is being asserted, so the test would be answering a broader question than the
+ * one it claims.
+ */
+export async function handleRemovedComponents(
   removed: OrphanRecord[],
   adapter: DrizzleAdapter,
   logger: CommandContext["logger"]
