@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 
-import { useFormField } from "@admin/components/ui/form";
+import { FormDescription, useFormField } from "@admin/components/ui/form";
 import { useLabelLandingCheck } from "@admin/lib/forms/label-landing";
 
 interface SettingsRowProps {
@@ -48,14 +48,26 @@ export function SettingsRow({
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-[2fr_3fr] gap-4 md:gap-8 py-5 items-start">
-      <label htmlFor={formItemId} className="cursor-pointer flex flex-col">
-        <span className="text-sm font-semibold text-foreground">{label}</span>
+      <div className="flex flex-col">
+        <label
+          htmlFor={formItemId}
+          className="cursor-pointer text-sm font-semibold text-foreground"
+        >
+          {label}
+        </label>
+        {/* A sibling of the label rather than a child of it, and rendered
+            through FormDescription rather than as plain markup. Inside the
+            label, help text became part of the control's accessible NAME — a
+            screen reader announced the whole paragraph every time focus
+            arrived — and nothing registered it with FormControl, so it reached
+            aria-describedby not at all. FormDescription publishes its presence,
+            which is what lets FormControl name it. */}
         {description && (
-          <span className="mt-0.5 text-xs text-muted-foreground leading-relaxed">
+          <FormDescription className="mt-0.5 text-xs leading-relaxed">
             {description}
-          </span>
+          </FormDescription>
         )}
-      </label>
+      </div>
       <div className="w-full">{children}</div>
     </div>
   );

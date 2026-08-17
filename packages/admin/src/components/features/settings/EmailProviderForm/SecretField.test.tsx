@@ -72,6 +72,31 @@ function secretInput(): HTMLInputElement {
   return input;
 }
 
+describe("the row's label", () => {
+  it("names the credential input itself", () => {
+    render(<Harness initialValue="" storedSecret={false} />);
+    // Queried the way assistive technology resolves a name, rather than by
+    // selector: the id used to land on the positioning wrapper around this
+    // input, which a lookup finds and a label cannot name. Every test in this
+    // file reached the control by `name` or by role, so none of them could see
+    // that the field had no accessible name at all.
+    expect(screen.getByLabelText("API Key")).toBe(secretInput());
+  });
+
+  it("connects the helper text to the input for a stored credential", () => {
+    render(<Harness initialValue={MASKED_SECRET} storedSecret={true} />);
+    const describedBy = secretInput().getAttribute("aria-describedby");
+    expect(describedBy).toBeTruthy();
+    // The description has to be reachable from the input, not merely present on
+    // the page: `aria-describedby` naming an id is only a promise, and the
+    // element it names is what a screen reader actually reads out.
+    const description = document.getElementById(
+      String(describedBy).split(" ")[0] ?? ""
+    );
+    expect(description?.textContent).toContain("Existing secret is configured");
+  });
+});
+
 describe("a credential made only of the characters the mask uses", () => {
   it("survives a reveal on a create", async () => {
     const user = userEvent.setup();

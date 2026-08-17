@@ -73,6 +73,40 @@ describe("SettingsRow", () => {
       screen.getByTestId("control")
     );
   });
+
+  it("keeps the description out of the control's accessible name", () => {
+    render(<Harness description="extra help">{<WiredControl />}</Harness>);
+    // An exact match, which is the assertion: while the description sat INSIDE
+    // the label, the name was "My Labelextra help" and a screen reader read the
+    // whole paragraph out on every focus. The description belongs in
+    // aria-describedby, asserted below, not in the name.
+    expect(screen.getByLabelText("My Label")).toBe(
+      screen.getByTestId("control")
+    );
+  });
+
+  it("connects the description to the control", () => {
+    render(<Harness description="extra help">{<WiredControl />}</Harness>);
+    const describedBy = screen
+      .getByTestId("control")
+      .getAttribute("aria-describedby");
+    expect(describedBy).toBeTruthy();
+    // The id has to resolve to the text on the page. `aria-describedby` naming
+    // an element that does not exist is the failure this whole file is about,
+    // one attribute over.
+    expect(document.getElementById(String(describedBy))?.textContent).toBe(
+      "extra help"
+    );
+  });
+
+  it("emits no description reference when there is no description", () => {
+    render(<Harness>{<WiredControl />}</Harness>);
+    // The complement of the case above: a control that always claimed a
+    // description would point at an element that never rendered.
+    expect(
+      screen.getByTestId("control").getAttribute("aria-describedby")
+    ).toBeNull();
+  });
 });
 
 describe("SettingsRow label landing check", () => {
