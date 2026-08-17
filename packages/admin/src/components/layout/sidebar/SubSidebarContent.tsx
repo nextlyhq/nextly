@@ -110,7 +110,7 @@ export function SubSidebarContent({
         <div className="space-y-1">
           {/* Names what the panel contains: the installed-plugins overview,
               navigation into each plugin's collections, and any declarative
-              menu items plugins contribute via `contributes.admin.menu` (D20) —
+              menu items plugins contribute via `contributes.admin.menu` —
               e.g. the api-docs plugin's reference link. Nothing here installs
               a plugin, which happens through the Nextly config. */}
           <p className="text-xs font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">

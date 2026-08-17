@@ -23,10 +23,10 @@
     "build": "node scripts/vendor-scalar.mjs && tsup",
     "dev": "node scripts/vendor-scalar.mjs && tsup src/index.ts --format esm --dts --watch",
     "check-types": "node scripts/vendor-scalar.mjs && tsc --noEmit",
-    "lint": "eslint . --max-warnings 0",
+    "lint": "node scripts/vendor-scalar.mjs && eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
     "test": "node scripts/vendor-scalar.mjs && vitest run",
-    "test:watch": "vitest"
+    "test:watch": "node scripts/vendor-scalar.mjs && vitest"
   },
   "peerDependencies": {
     "@nextlyhq/plugin-sdk": "workspace:*",

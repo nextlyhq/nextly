@@ -276,3 +276,111 @@ describe("generateOpenApiDocument — publicOnly (anonymous viewer)", () => {
     }
   });
 });
+
+describe("generateOpenApiDocument — review regressions", () => {
+  it("declares every {param} path segment as a required path parameter", () => {
+    const d = generateOpenApiDocument({
+      scan: scan(),
+      restOperations: restOps,
+    });
+    const paths = (d.paths ?? {}) as Record<string, Record<string, unknown>>;
+    let checked = 0;
+    for (const [path, item] of Object.entries(paths)) {
+      const templateNames = [...path.matchAll(/\{([A-Za-z_][\w]*)\}/g)].map(
+        m => m[1]
+      );
+      if (templateNames.length === 0) continue;
+      for (const [verb, op] of Object.entries(item)) {
+        if (!["get", "post", "put", "patch", "delete", "head"].includes(verb))
+          continue;
+        const params = (op as Record<string, unknown>)?.parameters as
+          Array<{ name: string; in: string; required: boolean }> | undefined;
+        expect(params, `${verb} ${path} must declare parameters`).toBeDefined();
+        for (const name of templateNames) {
+          const match = params?.find(p => p.name === name);
+          expect(match, `${verb} ${path} param ${name}`).toMatchObject({
+            in: "path",
+            required: true,
+          });
+          checked++;
+        }
+      }
+    }
+    // Positive control: the fixture has templated paths, so the loop ran.
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("keeps operationIds unique when both media mounts exist", () => {
+    const d = generateOpenApiDocument({
+      scan: scan(),
+      restOperations: restOps,
+    });
+    const ids: string[] = [];
+    for (const item of Object.values(
+      d.paths as Record<string, Record<string, unknown>>
+    )) {
+      for (const op of Object.values(item)) {
+        const id = (op as Record<string, unknown>)?.operationId;
+        if (typeof id === "string") ids.push(id);
+      }
+    }
+    expect(new Set(ids).size).toBe(ids.length);
+    // The two mounts qualify the same base name.
+    expect(ids).toContain("listMedia.admin");
+    expect(ids).toContain("listMedia.public");
+  });
+
+  it("never emits a write operation on a public media mount, even if the scan reports the verb", () => {
+    const hostileScan: ScanResult = {
+      routes: [
+        {
+          mountPath: "/api/media/[[...path]]",
+          source: { kind: "media" },
+          // A mis-declared public mount claiming POST — writes must still not appear.
+          verbs: ["GET", "POST", "DELETE"],
+        },
+      ],
+      unrecognized: [],
+    };
+    const d = generateOpenApiDocument({ scan: hostileScan });
+    const paths = (d.paths ?? {}) as Record<string, Record<string, unknown>>;
+    expect(paths["/api/media"]?.get).toBeDefined();
+    expect(paths["/api/media"]?.post).toBeUndefined();
+    expect(paths["/api/media/{id}"]?.delete).toBeUndefined();
+  });
+
+  it("keeps the templated operation when a content kind has zero surfaces (no silent drop)", () => {
+    // A templated collection op in the input; the users-only restOps fixture
+    // has none, so supply one representative op directly.
+    const collectionList: DocsOperation = {
+      service: "collections",
+      operation: "listEntries",
+      method: "GET",
+      path: "/collections/{collectionName}/entries",
+      auth: "permission",
+      permissionSlug: "read-{collectionName}",
+      tag: "Collections",
+      envelope: "list",
+    };
+    const singleGet: DocsOperation = {
+      service: "singles",
+      operation: "getSingleDocument",
+      method: "GET",
+      path: "/singles/{slug}",
+      auth: "permission",
+      permissionSlug: "read-{slug}",
+      tag: "Singles",
+      envelope: "doc",
+    };
+    const d = generateOpenApiDocument({
+      scan: scan(),
+      restOperations: [...restOps, collectionList, singleGet],
+      content: { collections: [], singles: [{ slug: "homepage", fields: [] }] },
+    });
+    const paths = (d.paths ?? {}) as Record<string, Record<string, unknown>>;
+    expect(
+      paths["/admin/api/collections/{collectionName}/entries"]?.get
+    ).toBeDefined();
+    expect(paths["/admin/api/singles/homepage"]?.get).toBeDefined();
+  });
+});

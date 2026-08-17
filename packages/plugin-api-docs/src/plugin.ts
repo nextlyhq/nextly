@@ -101,10 +101,13 @@ function docsRoutePaths(docsPath: string): {
   spec: string;
   scalar: string;
 } {
+  // A base of "/" would produce "//spec.json"; strip the trailing slash so the
+  // root mount serves "/spec.json" and "/scalar.js".
+  const base = docsPath.replace(/\/+$/, "");
   return {
     docs: docsPath,
-    spec: `${docsPath}/spec.json`,
-    scalar: `${docsPath}/scalar.js`,
+    spec: `${base}/spec.json`,
+    scalar: `${base}/scalar.js`,
   };
 }
 

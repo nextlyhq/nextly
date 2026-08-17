@@ -107,6 +107,13 @@ function expandContentOperations(
     const surfaces = isCollection
       ? (content.collections ?? [])
       : (content.singles ?? []);
+    // No surfaces of this kind exist (e.g. an app with singles but zero
+    // collections): keep the TEMPLATED operation rather than dropping it, so a
+    // sparse registry cannot silently delete half the documented surface.
+    if (surfaces.length === 0) {
+      out.push(op);
+      continue;
+    }
     for (const surface of surfaces) {
       const param = isCollection ? "{collectionName}" : "{slug}";
       const label =
@@ -199,13 +206,20 @@ export function generateOpenApiDocument(input: OpenApiInput): OpenApiDocument {
     if (mount.source.kind === "media") {
       const isAdminMount = mount.mountPath.startsWith("/admin");
       const base = mountBasePath(mount.mountPath);
+      // Mount qualifier keeps operationIds unique: both mounts emit listMedia,
+      // and OpenAPI requires every operationId to be unique or client
+      // generators overwrite one with the other.
+      const qualifier = isAdminMount ? "admin" : "public";
       const ops = listMediaSurfaceOperations()
-        // A mount only serves the verbs its route file re-exports; writes never
-        // appear on the public (GET-only) mount.
-        .filter(op => mount.verbs.includes(op.method))
+        // A mount only serves the verbs its route file re-exports, AND a
+        // non-admin mount never serves a write descriptor even if its scan
+        // reported the verb — a public mount must not document uploads.
+        .filter(
+          op => mount.verbs.includes(op.method) && (isAdminMount || !op.write)
+        )
         .map((op): DocsOperation => ({
           service: "media",
-          operation: op.operation,
+          operation: `${op.operation}.${qualifier}`,
           method: op.method,
           path: op.path,
           auth: isAdminMount ? "permission" : "public",

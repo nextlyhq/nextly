@@ -58,7 +58,10 @@ export function buildEnvelopeSchemas(): Record<string, OpenApiSchema> {
     },
     MutationResponse: {
       type: "object",
-      required: ["message"],
+      // `item` is required: core's respondMutation(message, item) takes the
+      // mutated document as a mandatory argument, so every mutation body
+      // carries it.
+      required: ["message", "item"],
       properties: {
         message: { type: "string" },
         item: { type: "object" },

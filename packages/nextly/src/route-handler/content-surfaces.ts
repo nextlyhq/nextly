@@ -66,33 +66,45 @@ function project(records: RegistryRecord[]): ContentSurfaceInfo[] {
 }
 
 /**
+ * Read one registry's surfaces, honoring the seam's "empty rather than error"
+ * contract. A missing container binding, a missing method, OR a registry that
+ * REJECTS (the services query the database on every call, so an unreachable
+ * database rejects) all degrade to an empty projection — the caller falls back
+ * to its own config view instead of the whole request failing.
+ */
+async function readSurfaces<T>(
+  key: string,
+  read: (svc: T) => unknown
+): Promise<ContentSurfaceInfo[]> {
+  if (!container.has(key)) return [];
+  try {
+    const svc = container.get<T>(key);
+    const records = (await read(svc)) as RegistryRecord[];
+    return Array.isArray(records) ? project(records) : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
  * List every registered collection and single with its fields. Reads the
- * runtime registry services through the DI container; when DI has not run
- * (e.g. a tool importing the package outside a booted app) both arrays are
- * empty rather than an error — callers fall back to their own config view.
+ * runtime registry services through the DI container; when DI has not run,
+ * a service is missing, or a registry cannot answer, both arrays are empty
+ * rather than an error — callers fall back to their own config view.
  */
 export async function listContentSurfaces(): Promise<ContentSurfaces> {
-  const result: ContentSurfaces = { collections: [], singles: [] };
-
-  if (container.has("collectionRegistryService")) {
-    const svc = container.get<{ getAllCollections?: () => Promise<unknown> }>(
-      "collectionRegistryService"
-    );
-    if (typeof svc?.getAllCollections === "function") {
-      const records = (await svc.getAllCollections()) as RegistryRecord[];
-      if (Array.isArray(records)) result.collections = project(records);
-    }
-  }
-
-  if (container.has("singleRegistryService")) {
-    const svc = container.get<{ getAllSingles?: () => Promise<unknown> }>(
-      "singleRegistryService"
-    );
-    if (typeof svc?.getAllSingles === "function") {
-      const records = (await svc.getAllSingles()) as RegistryRecord[];
-      if (Array.isArray(records)) result.singles = project(records);
-    }
-  }
-
-  return result;
+  return {
+    collections: await readSurfaces<{
+      getAllCollections?: () => Promise<unknown>;
+    }>("collectionRegistryService", svc =>
+      typeof svc?.getAllCollections === "function"
+        ? svc.getAllCollections()
+        : []
+    ),
+    singles: await readSurfaces<{ getAllSingles?: () => Promise<unknown> }>(
+      "singleRegistryService",
+      svc =>
+        typeof svc?.getAllSingles === "function" ? svc.getAllSingles() : []
+    ),
+  };
 }

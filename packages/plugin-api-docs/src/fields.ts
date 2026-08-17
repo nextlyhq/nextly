@@ -83,10 +83,13 @@ function scalarSchema(field: FieldLike): OpenApiSchema {
     case "json":
       return { type: "object", additionalProperties: true };
     // relationship + upload carry the target's id (expanded reads are a
-    // query-time projection, not the stored shape).
+    // query-time projection, not the stored shape); hasMany stores an ARRAY of
+    // those ids — the stored wire shape, which is what a schema documents.
     case "relationship":
-    case "upload":
-      return { type: "string" };
+    case "upload": {
+      const id = { type: "string" };
+      return field.hasMany ? { type: "array", items: id } : id;
+    }
     // Plugin-contributed types: unknown wire shape, open object.
     default:
       return {

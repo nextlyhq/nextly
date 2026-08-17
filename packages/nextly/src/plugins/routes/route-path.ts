@@ -14,8 +14,16 @@ import type { PluginRoute } from "./route-types";
  * `/admin/plugins/acme-p`; the slug is how the ADMIN names a plugin and has
  * never been how the dispatcher does.
  *
- * No mount prefix: the host app decides where the Nextly handler is mounted
- * (`/api/...` by convention), so that half is the caller's to add.
+ * No mount prefix beyond the above: the host app decides where the Nextly
+ * handler is mounted (`/api/...` by convention), so that half is the caller's
+ * to add.
+ *
+ * Two mount modes: the default `plugins` mount is namespaced under
+ * `/plugins/<pluginName>`; the opt-in `admin-api` mount returns the path
+ * as-is, serving the route at the admin API root for surfaces that read as
+ * first-party (the docs plugin's `/docs`). What that mode may not shadow is
+ * decided in `collect-routes.ts`, which refuses first segments that name or
+ * wildcard system resources.
  *
  * @module plugins/routes/route-path
  */

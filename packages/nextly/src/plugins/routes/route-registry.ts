@@ -130,7 +130,10 @@ export interface PluginRouteInfo {
   method: RouteMethod;
   /** Path within the plugin namespace (leading "/", `:param` segments). */
   path: string;
-  /** Namespaced path: `/plugins/<pluginName><path>`. */
+  /**
+   * Match path under the admin API root: `/plugins/<pluginName><path>` for the
+   * default `plugins` mount, or `path` itself for an `admin-api` mount.
+   */
   fullPath: string;
   /** Whether the route is publicly callable (secure by default otherwise). */
   public: boolean;

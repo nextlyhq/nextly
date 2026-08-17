@@ -181,18 +181,21 @@ function extractExportedNames(code: string): string[] {
 
   for (const m of code.matchAll(/\bexport\s*\{([^}]*)\}/g)) {
     for (const part of m[1].split(",")) {
-      // Drop an `as` rename; only the local (exported-under) name is the verb.
+      // `A as B` exports B - the EXPORTED name is what Next matches to a
+      // request verb, so take the last segment of a rename.
       const name = part
         .trim()
-        .split(/\s+as\s+/)[0]
-        .trim();
+        .split(/\s+as\s+/)
+        .pop()
+        ?.trim();
       if (name) names.add(name);
     }
   }
   for (const m of code.matchAll(/\bexport\s+const\s*\{([^}]*)\}\s*=/g)) {
     for (const part of m[1].split(",")) {
-      // A destructure may rename (`A: B`); the bound name is the verb.
-      const name = part.trim().split(/\s*:/)[0].trim();
+      // A destructure rename (`A: B`) binds B - the bound name is the verb.
+      const segments = part.trim().split(/\s*:\s*/);
+      const name = (segments[1] ?? segments[0]).trim();
       if (name) names.add(name);
     }
   }
@@ -390,7 +393,22 @@ export function scanAppDirectory(
   const routes: ScannedRoute[] = [];
   const unrecognized: { filePath: string; reason: string }[] = [];
   for (const filePath of routeFiles.sort()) {
-    const code = readFileSync(filePath, "utf8");
+    // An unreadable route file (permissions, a race with an editor) is surfaced
+    // as unrecognized rather than aborting the scan: one bad file must not
+    // block documentation of every other mount.
+    let code: string;
+    try {
+      code = readFileSync(filePath, "utf8");
+    } catch (err) {
+      const rel = relative(projectRoot, filePath).split(sep).join("/");
+      unrecognized.push({
+        filePath: rel,
+        reason: `could not read the route file: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      });
+      continue;
+    }
     const cls = classifyRouteSource(code);
     if (cls.kind === "non-nextly") continue;
     if (cls.kind === "unrecognized") {

@@ -70,12 +70,13 @@ export const GET = h.GET;
   });
 
   it("classifies a subpath re-export and ignores a fake export in a JSDoc comment", () => {
-    // The block comment contains a decoy export with SINGLE quotes. A naive scan
-    // would double the verbs; comment stripping must leave only the real one.
+    // The block comment contains a decoy export with SINGLE quotes and a
+    // DIFFERENT verb set — identical verbs could not distinguish stripping
+    // from no-stripping, since both would yield the same result.
     const code = `
 /**
  * \`\`\`typescript
- * export { GET, HEAD } from 'nextly/api/health';
+ * export { GET, POST, DELETE } from 'nextly/api/health';
  * \`\`\`
  */
 export { GET, HEAD } from "nextly/api/health";
@@ -266,8 +267,9 @@ export const GET = h.GET;
 
 const health = `
 /**
+ * Decoy with different verbs + single quotes; the real export below wins.
  * \`\`\`typescript
- * export { GET, HEAD } from 'nextly/api/health';
+ * export { GET, POST, DELETE } from 'nextly/api/health';
  * \`\`\`
  */
 export { GET, HEAD } from "nextly/api/health";

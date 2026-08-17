@@ -71,6 +71,20 @@ export function buildOperation(
     security: securityFor(op.auth),
     responses,
   };
+  // OpenAPI requires every `{name}` in the path to be declared as a required
+  // path parameter, or tooling rejects the document / generates incomplete
+  // clients. Derived from the operation's own path so the two cannot disagree.
+  const pathParams = [...op.path.matchAll(/\{([A-Za-z_][\w]*)\}/g)].map(
+    m => m[1]
+  );
+  if (pathParams.length > 0) {
+    operation.parameters = pathParams.map(name => ({
+      name,
+      in: "path",
+      required: true,
+      schema: { type: "string" },
+    }));
+  }
   if (op.method === "POST" || op.method === "PATCH" || op.method === "PUT") {
     operation.requestBody = op.requestMultipart
       ? {

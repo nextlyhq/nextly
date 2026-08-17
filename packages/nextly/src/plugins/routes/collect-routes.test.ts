@@ -101,3 +101,26 @@ describe("collectPluginRoutes", () => {
     ).toEqual([]);
   });
 });
+
+describe("admin-api dynamic-segment guard", () => {
+  it("rejects an admin-api route whose first segment is dynamic (:resource wildcards every REST path)", () => {
+    expect(
+      thrownCode(() =>
+        collectPluginRoutes([
+          plugin("@a/grab", [
+            { method: "GET", path: "/:resource", mount: "admin-api" },
+          ]),
+        ])
+      )
+    ).toBe("NEXTLY_ROUTE_COLLISION");
+  });
+
+  it("still allows a dynamic segment AFTER a static first segment", () => {
+    const routes = collectPluginRoutes([
+      plugin("@a/docs", [
+        { method: "GET", path: "/docs/:pageId", mount: "admin-api" },
+      ]),
+    ]);
+    expect(routes[0]?.fullPath).toBe("/docs/:pageId");
+  });
+});

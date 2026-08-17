@@ -84,9 +84,8 @@ export default defineConfig({
   fieldGroups: [Seo],
   // Dev-harness plugins: page builder and form builder are what a contributor
   // works against. The api-docs plugin is the local test surface for OpenAPI
-  // documentation — it serves the spec + Scalar reference under
-  // /admin/api/plugins/@nextlyhq/plugin-api-docs/ and adds an "API Docs"
-  // sidebar entry.
+  // documentation — it serves the Scalar reference at /admin/api/docs and the
+  // spec at /admin/api/docs/spec.json, and adds an "API Docs" sidebar entry.
   //
   // The styling fixture is registered only for the e2e run. It exists so
   // plugin-admin-styling.spec.ts can prove a plugin's admin UI is styled in

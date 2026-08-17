@@ -60,11 +60,14 @@ export function collectPluginRoutes(
         throw routeInvalidPathError(plugin.name, route.path);
       }
       const fullPath = pluginRouteFullPath(plugin.name, route);
-      // An admin-api route sits ahead of the REST router in dispatch order; one
-      // whose first segment names a system resource would shadow it.
+      // An admin-api route sits ahead of the REST router in dispatch order, so
+      // neither a system-resource first segment NOR a dynamic one may lead its
+      // path: `:resource` matches any segment in the registry, which would
+      // wildcard-shadow the built-in surface the same as a literal name.
+      const firstSegment = route.path.split("/").filter(Boolean)[0] ?? "";
       if (
         route.mount === "admin-api" &&
-        reserved.has(route.path.split("/").filter(Boolean)[0] ?? "")
+        (firstSegment.startsWith(":") || reserved.has(firstSegment))
       ) {
         throw routeCollisionError(route.method, fullPath, [
           plugin.name,

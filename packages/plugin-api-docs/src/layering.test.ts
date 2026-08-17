@@ -3,9 +3,11 @@
  *
  * The plugin reaches core ONLY through `@nextlyhq/plugin-sdk` (the stable
  * surface), is framework-agnostic (zero `next`/`react`), and never imports
- * `@nextlyhq/admin` directly. An ALLOWLIST of permitted specifiers is the
- * boundary a blocklist cannot be. Comments are stripped before matching so a
- * JSDoc example import is not a false positive. Scans `src/` recursively.
+ * `@nextlyhq/admin` directly. The guard REFUSES a blocklist of known-banned
+ * specifier shapes — it rejects every banned package and subpath outright, at
+ * the cost of not proving the absence of an unlisted dependency (a true import
+ * allowlist would). Comments are stripped before matching so a JSDoc example
+ * import is not a false positive. Scans `src/` recursively.
  *
  * @module layering
  * @since alpha

@@ -73,13 +73,13 @@ export interface PluginRoute {
   /**
    * Optional OpenAPI metadata for this route. Derivation stays zero-action by
    * default (path, method, and security come from the route itself); this only
-   * enriches the generated operation with a summary/description/tags. (Plan P5.)
+   * enriches the generated operation with a summary/description/tags.
    */
   openapi?: PluginRouteOpenApi;
 }
 
 /**
- * @public Optional OpenAPI metadata a plugin attaches to a route (Plan P5).
+ * @public Optional OpenAPI metadata a plugin attaches to a route.
  * Every field is optional and flows into the generated operation verbatim.
  */
 export interface PluginRouteOpenApi {
