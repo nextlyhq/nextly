@@ -23,6 +23,8 @@ import {
 
 import { cn } from "@admin/lib/utils";
 
+import { useFieldElementId } from "../field-id-scope";
+
 // ============================================================
 // Types
 // ============================================================
@@ -193,6 +195,12 @@ export function DateInput<TFieldValues extends FieldValues = FieldValues>({
     return field.defaultValue ?? null;
   };
 
+  // Scoped, so a second rendering of the same document on one page cannot
+
+  // duplicate this id and steal the first rendering's label.
+
+  const elementId = useFieldElementId(name);
+
   const {
     field: { value, onChange, onBlur, ref },
     fieldState: { invalid },
@@ -296,7 +304,7 @@ export function DateInput<TFieldValues extends FieldValues = FieldValues>({
   return (
     <Input
       ref={ref}
-      id={name}
+      id={elementId}
       type={inputType}
       value={formatValue(value)}
       onChange={handleChange}

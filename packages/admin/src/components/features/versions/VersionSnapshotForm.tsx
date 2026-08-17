@@ -26,10 +26,11 @@
  */
 
 import type { FieldConfig } from "nextly/config";
-import { useMemo } from "react";
+import { useId, useMemo } from "react";
 import { FormProvider, useForm } from "react-hook-form";
 
 import { EntryFormContent } from "@admin/components/features/entries/EntryForm/EntryFormContent";
+import { FieldIdScopeContext } from "@admin/components/features/entries/fields/field-id-scope";
 
 export interface VersionSnapshotFormProps {
   /** The document's current schema, which decides what is shown. */
@@ -58,12 +59,21 @@ export function VersionSnapshotForm({
   // needing a reset — the panel already remounts this on selection.
   const form = useForm<Record<string, unknown>>({ defaultValues: values });
 
+  // A DOM id scope of its own. A field's id is its path, which is unique in a
+  // form and not on a page — so without this every label here would point at
+  // the live editor's control of the same name: these fields would lose their
+  // accessible name, and clicking a label in a read-only view would move focus
+  // into the editable document.
+  const idScope = useId();
+
   return (
-    <FormProvider {...form}>
-      {/* `mode="edit"` because a version belongs to a document that exists;
-          write-only fields present themselves as they do when editing rather
-          than as they do on a blank create form. */}
-      <EntryFormContent fields={fields} readOnly mode="edit" />
-    </FormProvider>
+    <FieldIdScopeContext.Provider value={idScope}>
+      <FormProvider {...form}>
+        {/* `mode="edit"` because a version belongs to a document that exists;
+            write-only fields present themselves as they do when editing rather
+            than as they do on a blank create form. */}
+        <EntryFormContent fields={fields} readOnly mode="edit" />
+      </FormProvider>
+    </FieldIdScopeContext.Provider>
   );
 }

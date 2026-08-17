@@ -24,6 +24,8 @@ import { Braces, Check, AlertCircle } from "@admin/components/icons";
 import { UI } from "@admin/constants/ui";
 import { cn } from "@admin/lib/utils";
 
+import { useFieldElementId } from "../field-id-scope";
+
 // ============================================================
 // Types
 // ============================================================
@@ -170,6 +172,10 @@ export function JsonInput<TFieldValues extends FieldValues = FieldValues>({
   };
 
   // React Hook Form controller
+  // Scoped, so a second rendering of the same document on one page cannot
+  // duplicate this id and steal the first rendering's label.
+  const elementId = useFieldElementId(name);
+
   const {
     field: { value, onChange },
     fieldState: { invalid },
@@ -280,7 +286,7 @@ export function JsonInput<TFieldValues extends FieldValues = FieldValues>({
       {/* Textarea */}
       <div className="relative">
         <Textarea
-          id={name}
+          id={elementId}
           value={textValue}
           onChange={handleChange}
           onBlur={handleBlur}
@@ -305,7 +311,7 @@ export function JsonInput<TFieldValues extends FieldValues = FieldValues>({
         {/* Parse error message */}
         {parseError && (
           <div
-            id={`${name}-error`}
+            id={`${elementId}-error`}
             className="flex items-center gap-1.5 text-sm text-destructive"
           >
             <AlertCircle className="h-4 w-4 flex-shrink-0" />
