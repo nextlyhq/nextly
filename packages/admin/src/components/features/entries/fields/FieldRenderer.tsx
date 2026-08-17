@@ -37,7 +37,10 @@ import { lazy, Suspense, useState, useEffect } from "react";
 import { useFormContext, useWatch } from "react-hook-form";
 
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
-import { useBranding } from "@admin/context/providers/BrandingProvider";
+import {
+  useBranding,
+  useBrandingStatus,
+} from "@admin/context/providers/BrandingProvider";
 import { evaluateCondition } from "@admin/lib/builder/condition-evaluator";
 
 import { FieldWrapper } from "./FieldWrapper";
@@ -253,6 +256,17 @@ export function FieldRenderer({
 
   // C7/D16 — plugin-registered custom field types, delivered via /admin-meta.
   const branding = useBranding();
+  /*
+   * The plugin list arrives from the SESSION-GATED half of admin-meta, so it is
+   * absent for a moment on every load — and a field whose type lives in a
+   * plugin is deciding what to render during exactly that moment.
+   *
+   * Read the request's state as well as its answer, because absence means two
+   * different things here: no plugin contributes this type, or the list that
+   * would say so has not come back. Only the first is a fact about the project;
+   * treating the second as one reports a correctly-configured field as broken.
+   */
+  const { isPending: pluginsPending } = useBrandingStatus();
 
   // Determine if field should be read-only or disabled
   // Cast to any to handle fields that don't have readOnly/disabled in their admin options
@@ -552,6 +566,13 @@ export function FieldRenderer({
             />
           );
         }
+        /*
+         * The list that would name this type has not answered yet, so nothing
+         * is known about it. Reporting it as unknown here states a conclusion
+         * the data does not support, and it is the WRONG one for every
+         * plugin-contributed field on the page.
+         */
+        if (pluginsPending) return <EditorSkeleton />;
         return (
           <div className="rounded-lg  border border-destructive bg-destructive/10 p-4 text-center">
             <p className="text-sm text-destructive">
