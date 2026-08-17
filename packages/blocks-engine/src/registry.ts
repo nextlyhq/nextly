@@ -455,7 +455,16 @@ export function registryLookup(): BlockTypeLookup {
  * re-register rather than capturing the definitions present when it was built.
  */
 export function registryNestingSource(): NestingSource {
-  return { parentsOf: name => getBlock(name)?.parent };
+  return {
+    parentsOf: name => getBlock(name)?.parent,
+    // The parent's half, read from the container's own slot declaration. An
+    // unregistered parent or an undeclared slot answers `undefined` for the same
+    // reason `parentsOf` does: the missing registration is reported by the
+    // block-type lookup, and refusing the placement as well would describe it as
+    // a layout mistake.
+    slotAllowOf: (parentType, slot) =>
+      getBlock(parentType)?.slots?.[slot]?.allow,
+  };
 }
 
 /**

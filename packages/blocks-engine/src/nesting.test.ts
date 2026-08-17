@@ -8,7 +8,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { canBeRoot, canNest } from "./nesting";
+import { canBeRoot, canNest, canNestInSlot } from "./nesting";
 import type { NestingSource } from "./nesting";
 import { clearBlocks, registerBlocks, registryNestingSource } from "./registry";
 
@@ -157,5 +157,69 @@ describe("a source that answers outside the registry's shape", () => {
     // rather than obeyed: registration is where that declaration is rejected
     // with a message naming it.
     expect(canNest("acme/x", "core/columns", source).allowed).toBe(true);
+  });
+});
+
+describe("canNestInSlot — the parent's half of the rule", () => {
+  const source: NestingSource = {
+    parentsOf: () => undefined,
+    slotAllowOf: (parent, slot) =>
+      parent === "core/accordion" && slot === "children"
+        ? ["core/accordion-item"]
+        : parent === "core/box" && slot === "wide"
+          ? ["core/*"]
+          : undefined,
+  };
+
+  it("admits a type the slot names", () => {
+    expect(
+      canNestInSlot("core/accordion-item", "core/accordion", "children", source)
+        .allowed
+    ).toBe(true);
+  });
+
+  it("REFUSES a type the slot does not name, carrying the permitted set", () => {
+    const verdict = canNestInSlot(
+      "core/heading",
+      "core/accordion",
+      "children",
+      source
+    );
+    expect(verdict.allowed).toBe(false);
+    expect(verdict.reason).toBe("not-allowed-in-slot");
+    // The permitted set travels, because the caller explaining the refusal is
+    // the only place it is still known.
+    expect(verdict.permitted).toEqual(["core/accordion-item"]);
+  });
+
+  it("admits any member of a namespace an entry ends `/*` on", () => {
+    expect(
+      canNestInSlot("core/heading", "core/box", "wide", source).allowed
+    ).toBe(true);
+  });
+
+  it("binds the wildcard to the SEPARATOR, so `core/*` refuses `coreevil/x`", () => {
+    // A prefix test without the `/` admits this, and the name is close enough
+    // to read past in a review.
+    expect(
+      canNestInSlot("coreevil/banner", "core/box", "wide", source).allowed
+    ).toBe(false);
+  });
+
+  it("admits anything when the slot declares no allow-list", () => {
+    // The control for every refusal above: a rule that refused by default would
+    // pass those and make every undeclared slot unfillable.
+    expect(
+      canNestInSlot("core/heading", "core/section", "children", source).allowed
+    ).toBe(true);
+  });
+
+  it("admits anything when the source predates `slotAllowOf` entirely", () => {
+    // An older caller supplying only `parentsOf` keeps the behaviour it had.
+    expect(
+      canNestInSlot("core/heading", "core/accordion", "children", {
+        parentsOf: () => undefined,
+      }).allowed
+    ).toBe(true);
   });
 });

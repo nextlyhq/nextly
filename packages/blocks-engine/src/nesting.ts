@@ -38,6 +38,24 @@ export interface NestingSource {
    * declares no restriction.
    */
   parentsOf(type: string): readonly string[] | undefined;
+  /**
+   * The block names a parent's named slot admits, or undefined when the slot
+   * declares no restriction.
+   *
+   * The PARENT's half of the nesting rule, and the counterpart to
+   * {@link NestingSource.parentsOf} rather than a restatement of it. A slot's
+   * allow-list is the container saying what it will hold; `parent` is the child
+   * saying where it makes sense. `block.ts` is explicit that neither implies the
+   * other, so a document satisfying one can violate the other and only asking
+   * both settles a placement.
+   *
+   * Optional so an existing caller that supplies only `parentsOf` keeps
+   * compiling. A source omitting it answers "no restriction" for every slot,
+   * which is the behaviour those callers already had — the alternative, treating
+   * an absent method as a refusal, would make every placement invalid for a
+   * caller that simply predates the field.
+   */
+  slotAllowOf?(parentType: string, slot: string): readonly string[] | undefined;
 }
 
 /**
@@ -52,7 +70,10 @@ export interface NestingSource {
  * second answer with a sentence about choosing another container, which is
  * advice that cannot be followed.
  */
-export type NestingRefusal = "wrong-parent" | "restricted-at-root";
+export type NestingRefusal =
+  | "wrong-parent"
+  | "restricted-at-root"
+  | "not-allowed-in-slot";
 
 /**
  * A refusal carries its reason by construction.
@@ -123,6 +144,40 @@ export function canNest(
   if (parents === undefined) return ALLOWED;
   if (parents.includes(parentType)) return ALLOWED;
   return { allowed: false, reason: "wrong-parent", permitted: parents };
+}
+
+/**
+ * Whether a parent's named SLOT admits `childType`.
+ *
+ * The parent's half of the rule. `canNest` asks the child where it belongs;
+ * this asks the container what it holds, and a placement needs both — a slot
+ * naming a type does not confine that type to it, and a child that restricts
+ * its parents says nothing about which of that parent's slots may hold it.
+ *
+ * An entry ending `/*` matches a namespace, so `core/*` admits every core
+ * block. The wildcard binds to the `/`, which is what stops `core/*` admitting
+ * `coreevil/banner` — a prefix test without the separator would, and the
+ * failure is silent because the name looks close enough to read past.
+ */
+export function canNestInSlot(
+  childType: string,
+  parentType: string,
+  slot: string,
+  source: NestingSource
+): NestingVerdict {
+  const allow = source.slotAllowOf?.(parentType, slot);
+  // Absent OR empty is no restriction, matching `restrictionFor`. An empty
+  // array reaching here as a refusal would make a slot declared `allow: []`
+  // admit nothing at all, which is a slot no document can fill rather than one
+  // that accepts anything — and registration does not reject it.
+  if (!Array.isArray(allow) || allow.length === 0) return ALLOWED;
+  const admitted = allow.some(entry =>
+    entry.endsWith("/*")
+      ? childType.startsWith(entry.slice(0, -1))
+      : entry === childType
+  );
+  if (admitted) return ALLOWED;
+  return { allowed: false, reason: "not-allowed-in-slot", permitted: allow };
 }
 
 /**
