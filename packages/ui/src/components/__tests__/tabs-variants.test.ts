@@ -186,7 +186,13 @@ describe("what a variant is allowed to change", () => {
     const trigger = classesOf(tabsTriggerVariants());
     expect(trigger).toContain("rounded-none");
     expect(trigger).toContain("border-b-2");
-    expect(trigger).toContain("data-[state=active]:border-b-primary!");
+    expect(trigger).toContain("data-[state=active]:border-b-primary");
+
+    // Unmarked, deliberately. The colour of the line under the selected tab is
+    // the token system's to decide, and an important-marked utility is the one
+    // thing a theme cannot override — so marking it would make this the single
+    // line in the admin that ignores a retheme.
+    expect(trigger).not.toContain("data-[state=active]:border-b-primary!");
     expect(classesOf(tabsListVariants())).toContain("rounded-none");
   });
 });

@@ -183,12 +183,19 @@ const tabsTriggerVariants = cva(
   // Square corners: the active state is a 2px border on the trailing edge that
   // has to run the full length of the trigger and stay flush with its ends.
   //
+  // The active colour is NOT important-marked. Nothing inside this component
+  // competes for it — the inactive arm is mutually exclusive with the active
+  // one — so the only thing an `!` could win against is a caller's class, which
+  // is precisely what a theme supplies. Marking it made the one line under
+  // every selected tab the one line a theme could not restyle, and the failure
+  // read as "the theme did not apply here" rather than as an opt-out.
+  //
   // The trailing edge is the bottom when the strip is horizontal and the right
   // when it is vertical, so the indicator, the half-step pull onto the rail and
   // the active colour all switch axis together off the same `data-orientation`
   // the list reads. Switching only some of them puts the selection affordance
   // on one axis and the line it sits on the other.
-  "inline-flex items-center justify-center whitespace-nowrap rounded-none bg-transparent px-4 py-2 font-medium cursor-pointer transition-all duration-200 border-b-2 relative -mb-0.5 data-[state=active]:border-b-primary! data-[state=active]:text-primary data-[state=inactive]:border-transparent data-[state=inactive]:text-muted-foreground hover:text-primary hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 disabled:cursor-not-allowed data-[orientation=vertical]:border-b-0 data-[orientation=vertical]:mb-0 data-[orientation=vertical]:border-r-2 data-[orientation=vertical]:-mr-0.5 data-[orientation=vertical]:data-[state=active]:border-r-primary",
+  "inline-flex items-center justify-center whitespace-nowrap rounded-none bg-transparent px-4 py-2 font-medium cursor-pointer transition-all duration-200 border-b-2 relative -mb-0.5 data-[state=active]:border-b-primary data-[state=active]:text-primary data-[state=inactive]:border-transparent data-[state=inactive]:text-muted-foreground hover:text-primary hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 disabled:cursor-not-allowed data-[orientation=vertical]:border-b-0 data-[orientation=vertical]:mb-0 data-[orientation=vertical]:border-r-2 data-[orientation=vertical]:-mr-0.5 data-[orientation=vertical]:data-[state=active]:border-r-primary",
   {
     variants: { size: TABS_TRIGGER_SIZES },
     defaultVariants: { size: "default" },
@@ -203,8 +210,8 @@ const tabsTriggerVariants = cva(
  * - Padding: 6px 16px (px-4 py-2)
  * - Font: text-sm (14px), font-medium (500)
  * - Transition: 150ms (design system standard)
- * - Active state: blue text with blue bottom  border border-border (2px)
- * - Hover: blue text with blue bottom  border border-border
+ * - Active state: the accent colour on the text and on the 2px trailing border
+ * - Hover: the same accent, so the target reads before it is chosen
  * - Gmail-inspired clean underline style
  *
  * Accessibility:
