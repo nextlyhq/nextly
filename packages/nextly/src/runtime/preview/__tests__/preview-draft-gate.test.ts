@@ -10,6 +10,7 @@
 import { describe, expect, it } from "vitest";
 
 import { signPreviewToken } from "../../../auth/preview/preview-token";
+import type { ContentRouteConfig } from "../../routing/content-route";
 import { PREVIEW_SCOPE_COOKIE } from "../preview-route";
 import { previewDraftGate } from "../preview-draft-gate";
 
@@ -34,19 +35,22 @@ async function cookiesFor(
 /** A request with no preview cookie at all. */
 const noCookies = () => ({ get: () => undefined });
 
-function gate(
-  cookies: Parameters<typeof previewDraftGate>[0]["cookies"],
-  locale?: string
-) {
-  return previewDraftGate({
-    secret: SECRET,
-    generation: GENERATION,
-    cookies,
-    ...(locale === undefined ? {} : { locale }),
-  });
+function gate(cookies: Parameters<typeof previewDraftGate>[0]["cookies"]) {
+  return previewDraftGate({ secret: SECRET, generation: GENERATION, cookies });
 }
 
 describe("previewDraftGate", () => {
+  it("is accepted as a content route's draft hook", () => {
+    // The usage the docblock shows, asserted rather than described. `satisfies`
+    // is what does the work: if either shape moves, this stops compiling here
+    // instead of in the first site that wires the two together.
+    const hook = gate(noCookies) satisfies NonNullable<
+      ContentRouteConfig<unknown>["draft"]
+    >;
+
+    expect(typeof hook).toBe("function");
+  });
+
   it("grants the entry the token names, BY ID", async () => {
     // The positive control. Every refusal below is also satisfied by a gate
     // that refuses everything, and at each individual assertion the two are the
@@ -95,9 +99,28 @@ describe("previewDraftGate", () => {
   });
 
   it("refuses a locale the token does not cover", async () => {
-    // The third field `previewTokenCovers` compares, and the one the hook is
-    // never told — so a gate that could not be given the route's locale would
-    // skip it, widening a token minted for one translation to all of them.
+    // The third field `previewTokenCovers` compares, taken from the request so
+    // it is the locale the route is about to read in.
+    const cookies = await cookiesFor({
+      collection: "pages",
+      entryId: "entry-1",
+      locale: "en",
+    });
+    const g = gate(cookies);
+
+    expect(await g({ collection: "pages", slug: "about", locale: "fr" })).toBe(
+      false
+    );
+    expect(
+      await g({ collection: "pages", slug: "about", locale: "en" })
+    ).toEqual({ entryId: "entry-1" });
+  });
+
+  it("grants the default language, whose request names the resolved locale", async () => {
+    // The commonest preview there is, and the one a locale-less request breaks.
+    // The editor spells the default language as "no locale" and the mint route
+    // resolves it, so the token names `en` — a request that named nothing would
+    // compare `en` against undefined and refuse every default-language preview.
     const cookies = await cookiesFor({
       collection: "pages",
       entryId: "entry-1",
@@ -105,11 +128,23 @@ describe("previewDraftGate", () => {
     });
 
     expect(
-      await gate(cookies, "fr")({ collection: "pages", slug: "about" })
-    ).toBe(false);
-    expect(
-      await gate(cookies, "en")({ collection: "pages", slug: "about" })
+      await gate(cookies)({ collection: "pages", slug: "about", locale: "en" })
     ).toEqual({ entryId: "entry-1" });
+  });
+
+  it("grants an unscoped token where the site has no locale at all", async () => {
+    // Kept separate from the case above, because only a site configuring no
+    // localization reaches the gate with no locale. A non-localized collection
+    // mints an unscoped token, which covers the entry rather than a
+    // translation, so nothing is compared and nothing is refused.
+    const cookies = await cookiesFor({
+      collection: "pages",
+      entryId: "entry-1",
+    });
+
+    expect(await gate(cookies)({ collection: "pages", slug: "about" })).toEqual(
+      { entryId: "entry-1" }
+    );
   });
 
   it("covers every locale when the token names none", async () => {
@@ -121,7 +156,7 @@ describe("previewDraftGate", () => {
     });
 
     expect(
-      await gate(cookies, "fr")({ collection: "pages", slug: "about" })
+      await gate(cookies)({ collection: "pages", slug: "about", locale: "fr" })
     ).toEqual({ entryId: "entry-1" });
   });
 
