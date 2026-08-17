@@ -9,16 +9,20 @@
  * derivation twice while making the failures harder to read, so what is checked
  * here is the seam — the binding, its guards, and the op passed to `apply`.
  *
- * @module keyboard-moves.test
+ * @module keyboard-actions.test
  */
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { ShortcutProvider } from "@nextlyhq/ui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { BlockDocument } from "@nextlyhq/blocks-engine";
+import {
+  clearBlocks,
+  registerBlocks,
+  type BlockDocument,
+} from "@nextlyhq/blocks-engine";
 
 import type { EditorState } from "./editor-state";
-import { BlockKeyboardMoves } from "./keyboard-moves";
+import { BlockKeyboardActions } from "./keyboard-actions";
 
 // `cleanup`, not an innerHTML wipe. This package does not enable vitest
 // globals, so testing-library registers no cleanup of its own — and clearing
@@ -68,7 +72,7 @@ function editorSpy(
 function mount(editor: EditorState) {
   render(
     <ShortcutProvider>
-      <BlockKeyboardMoves editor={editor} />
+      <BlockKeyboardActions editor={editor} />
     </ShortcutProvider>
   );
 }
@@ -97,7 +101,7 @@ function press(key: string, init: KeyboardEventInit = {}): KeyboardEvent {
   return event;
 }
 
-describe("useBlockKeyboardMoves", () => {
+describe("useBlockKeyboardActions", () => {
   it("moves the selected block down, through the store", () => {
     const editor = editorSpy(pair(), "a");
     mount(editor);
@@ -313,5 +317,180 @@ describe("useBlockKeyboardMoves", () => {
     expect(region).toBeTruthy();
     expect(region.getAttribute("aria-live")).toBe("polite");
     expect(region.textContent).toBe("");
+  });
+
+  it("deletes the selected block through the store", () => {
+    const editor = editorSpy(pair(), "a");
+    mount(editor);
+
+    press("Delete");
+
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+    const op = editor.apply.mock.calls[0][0];
+    expect(op.kind).toBe("remove");
+    expect(op.id).toBe("a");
+  });
+
+  it("deletes on Backspace as well", () => {
+    // Most people reach for Backspace. Binding only Delete leaves half the
+    // authors pressing a key that does nothing.
+    const editor = editorSpy(pair(), "a");
+    mount(editor);
+
+    press("Backspace");
+
+    expect(editor.apply.mock.calls[0][0].kind).toBe("remove");
+  });
+
+  it("moves the selection forward, not backward", () => {
+    // The repeated-delete case: selecting the PREVIOUS sibling would put the
+    // author on a block they already approved, so a second press destroys work
+    // behind them.
+    const editor = editorSpy(
+      documentOf([
+        { id: "a", type: "acme/text", version: 1, props: {} },
+        { id: "b", type: "acme/text", version: 1, props: {} },
+        { id: "c", type: "acme/text", version: 1, props: {} },
+      ]),
+      "b"
+    );
+    mount(editor);
+
+    press("Delete");
+
+    expect(editor.select).toHaveBeenCalledWith("c");
+  });
+
+  it("does not move the selection when the store refuses", () => {
+    // Moving it first would leave the author pointed at a neighbour while the
+    // block they asked to delete is still on the page.
+    const editor = editorSpy(pair(), "a");
+    editor.apply.mockReturnValue(null);
+    mount(editor);
+
+    press("Delete");
+
+    expect(editor.select).not.toHaveBeenCalled();
+    expect(screen.getByRole("status").textContent).toBe("");
+  });
+
+  it("announces what was deleted and how to get it back", () => {
+    // A screen-reader user cannot see an undo control, so the announcement is
+    // the only place the recovery path exists for them.
+    const editor = editorSpy(pair(), "a");
+    mount(editor);
+
+    press("Delete");
+
+    const said = screen.getByRole("status").textContent ?? "";
+    // The type, because this fixture registers no block and so has no label.
+    // The labelled case is asserted below.
+    expect(said).toContain("acme/text deleted");
+    expect(said).toContain("Undo");
+  });
+
+  it("says how many blocks a container takes with it", () => {
+    // A collapsed section looks exactly like an empty one, so the count is the
+    // only thing telling an author what they just lost.
+    const editor = editorSpy(
+      documentOf([
+        {
+          id: "wrap",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          slots: {
+            children: [
+              { id: "x", type: "acme/text", version: 1, props: {} },
+              { id: "y", type: "acme/text", version: 1, props: {} },
+            ],
+          },
+        },
+      ]),
+      "wrap"
+    );
+    mount(editor);
+
+    press("Delete");
+
+    expect(screen.getByRole("status").textContent).toContain("2 blocks inside");
+  });
+
+  // `ctrlKey`, not `metaKey`: the manager resolves `mod` from the platform, and
+  // this environment is not macOS — so a Command press here matches nothing and
+  // would report the binding as missing when it is the fixture that is wrong.
+  it("undoes, and says so", () => {
+    const editor = editorSpy(pair(), "a");
+    (editor as { canUndo: boolean }).canUndo = true;
+    mount(editor);
+
+    press("z", { ctrlKey: true });
+
+    expect(editor.undo).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("status").textContent).toContain("Undone");
+  });
+
+  it("does not undo when there is nothing to undo", () => {
+    // `canUndo` is false on the spy by default. A binding that fired regardless
+    // would call into an empty history on every press.
+    const editor = editorSpy(pair(), "a");
+    mount(editor);
+
+    press("z", { ctrlKey: true });
+
+    expect(editor.undo).not.toHaveBeenCalled();
+  });
+
+  it("redoes on both the mac and windows spellings", () => {
+    const editor = editorSpy(pair(), "a");
+    (editor as { canRedo: boolean }).canRedo = true;
+    mount(editor);
+
+    press("z", { ctrlKey: true, shiftKey: true });
+    press("y", { ctrlKey: true });
+
+    expect(editor.redo).toHaveBeenCalledTimes(2);
+  });
+
+  it("undoes with no selection", () => {
+    // Undo acts on the document's history rather than on whatever is selected,
+    // and the commonest thing to undo is a deletion — which leaves a different
+    // block selected than the one the edit touched.
+    const editor = editorSpy(pair(), null);
+    (editor as { canUndo: boolean }).canUndo = true;
+    mount(editor);
+
+    press("z", { ctrlKey: true });
+
+    expect(editor.undo).toHaveBeenCalledTimes(1);
+  });
+
+  it("names the block by its label when it has one", () => {
+    // An author who inserted "Divider" from the palette should hear "Divider
+    // deleted" — the identifier is what the registry calls it, the label is
+    // what they were shown.
+    clearBlocks();
+    registerBlocks(
+      [
+        {
+          name: "acme/text",
+          version: 1,
+          description: "A block.",
+          example: { props: {} },
+          render: () => null,
+          editor: { label: "Paragraph" },
+        },
+      ] as never,
+      { source: "keyboard-actions-test" }
+    );
+    const editor = editorSpy(pair(), "a");
+    mount(editor);
+
+    press("Delete");
+
+    expect(screen.getByRole("status").textContent).toContain(
+      "Paragraph deleted"
+    );
+    clearBlocks();
   });
 });

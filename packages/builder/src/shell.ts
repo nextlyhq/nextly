@@ -76,14 +76,22 @@ export { InsertPanel } from "./insert-panel";
 export type { InsertPanelProps } from "./insert-panel";
 
 /**
- * Moving the selected block from the keyboard, behind the same client banner.
+ * The editor's keyboard actions — moving, deleting, undoing — behind the same
+ * client banner.
+ *
+ * ONE component rather than a set, because they share a live region: two
+ * regions announcing the same author's actions read them twice, and a listener
+ * has no way to tell which to believe.
  *
  * Published as a component as well as a hook because the shell provides the
  * shortcut context: whatever renders the shell is outside it, so only a child
  * of the shell can register bindings.
  */
-export { BlockKeyboardMoves, useBlockKeyboardMoves } from "./keyboard-moves";
-export type { BlockKeyboardMovesOptions } from "./keyboard-moves";
+export {
+  BlockKeyboardActions,
+  useBlockKeyboardActions,
+} from "./keyboard-actions";
+export type { BlockKeyboardActionsOptions } from "./keyboard-actions";
 
 /**
  * The editor's document state, published beside the canvas because it is a hook
