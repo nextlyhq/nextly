@@ -36,6 +36,7 @@ import { LanguageSwitcher } from "../LanguageSwitcher";
 
 import { AutoSaveIndicator } from "./AutoSaveIndicator";
 import { DiscardDraftConfirmDialog } from "./DiscardDraftConfirmDialog";
+import { DocumentStatusLive } from "./DocumentStatusLive";
 import { effectiveEntryStatus } from "./entry-address";
 import { PreviewActions } from "./PreviewActions";
 import { ShowJSONDialog } from "./ShowJSONDialog";
@@ -437,6 +438,19 @@ export function EntrySystemHeader({
             isDirty={isDirty}
           />
         ) : null}
+        {/* The spoken half of the same information. `AutoSaveIndicator` reports
+            visually only — it carries no live region — so an author using a
+            screen reader was never told whether their work had been stored.
+            This is rendered unconditionally rather than beside the indicator's
+            own condition, because a live region has to be PRESENT BEFORE the
+            text it will announce changes: mounting a region and populating it
+            in the same commit is not reliably announced. */}
+        <DocumentStatusLive
+          autosaveEnabled={autosaveEnabled}
+          isSaving={autosaveStatus === "saving"}
+          isDirty={isDirty}
+          lastSavedAt={autosaveLastSavedAt}
+        />
         {hasStatus && isPublishedEdit ? (
           <>
             <Button

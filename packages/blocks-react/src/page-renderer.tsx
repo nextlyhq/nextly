@@ -122,6 +122,15 @@ export interface PageRendererProps {
    * omitting this does not deny remote fetches.
    */
   hostPolicy?: BlockHostPolicy;
+  /**
+   * Emit `data-nx-node="<node id>"` on each block's root element.
+   *
+   * OFF by default: a published page should not carry editor concerns. An editor
+   * turns it on to get a stable address per node — and it is the ONLY per-node
+   * hook that reaches the DOM independently of styling, because a node with no
+   * compiled styles receives only the block-TYPE class.
+   */
+  nodeAttribute?: boolean;
 }
 
 /**
@@ -174,6 +183,7 @@ export function PageRenderer({
   styles,
   styleContext,
   siteStyles,
+  nodeAttribute,
   blockFallback,
   limits,
   hostPolicy,
@@ -463,6 +473,7 @@ export function PageRenderer({
         classes={classes}
         fallback={blockFallback}
         {...(hostPolicy === undefined ? {} : { hostPolicy })}
+        {...(nodeAttribute === undefined ? {} : { nodeAttribute })}
       />
     </div>
   );

@@ -18,6 +18,7 @@ import { describe, expect, it } from "vitest";
 
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
 
+import { NODE_ID_ATTRIBUTE } from "./block-boundary";
 import { box } from "./blocks/box";
 import { PageRenderer } from "./page-renderer";
 import { createBlockResolver } from "./resolver";
@@ -166,5 +167,60 @@ describe("the site stylesheet", () => {
       },
     });
     expect(hashOf(changed)).not.toBe(hashOf(first));
+  });
+});
+
+describe("the per-node DOM address", () => {
+  /**
+   * The case that DECIDES this, and the one both existing mechanisms skip.
+   *
+   * A node with no compiled styles, no `cssId` and no `attributes` — which is
+   * nearly every node on a real page. `classNameFor` gives such a node only the
+   * block-TYPE class, so hit-testing on the class cannot address it and would
+   * resolve to the wrong instance; and `withNodeAttributes` early-returns before
+   * its clone for exactly this node, so an address joined to the attribute
+   * allowlist would land on almost nothing.
+   *
+   * A fixture carrying styles, a `cssId` or an attribute passes while the common
+   * node stays uncovered, which is why this one carries none of the three.
+   */
+  const BARE: BlockDocument = {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [{ id: "bare-node", type: "core/box", version: 1, props: {} }],
+  };
+
+  function render(nodeAttribute?: boolean) {
+    return renderToStaticMarkup(
+      <PageRenderer
+        document={BARE}
+        blocks={createBlockResolver([box])}
+        styleContext={{ breakpoints: BREAKPOINTS }}
+        {...(nodeAttribute === undefined ? {} : { nodeAttribute })}
+      />
+    );
+  }
+
+  it("is ABSENT by default, so a published page carries no editor concern", () => {
+    // The same reason Gutenberg emits `data-block` in the editor and not in post
+    // content. Opt-in is also reversible; always-on would be a breaking change
+    // to remove once anything scraped it.
+    expect(render()).not.toContain(NODE_ID_ATTRIBUTE);
+  });
+
+  it("reaches the DOM for a node with no styles, no cssId and no attributes", () => {
+    const out = render(true);
+
+    expect(out).toContain(`${NODE_ID_ATTRIBUTE}="bare-node"`);
+  });
+
+  it("carries the node's own id, not the block type", () => {
+    // A type class is shared by every instance, which is why the class cannot
+    // serve as an address. The attribute must be per NODE or it selects the
+    // wrong one confidently.
+    const out = render(true);
+
+    expect(out).toContain('="bare-node"');
+    expect(out).not.toContain(`${NODE_ID_ATTRIBUTE}="core/box"`);
   });
 });
