@@ -21,7 +21,7 @@ import type {
   NextlyColumn,
   RowAction,
 } from "@admin/components/ui/table/data-table";
-import { ListView } from "@admin/components/ui/table/list-view";
+import { ListView, useListColumns } from "@admin/components/ui/table/list-view";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { usePagination } from "@admin/hooks/usePagination";
 import { navigateTo } from "@admin/lib/navigation";
@@ -64,21 +64,6 @@ function ImageSizesContent({
   const [sizes, setSizes] = React.useState<ImageSize[]>([]);
   const [isLoading, setIsLoading] = React.useState(true);
   const { page, pageSize, setPage, setPageSize, resetPage } = usePagination();
-  const [hiddenColumns, setHiddenColumns] = React.useState<Set<string>>(
-    new Set()
-  );
-
-  const toggleColumn = (key: string) => {
-    setHiddenColumns(prev => {
-      const next = new Set(prev);
-      if (next.has(key)) {
-        next.delete(key);
-      } else {
-        next.add(key);
-      }
-      return next;
-    });
-  };
 
   // Fetch sizes on mount
   const loadSizes = React.useCallback(async () => {
@@ -202,14 +187,23 @@ function ImageSizesContent({
     []
   );
 
-  const columns = React.useMemo(
-    () =>
-      allColumns.map(col => ({ ...col, hidden: hiddenColumns.has(col.name) })),
-    [allColumns, hiddenColumns]
-  );
-
   const toggleableColumns = allColumns.filter(
     col => !ALWAYS_VISIBLE.has(col.name)
+  );
+
+  /* The reader's column choice outlives the tab it was made in. */
+  const columnsControl = useListColumns({
+    storageKey: "image-sizes",
+    columns: toggleableColumns,
+  });
+
+  const columns = React.useMemo(
+    () =>
+      allColumns.map(col => ({
+        ...col,
+        hidden: !columnsControl.isColumnVisible(col.name),
+      })),
+    [allColumns, columnsControl]
   );
 
   const rowActions = React.useCallback(
@@ -244,11 +238,7 @@ function ImageSizesContent({
         placeholder: "Search image sizes...",
         isLoading,
       }}
-      columnsControl={{
-        columns: toggleableColumns,
-        isColumnVisible: name => !hiddenColumns.has(name),
-        onToggleColumn: toggleColumn,
-      }}
+      columnsControl={columnsControl}
       slots={{
         afterList: !isLoading && sizes.some(s => s.isDefault) && (
           <div className="flex items-start gap-2 text-xs text-muted-foreground px-1">

@@ -31,7 +31,7 @@ import type {
   NextlyColumn,
   RowAction,
 } from "@admin/components/ui/table/data-table";
-import { ListView } from "@admin/components/ui/table/list-view";
+import { ListView, useListColumns } from "@admin/components/ui/table/list-view";
 import { PAGINATION } from "@admin/constants/pagination";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import {
@@ -228,16 +228,6 @@ function EmailTemplateTable() {
 
   const { page, pageSize, setPage, setPageSize, resetPage } = usePagination();
   const [search, setSearch] = useState("");
-  const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
-
-  const toggleColumn = useCallback((key: string) => {
-    setHiddenColumns(prev => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  }, []);
 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [templateToDelete, setTemplateToDelete] = useState<{
@@ -387,15 +377,24 @@ function EmailTemplateTable() {
     []
   );
 
-  const columns = useMemo(
-    () =>
-      allColumns.map(col => ({ ...col, hidden: hiddenColumns.has(col.name) })),
-    [allColumns, hiddenColumns]
-  );
-
   const toggleableColumns = useMemo(
     () => allColumns.filter(col => !ALWAYS_VISIBLE.has(col.name)),
     [allColumns]
+  );
+
+  /* The reader's column choice outlives the tab it was made in. */
+  const columnsControl = useListColumns({
+    storageKey: "email-templates",
+    columns: toggleableColumns,
+  });
+
+  const columns = useMemo(
+    () =>
+      allColumns.map(col => ({
+        ...col,
+        hidden: !columnsControl.isColumnVisible(col.name),
+      })),
+    [allColumns, columnsControl]
   );
 
   const rowActions = useCallback(
@@ -454,11 +453,7 @@ function EmailTemplateTable() {
               "Failed to load email templates. Please try again.")
             : null
         }
-        columnsControl={{
-          columns: toggleableColumns,
-          isColumnVisible: name => !hiddenColumns.has(name),
-          onToggleColumn: toggleColumn,
-        }}
+        columnsControl={columnsControl}
         skeleton={
           <div className="rounded-lg border border-border bg-card p-4">
             <Skeleton className="h-50 w-full rounded-lg" />
