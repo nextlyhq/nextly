@@ -1,4 +1,11 @@
-import { Alert, AlertDescription, AlertTitle, Button } from "@nextlyhq/ui";
+import {
+  Alert,
+  AlertDescription,
+  AlertTitle,
+  Button,
+  FormActions,
+  FormLayout,
+} from "@nextlyhq/ui";
 import { FormProvider } from "react-hook-form";
 
 import { SettingsSection } from "@admin/components/features/settings";
@@ -48,12 +55,10 @@ export function RoleForm({ roleId }: RoleFormProps) {
   } = useRoleForm(roleId);
 
   return (
-    <div className="space-y-6">
-      {/* Error Alert */}
-
+    <FormLayout>
       {/* Error Alert */}
       {error && (
-        <Alert variant="destructive">
+        <Alert variant="destructive" className="mb-6">
           <AlertTriangle className="h-4 w-4" />
           <AlertTitle>Error</AlertTitle>
           <AlertDescription>{error}</AlertDescription>
@@ -72,50 +77,21 @@ export function RoleForm({ roleId }: RoleFormProps) {
         </div>
       ) : (
         <FormProvider {...form}>
-          {/* Page header (sits above the form, but the submit button targets the
-              form via the `form="role-form"` attribute so we still get a single
-              submit even though the buttons live outside the <form> element). */}
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between pb-2">
-            <div>
-              <h1
-                id="role-form-title"
-                className="text-xl font-semibold text-foreground"
-              >
-                {isEditMode ? "Edit Role" : "Create New Role"}
-              </h1>
-              <p className="text-muted-foreground mt-1">
-                {isEditMode
-                  ? "Update role info and permissions."
-                  : "Define role info and assign permissions."}
-              </p>
-            </div>
-
-            <div className="flex items-center gap-3">
-              <Button
-                variant="outline"
-                type="button"
-                onClick={handleCancel}
-                disabled={isLoading}
-              >
-                Cancel
-              </Button>
-              <Button type="submit" form={ROLE_FORM_ID} disabled={isLoading}>
-                {isLoading ? (
-                  <>
-                    <Loader2
-                      className="h-4 w-4 animate-spin"
-                      aria-hidden="true"
-                    />
-                    <span>{isEditMode ? "Updating..." : "Creating..."}</span>
-                    <span className="sr-only">
-                      {isEditMode ? "Updating role" : "Creating role"}
-                    </span>
-                  </>
-                ) : (
-                  <span>{isEditMode ? "Update Role" : "Create Role"}</span>
-                )}
-              </Button>
-            </div>
+          {/* Page header. The submit button now lives in FormActions, at the
+              end of the form, but keeps the `form="role-form"` attribute so it
+              still targets this form regardless of where in the DOM it sits. */}
+          <div className="pb-6">
+            <h1
+              id="role-form-title"
+              className="text-xl font-semibold text-foreground"
+            >
+              {isEditMode ? "Edit Role" : "Create New Role"}
+            </h1>
+            <p className="text-muted-foreground mt-1">
+              {isEditMode
+                ? "Update role info and permissions."
+                : "Define role info and assign permissions."}
+            </p>
           </div>
 
           <form
@@ -169,9 +145,36 @@ export function RoleForm({ roleId }: RoleFormProps) {
             </SettingsSection>
 
             {/* Field-Level Permissions and RLS Policies are deferred to future plans */}
+
+            <FormActions dirty={form.formState.isDirty}>
+              <Button
+                variant="outline"
+                type="button"
+                onClick={handleCancel}
+                disabled={isLoading}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" form={ROLE_FORM_ID} disabled={isLoading}>
+                {isLoading ? (
+                  <>
+                    <Loader2
+                      className="h-4 w-4 animate-spin"
+                      aria-hidden="true"
+                    />
+                    <span>{isEditMode ? "Updating..." : "Creating..."}</span>
+                    <span className="sr-only">
+                      {isEditMode ? "Updating role" : "Creating role"}
+                    </span>
+                  </>
+                ) : (
+                  <span>{isEditMode ? "Update Role" : "Create Role"}</span>
+                )}
+              </Button>
+            </FormActions>
           </form>
         </FormProvider>
       )}
-    </div>
+    </FormLayout>
   );
 }

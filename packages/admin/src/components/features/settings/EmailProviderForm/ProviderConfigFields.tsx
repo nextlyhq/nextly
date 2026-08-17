@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  FieldShell,
   Input,
   Select,
   SelectContent,
@@ -11,18 +12,12 @@ import {
 } from "@nextlyhq/ui";
 import type { Control, FieldPath } from "react-hook-form";
 
-import {
-  FormControl,
-  FormField,
-  FormItem,
-  FormMessage,
-} from "@admin/components/ui/form";
+import { FormField } from "@admin/components/ui/form";
 import type {
   EmailProviderConfigField,
   EmailProviderDescriptor,
 } from "@admin/services/emailProviderApi";
 
-import { SettingsRow } from "../SettingsRow";
 import { SettingsSection } from "../SettingsSection";
 
 import {
@@ -218,160 +213,183 @@ function ProviderConfigField({
     );
   }
 
+  // The `select` kind is handled in its own `FormField`/`FieldShell` pair,
+  // rather than as one more switch case below. `Select` is `Root` +
+  // `Trigger`, and `Root` never forwards `id`/`aria-describedby`/
+  // `aria-invalid` to a real DOM node, so this kind needs FieldShell's
+  // render-function children — written directly as JSX rather than
+  // `return`ed from inside a switch, which is what the other kinds do.
+  if (field.kind === "select") {
+    const options = field.options;
+    return (
+      <FormField
+        control={control}
+        name={name}
+        render={({ field: controller, fieldState }) => {
+          // Held as the VALUE rather than a flag, so the narrowing the guard
+          // performs survives to both uses below.
+          const legacyValue = isLegacyChoice(controller.value, options)
+            ? controller.value
+            : undefined;
+          // Derived against the legacy choice as well as the descriptor's
+          // own. A stored value that happens to BE the sentinel is rendered
+          // as an item beside "None" carrying the same value, and picking it
+          // is then read as clearing the field — so the one option the
+          // operator cannot choose is the value they already have.
+          const clearValue = clearSelectionValue(
+            legacyValue !== undefined
+              ? [...(options ?? []), { value: legacyValue }]
+              : options
+          );
+          const optional = field.required !== true;
+
+          return (
+            <FieldShell
+              label={field.label}
+              description={description}
+              error={fieldState.error?.message}
+            >
+              {({ id, describedBy, invalid }) => (
+                <Select
+                  value={
+                    typeof controller.value === "string" ? controller.value : ""
+                  }
+                  // The sentinel is a rendering detail and never leaves this
+                  // component: the form holds the empty string, which is
+                  // what the payload reads as "cleared".
+                  onValueChange={next =>
+                    controller.onChange(next === clearValue ? "" : next)
+                  }
+                  disabled={disabled}
+                >
+                  <SelectTrigger
+                    id={id}
+                    aria-describedby={describedBy}
+                    aria-invalid={invalid}
+                  >
+                    <SelectValue
+                      placeholder={field.placeholder ?? "Select an option"}
+                    />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {optional && (
+                      <SelectItem value={clearValue}>None</SelectItem>
+                    )}
+                    {(options ?? []).map(option => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                    {/* The stored choice, when the descriptor no longer
+                        offers it. A provider upgrade may rename or drop an
+                        option while its own parser still accepts the stored
+                        string, and a select with no matching item renders as
+                        unselected — so the operator is shown an empty
+                        control over configuration that is perfectly valid,
+                        and cannot rename or deactivate the provider without
+                        replacing it. Labelled as itself, since the
+                        descriptor no longer has a name for it. */}
+                    {legacyValue !== undefined && (
+                      <SelectItem value={legacyValue}>{legacyValue}</SelectItem>
+                    )}
+                  </SelectContent>
+                </Select>
+              )}
+            </FieldShell>
+          );
+        }}
+      />
+    );
+  }
+
+  // A local `const` rather than repeated `field.kind` reads: narrowing a
+  // property access does not survive into the `render` closure below (a
+  // separate function scope), so the switch would otherwise see the full
+  // union again, including the `"select"` case already handled above, and
+  // TypeScript would no longer consider it exhaustive.
+  const kind = field.kind;
+
   return (
     <FormField
       control={control}
       name={name}
-      render={({ field: controller }) => (
-        <FormItem className="m-0">
-          <SettingsRow label={field.label} description={description}>
-            <FormControl>
-              {(() => {
-                switch (field.kind) {
-                  case "boolean":
-                    return (
-                      <Switch
-                        checked={controller.value === true}
-                        onCheckedChange={controller.onChange}
-                        disabled={disabled}
-                      />
-                    );
+      render={({ field: controller, fieldState }) => (
+        <FieldShell
+          label={field.label}
+          description={description}
+          error={fieldState.error?.message}
+        >
+          {(() => {
+            switch (kind) {
+              case "boolean":
+                return (
+                  <Switch
+                    checked={controller.value === true}
+                    onCheckedChange={controller.onChange}
+                    disabled={disabled}
+                  />
+                );
 
-                  case "number":
-                    return (
-                      <Input
-                        {...controller}
-                        type="number"
-                        inputMode="decimal"
-                        // A native number input applies an implicit step of 1,
-                        // and the browser then blocks submission for any value
-                        // that does not land on it -- so a provider declaring
-                        // a 0.5 rate or timeout could not be saved, even
-                        // though the descriptor and the generated schema both
-                        // accept it. The descriptor has no step to declare, so
-                        // the control must not invent one.
-                        step="any"
-                        min={field.constraints?.min}
-                        max={field.constraints?.max}
-                        placeholder={field.placeholder}
-                        disabled={disabled}
-                        value={
-                          typeof controller.value === "number"
-                            ? controller.value
-                            : ""
-                        }
-                        // An emptied number input reports NaN. Passed on as an
-                        // empty string it reads as "missing" to the schema,
-                        // rather than being coerced into the number zero.
-                        onChange={event =>
-                          controller.onChange(
-                            Number.isNaN(event.target.valueAsNumber)
-                              ? ""
-                              : event.target.valueAsNumber
-                          )
-                        }
-                      />
-                    );
+              case "number":
+                return (
+                  <Input
+                    {...controller}
+                    type="number"
+                    inputMode="decimal"
+                    // A native number input applies an implicit step of 1,
+                    // and the browser then blocks submission for any value
+                    // that does not land on it -- so a provider declaring
+                    // a 0.5 rate or timeout could not be saved, even
+                    // though the descriptor and the generated schema both
+                    // accept it. The descriptor has no step to declare, so
+                    // the control must not invent one.
+                    step="any"
+                    min={field.constraints?.min}
+                    max={field.constraints?.max}
+                    placeholder={field.placeholder}
+                    disabled={disabled}
+                    value={
+                      typeof controller.value === "number"
+                        ? controller.value
+                        : ""
+                    }
+                    // An emptied number input reports NaN. Passed on as an
+                    // empty string it reads as "missing" to the schema,
+                    // rather than being coerced into the number zero.
+                    onChange={event =>
+                      controller.onChange(
+                        Number.isNaN(event.target.valueAsNumber)
+                          ? ""
+                          : event.target.valueAsNumber
+                      )
+                    }
+                  />
+                );
 
-                  case "select": {
-                    // Held as the VALUE rather than a flag, so the narrowing
-                    // the guard performs survives to both uses below.
-                    const legacyValue = isLegacyChoice(
-                      controller.value,
-                      field.options
-                    )
-                      ? controller.value
-                      : undefined;
-                    // Derived against the legacy choice as well as the
-                    // descriptor's own. A stored value that happens to BE the
-                    // sentinel is rendered as an item beside "None" carrying
-                    // the same value, and picking it is then read as clearing
-                    // the field — so the one option the operator cannot choose
-                    // is the value they already have.
-                    const clearValue = clearSelectionValue(
-                      legacyValue !== undefined
-                        ? [...(field.options ?? []), { value: legacyValue }]
-                        : field.options
-                    );
-                    const optional = field.required !== true;
-                    return (
-                      <Select
-                        value={
-                          typeof controller.value === "string"
-                            ? controller.value
-                            : ""
-                        }
-                        // The sentinel is a rendering detail and never leaves
-                        // this component: the form holds the empty string,
-                        // which is what the payload reads as "cleared".
-                        onValueChange={next =>
-                          controller.onChange(next === clearValue ? "" : next)
-                        }
-                        disabled={disabled}
-                      >
-                        <SelectTrigger>
-                          <SelectValue
-                            placeholder={
-                              field.placeholder ?? "Select an option"
-                            }
-                          />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {optional && (
-                            <SelectItem value={clearValue}>None</SelectItem>
-                          )}
-                          {(field.options ?? []).map(option => (
-                            <SelectItem key={option.value} value={option.value}>
-                              {option.label}
-                            </SelectItem>
-                          ))}
-                          {/* The stored choice, when the descriptor no longer
-                              offers it. A provider upgrade may rename or drop
-                              an option while its own parser still accepts the
-                              stored string, and a select with no matching item
-                              renders as unselected — so the operator is shown
-                              an empty control over configuration that is
-                              perfectly valid, and cannot rename or deactivate
-                              the provider without replacing it. Labelled as
-                              itself, since the descriptor no longer has a name
-                              for it. */}
-                          {legacyValue !== undefined && (
-                            <SelectItem value={legacyValue}>
-                              {legacyValue}
-                            </SelectItem>
-                          )}
-                        </SelectContent>
-                      </Select>
-                    );
-                  }
-
-                  case "text":
-                  case "password":
-                    // A `password` kind that is NOT marked secret still hides
-                    // its characters, but it is not a stored credential: it is
-                    // never masked on read, so it stays an ordinary input
-                    // rather than a SecretField.
-                    return (
-                      <Input
-                        {...controller}
-                        type={field.kind === "password" ? "password" : "text"}
-                        placeholder={field.placeholder}
-                        maxLength={field.constraints?.maxLength}
-                        autoComplete="off"
-                        disabled={disabled}
-                        value={
-                          typeof controller.value === "string"
-                            ? controller.value
-                            : ""
-                        }
-                      />
-                    );
-                }
-              })()}
-            </FormControl>
-            <FormMessage className="mt-1.5" />
-          </SettingsRow>
-        </FormItem>
+              case "text":
+              case "password":
+                // A `password` kind that is NOT marked secret still hides
+                // its characters, but it is not a stored credential: it is
+                // never masked on read, so it stays an ordinary input
+                // rather than a SecretField.
+                return (
+                  <Input
+                    {...controller}
+                    type={kind === "password" ? "password" : "text"}
+                    placeholder={field.placeholder}
+                    maxLength={field.constraints?.maxLength}
+                    autoComplete="off"
+                    disabled={disabled}
+                    value={
+                      typeof controller.value === "string"
+                        ? controller.value
+                        : ""
+                    }
+                  />
+                );
+            }
+          })()}
+        </FieldShell>
       )}
     />
   );
