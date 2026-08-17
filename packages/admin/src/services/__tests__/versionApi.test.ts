@@ -126,9 +126,13 @@ describe("versionApi autosave", () => {
     // server's PUT-only route unmatched, and the request would 404 rather than
     // failing anywhere a type could catch.
     expect(putSpy).toHaveBeenCalledTimes(1);
+    // The BODY IS THE SNAPSHOT, not an envelope containing one, and the locale
+    // rides in the query string. This pins the SERVER's contract: the
+    // dispatcher stores the body itself, so an envelope here would be stored as
+    // the snapshot and every field would sit one level too deep.
     expect(putSpy).toHaveBeenCalledWith(
-      "/collections/posts/entries/e1/versions/autosave",
-      { snapshot: { title: "draft" }, locale: "en" }
+      "/collections/posts/entries/e1/versions/autosave?locale=en",
+      { title: "draft" }
     );
   });
 
@@ -136,8 +140,7 @@ describe("versionApi autosave", () => {
     await versionApi.saveAutosave(single, { siteName: "x" });
 
     expect(putSpy).toHaveBeenCalledWith("/singles/settings/versions/autosave", {
-      snapshot: { siteName: "x" },
-      locale: null,
+      siteName: "x",
     });
   });
 
@@ -146,13 +149,18 @@ describe("versionApi autosave", () => {
    * key. Absent and null mean the same thing to this endpoint, and sending the
    * key keeps the body one shape for every document.
    */
-  it("sends an explicit null locale when the document has none", async () => {
+  /**
+   * An unlocalized document sends no locale at all rather than an empty one.
+   * The server reads it from the request params, so an empty value would be a
+   * locale named "" rather than the absence of one.
+   */
+  it("omits the locale entirely when the document has none", async () => {
     await versionApi.saveAutosave(collection, { title: "draft" });
 
-    expect(putSpy).toHaveBeenCalledWith(expect.any(String), {
-      snapshot: { title: "draft" },
-      locale: null,
-    });
+    expect(putSpy).toHaveBeenCalledWith(
+      "/collections/posts/entries/e1/versions/autosave",
+      { title: "draft" }
+    );
   });
 
   it("reads the caller's own recovery point from the same path", async () => {

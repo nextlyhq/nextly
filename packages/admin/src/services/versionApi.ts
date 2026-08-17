@@ -231,14 +231,22 @@ export const versionApi = {
     scope: VersionScope,
     snapshot: unknown,
     locale?: string | null
-  ): Promise<AutosaveWriteResponse> =>
-    protectedApi.put<AutosaveWriteResponse>(`${basePath(scope)}/autosave`, {
-      snapshot,
-      // Sent even when null. Null and absent mean the same thing here (this
-      // document has no locale), unlike on a listing where absent means every
-      // locale, so being explicit costs nothing and reads unambiguously.
-      locale: locale ?? null,
-    }),
+  ): Promise<AutosaveWriteResponse> => {
+    // The BODY IS THE SNAPSHOT, and the locale rides in the query string.
+    //
+    // Wrapping the values in `{ snapshot }` stores that envelope AS the
+    // snapshot, so every field ends up one level too deep and a restore writes
+    // an object with no field names the form recognises. The locale is read
+    // from the request params, so a body-carried one is silently ignored.
+    const search = new URLSearchParams();
+    if (locale) search.set("locale", locale);
+    const query = search.toString();
+
+    return protectedApi.put<AutosaveWriteResponse>(
+      `${basePath(scope)}/autosave${query ? `?${query}` : ""}`,
+      snapshot
+    );
+  },
 
   /**
    * This author's own recovery point, or `null` when they have none.
