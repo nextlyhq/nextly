@@ -30,33 +30,56 @@
  */
 
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
-import { PageRenderer } from "@nextlyhq/blocks-react";
+import { NODE_ID_ATTRIBUTE, PageRenderer } from "@nextlyhq/blocks-react";
 import type { PageRendererProps } from "@nextlyhq/blocks-react";
 import { cn } from "@nextlyhq/ui/utils";
 import { useCallback, useMemo } from "react";
 
 /**
- * The attribute the canvas writes its node ids into, and reads them back from.
+ * The class marking the canvas root, and the boundary the hit-test stops at.
  *
- * A `data-` attribute rather than the scoped CSS class the compiler already
- * emits: that class is the STYLING contract, so keying selection on it would
- * make an unstyled node unselectable and tie the editor's hit-testing to a
- * naming scheme the compiler is free to change. Declared once here because a
- * writer and a reader that spell it separately are two declarations of one
- * name.
+ * The walk needs an upper bound for the reason given in
+ * {@link nodeIdFromEvent}, and that bound has to be identifiable from a DOM
+ * node rather than from React state, because the walk starts at an event
+ * target and climbs.
  */
-export const CANVAS_NODE_ATTR = "data-nx-node";
+export const CANVAS_ROOT_CLASS = "nx-canvas";
 
-/** How a pointer event on the canvas resolves to a node id, or to nothing. */
+/**
+ * How a pointer event on the canvas resolves to a node id, or to nothing.
+ *
+ * `closest` rather than reading the target directly: a click lands on whatever
+ * leaf is under the pointer — a `<span>` inside a heading, an `<img>` inside a
+ * card — and the node that owns it is an ancestor. Reading the target alone
+ * selects nothing for every block that renders more than one element, which is
+ * most of them.
+ *
+ * The attribute name comes from `@nextlyhq/blocks-react` rather than being
+ * spelled here. The renderer writes it and this reads it, so two spellings
+ * would be two declarations of one name, and the day it moves the hit-testing
+ * would resolve nothing while every test that hard-coded it still passed.
+ *
+ * **Bounded at the canvas root, which is not a detail.** The renderer applies
+ * the attribute by cloning the block's root element and returns the output
+ * untouched when it is not a single host element — so a block rendering a
+ * fragment or a component carries none. An unbounded `closest` then walks past
+ * it to the nearest ANCESTOR that has one, and returns that node's id: a
+ * confidently WRONG selection rather than a missing one.
+ *
+ * The two failures are not equally bad. A miss is visible immediately — the
+ * author clicks and nothing happens. A wrong hit selects a container while the
+ * author believes they selected the child inside it, and every edit afterwards
+ * lands on the wrong node with nothing to indicate it.
+ */
 export function nodeIdFromEvent(target: EventTarget | null): string | null {
-  // `closest` rather than reading the target directly: a click lands on whatever
-  // leaf is under the pointer — a `<span>` inside a heading, an `<img>` inside a
-  // card — and the node that owns it is an ancestor. Reading the target alone
-  // selects nothing for every block that renders more than one element, which is
-  // most of them.
   if (!(target instanceof Element)) return null;
-  const owner = target.closest(`[${CANVAS_NODE_ATTR}]`);
-  return owner?.getAttribute(CANVAS_NODE_ATTR) ?? null;
+  const owner = target.closest(`[${NODE_ID_ATTRIBUTE}]`);
+  if (owner === null) return null;
+  // Inside THIS canvas, not merely inside something carrying the attribute. A
+  // canvas rendered within another rendered page would otherwise resolve a
+  // click to the outer page's node.
+  if (owner.closest(`.${CANVAS_ROOT_CLASS}`) === null) return null;
+  return owner.getAttribute(NODE_ID_ATTRIBUTE);
 }
 
 export interface CanvasProps {
@@ -113,14 +136,25 @@ export function Canvas({
   // a selection change, a hover — does not rebuild the rendered tree.
   const page = useMemo(
     () => (
-      <PageRenderer {...render} document={document} siteStyles={siteStyles} />
+      <PageRenderer
+        {...render}
+        document={document}
+        siteStyles={siteStyles}
+        // What makes the hit-testing above possible at all. The renderer emits
+        // the node attribute only when asked, because a PUBLISHED page should
+        // not carry an editor's addressing — so the canvas asks and a route
+        // does not. Spread first and set here deliberately: a caller passing
+        // `nodeAttribute: false` through `render` would silently disable
+        // selection for the whole canvas.
+        nodeAttribute
+      />
     ),
     [render, document, siteStyles]
   );
 
   return (
     <div
-      className={cn("nx-canvas", className)}
+      className={cn(CANVAS_ROOT_CLASS, className)}
       data-nx-selected={selectedId ?? undefined}
       onClick={handleClick}
     >

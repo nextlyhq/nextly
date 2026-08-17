@@ -19,7 +19,9 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { CANVAS_NODE_ATTR, nodeIdFromEvent } from "./canvas";
+import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
+
+import { CANVAS_ROOT_CLASS, nodeIdFromEvent } from "./canvas";
 
 // Explicit because this package does not enable vitest globals, and without
 // them testing-library never registers its own cleanup: every render stays
@@ -36,9 +38,13 @@ afterEach(cleanup);
  * would certify a canvas that can only select blocks rendering exactly one
  * element — which is almost none of them.
  */
+function canvas(children: React.ReactNode) {
+  return <div className={CANVAS_ROOT_CLASS}>{children}</div>;
+}
+
 function block(id: string, label: string) {
   return (
-    <section {...{ [CANVAS_NODE_ATTR]: id }}>
+    <section {...{ [NODE_ID_ATTRIBUTE]: id }}>
       <h2>
         <span data-testid={`leaf-${id}`}>{label}</span>
       </h2>
@@ -48,7 +54,7 @@ function block(id: string, label: string) {
 
 describe("resolving a pointer target to the node that owns it", () => {
   it("walks up from a deep leaf to the block that rendered it", () => {
-    render(<div>{block("node-a", "Heading A")}</div>);
+    render(canvas(block("node-a", "Heading A")));
 
     // Two levels below the element carrying the attribute.
     const leaf = screen.getByTestId("leaf-node-a");
@@ -58,11 +64,11 @@ describe("resolving a pointer target to the node that owns it", () => {
 
   it("resolves to the NEAREST block, so a nested block wins over its parent", () => {
     render(
-      <div>
-        <section {...{ [CANVAS_NODE_ATTR]: "outer" }}>
+      canvas(
+        <section {...{ [NODE_ID_ATTRIBUTE]: "outer" }}>
           {block("inner", "Nested")}
         </section>
-      </div>
+      )
     );
 
     // Without this, a container would swallow every click meant for its
@@ -71,13 +77,26 @@ describe("resolving a pointer target to the node that owns it", () => {
   });
 
   it("resolves to null when the target is outside every block", () => {
-    render(
-      <div>
-        <p data-testid="background">canvas background</p>
-      </div>
-    );
+    render(canvas(<p data-testid="background">canvas background</p>));
 
     expect(nodeIdFromEvent(screen.getByTestId("background"))).toBeNull();
+  });
+
+  it("resolves to null OUTSIDE the canvas, rather than to an ancestor node", () => {
+    // The case the boundary exists for. A block that renders a fragment or a
+    // component carries no attribute of its own, so a click inside it walks up
+    // to whatever ancestor has one. Modelled here as a node OUTSIDE the canvas
+    // root, which is the same walk reaching past the boundary.
+    render(
+      <section {...{ [NODE_ID_ATTRIBUTE]: "outside-node" }}>
+        <span data-testid="stray">not in any canvas</span>
+      </section>
+    );
+
+    // Wrong-and-confident is the failure being prevented: without the bound
+    // this returns "outside-node" and the editor acts on a node the author
+    // never clicked.
+    expect(nodeIdFromEvent(screen.getByTestId("stray"))).toBeNull();
   });
 
   it("resolves to null for a non-Element target, which a document click is", () => {
@@ -97,6 +116,7 @@ describe("selection", () => {
     // hit-testing without standing up a renderer and a registry.
     render(
       <div
+        className={CANVAS_ROOT_CLASS}
         data-testid="surface"
         onClick={e => onSelect(nodeIdFromEvent(e.target))}
       >

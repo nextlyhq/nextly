@@ -47,12 +47,12 @@ export type { BuilderCommand, CommandPaletteProps } from "./command-palette";
  * shell's: it holds a pointer handler and renders `PageRenderer`, so it is
  * interactive in its own right rather than merely stateful.
  *
- * `CANVAS_NODE_ATTR` and `nodeIdFromEvent` ship beside it rather than from the
+ * `CANVAS_ROOT_CLASS` and `nodeIdFromEvent` ship beside it rather than from the
  * root entry even though neither touches React. They describe how a DOM element
  * is matched to a node id, which is only answerable where that DOM exists, and
  * splitting them across two entries would let a host read the attribute name
  * from a server module while the writer lives behind the boundary — two halves
  * of one contract that could then be versioned apart.
  */
-export { CANVAS_NODE_ATTR, Canvas, nodeIdFromEvent } from "./canvas";
+export { CANVAS_ROOT_CLASS, Canvas, nodeIdFromEvent } from "./canvas";
 export type { CanvasProps } from "./canvas";
