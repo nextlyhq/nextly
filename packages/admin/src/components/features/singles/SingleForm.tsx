@@ -590,7 +590,6 @@ export function SingleForm({
   });
   const recovery = useAutosaveRecovery({
     scope: autosaveScope,
-    documentUpdatedAt: document?.updatedAt ?? null,
   });
   const restoreRecovery = useCallback(() => {
     if (!recovery.offer) return;
@@ -607,14 +606,6 @@ export function SingleForm({
     <EntryLocaleProvider value={localeCtx}>
       <div className={cn("space-y-0", className)}>
         <EntryFormProvider form={form} onSubmit={handleSubmit}>
-          {recovery.offer ? (
-            <AutosaveRecoveryBanner
-              savedAt={recovery.offer.savedAt}
-              onRestore={restoreRecovery}
-              onDismiss={recovery.dismiss}
-              className="mx-6 mt-3"
-            />
-          ) : null}
           <FormErrorSummary
             errors={errors}
             submitCount={submitCount}
@@ -684,6 +675,19 @@ export function SingleForm({
                 isRailCollapsed={railCollapsed}
                 lockSlug
               />
+
+              {/* Inside the main column, below the header, matching the entry
+                  editor. Placed above the flex row it sat UNDER the sticky
+                  header, which intercepted pointer events: the offer was
+                  visible and its buttons were not clickable. */}
+              {recovery.offer ? (
+                <AutosaveRecoveryBanner
+                  savedAt={recovery.offer.savedAt}
+                  onRestore={restoreRecovery}
+                  onDismiss={recovery.dismiss}
+                  className="mx-6 mt-3"
+                />
+              ) : null}
 
               {mainFields.length > 0 && (
                 <div className="@4xl/content:p-8 pt-6">
