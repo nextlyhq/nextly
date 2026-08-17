@@ -8,33 +8,20 @@
  * Shows regeneration status when sizes change.
  */
 
-import {
-  Badge,
-  Button,
-  DropdownMenu,
-  DropdownMenuCheckboxItem,
-  DropdownMenuContent,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@nextlyhq/ui";
+import { Badge, Button } from "@nextlyhq/ui";
 import * as React from "react";
 
-import {
-  SettingsLayout,
-  SettingsTableToolbar,
-} from "@admin/components/features/settings";
-import { Columns, Edit, Info, Plus, Trash2 } from "@admin/components/icons";
+import { SettingsLayout } from "@admin/components/features/settings";
+import { Edit, Info, Plus, Trash2 } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
-import { SearchBar } from "@admin/components/shared/search-bar";
 import { Link } from "@admin/components/ui/link";
-import { DataTableView } from "@admin/components/ui/table/data-table";
 import type {
   NextlyColumn,
   RowAction,
 } from "@admin/components/ui/table/data-table";
+import { ListView } from "@admin/components/ui/table/list-view";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { usePagination } from "@admin/hooks/usePagination";
 import { navigateTo } from "@admin/lib/navigation";
@@ -250,93 +237,65 @@ function ImageSizesContent({
   );
 
   return (
-    <div className="space-y-4">
-      {/* Search Bar & Columns Filter */}
-      <SettingsTableToolbar
-        search={
-          <SearchBar
-            value={search}
-            onChange={setSearch}
-            placeholder="Search image sizes..."
-            className="w-full"
-            isLoading={isLoading}
-          />
-        }
-        columns={
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="md" className="bg-background">
-                <Columns className="h-4 w-4" />
-                Columns
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
-              <DropdownMenuLabel>Toggle columns</DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              {toggleableColumns.map(col => (
-                <DropdownMenuCheckboxItem
-                  key={col.name}
-                  checked={!hiddenColumns.has(col.name)}
-                  onCheckedChange={() => toggleColumn(col.name)}
-                >
-                  {typeof col.header === "string" ? col.header : col.name}
-                </DropdownMenuCheckboxItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        }
-      />
-
-      {/* Table */}
-      <DataTableView<ImageSize>
-        columns={columns}
-        rows={paginatedSizes}
-        loading={isLoading}
-        rowHref={size =>
-          buildRoute(ROUTES.SETTINGS_IMAGE_SIZES_EDIT, { id: size.id })
-        }
-        primaryColumn="name"
-        rowActions={rowActions}
-        registryKey="image-sizes"
-        ariaLabel="Image sizes table"
-        emptyMessage={
-          search
-            ? "No image sizes found matching your search."
-            : "No image sizes configured."
-        }
-        // The table owns the pager, so it is placed for whichever view is
-        // showing. This list paginates in memory rather than
-        // over the wire, so the gate counts the filtered rows: a search that
-        // matches nothing should leave no controls behind.
-        pagination={
-          filteredSizes.length > 0
-            ? {
-                currentPage: page,
-                totalPages: Math.max(
-                  1,
-                  Math.ceil(filteredSizes.length / pageSize)
-                ),
-                totalItems: filteredSizes.length,
-                pageSize,
-                onPageChange: setPage,
-                onPageSizeChange: setPageSize,
-                isLoading,
-              }
-            : undefined
-        }
-      />
-
-      {/* Info note about code-defined sizes */}
-      {!isLoading && sizes.some(s => s.isDefault) && (
-        <div className="flex items-start gap-2 text-xs text-muted-foreground px-1">
-          <Info className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-          <span>
-            Sizes marked as <strong>Config</strong> are defined in your
-            nextly.config.ts and cannot be deleted here.
-          </span>
-        </div>
-      )}
-    </div>
+    <ListView<ImageSize>
+      search={{
+        value: search,
+        onChange: setSearch,
+        placeholder: "Search image sizes...",
+        isLoading,
+      }}
+      columnsControl={{
+        columns: toggleableColumns,
+        isColumnVisible: name => !hiddenColumns.has(name),
+        onToggleColumn: toggleColumn,
+      }}
+      slots={{
+        afterList: !isLoading && sizes.some(s => s.isDefault) && (
+          <div className="flex items-start gap-2 text-xs text-muted-foreground px-1">
+            <Info className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+            <span>
+              Sizes marked as <strong>Config</strong> are defined in your
+              nextly.config.ts and cannot be deleted here.
+            </span>
+          </div>
+        ),
+      }}
+      columns={columns}
+      rows={paginatedSizes}
+      loading={isLoading}
+      rowHref={size =>
+        buildRoute(ROUTES.SETTINGS_IMAGE_SIZES_EDIT, { id: size.id })
+      }
+      primaryColumn="name"
+      rowActions={rowActions}
+      registryKey="image-sizes"
+      ariaLabel="Image sizes table"
+      emptyMessage={
+        search
+          ? "No image sizes found matching your search."
+          : "No image sizes configured."
+      }
+      // The table owns the pager, so it is placed for whichever view is
+      // showing. This list paginates in memory rather than
+      // over the wire, so the gate counts the filtered rows: a search that
+      // matches nothing should leave no controls behind.
+      pagination={
+        filteredSizes.length > 0
+          ? {
+              currentPage: page,
+              totalPages: Math.max(
+                1,
+                Math.ceil(filteredSizes.length / pageSize)
+              ),
+              totalItems: filteredSizes.length,
+              pageSize,
+              onPageChange: setPage,
+              onPageSizeChange: setPageSize,
+              isLoading,
+            }
+          : undefined
+      }
+    />
   );
 }
 

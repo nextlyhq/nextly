@@ -8,28 +8,16 @@
  * edit and revoke. Revoked keys are read-only (no row click, no actions).
  */
 
-import {
-  Skeleton,
-  Badge,
-  Button,
-  DropdownMenu,
-  DropdownMenuCheckboxItem,
-  DropdownMenuContent,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@nextlyhq/ui";
+import { Skeleton, Badge } from "@nextlyhq/ui";
 import type React from "react";
 import { useCallback, useMemo, useState, useEffect } from "react";
 
-import { SettingsTableToolbar } from "@admin/components/features/settings";
-import { AlertTriangle, Columns, Edit, Trash2 } from "@admin/components/icons";
-import { SearchBar } from "@admin/components/shared/search-bar";
-import { DataTableView } from "@admin/components/ui/table/data-table";
+import { AlertTriangle, Edit, Trash2 } from "@admin/components/icons";
 import type {
   NextlyColumn,
   RowAction,
 } from "@admin/components/ui/table/data-table";
+import { ListView } from "@admin/components/ui/table/list-view";
 import { PAGINATION } from "@admin/constants/pagination";
 import { usePagination } from "@admin/hooks/usePagination";
 import type { ApiKeyMeta } from "@admin/services/apiKeyApi";
@@ -291,79 +279,47 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
   );
 
   return (
-    <div className="space-y-4">
-      <SettingsTableToolbar
-        search={
-          <SearchBar
-            value={search}
-            onChange={setSearch}
-            placeholder="Search API keys by name, description, or role..."
-            isLoading={isLoading}
-            className="w-full"
-          />
-        }
-        columns={
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="md">
-                <Columns className="h-4 w-4" />
-                Columns
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
-              <DropdownMenuLabel>Toggle columns</DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              {toggleableColumns.map(col => (
-                <DropdownMenuCheckboxItem
-                  key={col.name}
-                  checked={!hiddenColumns.has(col.name)}
-                  onCheckedChange={() => toggleColumn(col.name)}
-                >
-                  {typeof col.header === "string" ? col.header : col.name}
-                </DropdownMenuCheckboxItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        }
-      />
-
-      {isLoading && data.length === 0 ? (
+    <ListView<ApiKeyMeta>
+      search={{
+        value: search,
+        onChange: setSearch,
+        placeholder: "Search API keys by name, description, or role...",
+        isLoading,
+      }}
+      columnsControl={{
+        columns: toggleableColumns,
+        isColumnVisible: name => !hiddenColumns.has(name),
+        onToggleColumn: toggleColumn,
+      }}
+      skeleton={
         <div className="rounded-lg border border-border bg-card p-4">
           <Skeleton className="h-50 w-full rounded-lg" />
         </div>
-      ) : (
-        <>
-          <DataTableView<ApiKeyMeta>
-            columns={columns}
-            rows={paginatedData}
-            loading={isLoading}
-            onRowClick={key => {
-              // Only active keys are editable; revoked keys are read-only.
-              if (key.isActive) onEdit(key);
-            }}
-            primaryColumn="name"
-            rowActions={rowActions}
-            registryKey="api-keys"
-            ariaLabel="API keys table"
-            emptyMessage="No API keys yet. Create your first key to authenticate programmatic access."
-            // The pager belongs to the table, not beside it. Rendered here it
-            // lands inside the card on desktop and in the column's gap on
-            // mobile --
-            // a decision only this component can make, because only it knows
-            // which of the two views is showing.
-            pagination={{
-              currentPage: page,
-              totalPages: Math.max(1, totalPages),
-              pageSize,
-              pageSizeOptions: PAGINATION.TABLE_PAGE_SIZE_OPTIONS,
-              onPageChange: setPage,
-              onPageSizeChange: setPageSize,
-              totalItems,
-              isLoading,
-            }}
-          />
-        </>
-      )}
-    </div>
+      }
+      columns={columns}
+      rows={paginatedData}
+      loading={isLoading}
+      onRowClick={key => {
+        // Only active keys are editable; revoked keys are read-only.
+        if (key.isActive) onEdit(key);
+      }}
+      primaryColumn="name"
+      rowActions={rowActions}
+      registryKey="api-keys"
+      ariaLabel="API keys table"
+      emptyMessage="No API keys yet. Create your first key to authenticate programmatic access."
+      // Inside the table rather than beside it: only the table knows
+      // which of its two views is showing, so only it can place the pager.
+      pagination={{
+        currentPage: page,
+        totalPages: Math.max(1, totalPages),
+        pageSize,
+        pageSizeOptions: PAGINATION.TABLE_PAGE_SIZE_OPTIONS,
+        onPageChange: setPage,
+        onPageSizeChange: setPageSize,
+        totalItems,
+        isLoading,
+      }}
+    />
   );
 };

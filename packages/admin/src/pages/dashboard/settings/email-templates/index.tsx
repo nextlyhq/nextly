@@ -12,24 +12,14 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DropdownMenu,
-  DropdownMenuCheckboxItem,
-  DropdownMenuContent,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
   Skeleton,
 } from "@nextlyhq/ui";
 import type React from "react";
 import { useState, useCallback, useEffect, useMemo } from "react";
 
-import {
-  SettingsLayout,
-  SettingsTableToolbar,
-} from "@admin/components/features/settings";
+import { SettingsLayout } from "@admin/components/features/settings";
 import {
   AlertTriangle,
-  Columns,
   Copy,
   Edit,
   Eye,
@@ -42,11 +32,11 @@ import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { toast } from "@admin/components/ui";
-import { DataTableView } from "@admin/components/ui/table/data-table";
 import type {
   NextlyColumn,
   RowAction,
 } from "@admin/components/ui/table/data-table";
+import { ListView } from "@admin/components/ui/table/list-view";
 import { PAGINATION } from "@admin/constants/pagination";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import {
@@ -475,76 +465,49 @@ function EmailTemplateTable() {
   }
 
   return (
-    <div className="space-y-4">
-      <SettingsTableToolbar
-        search={
-          <SearchBar
-            value={search}
-            onChange={setSearch}
-            placeholder="Search templates by name, slug, or subject..."
-            isLoading={isLoading}
-            className="w-full"
-          />
+    <>
+      <ListView<EmailTemplateRecord>
+        search={{
+          value: search,
+          onChange: setSearch,
+          placeholder: "Search templates by name, slug, or subject...",
+          isLoading,
+        }}
+        columnsControl={{
+          columns: toggleableColumns,
+          isColumnVisible: name => !hiddenColumns.has(name),
+          onToggleColumn: toggleColumn,
+        }}
+        skeleton={
+          <div className="rounded-lg border border-border bg-card p-4">
+            <Skeleton className="h-50 w-full rounded-lg" />
+          </div>
         }
-        columns={
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="md" className="bg-background">
-                <Columns className="h-4 w-4" />
-                Columns
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
-              <DropdownMenuLabel>Toggle columns</DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              {toggleableColumns.map(col => (
-                <DropdownMenuCheckboxItem
-                  key={col.name}
-                  checked={!hiddenColumns.has(col.name)}
-                  onCheckedChange={() => toggleColumn(col.name)}
-                >
-                  {typeof col.header === "string" ? col.header : col.name}
-                </DropdownMenuCheckboxItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        }
+        columns={columns}
+        rows={paginatedTemplates}
+        loading={isLoading}
+        onRowClick={template => handleEdit(template)}
+        primaryColumn="name"
+        rowActions={rowActions}
+        registryKey="email-templates"
+        ariaLabel="Email templates table"
+        emptyMessage="No email templates found. Create a template to get started."
+        // The table owns the pager, so it is placed for whichever view is
+        // showing. Ungated because this list paginates in memory:
+        // `totalPages` is derived from the filtered rows and floored at one
+        // below, so the pager renders its own single-page state instead of
+        // needing to be hidden.
+        pagination={{
+          currentPage: page,
+          totalPages: Math.max(1, totalPages),
+          pageSize,
+          pageSizeOptions: PAGINATION.TABLE_PAGE_SIZE_OPTIONS,
+          onPageChange: setPage,
+          onPageSizeChange: setPageSize,
+          totalItems,
+          isLoading,
+        }}
       />
-
-      {isLoading && templates.length === 0 ? (
-        <div className="rounded-lg border border-border bg-card p-4">
-          <Skeleton className="h-50 w-full rounded-lg" />
-        </div>
-      ) : (
-        <>
-          <DataTableView<EmailTemplateRecord>
-            columns={columns}
-            rows={paginatedTemplates}
-            loading={isLoading}
-            onRowClick={template => handleEdit(template)}
-            primaryColumn="name"
-            rowActions={rowActions}
-            registryKey="email-templates"
-            ariaLabel="Email templates table"
-            emptyMessage="No email templates found. Create a template to get started."
-            // The table owns the pager, so it is placed for whichever view is
-            // showing. Ungated because this list paginates in memory:
-            // `totalPages` is derived from the filtered rows and floored at one
-            // below, so the pager renders its own single-page state instead of
-            // needing to be hidden.
-            pagination={{
-              currentPage: page,
-              totalPages: Math.max(1, totalPages),
-              pageSize,
-              pageSizeOptions: PAGINATION.TABLE_PAGE_SIZE_OPTIONS,
-              onPageChange: setPage,
-              onPageSizeChange: setPageSize,
-              totalItems,
-              isLoading,
-            }}
-          />
-        </>
-      )}
 
       <TemplateDeleteDialog
         open={deleteDialogOpen}
@@ -559,7 +522,7 @@ function EmailTemplateTable() {
         onOpenChange={setPreviewDialogOpen}
         template={templateToPreview}
       />
-    </div>
+    </>
   );
 }
 
