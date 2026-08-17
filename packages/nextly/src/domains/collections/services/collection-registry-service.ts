@@ -38,6 +38,7 @@ import {
   calculateSchemaHash,
   schemaHashesMatch,
 } from "../../schema/services/schema-hash";
+import { VersionsRepository } from "../../versions/versions-repository";
 import {
   clearWebhookRecording,
   setWebhookRecording,
@@ -494,6 +495,25 @@ export class CollectionRegistryService extends BaseRegistryService<
     }
 
     try {
+      // Recovery points go with the collection, and they are swept HERE rather
+      // than in the metadata service because this is the method every deletion
+      // path reaches: the schema route, `db-sync-promote` and `prune` all call
+      // it directly. A sweep placed one level up would cover one caller and
+      // silently miss three.
+      //
+      // They carry no foreign key to this collection, and are excluded from
+      // history listings, version reads and retention pruning alike, so
+      // nothing else would ever collect them. Before the registry row, so a
+      // failure leaves the collection intact and the operation retryable.
+      //
+      // Durable history and working drafts are deliberately NOT touched: what
+      // a deletion owes a document's recorded past is a wider question, and
+      // answering it as a side effect here would decide it by accident.
+      await new VersionsRepository(this.adapter).deleteAutosavesForEntity(
+        "collection",
+        slug
+      );
+
       const count = await this.adapter.delete(
         this.registryTableName,
         this.whereEq("slug", slug)

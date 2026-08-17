@@ -668,32 +668,27 @@ export class VersionsRepository {
     } catch (error) {
       // The existence check and this insert are two statements, so one author
       // saving from two tabs can pass the check twice before either row lands.
-      // Where the unique index exists the loser is rejected here, and rejecting
-      // a PUT that is idempotent by definition would be wrong: rewrite the row
-      // the winner just inserted instead.
+      // Where the unique index exists the loser is rejected here.
       //
-      // This closes the race on Postgres only, which is where the index is
-      // declared. MySQL and SQLite cannot express a partial unique index, so
-      // there both inserts succeed and the document briefly carries two of one
-      // author's recovery points. That is bounded: both rows are the same
-      // author's own work, and `findAutosave` reads the newest, so a recovery
-      // still returns the later snapshot rather than an arbitrary one.
+      // The loser then DROPS its write rather than rewriting the winner's row.
+      // Losing this race is proof of ordering: this request read an empty
+      // result, the winner inserted afterwards, so the stored row is strictly
+      // newer than the snapshot in hand. Overwriting it would replace newer
+      // work with older and stamp it newer still -- the same inversion the
+      // existing-row branch guards against with its compare-and-set, arriving
+      // by a different path.
+      //
+      // Only Postgres reaches this branch at all: MySQL and SQLite cannot
+      // express a partial unique index, so there both inserts succeed and the
+      // document briefly carries two of one author's recovery points. That is
+      // bounded -- both rows are the same author's own work, and `findAutosave`
+      // reads the newest.
       // Rethrow when the handle cannot say which engine it is: constraint
       // codes differ per dialect, so classifying without one would be a guess,
       // and a wrong guess here would swallow a real failure as a retry.
       const dialect = this.db.dialect;
       if (!dialect) throw error;
       if (toDbError(dialect, error).kind !== "unique-violation") throw error;
-      await this.db.update(
-        TABLE,
-        {
-          snapshot: serializedSnapshot,
-          status: input.status,
-          locale: input.locale ?? null,
-          updatedAt: now,
-        },
-        where
-      );
     }
     return { updatedAt: now, locale: input.locale ?? null };
   }

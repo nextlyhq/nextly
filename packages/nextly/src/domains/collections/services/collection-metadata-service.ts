@@ -18,7 +18,6 @@ import type { SupportedDialect } from "../../../types/database";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 import { teardownEntityComponentData } from "../../field-groups/services/teardown-entity-field-group-data";
 import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
-import { VersionsRepository } from "../../versions/versions-repository";
 
 /** Result shape returned by metadata service methods. */
 export interface MetadataServiceResult {
@@ -890,23 +889,6 @@ export class CollectionMetadataService extends BaseService {
   }): Promise<MetadataServiceResult> {
     try {
       const collection = await this.collectionService.getCollection(
-        params.collectionName
-      );
-
-      // Recovery points are keyed by scope slug with no foreign key to this
-      // collection, so dropping the table strands every author's autosave for
-      // every former entry. They are excluded from history listings, version
-      // reads and retention pruning alike, so nothing else would ever collect
-      // them. Swept before the drop for the same reason as the component data
-      // below: a failure here leaves the collection intact and retryable,
-      // whereas sweeping afterwards could leave rows nothing can reach.
-      //
-      // Durable history and working drafts are deliberately NOT touched. What
-      // a deletion owes a document's recorded past is a wider question than
-      // this change, and answering it as a side effect would decide it by
-      // accident.
-      await new VersionsRepository(this.adapter).deleteAutosavesForEntity(
-        "collection",
         params.collectionName
       );
 
