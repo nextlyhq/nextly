@@ -33,6 +33,7 @@ import { cn } from "@admin/lib/utils";
 
 import { useEntryLocale } from "../EntryLocaleContext";
 import { LanguageSwitcher } from "../LanguageSwitcher";
+import { TranslationStatus, translationCounts } from "../TranslationStatus";
 
 import { AutoSaveIndicator } from "./AutoSaveIndicator";
 import { DiscardDraftConfirmDialog } from "./DiscardDraftConfirmDialog";
@@ -259,7 +260,19 @@ export function EntrySystemHeader({
   const entryLocale = useEntryLocale();
   // The default language is edited with `locale === undefined`, and its status
   // can live on the companion, so resolve it to read the right lifecycle.
-  const { defaultLocale } = useLocalization();
+  const { defaultLocale, locales } = useLocalization();
+  // Present only when the entry was fetched with `?translation-status=1` on a
+  // localized collection; undefined otherwise, which both consumers below
+  // treat as "nothing to report" rather than as zero progress.
+  const entryTranslations = entry?._translations as
+    | Record<string, { translated: boolean; status?: string }>
+    | undefined;
+  // Derived once and handed to both the visible instrument and the spoken
+  // region, so the two can never disagree about how far along the document is.
+  const counts = translationCounts(
+    entryTranslations,
+    locales.map(l => l.code)
+  );
   const inputRef = useRef<HTMLInputElement>(null);
   const [unpublishOpen, setUnpublishOpen] = useState(false);
   const [discardDraftOpen, setDiscardDraftOpen] = useState(false);
@@ -400,6 +413,20 @@ export function EntrySystemHeader({
         {onLocaleChange && (
           <LanguageSwitcher value={locale} onChange={onLocaleChange} />
         )}
+        {/* Beside the switcher rather than in the document rail: the switcher
+            answers "which language am I editing" and this answers "what state
+            is every other language in", which is the same question continued.
+            Splitting them across two panels made the reader assemble one fact
+            from two places. Self-hides when localization is off. */}
+        <TranslationStatus
+          {...(entryTranslations === undefined
+            ? {}
+            : { translations: entryTranslations })}
+          {...(locale === undefined ? {} : { activeLocale: locale })}
+          {...(onLocaleChange === undefined
+            ? {}
+            : { onSelect: onLocaleChange })}
+        />
         {/* Directly left of the submit cluster, which is where an author looks
             for it: checking how something reads is part of deciding to publish
             it, not a document-management action like Duplicate or Delete. The
@@ -450,6 +477,12 @@ export function EntrySystemHeader({
           isSaving={autosaveStatus === "saving"}
           isDirty={isDirty}
           lastSavedAt={autosaveLastSavedAt}
+          {...(entryTranslations === undefined
+            ? {}
+            : {
+                translatedCount: counts.translated,
+                localeCount: counts.total,
+              })}
         />
         {hasStatus && isPublishedEdit ? (
           <>
