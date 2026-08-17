@@ -244,3 +244,54 @@
 .nx-insert-panel__label {
   overflow-wrap: break-word;
 }
+
+/*
+ * The selected block.
+ *
+ * `outline` rather than `border`, because an outline is drawn outside the box
+ * model and changes no geometry — a border would move the block by its own
+ * width the moment it was selected, so choosing a block would reflow the page
+ * around it and the author would be editing a layout the visitor never sees.
+ *
+ * A NEGATIVE offset draws the ring just inside the element's edge. Outside it,
+ * a block flush against the canvas edge has its indicator clipped, and adjacent
+ * blocks' rings overlap into what reads as one thick line between them.
+ */
+.nx-canvas [data-nx-selected] {
+  outline: 2px solid var(--nx-primary);
+  outline-offset: -2px;
+}
+
+/*
+ * A block that draws nothing still has to be selectable and visible when it is.
+ * `core/spacer` is deliberate empty space and `core/divider` is a single rule,
+ * so an outline is the only thing distinguishing "selected" from "not there" —
+ * which is why the ring is drawn inside rather than around, and why nothing
+ * here depends on the block having any content of its own.
+ */
+.nx-canvas [data-nx-selected]:empty {
+  min-height: 2px;
+}
+
+/*
+ * Available to assistive technology, absent from the page.
+ *
+ * `display: none` and `visibility: hidden` both remove an element from the
+ * accessibility tree as well as from view, so neither can carry an
+ * announcement. This clips the element to nothing instead, which leaves it
+ * rendered — and a live region has to be rendered to be watched.
+ *
+ * `white-space: nowrap` because a 1px-wide box wraps its text to one character
+ * per line, and some screen readers read the result letter by letter.
+ */
+.nx-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border-width: 0;
+}

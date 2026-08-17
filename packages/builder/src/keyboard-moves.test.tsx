@@ -11,14 +11,14 @@
  *
  * @module keyboard-moves.test
  */
-import { cleanup, render } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { ShortcutProvider } from "@nextlyhq/ui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
 
 import type { EditorState } from "./editor-state";
-import { useBlockKeyboardMoves } from "./keyboard-moves";
+import { BlockKeyboardMoves } from "./keyboard-moves";
 
 // `cleanup`, not an innerHTML wipe. This package does not enable vitest
 // globals, so testing-library registers no cleanup of its own — and clearing
@@ -57,15 +57,18 @@ function editorSpy(
   } as unknown as EditorState & { apply: ReturnType<typeof vi.fn> };
 }
 
-function Harness({ editor }: { editor: EditorState }) {
-  useBlockKeyboardMoves({ editor });
-  return null;
-}
-
+/**
+ * Mounts the COMPONENT rather than calling the hook.
+ *
+ * That is what a host renders, and it is the half carrying the live region: a
+ * harness that called the hook and returned null would exercise the bindings
+ * while leaving the announcement untested — which is how the effect the rule
+ * returns went unconsumed in the first place.
+ */
 function mount(editor: EditorState) {
   render(
     <ShortcutProvider>
-      <Harness editor={editor} />
+      <BlockKeyboardMoves editor={editor} />
     </ShortcutProvider>
   );
 }
@@ -84,7 +87,13 @@ function press(key: string, init: KeyboardEventInit = {}): KeyboardEvent {
     cancelable: true,
     ...init,
   });
-  document.dispatchEvent(event);
+  // Wrapped in `act` because the listener is on `document` rather than on a
+  // rendered node: testing-library wraps its own `fireEvent`, but a direct
+  // dispatch is outside that, so a state update the handler makes is not
+  // flushed before the assertion reads the DOM.
+  act(() => {
+    document.dispatchEvent(event);
+  });
   return event;
 }
 
@@ -203,5 +212,106 @@ describe("useBlockKeyboardMoves", () => {
     const op = editor.apply.mock.calls[0]?.[0];
     expect(op?.kind).toBe("move");
     expect(op?.dropSlotIfEmpty).toEqual({ parentId: "wrap", slot: "children" });
+  });
+
+  it("announces the move, naming what the effect was", () => {
+    // A keyboard author cannot see the result, and `keyboardMovePosition`
+    // returns `effect` for exactly this. Dropping it made a reorder and a
+    // change of parent identical to someone not looking at the screen.
+    const editor = editorSpy(pair(), "a");
+    mount(editor);
+
+    press("ArrowDown", { altKey: true });
+
+    const region = screen.getByRole("status");
+    expect(region.textContent).toContain("Block moved");
+  });
+
+  it("distinguishes leaving a container from reordering", () => {
+    // The separating case. Both are "the block moved"; only one changes which
+    // block CONTAINS it, and that is the difference a screen reader must carry.
+    const editor = editorSpy(
+      documentOf([
+        {
+          id: "wrap",
+          type: "acme/columns",
+          version: 1,
+          props: {},
+          slots: {
+            children: [
+              { id: "inner", type: "acme/text", version: 1, props: {} },
+            ],
+          },
+        },
+      ]),
+      "inner"
+    );
+    mount(editor);
+
+    press("ArrowLeft", { altKey: true });
+
+    expect(screen.getByRole("status").textContent).toContain(
+      "out of its container"
+    );
+  });
+
+  it("says nothing when the move was refused", () => {
+    // The first block cannot move up. Announcing a move that did not happen is
+    // worse than silence, because it cannot be told from one that did.
+    const editor = editorSpy(pair(), "a");
+    mount(editor);
+
+    press("ArrowUp", { altKey: true });
+
+    expect(screen.getByRole("status").textContent).toBe("");
+  });
+
+  it("says nothing when the store refuses the op", () => {
+    // `apply` answering null means the document moved underneath the press.
+    // The rule permitted it; the store did not.
+    const editor = editorSpy(pair(), "a");
+    editor.apply.mockReturnValue(null);
+    mount(editor);
+
+    press("ArrowDown", { altKey: true });
+
+    expect(screen.getByRole("status").textContent).toBe("");
+  });
+
+  it("re-announces a repeated move rather than falling silent", () => {
+    // Two presses of the same direction produce the same sentence, and a live
+    // region does not re-read text that did not change — so the second press
+    // would be silent without something making the value differ.
+    const editor = editorSpy(
+      documentOf([
+        { id: "a", type: "acme/text", version: 1, props: {} },
+        { id: "b", type: "acme/text", version: 1, props: {} },
+        { id: "c", type: "acme/text", version: 1, props: {} },
+      ]),
+      "a"
+    );
+    mount(editor);
+
+    press("ArrowDown", { altKey: true });
+    const first = screen.getByRole("status").textContent;
+    press("ArrowDown", { altKey: true });
+    const second = screen.getByRole("status").textContent;
+
+    expect(first).not.toBe(second);
+    // And both still read as the same sentence to a listener: the difference is
+    // a zero-width space, not different wording.
+    expect(second?.replace(/\u200b/g, "")).toBe(first?.replace(/\u200b/g, ""));
+  });
+
+  it("renders the live region before any move happens", () => {
+    // A region added to the page at the moment it gains text is frequently not
+    // announced at all — the assistive technology has nothing it was already
+    // watching. Present and empty from the first render.
+    mount(editorSpy(pair(), "a"));
+
+    const region = screen.getByRole("status");
+    expect(region).toBeTruthy();
+    expect(region.getAttribute("aria-live")).toBe("polite");
+    expect(region.textContent).toBe("");
   });
 });

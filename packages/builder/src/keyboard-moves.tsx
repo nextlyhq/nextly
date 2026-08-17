@@ -24,7 +24,11 @@ import { useShortcuts } from "@nextlyhq/ui";
 import * as React from "react";
 
 import type { EditorState } from "./editor-state";
-import { keyboardMovePosition, type MoveDirection } from "./keyboard-move";
+import {
+  keyboardMovePosition,
+  type MoveDirection,
+  type MoveEffect,
+} from "./keyboard-move";
 
 /**
  * The bindings, and why these keys.
@@ -66,6 +70,24 @@ const MOVE_KEYS: ReadonlyArray<{
   },
 ];
 
+/**
+ * What each effect is announced as.
+ *
+ * Derived from the effect the rule already decided rather than inferred here
+ * from the direction pressed. `alt+ArrowLeft` is `outdent` only when there is a
+ * container to leave, and re-deriving it from the keystroke would announce a
+ * move out of a group that never happened.
+ *
+ * Three sentences rather than one, because the three are not the same event to
+ * someone who cannot see the result: reordering keeps a block among its
+ * siblings, while indenting and outdenting change which block CONTAINS it.
+ */
+const EFFECT_ANNOUNCEMENT: Readonly<Record<MoveEffect, string>> = {
+  reorder: "Block moved",
+  indent: "Block moved into the container above it",
+  outdent: "Block moved out of its container",
+};
+
 export interface BlockKeyboardMovesOptions {
   /**
    * The editor whose document these move blocks in.
@@ -95,7 +117,22 @@ export interface BlockKeyboardMovesOptions {
 export function useBlockKeyboardMoves({
   editor,
   enabled = true,
-}: BlockKeyboardMovesOptions): void {
+}: BlockKeyboardMovesOptions): string {
+  // The message a live region reads out. Held as state rather than written to
+  // the DOM directly so React owns the node — a region mutated behind React's
+  // back is reverted by the next render, silently and only sometimes.
+  const [announcement, setAnnouncement] = React.useState("");
+
+  // A move can repeat the previous effect — two presses of alt+ArrowDown are
+  // both "Block moved" — and a live region does not re-announce text that did
+  // not change. The zero-width space alternates the string so each press is a
+  // new value, without changing what is read aloud.
+  const announce = React.useCallback((message: string) => {
+    setAnnouncement(previous =>
+      previous.replace(/\u200b$/, "") === message ? `${message}\u200b` : message
+    );
+  }, []);
+
   // The newest editor, reachable from a binding registered once. The shortcut
   // layer is deliberately not rebuilt when its bindings change — rebuilding
   // moves the layer to the top of its depth and silently changes precedence —
@@ -135,22 +172,33 @@ export function useBlockKeyboardMoves({
           // be an error message for pressing a key that did nothing.
           if (move === null) return;
 
-          editorNow.apply({
+          const applied = editorNow.apply({
             kind: "move",
             id: selectedId,
             to: move.to,
             dropSlotIfEmpty: move.dropSlotIfEmpty,
           });
+          // Announced only once the store has accepted it. A keyboard author
+          // cannot see the result, and the store may refuse — announcing before
+          // it answered would report a move that did not happen, which is worse
+          // than silence because it cannot be told from one that did.
+          //
+          // Refusals stay silent, deliberately. "This block is already first"
+          // on every press at the end of a list is noise an author cannot act
+          // on, and the block not moving is itself the answer.
+          if (applied !== null) announce(EFFECT_ANNOUNCEMENT[move.effect]);
           // The selection deliberately does NOT change. The block that moved is
           // the block still selected, so a second press continues moving the
           // same block — which is what makes a run of presses walk it across the
           // page rather than moving a different block each time.
         },
       })),
-    []
+    [announce]
   );
 
   useShortcuts(bindings, { name: "builder-block-moves", enabled });
+
+  return announcement;
 }
 
 /**
@@ -167,7 +215,20 @@ export function useBlockKeyboardMoves({
 export function BlockKeyboardMoves({
   editor,
   enabled,
-}: BlockKeyboardMovesOptions): null {
-  useBlockKeyboardMoves({ editor, enabled });
-  return null;
+}: BlockKeyboardMovesOptions): React.JSX.Element {
+  const announcement = useBlockKeyboardMoves({ editor, enabled });
+
+  // `polite`, not `assertive`: a move is the author's own action and its result
+  // can wait for a pause. Assertive interrupts whatever is being read, which for
+  // a run of presses means talking over itself.
+  //
+  // The region is present from the first render rather than appearing with its
+  // first message. A live region added to the page at the same moment it gains
+  // text is frequently not announced at all, because the assistive technology
+  // has nothing it was already watching.
+  return (
+    <p aria-live="polite" role="status" className="nx-sr-only">
+      {announcement}
+    </p>
+  );
 }
