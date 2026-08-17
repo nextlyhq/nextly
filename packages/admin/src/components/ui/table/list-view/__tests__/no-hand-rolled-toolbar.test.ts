@@ -35,6 +35,12 @@ const NOT_YET_CONVERTED = [
   // reports itself rather than about the toolbar.
   "pages/dashboard/settings/email-providers/index.tsx",
   "pages/dashboard/settings/email-templates/index.tsx",
+  // Its LIST is converted. Error and loading are handled by EARLY RETURNS that
+  // each render a search field beside a message and no table, so the toolbar
+  // disappears entirely while the first response is outstanding. Converting
+  // those is a question about how a list reports loading and failure, which
+  // `UserTable` answers by keeping the toolbar mounted and making both table
+  // states.
   "pages/dashboard/singles/components/SinglesTable.tsx",
 ];
 
