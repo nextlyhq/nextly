@@ -22,6 +22,18 @@ ruleTester.run("no-palette-classes", rule, {
   ],
   invalid: [
     {
+      // The bare marker records no reason, so it suppresses nothing.
+      code: `// design-lint-ok\n       const a = <div className="bg-red-500" />;`,
+      errors: 1,
+    },
+    {
+      // Incidental text containing the marker is not a directive — here the
+      // surrounding words argue the opposite of an exemption.
+      code: `// this is not-design-lint-ok: please fix\n       const a = <div className="bg-red-500" />;`,
+      errors: 1,
+    },
+
+    {
       // An ARBITRARY variant carries brackets, an equals sign and a colon of
       // its own, so a pattern that consumes the variant prefix cannot reach the
       // utility behind it and reports clean.

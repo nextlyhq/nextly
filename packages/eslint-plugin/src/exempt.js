@@ -1,4 +1,4 @@
-import { EXEMPTION_MARKER } from "./vocabulary.js";
+import { hasExemptionDirective } from "./vocabulary.js";
 
 /**
  * Whether the line a node sits on carries the exemption marker.
@@ -18,7 +18,7 @@ export function isExempt(sourceCode, node) {
     .getAllComments()
     .some(
       comment =>
-        comment.value.includes(EXEMPTION_MARKER) &&
+        hasExemptionDirective(comment.value) &&
         (comment.loc.start.line === start ||
           comment.loc.end.line === start ||
           comment.loc.end.line === start - 1)

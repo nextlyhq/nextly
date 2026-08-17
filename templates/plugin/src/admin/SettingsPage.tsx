@@ -1,6 +1,6 @@
 /**
- * Example plugin settings page, rendered at `/admin/plugins/<slug>` and inside
- * a per-component error boundary (D53).
+ * Example plugin settings page, rendered at `/admin/plugins/<slug>` and wrapped in an
+ * error boundary, so a mistake here cannot take the admin down with it.
  *
  * Every class here is a design token utility, so this page follows the admin's
  * theme and its light/dark modes with no styling work of its own. Build your
