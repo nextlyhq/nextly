@@ -114,16 +114,26 @@ export const EXEMPTION_MARKER = "design-lint-ok";
  * where the previous caller left off, and the misses would look like clean code.
  *
  * The match is anchored on a class-list boundary so `translate-x-1/2` (which
- * contains "slate-x") and a hue named in prose are not read as utilities.
- * Variants (`hover:`, `dark:`) and the `!` important marker are allowed to
- * precede the utility, and an opacity suffix (`/40`) to follow it.
+ * contains "slate-x") and a hue named in prose are not read as utilities. The
+ * `!` important marker may precede the utility and an opacity suffix (`/40`)
+ * may follow it.
+ *
+ * A VARIANT SEPARATOR counts as a boundary, rather than the variants themselves
+ * being matched. Enumerating them cannot be made complete: Tailwind admits
+ * arbitrary variants containing brackets, equals signs and colons of their own —
+ * `data-[state=open]:`, `supports-[display:grid]:`, `[&>*]:` — so a pattern that
+ * consumes the prefix has to model the whole variant grammar, and every shape it
+ * has not met yet reads as clean. Anchoring on the `:` that ends any variant
+ * needs to model none of it. The trade is that the reported class names the
+ * utility rather than the whole expression, which is the part being asked to
+ * change anyway.
  */
 export function createPaletteClassPattern({ global = false } = {}) {
   const utils = COLOR_UTILS.join("|");
   const hues = PALETTE_HUES.join("|");
   const shades = PALETTE_SHADES.join("|");
   return new RegExp(
-    `(?:^|[\\s"'\`{])((?:[a-z-]+:)*!?(?:${utils})-(?:${hues})-(?:${shades})(?:\\/\\d{1,3})?)(?![\\w-])`,
+    `(?:^|[\\s"'\`{:])(!?(?:${utils})-(?:${hues})-(?:${shades})(?:\\/\\d{1,3})?)(?![\\w-])`,
     global ? "g" : ""
   );
 }
@@ -184,8 +194,14 @@ export function stripExemptColorPieces(text) {
       .replace(/\/\*[\s\S]*?\*\//g, "")
       .replace(/url\([^)]*\)/g, "")
       .replace(/placeholder\s*[:=]\s*["'][^"']*["']/g, "")
-      // black / white, with an optional 2-digit alpha (`#00000033` scrims)
-      .replace(/#(?:ffffff|fff|000000|000)(?:[0-9a-f]{2})?\b/gi, "")
+      // Black and white in every hex length CSS accepts, each with its own
+      // alpha form: `#RGB` takes one alpha digit (`#0000`), `#RRGGBB` takes two
+      // (`#00000033`). Offering only the 6-digit pair's alpha rejected `#0000`
+      // and `#fff8` — mode-invariant scrims the rule advertises as legitimate.
+      .replace(
+        /#(?:ffffff(?:[0-9a-f]{2})?|000000(?:[0-9a-f]{2})?|fff[0-9a-f]?|000[0-9a-f]?)\b/gi,
+        ""
+      )
       .replace(/rgba?\(\s*0\s*[,\s]\s*0\s*[,\s]\s*0[^)]*\)/gi, "")
       .replace(/rgba?\(\s*255\s*[,\s]\s*255\s*[,\s]\s*255[^)]*\)/gi, "")
   );

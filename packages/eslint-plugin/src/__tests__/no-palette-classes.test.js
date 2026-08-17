@@ -22,6 +22,27 @@ ruleTester.run("no-palette-classes", rule, {
   ],
   invalid: [
     {
+      // An ARBITRARY variant carries brackets, an equals sign and a colon of
+      // its own, so a pattern that consumes the variant prefix cannot reach the
+      // utility behind it and reports clean.
+      code: `const a = <div className="data-[state=open]:bg-red-500" />;`,
+      errors: 1,
+    },
+    {
+      code: `const a = <div className="supports-[display:grid]:bg-red-500" />;`,
+      errors: 1,
+    },
+    {
+      // An arbitrary SELECTOR variant, which is bracket-led rather than named.
+      code: `const a = <div className="[&>*]:bg-red-500" />;`,
+      errors: 1,
+    },
+    {
+      // A variant stack ending in the important marker still resolves.
+      code: `const a = <div className="dark:hover:!bg-red-500" />;`,
+      errors: 1,
+    },
+    {
       code: `const a = <div className="bg-red-500" />;`,
       errors: [
         {
