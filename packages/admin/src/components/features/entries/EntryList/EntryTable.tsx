@@ -32,7 +32,10 @@ import type {
   DataTableSelection,
   RowAction,
 } from "@admin/components/ui/table/data-table";
-import { ListView } from "@admin/components/ui/table/list-view";
+import {
+  ListView,
+  type ListColumnsControl,
+} from "@admin/components/ui/table/list-view";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useLocalization } from "@admin/hooks/useLocalization";
 
@@ -109,14 +112,15 @@ export interface EntryTableProps {
   onBulkUnpublish?: (entryIds: string[]) => void;
   /** Whether a bulk publish/unpublish request is in flight. */
   isBulkPublishing?: boolean;
-  /** Column visibility state (controlled by parent for persistence) */
-  columnVisibility?: Record<string, boolean>;
-  /** Callback when column visibility changes */
-  onColumnVisibilityChange?: (
-    updater: (prev: Record<string, boolean>) => Record<string, boolean>
-  ) => void;
-  /** Callback to reset column visibility to defaults */
-  onResetColumnVisibility?: () => void;
+  /**
+   * The reader's column choice, as the control `ListView` renders.
+   *
+   * One prop rather than the three this took before — a visibility record, a
+   * change handler and a reset — which this component then recombined into
+   * exactly this shape. The owner builds it with `useListColumns`, so the
+   * choice persists the same way it does on every other list.
+   */
+  columnsControl?: ListColumnsControl<EntryRow>;
   /** Callback when row selection changes */
   onSelectionChange?: (selectedIds: string[]) => void;
   /** Current status filter value */
@@ -184,9 +188,7 @@ export const EntryTable = forwardRef<EntryTableRef, EntryTableProps>(
       onBulkPublish,
       onBulkUnpublish,
       isBulkPublishing = false,
-      columnVisibility,
-      onColumnVisibilityChange,
-      onResetColumnVisibility,
+      columnsControl,
       onSelectionChange,
       status = "all",
       onStatusChange,
@@ -215,8 +217,8 @@ export const EntryTable = forwardRef<EntryTableRef, EntryTableProps>(
     // -------------------------------------------------------------------------
 
     const columns = useMemo(
-      () => buildEntryColumns(collection, columnVisibility),
-      [collection, columnVisibility]
+      () => buildEntryColumns(collection, columnsControl?.isColumnVisible),
+      [collection, columnsControl]
     );
 
     const titleField = useMemo(
@@ -315,15 +317,6 @@ export const EntryTable = forwardRef<EntryTableRef, EntryTableProps>(
       onSearchChange(value);
     };
 
-    const isColumnVisible = (name: string) =>
-      columnVisibility?.[name] !== false;
-    const handleToggleColumn = (name: string) => {
-      onColumnVisibilityChange?.(prev => ({
-        ...prev,
-        [name]: prev[name] === false,
-      }));
-    };
-
     // -------------------------------------------------------------------------
     // Filters (status + date range) rendered into the toolbar dropdown
     // -------------------------------------------------------------------------
@@ -382,12 +375,7 @@ export const EntryTable = forwardRef<EntryTableRef, EntryTableProps>(
           placeholder: `Search ${collection.label}...`,
           inputProps: { "data-entry-search-input": true },
         }}
-        columnsControl={{
-          columns,
-          isColumnVisible,
-          onToggleColumn: handleToggleColumn,
-          onReset: onResetColumnVisibility,
-        }}
+        columnsControl={columnsControl && { ...columnsControl, columns }}
         hasActiveFilters={hasAnyActiveFilters}
         filters={
           showFilterDropdown ? (
