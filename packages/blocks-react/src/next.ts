@@ -24,6 +24,7 @@ import type {
   DocumentLimits,
   RemotePatternInput,
   SeoImageCandidate,
+  SiteSheetInput,
   StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
 import type { Metadata } from "next";
@@ -118,6 +119,30 @@ export interface BlocksPageConfig
    * artifact yet. Ignored for an entry whose `styles` produced a sheet.
    */
   styleContext?: StyleCompileContext;
+  /**
+   * The site's design tokens, fonts and named classes — the sheet every page
+   * shares, emitted before the page's own.
+   *
+   * **A route supplies this by DEFAULT, unlike the bare renderer.** Omitting it
+   * still emits the default token set, because a `{ $token }` that resolves to
+   * nothing is the defect this exists to close and a framework route is exactly
+   * where "it should already work" is the right answer. `PageRenderer` stays
+   * opt-in because a standalone consumer owns its own `<head>` and may already
+   * emit a token sheet of its own; a Nextly route owns neither.
+   *
+   * Making it a default was licensed by measurement rather than assumed safe:
+   * no block declares a token (enforced by a ratchet over every `baseStyles`),
+   * and no seeded or fixture document references one — so there is nothing whose
+   * appearance can change by the definitions arriving. When that stops being
+   * true, the honest move is to measure again rather than to reason about it.
+   *
+   * `breakpoints` falls back to `styleContext`'s, because a site that stated its
+   * breakpoints once should not have to state them twice — and two answers to
+   * "what are this site's breakpoints" is how the shared sheet and the page
+   * sheet come to disagree about which at-rules a tier is emitted under.
+   */
+  siteStyles?: Omit<SiteSheetInput, "breakpoints"> &
+    Partial<Pick<SiteSheetInput, "breakpoints">>;
   /**
    * A dynamic collection to resolve media ids against, for a site storing its
    * images in one of its own.
@@ -1029,6 +1054,23 @@ function blocksRouteConfig(
         resolveEntryPath,
       });
 
+      // Derived ONCE, from the breakpoints the site already stated. A second
+      // answer to "what are this site's breakpoints" is how the shared sheet
+      // and the page sheet come to disagree about which at-rules a tier is
+      // emitted under — and the disagreement is invisible, because each sheet
+      // is internally consistent.
+      const siteBreakpoints =
+        config.siteStyles?.breakpoints ?? styleContext?.breakpoints;
+      // A route emits the site sheet by DEFAULT: without it every `{ $token }`
+      // resolves to nothing, which is the defect this closes. It needs a
+      // breakpoint set to compile the block-default tier under, so a route that
+      // states neither its own nor a style context gets no sheet rather than one
+      // compiled against breakpoints nobody chose.
+      const siteStyles =
+        siteBreakpoints === undefined
+          ? undefined
+          : { ...config.siteStyles, breakpoints: siteBreakpoints };
+
       return createElement(PageRenderer, {
         document,
         context: pageContext,
@@ -1037,6 +1079,7 @@ function blocksRouteConfig(
         styleContext,
         blockFallback,
         limits,
+        ...(siteStyles === undefined ? {} : { siteStyles }),
         // Spread conditionally: `PageRenderer` distinguishes an absent policy
         // from one present and undefined, and passing the second would state a
         // posture the site never chose.
