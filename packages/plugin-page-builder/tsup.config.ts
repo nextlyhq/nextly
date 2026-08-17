@@ -27,10 +27,10 @@ import { defineConfig } from "tsup";
 // imports it.
 
 export default defineConfig({
-  // Two entries, where there were five. The editor and the renderer were this
-  // package's own, built beside `@nextlyhq/builder` and `@nextlyhq/blocks-react`
-  // rather than on them; the editor is now the former and blocks draw through
-  // the latter, so neither has a bundle here to emit.
+  // Three entries, where there were five. The renderer and its error boundary
+  // were this package's own, built beside `@nextlyhq/blocks-react` rather than
+  // on it, so neither has a bundle here to emit. `./admin` survives carrying one
+  // component — the blocks field's summary — where it used to carry the editor.
   entry: ["src/index.ts", "src/blocks/index.ts", "src/admin/index.ts"],
   format: ["esm"],
   dts: true,
