@@ -99,24 +99,24 @@ export function AutoSaveIndicator({
   if (isSaving) {
     icon = <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />;
     label = "Saving...";
-    tooltipContent = "Saving your changes locally";
+    tooltipContent = "Storing a recovery point";
   } else if (lastSavedAt) {
     const timeAgo = formatTimeAgo(lastSavedAt);
     if (isDirty) {
       icon = <Cloud className="h-4 w-4 text-muted-foreground" />;
       label = "Unsaved changes";
-      tooltipContent = `Draft saved ${timeAgo}. New changes pending...`;
+      tooltipContent = `Recovery point stored ${timeAgo}. Newer changes not in it yet.`;
     } else {
       // No dark variant: `success` is tuned to read in both modes, and
       // `success-500` aliases it, so the override said nothing.
       icon = <Check className="h-4 w-4 text-success" />;
       label = "Saved";
-      tooltipContent = `All changes saved ${timeAgo}`;
+      tooltipContent = `Recovery point stored ${timeAgo}`;
     }
   } else if (isDirty) {
     icon = <CloudOff className="h-4 w-4 text-muted-foreground" />;
     label = "Not saved";
-    tooltipContent = "Changes will be saved automatically";
+    tooltipContent = "A recovery point will be stored shortly";
   } else {
     // No changes, no saves - don't show anything
     return null;

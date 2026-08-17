@@ -70,6 +70,11 @@ export interface EntrySystemHeaderProps {
   isInvalid?: boolean;
   /** Whether the form has unsaved changes. Toggles Discard menu item. */
   isDirty?: boolean;
+  /**
+   * Whether recording is possible for this document at all. False for an entry
+   * that has never been saved, which has no id for the endpoint to address.
+   */
+  autosaveEnabled?: boolean;
   /** Recording state of this author's recovery point. */
   autosaveStatus?: AutosaveStatus;
   /** When the server last stored a recovery point, by the server's clock. */
@@ -215,6 +220,7 @@ export function EntrySystemHeader({
   isSubmitting = false,
   isInvalid = false,
   isDirty = false,
+  autosaveEnabled = false,
   autosaveStatus = "idle",
   autosaveLastSavedAt = null,
   formId = "entry-form",
@@ -415,9 +421,16 @@ export function EntrySystemHeader({
         />
         {/* Sits with the actions rather than beside the title: it reports on
             the same work the save buttons act on, and reads as status for that
-            cluster. Rendered only where recording can happen, so an unsaved new
-            entry shows nothing rather than a permanently idle indicator. */}
-        {autosaveStatus !== "idle" || autosaveLastSavedAt ? (
+            cluster.
+
+            The condition is only whether recording is POSSIBLE, never whether
+            there is anything to show. `AutoSaveIndicator` already returns null
+            when it has no state to report, and restating that here suppressed
+            its "Not saved" state for the whole debounce window: on the first
+            edit to a saved entry the status is still idle and no recovery point
+            exists yet, which is exactly when the reader most wants to be told
+            their change is not stored. */}
+        {autosaveEnabled ? (
           <AutoSaveIndicator
             lastSavedAt={autosaveLastSavedAt}
             isSaving={autosaveStatus === "saving"}
