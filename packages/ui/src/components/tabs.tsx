@@ -124,14 +124,19 @@ const tabsListVariants = cva(
   // repeating them in each arm gives any future adjustment two sites to change
   // and one to forget.
   //
-  // `border-b` is the rail the triggers sit on, and it is load-bearing rather
-  // than decoration. Each trigger draws a 2px bottom border and pulls itself up
-  // by `-mb-0.5` so that border lands ON this one: with no rail here, the pull
-  // put a 2px line onto whatever followed the strip in the document, and above
-  // a rounded panel that is the corner curve — a straight bar crossing an 8px
-  // arc. The rail also gives an inactive tab somewhere to be inactive, which is
-  // what makes the active one read as selected rather than as the only tab.
-  "inline-flex items-center justify-center gap-1 rounded-none border-b border-border p-0 text-muted-foreground",
+  // The rail the triggers sit on, and it is load-bearing rather than
+  // decoration. Each trigger draws a 2px border on its trailing edge and pulls
+  // itself half a step onto this one: with no rail here, that pull put a 2px
+  // line onto whatever followed the strip in the document, and above a rounded
+  // panel that is the corner curve — a straight bar crossing an 8px arc. The
+  // rail also gives an inactive tab somewhere to be inactive, which is what
+  // makes the active one read as selected rather than as the only tab.
+  //
+  // Which edge is the trailing one depends on orientation, so the rail follows
+  // it. Radix stamps `data-orientation` on the list and on every trigger, so
+  // both halves read the same source and cannot disagree about the axis. A
+  // fixed bottom rail draws a horizontal line beneath a vertical list.
+  "inline-flex items-center justify-center gap-1 rounded-none border-b border-border p-0 text-muted-foreground data-[orientation=vertical]:flex-col data-[orientation=vertical]:items-stretch data-[orientation=vertical]:border-b-0 data-[orientation=vertical]:border-r",
   {
     variants: { variant: TABS_LIST_VARIANTS },
     defaultVariants: { variant: "default" },
@@ -175,9 +180,15 @@ const TABS_TRIGGER_SIZES = {
 } as const;
 
 const tabsTriggerVariants = cva(
-  // Square corners: the active state is a 2px bottom border that has to run the
-  // full width of the trigger.
-  "inline-flex items-center justify-center whitespace-nowrap rounded-none bg-transparent px-4 py-2 font-medium cursor-pointer transition-all duration-200 border-b-2 relative -mb-0.5 data-[state=active]:border-b-primary! data-[state=active]:text-primary data-[state=inactive]:border-transparent data-[state=inactive]:text-muted-foreground hover:text-primary hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 disabled:cursor-not-allowed",
+  // Square corners: the active state is a 2px border on the trailing edge that
+  // has to run the full length of the trigger and stay flush with its ends.
+  //
+  // The trailing edge is the bottom when the strip is horizontal and the right
+  // when it is vertical, so the indicator, the half-step pull onto the rail and
+  // the active colour all switch axis together off the same `data-orientation`
+  // the list reads. Switching only some of them puts the selection affordance
+  // on one axis and the line it sits on the other.
+  "inline-flex items-center justify-center whitespace-nowrap rounded-none bg-transparent px-4 py-2 font-medium cursor-pointer transition-all duration-200 border-b-2 relative -mb-0.5 data-[state=active]:border-b-primary! data-[state=active]:text-primary data-[state=inactive]:border-transparent data-[state=inactive]:text-muted-foreground hover:text-primary hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 disabled:cursor-not-allowed data-[orientation=vertical]:border-b-0 data-[orientation=vertical]:mb-0 data-[orientation=vertical]:border-r-2 data-[orientation=vertical]:-mr-0.5 data-[orientation=vertical]:data-[state=active]:border-r-primary",
   {
     variants: { size: TABS_TRIGGER_SIZES },
     defaultVariants: { size: "default" },
