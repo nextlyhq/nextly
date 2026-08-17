@@ -14,18 +14,30 @@ name: Code hygiene
 # severity-aware pass/warn/fail. The attribution is the tool's own, so a rename
 # does not read as a new finding the way baseline-identity matching does.
 #
+# It gates on introduced DUPLICATION as well as dead code, which is easy to
+# miss because the bare `fallow dupes` command cannot. Measured: adding one
+# 156-line clone moved `duplication_introduced` from 0 to 1 and the verdict
+# from `warn` to `fail`, with the dead-code count unchanged. Complexity is
+# attributed too and stays warn-tier, so it reports without failing.
+#
 # WHOLE-REPO catches the one class the gate structurally cannot see: a change
 # deleting the last call to an exported helper orphans that export in a file the
 # diff never opened. Its DEAD CODE half gates, against a baseline of the
 # branch's base, so only what the change adds can fail it.
 #
-# Duplication and complexity in that job report and do not gate, and the reason
-# is the tool rather than a policy choice. `fallow dupes` exits 0 whatever it
-# finds -- 846 clone groups and `--fail-on-issues` both -- and its JSON carries
-# no new-versus-inherited flag to count instead. `fallow health` matches its
-# baseline per file and category, which does not survive the two sides being
-# different trees: a branch touching neither still reported ~50 findings in
-# `admin` and `plugin-form-builder`. Gating on either would be theatre.
+# Duplication and complexity are NOT gated in that job, and the reason is the
+# mechanism rather than a view about their severity. Neither analysis attributes
+# a finding to a side the way `audit` does: `fallow dupes` carries no
+# per-group new-versus-inherited flag and exits 0 even with `--fail-on-issues`,
+# leaving `--threshold` -- a repository-wide percentage, 7.4% here across 846
+# clone groups -- as the only lever. That judges a change by a number it barely
+# moves, and one merge nudging it up would fail the next unrelated pull request.
+# `fallow health` matches its baseline per file and category, which does not
+# survive the two sides being different trees: a branch touching neither still
+# reported ~50 findings in `admin` and `plugin-form-builder`.
+#
+# So duplication IS enforced, in the job that can attribute it, and the
+# whole-repo job adds reach for dead code rather than a second verdict on it.
 #
 # `templates/` is left out of both. Those four are fragments with no
 # package.json of their own, composed into a project by create-nextly-app at
@@ -239,8 +251,9 @@ jobs:
             echo "## Whole-repository scan"
             echo
             echo "Compared against a baseline of this branch's base, so only what"
-            echo "the change adds is listed. Dead code here FAILS this job;"
-            echo "duplication and complexity are reported and do not gate."
+            echo "the change adds is listed. Dead code here FAILS this job."
+            echo "Duplication and complexity are reported here and enforced in"
+            echo 'the Changed files job, which can attribute them.'
             echo
           } >> "$GITHUB_STEP_SUMMARY"
           for analysis in dead-code dupes health; do
