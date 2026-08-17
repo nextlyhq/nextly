@@ -579,7 +579,7 @@ export function SingleForm({
   // so a schema whose row has not been materialised yet records nothing rather
   // than addressing a document that is not there.
   const autosaveScope = useMemo(
-    () => autosaveScopeFor("single", schema.slug, document?.id ?? ""),
+    () => autosaveScopeFor("single", schema.slug, document?.id),
     [schema.slug, document?.id]
   );
   const autosave = useDocumentAutosave({
