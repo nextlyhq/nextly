@@ -34,7 +34,12 @@
  */
 
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
-import { BuilderShell, Canvas, useEditorState } from "@nextlyhq/builder/shell";
+import {
+  BuilderShell,
+  Canvas,
+  InsertPanel,
+  useEditorState,
+} from "@nextlyhq/builder/shell";
 import { useSuppressAdminChrome } from "@nextlyhq/plugin-sdk/admin";
 import { useCallback, useMemo, useState } from "react";
 import {
@@ -61,13 +66,14 @@ export interface BlocksFieldProps<
 /**
  * Every left panel the editor can fill today.
  *
- * Empty, because the inserter, layers and the rest are not built. The shell
- * draws all seven regardless and disables the ones nothing fills, so the rail
- * describes the editor's shape while never opening a region with nothing in it.
- * Listing a panel here that renders nothing would reserve space and shrink the
- * canvas to show it.
+ * The inserter only; layers and the rest are not built. The shell draws all
+ * seven regardless and disables the ones nothing fills, so the rail describes
+ * the editor's shape while never opening a region with nothing in it. Listing a
+ * panel here that renders nothing would reserve space and shrink the canvas to
+ * show it, which is why this grows one entry at a time rather than being
+ * declared ahead of the panels.
  */
-const AVAILABLE_PANELS = [] as const;
+const AVAILABLE_PANELS = ["insert"] as const;
 
 /**
  * A stored value that is not a usable document is treated as absent.
@@ -185,7 +191,17 @@ function BlocksEditor({
 
   return (
     <div className="fixed inset-0 z-50 bg-background">
-      <BuilderShell onExit={done} availablePanels={AVAILABLE_PANELS}>
+      <BuilderShell
+        onExit={done}
+        availablePanels={AVAILABLE_PANELS}
+        // Switched on the panel id rather than rendering the inserter for
+        // whatever the rail reports open. The shell asks for the panel it
+        // opened, and a renderer ignoring that argument would draw the inserter
+        // under every heading the moment a second panel is listed above.
+        renderPanel={panel =>
+          panel === "insert" ? <InsertPanel editor={editor} /> : null
+        }
+      >
         <Canvas
           document={editor.document}
           siteStyles={siteSheet()}

@@ -151,3 +151,68 @@
       color 120ms ease;
   }
 }
+
+/*
+ * The inserter panel.
+ *
+ * Colours come from the admin's tokens rather than from literals, so the panel
+ * follows the host's light and dark themes without a second palette here. The
+ * list scrolls inside the panel rather than the panel growing, because the rail
+ * fixes the panel's width and height and a growing list would push the shell's
+ * own layout instead of its own.
+ */
+.nx-insert-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  color: var(--nx-builder-text, var(--nx-foreground));
+  background: var(--nx-builder-surface, var(--nx-background));
+}
+
+/*
+ * Where the next block lands. Announced politely rather than assertively: it
+ * changes on every selection change, and an assertive region would interrupt a
+ * screen reader mid-sentence each time the author moved.
+ */
+.nx-insert-panel__placement {
+  padding: 0.25rem 0.75rem 0.5rem;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--nx-muted-foreground);
+  border-bottom: 1px solid var(--nx-border);
+}
+
+.nx-insert-panel__note {
+  padding: 0.75rem;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--nx-muted-foreground);
+}
+
+/*
+ * Two lines per row, so the block's description is readable without a hover.
+ * A palette that shows only labels makes an author guess what "Section" holds,
+ * and the description is already required on every block definition.
+ */
+.nx-insert-panel__label {
+  display: block;
+  font-weight: 500;
+  color: var(--nx-foreground);
+}
+
+.nx-insert-panel__description {
+  display: block;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--nx-muted-foreground);
+  /*
+   * Clamped rather than truncated at one line: descriptions are prose written
+   * by block authors and the first few words are often a category name shared
+   * with a sibling block, so one line can render two rows indistinguishable.
+   */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}

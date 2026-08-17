@@ -2334,7 +2334,11 @@ function assertDropSlotWasVacated(
   }
 }
 
-function positionOf(location: NodeLocation): OpPosition {
+// Exported to the module graph, deliberately not to the package entry: the
+// inserter needs the same location-to-position answer the op layer uses, and a
+// second conversion would disagree about the slot invariant below the first
+// time either changed.
+export function positionOf(location: NodeLocation): OpPosition {
   if (location.parent === undefined) return { index: location.index };
   // A parent with no slot is not a position an op can express, and building one
   // anyway would put an unapplicable op into the inverse: an undo that names
