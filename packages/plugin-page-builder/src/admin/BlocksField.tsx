@@ -33,7 +33,12 @@
  * @module @nextlyhq/plugin-page-builder/admin/BlocksField
  */
 
-import type { BlockDocument } from "@nextlyhq/blocks-engine";
+import {
+  hasBlock,
+  registerBlocks,
+  type BlockDocument,
+} from "@nextlyhq/blocks-engine";
+import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import {
   BuilderShell,
   Canvas,
@@ -74,6 +79,33 @@ export interface BlocksFieldProps<
  * declared ahead of the panels.
  */
 const AVAILABLE_PANELS = ["insert"] as const;
+
+/** Names the registry attributes these blocks to, for diagnostics. */
+const PLUGIN_SOURCE = "@nextlyhq/plugin-page-builder";
+
+/**
+ * Put the core blocks in the BROWSER's registry.
+ *
+ * The plugin registers them during its own setup, which runs in the server
+ * process. The engine's registry is module state, so the copy loaded into the
+ * admin's client bundle is a different one and starts empty — and everything
+ * the editor asks flows through it: `allBlocks` fills the inserter,
+ * `registryNestingSource` decides what a position accepts, and the renderer
+ * resolves a node's type to something it can draw.
+ *
+ * Registering once, here, rather than handing each of those its own list is
+ * what keeps them agreeing. Given separate lists, the palette could offer a
+ * block the renderer cannot draw and the nesting rule has never heard of — and
+ * an empty registry fails SILENTLY in the permissive direction, because a block
+ * nobody has heard of declares no parent and is therefore allowed everywhere.
+ *
+ * Filtered by `hasBlock` because registration refuses a redefinition, and this
+ * runs again on every hot reload and every remount of the editor.
+ */
+function ensureCoreBlocksRegistered(): void {
+  const missing = coreBlocks.filter(block => !hasBlock(block.name));
+  if (missing.length > 0) registerBlocks(missing, { source: PLUGIN_SOURCE });
+}
 
 /**
  * A stored value that is not a usable document is treated as absent.
@@ -147,6 +179,12 @@ function BlocksEditor({
   onCommit: (value: BlockDocument) => void;
   onClose: () => void;
 }) {
+  // Before anything reads the registry. Inside the component that mounts the
+  // editor rather than at module scope: this file is imported by the field
+  // control, which every entry form holding a blocks field renders whether or
+  // not the editor is ever opened.
+  ensureCoreBlocksRegistered();
+
   const initialDocument = useMemo(
     () => documentFrom(initialValue),
     [initialValue]

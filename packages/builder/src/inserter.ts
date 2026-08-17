@@ -190,9 +190,42 @@ export function catalogFrom(
   return entries;
 }
 
-/** The name an author reads, falling back to the block's namespaced identity. */
+/**
+ * The name an author reads.
+ *
+ * A declared `editor.label` wins. Without one, the namespaced identity is
+ * humanised rather than shown raw: "core/collection-loop" reads as "Collection
+ * loop". Showing the identity verbatim is honest and hostile — a palette is
+ * read by whoever writes the page, not by whoever registered the block, and
+ * every block that has simply not been labelled yet would present as an
+ * internal name.
+ *
+ * Derived rather than stored, because a definition gaining a real label must
+ * override this immediately, and a copy written into the entry at build time
+ * would keep the guess alongside it.
+ */
 function labelOf(definition: AnyBlockDefinition): string {
-  return definition.editor?.label ?? definition.name;
+  const declared = definition.editor?.label;
+  if (declared !== undefined && declared !== "") return declared;
+  return humanise(definition.name);
+}
+
+/**
+ * Turn a namespaced block name into something readable.
+ *
+ * The namespace is dropped because it answers "who shipped this", which a
+ * palette groups by rather than repeats on every row. Separators become spaces
+ * and only the first letter is capitalised — title-casing every word would
+ * render "Collection Loop", which reads like a proper noun for a thing that is
+ * a description.
+ */
+function humanise(name: string): string {
+  const local = name
+    .slice(name.indexOf("/") + 1)
+    .replace(/[-_]+/g, " ")
+    .trim();
+  if (local === "") return name;
+  return local.charAt(0).toUpperCase() + local.slice(1);
 }
 
 /**

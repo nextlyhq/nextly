@@ -87,11 +87,29 @@ describe("catalogFrom", () => {
     expect(entries.map(e => e.label)).toEqual(["Alpha", "Zulu"]);
   });
 
-  it("falls back to the namespaced name when a block declares no label", () => {
-    const entries = catalog([{ ...base, name: "acme/unlabelled" }]);
+  it("humanises the block name when no label is declared", () => {
+    // Not the raw identity. A palette is read by whoever writes the page, and
+    // an unlabelled block would otherwise present as an internal name.
+    const entries = catalog([
+      { ...base, name: "acme/collection-loop" },
+      { ...base, name: "acme/card" },
+    ]);
 
-    expect(entry(entries, "acme/unlabelled").label).toBe("acme/unlabelled");
-    expect(entry(entries, "acme/unlabelled").category).toBe(UNCATEGORISED);
+    expect(entry(entries, "acme/collection-loop").label).toBe(
+      "Collection loop"
+    );
+    expect(entry(entries, "acme/card").label).toBe("Card");
+    expect(entry(entries, "acme/card").category).toBe(UNCATEGORISED);
+  });
+
+  it("prefers a declared label over the humanised name", () => {
+    // The separating control: both blocks would humanise identically, so only a
+    // declared label distinguishes them.
+    const entries = catalog([
+      { ...base, name: "acme/card", editor: { label: "Fancy Card" } },
+    ]);
+
+    expect(entry(entries, "acme/card").label).toBe("Fancy Card");
   });
 
   it("emits one entry per variation, directly after its block", () => {
