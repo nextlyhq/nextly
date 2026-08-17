@@ -77,6 +77,29 @@
     "../dist/render/index.js",
   ],
 
+  // Three pnpm `overrides` entries pin a version of a package nothing here
+  // depends on directly: they exist to lift a transitive dependency off a
+  // vulnerable release. Fallow reports each as an unused override, which is
+  // accurate and permanent — the whole point of the pin is that no manifest
+  // asks for the package, so the finding can never be resolved by fixing
+  // anything. Verified for all three: no workspace manifest declares them and
+  // no source file imports them.
+  //
+  // Unlike `ignoreDependencies` below, this key does not leak. It matches one
+  // override entry by exact target name, narrowed further to the declaring
+  // file, so it cannot excuse a package anywhere else.
+  //
+  // The findings are warn-tier, so they never blocked anything. They were
+  // reported as INTRODUCED on this branch regardless, because attribution
+  // anchors a manifest finding to its file and this branch edits package.json
+  // to add the fallow devDependency. Left in place, every future change to
+  // package.json would inherit the same three phantom findings.
+  "ignoreDependencyOverrides": [
+    { "package": "fast-xml-builder", "source": "package.json" },
+    { "package": "fast-xml-parser", "source": "package.json" },
+    { "package": "uuid", "source": "package.json" },
+  ],
+
   // NO `ignoreDependencies` HERE, deliberately. It matches by exact package
   // NAME across the whole analysis and suppresses the unlisted-dependency
   // finding as well as the unused one, so naming `cmdk` to excuse admin also
