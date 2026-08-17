@@ -111,6 +111,23 @@ export async function withMigrationExcluded<T>(
      * sync, which is narrower than refusing the command outright.
      */
     mayCreateLock: boolean;
+    /**
+     * Whether an interrupt may hand the claim away while `work` is still running.
+     *
+     * Stated by every caller rather than defaulted, because the two answers protect different
+     * things and the safe one depends on what the work does, which this cannot see.
+     *
+     * A schema SYNC opts in: the documented way to stop watch mode is Ctrl+C, its work is
+     * idempotent, and two syncs overlapping is the state that existed before this exclusion, so a
+     * claim stuck behind a dead process is the worse outcome.
+     *
+     * A schema CHANGE must not. Its DDL and its registry write are neither atomic nor idempotent,
+     * and the signal does not stop `work` — another listener delaying termination is enough for a
+     * migration to take the row and start renaming while the change is still finishing. That is
+     * precisely the overlap the exclusion exists to prevent, so the claim is held to the end and a
+     * killed process leaves a claim for an operator, which is the trade a migration already makes.
+     */
+    releaseOnInterrupt: boolean;
   },
   work: () => Promise<T>
 ): Promise<T> {
@@ -120,10 +137,11 @@ export async function withMigrationExcluded<T>(
       dialect: args.adapter.getCapabilities().dialect,
       label: args.label,
       requireExistingLock: !args.mayCreateLock,
-      // A sync's claim is safe to drop on a signal: two syncs overlapping is
-      // the state that existed before this exclusion, whereas a migration's
-      // claim must survive interruption.
-      releaseOnInterrupt: true,
+      releaseOnInterrupt: args.releaseOnInterrupt,
+      // Without this the session has nowhere to report a lock it had to skip, and a downgrade from
+      // excluded to unexcluded happens in silence — which is the one outcome that makes skipping
+      // dangerous rather than merely tolerant. Every caller here already has a logger.
+      logger: args.logger,
     },
     async () => {
       await assertNoMigrationInFlight({

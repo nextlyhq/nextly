@@ -11,6 +11,7 @@ import type { DatabaseConfig } from "../types";
 import {
   copyTemplate,
   generatePackageJson,
+  generateNpmrc,
   generatePnpmWorkspaceYaml,
   NATIVE_BUILD_DEPENDENCIES,
 } from "../utils/template";
@@ -25,6 +26,7 @@ vi.mock("fs-extra", () => ({
     readFile: vi.fn(),
     readdir: vi.fn(),
     remove: vi.fn(),
+    move: vi.fn(),
     ensureDir: vi.fn(),
   },
 }));
@@ -153,9 +155,11 @@ describe("generatePackageJson", () => {
   it("should include Next.js scripts", async () => {
     const result = JSON.parse(await generatePackageJson("test", pgDatabase));
     expect(result.scripts.dev).toBe("next dev --turbopack");
-    expect(result.scripts.build).toBe(
-      "nextly migrate && next build && (test -f scripts/build-search-index.mjs && node scripts/build-search-index.mjs || true)"
-    );
+    // No search-index step, and no `search:index`, because no template directory was passed —
+    // so the generator saw a scaffold that does not receive the Pagefind builder. A template
+    // that does ship it is covered in template-search-index.test.ts, against a real tree.
+    expect(result.scripts.build).toBe("nextly migrate && next build");
+    expect(result.scripts["search:index"]).toBeUndefined();
     expect(result.scripts.start).toBe("next start");
     expect(result.scripts.lint).toBe("next lint");
   });
@@ -168,7 +172,10 @@ describe("generatePackageJson", () => {
     expect(result.scripts["db:migrate"]).toBe("nextly migrate");
     expect(result.scripts["db:migrate:status"]).toBe("nextly migrate:status");
     expect(result.scripts["db:migrate:fresh"]).toBe("nextly migrate:fresh");
-    expect(result.scripts["db:migrate:reset"]).toBe("nextly migrate:reset");
+    // Asserted ABSENT: `nextly migrate:reset` is not a registered command, so
+    // generating this script shipped every project a `npm run db:migrate:reset`
+    // that fails. The test previously pinned it as expected output.
+    expect(result.scripts["db:migrate:reset"]).toBeUndefined();
     expect(result.scripts["types:generate"]).toBe("nextly generate:types");
   });
 
@@ -216,6 +223,57 @@ describe("generatePnpmWorkspaceYaml", () => {
   // a postgres/mysql yalc scaffold still pulls (and must build) better-sqlite3.
   it("always includes better-sqlite3 in the allowlist", () => {
     expect(NATIVE_BUILD_DEPENDENCIES).toContain("better-sqlite3");
+  });
+});
+
+describe("generateNpmrc", () => {
+  // The setting is not npm's. npm reads .npmrc too and answers every command
+  // with `npm warn Unknown project config "ignore-workspace-root-check". This
+  // will stop working in the next major version of npm.` — a permanent warning
+  // for the majority of users, buying them nothing.
+  it.each(["npm", "yarn", "bun"] as const)("writes nothing for %s", manager => {
+    expect(generateNpmrc(manager)).toBeNull();
+  });
+
+  it("opts a pnpm scaffold out of the workspace-root check", () => {
+    const npmrc = generateNpmrc("pnpm");
+    expect(npmrc).not.toBeNull();
+    expect(npmrc).toMatch(/^ignore-workspace-root-check=true$/m);
+  });
+
+  // pnpm 9 treats the presence of this file as declaring a workspace and
+  // refuses to install without a `packages` key
+  // (ERR_PNPM_INVALID_WORKSPACE_CONFIGURATION). A scaffold that ships the
+  // allowlist alone cannot be installed at all on that line, so the key is
+  // what makes the file safe to emit unconditionally.
+  it("declares packages, so pnpm 9 can install the scaffold", () => {
+    const yaml = generatePnpmWorkspaceYaml();
+    expect(yaml).toMatch(/^packages: \[\]$/m);
+  });
+
+  // Emitting this file has a cost on the same pnpm versions it is emitted for:
+  // it makes the project a workspace ROOT, so `pnpm add <pkg>` is refused with
+  // ERR_PNPM_ADDING_TO_ROOT. generateNpmrc pays that cost back, and these two
+  // are only correct together — hence the pointer.
+  it("is paired with an npmrc that keeps pnpm add working", () => {
+    expect(generatePnpmWorkspaceYaml()).toMatch(/^packages: \[\]$/m);
+    expect(generateNpmrc("pnpm")).toMatch(
+      /^ignore-workspace-root-check=true$/m
+    );
+  });
+
+  // A scaffolded app is a single package. Naming any member would claim a
+  // repository layout the scaffold does not create, and pnpm would then look
+  // for manifests that are not there.
+  it("declares no workspace members", () => {
+    const yaml = generatePnpmWorkspaceYaml();
+    const packagesLine = yaml
+      .split("\n")
+      .findIndex(line => line.startsWith("packages:"));
+    expect(packagesLine).toBeGreaterThanOrEqual(0);
+    // A YAML list continues on indented lines; the next top-level key ends it.
+    const next = yaml.split("\n")[packagesLine + 1] ?? "";
+    expect(next).not.toMatch(/^\s+-/);
   });
 });
 

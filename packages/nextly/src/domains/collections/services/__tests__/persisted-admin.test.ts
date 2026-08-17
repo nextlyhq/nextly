@@ -1,0 +1,198 @@
+import { describe, expect, it } from "vitest";
+
+import type { CollectionConfig } from "../../../../collections/config/define-collection";
+import {
+  ADMIN_KEYS_NOT_PERSISTED,
+  asAdminOptions,
+  resolveDescription,
+  toPersistedAdmin,
+} from "../collection-sync-service";
+
+/**
+ * The projection from a collection's authored admin options to the shape stored
+ * in the registry. Both sync paths use it, so a value dropped here reaches the
+ * admin as "the setting does nothing" while the config still type-checks.
+ */
+describe("toPersistedAdmin", () => {
+  it("carries defaultColumns through to the persisted shape", () => {
+    const admin: CollectionConfig["admin"] = {
+      useAsTitle: "title",
+      defaultColumns: ["title", "status", "publishedAt"],
+    };
+
+    // Asserted on the VALUE rather than on the key being present: a key holding
+    // undefined would satisfy a presence check while the entry list still
+    // auto-selects its columns.
+    expect(toPersistedAdmin(admin)?.defaultColumns).toEqual([
+      "title",
+      "status",
+      "publishedAt",
+    ]);
+  });
+
+  it("preserves the other admin options alongside it", () => {
+    const admin: CollectionConfig["admin"] = {
+      group: "Content",
+      icon: "file-text",
+      hidden: true,
+      useAsTitle: "title",
+      defaultColumns: ["title"],
+      disableCreate: true,
+      pagination: { defaultLimit: 25, limits: [10, 25, 50] },
+    };
+
+    const persisted = toPersistedAdmin(admin);
+
+    expect(persisted).toMatchObject({
+      group: "Content",
+      icon: "file-text",
+      hidden: true,
+      useAsTitle: "title",
+      defaultColumns: ["title"],
+      disableCreate: true,
+      pagination: { defaultLimit: 25, limits: [10, 25, 50] },
+    });
+  });
+
+  it("stores whether a preview exists, never the function that decides it", () => {
+    const persisted = toPersistedAdmin({
+      useAsTitle: "title",
+      preview: {
+        url: entry => `/posts/${String(entry.slug)}`,
+        label: "View post",
+        openInNewTab: false,
+      },
+    });
+
+    expect(persisted?.preview).toEqual({
+      hasPreview: true,
+      label: "View post",
+      openInNewTab: false,
+    });
+    // The function is the thing no column can hold. If it ever appears here the
+    // row write will either fail or silently store null, and the admin will be
+    // reading a key that cannot mean anything.
+    expect(persisted?.preview).not.toHaveProperty("url");
+  });
+
+  it("omits preview entirely when a collection declares none", () => {
+    // Distinct from hasPreview: false — nothing was declared, so there is no
+    // preview object to describe.
+    expect(toPersistedAdmin({ useAsTitle: "title" })?.preview).toBeUndefined();
+  });
+
+  it("returns undefined when a collection declares no admin options", () => {
+    expect(toPersistedAdmin(undefined)).toBeUndefined();
+  });
+});
+
+/**
+ * Sidebar placement reaches the registry.
+ *
+ * `DynamicCollectionNav` takes its collections from the persisted registry, so a value dropped by
+ * the projection means a code-first collection can set its position, type-check, and still sort
+ * by the default — the same shape as the `defaultColumns` drop, found by auditing the rest of the
+ * key list after fixing that one.
+ */
+describe("sidebar placement", () => {
+  it("carries order and sidebarGroup", () => {
+    const admin: CollectionConfig["admin"] = {
+      order: 2,
+      sidebarGroup: "editorial",
+    };
+
+    const persisted = toPersistedAdmin(admin);
+    // On the VALUES: a present key holding undefined sorts by the default just as an absent one
+    // does, so a presence check would pass on the broken projection.
+    expect(persisted?.order).toBe(2);
+    expect(persisted?.sidebarGroup).toBe("editorial");
+  });
+
+  it("leaves them undefined when the author set neither", () => {
+    // The scaffold must not invent a position. `order` defaulting to 0 here would silently pin
+    // every code-first collection above every other one.
+    const persisted = toPersistedAdmin({ useAsTitle: "title" });
+    expect(persisted?.order).toBeUndefined();
+    expect(persisted?.sidebarGroup).toBeUndefined();
+  });
+});
+
+/**
+ * `admin.description` and the top-level `description` are two spellings of one thing, and only
+ * the second has a column. Resolved in one place so the two sync paths cannot disagree.
+ */
+describe("resolveDescription", () => {
+  it("uses admin.description when the collection sets no top-level one", () => {
+    expect(
+      resolveDescription({ admin: { description: "Blog posts and news" } })
+    ).toBe("Blog posts and news");
+  });
+
+  it("prefers the top-level description when both are set", () => {
+    // The documented home wins: an author setting both is most plausibly migrating off the
+    // `admin` spelling and expects the explicit field to take effect.
+    expect(
+      resolveDescription({
+        description: "explicit",
+        admin: { description: "legacy" },
+      })
+    ).toBe("explicit");
+  });
+
+  it("is undefined when neither is set", () => {
+    expect(resolveDescription({})).toBeUndefined();
+  });
+});
+
+/**
+ * The exclusion list is a claim, not a comment: every key on it is an admin option a caller can
+ * set and this projection deliberately will not store, and the reason is what a later reader has
+ * to weigh before moving it. A blank one would pass the compiler's completeness check while
+ * telling that reader nothing.
+ */
+describe("ADMIN_KEYS_NOT_PERSISTED", () => {
+  it("gives a reason for every excluded key", () => {
+    const entries = Object.entries(ADMIN_KEYS_NOT_PERSISTED);
+    // A control on the assertion below: it holds vacuously over an empty list, and an empty list
+    // is also what a bad refactor would leave behind.
+    expect(entries.length).toBeGreaterThan(0);
+
+    for (const [key, reason] of entries) {
+      expect(reason, `${key} is excluded without a reason`).toBeTruthy();
+      expect(reason.trim().length, `${key}'s reason is blank`).toBeGreaterThan(
+        0
+      );
+    }
+  });
+});
+
+/**
+ * The seam where a config has lost its type.
+ *
+ * The HMR payload builder reads a module re-imported across a reload and holds `admin` as
+ * `unknown`, so something has to re-establish the type before the projection can run. Keeping
+ * that narrowing in one named place is what lets the projection keep a precise signature — the
+ * alternative, widening it to accept `unknown`, would let every caller hand it anything.
+ */
+describe("asAdminOptions", () => {
+  it("passes an object through so the projection can read it", () => {
+    const narrowed = asAdminOptions({ order: 3, sidebarGroup: "editorial" });
+    // Through the projection, because that is what the caller does with it — asserting the
+    // narrowing alone would not show that the value survives the trip.
+    expect(toPersistedAdmin(narrowed)?.order).toBe(3);
+    expect(toPersistedAdmin(narrowed)?.sidebarGroup).toBe("editorial");
+  });
+
+  it.each([
+    ["undefined", undefined],
+    ["null", null],
+    ["a string", "admin"],
+    ["a number", 7],
+  ])("treats %s as no admin block at all", (_label, value) => {
+    // Not a throw. A malformed value reaching this seam means a reload delivered something
+    // unexpected, and refusing to boot over it would be a worse outcome than a collection
+    // rendering with default admin options.
+    expect(asAdminOptions(value)).toBeUndefined();
+    expect(toPersistedAdmin(asAdminOptions(value))).toBeUndefined();
+  });
+});

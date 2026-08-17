@@ -56,7 +56,11 @@ function PluginOverviewLink({
 }: {
   isActive: (href?: string) => boolean;
 }) {
-  const active = isActive("/admin/plugins");
+  // The whole subtree, so a plugin's own pages — `/admin/plugins/<slug>` and
+  // its settings — keep the overview selected. Nothing has to be subtracted
+  // here: the directory lives outside this prefix, so it cannot be caught by
+  // a descendant match and light both entries at once.
+  const active = isActive(ROUTES.PLUGINS);
   return (
     <SidebarMenuItem>
       <SidebarMenuButton asChild isActive={active}>

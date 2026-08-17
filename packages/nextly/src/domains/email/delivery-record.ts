@@ -13,6 +13,10 @@
 import { createHmac, createHash } from "crypto";
 
 import { env } from "../../lib/env";
+import {
+  secretGenerations,
+  type SecretGeneration,
+} from "../../shared/lib/secret-generations";
 
 /** How a delivery ended. A drain would add `pending` and `retrying`. */
 export type EmailDeliveryStatus = "sent" | "failed";
@@ -59,12 +63,53 @@ export type EmailDeliveryRecipientKind = "to" | "cc" | "bcc";
  * unable to record anything.
  */
 export function hashRecipient(address: string): string {
-  const mailbox = address.trim().toLowerCase();
-  const key = env.NEXTLY_SECRET;
+  return digestWith(env.NEXTLY_SECRET, address.trim().toLowerCase());
+}
 
+/**
+ * One mailbox, under one generation of the key.
+ *
+ * `undefined` is the unkeyed development digest rather than a missing
+ * argument, because that is genuinely one of the generations a row can have
+ * been written under — an install with no `NEXTLY_SECRET` writes it. Every
+ * digest in this module comes from here, so the write path and the read paths
+ * cannot drift into hashing the same address two ways.
+ */
+function digestWith(key: string | undefined, mailbox: string): string {
   return key === undefined
     ? createHash("sha256").update(mailbox).digest("hex")
     : createHmac("sha256", key).update(mailbox).digest("hex");
+}
+
+/**
+ * Every key this install can still READ with, newest first.
+ *
+ * The first entry is always the one a row would be written under NOW — the
+ * current secret, or `undefined` for the unkeyed development digest. That is
+ * what makes {@link recipientDigest} a narrower view of
+ * {@link recipientDigests} rather than a second answer to the same question,
+ * and the tuple type is what keeps the list from ever being empty.
+ *
+ * The unkeyed entry is present whenever no current secret is set, INDEPENDENTLY
+ * of whether retired ones are listed. An install mid-rotation that has removed
+ * `NEXTLY_SECRET` but still lists `NEXTLY_SECRET_PREVIOUS` writes new rows
+ * unkeyed while its retired keys are HMACs, so a read that computed only the
+ * HMACs would miss every row written today — the newest ones, and the ones an
+ * erasure request is most likely to be about.
+ */
+function readableKeys(): [SecretGeneration, ...SecretGeneration[]] {
+  return [
+    env.NEXTLY_SECRET,
+    // Asked for the RETIRED list alone: the current key is already the head of
+    // this tuple, and passing it again would only be deduplicated later.
+    //
+    // Retired entries may themselves be `undefined`, spelled `null` in the JSON
+    // form. That is how an install names the generation it wrote BEFORE it had
+    // a secret at all: those rows carry a plain SHA-256 digest, and no HMAC
+    // under any string reproduces it, so without a way to say "unkeyed" they
+    // would be permanently unreachable the moment a secret was enabled.
+    ...secretGenerations(undefined, env.NEXTLY_SECRET_PREVIOUS),
+  ];
 }
 
 /**
@@ -223,8 +268,39 @@ export function mailboxOf(address: string): string {
  * erasure would quietly stop matching the rows a lookup still finds, which is
  * the failure this table cannot afford to have silently.
  */
+/**
+ * Every digest an address could have been stored under.
+ *
+ * A rotation does not move the rows already written, so reaching them means
+ * computing what each generation would have produced rather than recording
+ * which one did. That is why no key-version column exists: matching against all
+ * known generations reaches the same rows a stored version would have, without
+ * a schema change and without a backfill for the rows that predate it.
+ *
+ * The unkeyed development digest is included when no secret is configured, so a
+ * contributor's local rows are erasable too.
+ *
+ * Ordered newest first, and deduplicated: an install that lists its current
+ * secret again under the retired key would otherwise compare the same digest
+ * twice on every erasure.
+ */
+export function recipientDigests(address: string): string[] {
+  const mailbox = mailboxOf(address).trim().toLowerCase();
+  return [...new Set(readableKeys().map(key => digestWith(key, mailbox)))];
+}
+
+/**
+ * The single digest a row is WRITTEN under.
+ *
+ * Derived from the same key list the read paths walk, and specifically from its
+ * head, so "the digest we store" is by construction the first thing "the
+ * digests we look for" contains. Computing it independently is how a writer and
+ * a reader come to disagree about which rows are a person's — silently, since a
+ * lookup that finds nothing is indistinguishable from a person with no mail.
+ */
 export function recipientDigest(address: string): string {
-  return hashRecipient(mailboxOf(address));
+  const [writeKey] = readableKeys();
+  return digestWith(writeKey, mailboxOf(address).trim().toLowerCase());
 }
 
 /**

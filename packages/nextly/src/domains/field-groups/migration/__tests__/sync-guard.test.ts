@@ -175,7 +175,13 @@ describe("holding the exclusion for the whole sync", () => {
     let ownerDuringWork: string | null = null;
 
     await withMigrationExcluded(
-      { adapter, logger, label: "db:sync", mayCreateLock: true },
+      {
+        adapter,
+        logger,
+        label: "db:sync",
+        mayCreateLock: true,
+        releaseOnInterrupt: true,
+      },
       () => {
         ownerDuringWork = ownerNow();
         return Promise.resolve();
@@ -193,7 +199,13 @@ describe("holding the exclusion for the whole sync", () => {
     const work = vi.fn(() => Promise.resolve());
 
     const error = await withMigrationExcluded(
-      { adapter, logger, label: "db:sync", mayCreateLock: true },
+      {
+        adapter,
+        logger,
+        label: "db:sync",
+        mayCreateLock: true,
+        releaseOnInterrupt: true,
+      },
       work
     ).catch((caught: unknown) => caught);
 
@@ -207,7 +219,13 @@ describe("holding the exclusion for the whole sync", () => {
   it("issues no DDL when the caller may not change schema", async () => {
     const { adapter, ddlIssued } = createLockingAdapter({});
     await withMigrationExcluded(
-      { adapter, logger, label: "db:sync", mayCreateLock: false },
+      {
+        adapter,
+        logger,
+        label: "db:sync",
+        mayCreateLock: false,
+        releaseOnInterrupt: true,
+      },
       () => Promise.resolve()
     );
     expect(ddlIssued().filter(sql => /CREATE TABLE/i.test(sql))).toEqual([]);
@@ -223,7 +241,13 @@ describe("holding the exclusion for the whole sync", () => {
     const work = vi.fn(() => Promise.resolve());
 
     await withMigrationExcluded(
-      { adapter, logger, label: "db:sync", mayCreateLock: false },
+      {
+        adapter,
+        logger,
+        label: "db:sync",
+        mayCreateLock: false,
+        releaseOnInterrupt: true,
+      },
       work
     );
 
@@ -248,7 +272,13 @@ describe("holding the exclusion for the whole sync", () => {
     try {
       let ownerWhileHeld: string | null = null;
       await withMigrationExcluded(
-        { adapter, logger, label: "db:sync watch", mayCreateLock: true },
+        {
+          adapter,
+          logger,
+          label: "db:sync watch",
+          mayCreateLock: true,
+          releaseOnInterrupt: true,
+        },
         async () => {
           ownerWhileHeld = ownerNow();
           process.emit("SIGINT");
@@ -276,7 +306,13 @@ describe("holding the exclusion for the whole sync", () => {
     let ownerDuringWork: string | null = null;
 
     await withMigrationExcluded(
-      { adapter, logger, label: "db:sync", mayCreateLock: true },
+      {
+        adapter,
+        logger,
+        label: "db:sync",
+        mayCreateLock: true,
+        releaseOnInterrupt: true,
+      },
       () => {
         ownerDuringWork = ownerNow();
         return Promise.resolve();
@@ -287,6 +323,43 @@ describe("holding the exclusion for the whole sync", () => {
     expect(ownerDuringWork).not.toBeNull();
   });
 
+  // A lock table created by the previous release has no `expires_at`, and a caller that may not
+  // issue DDL cannot add it, so the session skips the lock and runs the sync unexcluded. That is
+  // survivable only while it is REPORTED: the warning is the operator's one signal that this run
+  // held nothing, and it reaches them only if this seam hands its logger down.
+  it("reports a skipped legacy lock through the caller's logger", async () => {
+    // Fresh rather than the shared double, so the assertion cannot be satisfied by another test's
+    // call — the module-level logger is never reset between cases.
+    const warn = vi.fn();
+    // 42703 is undefined_column: the row seeds fine and only the liveness read fails, which is
+    // exactly how a table without the column behaves.
+    const { adapter } = createLockingAdapter({
+      stateReadError: Object.assign(
+        new Error('column "expires_at" does not exist'),
+        { code: "42703" }
+      ),
+    });
+    const work = vi.fn(() => Promise.resolve());
+
+    await withMigrationExcluded(
+      {
+        adapter,
+        logger: { warn } as unknown as Logger,
+        label: "db:sync",
+        mayCreateLock: false,
+        releaseOnInterrupt: true,
+      },
+      work
+    );
+
+    expect(work).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[1]).toMatchObject({
+      reason: "migration lock table is missing expires_at",
+      label: "db:sync",
+    });
+  });
+
   // Holding the lock is necessary and not sufficient. An operator who cleared a
   // dead run's lock row without settling its marker would otherwise be let
   // straight into half-renamed storage.
@@ -295,7 +368,13 @@ describe("holding the exclusion for the whole sync", () => {
     const work = vi.fn(() => Promise.resolve());
 
     const error = await withMigrationExcluded(
-      { adapter, logger, label: "db:sync", mayCreateLock: true },
+      {
+        adapter,
+        logger,
+        label: "db:sync",
+        mayCreateLock: true,
+        releaseOnInterrupt: true,
+      },
       work
     ).catch((caught: unknown) => caught);
 

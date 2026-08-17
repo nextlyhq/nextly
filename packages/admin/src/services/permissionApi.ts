@@ -5,22 +5,16 @@ import { fetcher } from "../lib/api/fetcher";
 import type { MutationResponse } from "../lib/api/response-types";
 import type { Permission } from "../types/entities";
 
-/**
- * Real permission entry shape returned by the backend API.
- */
-interface ApiPermissionEntry {
-  id: string;
-  name: string;
-  slug: string;
-  action: string;
-  resource: string;
-  description: string | null;
-}
+// The wire shape is declared once, in the module that performs the request.
+// `owner` is the field that decides which plugin a permission belongs to, and
+// it arrives alongside `group`, `orphaned` and `danger`; a second local copy of
+// the interface would be free to omit any of them while still compiling.
+import type { ApiPermissionBase } from "./realPermissionsApi";
 
 /**
  * Map a backend permission entry to the admin Permission entity shape.
  */
-function toPermission(entry: ApiPermissionEntry): Permission {
+function toPermission(entry: ApiPermissionBase): Permission {
   return {
     id: entry.id,
     name: entry.name,
@@ -53,7 +47,7 @@ export const fetchPermissions = async (
   const query = buildQuery(params);
   const url = `/permissions${query ? `?${query}` : ""}`;
 
-  const result = await fetcher<ListResponse<ApiPermissionEntry>>(url, {}, true);
+  const result = await fetcher<ListResponse<ApiPermissionBase>>(url, {}, true);
 
   return {
     items: (result.items ?? []).map(toPermission),
@@ -67,7 +61,7 @@ export const fetchPermissions = async (
 export const getPermissionById = async (
   permissionId: string
 ): Promise<Permission> => {
-  const result = await fetcher<ApiPermissionEntry>(
+  const result = await fetcher<ApiPermissionBase>(
     `/permissions/${permissionId}`,
     {},
     true
@@ -85,7 +79,7 @@ export const updatePermission = async (
   permissionId: string,
   updates: Partial<Permission>
 ): Promise<Permission> => {
-  await fetcher<MutationResponse<ApiPermissionEntry>>(
+  await fetcher<MutationResponse<ApiPermissionBase>>(
     `/permissions/${permissionId}`,
     {
       method: "PATCH",
@@ -103,7 +97,7 @@ export const updatePermission = async (
  * response body.
  */
 export const deletePermission = async (permissionId: string): Promise<void> => {
-  await fetcher<MutationResponse<ApiPermissionEntry>>(
+  await fetcher<MutationResponse<ApiPermissionBase>>(
     `/permissions/${permissionId}`,
     { method: "DELETE" },
     true

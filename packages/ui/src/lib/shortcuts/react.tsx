@@ -367,6 +367,13 @@ export interface UseShortcutsOptions {
    * Set this while a drag or a modal interaction owns the keyboard.
    */
   blocking?: boolean;
+  /**
+   * Sorted ABOVE depth, so a layer can outrank one nested deeper than itself.
+   *
+   * For a modal, whose hold must not be tied or beaten by a host scoping its own shortcuts one
+   * level further. Ordinary layers leave this alone.
+   */
+  priority?: number;
 }
 
 /**
@@ -416,6 +423,7 @@ export function useShortcuts(
       depth,
       enabled: options.enabled,
       blocking: options.blocking,
+      priority: options.priority,
     });
   });
 }

@@ -3,12 +3,16 @@
 The visual page-builder editor: the shell, the canvas, and the op store that
 everything in it either produces or reads.
 
-**The editor itself has not landed.** What ships today is the frame geometry —
-the one mapping between the canvas frame and the host page — plus the package
-name constant. See [Public surface](#public-surface). The package was created
-ahead of the editor so its name could be claimed on npm: trusted publishing
-cannot perform a package's first publish, and the bootstrap script will not
-claim a name that is not already a workspace package.
+**The editor is landing in slices, and every export is `@experimental`.** What
+ships today is the editor SHELL — the rail, the switched left panel, the canvas
+slot, the inspector and the bars around them — the frame geometry that maps
+between the canvas frame and the host page, the op store that every edit is
+expressed in, and the package name constant. The canvas is still to come. See
+[Public surface](#public-surface).
+
+The package was created ahead of any of it so its name could be claimed on npm:
+trusted publishing cannot perform a package's first publish, and the bootstrap
+script will not claim a name that is not already a workspace package.
 
 ## What this package is not
 
@@ -75,6 +79,129 @@ which packages a host loaded. The name and not the version: a version literal in
 source would be stale one release after it was written, because every release
 bumps this package in lockstep with its siblings.
 
+### The editor shell
+
+```tsx
+import { BuilderShell } from "@nextlyhq/builder/shell";
+import "@nextlyhq/ui/styles.css"; // the design system's — see below
+import "@nextlyhq/builder/styles.css"; // the editor chrome's
+
+<BuilderShell
+  onExit={() => router.push("/admin/pages")}
+  renderPanel={panel => <MyPanel kind={panel} />}
+  inspector={<MyInspector />}
+  topBar={<MyTopBar />}
+  breadcrumb={<MyBreadcrumb />}
+>
+  <MyCanvas />
+</BuilderShell>;
+```
+
+**Two stylesheets, and both are required.**
+
+`@nextlyhq/builder/styles.css` is COMPILED rather than a token file: it carries
+the shell's own utility rules as well as the `--nx-builder-*` custom properties,
+so the chrome lays out with no Tailwind setup in the host.
+
+It SUPPLEMENTS the design system's stylesheet rather than restating it, so
+`@nextlyhq/ui/styles.css` is loaded alongside — or the admin's stylesheet, which
+already contains it, when the editor is mounted inside the admin. That sheet
+owns three things this one deliberately does not ship:
+
+- the `--nx-*` tokens the chrome's own colours are derived from,
+- the base reset the components are designed against,
+- the rules for the primitives the shell renders — tooltips and drag handles.
+
+Shipping a second copy of any of them would make the result depend on which
+stylesheet loaded last, and would break re-theming: the point of deriving from
+`--nx-*` is that a host which re-themes the admin moves the editor with it.
+
+If the design system's sheet is missing, the shell says so in the console in
+development rather than leaving you to diagnose colours that resolve to nothing.
+
+If you DO use Tailwind and want to re-theme or extend the chrome, apply
+`@nextlyhq/ui/tailwind-preset` and add this package to your `@source` scan. That
+is optional — the compiled sheet already works — and it is what lets your own
+classes sit alongside the shell's without a second Tailwind build.
+
+**The stylesheet is not optional and nothing will tell you if you forget it.**
+The shell renders its markup, carries its class names, and lays out as a stack
+of full-width blocks — which reads as a layout bug rather than a missing import.
+It is a separate subpath because a stylesheet a bundler cannot tree-shake should
+be a decision the host makes, not a side effect of importing a component.
+
+**The shell is presentational, and that is a contract rather than a current
+state.** It owns which panel is open and how wide the regions are — chrome
+state, its own business. It owns nothing about the document, so selection
+arrives as a prop.
+
+That split is not tidiness. Document ops INVALIDATE selection: a remove deletes
+the selected node, a move relocates it. Selection held inside the shell would
+have to be updated in step with every op, which is two things changing together.
+Held outside, it can be DERIVED from the post-op document — "does this id still
+resolve?" — which cannot go out of step because there is only one thing to read.
+
+Content arrives as slots, so a layers panel, an inserter and an inspector can be
+built without this component changing. It knows the SHAPE of the editor and
+never what fills it.
+
+**Chrome preferences go through a port, not `localStorage`.** `store` takes
+`{ read, write }`; the default reads `localStorage` in a browser and remembers
+nothing anywhere else, so a server render is a default rather than a crash. A
+host that already keeps user preferences server-side supplies its own and the
+shell needs no change.
+
+Preferences are restored AFTER mount, deliberately. Reading them in the state
+initializer makes the server emit the defaults and the first client render emit
+the restored layout, which React treats as a hydration failure and repairs by
+discarding the subtree.
+
+**Below 1280px the shell does not compress.** It says where to edit instead and
+keeps the exit reachable. An editor that merely gets cramped is worse than one
+that states its requirement, because the author otherwise discovers the limit by
+failing at a task.
+
+**Widths are solved by `react-resizable-panels`, not here.** The bounds are
+declared — `PANEL_BOUNDS`, `MIN_CANVAS_WIDTH`, `RAIL_WIDTH` — and handed to it.
+The canvas floor is expressed as the canvas panel's own minimum, which is what
+makes it a joint constraint: at 1280px both panels at their individual maximums
+would leave the canvas narrower than either of them, with no per-panel bound
+violated, because the constraint was never per-panel.
+
+The persisted layout is PROPORTIONAL. A pixel layout is wrong on the next
+monitor; the pixel bounds still hold because the library re-applies them to
+whatever the proportions resolve to.
+
+### Where the client boundary is
+
+**The root entry is server-safe.** `"use client"` is carried by
+`@nextlyhq/builder/shell` alone, which is the only entry containing React:
+
+```ts
+// Client. The shell is a client component.
+import { BuilderShell } from "@nextlyhq/builder/shell";
+
+// Server-callable. No React in any of them.
+import { BUILDER_PACKAGE_NAME, rectToHost } from "@nextlyhq/builder";
+import { fitsFullShell, PANEL_BOUNDS } from "@nextlyhq/builder/shell-state";
+import { rectToHost } from "@nextlyhq/builder/geometry";
+```
+
+The split is not tidiness. A banner applies to a whole artifact and everything
+it re-exports, so putting the shell in the root barrel turned the frame geometry
+— plain arithmetic, and public here before the shell existed — into client
+references a Server Component could no longer call, while the export map went on
+advertising callable functions.
+
+`BuilderShellProps` is still described by the root entry: a type is erased, so
+it carries no boundary with it.
+
+This is the same split, for the same reason, as `@nextlyhq/ui`'s `./color` and
+`./utils`. It is not hypothetical tidiness: the geometry already had a consumer
+that only worked because it resolved this package through a tsconfig path
+mapping to source, bypassing the published entry — so the export map was
+advertising something the artifact could not deliver.
+
 ### Frame geometry
 
 The canvas renders inside an iframe while the editor's chrome — insertion
@@ -123,20 +250,85 @@ acceptance suite adapts these rather than restating them: a browser harness
 carrying its own copy certifies its own copy, and would keep passing through
 exactly the correction it exists to catch.
 
+### The op store
+
+`applyOp(document, op, limits?)` — apply one edit to a `BlockDocument`,
+returning the new document under `AppliedOp.document` and the op that undoes it.
+Every change goes through it: the canvas, the layers panel, the inspector and an
+agent all produce ops and nothing else, which is what makes undo, autosave,
+crash restore and edit review one mechanism rather than four.
+
+It takes a DOCUMENT rather than a bare forest because the size caps are
+document-level. A forest measured on its own omits `settings` and `assets`, so a
+document already near its byte limit through those would accept an edit the
+engine then refuses to store. The document is returned whole: `settings`,
+`assets` and any field the format gains later survive an edit untouched.
+
+`limits` defaults to the engine's `DEFAULT_LIMITS` and takes the same
+`DocumentLimits` that `validate()` accepts. Pass the site's own limits if it
+renders with custom ones, or the op layer and the validator will disagree about
+what fits.
+
+`BuilderOp` — the whole edit vocabulary: `insert`, `remove`, `move`, `update`.
+Ops address nodes by id, never by path, because a path describes the tree at the
+moment it was written and any edit above it invalidates one.
+
+`OpError` — thrown when an op cannot apply. A refusal rather than a silent
+no-op: the caller is a history, so an op that quietly did nothing would still be
+recorded and its inverse would undo an edit that never happened.
+
+`AppliedOp`, `NodePatch` — the result shape and the fields an `update` may
+carry. `NodePatch` is read off the engine's own signature rather than restated.
+
 ## Development
 
-Run these from this directory (`packages/builder`), not the repository root —
-turbo swallows the summary line at the root.
+Dependencies must be built first. This package resolves
+`@nextlyhq/blocks-engine` through its published entry, which is `dist/`, so on a
+clean checkout **`test`, `check-types` and `lint` all fail** until it exists —
+`test` in the way worth knowing about, reporting a resolution error and a
+reduced test count rather than an obvious stop.
+
+```bash
+# Once, and again after changing a dependency. Builds only what this
+# package depends on, not the whole repository.
+pnpm --filter @nextlyhq/builder... build
+```
+
+Then, from this directory (`packages/builder`) rather than the repository root —
+turbo swallows the summary line at the root:
 
 ```bash
 pnpm run test          # vitest, including the layering guard
 pnpm run check-types   # tsc --noEmit; unlike some packages here, this DOES
                        # cover the test files (tsconfig has no test exclude)
 pnpm run lint          # eslint --max-warnings 0; a single warning fails
-pnpm run build         # tsup
+pnpm run build         # tsup; this package ONLY, so its dependencies must
+                       # already be built — see below
 ```
 
+`pnpm turbo test --filter=@nextlyhq/builder` builds dependencies itself, because
+the `test` task declares `dependsOn: ["^build"]`. `check-types` and `lint` do
+not. Neither is build-free on a clean checkout: a workspace import resolves
+through the sibling's package exports to a `dist` that does not exist yet, and
+`lint` fails on the same specifiers through `import-x/no-unresolved`.
+
+Build the dependencies first, and on a clean checkout that means:
+
+```bash
+pnpm --filter @nextlyhq/builder... build   # trailing ... INCLUDES this package
+```
+
+The package-local `pnpm run build` above builds this package alone, so it is
+enough only once the dependencies are built. Not `@nextlyhq/builder^...` either:
+`pnpm recursive --help` defines that form as the dependencies _without_ the
+matched package, which leaves this package's own `dist` absent — the same
+missing build wearing a different error message.
+
 ## Peer dependencies
+
+`lucide-react` for the rail's icons, declared as a peer for the reason
+`@nextlyhq/ui` declares it as one: an icon set resolved once by the host rather
+than bundled per package.
 
 React 19, matching the renderer it draws with. `@nextlyhq/blocks-react` requires
 `react: ^19.0.0`, and it is a dependency here rather than a peer, so a React 18

@@ -35,6 +35,7 @@ import { LanguageSwitcher } from "../LanguageSwitcher";
 
 import { DiscardDraftConfirmDialog } from "./DiscardDraftConfirmDialog";
 import { effectiveEntryStatus } from "./entry-address";
+import { PreviewActions } from "./PreviewActions";
 import { ShowJSONDialog } from "./ShowJSONDialog";
 import { UnpublishConfirmDialog } from "./UnpublishConfirmDialog";
 import type { EntryData, EntryFormMode } from "./useEntryForm";
@@ -82,6 +83,38 @@ export interface EntrySystemHeaderProps {
    *  the authoritative signal for its locale filter (shared writes can produce
    *  null-locale versions, so the rows alone are not conclusive). */
   localized?: boolean;
+
+  /* Preview. Two independent actions rendered by one control — see
+     `PreviewActions`, which decides its own shape from which of them are
+     available and renders nothing when neither is. They are separate props
+     rather than one `preview` object because they are answered by different
+     things: whether a URL can be built for this entry, and whether this author
+     may hand out a grant to read it. A caller that can answer one and not the
+     other passes one and not the other. */
+
+  /** Whether a preview URL can be built for this entry. */
+  isPreviewAvailable?: boolean;
+  /** Opens the preview using the editor's own session. May be asynchronous. */
+  onPreview?: () => void | Promise<void>;
+  /** Label for the preview action. Defaults to "Preview". */
+  previewLabel?: string;
+  /**
+   * Whether there is a saved document for a link to name.
+   *
+   * Deliberately NOT ANDed with `update-{slug}` here. The mint endpoint
+   * authorizes the request against the collection's real access rules, and
+   * `update` can be granted by a code-first `access.update` rule that the flat
+   * permission list does not carry — so a client-side check on that list is a
+   * false negative for exactly the arrangement it would claim to protect,
+   * hiding the link from an author who can edit the document. This is the same
+   * reasoning the Discard Draft affordance below is built on, and the sibling
+   * Save controls are not gated on it either.
+   */
+  isLinkAvailable?: boolean;
+  /** Mints a shareable link and copies it. */
+  onCopyLink?: () => void;
+  /** Whether a link is being minted right now. */
+  isCopyingLink?: boolean;
 
   /** Save Draft handler — routed through useEntryForm.handleSubmit('save-draft').
    *  Used in create mode and when editing a draft entry. */
@@ -200,6 +233,12 @@ export function EntrySystemHeader({
   onToggleRail,
   toolbarSlot,
   localized,
+  isPreviewAvailable = false,
+  onPreview,
+  previewLabel,
+  isLinkAvailable = false,
+  onCopyLink,
+  isCopyingLink = false,
 }: EntrySystemHeaderProps) {
   const form = useFormContext();
   const entryLocale = useEntryLocale();
@@ -346,6 +385,26 @@ export function EntrySystemHeader({
         {onLocaleChange && (
           <LanguageSwitcher value={locale} onChange={onLocaleChange} />
         )}
+        {/* Directly left of the submit cluster, which is where an author looks
+            for it: checking how something reads is part of deciding to publish
+            it, not a document-management action like Duplicate or Delete. The
+            `sm` size is the band's, so it lines up with Save beside it rather
+            than standing a few pixels taller.
+
+            `disabled` follows the submit buttons rather than the whole form:
+            minting a link and opening a preview both act on what is already
+            saved, so a submit in flight is a race with them and not merely a
+            busy form. */}
+        <PreviewActions
+          size="sm"
+          isPreviewAvailable={isPreviewAvailable}
+          {...(onPreview === undefined ? {} : { onPreview })}
+          {...(previewLabel === undefined ? {} : { previewLabel })}
+          isLinkAvailable={isLinkAvailable}
+          {...(onCopyLink === undefined ? {} : { onCopyLink })}
+          isCopyingLink={isCopyingLink}
+          disabled={isSubmitting}
+        />
         {hasStatus && isPublishedEdit ? (
           <>
             <Button

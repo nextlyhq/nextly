@@ -1,5 +1,20 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
+// The sync asks the reconcile service to clear a diverged mark on a code-managed group. Mocked so
+// the ASK is observable: the repair itself is proved in its own suite, and running it here would
+// make these tests depend on introspection they do not model.
+vi.mock("../services/field-group-reconcile-service", () => ({
+  reconcileFieldGroup: vi.fn(async () => ({
+    slug: "seo",
+    localized: false,
+    removed: [],
+    repaired: [],
+    adopted: [],
+    unchanged: true,
+    schemaVersion: 1,
+  })),
+}));
+
 // The service throws NextlyError, so `rejects.toThrow(...)` asserts against
 // that class for the instanceof check to line up with the thrown type.
 import { NextlyError } from "../../../errors";
@@ -311,6 +326,113 @@ describe("FieldGroupRegistryService", () => {
       expect(updateData.schema_hash).toBe("new-hash");
     });
 
+    // 🔴 `schema_version` is an optimistic lock, and toggling localization MOVES every translatable
+    // column between the main table and `comp_<slug>_locales`. Tying the bump to `fields` alone left
+    // that transition invisible to `assertSchemaVersionMatch`: a preview taken beforehand still
+    // matched, and applying it wrote a stale field set over a shape that had already moved.
+    it("increments schema_version when localization is toggled with no field change", async () => {
+      ctx.adapter.selectOne.mockResolvedValue(
+        dbRow({ locked: 0, localized: 0 })
+      );
+      ctx.adapter.update.mockResolvedValue([dbRow({ schema_version: 2 })]);
+
+      await ctx.service.updateComponent("seo", { localized: true });
+
+      const updateData = ctx.adapter.update.mock.calls[0][1] as Record<
+        string,
+        unknown
+      >;
+      expect(updateData.schema_version).toBe(2);
+      // Nothing about the field set changed, so the migration status must not be disturbed.
+      expect(updateData.fields).toBeUndefined();
+      expect(updateData.migration_status).toBeUndefined();
+    });
+
+    // 🔴 The control that keeps the bump from becoming noise. Compared against the STORED value
+    // rather than merely being present: a request resending the current setting changes no storage,
+    // so invalidating every open editor for it would make the lock fire on saves that conflict with
+    // nothing.
+    it("leaves schema_version alone when localized is resent unchanged", async () => {
+      ctx.adapter.selectOne.mockResolvedValue(
+        dbRow({ locked: 0, localized: 1 })
+      );
+      ctx.adapter.update.mockResolvedValue([dbRow()]);
+
+      await ctx.service.updateComponent("seo", {
+        localized: true,
+        label: "Renamed",
+      });
+
+      const updateData = ctx.adapter.update.mock.calls[0][1] as Record<
+        string,
+        unknown
+      >;
+      expect(updateData.schema_version).toBeUndefined();
+      expect(updateData.label).toBe("Renamed");
+    });
+
+    // 🔴 How far a schema change GOT is not a property of the field list. Writing the status only
+    // alongside `fields` left it unwritable on its own — and the one caller who has an outcome and
+    // nothing else to say is a write that failed AFTER its DDL committed, which is exactly when the
+    // divergence needs recording.
+    it("writes migration_status on its own, with no field change", async () => {
+      ctx.adapter.selectOne.mockResolvedValue(dbRow({ locked: 0 }));
+      ctx.adapter.update.mockResolvedValue([dbRow()]);
+
+      await ctx.service.updateComponent(
+        "seo",
+        { migrationStatus: "failed" },
+        { source: "code" }
+      );
+
+      const updateData = ctx.adapter.update.mock.calls[0][1] as Record<
+        string,
+        unknown
+      >;
+      expect(updateData.migration_status).toBe("failed");
+      // The status says nothing about the shape, so neither the stored fields nor the optimistic
+      // lock may move with it. A bump here would invalidate every open editor for a row whose
+      // schema did not change.
+      expect(updateData.fields).toBeUndefined();
+      expect(updateData.schema_version).toBeUndefined();
+    });
+
+    // The control against the status becoming sticky: a later edit that says nothing about it must
+    // leave the column alone rather than resetting it.
+    it("leaves migration_status alone when the request does not carry one", async () => {
+      ctx.adapter.selectOne.mockResolvedValue(dbRow({ locked: 0 }));
+      ctx.adapter.update.mockResolvedValue([dbRow()]);
+
+      await ctx.service.updateComponent("seo", { label: "Renamed" });
+
+      const updateData = ctx.adapter.update.mock.calls[0][1] as Record<
+        string,
+        unknown
+      >;
+      expect(updateData.migration_status).toBeUndefined();
+    });
+
+    // 🔴 The optimistic lock has to move when the TABLES did, even though this write carries no new
+    // field set. `assertSchemaVersionMatch` is all that stands between an editor loaded before a
+    // partial transition and an apply against the tables that transition already moved.
+    it("advances schema_version when the caller says the shape diverged", async () => {
+      ctx.adapter.selectOne.mockResolvedValue(dbRow({ locked: 0 }));
+      ctx.adapter.update.mockResolvedValue([dbRow({ schema_version: 2 })]);
+
+      await ctx.service.updateComponent(
+        "seo",
+        { migrationStatus: "failed" },
+        { source: "code", invalidateSchemaVersion: true }
+      );
+
+      const updateData = ctx.adapter.update.mock.calls[0][1] as Record<
+        string,
+        unknown
+      >;
+      expect(updateData.schema_version).toBe(2);
+      expect(updateData.migration_status).toBe("failed");
+    });
+
     it("throws FORBIDDEN when locked and source is not 'code'", async () => {
       ctx.adapter.selectOne.mockResolvedValue(dbRow({ locked: 1 }));
 
@@ -497,6 +619,61 @@ describe("FieldGroupRegistryService", () => {
       expect(result.created).toEqual(["hero"]);
       expect(result.updated).toEqual([]);
       expect(result.unchanged).toEqual([]);
+    });
+
+    // 🔴 A code-managed group marked `diverged` is otherwise a DEAD END: the admin refuses it for
+    // being locked and this sync refuses it for being diverged, so neither direction reaches it.
+    // The sync holds the config file — which IS the definition for a locked group — so it is the
+    // caller that may repair, and it must do so BEFORE deciding what to write.
+    it("clears a diverged mark on a code-managed component before writing it", async () => {
+      const fields = [{ name: "metaTitle", type: "text" }];
+      ctx.adapter.selectOne.mockResolvedValue(
+        dbRow({ migration_status: "diverged", locked: 1 })
+      );
+      ctx.adapter.update.mockResolvedValue([dbRow()]);
+      // The repair itself is proved where it lives; here the question is only whether the sync
+      // ASKS for it, so the introspection the reconcile service performs is answered minimally.
+      ctx.adapter.tableExists.mockResolvedValue(true);
+
+      await ctx.service.syncCodeFirstComponents([
+        { slug: "seo", label: "SEO", fields },
+      ]);
+
+      // 🔴 Asserted on the CALL, not on the result lists. The component ends up in `updated` or
+      // `unchanged` whether or not the repair was requested, so a result-shaped assertion would
+      // pass with and without the wiring — coverage in appearance only. `fromCode: true` is the
+      // part that matters: without it the repair is refused by the lock check it exists to pass.
+      const { reconcileFieldGroup } = await import(
+        "../services/field-group-reconcile-service"
+      );
+      expect(reconcileFieldGroup).toHaveBeenCalledWith(
+        expect.objectContaining({ slug: "seo", fromCode: true })
+      );
+    });
+
+    it("does not ask for a repair when the component is not diverged", async () => {
+      // The control that keeps the branch above from becoming unconditional: a healthy row must
+      // not be run through a repair on every boot.
+      const fields = [{ name: "metaTitle", type: "text" }];
+      ctx.adapter.selectOne.mockResolvedValue(
+        dbRow({ migration_status: "applied", locked: 1 })
+      );
+      ctx.adapter.update.mockResolvedValue([dbRow()]);
+
+      // The mock is module-level and this suite's `beforeEach` only rebuilds the adapter, so a
+      // call recorded by the test above would satisfy this assertion's opposite. Cleared here
+      // rather than globally: 53 other tests in this file pass under the current lifecycle and
+      // widening it would be a change to their experiment, not to mine.
+      const { reconcileFieldGroup } = await import(
+        "../services/field-group-reconcile-service"
+      );
+      vi.mocked(reconcileFieldGroup).mockClear();
+
+      await ctx.service.syncCodeFirstComponents([
+        { slug: "seo", label: "SEO", fields },
+      ]);
+
+      expect(reconcileFieldGroup).not.toHaveBeenCalled();
     });
 
     it("updates components with changed schema hash", async () => {

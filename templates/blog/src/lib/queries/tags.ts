@@ -14,6 +14,7 @@ import { getNextly } from "nextly";
 import { cachedFind, nextlyTags } from "nextly/runtime";
 import nextlyConfig from "@nextly-config";
 
+import { toTag } from "./coerce";
 import type { Tag, TaxonomyWithCount } from "./types";
 
 export async function getTagBySlug(slug: string): Promise<Tag | null> {
@@ -27,7 +28,8 @@ export async function getTagBySlug(slug: string): Promise<Tag | null> {
           limit: 1,
           depth: 0,
         });
-        return result.items[0] ? (result.items[0] as Tag) : null;
+        const found = result.items[0];
+        return found ? toTag(found) : null;
       },
       { tags: nextlyTags("tags"), keyParts: ["tags", "detail", slug] }
     );
@@ -90,7 +92,7 @@ export async function getAllTagsWithCounts(): Promise<
               depth: 0,
             });
             return {
-              item: tag as Tag,
+              item: toTag(tag),
               postCount: posts.meta.total,
             };
           })

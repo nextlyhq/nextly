@@ -49,6 +49,20 @@ export interface ColumnSpec {
   // the two apart, which is why this is carried in the snapshot rather than
   // re-derived in the diff.
   ownedSequenceDefault?: boolean;
+  // The size or precision the column was DECLARED with, when it has one:
+  // "255" for varchar(255), "10,2" for numeric(10,2). Absent when the type
+  // carries no modifier.
+  //
+  // Separate from `type` deliberately, and the diff must never read it.
+  // `normalizeType` strips modifiers precisely so the live side (which on
+  // PostgreSQL reads `udt_name` and cannot report one) and the desired side
+  // (which authors lengths) compare equal — folding the modifier into `type`
+  // would emit a `change_column_type` for every core column of every existing
+  // PostgreSQL database, which is the whole failure that strip prevents.
+  //
+  // Recorded so a consumer that legitimately needs the width can ask for it
+  // without re-deriving it from a string the strip has already flattened.
+  typeModifier?: string;
 }
 
 export interface IndexSpec {

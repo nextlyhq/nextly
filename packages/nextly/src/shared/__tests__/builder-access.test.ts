@@ -110,6 +110,11 @@ describe("isBuilderRoute", () => {
     ["DELETE", "/field-groups/hero"],
     ["POST", "/field-groups/schema/hero/preview"],
     ["POST", "/field-groups/schema/hero/apply"],
+    // Rewrites the stored definition, so it is builder surface exactly as the apply is. Absence
+    // from the guarded set is SILENT — the route simply answers in production — which is why this
+    // table is the join between the parser and `BUILDER_METHODS` rather than two lists that agree
+    // by hand until one of them gains a method.
+    ["POST", "/field-groups/schema/hero/reconcile"],
   ])("gates %s %s", (httpMethod, path) => {
     expect(classify(path, httpMethod)).toBe(true);
   });
@@ -184,5 +189,41 @@ describe("requireBuilderEnabled", () => {
   it("passes where the builder is enabled", () => {
     process.env.NODE_ENV = "development";
     expect(() => requireBuilderEnabled("create-collection")).not.toThrow();
+  });
+});
+
+/**
+ * The guarded set names dispatcher methods by STRING, so it can drift from them silently.
+ *
+ * A renamed dispatcher method leaves a dead entry behind, and `isBuilderRoute` answers false for
+ * the new name — the endpoint simply starts responding in production, with nothing red anywhere.
+ * The route table above catches a method someone forgot to GUARD; this catches a method someone
+ * renamed and guarded under its old name, which the table cannot see because the route still parses.
+ *
+ * Derived from the registry rather than restated: a second hand-written list would need the same
+ * maintenance as the first and would agree with it right up until the moment it mattered.
+ */
+describe("the builder-guarded set stays joined to the dispatcher", () => {
+  it("names only methods the component dispatcher actually has", async () => {
+    const { COMPONENTS_METHODS } = await import(
+      "../../dispatcher/handlers/component-dispatcher"
+    );
+    const { isBuilderRoute } = await import("../builder-access");
+
+    const guarded = [
+      "createComponent",
+      "updateComponent",
+      "deleteComponent",
+      "previewComponentSchemaChanges",
+      "applyComponentSchemaChanges",
+      "reconcileComponent",
+    ].filter(method => isBuilderRoute("field-groups", method));
+
+    // The population first: an empty list would satisfy every assertion below while proving that
+    // the guard recognises nothing at all.
+    expect(guarded.length).toBeGreaterThan(0);
+    for (const method of guarded) {
+      expect(Object.keys(COMPONENTS_METHODS)).toContain(method);
+    }
   });
 });

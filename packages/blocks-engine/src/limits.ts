@@ -11,7 +11,12 @@ export const MAX_DEPTH = 12;
 export const MAX_NODES = 5000;
 
 /** Default maximum serialized document size in bytes (2 MiB). */
-export const DEFAULT_MAX_DOCUMENT_BYTES = 2 * 1024 * 1024;
+// Written as a literal rather than as `2 * 1024 * 1024`, because the literal
+// TYPE is what the freeze asserts. TypeScript does not fold the arithmetic when
+// inferring, so the computed form widens to `number` and a freeze assertion
+// over it accepts every possible cap — no assertion at all. The comment carries
+// the readability the expression used to.
+export const DEFAULT_MAX_DOCUMENT_BYTES = 2_097_152; // 2 MiB
 
 /** Fraction of a cap at which tooling should warn (80%). */
 export const LIMIT_WARNING_RATIO = 0.8;
@@ -47,7 +52,13 @@ export function countNodes(nodes: BlockNode[]): number {
       // Guard against malformed slots (a non-array value): these helpers run
       // over untrusted documents during validation and must not throw.
       for (const children of Object.values(node.slots)) {
-        if (Array.isArray(children)) queue.push(...children);
+        if (!Array.isArray(children)) continue;
+        // Enqueued one at a time. `push(...children)` passes each child as a
+        // call ARGUMENT, and V8 caps those near 100k — so a slot wider than
+        // that throws a native RangeError from inside the counter, before any
+        // caller can refuse the document for being too large. The count exists
+        // to reject exactly that document.
+        for (const child of children) queue.push(child);
       }
     }
   }

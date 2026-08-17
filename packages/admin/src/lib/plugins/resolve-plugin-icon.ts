@@ -39,20 +39,36 @@ export type PluginIconSource =
  */
 export function resolvePluginIconFrom(
   candidates: readonly (Pick<PluginMetadata, "appearance"> | undefined)[],
-  opts: { fallback: string; allowAsset: false }
+  opts: {
+    fallback: string;
+    allowAsset: false;
+    skipAssets?: ReadonlySet<string>;
+  }
 ): Extract<PluginIconSource, { kind: "lucide" }>;
 export function resolvePluginIconFrom(
   candidates: readonly (Pick<PluginMetadata, "appearance"> | undefined)[],
-  opts: { fallback: string; allowAsset?: boolean }
+  opts: {
+    fallback: string;
+    allowAsset?: boolean;
+    skipAssets?: ReadonlySet<string>;
+  }
 ): PluginIconSource;
 export function resolvePluginIconFrom(
   candidates: readonly (Pick<PluginMetadata, "appearance"> | undefined)[],
-  opts: { fallback: string; allowAsset?: boolean }
+  opts: {
+    fallback: string;
+    allowAsset?: boolean;
+    skipAssets?: ReadonlySet<string>;
+  }
 ): PluginIconSource {
   for (const candidate of candidates) {
     const asset = candidate?.appearance?.iconAsset;
-    if (asset && opts.allowAsset !== false)
+    // A skipped asset drops only that candidate's image; the candidate's own
+    // glyph is still preferred over the next candidate, because a plugin
+    // naming a glyph beside a broken logo has said what to show instead.
+    if (asset && opts.allowAsset !== false && !opts.skipAssets?.has(asset)) {
       return { kind: "asset", src: asset };
+    }
 
     const name = candidate?.appearance?.icon;
     if (name) return { kind: "lucide", name };

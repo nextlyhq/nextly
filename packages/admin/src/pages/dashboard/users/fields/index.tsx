@@ -77,6 +77,7 @@ import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundar
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { toast } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
+import { PAGINATION } from "@admin/constants/pagination";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
 import {
   useDeleteUserField,
@@ -84,6 +85,7 @@ import {
   useUserFields,
 } from "@admin/hooks/queries/useUserFields";
 import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
+import { usePagination } from "@admin/hooks/usePagination";
 import { navigateTo } from "@admin/lib/navigation";
 import { cn } from "@admin/lib/utils";
 import type {
@@ -491,8 +493,7 @@ function SortableFieldRow({
 
 function UserFieldsTable() {
   // Pagination state
-  const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState(10);
+  const { page, pageSize, setPage, setPageSize, resetPage } = usePagination();
 
   // Search state
   const [search, setSearch] = useState("");
@@ -571,8 +572,8 @@ function UserFieldsTable() {
 
   // Reset page when search changes
   useEffect(() => {
-    setPage(0);
-  }, [search]);
+    resetPage();
+  }, [search, resetPage]);
 
   // Action handlers
   const handleEdit = useCallback((field: UserFieldDefinitionRecord) => {
@@ -641,11 +642,6 @@ function UserFieldsTable() {
     [localFields, doReorder, data]
   );
 
-  const handlePageSizeChange = useCallback((newPageSize: number) => {
-    setPageSize(newPageSize);
-    setPage(0);
-  }, []);
-
   // Error state
   if (isError) {
     return (
@@ -657,7 +653,6 @@ function UserFieldsTable() {
               onChange={setSearch}
               placeholder="Search fields by name or label..."
               isLoading={false}
-              className="bg-background text-foreground border-border"
             />
           </div>
         </div>
@@ -685,7 +680,6 @@ function UserFieldsTable() {
               onChange={setSearch}
               placeholder="Search fields by name or label..."
               isLoading={true}
-              className="bg-background text-foreground border-border"
             />
           </div>
         </div>
@@ -729,7 +723,6 @@ function UserFieldsTable() {
               onChange={setSearch}
               placeholder="Search fields by name or label..."
               isLoading={isLoading}
-              className="bg-background text-foreground border-border"
             />
           </div>
         </div>
@@ -805,16 +798,23 @@ function UserFieldsTable() {
             </Table>
           </DndContext>
 
-          {/* Pagination inside table wrapper - always show if table is shown */}
-          {/* <div className="table-footer  border-t border-border bg-[var(--nx-table-header-bg)] p-4"> */}
+          {/* Rendered directly rather than handed to a table, because this list
+              is not a DataTableView: the rows are drag-reorderable and drawn by
+              a DndContext over a plain Table, so there is no two-view
+              responsive decision for a table to place a pager for. */}
           <Pagination
             currentPage={page}
             totalPages={Math.max(1, totalPages)}
             pageSize={pageSize}
-            pageSizeOptions={[10, 25, 50]}
+            pageSizeOptions={PAGINATION.TABLE_PAGE_SIZE_OPTIONS}
             onPageChange={setPage}
-            onPageSizeChange={handlePageSizeChange}
+            onPageSizeChange={setPageSize}
             totalItems={totalItems + filteredStaticFields.length}
+            // Named rather than left as the default "Pagination". A screen
+            // reader announces this control by that name, and the admin renders
+            // several pagers across its pages, so a generic one says nothing
+            // about which list it moves.
+            ariaLabel="User fields pagination"
           />
           {/* </div> */}
         </div>

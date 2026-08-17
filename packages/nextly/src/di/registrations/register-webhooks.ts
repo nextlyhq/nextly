@@ -13,7 +13,10 @@
  */
 
 import { MetaRetentionGate } from "../../domains/retention/gate";
-import { buildRetentionRunner } from "../../domains/retention/passes";
+import {
+  buildRetentionRunner,
+  retentionPoliciesFrom,
+} from "../../domains/retention/passes";
 import { WebhookFastDrainScheduler } from "../../domains/webhooks/after-drain";
 import type {
   RunWebhookDrainOptions,
@@ -118,8 +121,7 @@ export function registerWebhookServices(ctx: RegistrationContext): void {
   container.registerSingleton("retentionRunner", () =>
     buildRetentionRunner({
       adapter,
-      webhookPolicy: ctx.config.webhookRetention,
-      auditPolicy: ctx.config.auditRetention,
+      ...retentionPoliciesFrom(ctx.config),
       gate: new MetaRetentionGate(adapter),
       logger,
     })
@@ -134,17 +136,38 @@ export function registerWebhookServices(ctx: RegistrationContext): void {
       // is an unrelated decision: every remaining audit trigger is a request
       // path capped at a batch, so the configured budget became unreachable and
       // a busy trail could grow indefinitely.
-      ctx.config.webhookRetention || ctx.config.auditRetention
-        ? {
-            policy: ctx.config.webhookRetention ?? undefined,
-            // Carried whenever a policy exists rather than only when it prunes
-            // today: whether it prunes is decided when the pass runs, so a hot
-            // reload that widens an entirely-`false` policy reaches this
-            // dependency instead of needing a restart.
-            auditPolicy: ctx.config.auditRetention,
-            prune: { adapter, logger },
-            gate: new MetaRetentionGate(adapter),
-          }
-        : undefined
+      // Derived from the shared policy list rather than named here, so a domain
+      // that gains retention reaches the SCHEDULED trigger too. Naming them by
+      // hand is what left the delivery log with no full-budget pass: it was
+      // swept only by writes, so an install that went quiet never swept again.
+      (() => {
+        const policies = retentionPoliciesFrom(ctx.config);
+        // Built whenever ANY policy has something to prune. Keying it on the
+        // webhook policy alone made the audit trails' only full-budget trigger
+        // disappear the moment an operator switched webhook retention off,
+        // which is an unrelated decision: every remaining audit trigger is a
+        // request path capped at a batch, so the configured budget became
+        // unreachable and a busy trail could grow indefinitely. The delivery
+        // log is in the same position, and worse — writes are its ONLY other
+        // trigger.
+        if (
+          !policies.webhookPolicy &&
+          !policies.auditPolicy &&
+          !policies.emailPolicy
+        ) {
+          return undefined;
+        }
+        return {
+          policy: policies.webhookPolicy ?? undefined,
+          // Carried whenever a policy exists rather than only when it prunes
+          // today: whether it prunes is decided when the pass runs, so a hot
+          // reload that widens an entirely-`false` policy reaches this
+          // dependency instead of needing a restart.
+          auditPolicy: policies.auditPolicy,
+          emailPolicy: policies.emailPolicy,
+          prune: { adapter, logger },
+          gate: new MetaRetentionGate(adapter),
+        };
+      })()
   );
 }

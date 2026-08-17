@@ -1,6 +1,6 @@
 import { lazy } from "react";
 
-import { ROUTES } from "../constants/routes";
+import { type PublicRoutePath, ROUTES } from "../constants/routes";
 import type { PageProps } from "../lib/routing";
 
 import AcceptInvitePage from "./(auth)/accept-invite";
@@ -20,6 +20,7 @@ import DashboardPage from "./dashboard/index";
 import MediaLibraryPage from "./dashboard/media/index";
 import PluginDetailPage from "./dashboard/plugins/[slug]";
 import PluginSettingsPage from "./dashboard/plugins/[slug]/settings";
+import PluginBrowsePage from "./dashboard/plugins/browse";
 import PluginsOverviewPage from "./dashboard/plugins/index";
 import CollectionsLandingRedirect from "./dashboard/redirects/CollectionsLandingRedirect";
 import FieldGroupsLandingRedirect from "./dashboard/redirects/FieldGroupsLandingRedirect";
@@ -95,15 +96,39 @@ export interface RouteConfig {
   requiresBuilder?: boolean;
 }
 
+/**
+ * The page that answers each public route.
+ *
+ * Keyed by `PublicRoutePath` rather than by `string`, so the compiler requires
+ * exactly the paths `PUBLIC_ROUTE_PATHS` declares: a path added there without a
+ * page fails to build, and a page here for a path not declared public is
+ * rejected. That is what keeps the two in step, since the interceptor derives
+ * its own copy from the same declaration and cannot import this module.
+ */
+const PUBLIC_PAGES: Record<PublicRoutePath, React.ComponentType<PageProps>> = {
+  [ROUTES.SETUP]: SetupPage,
+  [ROUTES.LOGIN]: LoginPage,
+  [ROUTES.REGISTER]: RegisterPage,
+  [ROUTES.FORGOT_PASSWORD]: ForgotPasswordPage,
+  [ROUTES.RESET_PASSWORD]: ResetPasswordPage,
+  [ROUTES.VERIFY_EMAIL]: VerifyEmailPage,
+  [ROUTES.ACCEPT_INVITE]: AcceptInvitePage,
+};
+
+/**
+ * `PUBLIC_PAGES` as registry entries. Every one is `type: "public"` by
+ * construction, so no entry can be declared public in one place and private in
+ * the other.
+ */
+const publicRouteConfig: Record<string, RouteConfig> = Object.fromEntries(
+  Object.entries(PUBLIC_PAGES).map(([path, component]) => [
+    path,
+    { component, type: "public" },
+  ])
+);
+
 export const routeConfig: Record<string, RouteConfig> = {
-  // Public routes
-  [ROUTES.SETUP]: { component: SetupPage, type: "public" },
-  [ROUTES.LOGIN]: { component: LoginPage, type: "public" },
-  [ROUTES.REGISTER]: { component: RegisterPage, type: "public" },
-  [ROUTES.FORGOT_PASSWORD]: { component: ForgotPasswordPage, type: "public" },
-  [ROUTES.RESET_PASSWORD]: { component: ResetPasswordPage, type: "public" },
-  [ROUTES.VERIFY_EMAIL]: { component: VerifyEmailPage, type: "public" },
-  [ROUTES.ACCEPT_INVITE]: { component: AcceptInvitePage, type: "public" },
+  ...publicRouteConfig,
 
   // Dashboard route (homepage)
   [ROUTES.DASHBOARD]: { component: DashboardPage, type: "private" },
@@ -369,6 +394,14 @@ export const routeConfig: Record<string, RouteConfig> = {
   // Plugin routes
   [ROUTES.PLUGINS]: {
     component: PluginsOverviewPage,
+    type: "private",
+    requiredPermission: "manage-settings",
+  },
+  // Registered outside `/admin/plugins/`, so no ordering rule holds this in
+  // place: the directory and a plugin's detail page cannot match the same
+  // path, whatever the plugin is called.
+  [ROUTES.PLUGIN_BROWSE]: {
+    component: PluginBrowsePage,
     type: "private",
     requiredPermission: "manage-settings",
   },

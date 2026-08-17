@@ -22,7 +22,6 @@ import { BulkActionBar } from "@admin/components/features/entries/EntryList/Bulk
 import * as Icons from "@admin/components/icons";
 import { Lock } from "@admin/components/icons";
 import { BulkDeleteDialog } from "@admin/components/shared/bulk-action-dialogs";
-import { Pagination } from "@admin/components/shared/pagination";
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { toast } from "@admin/components/ui";
 import { DataTableView } from "@admin/components/ui/table/data-table";
@@ -31,6 +30,7 @@ import type {
   NextlyColumn,
   RowAction,
 } from "@admin/components/ui/table/data-table";
+import { PAGINATION } from "@admin/constants/pagination";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { UI } from "@admin/constants/ui";
 import {
@@ -39,6 +39,7 @@ import {
   useBulkDeleteFieldGroups,
 } from "@admin/hooks/queries";
 import { useDebouncedValue } from "@admin/hooks/useDebouncedValue";
+import { usePagination } from "@admin/hooks/usePagination";
 import { useRowSelection } from "@admin/hooks/useRowSelection";
 import { formatDateTime } from "@admin/lib/dates/format";
 import { navigateTo } from "@admin/lib/navigation";
@@ -67,24 +68,50 @@ function getSourceBadge(source?: FieldGroupSource): {
 }
 
 /** Migration-status badge variant + label. */
-function getMigrationBadge(status?: FieldGroupMigrationStatus): {
+type MigrationBadge = {
   variant: "success" | "warning" | "primary" | "default" | "destructive";
   label: string;
-} {
-  switch (status) {
-    case "synced":
-      return { variant: "success", label: "Synced" };
-    case "pending":
-      return { variant: "warning", label: "Pending" };
-    case "generated":
-      return { variant: "primary", label: "Generated" };
-    case "applied":
-      return { variant: "success", label: "Applied" };
-    case "failed":
-      return { variant: "destructive", label: "Failed" };
-    default:
-      return { variant: "default", label: "-" };
-  }
+};
+
+/** Every migration status this table can be handed, keyed so the compiler demands each one. */
+const MIGRATION_BADGES: Record<FieldGroupMigrationStatus, MigrationBadge> = {
+  synced: { variant: "success", label: "Synced" },
+  pending: { variant: "warning", label: "Pending" },
+  generated: { variant: "primary", label: "Generated" },
+  applied: { variant: "success", label: "Applied" },
+  failed: { variant: "destructive", label: "Failed" },
+  diverged: { variant: "destructive", label: "Diverged" },
+};
+
+function getMigrationBadge(status?: FieldGroupMigrationStatus): MigrationBadge {
+  // 🔴 An exhaustive Record rather than a switch with a `default`, and that is the control.
+  //
+  // A `default` arm silently absorbs any status added later: `diverged` rendered as `-` here — "no
+  // migration state", the opposite of what it means, and the state an operator most needs to find —
+  // while the sidebar indicator, which already keyed a Record off the same union, could not compile
+  // until it was handled. The compiler is a boundary; remembering to add a case is not.
+  //
+  // `undefined` keeps its own answer, because "this row has no status" is a real case and is not
+  // the same as an unhandled one.
+  if (!status) return { variant: "default", label: "-" };
+
+  // 🔴 A runtime fallback ON TOP of the exhaustive Record, not instead of it. The two catch
+  // different things and only one of them is a compile-time question.
+  //
+  // `migration_status` is an unconstrained `varchar(20)` and the registry casts whatever string it
+  // reads to this union, so the type is a claim about the column rather than a guarantee from it —
+  // a row written by an older release, a hand-edited row, or a future status arriving during a
+  // rolling deploy all land here as a value no entry covers. Indexing then yields `undefined` and
+  // the cell dereferences `.variant`, taking down the whole management view: the operator loses the
+  // page that would have shown them the offending row.
+  //
+  // This does NOT reopen the hole the Record closed. A new member of the union still fails to
+  // compile until it has an entry, because the Record is declared exhaustive OVER THE UNION; what
+  // this adds is an answer for values that were never in the union at all. The status is shown
+  // verbatim, so an operator sees what the column actually holds rather than a shrug.
+  return (
+    MIGRATION_BADGES[status] ?? { variant: "warning", label: String(status) }
+  );
 }
 
 /** Columns pinned as always-visible in the column toggle. */
@@ -100,16 +127,15 @@ const ALWAYS_VISIBLE = new Set(["label", "createdAt"]);
  * rendering is delegated to the unified DataTableView.
  */
 export default function FieldGroupTable() {
-  const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState(10);
+  const { page, pageSize, setPage, setPageSize, resetPage } = usePagination();
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebouncedValue(search, UI.SEARCH_DEBOUNCE_MS);
 
   // Reset to the first page when the search term changes so a later page does not
   // request out-of-range results and show a false empty state.
   useEffect(() => {
-    setPage(0);
-  }, [debouncedSearch]);
+    resetPage();
+  }, [debouncedSearch, resetPage]);
 
   const [sourceFilter, setSourceFilter] = useState<FieldGroupSource | "all">(
     "all"
@@ -136,10 +162,23 @@ export default function FieldGroupTable() {
     });
   };
 
+  // 🔴 Both filters go to the SERVER, and the table renders exactly what comes back.
+  //
+  // They used to be applied here, to `data.items` — one server-paginated page. A page is a window
+  // over the whole set, so narrowing it can only ever search the window: choosing "Diverged" showed
+  // an empty table whenever the diverged group sat on another page, hiding the one state an
+  // operator opens this screen to find. The counters had the same problem from the other side,
+  // since `meta.total` counts the unfiltered set.
+  //
+  // Asking the database once and rendering the answer also keeps the pager honest: `meta` now
+  // describes the filtered set, so page count, "hasNext" and the row range all agree with the rows.
   const { data, isLoading, isFetching, isError, error } = useFieldGroups({
     pagination: { page, pageSize },
     sorting: [],
-    filters: { search: debouncedSearch },
+    filters: {
+      search: debouncedSearch,
+      filters: { source: sourceFilter, migrationStatus: migrationFilter },
+    },
   });
 
   const { mutate: deleteFieldGroup, isPending: isDeleting } =
@@ -157,28 +196,21 @@ export default function FieldGroupTable() {
   // Selection is page-scoped: clear it whenever the page, search, or source
   // filter changes so a bulk action never targets rows that are no longer
   // shown/confirmed.
+  // `migrationFilter` belongs here for the same reason `sourceFilter` does, and it did not before
+  // only because the filter used to be applied after the fetch. Now that it changes which rows the
+  // SERVER returns, a selection made under one filter would otherwise survive into another result
+  // set and a bulk action would target rows the operator can no longer see.
   useEffect(() => {
     clearSelection();
-  }, [page, debouncedSearch, sourceFilter, clearSelection]);
+  }, [page, debouncedSearch, sourceFilter, migrationFilter, clearSelection]);
 
   const { mutate: bulkDeleteFieldGroups, isPending: isBulkDeleting } =
     useBulkDeleteFieldGroups();
 
-  const filteredData = useMemo(() => {
-    if (!data?.items) return [];
-    return data.items.filter(fieldGroup => {
-      if (sourceFilter !== "all" && fieldGroup.source !== sourceFilter) {
-        return false;
-      }
-      if (
-        migrationFilter !== "all" &&
-        fieldGroup.migrationStatus !== migrationFilter
-      ) {
-        return false;
-      }
-      return true;
-    });
-  }, [data?.items, sourceFilter, migrationFilter]);
+  // The rows ARE the answer to the filtered query, so there is nothing left to narrow here. A
+  // second filter over the same question is the drift this codebase has a rule about: two
+  // implementations agree the day they are written, and the one that runs last decides.
+  const filteredData = useMemo(() => data?.items ?? [], [data?.items]);
 
   // Code-first (locked) components open the same builder route; the builder
   // renders read-only when the loaded component is locked.
@@ -378,19 +410,14 @@ export default function FieldGroupTable() {
     [allColumns]
   );
 
-  const handlePageSizeChange = (newPageSize: number) => {
-    setPageSize(newPageSize);
-    setPage(0);
-  };
-
   const handleSourceFilterChange = (value: string) => {
     setSourceFilter(value as FieldGroupSource | "all");
-    setPage(0);
+    resetPage();
   };
 
   const handleMigrationFilterChange = (value: string) => {
     setMigrationFilter(value as FieldGroupMigrationStatus | "all");
-    setPage(0);
+    resetPage();
   };
 
   const selection = useMemo<DataTableSelection<ApiFieldGroup>>(
@@ -455,7 +482,7 @@ export default function FieldGroupTable() {
           onChange={setSearch}
           placeholder="Search field groups..."
           isLoading={isFetching}
-          className="w-full border-border bg-background text-foreground md:max-w-sm"
+          className="w-full md:max-w-sm"
         />
 
         <div className="flex w-full items-center justify-between gap-2 sm:justify-end md:w-auto">
@@ -549,6 +576,14 @@ export default function FieldGroupTable() {
                   >
                     Failed
                   </DropdownMenuCheckboxItem>
+                  <DropdownMenuCheckboxItem
+                    checked={migrationFilter === "diverged"}
+                    onCheckedChange={() =>
+                      handleMigrationFilterChange("diverged")
+                    }
+                  >
+                    Diverged
+                  </DropdownMenuCheckboxItem>
                 </DropdownMenuContent>
               </DropdownMenu>
               <DropdownMenu>
@@ -604,19 +639,27 @@ export default function FieldGroupTable() {
             registryKey="components"
             ariaLabel="Field Groups table"
             emptyMessage="No field groups found. Try adjusting your search or filters."
+            // The table owns the pager, so it is placed for whichever view is
+            // showing. Gated on `data` rather than on a page
+            // count because this list filters client-side after fetching, so
+            // the server's total is the only reliable signal that a response
+            // has arrived at all.
+            pagination={
+              data
+                ? {
+                    currentPage: page,
+                    totalPages:
+                      data.meta.totalPages > 0 ? data.meta.totalPages : 1,
+                    pageSize,
+                    pageSizeOptions: PAGINATION.TABLE_PAGE_SIZE_OPTIONS,
+                    onPageChange: setPage,
+                    onPageSizeChange: setPageSize,
+                    isLoading: isFetching,
+                    totalItems: data.meta.total,
+                  }
+                : undefined
+            }
           />
-          {data && (
-            <Pagination
-              currentPage={page}
-              totalPages={data.meta.totalPages > 0 ? data.meta.totalPages : 1}
-              pageSize={pageSize}
-              pageSizeOptions={[10, 25, 50]}
-              onPageChange={setPage}
-              onPageSizeChange={handlePageSizeChange}
-              isLoading={isFetching}
-              totalItems={data.meta.total}
-            />
-          )}
         </>
       )}
 

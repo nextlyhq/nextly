@@ -23,6 +23,21 @@ import { localizedColumnsOnMain } from "../../i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../i18n/runtime/companion-registration";
 import { isIdempotencyError } from "../../schema/pipeline/sql-statement-utils";
 
+/**
+ * Whether the in-memory schema was actually refreshed, and why not when it was not.
+ *
+ * Reported rather than thrown because this step runs AFTER the durable write on every caller: the
+ * schema change is already committed, so raising here would describe a repair that landed as one
+ * that failed. Returning the outcome lets a caller that must not overstate its result — a repair
+ * telling an operator the group is usable again — say what is still stale, while the callers that
+ * treat registration as best-effort carry on ignoring it exactly as before.
+ */
+export interface RuntimeSchemaRegistration {
+  registered: boolean;
+  /** Present only when `registered` is false; safe to show an operator. */
+  reason?: string;
+}
+
 export function registerComponentRuntimeSchema(
   adapter: DrizzleAdapter,
   dialect: string,
@@ -32,7 +47,7 @@ export function registerComponentRuntimeSchema(
   // i18n: when localized, the main comp_ runtime table omits translatable columns and the
   // companion comp_<slug>_locales runtime table is registered for per-language reads/writes.
   localized = false
-): void {
+): RuntimeSchemaRegistration {
   try {
     const fieldGroupSchemaService = new FieldGroupSchemaService(
       dialect as ConstructorParameters<typeof FieldGroupSchemaService>[0]
@@ -55,16 +70,31 @@ export function registerComponentRuntimeSchema(
         })
       : null;
 
+    /**
+     * Register the pair through whichever sink is available.
+     *
+     * 🔴 Both tables, always. A localized field group's reads and writes go through the COMPANION,
+     * so registering only the main table leaves the half that actually serves translated values
+     * stale — and a caller that reports this as a completed refresh then tells an operator the
+     * group is usable when the localized half is not. Written once and applied to both sinks
+     * because the two branches answer the same question, and the fallback previously answered it
+     * differently while returning the same verdict.
+     */
+    const registerBoth = (
+      register: (name: string, table: unknown) => void
+    ): void => {
+      register(tableName, runtimeTable);
+      if (companion) {
+        register(companion.companionTableName, companion.table);
+      }
+    };
+
     const registry = getSchemaRegistryFromDI();
     if (registry) {
-      registry.registerDynamicSchema(tableName, runtimeTable);
-      if (companion) {
-        registry.registerDynamicSchema(
-          companion.companionTableName,
-          companion.table
-        );
-      }
-      return;
+      registerBoth((name, table) =>
+        registry.registerDynamicSchema(name, table)
+      );
+      return { registered: true };
     }
 
     // Fallback for paths where DI isn't wired (tests, CLI).
@@ -75,9 +105,12 @@ export function registerComponentRuntimeSchema(
         };
       }
     ).tableResolver;
-    if (resolver && typeof resolver.registerDynamicSchema === "function") {
-      resolver.registerDynamicSchema(tableName, runtimeTable);
-      return;
+    const fallbackRegister = resolver?.registerDynamicSchema;
+    if (typeof fallbackRegister === "function") {
+      registerBoth((name, table) =>
+        fallbackRegister.call(resolver, name, table)
+      );
+      return { registered: true };
     }
 
     console.warn(
@@ -85,6 +118,10 @@ export function registerComponentRuntimeSchema(
         `'${tableName}'. Component queries may reference old column names ` +
         `until next server restart.`
     );
+    return {
+      registered: false,
+      reason: "no schema registry is available in this process",
+    };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.warn(
@@ -92,6 +129,7 @@ export function registerComponentRuntimeSchema(
         `'${tableName}': ${msg}. Component queries may reference old ` +
         `column names until next server restart.`
     );
+    return { registered: false, reason: msg };
   }
 }
 
@@ -113,11 +151,15 @@ export async function reconcileComponentCompanion(args: {
   /** Localization state BEFORE this save (persisted). Drives enable/disable detection. */
   wasLocalized: boolean;
   adapter: DrizzleAdapter;
-}): Promise<void> {
+  // Whether any DDL actually ran. The caller cannot derive this from the request: a field-set
+  // change on a group that was and remains non-localized reaches here and moves nothing, and a
+  // caller that inferred "the tables changed" from the request shape would report a physical
+  // transition that never happened.
+}): Promise<boolean> {
   const { slug, tableName, oldFields, newFields, localized, adapter } = args;
   const wasLocalized = args.wasLocalized;
   // Nothing to do when the component was and remains non-localized.
-  if (!wasLocalized && !localized) return;
+  if (!wasLocalized && !localized) return false;
 
   const dialect = adapter.dialect;
   const defaultLocale = getConfigFromDI()?.localization?.defaultLocale ?? "en";
@@ -207,4 +249,40 @@ export async function reconcileComponentCompanion(args: {
   }
   // Runtime registration of the companion is handled by registerComponentRuntimeSchema(localized)
   // in the calling handlers, so no separate registration is needed here.
+
+  // The archive DDL is excluded on purpose: it provisions a shared framework table and is
+  // idempotent, so it says nothing about whether THIS field group's storage moved.
+  return plan.statements.length > 0;
+}
+
+/**
+ * Which discriminator column a field group's table actually carries.
+ *
+ * PROBED rather than assumed, because the storage migration renames these tables and their
+ * columns: which spelling a given database uses is a fact about that database, not something a
+ * release can infer from its own version. The constant is the fallback for a table the probe
+ * cannot see, which is the shape a fresh install has.
+ *
+ * Here rather than private to a transport for the reason the rest of this module exists: the
+ * dispatcher held it, so every other transport that rebinds a runtime schema either reimplemented
+ * it or skipped it.
+ *
+ * 🔴 Call it BEFORE the DDL, never from inside `registerComponentRuntimeSchema`. That function's
+ * `catch` is a cache-refresh failsafe — it suppresses so a refresh problem cannot fail a request
+ * whose schema change already committed — and a catalog probe placed inside it inherits that
+ * policy, letting a caller report success while leaving the runtime table unregistered or holding
+ * obsolete columns. Resolving first is equivalent and safer: a schema change only ever alters user
+ * columns, so the discriminator is the same either side of it, and a probe that cannot answer
+ * fails the request before anything is committed.
+ */
+export async function resolveComponentTypeColumn(
+  adapter: DrizzleAdapter,
+  tableName: string
+): Promise<string> {
+  const { resolveTypeColumns } = await import(
+    "../storage/resolve-storage-names"
+  );
+  const { STORAGE_FORMAT } = await import("../../../schemas/storage-format");
+  const typeColumns = await resolveTypeColumns(adapter, [tableName]);
+  return typeColumns.get(tableName) ?? STORAGE_FORMAT.columns.type;
 }

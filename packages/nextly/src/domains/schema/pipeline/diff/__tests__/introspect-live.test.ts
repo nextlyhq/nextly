@@ -143,6 +143,11 @@ describe("introspectLiveSnapshot - mysql", () => {
       nullable: false,
       default: undefined,
       primaryKey: true,
+      // MySQL reports the DECLARATION in `COLUMN_TYPE`, so a display width declared on the column
+      // is part of what it says. Recorded as reported rather than judged here: whether a modifier
+      // is meaningful for a given type is the consumer's question, and inventing an absence would
+      // be the same error as inventing a width.
+      typeModifier: "11",
     });
     expect(snapshot.tables[0].indexes).toEqual([
       { name: "idx_dc_posts_views", columns: ["views"], unique: false },

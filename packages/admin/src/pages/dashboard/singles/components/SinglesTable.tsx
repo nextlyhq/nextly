@@ -27,7 +27,6 @@ import {
   type LucideIcon,
 } from "@admin/components/icons";
 import { BulkDeleteDialog } from "@admin/components/shared/bulk-action-dialogs";
-import { Pagination } from "@admin/components/shared/pagination";
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { toast } from "@admin/components/ui";
 import { DataTableView } from "@admin/components/ui/table/data-table";
@@ -36,6 +35,7 @@ import type {
   NextlyColumn,
   RowAction,
 } from "@admin/components/ui/table/data-table";
+import { PAGINATION } from "@admin/constants/pagination";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { UI } from "@admin/constants/ui";
 import {
@@ -44,6 +44,7 @@ import {
   useBulkDeleteSingles,
 } from "@admin/hooks/queries";
 import { useDebouncedValue } from "@admin/hooks/useDebouncedValue";
+import { usePagination } from "@admin/hooks/usePagination";
 import { useRowSelection } from "@admin/hooks/useRowSelection";
 import { formatDateTime } from "@admin/lib/dates/format";
 import { navigateTo } from "@admin/lib/navigation";
@@ -113,16 +114,15 @@ const ALWAYS_VISIBLE = new Set(["label", "createdAt"]);
  * the unified DataTableView.
  */
 export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
-  const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState(10);
+  const { page, pageSize, setPage, setPageSize, resetPage } = usePagination();
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebouncedValue(search, UI.SEARCH_DEBOUNCE_MS);
 
   // Reset to the first page when the search term changes so a later page does not
   // request out-of-range results and show a false empty state.
   useEffect(() => {
-    setPage(0);
-  }, [debouncedSearch]);
+    resetPage();
+  }, [debouncedSearch, resetPage]);
 
   const [sourceFilter, setSourceFilter] = useState<SingleSource | "all">("all");
   const [migrationFilter, setMigrationFilter] = useState<
@@ -370,20 +370,21 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
     [allColumns]
   );
 
-  const handlePageSizeChange = useCallback((newPageSize: number) => {
-    setPageSize(newPageSize);
-    setPage(0);
-  }, []);
+  const handleSourceFilterChange = useCallback(
+    (value: string) => {
+      setSourceFilter(value as SingleSource | "all");
+      resetPage();
+    },
+    [resetPage]
+  );
 
-  const handleSourceFilterChange = useCallback((value: string) => {
-    setSourceFilter(value as SingleSource | "all");
-    setPage(0);
-  }, []);
-
-  const handleMigrationFilterChange = useCallback((value: string) => {
-    setMigrationFilter(value as SingleMigrationStatus | "all");
-    setPage(0);
-  }, []);
+  const handleMigrationFilterChange = useCallback(
+    (value: string) => {
+      setMigrationFilter(value as SingleMigrationStatus | "all");
+      resetPage();
+    },
+    [resetPage]
+  );
 
   const selection = useMemo<DataTableSelection<ApiSingle>>(
     () => ({
@@ -486,7 +487,7 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
           onChange={setSearch}
           placeholder="Search Singles..."
           isLoading={isLoading}
-          className="w-full border-border bg-background text-foreground md:max-w-sm"
+          className="w-full md:max-w-sm"
         />
 
         <div className="flex w-full items-center justify-between gap-2 sm:justify-end md:w-auto">
@@ -607,19 +608,26 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
             registryKey="singles"
             ariaLabel="Singles table"
             emptyMessage="No Singles found. Try adjusting your search or filters."
+            // The table owns the pager, so it is placed for whichever view is
+            // showing. Same `data` gate as the field group
+            // list, and for the same reason: the rows are filtered client-side
+            // after fetching, so only the server's meta says a response landed.
+            pagination={
+              data
+                ? {
+                    currentPage: page,
+                    totalPages:
+                      data.meta.totalPages > 0 ? data.meta.totalPages : 1,
+                    pageSize,
+                    pageSizeOptions: PAGINATION.TABLE_PAGE_SIZE_OPTIONS,
+                    onPageChange: setPage,
+                    onPageSizeChange: setPageSize,
+                    isLoading,
+                    totalItems: data.meta.total,
+                  }
+                : undefined
+            }
           />
-          {data && (
-            <Pagination
-              currentPage={page}
-              totalPages={data.meta.totalPages > 0 ? data.meta.totalPages : 1}
-              pageSize={pageSize}
-              pageSizeOptions={[10, 25, 50]}
-              onPageChange={setPage}
-              onPageSizeChange={handlePageSizeChange}
-              isLoading={isLoading}
-              totalItems={data.meta.total}
-            />
-          )}
         </>
       )}
 

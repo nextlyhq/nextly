@@ -43,7 +43,10 @@ const executed: string[] = [];
  * runtime re-registration and keeps this focused on the statements.
  */
 function makeAdapter(dialect: "postgresql" | "mysql" | "sqlite") {
-  return {
+  // A single's schema change runs inside the storage migration's lock, so the double has to answer
+  // the lock's reads and writes as well as its own. Added rather than stubbed: a surface that let
+  // every claim succeed would certify an exclusion that is not there.
+  return withMigrationLockSurface({
     dialect,
     getCapabilities: () => ({ dialect }),
     // Answers the way a fresh create finds the database: the main table is there once its CREATE
@@ -60,7 +63,7 @@ function makeAdapter(dialect: "postgresql" | "mysql" | "sqlite") {
       executed.push(sql);
       return [];
     }),
-  };
+  });
 }
 
 let adapter: ReturnType<typeof makeAdapter>;
@@ -82,6 +85,7 @@ vi.mock("../../../di/container", () => ({
   },
 }));
 
+import { withMigrationLockSurface } from "../../../domains/field-groups/migration/__tests__/helpers/migration-lock-double";
 import { SingleMetadataService } from "../../../domains/singles/services/single-metadata-service";
 import type { SingleRegistryService } from "../../../domains/singles/services/single-registry-service";
 import type { Logger } from "../../../shared/types";

@@ -133,10 +133,25 @@ export const config = [
   {
     ignores: [
       "dist/**",
-      // tsup writes a bundled copy of tsup.config.ts to disk during build
+      // tsup writes a bundled copy of its config to disk during build
       // (e.g. tsup.config.bundled_abc123.mjs) — treat these as build artifacts.
+      //
+      // Both shapes, because tsup names the copy after the config it read and a
+      // package may have several: `packages/builder` builds a second bundle
+      // from `tsup.server-safe.config.ts`, whose copy is
+      // `tsup.server-safe.config.bundled_*.mjs` and matches neither of the
+      // first two patterns. The source-config entries below already carry that
+      // `tsup.*.config` form; the bundled ones did not, so an interrupted build
+      // left a file no rule covered.
+      //
+      // These are normally deleted when tsup exits. A watcher killed with
+      // Ctrl-C leaves one behind, and because it is untracked and unignored the
+      // next `git push` fails the pre-push lint with a parsing error naming a
+      // file the developer never wrote.
       "**/tsup.config.bundled_*.mjs",
       "**/tsup.config.bundled_*.cjs",
+      "**/tsup.*.config.bundled_*.mjs",
+      "**/tsup.*.config.bundled_*.cjs",
       // reason: config files (tsup, next, vitest, eslint) aren't in any
       // tsconfig project, so type-aware linting can't resolve them. They
       // are maintained by hand and don't need lint coverage.

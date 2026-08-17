@@ -17,6 +17,25 @@
  */
 import type { ColumnSpec, TableSpec } from "../diff/types";
 
+/**
+ * The column's type as it must be WRITTEN, with any declared size restored.
+ *
+ * 🔴 A snapshot does not always spell the modifier inside `type`. PostgreSQL introspection reads
+ * `udt_name`, which reports a bare `varchar` however the column was declared, and records the
+ * length separately. Rendering `type` alone therefore recreates `varchar(20)` as an UNBOUNDED
+ * `varchar` — a real widening of the column, silent because both the source and the rebuilt table
+ * then describe themselves the same way.
+ *
+ * MySQL and SQLite report the declaration itself, so their `type` already carries the modifier and
+ * must not have a second one appended.
+ */
+function renderedType(c: ColumnSpec): string {
+  if (c.typeModifier === undefined) return c.type;
+  // Already spelled inside the type — the MySQL and SQLite case.
+  if (c.type.includes("(")) return c.type;
+  return `${c.type}(${c.typeModifier})`;
+}
+
 /** Quotes an identifier the way one dialect spells it. */
 export type QuoteIdentifier = (name: string) => string;
 
@@ -29,7 +48,7 @@ export type QuoteIdentifier = (name: string) => string;
 export function columnDefinition(c: ColumnSpec, q: QuoteIdentifier): string {
   const nullable = c.nullable ? "" : " NOT NULL";
   const def = c.default !== undefined ? ` DEFAULT ${c.default}` : "";
-  return `${q(c.name)} ${c.type}${nullable}${def}`;
+  return `${q(c.name)} ${renderedType(c)}${nullable}${def}`;
 }
 
 /**
@@ -44,7 +63,7 @@ function createTableColumn(c: ColumnSpec, q: QuoteIdentifier): string {
   if (c.primaryKey !== true) return columnDefinition(c, q);
   const nullable = c.nullable ? "" : " NOT NULL";
   const def = c.default !== undefined ? ` DEFAULT ${c.default}` : "";
-  return `${q(c.name)} ${c.type} PRIMARY KEY${nullable}${def}`;
+  return `${q(c.name)} ${renderedType(c)} PRIMARY KEY${nullable}${def}`;
 }
 
 /**

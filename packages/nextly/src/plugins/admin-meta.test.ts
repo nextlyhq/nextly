@@ -444,7 +444,19 @@ describe("buildPluginAdminMeta", () => {
     expect(meta[0].dependsOn).toEqual({ "@acme/core": "^1.2.0" });
   });
 
-  it("summarizes declared permissions for enabled plugins only", () => {
+  /**
+   * The admin-meta endpoint answers WITHOUT authentication, so anything on this
+   * payload is readable by anyone who can reach the app. A permission
+   * vocabulary is a map of what the installation can do and how each capability
+   * is spelled, which is reconnaissance rather than content, so it is not
+   * served here at all.
+   *
+   * Asserted against a plugin that DECLARES one, so the absence is the
+   * serializer declining to carry it rather than a fixture with nothing to
+   * carry. The admin reads the seeded rows from the authenticated permissions
+   * endpoint instead, which is also the set that actually exists.
+   */
+  it("never serializes declared permissions onto the public payload", () => {
     const contributes = {
       permissions: [
         {
@@ -459,20 +471,16 @@ describe("buildPluginAdminMeta", () => {
       asPlugins([{ ...base, contributes }]),
       undefined
     );
-    expect(enabled[0].permissions).toEqual([
-      {
-        action: "export",
-        resource: "submissions",
-        label: "Export submissions",
-        danger: true,
-      },
-    ]);
+    expect(enabled[0]).not.toHaveProperty("permissions");
+    // The plugin itself was serialized: without this the assertion above would
+    // pass just as well for a fixture the builder dropped entirely.
+    expect(enabled[0].name).toBe(base.name);
 
     const disabled = buildPluginAdminMeta(
       asPlugins([{ ...base, enabled: false, contributes }]),
       undefined
     );
-    expect(disabled[0].permissions).toBeUndefined();
+    expect(disabled[0]).not.toHaveProperty("permissions");
   });
 
   it("summarizes declared routes (method + path only) for enabled plugins only", () => {
@@ -490,8 +498,15 @@ describe("buildPluginAdminMeta", () => {
       asPlugins([{ ...base, contributes }]),
       undefined
     );
+    // `fullPath` travels too: it is the namespace the dispatcher mounts the
+    // route at, derived from the raw package name, and the admin renders it
+    // rather than rebuilding it from the slug.
     expect(enabled[0].routes).toEqual([
-      { method: "GET", path: "/submissions/export" },
+      {
+        method: "GET",
+        path: "/submissions/export",
+        fullPath: "/plugins/@acme/p/submissions/export",
+      },
     ]);
 
     const disabled = buildPluginAdminMeta(
@@ -686,5 +701,200 @@ describe("buildPluginAdminMeta — clientConfig runtime shapes", () => {
     expect((thrown as NextlyError).statusCode).toBe(
       NEXTLY_ERROR_STATUS.NEXTLY_PLUGIN_CLIENT_CONFIG_INVALID
     );
+  });
+});
+
+/**
+ * Routes and permissions are asymmetric, and the tests exist to hold that
+ * apart. `collectPluginRoutes` covers enabled plugins only, so a disabled
+ * plugin serves nothing — that is what enabling would add. `collectCustomPermissions`
+ * folds over every plugin including disabled ones, so its permissions are
+ * already seeded and are not pending on anything.
+ */
+describe("dormant routes", () => {
+  const declaring = {
+    name: "@acme/p",
+    version: "1.0.0",
+    contributes: {
+      permissions: [
+        { action: "export", resource: "submissions", danger: true },
+      ],
+      routes: [{ method: "GET", path: "/export", handler: () => undefined }],
+    },
+  } as unknown as PluginDefinition;
+
+  it("reports a disabled plugin's routes as dormant, not active", () => {
+    const [meta] = buildPluginAdminMeta(
+      [{ ...declaring, enabled: false } as PluginDefinition],
+      undefined
+    );
+
+    expect(meta.whenEnabled?.routes).toEqual([
+      { method: "GET", path: "/export", fullPath: "/plugins/@acme/p/export" },
+    ]);
+    expect(meta.routes).toBeUndefined();
+  });
+
+  /**
+   * The separating case for the routes/permissions split. A disabled plugin's
+   * permissions are seeded whatever this page shows, so presenting them as
+   * something enabling would ADD would be false — the dormant branch must
+   * carry routes and nothing else.
+   */
+  it("never presents permissions as pending on being enabled", () => {
+    const [meta] = buildPluginAdminMeta(
+      [{ ...declaring, enabled: false } as PluginDefinition],
+      undefined
+    );
+
+    expect(Object.keys(meta.whenEnabled ?? {})).toEqual(["routes"]);
+  });
+
+  it("reports an enabled plugin's routes as active, not dormant", () => {
+    const [meta] = buildPluginAdminMeta(
+      [{ ...declaring, enabled: true } as PluginDefinition],
+      undefined
+    );
+
+    expect(meta.routes).toEqual([
+      { method: "GET", path: "/export", fullPath: "/plugins/@acme/p/export" },
+    ]);
+    expect(meta.whenEnabled).toBeUndefined();
+  });
+
+  it.each([true, false])(
+    "never carries the active and dormant routes together (enabled=%s)",
+    enabled => {
+      const [meta] = buildPluginAdminMeta(
+        [{ ...declaring, enabled } as PluginDefinition],
+        undefined
+      );
+
+      const active = Boolean(meta.routes);
+      const dormant = Boolean(meta.whenEnabled);
+      expect(active && dormant).toBe(false);
+      // Exactly one, so this cannot pass on a plugin that serialized neither.
+      expect(active || dormant).toBe(true);
+    }
+  );
+
+  /**
+   * `collectPluginRoutes` throws on a path without a leading slash, so a
+   * declaration like this cannot mount. Presenting it as something enabling
+   * would add is a promise that boot then refuses.
+   */
+  it("omits a declared route that could not mount", () => {
+    const [meta] = buildPluginAdminMeta(
+      [
+        {
+          name: "@acme/bad",
+          version: "1.0.0",
+          enabled: false,
+          contributes: { routes: [{ method: "GET", path: "export" }] },
+        } as unknown as PluginDefinition,
+      ],
+      undefined
+    );
+
+    expect(meta.whenEnabled).toBeUndefined();
+  });
+
+  /**
+   * The second of `collectPluginRoutes`'s two rules, and the one a
+   * leading-slash filter alone would miss. Two declarations sharing a
+   * `(method, full path)` make boot throw NEXTLY_ROUTE_COLLISION, so
+   * advertising both as things enabling would serve is a promise boot refuses.
+   */
+  it("omits declarations that collide with each other", () => {
+    const [meta] = buildPluginAdminMeta(
+      [
+        {
+          name: "@acme/dup",
+          version: "1.0.0",
+          enabled: false,
+          contributes: {
+            routes: [
+              { method: "GET", path: "/export" },
+              { method: "GET", path: "/export" },
+            ],
+          },
+        } as unknown as PluginDefinition,
+      ],
+      undefined
+    );
+
+    expect(meta.whenEnabled).toBeUndefined();
+  });
+
+  it("omits the dormant branch for a plugin that declares no routes", () => {
+    const [meta] = buildPluginAdminMeta(
+      [
+        {
+          name: "@acme/bare",
+          version: "1.0.0",
+          enabled: false,
+        } as PluginDefinition,
+      ],
+      undefined
+    );
+
+    expect(meta.whenEnabled).toBeUndefined();
+  });
+});
+
+/**
+ * Namespaces are built from package names, so a collision need not be
+ * self-inflicted: an enabled plugin can already own the path a disabled one
+ * would claim. Advertising it as something enabling would serve is a promise
+ * boot refuses.
+ */
+describe("dormant routes against the enabled set", () => {
+  const enabledOwner = {
+    name: "foo",
+    version: "1.0.0",
+    contributes: { routes: [{ method: "GET", path: "/bar/x" }] },
+  } as unknown as PluginDefinition;
+
+  const disabledClaimant = {
+    name: "foo/bar",
+    version: "1.0.0",
+    enabled: false,
+    contributes: { routes: [{ method: "GET", path: "/x" }] },
+  } as unknown as PluginDefinition;
+
+  it("omits a dormant route an enabled plugin already serves", () => {
+    // Both resolve to /plugins/foo/bar/x.
+    const metas = buildPluginAdminMeta(
+      [enabledOwner, disabledClaimant],
+      undefined
+    );
+    const claimant = metas.find(m => m.name === "foo/bar");
+
+    expect(claimant?.whenEnabled).toBeUndefined();
+  });
+
+  /**
+   * The control. Without the enabled owner present the same declaration is
+   * perfectly mountable, so the omission above is about the collision rather
+   * than about a route that was never valid.
+   */
+  it("keeps it when no enabled plugin holds that path", () => {
+    const metas = buildPluginAdminMeta([disabledClaimant], undefined);
+    const claimant = metas.find(m => m.name === "foo/bar");
+
+    expect(claimant?.whenEnabled?.routes).toEqual([
+      { method: "GET", path: "/x", fullPath: "/plugins/foo/bar/x" },
+    ]);
+  });
+
+  it("leaves the enabled owner's own route reported", () => {
+    const metas = buildPluginAdminMeta(
+      [enabledOwner, disabledClaimant],
+      undefined
+    );
+
+    expect(metas.find(m => m.name === "foo")?.routes).toEqual([
+      { method: "GET", path: "/bar/x", fullPath: "/plugins/foo/bar/x" },
+    ]);
   });
 });

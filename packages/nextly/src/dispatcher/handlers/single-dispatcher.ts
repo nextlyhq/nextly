@@ -900,6 +900,10 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           fields: schemaFields,
           isLocalized,
           wasLocalized,
+          // Whether the request SET the toggle, mirroring `statusRequested`. The service re-reads
+          // the record inside its exclusion and needs to tell an explicit `localized: false` from
+          // this handler having filled in the value it read.
+          localizedRequested: b.localized !== undefined,
           hasStatus,
           wasStatus,
           // Whether the request SET the toggle, which is not the same as changing it: saving it at

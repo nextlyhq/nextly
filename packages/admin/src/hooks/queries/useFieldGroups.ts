@@ -88,6 +88,12 @@ export const fieldGroupKeys = {
         page: params.pagination.page,
         pageSize: params.pagination.pageSize,
         search: params.filters?.search || "",
+        // 🔴 Every filter the request carries has to be IN the key. `source` and `migrationStatus`
+        // are applied by the server, so two selections produce two different result sets — and a key
+        // that cannot tell them apart serves the previous selection's page from cache while the
+        // control shows the new one. Stringified for the same reason `sorting` is: the key is
+        // compared structurally, and a fresh object literal each render is a fresh key.
+        filters: JSON.stringify(params.filters?.filters ?? {}),
         sorting: JSON.stringify(params.sorting), // Stable string representation
       },
     ] as const,

@@ -13,8 +13,10 @@ import {
   FIXTURE_BREAKPOINTS,
   VALIDATION_FIXTURES,
 } from "./validation.fixtures";
+import type { NestingSource } from "./nesting";
 import type { BlockTypeLookup } from "./validation";
-import { ISSUE_CODES, validate } from "./validation";
+import { measureBytes } from "./measure-bytes";
+import { ISSUE_CODES, validate, validateDocument } from "./validation";
 
 function lookup(types: string[]): BlockTypeLookup {
   const set = new Set(types);
@@ -24,6 +26,17 @@ function lookup(types: string[]): BlockTypeLookup {
 /** Coerce deliberately-malformed input to BlockDocument for the validator. */
 function invalidDoc(doc: unknown): BlockDocument {
   return doc as BlockDocument;
+}
+
+/**
+ * A nesting source answering from a literal map of declared parents.
+ *
+ * A type the map does not name answers undefined, which the rule reads as "no
+ * restriction" — the same answer the registry source gives for a block it does
+ * not hold.
+ */
+function nestingOf(parents: Record<string, readonly string[]>): NestingSource {
+  return { parentsOf: type => parents[type] };
 }
 
 /** Resolve an RFC 6901 JSON-Pointer against a value; undefined if it misses. */
@@ -220,6 +233,309 @@ describe("validation fixture corpus", () => {
 });
 
 describe("issue-code vocabulary is stable and complete", () => {
+  it("reports a node sitting in a container its definition forbids", () => {
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "row",
+          type: "core/container",
+          version: 1,
+          props: {},
+          slots: {
+            default: [
+              { id: "cell", type: "acme/column", version: 1, props: {} },
+            ],
+          },
+        },
+      ],
+    });
+
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+      nesting: nestingOf({ "acme/column": ["core/columns"] }),
+    });
+
+    const placement = issues.find(i => i.code === "wrong-parent");
+    expect(placement?.path).toBe("/nodes/0/slots/default/0");
+    expect(placement?.severity).toBe("error");
+    // Names where the block WILL go, because that is the author's next action.
+    expect(placement?.message).toContain("core/columns");
+  });
+
+  it("reports a restricted node at the TOP LEVEL, where it has no container", () => {
+    // The walk only ever sees a node as somebody's child, so without the root
+    // entries carrying "no parent" the one node with no container is the one
+    // node the rule never reaches.
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "cell", type: "acme/column", version: 1, props: {} }],
+    });
+
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+      nesting: nestingOf({ "acme/column": ["core/columns"] }),
+    });
+
+    const placement = issues.find(i => i.code === "restricted-at-root");
+    expect(placement?.path).toBe("/nodes/0");
+    expect(placement?.severity).toBe("error");
+  });
+
+  it("accepts a node in a container its definition permits", () => {
+    // The positive control. Every refusal above is also satisfied by a rule that
+    // refuses everything, and at each individual assertion the two look alike.
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "row",
+          type: "core/columns",
+          version: 1,
+          props: {},
+          slots: {
+            default: [
+              { id: "cell", type: "acme/column", version: 1, props: {} },
+            ],
+          },
+        },
+      ],
+    });
+
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+      nesting: nestingOf({ "acme/column": ["core/columns"] }),
+    });
+
+    expect(issues.some(i => i.code === "wrong-parent")).toBe(false);
+    expect(issues.some(i => i.code === "restricted-at-root")).toBe(false);
+  });
+
+  it("is an ERROR in forgiving mode too", () => {
+    // `parent` is the child stating where it is meaningful, so a violation is a
+    // document that renders somewhere its author never said it could — not a
+    // forward-compatible value the lenient mode exists to preserve.
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "cell", type: "acme/column", version: 1, props: {} }],
+    });
+
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "forgiving",
+      nesting: nestingOf({ "acme/column": ["core/columns"] }),
+    });
+
+    expect(issues.find(i => i.code === "restricted-at-root")?.severity).toBe(
+      "error"
+    );
+  });
+
+  it("does not check placement when the caller supplies no nesting source", () => {
+    // Absent means not checked, the same terms as tokens and classes. Asserted
+    // so the fail-open is a decision the suite records rather than a gap.
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "cell", type: "acme/column", version: 1, props: {} }],
+    });
+
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+    });
+
+    expect(issues.some(i => i.code === "restricted-at-root")).toBe(false);
+  });
+
+  it("asks the rule about a container the document actually names", () => {
+    // The parent handed to the rule is the CONTAINER's type, not the slot name
+    // and not the child's own. A walk that carried the wrong one would refuse
+    // and accept in the right proportions while answering a different question,
+    // so the observation is on what the source was ASKED rather than on the
+    // verdict it produced.
+    const asked: string[] = [];
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "row",
+          type: "core/columns",
+          version: 1,
+          props: {},
+          slots: {
+            default: [
+              { id: "cell", type: "acme/column", version: 1, props: {} },
+            ],
+          },
+        },
+      ],
+    });
+
+    validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+      nesting: {
+        parentsOf: type => {
+          asked.push(type);
+          return type === "acme/column" ? ["core/columns"] : undefined;
+        },
+      },
+    });
+
+    // Both nodes reach the rule: the container as a root, the child under it.
+    expect(asked).toContain("core/columns");
+    expect(asked).toContain("acme/column");
+  });
+
+  it("explains a refusal from the restriction that produced it", () => {
+    // `NestingSource` is caller-supplied and nothing requires it to be
+    // idempotent. A source answering differently on a second call is what
+    // separates a message DERIVED from the verdict from one that re-asks: both
+    // name a permitted set, and only one names the set that actually refused
+    // this placement.
+    let call = 0;
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "cell", type: "acme/column", version: 1, props: {} }],
+    });
+
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+      nesting: {
+        parentsOf: () => {
+          call += 1;
+          return call === 1 ? ["core/columns"] : ["acme/somewhere-else"];
+        },
+      },
+    });
+
+    const placement = issues.find(i => i.code === "restricted-at-root");
+    expect(placement?.message).toContain("core/columns");
+    expect(placement?.message).not.toContain("acme/somewhere-else");
+  });
+
+  it.each(["columns", "core/columns/", "", "core//columns"])(
+    "declines the placement question under a container typed %o",
+    badType => {
+      // A STRING is not a name. These are all strings no block can be named, so
+      // treating them as container names refuses a restricted child against
+      // something nothing could ever match — a placement error the author cannot
+      // act on, beside the malformed-type error that is the real defect.
+      const doc = invalidDoc({
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "row",
+            type: badType,
+            version: 1,
+            props: {},
+            slots: {
+              default: [
+                { id: "cell", type: "acme/column", version: 1, props: {} },
+              ],
+            },
+          },
+        ],
+      });
+
+      const issues = validate(doc, {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        mode: "strict",
+        nesting: nestingOf({ "acme/column": ["core/columns"] }),
+      });
+
+      expect(
+        issues.filter(
+          i => i.code === "wrong-parent" || i.code === "restricted-at-root"
+        )
+      ).toEqual([]);
+      // The container's own defect is still what the document is refused for.
+      expect(issues.some(i => i.code === "invalid-node-type")).toBe(true);
+    }
+  );
+
+  it("does not call a child of an unnameable container a root", () => {
+    // "No container" and "a container this walk cannot name" are different
+    // facts. One absent value standing for both makes a node in a slot answer
+    // the ROOT question, which reports it as sitting nowhere while its own path
+    // names the slot holding it — a refusal that contradicts itself and that an
+    // author cannot act on, because the placement it describes is not the one
+    // the node is in.
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "bad",
+          type: 42,
+          version: 1,
+          props: {},
+          slots: {
+            default: [
+              { id: "cell", type: "acme/column", version: 1, props: {} },
+            ],
+          },
+        },
+      ],
+    });
+
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+      nesting: nestingOf({ "acme/column": ["core/columns"] }),
+    });
+
+    expect(
+      issues.filter(
+        i => i.code === "restricted-at-root" || i.code === "wrong-parent"
+      )
+    ).toEqual([]);
+    // The container's own defect is still reported, so declining the placement
+    // question leaves the document refused rather than silently accepted.
+    expect(
+      issues.some(
+        i => i.code === "invalid-node-type" && i.path === "/nodes/0/type"
+      )
+    ).toBe(true);
+  });
+
+  it("does not ask about placement when the node type is malformed", () => {
+    // A malformed type is already reported as an invalid node. Asking where it
+    // may sit would answer for a name no definition carries, and add a second
+    // complaint about the same defect in terms the author cannot act on.
+    const asked: string[] = [];
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "bad", type: 42, version: 1, props: {} }],
+    });
+
+    validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+      nesting: {
+        parentsOf: type => {
+          asked.push(type);
+          return undefined;
+        },
+      },
+    });
+
+    expect(asked).toEqual([]);
+  });
+
   it("every code emitted by the corpus is documented in ISSUE_CODES", () => {
     for (const fixture of VALIDATION_FIXTURES) {
       const issues = validate(fixture.doc, {
@@ -565,7 +881,12 @@ describe("validation never throws on adversarial input", () => {
       issues = validate(doc, {
         breakpoints: FIXTURE_BREAKPOINTS,
         mode: "strict",
-        limits: { maxDepth: 12, maxNodes: 100, maxBytes: 1_000_000 },
+        // The byte cap is deliberately far out of reach. This test is about the
+        // NODE cap bounding the walk, and a forest of 500,000 children also
+        // outruns a 1 MB budget — so a byte limit near the document's real size
+        // decides the outcome before the node cap is consulted, and the
+        // assertion below would be reporting on a bound the test does not name.
+        limits: { maxDepth: 12, maxNodes: 100, maxBytes: 100_000_000 },
       });
     }).not.toThrow();
     expect(issues.some(i => i.code === "node-count-exceeded")).toBe(true);
@@ -733,6 +1054,53 @@ describe("validation never throws on adversarial input", () => {
     });
     expect(issues.some(i => i.code === "node-count-exceeded")).toBe(true);
     expect(asked).toBe(0);
+  });
+
+  it("enforces the node cap the survey measured, not a later answer", () => {
+    // A limit that GROWS between reads. Nothing obliges a caller to hand over a
+    // plain object, and an accessor is free to answer differently every time —
+    // so a bound read once for the verdict and again to size the walk is two
+    // different bounds, and the second one is the one that decides how much
+    // work a hostile document gets.
+    //
+    // The walk must be sized by the number the verdict was computed from. The
+    // observable form of that is the read COUNT: one read per limit, at the
+    // point the survey snapshots them. Asserting only that the issue is
+    // reported passes on the broken implementation too, because the verdict was
+    // always right — it was the traversal after it that ran unbounded.
+    let reads = 0;
+    const nodes = Array.from({ length: 200 }, (_, i) => ({
+      id: `n${i}`,
+      type: "core/text",
+      version: 1,
+      props: {},
+    }));
+    const doc = invalidDoc({ formatVersion: 1, kind: "page", nodes });
+    const limits = {
+      maxDepth: 12,
+      maxBytes: 2 * 1024 * 1024,
+      get maxNodes() {
+        reads += 1;
+        return reads === 1 ? 10 : 1_000_000_000;
+      },
+    };
+
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+      limits,
+    });
+
+    expect(issues.some(i => i.code === "node-count-exceeded")).toBe(true);
+    // Exactly one, and the message must quote the bound that was ENFORCED
+    // rather than whichever value a later read produced.
+    expect(reads).toBe(1);
+    // The WHOLE message, not a substring of it. `includes("10")` is satisfied
+    // by "100" and by the getter's own 1000000000, so it passes on exactly the
+    // implementation this asserts against.
+    expect(
+      issues.filter(i => i.code === "node-count-exceeded").map(i => i.message)
+    ).toEqual(["Document exceeds the maximum of 10 nodes."]);
   });
 
   it("bounds the path text unknown class warnings can return", () => {
@@ -1397,7 +1765,18 @@ describe("style keys inherited from a prototype", () => {
       hover: { base: { nope: "1px" } },
     }) as Record<string, unknown>;
     styles.base = { base: { display: "block" } };
-    expect(codesFor(styles)).toEqual(["invalid-style-values"]);
+    // TWO issues now, and both are true. `invalid-style-values` names the
+    // specific defect; `document-lossy` is the document-level statement that
+    // what would be stored is not what was validated. Lossy rather than
+    // unwritable, and the distinction is the point: JSON WRITES this document,
+    // dropping the inherited keys, so it has a stored form and that form is not
+    // this object. Calling it unwritable told an author their content could not
+    // be saved, which sent them looking for a value JSON refuses when the real
+    // answer is that a value they hold will come back missing.
+    expect(codesFor(styles)).toEqual([
+      "document-lossy",
+      "invalid-style-values",
+    ]);
   });
 
   it("are refused at the breakpoint level too", () => {
@@ -1407,7 +1786,13 @@ describe("style keys inherited from a prototype", () => {
       tablet: { nope: "1px" },
     }) as Record<string, unknown>;
     byBreakpoint.base = { display: "block" };
-    expect(codesFor({ base: byBreakpoint })).toEqual(["invalid-style-values"]);
+    // Both, for the same reason as the case above: the specific defect plus the
+    // document-level statement that the stored form differs from what was
+    // validated.
+    expect(codesFor({ base: byBreakpoint })).toEqual([
+      "document-lossy",
+      "invalid-style-values",
+    ]);
   });
 
   it("are not read off a polluted Object.prototype", () => {
@@ -1739,5 +2124,595 @@ describe("a document past the byte cap stops paying to read its values", () => {
       { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" }
     );
     expect(issues.map(issue => issue.code)).toContain("invalid-style-value");
+  });
+});
+
+describe("measureBytes", () => {
+  // The counter decides whether a document is too large, and `validate()` and
+  // the builder's op store both ask it. So the property that matters is not
+  // "close enough" but that it agrees with what will actually be written: a
+  // counter that reads low lets a document past a cap it exceeds, and nothing
+  // downstream re-checks.
+  //
+  // Pinned against `JSON.stringify` rather than against remembered numbers,
+  // because the numbers are what drift. Object separators were missing here:
+  // every object with more than one property counted one byte short per extra
+  // property, which compounds with nesting.
+  it.each([
+    ["one property", { a: 1 }],
+    ["two properties", { a: 1, b: 2 }],
+    ["three properties", { a: 1, b: 2, c: 3 }],
+    ["nested objects", { a: { x: 1, y: 2 }, b: { x: 1, y: 2 } }],
+    ["an array", [1, 2, 3]],
+    ["an empty object", {}],
+    ["an empty array", []],
+    ["a string", { s: "hello" }],
+    ["a multibyte string", { s: "héllo wörld ✓" }],
+    ["null and booleans", { a: null, b: true, c: false }],
+    [
+      "a document",
+      {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [{ id: "a", type: "box", version: 1, props: { text: "hi" } }],
+      },
+    ],
+    // The members `JSON.stringify` DROPS. An update that clears a field leaves
+    // an own property holding `undefined`, so charging for one measures a
+    // document larger than the one that gets saved — and an edit that shrinks
+    // a document then reads as growing it.
+    ["an undefined member", { a: 1, b: undefined }],
+    ["only undefined members", { a: undefined }],
+    ["a function member", { a: 1, b: () => 1 }],
+    ["a symbol member", { a: 1, b: Symbol("s") }],
+    ["nested dropped members", { a: { b: undefined, c: 2 } }],
+    // In an ARRAY the same values become `null`, because length is part of an
+    // array's meaning.
+    ["an undefined element", [1, undefined, 3]],
+    // `JSON.stringify` writes `null` for a number it cannot represent, so the
+    // count must follow the written form rather than the source spelling.
+    ["NaN", { n: NaN }],
+    ["Infinity", { n: Infinity }],
+    ["negative Infinity", { n: -Infinity }],
+    ["a function element", [1, () => 1, 3]],
+  ])("counts %s exactly as it serializes", (_label, value) => {
+    expect(measureBytes(value, Number.POSITIVE_INFINITY).bytes).toBe(
+      Buffer.byteLength(JSON.stringify(value), "utf8")
+    );
+  });
+
+  it("stops once the limit is passed rather than counting the whole value", () => {
+    // The bail-out is the reason this counter exists rather than
+    // `documentBytes`: an oversized value must be refused without being
+    // materialized. A counter that reported `exceeded` only after walking
+    // everything would answer correctly and still allocate the walk.
+    const wide = { huge: "x".repeat(5_000_000) };
+    const result = measureBytes(wide, 100);
+    expect(result.exceeded).toBe(true);
+    expect(
+      result.bytes,
+      "a bounded count stops near the limit rather than at the true size"
+    ).toBeLessThan(5_000_000);
+  });
+});
+
+describe("measureBytes and the serializer agree on toJSON", () => {
+  it("counts what JSON.stringify writes for a value defining toJSON", () => {
+    // A `Date` carries no enumerable fields, so a walk over its properties
+    // counts an empty object while the writer emits a quoted timestamp. Pinned
+    // against `Buffer.byteLength(JSON.stringify(v))` rather than a remembered
+    // number, so the next divergence fails instead of needing to be noticed.
+    const value = { when: new Date("2020-01-01T00:00:00.000Z") };
+    const written = Buffer.byteLength(JSON.stringify(value), "utf8");
+
+    expect(measureBytes(value, 1_000).bytes).toBe(written);
+    expect(measureBytes(value, 20).exceeded).toBe(true);
+  });
+});
+
+describe("measureBytes passes toJSON the key the serializer does", () => {
+  it("matches the writer for a key-sensitive hook", () => {
+    // `JSON.stringify` calls `toJSON(key)` with the containing property name.
+    // Called with no argument, a hook that reads the key either throws or
+    // returns something else, and the counter stops agreeing with the writer.
+    const value = {
+      child: {
+        toJSON(key: string) {
+          return key.repeat(3);
+        },
+      },
+      list: [
+        {
+          toJSON(key: string) {
+            return `at-${key}`;
+          },
+        },
+      ],
+    };
+    const written = Buffer.byteLength(JSON.stringify(value), "utf8");
+
+    expect(measureBytes(value, 1_000).bytes).toBe(written);
+  });
+});
+
+describe("measureBytes drops what the serializer drops", () => {
+  it("charges nothing for a member whose toJSON returns undefined", () => {
+    // The hook runs BEFORE the writer decides whether the member is writable,
+    // so this object serializes to `{}`. Filtering on the member as it stands
+    // keeps it and charges key, quotes, colon and value.
+    const value = { x: { toJSON: () => undefined } };
+    const written = Buffer.byteLength(JSON.stringify(value), "utf8");
+
+    expect(measureBytes(value, 1_000).bytes).toBe(written);
+  });
+
+  it("writes null for an array element whose toJSON returns a function", () => {
+    // An array's length is part of its meaning, so a value the writer cannot
+    // represent becomes `null` rather than disappearing.
+    const value = { list: [1, { toJSON: () => () => 1 }, 3] };
+    const written = Buffer.byteLength(JSON.stringify(value), "utf8");
+
+    expect(measureBytes(value, 1_000).bytes).toBe(written);
+  });
+});
+
+describe("measureBytes agrees with the serializer on hooks and cycles", () => {
+  it("refuses a cyclic value in exact-count mode instead of hanging", () => {
+    // With no cap, nothing is ever over the limit, so the early return that
+    // stops the walk in capped mode never fires and each visit queues the same
+    // object again. `JSON.stringify` rejects this immediately.
+    const value: Record<string, unknown> = { a: 1 };
+    value.self = value;
+
+    // Reported, not thrown: callers include validators that must turn an
+    // unstorable document into an issue rather than raise. Under a finite limit
+    // this was already the answer, because each revisit added bytes until the
+    // cap stopped the walk; the cycle set is what makes the exact-count mode
+    // reach it instead of never terminating.
+    //
+    // Reported through `reason` rather than through a second flag. Both say a
+    // cycle has no stored form at any size; the difference is that `exceeded`
+    // remains the single "refused" boolean, so a caller asking only whether the
+    // document fits keeps refusing this one. Two independent flags read as
+    // tidier and are fail-OPEN — measured, that shape silently stopped the op
+    // store refusing cyclic documents until the check was added by hand.
+    expect(measureBytes(value, Number.POSITIVE_INFINITY)).toEqual({
+      bytes: expect.any(Number) as number,
+      exceeded: true,
+      reason: "unwritable",
+    });
+  });
+
+  it("runs a nested toJSON once, as the writer does", () => {
+    // `JSON.stringify` writes what the hook returns AS-IS; it does not call
+    // `toJSON` again on the replacement. Normalising twice measures a value the
+    // writer never produces.
+    const value = { x: { toJSON: () => ({ toJSON: () => "0123456789" }) } };
+    const written = Buffer.byteLength(JSON.stringify(value), "utf8");
+
+    expect(measureBytes(value, 1_000).bytes).toBe(written);
+  });
+
+  it("still counts a value that appears twice as siblings", () => {
+    // Two references to one object is a tree, not a cycle, and JSON writes it
+    // fine — so the cycle guard must not refuse it.
+    const shared = { a: 1 };
+    const value = { left: shared, right: shared };
+    const written = Buffer.byteLength(JSON.stringify(value), "utf8");
+
+    expect(measureBytes(value, 1_000).bytes).toBe(written);
+  });
+});
+
+describe("measureBytes says WHY a value cannot be stored", () => {
+  it("calls a BigInt unwritable rather than counting it", () => {
+    // `JSON.stringify` THROWS on a BigInt — it neither writes nor drops it — so
+    // counting it as an ordinary value reports a document as fitting that the
+    // writer refuses entirely.
+    expect(measureBytes({ x: 1n }, 100)).toEqual({
+      bytes: expect.any(Number) as number,
+      exceeded: true,
+      reason: "unwritable",
+    });
+  });
+
+  it("calls a boxed BigInt unwritable too", () => {
+    // `Object(1n)` is a BigInt OBJECT, so `typeof` reports "object" and the
+    // walk would treat it as an ordinary record with no own keys.
+    expect(measureBytes({ x: Object(1n) }, 100)).toEqual({
+      bytes: expect.any(Number) as number,
+      exceeded: true,
+      reason: "unwritable",
+    });
+  });
+
+  it("reports over-limit ahead of unwritable when a document is both", () => {
+    // A document can be BOTH unwritable and over the limit, and one `reason`
+    // can only carry one of them. This used to be decided by traversal: the
+    // walk returned at the first refusal it reached, and because the stack is
+    // LIFO that made the answer depend on DECLARATION ORDER — the same two keys
+    // swapped gave opposite reasons, which nothing outside the walk could
+    // predict.
+    //
+    // Order is no longer what decides it. Over-limit is reported first, and the
+    // reason is not aesthetic: the byte verdict is what gates the precise
+    // validation walk downstream, so a document that loses it to the other
+    // cause gets an UNBOUNDED traversal — the bound defeated by key order
+    // alone.
+    //
+    // What this does NOT do is make precedence total, and nothing bounded can:
+    // proving no unwritable value exists anywhere means reading the whole
+    // document, which is the pass this counter exists to avoid. An unwritable
+    // value inside a subtree the cap stopped us entering is still unreported.
+    const padFirst = measureBytes({ pad: "x".repeat(500), bad: 1n }, 100);
+    const badFirst = measureBytes({ bad: 1n, pad: "x".repeat(500) }, 100);
+
+    expect(padFirst.exceeded && padFirst.reason).toBe("over-limit");
+    expect(badFirst.exceeded && badFirst.reason).toBe("over-limit");
+
+    // Unwritable is still reported on its own, so the ordering above is a
+    // precedence rule rather than the reason being unreachable.
+    const small = measureBytes({ bad: 1n }, 1_000);
+    expect(small.exceeded && small.reason).toBe("unwritable");
+
+    // And either way the document is refused, which is what a caller asking
+    // only "does this fit" relies on.
+    expect([padFirst.exceeded, badFirst.exceeded, small.exceeded]).toEqual([
+      true,
+      true,
+      true,
+    ]);
+  });
+
+  it("writes an object that only CLAIMS to be a BigInt", () => {
+    // `Symbol.toStringTag` is an ordinary writable property of the document
+    // under inspection, so `Object.prototype.toString` reports whatever the
+    // document says. This value tags itself `[object BigInt]` and the writer
+    // stores it regardless, which is why the refusal is decided by the internal
+    // slot instead: classifying by the tag would let block props declare
+    // themselves unstorable and lock their own author out.
+    const spoof = { [Symbol.toStringTag]: "BigInt", x: 1 };
+    const written = JSON.stringify({ v: spoof });
+
+    // The positive control for the pair: the writer really does store one and
+    // really does refuse the other, so the two cases are genuinely different
+    // rather than both being accepted.
+    expect(written).toBe('{"v":{"x":1}}');
+    expect(() => JSON.stringify({ v: Object(1n) })).toThrow(TypeError);
+
+    // Refused, but NOT as a BigInt: the symbol-keyed property is one JSON
+    // drops, so the document would not survive storage unchanged.
+    const measuredSpoof = measureBytes({ v: spoof }, 1_000);
+    expect(measuredSpoof.exceeded).toBe(true);
+
+    // THE CONTROL THAT MATTERS. The same object without the symbol key is
+    // accepted and measured exactly as the writer emits it, so the tag
+    // contributed nothing to the refusal above — which is what would break if
+    // classification ever moved back to `Object.prototype.toString`.
+    const plain = { x: 1 };
+    expect(measureBytes({ v: plain }, 1_000)).toEqual({
+      bytes: Buffer.byteLength(JSON.stringify({ v: plain }), "utf8"),
+      exceeded: false,
+    });
+  });
+
+  it("still says over-limit when the document is merely too big", () => {
+    // The distinction is the whole point: these two need opposite advice, and
+    // a single boolean cannot tell an author which one they have.
+    const measured = measureBytes({ x: "y".repeat(500) }, 100);
+
+    expect(measured).toEqual({
+      bytes: expect.any(Number) as number,
+      exceeded: true,
+      reason: "over-limit",
+    });
+  });
+});
+
+describe("measureBytes reads nothing the writer would not", () => {
+  it("does not invoke a Symbol.toStringTag getter the document defined", () => {
+    // `JSON.stringify` ignores symbol keys, so it never runs this getter and
+    // stores the object as `{}`. A measurement that runs it is executing
+    // document-supplied code the writer does not, which lets a throwing getter
+    // escape a function contracted to report rather than raise, and lets a
+    // getter with side effects mutate a document while it is being measured.
+    let reads = 0;
+    const watched = { x: 1 };
+    Object.defineProperty(watched, Symbol.toStringTag, {
+      get: () => {
+        reads += 1;
+        return "BigInt";
+      },
+      configurable: true,
+    });
+
+    const measured = measureBytes({ v: watched }, 1_000);
+
+    expect(reads, "the tag getter ran during measurement").toBe(0);
+    // The verdict is a REFUSAL, and not for the reason this test guards. The
+    // writer stores the object, but it stores it WITHOUT the symbol-keyed
+    // property, and a member JSON drops is the same class as `undefined` and a
+    // function — which this counter refuses so the stored document cannot
+    // differ from the one that was checked. The control below is what shows
+    // the tag played no part.
+    expect(measured.exceeded).toBe(true);
+  });
+
+  it("does not raise when a tag getter throws, because the writer stores it", () => {
+    const hostile = { x: 1 };
+    Object.defineProperty(hostile, Symbol.toStringTag, {
+      get: () => {
+        throw new Error("tag getter");
+      },
+      configurable: true,
+    });
+
+    // The control: the writer really does accept this value, so refusing it
+    // or raising here would be a disagreement with the thing being counted.
+    expect(JSON.stringify({ v: hostile })).toBe('{"v":{"x":1}}');
+    expect(() => measureBytes({ v: hostile }, 1_000)).not.toThrow();
+    // Refused for carrying a symbol-keyed property, which JSON drops — never
+    // by running the getter, which is the property this test exists for.
+    expect(measureBytes({ v: hostile }, 1_000).exceeded).toBe(true);
+  });
+
+  it("still refuses a boxed BigInt that carries a tag of its own", () => {
+    // The slot check is what a declared tag falls through to, so this is the
+    // case proving the fall-through still reaches the right answer.
+    const tagged = Object(1n) as object;
+    Object.defineProperty(tagged, Symbol.toStringTag, {
+      value: "Object",
+      configurable: true,
+    });
+    expect(measureBytes({ v: tagged }, 1_000).exceeded).toBe(true);
+  });
+});
+
+describe("measureBytes probes a value only where the writer does", () => {
+  it("does not execute a proxy's descriptor trap", () => {
+    // The writer reads `toJSON` and own keys, and never asks for
+    // `Symbol.toStringTag`. A probe that does is observable through a Proxy
+    // trap even when no ordinary getter is involved, and a trap that throws
+    // turns a document the writer stores into a raised error.
+    const trapped: string[] = [];
+    const hostile = new Proxy(
+      { x: 1 },
+      {
+        getOwnPropertyDescriptor(target, key) {
+          trapped.push(String(key));
+          if (key === Symbol.toStringTag) throw new Error("descriptor trap");
+          return Reflect.getOwnPropertyDescriptor(target, key);
+        },
+      }
+    );
+
+    // The control: the writer really does accept it, so raising here would be
+    // a disagreement with the thing being counted.
+    expect(JSON.stringify({ v: hostile })).toBe('{"v":{"x":1}}');
+    expect(() => measureBytes({ v: hostile }, 1_000)).not.toThrow();
+    expect(
+      trapped.filter(key => key.includes("toStringTag")),
+      "the counter asked for a symbol the writer never asks for"
+    ).toEqual([]);
+  });
+
+  it("refuses a boxed BigInt whose prototype was replaced", () => {
+    // A prototype-based filter would call this an ordinary object. The writer
+    // still refuses it, so the counter has to as well or the two disagree
+    // about a document that cannot be stored.
+    const disguised = Object(1n) as object;
+    Object.setPrototypeOf(disguised, Object.prototype);
+
+    expect(() => JSON.stringify({ v: disguised })).toThrow(TypeError);
+    expect(measureBytes({ v: disguised }, 1_000).exceeded).toBe(true);
+  });
+});
+
+describe("a document is told what is actually wrong with it", () => {
+  it("calls a rewritten document rewritten, not unreadable", () => {
+    // A node hook returning a replacement is READ perfectly well; JSON simply
+    // rewrites it. Its survey is incomplete because the byte count is then the
+    // original's, and reporting incompleteness as the verdict told an author the
+    // validator refused to read a member it had read — sending them to look for
+    // a member that is not the problem.
+    const node = {
+      id: "n1",
+      type: "core/text",
+      version: 1,
+      props: {},
+      toJSON() {
+        return "x".repeat(2000);
+      },
+    };
+    const codes = validate(
+      invalidDoc({ formatVersion: 1, kind: "page", nodes: [node] }),
+      { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" }
+    ).map(issue => issue.code);
+
+    expect(codes).toContain("document-lossy");
+    expect(codes).not.toContain("document-unreadable");
+  });
+
+  it("still calls an unread member unreadable", () => {
+    // The other direction, so the case above cannot pass by never reporting
+    // `document-unreadable` at all. An accessor IS a member the walk declined
+    // to read, and that verdict is the true one.
+    const props: Record<string, unknown> = {};
+    Object.defineProperty(props, "payload", {
+      enumerable: true,
+      get() {
+        return "x".repeat(100);
+      },
+    });
+    const codes = validate(
+      invalidDoc({
+        formatVersion: 1,
+        kind: "page",
+        nodes: [{ id: "n1", type: "core/text", version: 1, props }],
+      }),
+      { breakpoints: FIXTURE_BREAKPOINTS, mode: "strict" }
+    ).map(issue => issue.code);
+
+    expect(codes).toContain("document-unreadable");
+    expect(codes).not.toContain("document-lossy");
+  });
+});
+
+describe("an unstorable document does not have its values parsed", () => {
+  it("does not enumerate a classes list the byte pass never measured", () => {
+    // An accessor is the walk's own blind spot: reading it runs code the survey
+    // refuses to run, so whatever it holds was never counted and nothing
+    // downstream is bounded by the byte cap. Validation must not then reach the
+    // same field by ordinary property access and walk it in full.
+    let reads = 0;
+    const node = {
+      id: "n1",
+      type: "core/text",
+      version: 1,
+      props: {},
+      get classes() {
+        reads += 1;
+        return Array.from({ length: 5_000 }, (_, i) => `c${i}`);
+      },
+    };
+    const doc = invalidDoc({ formatVersion: 1, kind: "page", nodes: [node] });
+
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+    });
+
+    expect(issues.some(i => i.code === "document-unreadable")).toBe(true);
+    // Zero, not "few". Every check in `validateClasses` re-reads the field, so
+    // any read at all means the list was walked — the assertion has to be on
+    // the field never being touched rather than on a count that looks small.
+    expect(reads).toBe(0);
+  });
+
+  it("still validates the classes of a document JSON merely rewrites", () => {
+    // The other side of the same gate, and the reason it has to be the narrow
+    // question. A sparse array is fully measured — twelve bytes, written by
+    // `JSON.stringify` as `[null,"cls"]` — so the work below IS bounded and
+    // skipping it would drop a real, actionable issue about the document.
+    const classes: unknown[] = [];
+    classes[1] = "cls";
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "n1", type: "core/text", version: 1, props: {}, classes }],
+    });
+
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+    });
+
+    expect(issues.some(i => i.code === "invalid-classes")).toBe(true);
+    // And it is reported as rewritten rather than as impossible to store.
+    expect(issues.some(i => i.code === "document-lossy")).toBe(true);
+    expect(issues.some(i => i.code === "document-unwritable")).toBe(false);
+  });
+
+  it("still validates the classes of a document whose counts are approximate", () => {
+    // A node hook returning a replacement leaves the walk having read the whole
+    // document while the published byte total describes the replacement rather
+    // than the node. So the counts stop being the writer's — but nothing about
+    // the traversal stopped short, and the per-value work below is bounded by a
+    // tree that was measured end to end.
+    //
+    // Separating the two is what this covers. A sparse array is fully measured
+    // AND counted from itself, so it cannot tell a gate on "the numbers are the
+    // writer's" from one on "the walk reached everything"; only a document that
+    // is traversed and approximate at once distinguishes them.
+    const classes: unknown[] = [];
+    classes[1] = "cls";
+    const node = {
+      id: "n1",
+      type: "core/text",
+      version: 1,
+      props: {},
+      classes,
+      // Structure is counted from the document and bytes from the replacement,
+      // which is what withdraws the completeness claim without truncating the
+      // walk.
+      toJSON() {
+        return { id: "n1", type: "core/text", version: 1, props: {} };
+      },
+    };
+    const doc = invalidDoc({ formatVersion: 1, kind: "page", nodes: [node] });
+
+    const { issues, survey } = validateDocument(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+    });
+
+    // Asserted from the survey the validator itself judged the document with,
+    // and BEFORE the issues: a fixture that stopped being approximate, or that
+    // started tripping a cap, would leave every assertion below satisfied by a
+    // document that never reached the gate at all.
+    expect(survey.traversed).toBe(true);
+    expect(survey.complete).toBe(false);
+
+    expect(issues.some(i => i.code === "invalid-classes")).toBe(true);
+  });
+
+  it("skips per-value work when the byte pass could not measure the document", () => {
+    // The byte precondition REFUSES to invoke an accessor, so it never learns
+    // how large that field is. The per-value work below reaches the same field
+    // by ordinary property access, runs the getter, and parses everything it
+    // returns — so the one document whose size is UNKNOWN was the one whose
+    // values were parsed in full.
+    //
+    // Counting getter invocations is what separates the implementations: both
+    // report the document invalid, and only one of them reads the megabytes.
+    let reads = 0;
+    const node: Record<string, unknown> = {
+      id: "n1",
+      type: "core/text",
+      version: 1,
+      props: {},
+    };
+    Object.defineProperty(node, "styles", {
+      get() {
+        reads += 1;
+        // A token reference the lookup below does NOT know, which is what
+        // `validateStyleValues` reports — so this fixture produces a style
+        // issue when parsed and none when skipped. Without that, the assertion
+        // is satisfied by the fixture rather than by the behaviour.
+        return { base: { base: { color: { $token: "no.such.token" } } } };
+      },
+      enumerable: true,
+      configurable: true,
+    });
+    const doc = invalidDoc({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [node],
+    });
+
+    const issues = validate(doc, {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      mode: "strict",
+      tokens: { kindOf: () => undefined },
+    });
+
+    // Refused, and refused for the right reason.
+    expect(issues.some(i => i.code === "document-unreadable")).toBe(true);
+
+    // The style tree behind the accessor is never PARSED, which is the
+    // unbounded work: every value builds an AST apiece, and the byte pass
+    // refused to measure this field so nothing bounded it.
+    expect(
+      issues.some(
+        i => i.code === "invalid-style-values" || i.code === "unknown-token"
+      )
+    ).toBe(false);
+
+    // What this does NOT do, stated rather than implied: the property is still
+    // READ, so the getter still runs. Skipping the read entirely would mean not
+    // validating the node's shape at all, and a document is refused on its
+    // shape long before its style values matter. The exposure that closes is
+    // the parsing of whatever the getter returns, not the single invocation.
+    expect(reads).toBeGreaterThan(0);
   });
 });

@@ -1,6 +1,6 @@
 {
   "name": "nextly",
-  "version": "0.0.2-alpha.57",
+  "version": "0.0.2-alpha.58",
   "description": "Nextly - Core functionality, database, services, and APIs",
   "license": "MIT",
   "type": "module",
@@ -205,7 +205,6 @@
     "@nextlyhq/adapter-mysql": "workspace:*",
     "@nextlyhq/adapter-postgres": "workspace:*",
     "@nextlyhq/adapter-sqlite": "workspace:*",
-    "@nextlyhq/blocks-engine": "workspace:*",
     "@nextlyhq/eslint-config": "workspace:*",
     "@nextlyhq/telemetry": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
@@ -258,6 +257,7 @@
     "@clack/prompts": "^1.1.0",
     "@inquirer/prompts": "^7.3.2",
     "@nextlyhq/adapter-drizzle": "workspace:*",
+    "@nextlyhq/blocks-engine": "workspace:*",
     "@sanity/diff-match-patch": "^3.2.0",
     "bcryptjs": "^3.0.2",
     "commander": "^14.0.2",

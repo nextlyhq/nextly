@@ -16,7 +16,6 @@ import {
   DropdownMenuCheckboxItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
-  Input,
 } from "@nextlyhq/ui";
 import {
   useState,
@@ -27,7 +26,7 @@ import {
 } from "react";
 
 import { Pencil, Trash2 } from "@admin/components/icons";
-import { Pagination } from "@admin/components/shared/pagination";
+import { RangeField } from "@admin/components/shared/range-field";
 import { DataTableView } from "@admin/components/ui/table/data-table";
 import type {
   DataTableSelection,
@@ -463,38 +462,28 @@ export const EntryTable = forwardRef<EntryTableRef, EntryTableProps>(
                       <p className="text-xs font-medium text-muted-foreground">
                         Created Date
                       </p>
-                      <div className="grid grid-cols-1 gap-2">
-                        <Input
-                          type="date"
-                          value={createdFrom}
-                          onChange={e => onCreatedFromChange?.(e.target.value)}
-                          placeholder="From"
-                        />
-                        <Input
-                          type="date"
-                          value={createdTo}
-                          onChange={e => onCreatedToChange?.(e.target.value)}
-                          placeholder="To"
-                        />
-                      </div>
+                      <RangeField
+                        label="Created date"
+                        type="date"
+                        orientation="column"
+                        from={createdFrom}
+                        to={createdTo}
+                        onFromChange={value => onCreatedFromChange?.(value)}
+                        onToChange={value => onCreatedToChange?.(value)}
+                      />
 
                       <p className="pt-1 text-xs font-medium text-muted-foreground">
                         Updated Date
                       </p>
-                      <div className="grid grid-cols-1 gap-2">
-                        <Input
-                          type="date"
-                          value={updatedFrom}
-                          onChange={e => onUpdatedFromChange?.(e.target.value)}
-                          placeholder="From"
-                        />
-                        <Input
-                          type="date"
-                          value={updatedTo}
-                          onChange={e => onUpdatedToChange?.(e.target.value)}
-                          placeholder="To"
-                        />
-                      </div>
+                      <RangeField
+                        label="Updated date"
+                        type="date"
+                        orientation="column"
+                        from={updatedFrom}
+                        to={updatedTo}
+                        onFromChange={value => onUpdatedFromChange?.(value)}
+                        onToChange={value => onUpdatedToChange?.(value)}
+                      />
 
                       <button
                         type="button"
@@ -559,18 +548,22 @@ export const EntryTable = forwardRef<EntryTableRef, EntryTableProps>(
                   ? "No entries found. Try adjusting your search or filters."
                   : "No entries found."
               }
-            />
-
-            <Pagination
-              currentPage={pagination.page}
-              totalPages={pagination.totalPages}
-              totalItems={pagination.total}
-              pageSize={pagination.limit}
-              onPageChange={onPageChange}
-              onPageSizeChange={onLimitChange}
-              isLoading={isLoading}
-              itemLabel="entries"
-              ariaLabel="Entry table pagination"
+              // Inside the table rather than beside it, so the component that
+              // knows whether the row table or the mobile card view is showing
+              // is the one that places the pager. The wrapper below draws the
+              // card and `bordered={false}` stops the table drawing a second
+              // one, so this renders in the same place it always did.
+              pagination={{
+                currentPage: pagination.page,
+                totalPages: pagination.totalPages,
+                totalItems: pagination.total,
+                pageSize: pagination.limit,
+                onPageChange,
+                onPageSizeChange: onLimitChange,
+                isLoading,
+                itemLabel: "entries",
+                ariaLabel: "Entry table pagination",
+              }}
             />
           </div>
         )}

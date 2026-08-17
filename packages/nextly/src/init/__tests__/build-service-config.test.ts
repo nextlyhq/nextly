@@ -79,4 +79,33 @@ describe("buildServiceConfig — retention carry-through", () => {
     });
     expect(result.auditRetention).toEqual(explicit);
   });
+
+  /**
+   * `runMigrationsOnBoot` on the SERVICE config is internal wiring, not an
+   * option — it tells `registerServices` whether to open the boot-migrations
+   * gate, and that must match what `runProdMigrationsIfEnabled` will actually
+   * do, which reads the nested `db` block. A caller-supplied value winning here
+   * would open no gate while migrations ran anyway, which is precisely the
+   * unguarded window the gate exists to close.
+   *
+   * The opposite direction is asserted too: a caller cannot manufacture a gate
+   * that nothing will ever settle, which would hang every later consumer.
+   */
+  it("derives the gate flag from the nested config, ignoring a caller override", () => {
+    const enabled = buildServiceConfig({
+      config: {
+        db: { runMigrationsOnBoot: true },
+      } as unknown as SanitizedNextlyConfig,
+      runMigrationsOnBoot: false,
+    } as Parameters<typeof buildServiceConfig>[0]);
+    expect(enabled.runMigrationsOnBoot).toBe(true);
+
+    const disabled = buildServiceConfig({
+      config: {
+        db: { runMigrationsOnBoot: false },
+      } as unknown as SanitizedNextlyConfig,
+      runMigrationsOnBoot: true,
+    } as Parameters<typeof buildServiceConfig>[0]);
+    expect(disabled.runMigrationsOnBoot).toBe(false);
+  });
 });

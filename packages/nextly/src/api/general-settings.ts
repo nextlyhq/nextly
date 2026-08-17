@@ -32,10 +32,27 @@ async function getGeneralSettingsService(): Promise<GeneralSettingsService> {
 
 const updateSettingsSchema = z.object({
   applicationName: z.string().max(255).nullable().optional(),
+  // `.url()` alone accepts any scheme the WHATWG parser does, `javascript:` and
+  // `data:` included — and this value is concatenated into preview URLs the
+  // admin assigns to `location.href`, where such a scheme executes rather than
+  // navigates. The resolver refuses those too; this stops one being stored in
+  // the first place, so a row written before that check existed is the only way
+  // one can still be present.
   siteUrl: z
     .string()
     .url("Site URL must be a valid URL")
     .max(2048)
+    .refine(
+      value => {
+        try {
+          const { protocol } = new URL(value);
+          return protocol === "http:" || protocol === "https:";
+        } catch {
+          return false;
+        }
+      },
+      { message: "Site URL must start with http:// or https://" }
+    )
     .nullable()
     .optional(),
   adminEmail: z

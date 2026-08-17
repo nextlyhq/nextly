@@ -11,10 +11,14 @@ export type { SeoDefinitionSource, SeoImageCandidate } from "./derive-seo";
 export {
   DOCUMENT_FORMAT_VERSION,
   DOCUMENT_KINDS,
+  BINDING_SOURCES,
+  BINDING_FORMAT_TYPES,
+  DEFAULT_BINDING_SOURCE,
   COMPONENT_INSTANCE_TYPE,
   STYLE_STATES,
   MAX_BREAKPOINTS_PER_AXIS,
   isTokenRef,
+  isBindingSource,
   isComponentInstance,
 } from "./document";
 export type {
@@ -23,6 +27,7 @@ export type {
   Binding,
   BindingSource,
   BindingFormat,
+  BindingFormatType,
   BreakpointDef,
   BreakpointId,
   BreakpointSet,
@@ -53,6 +58,7 @@ export {
   documentBytes,
 } from "./limits";
 export type { DocumentLimits } from "./limits";
+export type { DocumentSurvey, SurveyLimits } from "./measure-bytes";
 
 export {
   newId,
@@ -69,13 +75,47 @@ export {
 } from "./tree";
 export type { NodeLocation, TreePosition } from "./tree";
 
-export { validate, ISSUE_CODES } from "./validation";
+export { measureBytes, surveyDocument } from "./measure-bytes";
+// The nesting rule and the types it answers in. Exported together: a caller
+// that can ask the question must be able to name the verdict it gets back, and
+// a refusal reason it cannot name is one it has to re-derive from the boolean.
+export { canNest, canBeRoot } from "./nesting";
+export type { NestingSource, NestingVerdict, NestingRefusal } from "./nesting";
+// The measurement's return type travels with the function. Without it a
+// consumer naming `measureBytes`'s result has to rebuild the union by hand or
+// reach for `ReturnType`, and a hand-rebuilt copy is the second statement of a
+// contract that then drifts from the first.
+export type { ByteMeasurement } from "./measure-bytes";
+export {
+  validate,
+  validateDocument,
+  ISSUE_CODES,
+  DOCUMENT_VERDICT_CODES,
+  INCOMPLETE_SURVEY_CODES,
+} from "./validation";
+/**
+ * The registry-independent facts about a node, exported so a caller holding no
+ * block registry can still refuse a malformed one. The editor's op layer is the
+ * caller that needs them: it must reject a bad node before the tree primitives
+ * place it, and `validate()` requires a context a tree operation has no business
+ * demanding.
+ */
+export { isNodeType, isNodeVersion } from "./validation";
+/**
+ * Exported because anything holding a document read from storage has to ask the
+ * same question, and the answer is subtler than it looks: the check is on the
+ * PROTOTYPE, so a `Date`, a `Map` or a class instance is refused rather than
+ * walked and reported clean. A caller writing its own `typeof x === "object"`
+ * gets a different answer for exactly the values that survive JSON badly.
+ */
+export { isPlainRecord } from "./plain-record";
 export { declaresNoMarkup, isConditionGated } from "./visibility";
 export type { NoMarkupDefinitionSource } from "./visibility";
 export type {
   BlockTypeLookup,
   ClassLookup,
   IssueCode,
+  ValidationResult,
   IssueSeverity,
   TokenLookup,
   ValidationContext,
@@ -107,6 +147,7 @@ export {
   registerBlocks,
   registerSupport,
   getBlock,
+  isBlockName,
   hasBlock,
   allBlocks,
   getBlockSource,
@@ -116,6 +157,7 @@ export {
   MAX_BLOCK_VERSION,
   registryLookup,
   registryMigrationSource,
+  registryNestingSource,
 } from "./registry";
 export type { RegisterOptions, SupportDefinition } from "./registry";
 
@@ -311,3 +353,13 @@ export {
   type RemotePattern,
   type RemotePatternInput,
 } from "./url-policy";
+
+// The operation names the format reserves for composition flows. Exported so
+// an operation layer can ask rather than restate: a reservation only holds if
+// the code deciding whether to accept a name reads the same list the format
+// spec publishes.
+export {
+  RESERVED_OPERATION_NAMES,
+  isReservedOperationName,
+  type ReservedOperationName,
+} from "./operations";

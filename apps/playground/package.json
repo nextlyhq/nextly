@@ -1,6 +1,6 @@
 {
   "name": "playground",
-  "version": "0.1.2-alpha.1",
+  "version": "0.1.2-alpha.2",
   "description": "Nextly contributor playground (internal — not for end users)",
   "private": true,
   "scripts": {
@@ -19,12 +19,15 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@fontsource-variable/geist": "^5.3.0",
+    "@fontsource-variable/geist-mono": "^5.3.0",
     "@nextlyhq/adapter-drizzle": "workspace:^",
     "@nextlyhq/adapter-mysql": "workspace:^",
     "@nextlyhq/adapter-postgres": "workspace:^",
     "@nextlyhq/adapter-sqlite": "workspace:^",
     "@nextlyhq/admin": "workspace:^",
     "@nextlyhq/blocks-react": "workspace:^",
+    "@nextlyhq/builder": "workspace:*",
     "@nextlyhq/plugin-form-builder": "workspace:^",
     "@nextlyhq/plugin-page-builder": "workspace:^",
     "@nextlyhq/plugin-sdk": "workspace:^",

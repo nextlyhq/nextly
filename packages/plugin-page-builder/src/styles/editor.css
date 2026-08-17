@@ -7,6 +7,22 @@
  * the surrounding admin. Inline styles can't express :hover/:focus — these classes can.
  */
 
+/*
+ * The editor's chrome is `@nextlyhq/builder`'s shell, and its rules and
+ * `--nx-builder-*` tokens live in that package's own sheet. Imported here rather
+ * than left to the host: this file is the ONE stylesheet the plugin documents and
+ * every host loads, so a host that did everything right would still get a shell
+ * with no layout and no colours.
+ *
+ * An `@import` rather than a TypeScript side-effect import, because this package
+ * COPIES `src/styles` into `dist` instead of running CSS through the bundler — a
+ * `import "…/styles.css"` in a component would not be processed at all.
+ *
+ * First, because `@import` must precede other rules to be honoured, and because
+ * the shell's sheet is a base the `.nx-pb-*` rules below are free to override.
+ */
+@import "@nextlyhq/builder/styles.css";
+
 /* ------------------------------------------------------------------ shell */
 .nx-pb-editor {
   display: flex;
@@ -500,4 +516,18 @@
 .nx-pb-repair-item-where {
   color: var(--nx-muted-foreground);
   margin-left: 6px;
+}
+
+/*
+ * The stated absence of an action, where a row has one to report and none to offer.
+ *
+ * Sized and aligned like the button it stands in for, so the list keeps one column of outcomes
+ * rather than a ragged edge where a row happens to be unfixable. Muted and not interactive,
+ * because the one thing worse than no button is one that looks pressable and does nothing.
+ */
+.nx-pb-repair-item-noop {
+  color: var(--nx-muted-foreground);
+  font-size: 0.8125rem;
+  white-space: nowrap;
+  padding: 0 12px;
 }

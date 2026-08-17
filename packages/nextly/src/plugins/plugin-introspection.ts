@@ -64,9 +64,14 @@ export function collectPluginInfo(
 ): PluginInfo[] {
   const resolved = resolvePlugins(plugins, { coreVersion: opts.coreVersion });
 
+  // Collected ONCE. Both views below derive from this list — the slug summary
+  // here and the display metadata `buildPluginAdminMeta` serializes — so the
+  // CLI and the admin cannot disagree about which permissions a plugin owns.
+  const collectedPermissions = collectCustomPermissions(config, resolved);
+
   // Custom permissions across all plugins, grouped by declaring owner (plugin name).
   const permissionsByOwner = new Map<string, string[]>();
-  for (const perm of collectCustomPermissions(config, resolved)) {
+  for (const perm of collectedPermissions) {
     const list = permissionsByOwner.get(perm.owner) ?? [];
     list.push(perm.slug);
     permissionsByOwner.set(perm.owner, list);

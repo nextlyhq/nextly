@@ -197,10 +197,10 @@ describe("ConditionBuilder -- value editor", () => {
         onChange={onChange}
       />
     );
-    await user.type(
-      screen.getByRole("spinbutton", { name: /condition value from/i }),
-      "5"
-    );
+    // Named "From" by its visible label now, inside a group named for the
+    // range. The old accessible name came from an `aria-label` that rendered
+    // nothing, which is why a date range showed two identical empty boxes.
+    await user.type(screen.getByRole("spinbutton", { name: "From" }), "5");
     expect(onChange).toHaveBeenCalledWith(
       expect.objectContaining({ value: { min: "5", max: "" } })
     );

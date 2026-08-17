@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -12,6 +12,9 @@ import { renderWithProviders } from "../../../__tests__/utils";
 let mockBranding: AdminBranding | undefined;
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => mockBranding,
+  // Settled with an answer: every case here is about a plugin the branding
+  // payload already carries.
+  useBrandingStatus: () => ({ isPending: false, isUnavailable: false }),
 }));
 
 import PluginDetailPage from "./[slug]";
@@ -45,6 +48,22 @@ describe("PluginDetailPage", () => {
     renderWithProviders(<PluginDetailPage params={{ slug: "acme-p" }} />);
     // Informational page: the settings UI itself does not render here.
     expect(screen.queryByText("acme settings panel")).not.toBeInTheDocument();
+
+    // And the link stays in the header rather than the metadata rail. The rail
+    // stacks to the BOTTOM of the page in the narrow layout, so a primary
+    // action placed in it would be the last thing on the page there.
+    //
+    // `getByRole`, not `queryByRole` behind a conditional: a rail that stopped
+    // rendering would skip the assertion entirely and leave the positive one
+    // below still passing, so its absence would satisfy the test that exists
+    // to pin the separation.
+    const aside = screen.getByRole("complementary");
+    expect(
+      within(aside).queryByRole("link", { name: /open settings/i })
+    ).toBeNull();
+    expect(
+      screen.getByRole("link", { name: /open settings/i })
+    ).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Open settings/ })).toHaveAttribute(
       "href",
       "/admin/plugins/acme-p/settings"

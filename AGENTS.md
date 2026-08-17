@@ -111,6 +111,21 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
   `.claude/rules/verifying-merged-work.md`, which says to check what `main`
   changed before calling any of this environmental.
 
+  **A stale or missing sibling `dist` does not only produce `no-unresolved`.**
+  Every TYPE-AWARE lint rule reads inferred types, so an unbuilt tree makes it
+  report on types the checker cannot see: measured here, a docs-only commit
+  failed `nextly#lint` with `@typescript-eslint/no-unnecessary-type-assertion`
+  on a load-bearing assertion, and `pnpm --filter nextly... build` cleared it
+  along with the `no-unresolved` error beside it.
+
+  That is the dangerous half, because the two errors read differently. An
+  unresolved import NAMES A PACKAGE and reads as environmental. A type-aware
+  finding names YOUR EXPRESSION and reads as a correctness defect — and its
+  obvious remedy, deleting the assertion, is a real regression that lints clean
+  afterwards on a built tree, because the assertion it was protecting is gone.
+  Build before you believe any lint result, not only one that names a module.
+  There is no tell in the message.
+
   Path mappings cover part of this and are not a general answer.
   `packages/admin` maps the bare `nextly` specifier to `../nextly/src`, which is
   why admin resolves it without a build while `packages/plugin-sdk`, which has
@@ -236,12 +251,15 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
   `telemetry`, `client`) plus `playground`, `root`, `ci`, `docs`, `deps`,
   `release`. Scope is optional; the subject must not start with an uppercase
   letter. Subsystem names are not valid scopes.
-- Errors thrown inside `packages/nextly/**` use `NextlyError` (static
-  factories: `notFound`, `forbidden`, `validation`, `conflict`, `duplicate`,
-  `authRequired`, `invalidCredentials`, `rateLimited`, `internal`, ...), never
-  bare `Error`. The admin package is exempt: it consumes the typed
-  `{ error: { code, message, requestId, data? } }` envelope via
-  `parseApiError`.
+- Errors thrown inside `packages/nextly/**` PRODUCT CODE use `NextlyError`
+  (static factories: `notFound`, `forbidden`, `validation`, `conflict`,
+  `duplicate`, `authRequired`, `invalidCredentials`, `rateLimited`,
+  `internal`, ...), never bare `Error`. The admin package is exempt: it
+  consumes the typed `{ error: { code, message, requestId, data? } }` envelope
+  via `parseApiError`. Test files are also exempt: fixtures model driver and
+  database failures arriving from OUTSIDE the package, which `NextlyError`
+  cannot faithfully represent — wrapping them would make every negative test
+  pass on the wrong error shape.
 - Database access is Drizzle ORM only. No raw SQL strings in product code.
   Test fixtures reuse the production DDL helpers (for example
   `getSchemaEventsDdl`), never hand-copied CREATE TABLE statements.

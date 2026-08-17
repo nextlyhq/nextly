@@ -14,6 +14,9 @@
 
 import {
   Button,
+  FieldShell,
+  FormActions,
+  FormLayout,
   Input,
   toast,
   Tabs,
@@ -348,234 +351,220 @@ function FormBuilderViewInner({
   ];
 
   // ── Render ────────────────────────────────────────────────────────────────
+  // `FormLayout` owns the page measure, centring and padding, so nothing here
+  // hand-rolls a card, a width cap or a hack to escape either.
   return (
-    <>
-      {/* ── Page header (Outside the white card) ── */}
-      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-6 px-1">
-        <div>
-          <h1 className="text-2xl font-semibold text-foreground tracking-tight">
-            {isCreating ? "Create Form" : "Edit Form"}
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            {isCreating
-              ? "Design a new form with drag-and-drop fields."
-              : "Modify your form fields and settings."}
-          </p>
-        </div>
-
-        {/* Action buttons — same variant/size as Collection Builder */}
-        <div className="flex items-center gap-2 shrink-0">
-          {isDirty && (
-            // Full-strength warning border so the unsaved-changes badge boundary is perceivable over its tinted fill.
-            <span className="text-xs font-medium bg-warning-100 text-warning-700 dark:bg-warning-900 dark:text-warning-100 border border-warning px-2.5 py-1 rounded-none whitespace-nowrap">
-              Unsaved changes
-            </span>
-          )}
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={handleCancel}
-            disabled={isSaving}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            onClick={() => {
-              void handleSave();
-            }}
-            disabled={isSaving}
-            className="flex items-center gap-1.5"
-          >
-            {isSaving ? (
-              <>
-                <svg
-                  className="animate-spin h-3.5 w-3.5"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                >
-                  <circle
-                    className="opacity-25"
-                    cx="12"
-                    cy="12"
-                    r="10"
-                    stroke="currentColor"
-                    strokeWidth="4"
-                  />
-                  <path
-                    className="opacity-75"
-                    fill="currentColor"
-                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-                  />
-                </svg>
-                Saving…
-              </>
-            ) : isCreating ? (
-              "Create"
-            ) : (
-              "Save Changes"
-            )}
-          </Button>
-        </div>
+    <FormLayout>
+      {/* ── Page header ── */}
+      <div className="mb-6">
+        <h1 className="text-2xl font-semibold text-foreground tracking-tight">
+          {isCreating ? "Create Form" : "Edit Form"}
+        </h1>
+        <p className="text-sm text-muted-foreground mt-1">
+          {isCreating
+            ? "Design a new form with drag-and-drop fields."
+            : "Modify your form fields and settings."}
+        </p>
       </div>
 
-      {/*
-        Outer shell — white card with rounded-none border (no shadow).
-        Fills available height in the admin page container.
-      */}
-      <div className="flex border border-border bg-background overflow-hidden">
-        {/* =================================================================
-            LEFT — scrollable main content
-        ================================================================= */}
-        <div className="flex-1 min-w-0">
-          <div className="w-full px-8 pt-8 pb-12 space-y-6">
-            {/* ── Fixed Metadata & Tab Navigation ── */}
-            {/* -mx-8 + px-8: full-width divider, inset content. */}
-            <div className="bg-background -mx-8 px-8 border-b border-border space-y-4">
-              <div className="flex flex-wrap gap-4">
-                {/* Form Name */}
-                <div className="flex-1 min-w-[200px] max-w-sm space-y-1.5">
-                  <label
-                    htmlFor="form-name"
-                    className="text-sm font-medium text-foreground"
-                  >
-                    Form Name
-                  </label>
-                  <Input
-                    id="form-name"
-                    type="text"
-                    value={formData.name || ""}
-                    onChange={e => handleNameChange(e.target.value)}
-                    placeholder="e.g., Contact Form"
+      {/* ── Metadata & tab navigation ── */}
+      <div className="border-b border-border space-y-4 pb-4 mb-6">
+        <div className="flex flex-wrap gap-4">
+          <FieldShell
+            label="Form Name"
+            htmlFor="form-name"
+            className="flex-1 min-w-[200px]"
+          >
+            <Input
+              type="text"
+              value={formData.name || ""}
+              onChange={e => handleNameChange(e.target.value)}
+              placeholder="e.g., Contact Form"
+              className="bg-transparent"
+            />
+          </FieldShell>
+
+          <FieldShell
+            label="Slug"
+            htmlFor="form-slug"
+            className="flex-1 min-w-[160px]"
+          >
+            <Input
+              type="text"
+              value={formData.slug || ""}
+              onChange={e => updateFormData({ slug: e.target.value })}
+              placeholder="e.g., contact-form"
+              className="bg-transparent placeholder:text-muted-foreground"
+            />
+          </FieldShell>
+
+          {/* Status is a Radix Select: its Root accepts a fixed prop list and
+              forwards none of the rest to the trigger DOM node, so a
+              FieldShell clone's id/aria-describedby/aria-invalid would land
+              on a component that drops them rather than on the focusable
+              trigger. The render-function form of `children` sidesteps
+              that: FieldShell hands the computed wiring to this function,
+              which applies it to SelectTrigger — the actual focusable,
+              ARIA-bearing element — instead of a clone that can never reach
+              past `Select`'s root. */}
+          <div className="w-36">
+            <FieldShell label="Status" htmlFor="form-status">
+              {({ id, describedBy, invalid }) => (
+                <Select
+                  value={formData.status || "draft"}
+                  onValueChange={value =>
+                    updateFormData({
+                      status: value as "draft" | "published" | "closed",
+                    })
+                  }
+                >
+                  <SelectTrigger
+                    id={id}
+                    aria-describedby={describedBy}
+                    aria-invalid={invalid}
                     className="bg-transparent"
-                  />
-                </div>
-
-                {/* Slug */}
-                <div className="flex-1 min-w-[160px] max-w-xs space-y-1.5">
-                  <label
-                    htmlFor="form-slug"
-                    className="text-sm font-medium text-foreground"
                   >
-                    Slug
-                  </label>
-                  <Input
-                    id="form-slug"
-                    type="text"
-                    value={formData.slug || ""}
-                    onChange={e => updateFormData({ slug: e.target.value })}
-                    placeholder="e.g., contact-form"
-                    className="bg-transparent placeholder:text-muted-foreground"
-                  />
-                </div>
-
-                {/* Status */}
-                <div className="w-36 space-y-1.5">
-                  <label
-                    htmlFor="form-status"
-                    className="text-sm font-medium text-foreground"
-                  >
-                    Status
-                  </label>
-                  <Select
-                    value={formData.status || "draft"}
-                    onValueChange={value =>
-                      updateFormData({
-                        status: value as "draft" | "published" | "closed",
-                      })
-                    }
-                  >
-                    <SelectTrigger id="form-status" className="bg-transparent">
-                      <SelectValue placeholder="Status" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="draft">Draft</SelectItem>
-                      <SelectItem value="published">Published</SelectItem>
-                      <SelectItem value="closed">Closed</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              {/* ── Main tab navigation ── */}
-              <Tabs
-                value={activeTab}
-                onValueChange={v => setActiveTab(v as typeof activeTab)}
-              >
-                <TabsList className="bg-transparent justify-start gap-0 -mb-px border-b-0 max-w-full overflow-x-auto">
-                  {mainTabs.map(tab => (
-                    <TabsTrigger
-                      key={tab.value}
-                      value={tab.value}
-                      style={{
-                        borderBottomColor:
-                          activeTab === tab.value
-                            ? "var(--nx-primary)"
-                            : "transparent",
-                      }}
-                      className="shrink-0 whitespace-nowrap border-b-2 relative -mb-0.5 data-[state=active]:text-primary data-[state=inactive]:text-muted-foreground hover:text-primary hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-                    >
-                      {tab.label}
-                      {tab.count !== null && (
-                        <span
-                          className={`inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-semibold rounded-none ml-2 transition-colors ${
-                            activeTab === tab.value
-                              ? "bg-primary/5 text-primary"
-                              : "bg-primary/5 text-muted-foreground"
-                          }`}
-                        >
-                          {tab.count}
-                        </span>
-                      )}
-                    </TabsTrigger>
-                  ))}
-                </TabsList>
-              </Tabs>
-            </div>
-
-            {/* ── Tab content ── */}
-
-            {/* Builder tab */}
-            {activeTab === "builder" && (
-              <FieldCards
-                enabledTypes={enabledTypes}
-                disabledFieldTypes={disabledFieldTypes}
-                onAddField={handleAddField}
-              />
-            )}
-
-            {/* Preview tab */}
-            {activeTab === "preview" && (
-              <FormPreview fields={fields} formData={formData} />
-            )}
-
-            {/* Settings tab */}
-            {activeTab === "settings" && (
-              <div className="w-full">
-                <FormSettingsTab spamDefaults={spamDefaults} />
-              </div>
-            )}
-
-            {/* Notifications tab */}
-            {activeTab === "notifications" && (
-              <div className="w-full">
-                <FormNotificationsTab defaults={notificationDefaults} />
-              </div>
-            )}
-
-            {/* Save error */}
-            {saveError && (
-              // Full-strength destructive border so the error box boundary is perceivable over its tinted fill.
-              <div className="p-3 text-sm text-destructive bg-destructive/10 border border-destructive rounded-none">
-                {saveError}
-              </div>
-            )}
+                    <SelectValue placeholder="Status" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="draft">Draft</SelectItem>
+                    <SelectItem value="published">Published</SelectItem>
+                    <SelectItem value="closed">Closed</SelectItem>
+                  </SelectContent>
+                </Select>
+              )}
+            </FieldShell>
           </div>
         </div>
+
+        {/* ── Main tab navigation ── */}
+        <Tabs
+          value={activeTab}
+          onValueChange={v => setActiveTab(v as typeof activeTab)}
+        >
+          {/* Layout only. The underline, the active and hover colours, the
+              focus ring and the disabled state all come from the shared
+              primitive; restating them here is how two copies of one
+              appearance start drifting. `gap-0` and the scroll behaviour
+              are genuinely local: this strip can overflow its container. */}
+          <TabsList className="bg-transparent justify-start gap-0 max-w-full overflow-x-auto">
+            {mainTabs.map(tab => (
+              <TabsTrigger
+                key={tab.value}
+                value={tab.value}
+                className="shrink-0 whitespace-nowrap"
+              >
+                {tab.label}
+                {/* `rounded-sm`, the adornment step, matching the shared
+                    Badge and the identically sized notification count.
+                    Square is the TAB's corner and it exists so the
+                    underline runs flush to the trigger's edges; a chip
+                    inside the label inherits none of that reasoning, and
+                    carrying it made the count read as a second tab. */}
+                {tab.count !== null && (
+                  <span
+                    className={`inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-semibold rounded-sm ml-2 transition-colors ${
+                      activeTab === tab.value
+                        ? "bg-primary/5 text-primary"
+                        : "bg-primary/5 text-muted-foreground"
+                    }`}
+                  >
+                    {tab.count}
+                  </span>
+                )}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </Tabs>
       </div>
-    </>
+
+      {/* ── Tab content ── */}
+
+      {/* Builder tab */}
+      {activeTab === "builder" && (
+        <FieldCards
+          enabledTypes={enabledTypes}
+          disabledFieldTypes={disabledFieldTypes}
+          onAddField={handleAddField}
+        />
+      )}
+
+      {/* Preview tab */}
+      {activeTab === "preview" && (
+        <FormPreview fields={fields} formData={formData} />
+      )}
+
+      {/* Settings tab */}
+      {activeTab === "settings" && (
+        <FormSettingsTab spamDefaults={spamDefaults} />
+      )}
+
+      {/* Notifications tab */}
+      {activeTab === "notifications" && (
+        <FormNotificationsTab defaults={notificationDefaults} />
+      )}
+
+      {/* Save error */}
+      {saveError && (
+        // Full-strength destructive border so the error box boundary is perceivable over its tinted fill.
+        <div className="mt-6 p-3 text-sm text-destructive bg-destructive/10 border border-destructive rounded-none">
+          {saveError}
+        </div>
+      )}
+
+      {/* A form commits as one document, so there is exactly one action bar,
+          fed the dirty flag the form state already tracks rather than a
+          second computation of it. */}
+      <FormActions dirty={isDirty}>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={handleCancel}
+          disabled={isSaving}
+        >
+          Cancel
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          onClick={() => {
+            void handleSave();
+          }}
+          disabled={isSaving}
+          className="flex items-center gap-1.5"
+        >
+          {isSaving ? (
+            <>
+              <svg
+                className="animate-spin h-3.5 w-3.5"
+                viewBox="0 0 24 24"
+                fill="none"
+              >
+                <circle
+                  className="opacity-25"
+                  cx="12"
+                  cy="12"
+                  r="10"
+                  stroke="currentColor"
+                  strokeWidth="4"
+                />
+                <path
+                  className="opacity-75"
+                  fill="currentColor"
+                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                />
+              </svg>
+              Saving…
+            </>
+          ) : isCreating ? (
+            "Create"
+          ) : (
+            "Save Changes"
+          )}
+        </Button>
+      </FormActions>
+    </FormLayout>
   );
 }
 

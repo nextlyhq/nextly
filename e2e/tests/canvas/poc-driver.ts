@@ -47,6 +47,33 @@ interface RecordedTransition {
 const DROP_ZONES = ".nx-pb-dropzone, .nx-pb-dropzone-empty";
 
 /**
+ * How long this canvas may still be moving a zone's edge after entry, in milliseconds.
+ *
+ * Exported so the guard that checks it against the canvas's MEASURED spans reads the SAME value
+ * the driver uses. A guard restating the number checks a constant against itself and passes while
+ * the driver carries something else entirely.
+ *
+ * ## Why it is a frame and not an animation
+ *
+ * This was the canvas's own transition duration, from when a zone grew its height and margin on
+ * becoming the active target. It does not do that any more: a zone is `position:absolute` at a
+ * fixed `height:6px`, and `[data-drag]` / `[data-active]` change only `pointer-events`,
+ * `background` and `box-shadow`. The guard beside it measures every one of those states through
+ * the browser and pins the geometry span at 0ms, so an allowance sized for an animation is sized
+ * for something that does not happen.
+ *
+ * What the wait still has to do is separate two brackets into DIFFERENT animation frames: adjacent
+ * samples can quantize to the same whole pixel inside one frame, so agreement between them is
+ * necessary and not sufficient however static the edge is. A frame is ~16ms, and this carries a
+ * comfortable multiple of it.
+ *
+ * Not a speed change, and it must not be sold as one. `dragToInsetInZone` is the only consumer of
+ * this value; no browser test reaches it, and the one suite that does drives a test double which
+ * declares no allowance and therefore spends the shared default instead.
+ */
+export const POC_GEOMETRY_SETTLE_MS = 32;
+
+/**
  * Block-level insertion targets. A grid registers insert-before and append
  * droppables on the block element itself and signals them with these classes
  * rather than with `data-active` on a separate zone element, so they are a
@@ -69,26 +96,63 @@ const EDITOR_ROOT = ".nx-pb-editor";
 /** A library entry in the left panel; the drag source for a cross-frame drag. */
 const LIBRARY_ITEM = ".nx-pb-lib-item";
 
+/** The library's filter, used to bring a named entry into view rather than scrolling to it. */
+const LIBRARY_SEARCH = "Search blocks";
+
+/**
+ * A block this canvas refuses inside an ordinary container, and one it accepts.
+ *
+ * `core/column` declares `parent: ["core/columns"]`, so a container's drop zones refuse it by the
+ * shipped registry's own rule — no fixture has to manufacture a restricted slot. `core/heading`
+ * declares no parent and sits in the same panel, so the two differ only in the rule under test.
+ */
+const RESTRICTED_BLOCK_LABEL = "Column";
+const ACCEPTED_BLOCK_LABEL = "Heading";
+
+/** The element dnd-kit positions under the cursor; the chip and any refusal are inside it. */
+const DRAG_OVERLAY = ".nx-pb-drag-overlay";
+
+/** The overlay's refusal marker, set only while a rule is stopping the drop. */
+const REFUSED = "[data-refused]";
+
+/** Where the refusal's sentence goes, so it reaches an author not watching the cursor. */
+const LIVE_REGION = '[role="status"]';
+
+/**
+ * How long a refusal may take to appear after the drag reaches the target it refuses.
+ *
+ * One React commit, so this is generous by two orders of magnitude on purpose: it is the cost of
+ * reporting "not refused" about a target that IS refused, and only a permitted target ever pays it.
+ */
+const REFUSAL_RENDER_MS = 2_000;
+
 /** Past dnd-kit's activation distance in one move, so a drag actually starts. */
 const DRAG_THRESHOLD_PX = 12;
 
+/**
+ * The attribute an editor publishes its undo depth through, and the selector that finds it.
+ *
+ * Named here rather than inlined so the refusal can quote it: a reader that says only "no
+ * seam" leaves whoever acts on it guessing what would satisfy the check, and two people
+ * guessing produce two seams. This is the contract, such as it is — one element carrying a
+ * base-10 count of undoable entries, in either document.
+ */
+const UNDO_DEPTH_ATTR = "data-nx-undo-depth";
+const UNDO_DEPTH_SELECTOR = `[${UNDO_DEPTH_ATTR}]`;
+
+/**
+ * How far inside the canvas's bottom edge {@link CanvasDriver.canvasBottomEdge} stands.
+ *
+ * Comfortably inside dnd-kit's own autoscroll threshold, which is a fraction of the scroller's
+ * size rather than a fixed distance, so a point a few pixels in is within it for any canvas large
+ * enough to scroll at all.
+ */
+const EDGE_INSET_PX = 8;
+
 export function createPocDriver(page: Page): CanvasDriver {
-  /** The canvas iframe is srcless, so it is the about:blank child frame. */
+  /** The canvas iframe, from the one place that decides which frame that is. */
   function canvasFrame(): Frame {
-    const frame = page
-      .frames()
-      .find(
-        f => f.parentFrame() === page.mainFrame() && f.url() === "about:blank"
-      );
-    if (!frame) {
-      throw new Error(
-        `canvas frame not found; frames: ${page
-          .frames()
-          .map(f => f.url())
-          .join(", ")}`
-      );
-    }
-    return frame;
+    return canvasFrameOf(page);
   }
 
   /**
@@ -112,9 +176,108 @@ export function createPocDriver(page: Page): CanvasDriver {
     });
   }
 
+  /**
+   * The centre of the library entry carrying exactly this label.
+   *
+   * Filtered for rather than scrolled to. The library is a long scrolling list, so an entry's
+   * locator resolves happily while its box is off-screen and a drag started there begins nowhere;
+   * typing into the search remounts each category expanded and puts the match at the top of the
+   * panel.
+   *
+   * EXACT text, because "Column" and "Columns" are both registered blocks and a container refuses
+   * only one of them. A substring match returns whichever the DOM lists first, so the drag under
+   * test would be chosen by document order rather than by the rule.
+   */
+  async function libraryEntryCentre(label: string): Promise<Point> {
+    await page.getByLabel(LIBRARY_SEARCH).fill(label);
+    const entry = page
+      .locator(LIBRARY_ITEM)
+      .filter({ has: page.getByText(label, { exact: true }) });
+    await expect(
+      entry,
+      `exactly one library entry must be labelled "${label}"`
+    ).toHaveCount(1);
+    const box = await entry.boundingBox();
+    if (!box) throw new Error(`library entry "${label}" has no box`);
+    return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  }
+
+  /**
+   * Every drop zone's vertical extent in HOST coordinates, document order.
+   *
+   * ONE snapshot, because the two questions asked of it — which zone contains
+   * the pointer, and which zone's centre is nearest — are two views of the same
+   * geometry. Read separately they agree until a selector, an ordering, the
+   * frame origin or the mapping is corrected in one and not the other, and the
+   * depth probe then compares two different models of the canvas: either a
+   * failure that names the canvas for a fault in the harness, or a pass that is
+   * self-consistent and wrong.
+   *
+   * The centre comes from the mapped edges rather than from mapping the frame's
+   * own centre. Under an affine map the two are equal, and deriving it here
+   * keeps a single mapped value as the source for both answers.
+   */
+  async function mappedZoneSpans(): Promise<
+    { top: number; bottom: number; centre: number }[]
+  > {
+    const rects = await canvasFrame().evaluate(
+      selector =>
+        Array.from(document.querySelectorAll(selector)).map(el => {
+          const r = el.getBoundingClientRect();
+          return { y: r.y, height: r.height };
+        }),
+      DROP_ZONES
+    );
+    if (rects.length === 0) return [];
+
+    const origin = await driver.frameOrigin();
+    const scale = await frameScale();
+    // Mapped by the shared helper rather than multiplied out here. Written
+    // inline this is two numbers scaled and added, which is exactly the shape
+    // no import scan can tell from ordinary arithmetic — so it is the one that
+    // drifts silently when the mapping is corrected.
+    return rects.map(rect => {
+      const top = mapFramePointToHost({ x: 0, y: rect.y }, origin, scale).y;
+      const bottom = mapFramePointToHost(
+        { x: 0, y: rect.y + rect.height },
+        origin,
+        scale
+      ).y;
+      return { top, bottom, centre: (top + bottom) / 2 };
+    });
+  }
+
   let pointer: Point = { x: 0, y: 0 };
 
   const driver: CanvasDriver = {
+    // Zero, because this canvas has no target-switch hysteresis at all:
+    // `plugin-page-builder` registers no collision priority and no dwell, and a
+    // 2px jitter at a boundary flips the indicator on every move. Declaring a
+    // dwell it does not have would spend a wait per reading for lag that never
+    // happens, and would let a real hysteresis defect hide inside the wait.
+    dwellAllowanceMs: 0,
+
+    // How long this canvas may still be moving a zone's EDGE after entry. A
+    // probe that re-measures inside that window can read the same whole pixel
+    // twice while the edge is still travelling through it, and return a depth
+    // measured from a boundary that has already moved.
+    //
+    // Every geometry span this canvas currently produces is ZERO. The
+    // between-item zone is `position: absolute` at a fixed `height: 6px` and
+    // transitions only `background`, which moves no edge; the empty placeholder
+    // is in flow at an auto height and declares no transition at all. So this
+    // number is not covering a known animation — it is headroom against one
+    // arriving, and against two brackets landing inside a single animation
+    // frame.
+    //
+    // Stated here rather than inside the probe because the timing belongs to
+    // this canvas. `geometry-settle-matches-the-canvas.test.ts` MEASURES the
+    // real elements through `getComputedStyle` rather than reading any
+    // stylesheet, pins each state's span, and fails if a span ever outgrows
+    // this number — so the two cannot drift silently, and a lowered allowance
+    // is checked against movement rather than against declarations.
+    geometrySettleMs: POC_GEOMETRY_SETTLE_MS,
+
     async mountTree(fixture: CanvasFixture) {
       await gotoAdmin(page, `/collections/pages/${fixture.entryId}`);
       await expect(page.locator("iframe")).toBeVisible({ timeout: 30_000 });
@@ -133,12 +296,32 @@ export function createPocDriver(page: Page): CanvasDriver {
       return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
     },
 
+    async restrictedDragSourceCentre() {
+      return libraryEntryCentre(RESTRICTED_BLOCK_LABEL);
+    },
+
+    async acceptedDragSourceCentre() {
+      return libraryEntryCentre(ACCEPTED_BLOCK_LABEL);
+    },
+
     async canvasCentre() {
       const box = await page.locator("iframe").boundingBox();
       if (!box) throw new Error("canvas iframe has no box");
       // Near the top rather than the middle: the drag then travels downward
       // through the tree, which is what the sweep scenarios need.
       return { x: box.x + box.width / 2, y: box.y + 40 };
+    },
+
+    async canvasBottomEdge() {
+      const box = await page.locator("iframe").boundingBox();
+      if (!box) throw new Error("canvas iframe has no box");
+      // INSIDE the edge, not on it. A pointer on the boundary is as likely to resolve to whatever
+      // sits below the canvas, and a drag that has left the canvas is not a test of what the
+      // canvas does near its edge.
+      return {
+        x: box.x + box.width / 2,
+        y: box.y + box.height - EDGE_INSET_PX,
+      };
     },
 
     async clickToInsert() {
@@ -159,7 +342,21 @@ export function createPocDriver(page: Page): CanvasDriver {
       // dnd-kit flips aria-grabbed on the source while a drag is active, so the
       // signal is the library's own accessibility state rather than a class the
       // canvas happens to add.
-      return page.evaluate(
+      //
+      // BOTH documents, because the source can live in either. A panel drag's
+      // source is host chrome; a drag of a block already in the canvas has its
+      // source inside the iframe. Searching only the host reports `false` for a
+      // fully active canvas drag — and since that half of the engine-parity
+      // case runs under an expected-failure marker, the capability arriving
+      // would still look exactly like the capability missing.
+      if (
+        await page.evaluate(
+          () => !!document.querySelector('[aria-grabbed="true"]')
+        )
+      ) {
+        return true;
+      }
+      return canvasFrame().evaluate(
         () => !!document.querySelector('[aria-grabbed="true"]')
       );
     },
@@ -239,34 +436,23 @@ export function createPocDriver(page: Page): CanvasDriver {
       );
     },
 
-    async nearestZoneToPointer() {
-      const rects = await canvasFrame().evaluate(
-        selector =>
-          Array.from(document.querySelectorAll(selector)).map(el => {
-            const r = el.getBoundingClientRect();
-            return { y: r.y, height: r.height };
-          }),
-        DROP_ZONES
+    async zoneContainingPointer() {
+      const spans = await mappedZoneSpans();
+      // The FIRST containing zone, not the nearest of several. Gap zones do not
+      // overlap, so at most one can contain a point; taking the first keeps the
+      // answer defined if a canvas ever registers overlapping ones rather than
+      // silently picking whichever compared smaller.
+      return spans.findIndex(
+        span => pointer.y >= span.top && pointer.y <= span.bottom
       );
-      if (rects.length === 0) return -1;
+    },
 
-      const origin = await driver.frameOrigin();
-      const scale = await frameScale();
-      const pointerY = pointer.y;
-
+    async nearestZoneToPointer() {
+      const spans = await mappedZoneSpans();
       let best = -1;
       let bestDistance = Number.POSITIVE_INFINITY;
-      rects.forEach((rect, index) => {
-        // Mapped by the shared helper rather than multiplied out here. Written
-        // inline this is two numbers scaled and added, which is exactly the
-        // shape no import scan can tell from ordinary arithmetic — so it is the
-        // one that drifts silently when the mapping is corrected.
-        const centre = mapFramePointToHost(
-          { x: 0, y: rect.y + rect.height / 2 },
-          origin,
-          scale
-        ).y;
-        const distance = Math.abs(pointerY - centre);
+      spans.forEach((span, index) => {
+        const distance = Math.abs(pointer.y - span.centre);
         if (distance < bestDistance) {
           bestDistance = distance;
           best = index;
@@ -307,14 +493,23 @@ export function createPocDriver(page: Page): CanvasDriver {
       pointer = { ...point };
       await page.mouse.move(pointer.x, pointer.y);
       await page.mouse.down();
-      pointer = { x: pointer.x + DRAG_THRESHOLD_PX, y: pointer.y };
-      await page.mouse.move(pointer.x, pointer.y);
+      await driver.crossActivationThreshold();
     },
 
     async pressAt(point: Point) {
       pointer = { ...point };
       await page.mouse.move(pointer.x, pointer.y);
       await page.mouse.down();
+    },
+
+    async crossActivationThreshold() {
+      // The one place this driver performs its activation motion. `startDragAt`
+      // calls it too, so the GESTURE is single-sourced rather than only the
+      // distance: sharing the constant alone leaves two code paths that agree
+      // today and diverge the moment activation needs a different direction,
+      // several moves, or another event — and both would still compile.
+      pointer = { x: pointer.x + DRAG_THRESHOLD_PX, y: pointer.y };
+      await page.mouse.move(pointer.x, pointer.y);
     },
 
     async moveBy(dx: number, dy: number) {
@@ -576,6 +771,29 @@ export function createPocDriver(page: Page): CanvasDriver {
   return driver;
 }
 
+/**
+ * The canvas iframe, found the same way the driver finds it.
+ *
+ * Exported so a test needing to read or measure the canvas's own document asks the same question
+ * this module already answers, instead of carrying a second copy of "which frame is the canvas".
+ */
+export function canvasFrameOf(page: Page): Frame {
+  const frame = page
+    .frames()
+    .find(
+      f => f.parentFrame() === page.mainFrame() && f.url() === "about:blank"
+    );
+  if (!frame) {
+    throw new Error(
+      `canvas frame not found; frames: ${page
+        .frames()
+        .map(f => f.url())
+        .join(", ")}`
+    );
+  }
+  return frame;
+}
+
 export { DROP_ZONES, ACTIVE_ZONE, LIBRARY_ITEM };
 
 /**
@@ -587,8 +805,20 @@ export { DROP_ZONES, ACTIVE_ZONE, LIBRARY_ITEM };
  * plausible value: an acceptance test that fails with "this canvas draws its
  * indicator inside the iframe" is a target, and one that fails with `false` is
  * indistinguishable from a broken harness.
+ *
+ * A refusal is only evidence of a shortfall when the reader LOOKED. One that declines
+ * unconditionally reports the same thing for "the canvas cannot do this" and "nobody has
+ * checked", and a case asserting that refusal can never go red when the capability arrives — so
+ * it certifies whichever of the two is convenient. Every reader here either measures or names
+ * what specifically stopped it.
+ *
+ * Takes the driver rather than only the page so a drag started here uses the driver's own
+ * gesture and leaves its pointer bookkeeping correct for whatever moves next.
  */
-export function createPocChromeReader(page: Page): CanvasChromeReader {
+export function createPocChromeReader(
+  page: Page,
+  driver: CanvasDriver
+): CanvasChromeReader {
   return {
     async readIndicators() {
       // Counted in BOTH documents, because the requirement is one claim: one
@@ -614,30 +844,175 @@ export function createPocChromeReader(page: Page): CanvasChromeReader {
       return { count: inHost + inFrame, host: "document" as const };
     },
 
-    readsInvalidTarget(): Promise<boolean> {
-      throw new CanvasCapabilityError(
-        "this canvas shows nothing over an illegal target, so there is no " +
-          "invalid state to read; absence of an indicator is not a state"
-      );
+    async readsInvalidTarget(): Promise<boolean> {
+      // The overlay first, and it THROWS rather than answering. `false` here would mean "this
+      // canvas shows nothing over an illegal target", and a drag that never started produces the
+      // same nothing — so a harness fault would be reported as the shortfall this reader exists to
+      // detect, which is the one confusion it must not make.
+      const overlay = page.locator(DRAG_OVERLAY);
+      if ((await overlay.count()) === 0) {
+        throw new Error(
+          "no drag overlay is on screen, so there is no drag whose target could be invalid"
+        );
+      }
+      // Marked AND worded. The marker alone is a state the canvas draws for itself; what the
+      // requirement asks for is something the author can read, and the two break independently.
+      //
+      // WAITED FOR, not counted. `count()` resolves against the DOM as it stands, and the two
+      // things this reader correlates are written by different systems: the active zone that got
+      // the drag here is a dnd-kit attribute write on an element inside the canvas frame, while
+      // the marker is a React commit in the host document. They land in either order, so an
+      // immediate read reports a refusal that has not rendered yet as no refusal at all — a
+      // canvas defect, from a race.
+      //
+      // The wait is bounded, and the bound is the honest instrument here: nothing signals "this
+      // canvas has decided and the answer is no", so a permitted target is only distinguishable
+      // from a slow refusal by having stayed unmarked for longer than a refusal takes to draw.
+      // It errs toward WAITING — a slow machine costs the timeout rather than a false verdict.
+      const marked = await overlay
+        .locator(REFUSED)
+        .waitFor({ state: "attached", timeout: REFUSAL_RENDER_MS })
+        .then(() => true)
+        .catch(() => false);
+      if (!marked) return false;
+      const said = await overlay.locator(LIVE_REGION).innerText();
+      return said.trim().length > 0;
     },
 
-    canvasScrollTop(): Promise<number> {
-      throw new CanvasCapabilityError(
-        "this canvas does not autoscroll, so its scroll offset during a drag " +
-          "reports nothing about a behaviour it does not have"
-      );
+    async canvasScroll(): Promise<{ top: number; max: number }> {
+      // The FRAME's own document. The host wrapper around the iframe has `overflow: auto` and is
+      // the obvious thing to watch, and it never moves: the iframe is sized to the wrapper, so
+      // the document that overflows is the one inside it. Measured — during a drag held at the
+      // edge the frame document travelled 3192px while the wrapper stayed at 0 — and a reader
+      // pointed at the wrapper would report "no autoscroll" about a canvas that is scrolling.
+      return canvasFrameOf(page).evaluate(() => {
+        const el = document.scrollingElement;
+        if (!el) {
+          throw new Error(
+            "the canvas frame has no scrolling element, so its scroll offset cannot be read"
+          );
+        }
+        return {
+          top: el.scrollTop,
+          // The bound the requirement is about. `scrollTop` alone cannot distinguish autoscroll
+          // stopping because it reached the end from autoscroll stopping for any other reason.
+          max: Math.max(0, el.scrollHeight - el.clientHeight),
+        };
+      });
     },
 
-    startDragOfBlock(id: string): Promise<void> {
-      throw new CanvasCapabilityError(
-        `this canvas offers no drag for a block already placed in it, so ` +
-          `"${id}" cannot be picked up; only the insert panel is draggable`
+    async startDragOfBlock(id: string): Promise<void> {
+      // Through the DRIVER's own gesture, not a second one written here. `startDragAt` records
+      // the pointer it leaves behind, and every later `moveBy` is relative to that record — so a
+      // drag started with a bare `page.mouse` here would begin correctly and then move from
+      // wherever the driver last thought the pointer was, which is a harness fault that reads as
+      // the canvas resolving the wrong target.
+      // Matched by comparing the ATTRIBUTE VALUE, never by interpolating the id into a
+      // selector. Block validation requires only a nonempty string, so an imported id
+      // carrying `"` or `]` either makes the selector invalid or silently changes what it
+      // matches — the second being the dangerous one, since it drags the wrong node while
+      // looking like it worked.
+      const handle = await canvasFrameOf(page).evaluateHandle(
+        ([attribute, wanted]) =>
+          [...document.querySelectorAll(`[${attribute}]`)].find(
+            el => el.getAttribute(attribute) === wanted
+          ) ?? null,
+        ["data-nx-id", id] as const
       );
+      const box = await handle.asElement()?.boundingBox();
+      // Refused only when the block is genuinely absent, which is a fixture fault rather than a
+      // canvas shortfall — and named as one, so it is not read as the capability being missing.
+      if (!box) {
+        throw new Error(
+          `no block with id "${id}" is laid out in the canvas, so there is nothing to pick up`
+        );
+      }
+      await driver.startDragAt({
+        x: box.x + box.width / 2,
+        y: box.y + box.height / 2,
+      });
     },
 
-    undoDepth(): Promise<number> {
+    async draggingBlockId(): Promise<string | null> {
+      // The block's OWN id, read from the element the canvas marks as grabbed, so a caller
+      // can assert WHICH block moved rather than that something did. Matched by comparing
+      // attribute values rather than by building a selector from an id, for the same reason
+      // the drag itself is: an id is data, and one carrying selector syntax would otherwise
+      // change what is matched.
+      //
+      // Both documents, because a panel drag's source is host chrome while a placed block's
+      // is inside the frame.
+      const read = async (where: Frame | Page) =>
+        where.evaluate(attribute => {
+          const grabbed = document.querySelector('[aria-grabbed="true"]');
+          if (!grabbed) return null;
+          // The marked element may be the block itself or a wrapper inside it, so the id is
+          // taken from the nearest enclosing node that carries one.
+          return (
+            grabbed.closest(`[${attribute}]`)?.getAttribute(attribute) ?? null
+          );
+        }, "data-nx-id");
+      return (await read(page)) ?? (await read(canvasFrameOf(page)));
+    },
+
+    async undoDepth(): Promise<number> {
+      // LOOKED FOR, then refused — never refused on the assumption that it is absent. A
+      // reader that declines unconditionally reports the same thing for "there is no seam"
+      // and "nobody checked", so the assertion guarding it in the acceptance suite keeps
+      // passing on the day the seam arrives, which is the one moment it exists to catch.
+      //
+      // BOTH documents, for the same reason `isDragging` reads both: the editor chrome is
+      // host-side and the canvas is in the frame, and which of them would publish this has
+      // not been decided. Searching one would refuse about a seam that exists in the other.
+      // EVERY publisher in both documents, not the first one found. Preferring one document
+      // over the other lets a stale host depth of 0 mask a frame depth going 0 -> 1, and the
+      // acceptance point then reports that a drop created no undo entry; taking the first
+      // match inside one document hides a duplicate the same way. The contract is ONE
+      // publisher, so more than one is an ambiguous count and refusing is the honest answer.
+      const read = async (where: Frame | Page) =>
+        where.evaluate(
+          ([selector, attribute]) =>
+            [...document.querySelectorAll(selector)].map(el =>
+              el.getAttribute(attribute)
+            ),
+          [UNDO_DEPTH_SELECTOR, UNDO_DEPTH_ATTR] as const
+        );
+      const all = [...(await read(page)), ...(await read(canvasFrameOf(page)))];
+      if (all.length > 1) {
+        throw new Error(
+          `${String(all.length)} elements publish ${UNDO_DEPTH_SELECTOR} across the host and ` +
+            "canvas documents; exactly one may, so which count is authoritative is undecidable"
+        );
+      }
+      const published = all[0] ?? null;
+
+      if (published !== null) {
+        // A seam that publishes something unreadable is a DEFECT in the seam, not a canvas
+        // that lacks undo — so it fails rather than degrading to the capability refusal
+        // below, which would hide a broken seam behind a message about a missing one.
+        // The WHOLE string, not a prefix. `Number.parseInt` stops at the first character it
+        // cannot use, so `1junk` reads as 1 and `1.5` as 1 — and a seam publishing `1junk`
+        // then `2junk` reports the delta of one that B-9 requires while remaining malformed.
+        // A count is also never negative, so the contract is asserted rather than approximated.
+        const depth = /^\d+$/.test(published.trim())
+          ? Number.parseInt(published.trim(), 10)
+          : Number.NaN;
+        if (!Number.isFinite(depth)) {
+          throw new Error(
+            `the undo-depth seam published ${JSON.stringify(published)}, which is not a count`
+          );
+        }
+        return depth;
+      }
+
+      // The editor DOES keep history — a bounded past/future in its store — so the message
+      // names the missing SEAM rather than a missing feature, and quotes the attribute that
+      // would satisfy it. Reporting this as absent undo would send someone to build what is
+      // already there.
       throw new CanvasCapabilityError(
-        "this canvas keeps no undo history, so there is no depth to count"
+        `this canvas publishes no undo depth a test can read (no \`${UNDO_DEPTH_SELECTOR}\` ` +
+          "in either document); the editor keeps a bounded history in its store, so the gap " +
+          "is an observable seam rather than the feature"
       );
     },
   };

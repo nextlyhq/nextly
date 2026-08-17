@@ -5,13 +5,58 @@ import type { ListResponse } from "../lib/api/response-types";
  * Real permission entry shape from the backend.
  * Distinct from the mock `Permission` type in `entities.ts` which is UI-specific.
  */
-export interface ApiPermissionEntry {
+/**
+ * The fields EVERY permission response carries.
+ *
+ * `getPermissionById` selects exactly these plus `category`, so a consumer of
+ * a single permission may rely on them and on nothing else. The list rows carry
+ * more, and {@link ApiPermissionEntry} derives from this rather than restating
+ * it — one shape declared once, widened where the wire is actually wider.
+ */
+export interface ApiPermissionBase {
   id: string;
   name: string;
   slug: string;
   action: string;
   resource: string;
   description: string | null;
+  /** Grouping label the settings page reads; absent unless the row sets one. */
+  category?: string;
+}
+
+/**
+ * A row from the permission LIST endpoint.
+ *
+ * The extra members are list-only: `PermissionService.listPermissions` joins
+ * and maps them, while `getPermissionById` selects the base columns alone. A
+ * single type covering both would promise these on a response that never
+ * carries them — `undefined` at runtime behind a type that says otherwise.
+ */
+export interface ApiPermissionEntry extends ApiPermissionBase {
+  /**
+   * The plugin that owns this permission, or null for one the seeder owns.
+   *
+   * Provenance rather than a naming convention: a plugin names its own
+   * resource, so a permission cannot be attributed by inspecting its resource
+   * string. This is the field that decides which plugin a permission belongs
+   * to, and it is what the rows record — as opposed to what a configuration
+   * declares, which cannot see Schema Builder entities at all.
+   */
+  owner: string | null;
+  /**
+   * Heading within the owner's section; null when the owner set none.
+   *
+   * Named for the field the endpoint SERIALIZES. `PermissionService`
+   * `listPermissions` maps its columns to `group` and `orphaned` and returns
+   * that result directly, so a DTO naming the column instead would declare
+   * properties that never cross the wire — always `undefined` at runtime, while
+   * hiding the ones that do arrive.
+   */
+  group: string | null;
+  /** True once the declaring package stopped declaring it. */
+  orphaned: boolean;
+  /** True for a permission the admin should warn before granting. */
+  danger: boolean;
 }
 
 // Canonical pagination meta is { total, page, limit, totalPages, hasNext,
@@ -41,12 +86,23 @@ export const fetchPermissionsFromApi = async (options?: {
   action?: string;
   limit?: number;
   page?: number;
+  /**
+   * Ask for permissions nothing declares any more, so they can be shown MARKED
+   * rather than silently omitted.
+   *
+   * Off unless requested, and the parameter is omitted entirely rather than
+   * sent as `false`: the server hides them by default, so a caller offering
+   * permissions as choices needs to do nothing to keep offering only the ones
+   * that still enforce something.
+   */
+  includeOrphaned?: boolean;
 }): Promise<PermissionListResult> => {
   const params = new URLSearchParams();
 
   if (options?.search) params.set("search", options.search);
   if (options?.resource) params.set("resource", options.resource);
   if (options?.action) params.set("action", options.action);
+  if (options?.includeOrphaned) params.set("includeOrphaned", "true");
   params.set("limit", String(options?.limit ?? 200));
   params.set("page", String(options?.page ?? 1));
   params.set("sortBy", "resource");

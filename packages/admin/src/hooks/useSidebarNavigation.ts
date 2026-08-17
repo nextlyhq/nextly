@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 
 import type { NavigationItem } from "../constants/navigation";
+import { isUnder } from "../lib/routing";
 
 /**
  * Custom hook to manage sidebar navigation state
@@ -61,9 +62,11 @@ export function useSidebarNavigation(
 
     if (exactMatch) return false;
 
-    // Sub-item match (e.g., /admin/users/create should match /admin/users)
-    // Ensure we match whole segments to avoid /admin/user matching /admin/users
-    return path.startsWith(target + "/") || path === target;
+    // Sub-item match (e.g., /admin/users/create should match /admin/users),
+    // asked of the shared helper rather than restated: the sidebar's category
+    // classifier answers the same question, and two spellings of "is this
+    // route under that one" agree until one of them is adjusted.
+    return isUnder(path, target);
   };
 
   return {

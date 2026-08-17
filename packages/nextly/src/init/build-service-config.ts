@@ -70,6 +70,15 @@ export function buildServiceConfig(
     const { config: nextlyConfig, ...rest } = providedConfig;
     Object.assign(serviceConfig, rest);
 
+    // AFTER the caller spread, and derived only from the nested config, so a
+    // caller cannot set it directly. It is internal wiring, not an option: the
+    // gate it opens must match what `runProdMigrationsIfEnabled` will actually
+    // do, and that reads `config.db.runMigrationsOnBoot`. A caller passing a
+    // conflicting top-level value would open no gate while migrations ran
+    // anyway — the exact unguarded window this exists to close.
+    serviceConfig.runMigrationsOnBoot =
+      nextlyConfig?.db?.runMigrationsOnBoot === true;
+
     // If storagePlugins not explicitly provided, use from nextly.config.ts
     if (!serviceConfig.storagePlugins && nextlyConfig?.storage) {
       serviceConfig.storagePlugins = nextlyConfig.storage;
@@ -193,6 +202,17 @@ export function buildServiceConfig(
       nextlyConfig?.auditRetention !== undefined
     ) {
       serviceConfig.auditRetention = nextlyConfig.auditRetention;
+    }
+
+    // Delivery-log retention — carried for the same reason, and with the same
+    // consequence if it is not: the email registration reads it to decide
+    // whether to offer a sweep, and an uncarried policy leaves the table
+    // unswept while the configuration reads as enforced.
+    if (
+      serviceConfig.emailRetention === undefined &&
+      nextlyConfig?.emailRetention !== undefined
+    ) {
+      serviceConfig.emailRetention = nextlyConfig.emailRetention;
     }
 
     // Audit seam — carry the resolved flag through so the webhook registration

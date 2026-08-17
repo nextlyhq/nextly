@@ -33,8 +33,193 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Decides whether this commit can affect any of the jobs below, so a change
+  # that provably cannot does not occupy a runner for forty-five minutes.
+  #
+  # The filter lives HERE rather than under `on:`, and the difference is not
+  # stylistic. A workflow skipped by `on.paths-ignore` never creates its checks
+  # at all, so the moment any of these becomes a REQUIRED check, a documentation
+  # pull request waits for a status that is never going to be reported. A job
+  # skipped by `if:` reports `skipped`, which branch protection accepts. This
+  # workflow is the likeliest of all of them to be made required, so it takes
+  # the form that survives that being switched on.
+  #
+  # It is an EXCLUSION list, and that direction is the whole safety property. An
+  # inclusion list answers "does this change match something I know needs
+  # testing", so a package nobody remembered to add is silently untested — the
+  # failure is invisible and arrives as a green tick. An exclusion list answers
+  # "is every changed file one I can prove is inert", so anything unrecognised
+  # runs the full suite. Wrong guesses cost minutes instead of coverage.
+  changes:
+    name: Decide what this commit can affect
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      inert: ${{ steps.decide.outputs.inert }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Both refs of the comparison have to be present. A shallow clone
+          # leaves the merge base missing, `git diff` fails, and the fallback
+          # below runs everything — correct, but it would make this job a
+          # permanent no-op that still looks like it is filtering.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Decide
+        id: decide
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -uo pipefail
+
+          # Anything this job cannot read, it does not get to skip. Every early
+          # exit here sets `inert=false`, so a broken comparison costs a full
+          # run rather than silently certifying a commit nobody examined.
+          fail_open() {
+            echo "inert=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Full CI::$1"
+            exit 0
+          }
+
+          if [ -z "$BASE_SHA" ] || [ -z "$HEAD_SHA" ]; then
+            fail_open "no base or head SHA for ${{ github.event_name }}; running everything."
+          fi
+          # A first push to a branch reports an all-zero `before`, and a force
+          # push can leave a base that is no longer fetchable.
+          if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            fail_open "base $BASE_SHA is not present; running everything."
+          fi
+
+          # On a pull request, compare against the MERGE BASE rather than the
+          # base branch's current tip. `pull_request.base.sha` moves as `main`
+          # advances, so diffing from it reports every commit `main` gained
+          # since the branch point as though this pull request had made it.
+          # Measured here: a change touching one `.claude/` file read as six
+          # files and ran the full matrix. The error is in the safe direction —
+          # it can only ever run MORE — but in a repository with several
+          # branches active it fires on nearly every pull request, which is the
+          # whole cost this job exists to remove.
+          #
+          # A push already carries the right value in `before`: the previous tip
+          # of that branch, which is the merge base by construction.
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            MERGE_BASE=$(git merge-base "$BASE_SHA" "$HEAD_SHA" 2>/dev/null) || \
+              fail_open "no merge base for $BASE_SHA..$HEAD_SHA; running everything."
+            [ -n "$MERGE_BASE" ] || fail_open "empty merge base; running everything."
+            BASE_SHA="$MERGE_BASE"
+          fi
+
+          CHANGED=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" 2>/dev/null) || \
+            fail_open "could not diff $BASE_SHA..$HEAD_SHA; running everything."
+
+          # No files changed is not evidence of inertness — it is the shape of a
+          # comparison that asked the wrong question.
+          if [ -z "$CHANGED" ]; then
+            fail_open "diff listed no files; running everything."
+          fi
+
+          # Paths that cannot change what any job below builds, runs or packs.
+          # Every entry is a CLAIM that nothing here reads it, checked rather
+          # than assumed, and a wrong entry removes real coverage rather than
+          # merely costing minutes.
+          #
+          # Three near-misses are why the list is this narrow, and each one
+          # looked obviously inert until the repository was searched:
+          #
+          #   *.md anywhere  — `packages/ui/README.md` and
+          #                    `packages/ui/docs/plugin-ui-authoring.md` are
+          #                    READ by portal-docs, authoring-doc-tokens and
+          #                    radius-tier-contract, which assert the docs and
+          #                    `theme.css` agree. Only ROOT-level `*.md` is
+          #                    inert; a nested one can fail a test.
+          #   .changeset/    — the changeset check a few steps below diffs
+          #                    `.changeset/*.md` and pipes it through
+          #                    `scripts/release/check-changesets.mjs`.
+          #   docs/          — safe, but only after confirming every hit for a
+          #                    `docs/` read resolved to `packages/ui/docs/`
+          #                    rather than to this one.
+          #
+          # `.github/**` is absent on purpose: this workflow lives there.
+          INERT='^(docs/|\.claude/|[^/]*\.md$|LICENSE$|\.editorconfig$|\.vscode/)'
+
+          NOT_INERT=$(printf '%s\n' "$CHANGED" | grep -vE "$INERT" || true)
+
+          {
+            echo "### CI scope"
+            echo
+            echo "\`$BASE_SHA\` → \`$HEAD_SHA\`, $(printf '%s\n' "$CHANGED" | wc -l | tr -d ' ') file(s) changed."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -z "$NOT_INERT" ]; then
+            # Named individually rather than counted. A summary saying "12 files
+            # skipped" is unreadable as evidence; the list is what lets someone
+            # notice a path that should never have been on it.
+            {
+              echo
+              echo "Every changed file is inert, so the build, test, e2e and"
+              echo "scaffold jobs were skipped. Files:"
+              echo
+              printf '%s\n' "$CHANGED" | sed 's/^/- `/;s/$/`/'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "inert=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          {
+            echo
+            echo "Running in full. First files requiring it:"
+            echo
+            printf '%s\n' "$NOT_INERT" | head -20 | sed 's/^/- `/;s/$/`/'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "inert=false" >> "$GITHUB_OUTPUT"
+
+  comments:
+    name: Comment convention (describes code, not process)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # Deliberately NOT gated on the inert decision, and not a dependent of the
+    # build job. Its scope is DEFAULT_ROOTS in the script, which starts at the
+    # repository root, so it covers paths the inert filter treats as unable to
+    # affect anything - `.claude/` among them. A source file added there would
+    # otherwise be in the checker's scope while the step that runs it was
+    # skipped, which is coverage on paper only.
+    #
+    # It needs no build and no database: the scan reads tracked files and one
+    # JSON record, so running it unconditionally costs seconds.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Setup Node
+        uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # The comments that predate this check are recorded in
+      # scripts/comment-convention-allowlist.json with a per-file count and one
+      # digest per offence. That record is what lets this run blocking rather
+      # than advisory, and it may only shrink: adding an entry to silence a new
+      # comment is the one use it does not have.
+      - name: Comment convention
+        run: pnpm check:comments
+
   ci:
     name: Lint / Typecheck / Test / Build
+    needs: changes
+    if: needs.changes.outputs.inert != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -103,6 +288,23 @@ jobs:
       - name: Storage-spelling gate (field-group storage format)
         run: pnpm check:storage-format-literals
 
+      # `pnpm dev` refuses to start when the concurrency limit written into the
+      # root scripts stops exceeding the number of persistent `dev` tasks, and
+      # that count grows whenever any package gains a `dev` script. Nothing else
+      # here can see it: the failure is in the launcher, so every build, test and
+      # type check stays green while the workspace dev command is dead.
+      #
+      # Static on purpose. Actually running `turbo run dev` would mean starting
+      # twenty long-running watchers to observe a property that is decided
+      # before any of them runs.
+      - name: Dev concurrency gate (persistent task count)
+        run: pnpm check:dev-concurrency
+
+      # Comments describe the code, never the process that produced it. A comment
+      # narrating a review or naming a tool compiles, lints and reads as insight,
+      # so nothing else in this repository can see it — and it decays into a
+      # reference to a conversation nobody can retrieve.
+      #
       # The drizzle-v1 migration's own safety net (review-driven: these
       # suites previously executed in NO CI job because the `nextly`
       # package's full test task carries a pre-existing failing baseline).
@@ -158,7 +360,7 @@ jobs:
       # `turbo run test` never reaches it. Its own suite runs here: a defect in
       # the release-notes builder only surfaces during a real publish, after the
       # packages are already on npm. Needs no build, runs in milliseconds.
-      - name: Release script tests
+      - name: Script tests
         run: pnpm test:scripts
 
       # The published packages version in lockstep, so a changeset that names
@@ -321,6 +523,12 @@ jobs:
   #
   # The suite brings up its own playground on its own port, against its own
   # throwaway sqlite file. Nothing here touches a database anyone wanted.
+  # This job and the two below inherit the scope decision through `ci` rather
+  # than repeating its condition: a job whose `needs` was skipped is skipped
+  # too. That is load-bearing, so it survives being read — adding `if:
+  # always()` or `if: !cancelled()` here to make the job run after a FAILING
+  # `ci` also makes it run after a SKIPPED one, which restores the full cost on
+  # every documentation change.
   e2e:
     name: Browser tests
     needs: [ci]
@@ -476,3 +684,166 @@ jobs:
           # avoids the multi-minute pnpm install during the smoke check.
           npm exec --yes --package="$tarball" -- create-nextly-app smoke-app --template blank --skip-install --yes
           test -f smoke-app/package.json && echo "scaffold ok"
+
+      # The generated scripts and the CLI's command set live in two different
+      # packages, and nothing compared them: every project shipped a
+      # `db:migrate:reset` calling a command `nextly` has never registered, which
+      # failed the first time a user ran it while every build stayed green.
+      #
+      # It runs HERE rather than in `scaffold-build.yml` because this job is
+      # reached by a change to EITHER side. That workflow triggers on the
+      # scaffolder and the templates, so a pull request that removes or renames a
+      # CLI command — the other half of the contract — would never run it.
+      - name: Check the generated scripts name real CLI commands
+        shell: bash
+        run: |
+          node scripts/check-scaffold-cli-scripts.mjs \
+            /tmp/scaffold-test/smoke-app \
+            packages/nextly/dist/cli/nextly.mjs
+  # The `dev` script of `packages/ui` starts TWO watchers, and the shape it used
+  # before — `a --watch & b --watch & wait` — is POSIX. `cmd.exe` treats `&` as a
+  # SEQUENTIAL separator and has no `wait`, so on Windows the first watcher held
+  # the line and the second never ran. Nothing errored: a contributor saw a
+  # running dev server, a healthy client bundle, and stale server-safe artifacts
+  # beside it.
+  #
+  # A unit test now refuses that construct in any workspace script, which stops
+  # it being reintroduced. It cannot show that the REPLACEMENT works, and the
+  # replacement is where the risk moved: a runner that spawns one watcher
+  # correctly and drops the other fails exactly as silently as the shell did.
+  #
+  # So this runs the real script on the platform that had the bug and requires
+  # BOTH watchers to produce output. Windows is the subject; ubuntu is the
+  # control, because a check that fails on every platform says nothing about
+  # Windows in particular.
+  dev-script-smoke:
+    name: Dev script starts every watcher (${{ matrix.os }})
+    needs: [ci]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The watchers compile this package's own sources, but its workspace
+      # dependencies still have to exist for the client entry to resolve them.
+      - name: Build the dependencies of the UI package
+        run: pnpm --filter @nextlyhq/ui^... build
+
+      # `shell: bash` on every leg, so one script covers all of them — Git Bash
+      # ships on the Windows runners. The dev script is still launched through
+      # pnpm, which is what puts `node_modules/.bin` on PATH; running the runner
+      # directly would fail to find `tsup` for reasons that have nothing to do
+      # with the property under test.
+      #
+      # `dist` is removed first so a file found afterwards was produced by THIS
+      # run. Without that, a previous build satisfies the assertion and the job
+      # passes with no watcher having started at all.
+      - name: Start the dev script and require every watcher to build
+        shell: bash
+        run: |
+          cd packages/ui
+          rm -rf dist
+          pnpm dev > /tmp/dev.log 2>&1 &
+          dev_pid=$!
+
+          # Wait for the artifacts to exist, which is only enough to take a baseline from. It is
+          # NOT evidence that anything is watching: tsup writes `dist` before it arms its file
+          # watcher, so an edit made in this gap is absorbed by chokidar's initial scan and never
+          # reported. The probe below is what establishes readiness.
+          for _ in $(seq 1 120); do
+            if [ -f dist/index.mjs ] && [ -f dist/color.mjs ]; then break; fi
+            sleep 1
+          done
+
+          # One artifact per watcher: `index.mjs` is the client config's, and
+          # `color.mjs` belongs to the server-safe config — the one the broken
+          # script never reached.
+          missing=""
+          [ -f dist/index.mjs ] || missing="$missing client(dist/index.mjs)"
+          [ -f dist/color.mjs ] || missing="$missing server-safe(dist/color.mjs)"
+
+          # Producing the artifacts is not the claim. What separates a watcher from a one-shot
+          # build is that it REBUILDS, so a source is edited and the artifact it produces is
+          # required to change.
+          #
+          # BOTH configs are probed through a source only they own. Editing the server-safe entry
+          # alone would leave the client watcher's argument uncovered: the root barrel re-exports
+          # colour, so that edit rebuilds `index.mjs` as a side effect and a client command
+          # regressed to a one-shot build would still be reported as watching.
+          #
+          # An added export rather than a comment: tsup strips comments, so a comment-only edit
+          # leaves the output byte-identical whether or not a rebuild ran, and the probe could not
+          # detect one in either direction.
+          before_client=$(cksum dist/index.mjs | awk '{print $1"-"$2}')
+          before_server=$(cksum dist/color.mjs | awk '{print $1"-"$2}')
+
+          # The edit is REPEATED until a rebuild is seen, rather than made once against a signal
+          # that claims the watcher is ready. tsup logs "Watching for changes" before it expands
+          # the watch path and constructs chokidar, so that line is a proxy: on a slow runner both
+          # configs can log it while neither is listening, and a single edit made then is swallowed
+          # by the initial scan. Retrying removes the proxy — the first rebuild IS the readiness
+          # signal, and nothing has to be assumed about when it arrives.
+          #
+          # Each probe carries the attempt number so repeated appends stay distinct declarations
+          # rather than a redeclaration error that would fail the build for the wrong reason.
+          client_rebuilt=no
+          server_rebuilt=no
+          for i in $(seq 1 45); do
+            [ "$client_rebuilt" = "no" ] &&
+              printf '\nexport const __clientWatcherProbe%s = "probe";\n' "$i" >> src/index.ts
+            [ "$server_rebuilt" = "no" ] &&
+              printf '\nexport const __serverWatcherProbe%s = "probe";\n' "$i" >> src/lib/color/index.ts
+            sleep 2
+            if [ "$(cksum dist/index.mjs | awk '{print $1"-"$2}')" != "$before_client" ]; then
+              client_rebuilt=yes
+            fi
+            if [ "$(cksum dist/color.mjs | awk '{print $1"-"$2}')" != "$before_server" ]; then
+              server_rebuilt=yes
+            fi
+            if [ "$client_rebuilt" = "yes" ] && [ "$server_rebuilt" = "yes" ]; then break; fi
+          done
+
+          # Liveness AFTER the rebuild, which is a different question from liveness before it: a
+          # watcher that serves one change and then dies leaves contributors editing against
+          # artifacts that stopped updating, and every check above has already passed by then.
+          # The `kill` below is unconditional and succeeds either way, so this has to be asked
+          # first or the answer is lost.
+          alive=yes
+          kill -0 "$dev_pid" 2>/dev/null || alive=no
+
+          git checkout -- src/index.ts src/lib/color/index.ts
+          kill "$dev_pid" 2>/dev/null || true
+
+          # A missing artifact fails here too. Without it, a watcher that produced nothing at all
+          # leaves its `before` checksum empty, every later read differs from it, and absence
+          # reports itself as a successful rebuild.
+          if [ -n "$missing" ] || [ "$client_rebuilt" = "no" ] || [ "$server_rebuilt" = "no" ] || [ "$alive" = "no" ]; then
+            [ -n "$missing" ] && echo "No artifact from:$missing"
+            [ "$alive" = "no" ] && echo "The dev script exited after rebuilding, so its artifacts stop updating from here."
+            [ "$client_rebuilt" = "no" ] && echo "Editing src/index.ts did not change dist/index.mjs, so the client command built once rather than watching."
+            [ "$server_rebuilt" = "no" ] && echo "Editing src/lib/color/index.ts did not change dist/color.mjs, so the server-safe command built once rather than watching."
+            echo "--- dev script output ---"
+            cat /tmp/dev.log
+            exit 1
+          fi
+          echo "Both commands produced their output, and an edit rebuilt each one."

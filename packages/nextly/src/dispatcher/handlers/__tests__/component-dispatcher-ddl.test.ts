@@ -21,6 +21,9 @@ vi.mock("../../helpers/di", () => ({
   getComponentRegistryFromDI: vi.fn(),
   getFieldGroupMetadataServiceFromDI: vi.fn(),
   getAdapterFromDI: vi.fn(),
+  // The apply route takes the schema-change exclusion, which reports a skipped lock through this.
+  // Omitted, the mocked module supplies no such export and the handler throws before it starts.
+  getLoggerFromDI: vi.fn(() => undefined),
   // Reached by the companion reconciliation a localized create runs. Omitted, calling it throws and
   // the handler catches that as a companion-provisioning failure — so the assertions below would
   // describe a FAILED migration while passing.
@@ -35,7 +38,10 @@ const executed: string[] = [];
  * passes through `executeQuery`.
  */
 function makeAdapter(dialect: "postgresql" | "mysql" | "sqlite") {
-  return {
+  // A field-group schema change runs inside the storage migration's lock, so the double has to
+  // answer the lock's reads and writes as well as its own. Added rather than stubbed: a surface
+  // that let every claim succeed would certify an exclusion that is not there.
+  return withMigrationLockSurface({
     dialect,
     getCapabilities: () => ({ dialect }),
     // Answers the way a fresh create finds the database: the main table is there once its CREATE
@@ -48,7 +54,7 @@ function makeAdapter(dialect: "postgresql" | "mysql" | "sqlite") {
       return [];
     }),
     getDrizzle: () => ({}),
-  };
+  });
 }
 
 let adapter: ReturnType<typeof makeAdapter>;
@@ -69,6 +75,10 @@ vi.mock("../../../di/container", () => ({
   },
 }));
 
+import {
+  isMigrationLockStatement,
+  withMigrationLockSurface,
+} from "../../../domains/field-groups/migration/__tests__/helpers/migration-lock-double";
 import { FieldGroupMetadataService } from "../../../domains/field-groups/services/field-group-metadata-service";
 import type { FieldGroupRegistryService } from "../../../services/field-groups/field-group-registry-service";
 import type { Logger } from "../../../shared/types";
@@ -230,5 +240,157 @@ describe("createComponent — what the request forwards into the DDL", () => {
     // CREATE INDEX that follows, so it passes even when the column itself is gone — verified by
     // removing the column definition and watching that weaker assertion stay green.
     expect(sql).toMatch(/"_parent_id"\s+\w+.*NOT NULL/i);
+  });
+});
+
+/**
+ * `diverged` means the tables moved and the row recording it did not, so the stored definition
+ * describes the previous shape. Planning the next change from that shape is the retry the state
+ * exists to declare unsafe — and the state is only a control if EVERY route that moves storage
+ * asks it.
+ *
+ * 🔴 These exist because the refusal was added to `updateFieldGroup` and this route was left open.
+ * Measured at the time: `grep -c diverged` over the apply handler returned ZERO while the service's
+ * own guard read as complete. One transport enforcing and another not is worse than neither, since
+ * the operator is told the edit is unsafe and then handed a door that performs it.
+ */
+describe("a diverged field group and the routes that move its storage", () => {
+  const diverged = {
+    slug: "hero",
+    locked: false,
+    migrationStatus: "diverged",
+    fields: [],
+    schemaVersion: 3,
+  };
+
+  it("refuses to apply schema changes", async () => {
+    // Shared across the file, so it carries whatever earlier tests ran unless it is cleared here.
+    executed.length = 0;
+    adapter = makeAdapter("postgresql");
+    vi.mocked(getAdapterFromDI).mockReturnValue(
+      adapter as unknown as ReturnType<typeof getAdapterFromDI>
+    );
+    const registry = wireRegistry();
+    registry.getComponent.mockResolvedValue(diverged);
+
+    await expect(
+      dispatchComponents(
+        "applyComponentSchemaChanges",
+        { slug: "hero" },
+        { fields: [], confirmed: true, schemaVersion: 3 }
+      )
+    ).rejects.toMatchObject({
+      code: "CONFLICT",
+      logContext: { migrationStatus: "diverged" },
+    });
+
+    // 🔴 And it refused BEFORE touching the field group's storage. Asserting only the rejection
+    // would pass on a handler that ran the DDL and then threw, which is the outcome this guard
+    // exists to prevent.
+    //
+    // The lock's OWN table is excluded rather than counted: taking the exclusion is what lets the
+    // guard read a status nothing can change underneath it, so its DDL is the refusal working. It
+    // is separated with the shared identifier, so this cannot disagree with what the lock considers
+    // its own.
+    expect(executed.filter(sql => !isMigrationLockStatement(sql))).toEqual([]);
+    // Positive control: the lock WAS taken, so the exclusion above is a real one rather than an
+    // empty list that would satisfy the assertion just as well.
+    expect(executed.some(isMigrationLockStatement)).toBe(true);
+  });
+
+  /**
+   * Refusing is only half of it. `updateFieldGroup` commits its companion DDL, then persists the
+   * row and the divergence marker as separate steps, so a status read taken OUTSIDE the exclusion
+   * answers for an instant that has already passed: it can see the old value, pass the guard, and
+   * start a second apply from a definition the tables have moved past.
+   *
+   * 🔴 Pinned as ORDERING rather than as the race. Holding the lock removes the interleaving
+   * instead of detecting it, so no fixture can exhibit the bad outcome with the fix in place — the
+   * observable difference is whether the exclusion is held AT THE MOMENT the status is read.
+   */
+  it("reads the status while holding the exclusion, not before taking it", async () => {
+    executed.length = 0;
+    adapter = makeAdapter("postgresql");
+    vi.mocked(getAdapterFromDI).mockReturnValue(
+      adapter as unknown as ReturnType<typeof getAdapterFromDI>
+    );
+    const registry = wireRegistry();
+
+    // Sampled INSIDE the read the guard decides on, which is the only place the question means
+    // anything. Asserting after the request would pass on a handler that read the status first and
+    // took the lock afterwards.
+    let ownerWhenStatusRead: string | null = null;
+    registry.getComponent.mockImplementation(() => {
+      ownerWhenStatusRead = adapter.migrationLock.ownerNow();
+      return Promise.resolve(diverged);
+    });
+
+    await expect(
+      dispatchComponents(
+        "applyComponentSchemaChanges",
+        { slug: "hero" },
+        { fields: [], confirmed: true, schemaVersion: 3 }
+      )
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+
+    // Positive control: the read the assertion is about actually happened. Without it a handler
+    // that never reached `getComponent` would leave the sample at its initial value and satisfy
+    // nothing while appearing to.
+    expect(registry.getComponent).toHaveBeenCalledTimes(1);
+    expect(ownerWhenStatusRead).toMatch(/^apply schema changes to field group/);
+  });
+
+  /**
+   * Taking the exclusion is not free: with `issuesDdl` it may CREATE and seed the lock table on a
+   * database that has never had one, and it can refuse outright when a migration holds the row or
+   * the role has no DDL rights. A request that is invalid on its face must not buy any of that —
+   * the operator would be handed a permission or contention error instead of "this payload is
+   * invalid", and a rejected request would have written a table on its way out.
+   */
+  it.each([
+    ["unconfirmed", { fields: [], confirmed: false }, /must be confirmed/],
+    ["missing fields", { confirmed: true }, /fields is required/],
+  ])(
+    "rejects an %s request without taking the lock",
+    async (_name, payload, reason) => {
+      executed.length = 0;
+      adapter = makeAdapter("postgresql");
+      vi.mocked(getAdapterFromDI).mockReturnValue(
+        adapter as unknown as ReturnType<typeof getAdapterFromDI>
+      );
+      const registry = wireRegistry();
+
+      await expect(
+        dispatchComponents(
+          "applyComponentSchemaChanges",
+          { slug: "hero" },
+          payload
+        )
+      ).rejects.toThrow(reason);
+
+      // 🔴 The REASON, not merely that it threw. Entering the exclusion first would still reject
+      // this request on a database with no lock table — with a DDL-permission or contention error
+      // that names nothing about the payload.
+      //
+      // Nothing was issued and nothing was read: no lock DDL, and the component was never fetched.
+      expect(executed).toEqual([]);
+      expect(adapter.migrationLock.ownerNow()).toBeNull();
+      expect(registry.getComponent).not.toHaveBeenCalled();
+    }
+  );
+
+  it("still lets an operator READ one, because that is how it gets reconciled", async () => {
+    adapter = makeAdapter("postgresql");
+    vi.mocked(getAdapterFromDI).mockReturnValue(
+      adapter as unknown as ReturnType<typeof getAdapterFromDI>
+    );
+    const registry = wireRegistry();
+    registry.getComponent.mockResolvedValue(diverged);
+
+    // Positive control on the pair: without this, guarding every route by slug would pass the test
+    // above while locking the operator out of the state entirely.
+    await expect(
+      dispatchComponents("getComponent", { slug: "hero" }, {})
+    ).resolves.toBeDefined();
   });
 });

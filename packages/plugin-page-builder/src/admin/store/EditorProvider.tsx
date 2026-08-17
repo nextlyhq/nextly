@@ -25,6 +25,7 @@ import {
   initialState,
   type EditorAction,
   type EditorState,
+  type PageMetadata,
 } from "./editorStore";
 
 /** Stable identity so the context value does not change on every render. */
@@ -71,6 +72,7 @@ export function EditorProvider({
   document: doc,
   draftKey,
   customCss,
+  metadata,
   remotePatterns,
   onDocumentChange,
   onCustomCssChange,
@@ -103,6 +105,11 @@ export function EditorProvider({
    */
   customCss?: string;
   /**
+   * The page's own fields at load. Supplied by the full Edit view, which shows
+   * inputs for them; the field mount has no such inputs and leaves it unset.
+   */
+  metadata?: PageMetadata;
+  /**
    * Fired whenever the document changes (skipping the initial mount) — used by the
    * field mount (`PageBuilderField`) to sync into the host react-hook-form. The full
    * Edit-view leaves this unset and persists via `SaveShell`.
@@ -113,7 +120,7 @@ export function EditorProvider({
   children: ReactNode;
 }) {
   const [state, dispatch] = useReducer(editorReducer, undefined, () =>
-    initialState(doc, customCss ?? "")
+    initialState(doc, customCss ?? "", metadata)
   );
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const firstRender = useRef(true);
@@ -130,6 +137,19 @@ export function EditorProvider({
   onDocumentChangeRef.current = onDocumentChange;
 
   // Push document changes to a host form (field mount), not on the initial mount.
+  //
+  // A load-time MIGRATION is deliberately not pushed, and the reason is worth
+  // stating because the opposite looks right. The only channel to the host form
+  // is the same one an edit uses, so pushing an upgrade nobody made marks the
+  // form dirty and arms its navigation guard on a page that was merely opened.
+  // And a push keyed to the incoming document re-fires when the host RESETS the
+  // field to a different entry, writing the previous entry's tree back over it.
+  //
+  // So the upgrade is applied to what the editor SHOWS — which is what stops the
+  // inspector rendering an old value through controls that no longer describe it
+  // — and reaches storage with the author's first real edit. Persisting it
+  // without an edit needs a write that does not mark the form dirty, which is
+  // the host form's API rather than this one's.
   useEffect(() => {
     if (firstRender.current) {
       firstRender.current = false;
@@ -162,6 +182,7 @@ export function EditorProvider({
           JSON.stringify({
             document: state.document,
             customCss: state.customCss,
+            metadata: state.metadata,
           })
         );
       } catch {
@@ -171,7 +192,7 @@ export function EditorProvider({
     return () => {
       if (timer.current) clearTimeout(timer.current);
     };
-  }, [state.document, state.customCss, state.dirty, draftKey]);
+  }, [state.document, state.customCss, state.metadata, state.dirty, draftKey]);
 
   return (
     <EditorContext.Provider

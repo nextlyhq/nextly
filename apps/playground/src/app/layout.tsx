@@ -6,29 +6,33 @@ import {
   QueryProvider,
   ThemeProvider,
 } from "@nextlyhq/admin";
-import { Geist, Geist_Mono } from "next/font/google";
+import "@fontsource-variable/geist";
+import "@fontsource-variable/geist-mono";
 import "./globals.css";
 
-// Self-hosted at build time by `next/font`, which exposes the face only as a
-// CSS variable -- the admin theme names that variable first for exactly this
-// reason. Weights are the four the design system declares; the rest would ship
-// bytes nothing renders.
-const geistSans = Geist({
-  variable: "--font-geist",
-  subsets: ["latin"],
-  display: "swap",
-  weight: ["400", "500", "600", "700"],
-});
-
-// The mono face the admin reaches for on code surfaces: the API playground
-// editor, ids, and inline code.
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-  display: "swap",
-  weight: ["400", "500"],
-});
-
+/**
+ * The faces are imported as STYLESHEETS from packages in `node_modules`, rather
+ * than fetched from fonts.googleapis.com by `next/font/google` while
+ * `next build` runs — which made every build depend on reaching a third party
+ * and fail behind a proxy, on a locked-down runner, or offline.
+ *
+ * A bare package import rather than `next/font/local` pointing INTO
+ * `node_modules`: a literal path asserts where the package physically lives,
+ * and that assertion is false under Yarn's Plug'n'Play linker (no
+ * `node_modules` at all), under npm/Yarn workspace hoisting (the package moves
+ * to the workspace root), and under pnpm's own symlinked store. An import asks
+ * the resolver instead, which is correct under every layout.
+ *
+ * The trade is `next/font`'s metric-adjusted fallback, so text can shift
+ * slightly as the face arrives. The families are bound to this app's `--font-*`
+ * variables in `globals.css`, which is what every rule downstream reads. *
+ * Importing the package root ships every subset the face offers — Latin, Latin
+ * Extended, Cyrillic, Vietnamese — but each `@font-face` carries a
+ * `unicode-range`, so a browser downloads only the subsets the page actually
+ * uses. The deployed bundle is larger than a single hand-picked file; what a
+ * reader fetches is not, and a page in Cyrillic now gets its face instead of a
+ * fallback.
+ */
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -37,7 +41,6 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable}`}
       /**
        * suppressHydrationWarning is needed to prevent hydration errors caused by
        * browser extensions (e.g., Bitwarden, password managers) that inject

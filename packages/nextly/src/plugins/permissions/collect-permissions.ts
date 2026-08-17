@@ -18,6 +18,16 @@ export interface CollectedPermission {
   /** Declaring plugin name ("app" for app-declared). Persisted on the row. */
   owner: string;
   /**
+   * Which KIND of declaration this came from, host or plugin.
+   *
+   * Carried beside `owner` rather than read out of it, because `owner` cannot
+   * answer the question: the host's sentinel is the literal string `"app"`, and
+   * a plugin may legally be named `app`. Anything grouping these by plugin would
+   * then file every host-declared permission under that plugin. Not persisted —
+   * `owner` remains the stored attribution, so no row changes shape.
+   */
+  source: "app" | "plugin";
+  /**
    * Heading within the owner's section. Defaulted here rather than left
    * undefined, so grouping never has to decide what an absent group means.
    */
@@ -98,9 +108,22 @@ export function collectCustomPermissions(
 
   // One declared custom permission from a given owner ("app" or a plugin name).
   // Shared by the app and plugin passes so both validate + collide identically.
-  const consider = (perm: PluginPermission, owner: string): void => {
+  const consider = (
+    perm: PluginPermission,
+    owner: string,
+    source: "app" | "plugin"
+  ): void => {
     const { action, resource } = perm;
-    const key = `${action}:${resource}`;
+    // Compared in lower case, because the SEEDER decides this same question
+    // that way: `ensurePermission` matches an existing row with
+    // `LOWER(action) = LOWER(action)` and `LOWER(resource) = LOWER(resource)`.
+    // Left case-sensitive, `Export:Reports` and `export:reports` are collected
+    // as two permissions from two owners while the database holds ONE row —
+    // attributed to whichever was seeded last — so a plugin's detail page can
+    // claim a permission the roles data gives to someone else. The stored
+    // action and resource keep their declared casing; only the identity used
+    // to dedupe is normalized.
+    const key = `${action.toLowerCase()}:${resource.toLowerCase()}`;
 
     const prev = seen.get(key);
     if (prev !== undefined) {
@@ -166,6 +189,7 @@ export function collectCustomPermissions(
       name: perm.label ?? permissionName(action, resource),
       description: perm.description,
       owner,
+      source,
       // `group` was accepted and dropped: the interface documented it, the
       // canonical example set it, and nothing ever read it.
       group: perm.group?.trim() || DEFAULT_PERMISSION_GROUP,
@@ -187,12 +211,16 @@ export function collectCustomPermissions(
 function eachDeclaredPermission(
   config: PermissionConfigSource,
   plugins: PluginDefinition[],
-  visit: (perm: PluginPermission, owner: string) => void
+  visit: (
+    perm: PluginPermission,
+    owner: string,
+    source: "app" | "plugin"
+  ) => void
 ): void {
-  for (const perm of config.permissions ?? []) visit(perm, "app");
+  for (const perm of config.permissions ?? []) visit(perm, "app", "app");
   for (const plugin of plugins) {
     for (const perm of plugin.contributes?.permissions ?? []) {
-      visit(perm, plugin.name);
+      visit(perm, plugin.name, "plugin");
     }
   }
 }

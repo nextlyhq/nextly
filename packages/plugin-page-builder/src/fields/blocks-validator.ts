@@ -19,7 +19,12 @@
  */
 
 import type { BlockDocument, BreakpointSet } from "@nextlyhq/blocks-engine";
-import { validate, walkNodes } from "@nextlyhq/blocks-engine";
+import {
+  DOCUMENT_VERDICT_CODES,
+  registryNestingSource,
+  validateDocument,
+  walkNodes,
+} from "@nextlyhq/blocks-engine";
 
 import type { DocumentKind } from "./blocks-options";
 
@@ -89,15 +94,113 @@ export function validateBlocksValue(
 
   const doc = value as BlockDocument;
   const issues: Issue[] = [];
+  // Two of the engine's verdicts are about the whole document rather than its
+  // STRUCTURE: it is too large, or it holds a value JSON cannot write. Neither
+  // makes the tree unsafe to walk, so neither should block the richer walks
+  // below — blocking on them costs the author the more useful answer.
+  // Asked of the engine rather than restated here. This set names the engine's
+  // own whole-document verdicts, and a copy of it in this package is a second
+  // statement that goes stale silently: the engine gained a third and a fourth
+  // verdict, a two-name copy classified them as structural, and the precise
+  // per-key report below was dropped in favour of the summary it exists to
+  // replace.
+  const NON_STRUCTURAL = DOCUMENT_VERDICT_CODES;
 
   // The engine owns every structural rule: ids, depth, node and byte caps,
   // slot legality, the kind enum, binding and style shapes.
-  const documentIssues = validate(doc, {
+  // The survey the engine judged this document with, rather than a verdict
+  // reconstructed from issue codes. Whether a second pass is affordable is a
+  // question about the MEASUREMENT, and a code answers a different one — what is
+  // wrong with the document — so the two disagree exactly where it matters: a
+  // document JSON rewrites is fully measured and safe to walk, one holding an
+  // accessor is neither, and both are errors.
+  const { issues: allDocumentIssues, survey } = validateDocument(doc, {
     breakpoints: NO_BREAKPOINTS,
     mode: "forgiving",
-  }).filter(issue => issue.severity === "error");
+    // Where a block declares the containers it may sit inside, this is the path
+    // that has to enforce it: the editor refuses such a placement while
+    // dragging, and a document written by an import, a script, or an older
+    // client never passes through the editor at all.
+    //
+    // Read through to the live registry on each call, so a block contributed
+    // after this module loaded is still judged by its own declaration.
+    //
+    // This is NOT the block-type existence check the module docblock declines,
+    // and the difference is the direction of the failure. Existence would
+    // REJECT every document when the registry is empty. A nesting source that
+    // holds nothing answers "declares no restriction" for every type, so an
+    // unpopulated registry leaves this silent rather than hostile — the rule
+    // reaches exactly the blocks something has contributed, and no document is
+    // refused for a declaration nobody made.
+    nesting: registryNestingSource(),
+  });
+  const documentIssues = allDocumentIssues.filter(
+    issue => issue.severity === "error"
+  );
+  const structuralIssues = documentIssues.filter(
+    issue => !NON_STRUCTURAL.has(issue.code)
+  );
+
+  // The engine's whole-document verdict is a SUMMARY of what the walk below
+  // reports precisely, so it is held back until that walk has run: if the walk
+  // names the offending keys, the summary says the same thing less usefully and
+  // is dropped; if the walk reaches nothing, the summary is the only answer
+  // there is and must survive.
+  //
+  // One question, one answer — and the more precise answer is the one an author
+  // can act on.
+  // Safe to walk is not the same as affordable to walk. `unserializableIssues`
+  // serializes the whole document, which is precisely the allocation the
+  // engine's bounded counter refused to make: it stops counting at the cap, so
+  // a document reported as too large may be arbitrarily bigger than the cap and
+  // materializing a full JSON copy of it here would undo that bound.
+  //
+  // Nothing is lost by skipping it. "Too large" is already the complete and
+  // actionable answer, and naming a key inside a document that has to shrink
+  // anyway does not change the repair.
+  //
+  // `document-unwritable` is the opposite case and still runs: the counter
+  // stopped on a value it could not write while still under the cap, and the
+  // engine can only say THAT the document is unwritable, never which key.
+  //
+  // Asked of the survey, not inferred. An UNREADABLE document is the sharp
+  // case: the walk declines to invoke an accessor so that document-supplied
+  // code never runs inside a precondition, and `unserializableIssues` calls
+  // `JSON.stringify`, which invokes it. Walking on would execute exactly the
+  // code the refusal existed to avoid and materialize whatever it returns.
+  //
+  // `complete` covers the byte cap and the structural caps too, and covers a
+  // fourth case a code list could not name at all: a byte count taken from a
+  // value the writer will not emit.
+  const unmeasured = !survey.complete;
+
+  const precise: Issue[] = [];
+  if (structuralIssues.length === 0 && !unmeasured) {
+    precise.push(...disallowedBlockIssues(doc, path, label, options));
+    precise.push(...unserializableIssues(doc, path, label));
+  }
+  // The precise walk names the offending KEYS, so the engine's document-level
+  // summary of the same defect is redundant once it has run. Both verdicts are
+  // superseded, because that walk reports every value the writer mishandles
+  // rather than only the ones it refuses: `bigint` is the unwritable case,
+  // while `function` and `symbol` are the lossy one, and all three come back as
+  // `UNSERIALIZABLE_VALUE` naming the key.
+  //
+  // Leaving either in place gives one defect two verdicts — a generic one and
+  // an actionable one — and spends the issue allowance twice on the same
+  // repair.
+  const SUPERSEDED_BY_PRECISE_KEYS: ReadonlySet<string> = new Set([
+    "document-unwritable",
+    "document-lossy",
+  ]);
+  const namesOffendingKeys = precise.some(
+    issue => issue.code === "UNSERIALIZABLE_VALUE"
+  );
 
   for (const issue of documentIssues) {
+    if (SUPERSEDED_BY_PRECISE_KEYS.has(issue.code) && namesOffendingKeys) {
+      continue;
+    }
     issues.push({
       path,
       // The engine's codes are the documented repair vocabulary. Translating
@@ -111,10 +214,16 @@ export function validateBlocksValue(
   // The allow-list walk reads node types, which is only safe once the engine
   // has confirmed the tree is well formed. A malformed node would otherwise
   // throw here and turn a rejected document into a server error.
-  if (documentIssues.length === 0) {
-    issues.push(...disallowedBlockIssues(doc, path, label, options));
-    issues.push(...unserializableIssues(doc, path, label));
-  }
+  //
+  // "Well formed" is about STRUCTURE, though, and the engine also reports two
+  // whole-document verdicts that say nothing about it: the document is too
+  // large, or it holds a value JSON cannot write. Neither makes the tree unsafe
+  // to walk, and blocking on them costs the author the more useful answer —
+  // the engine says a document is unwritable, while this walk says WHICH key.
+  //
+  // Without this, the two checks answered the same question and the coarser one
+  // won purely by running first.
+  issues.push(...precise);
 
   if (issues.length <= MAX_REPORTED_ISSUES) return issues;
   const withheld = issues.length - MAX_REPORTED_ISSUES;

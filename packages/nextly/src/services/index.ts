@@ -12,7 +12,10 @@ import { RolePermissionService } from "../domains/auth/services/role-permission-
 import { RoleService } from "../domains/auth/services/role-service";
 import { UserRoleService } from "../domains/auth/services/user-role-service";
 import { MetaRetentionGate } from "../domains/retention/gate";
-import { buildRetentionRunner } from "../domains/retention/passes";
+import {
+  buildRetentionRunner,
+  retentionPoliciesFrom,
+} from "../domains/retention/passes";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
 import { resolveWebhookWritePathInfra } from "../domains/webhooks/write-path-infra";
 import type { DatabaseInstance } from "../types/database-operations";
@@ -390,8 +393,7 @@ export class ServiceContainer {
         : undefined;
       const retentionRunner = buildRetentionRunner({
         adapter: this.adapter,
-        webhookPolicy: config?.webhookRetention,
-        auditPolicy: config?.auditRetention,
+        ...retentionPoliciesFrom(config),
         gate: new MetaRetentionGate(this.adapter),
         logger,
       });

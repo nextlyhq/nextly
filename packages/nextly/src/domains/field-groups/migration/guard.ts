@@ -20,6 +20,7 @@
 import { NextlyError } from "../../../errors/nextly-error";
 
 import type { ManifestEntry } from "./manifest";
+import { REFUSAL_KIND_KEY, type RefusalKind } from "./refusal-kind";
 import { MAX_MIGRATION_STEP } from "./state";
 import type {
   MigrationDirection,
@@ -134,7 +135,13 @@ export function resolveStorageVerdict(args: {
       // runtime writes post-migration names.
       throw refuse(
         "marker reports a completed migration but the migrated registry is absent",
-        { generation: state.generation, probe }
+        { generation: state.generation, probe },
+        // A rollback renames the registry back to its legacy name FIRST, before
+        // its own marker settles. A reader holding no lock can therefore read a
+        // v2 marker and then a catalog the rollback has already moved past — a
+        // pair the database was never in. Re-reading resolves it; a genuinely
+        // restored-from-backup database returns the same answer every time.
+        "torn-read"
       );
     }
     if (probe.legacyRegistryPresent) {
@@ -165,7 +172,11 @@ export function resolveStorageVerdict(args: {
         {
           generation: state.generation,
           missing: probe.migratedObjects.missing,
-        }
+        },
+        // The same tear one object further in: a rollback reverting data tables
+        // makes them incomplete against a v2 marker an unlocked reader captured
+        // beforehand.
+        "torn-read"
       );
     }
     return { action: "use-field-groups-v2" };
@@ -179,7 +190,11 @@ export function resolveStorageVerdict(args: {
     // and proceeding would rename over data we do not own.
     throw refuse(
       "an object using the migrated storage name exists but no migration recorded it",
-      { generation: state.generation, probe }
+      { generation: state.generation, probe },
+      // The mirror going up: a run renames the registry to its migrated name and
+      // settles its marker afterwards, so a reader that captured the legacy
+      // marker first sees a target that nothing yet accounts for.
+      "torn-read"
     );
   }
 
@@ -191,7 +206,10 @@ export function resolveStorageVerdict(args: {
     // registry yet, and creating one is ordinary first-run behaviour.
     throw refuse(
       "marker records legacy storage but the legacy registry is absent",
-      { generation: state.generation, probe }
+      { generation: state.generation, probe },
+      // An upward run in flight has renamed the legacy registry away while this
+      // reader still holds the legacy marker it captured first.
+      "torn-read"
     );
   }
 
@@ -204,9 +222,13 @@ export function resolveStorageVerdict(args: {
  * Details go to `logContext` so operators get the full picture while the public
  * message stays generic.
  */
-function refuse(reason: string, context: Record<string, unknown>): NextlyError {
+function refuse(
+  reason: string,
+  context: Record<string, unknown>,
+  kind: RefusalKind = "permanent"
+): NextlyError {
   return NextlyError.serviceUnavailable({
     logMessage: `field-group storage refused to start: ${reason}`,
-    logContext: { reason, ...context },
+    logContext: { reason, [REFUSAL_KIND_KEY]: kind, ...context },
   });
 }

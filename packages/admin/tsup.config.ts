@@ -1,4 +1,5 @@
 import fs from "fs";
+import { createRequire } from "module";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -7,6 +8,13 @@ import { defineConfig } from "tsup";
 // ESM __dirname equivalent
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Read at build time so `adminVersion()` can name the release this bundle was
+// published in. The browser bundle has no module resolver to read it later.
+const require = createRequire(import.meta.url);
+const { version: ADMIN_VERSION } = require("./package.json") as {
+  version: string;
+};
 
 /**
  * Bundle size target in KB (minified, not gzipped)
@@ -100,6 +108,9 @@ export default defineConfig(options => [
       resolve: true,
     },
     tsconfig: "tsconfig.json",
+    define: {
+      __NEXTLY_ADMIN_VERSION__: JSON.stringify(ADMIN_VERSION),
+    },
     external: EXTERNAL_DEPS,
     noExternal: NO_EXTERNAL_DEPS,
     splitting: true,

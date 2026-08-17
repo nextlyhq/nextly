@@ -1,5 +1,20 @@
 @import "tailwindcss";
 
+/* The families the imported font stylesheets declare, bound to the variables the rules
+   below read. Named here rather than by `next/font`, which used to inject them: the faces
+   now arrive as ordinary stylesheets, so the binding has to be written down somewhere, and
+   the name is load-bearing — the admin theme reads `--font-geist`. Quoted family names, so
+   the two-word values stay one identifier. */
+:root {
+  /* `--font-geist` is the name the ADMIN theme reads for its sans
+     (`--font-sans: var(--font-geist, Geist), ...`), so this template's face has
+     to be exposed under it as well as under its own name — otherwise the admin
+     renders in a system fallback while the blog renders in Inter. */
+  --font-geist: "Inter Variable";
+  --font-inter: "Inter Variable";
+  --font-geist-mono: "Geist Mono Variable";
+}
+
 /* ================================================================
    The Antigravity Standard - Design Tokens
    ----------------------------------------------------------------

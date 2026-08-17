@@ -53,6 +53,7 @@ import {
   useSubfolders,
   useRootFolders,
 } from "@admin/hooks/queries/useMedia";
+import { usePagination } from "@admin/hooks/usePagination";
 import {
   usePersistedState,
   usePersistedStringSet,
@@ -128,8 +129,9 @@ export function MediaLibrary({
   className,
 }: MediaLibraryProps = {}) {
   // State: Pagination
-  const [page, setPage] = React.useState(0);
-  const [pageSize, setPageSize] = React.useState(defaultPageSize);
+  const { page, pageSize, setPage, setPageSize, resetPage } = usePagination({
+    initialPageSize: defaultPageSize,
+  });
   // Hidden list-view columns persist across visits. Functional updates so
   // two quick toggles both land instead of the second reading stale state.
   const [hiddenColumns, updateHiddenColumns] = usePersistedStringSet(
@@ -191,8 +193,8 @@ export function MediaLibrary({
 
   // Reset page when folder changes
   React.useEffect(() => {
-    setPage(0);
-  }, [activeFolderId]);
+    resetPage();
+  }, [activeFolderId, resetPage]);
 
   const [isCreateFolderDialogOpen, setIsCreateFolderDialogOpen] =
     React.useState(false);
@@ -244,11 +246,11 @@ export function MediaLibrary({
   React.useEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedSearch(search);
-      setPage(0); // Reset to page 1 when search changes
+      resetPage(); // Reset to page 1 when search changes
     }, 300);
 
     return () => clearTimeout(timer);
-  }, [search]);
+  }, [search, resetPage]);
 
   // Build query params. Local React state name `pageSize` (admin-
   // internal) maps to canonical wire field `limit`.
@@ -386,50 +388,54 @@ export function MediaLibrary({
   );
 
   // Handlers: Pagination
-  const handlePageChange = React.useCallback((newPage: number) => {
-    setPage(newPage);
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  }, []);
-
-  const handlePageSizeChange = React.useCallback((newPageSize: number) => {
-    setPageSize(newPageSize);
-    setPage(0); // Reset to page 1 when page size changes
-  }, []);
+  const handlePageChange = React.useCallback(
+    (newPage: number) => {
+      setPage(newPage);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    },
+    [setPage]
+  );
 
   // Handlers: Filters
   const handleSearchChange = React.useCallback((value: string) => {
     setSearch(value);
   }, []);
 
-  const handleTypeFilterChange = React.useCallback((value: string) => {
-    setTypeFilter(value as MediaType | "all");
-    setPage(0); // Reset to page 1 when filter changes
-  }, []);
+  const handleTypeFilterChange = React.useCallback(
+    (value: string) => {
+      setTypeFilter(value as MediaType | "all");
+      resetPage(); // Reset to page 1 when filter changes
+    },
+    [resetPage]
+  );
 
-  const handleSortChange = React.useCallback((value: string) => {
-    // Narrow the "<field>-<order>" select value by comparison; the option
-    // list is closed, so anything else is ignored rather than cast through.
-    const [newSortBy, newSortOrder] = value.split("-");
-    if (
-      (newSortBy === "uploadedAt" ||
-        newSortBy === "filename" ||
-        newSortBy === "size") &&
-      (newSortOrder === "asc" || newSortOrder === "desc")
-    ) {
-      setSortBy(newSortBy);
-      setSortOrder(newSortOrder);
-      setPage(0); // Reset to page 1 when ordering changes
-    }
-  }, []);
+  const handleSortChange = React.useCallback(
+    (value: string) => {
+      // Narrow the "<field>-<order>" select value by comparison; the option
+      // list is closed, so anything else is ignored rather than cast through.
+      const [newSortBy, newSortOrder] = value.split("-");
+      if (
+        (newSortBy === "uploadedAt" ||
+          newSortBy === "filename" ||
+          newSortBy === "size") &&
+        (newSortOrder === "asc" || newSortOrder === "desc")
+      ) {
+        setSortBy(newSortBy);
+        setSortOrder(newSortOrder);
+        resetPage(); // Reset to page 1 when ordering changes
+      }
+    },
+    [resetPage]
+  );
 
   // Handlers: Folders
 
   const handleDeleteFolderSuccess = React.useCallback(() => {
     if (deleteFolderId === activeFolderId) {
       setActiveFolderId(null);
-      setPage(0);
+      resetPage();
     }
-  }, [deleteFolderId, activeFolderId, setActiveFolderId]);
+  }, [deleteFolderId, activeFolderId, setActiveFolderId, resetPage]);
 
   const handleMoveToFolder = React.useCallback(() => {
     if (selectedIds.size === 0) return;
@@ -784,7 +790,14 @@ export function MediaLibrary({
                   pageSizeOptions={[12, 24, 48, 96]}
                   showPageSizeSelector
                   onPageChange={handlePageChange}
-                  onPageSizeChange={handlePageSizeChange}
+                  onPageSizeChange={setPageSize}
+                  // This page renders TWO pagers -- one per view -- and they
+                  // are identical in every other prop, so the name is the only
+                  // thing that tells a screen reader which list it moves.
+                  // Rendered directly rather than handed to a table because a
+                  // grid has no row-versus-card view to place one for; the list
+                  // view's pager goes to the table below.
+                  ariaLabel="Media grid pagination"
                 />
               )}
             </>
@@ -803,20 +816,27 @@ export function MediaLibrary({
                 onRetry={() => {
                   void refetch();
                 }}
+                // The list view is a table, so its pager goes to the table
+                // rather than beside it. The grid branch above keeps its own,
+                // because a grid has no row-versus-card view to place it for.
+                pagination={
+                  !isLoading && !error && data && data.data.length > 0
+                    ? {
+                        currentPage: page,
+                        totalPages,
+                        pageSize,
+                        pageSizeOptions: [12, 24, 48, 96],
+                        showPageSizeSelector: true,
+                        onPageChange: handlePageChange,
+                        onPageSizeChange: setPageSize,
+                        // The other half of the pair above: same props, other
+                        // view, so the name is what tells a screen reader
+                        // which list it moves.
+                        ariaLabel: "Media list pagination",
+                      }
+                    : undefined
+                }
               />
-
-              {/* Pagination for List View */}
-              {!isLoading && !error && data && data.data.length > 0 && (
-                <Pagination
-                  currentPage={page}
-                  totalPages={totalPages}
-                  pageSize={pageSize}
-                  pageSizeOptions={[12, 24, 48, 96]}
-                  showPageSizeSelector
-                  onPageChange={handlePageChange}
-                  onPageSizeChange={handlePageSizeChange}
-                />
-              )}
             </>
           )}
         </div>
@@ -856,7 +876,7 @@ export function MediaLibrary({
               <AlertDialogCancel disabled={isBulkDeleting}>
                 Cancel
               </AlertDialogCancel>
-              {/* The `-solid` emphasis fill, paired with an on-color ink that flips: `text-destructive-foreground` is white on the light fill (5.00:1) and BLACK on the lighter dark-mode fill (6.90:1). One ink cannot clear 4.5:1 on both, which is why the token flips rather than the fill compensating. */}
+              {/* The `-solid` emphasis fill, paired with an on-color ink that flips: `text-destructive-foreground` is white on the light fill and BLACK on the lighter dark-mode fill (6.90:1). One ink cannot clear 4.5:1 on both, which is why the token flips rather than the fill compensating. The LIGHT pairing is 3.84:1 and does NOT clear it: the fill takes the reference red, and that failure is recorded in packages/ui/src/styles/contrast/accepted.ts rather than fixed here. */}
               <AlertDialogAction
                 onClick={handleConfirmBulkDelete}
                 disabled={isBulkDeleting}

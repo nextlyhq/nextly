@@ -4,7 +4,14 @@ import { fileURLToPath } from "url";
 import fs from "fs-extra";
 
 import { buildNextConfigTemplate } from "../generators/next-config";
-import type { DatabaseConfig, ProjectApproach, ProjectType } from "../types";
+import type {
+  DatabaseConfig,
+  PackageManager,
+  ProjectApproach,
+  ProjectType,
+} from "../types";
+
+import { binaryRunner, scriptRunner } from "./package-manager-commands";
 
 /**
  * Templates whose `nextly.config.ts` registers `formBuilderPlugin`. The
@@ -16,6 +23,129 @@ import type { DatabaseConfig, ProjectApproach, ProjectType } from "../types";
 const PROJECT_TYPES_WITH_FORM_BUILDER: ReadonlySet<ProjectType> = new Set([
   "blog",
 ]);
+
+/**
+ * The version range every font package is scaffolded at.
+ *
+ * One range because they are released together, and a project mixing lines would ship two copies
+ * of the same face.
+ *
+ * Safe to state here rather than carry per-template because the layouts import the package ROOT
+ * (`@fontsource-variable/inter`) rather than a file inside it. There is no asset path that a
+ * different release line could rename out from under the import, so a skew cannot produce a
+ * missing-file build failure.
+ *
+ * What it would NOT cover, stated so the limit is visible rather than discovered: a template
+ * importing a SUBPATH such as `.../wght.css`, or one needing a different MAJOR. No template does
+ * either, so the range stays a constant until one does — at which point it belongs with the
+ * template rather than here.
+ */
+const FONT_PACKAGE_RANGE = "^5.3.0";
+
+/** Matches a font package specifier wherever a template imports one. */
+const FONT_PACKAGE_PATTERN = /@fontsource(?:-variable)?\/[a-z0-9-]+/g;
+
+/**
+ * The font packages a scaffold of `projectType` actually needs.
+ *
+ * READ from the template sources rather than listed here. A hand-kept list is a
+ * second answer to a question the templates already answer, and the two only
+ * agree until someone changes a face: a template importing a package the
+ * scaffold never installs fails at `next build` with a module it cannot
+ * resolve, and one installing a package nothing imports ships dead bytes.
+ *
+ * The type's own directory is read as well as `base`'s, because a template that
+ * overrides `layout.tsx` chooses its own faces — reading only `base` would
+ * install Geist for a scaffold that renders in Inter.
+ *
+ * The caller passes the directories it is about to COPY, rather than this
+ * resolving its own. A downloaded or `--local-template` source is a different
+ * tree from the published one, and reading the wrong tree would install the
+ * fonts of templates the project never receives.
+ */
+export async function collectFontDependencies(
+  templateDirs: readonly string[]
+): Promise<string[]> {
+  const effective = await effectiveTemplateFiles(templateDirs);
+
+  const found = new Set<string>();
+  for (const file of effective.values()) {
+    const contents = await fs.readFile(file, "utf8");
+    for (const match of contents.matchAll(FONT_PACKAGE_PATTERN)) {
+      found.add(match[0]);
+    }
+  }
+
+  return [...found].sort();
+}
+
+/**
+ * The files a scaffold of these template directories actually RECEIVES, keyed by their path
+ * inside the project.
+ *
+ * Merged by relative path with the later directory winning, because that is what the copy does: a
+ * template overriding `src/app/layout.tsx` REPLACES base's rather than adding to it. Taking the
+ * union instead would describe a project nobody receives — a blank scaffold declaring the faces of
+ * a layout that was overwritten.
+ *
+ * Shared rather than recomputed per question. Every property derived from "what does this scaffold
+ * contain" has to agree about which files those are, and two walks written months apart would not.
+ */
+async function effectiveTemplateFiles(
+  templateDirs: readonly string[]
+): Promise<Map<string, string>> {
+  const effective = new Map<string, string>();
+  for (const root of templateDirs) {
+    if (!root || !(await fs.pathExists(root))) continue;
+    for (const file of await walkSourceFiles(root)) {
+      effective.set(path.relative(root, file), file);
+    }
+  }
+  return effective;
+}
+
+/** Where a template puts the Pagefind index builder, if it ships one. */
+const SEARCH_INDEX_SCRIPT = path.join("scripts", "build-search-index.mjs");
+
+/**
+ * Whether the scaffolded PROJECT has the Pagefind index builder.
+ *
+ * Read from the finished project directory rather than from the templates it was assembled out
+ * of, and the distinction is the whole point. A template can ship a file that the copy never
+ * carries across — which is exactly what happened to the blog's `scripts/` — and a decision taken
+ * from the source tree then writes a build step naming a file the project does not have.
+ *
+ * Asking the target makes the two impossible to disagree: whatever answers here is what `node`
+ * will resolve at build time, because it is the same directory.
+ *
+ * Must therefore be called AFTER every copy, which is where `generatePackageJson` already sits.
+ */
+export async function projectHasSearchIndexScript(
+  targetDir: string
+): Promise<boolean> {
+  return fs.pathExists(path.join(targetDir, SEARCH_INDEX_SCRIPT));
+}
+
+/**
+ * Every file under `root` that could carry an import specifier.
+ *
+ * Async, and through the same `fs-extra` surface the rest of this module uses,
+ * so a caller that substitutes the filesystem substitutes this too.
+ */
+async function walkSourceFiles(root: string): Promise<string[]> {
+  const out: string[] = [];
+  const entries = await fs.readdir(root, { withFileTypes: true });
+  for (const entry of entries) {
+    const full = path.join(root, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === "node_modules" || entry.name === ".next") continue;
+      out.push(...(await walkSourceFiles(full)));
+    } else if (/\.(?:tsx?|jsx?|mjs|cjs|css)$/.test(entry.name)) {
+      out.push(full);
+    }
+  }
+  return out;
+}
 
 export function projectUsesFormBuilder(projectType: ProjectType): boolean {
   return PROJECT_TYPES_WITH_FORM_BUILDER.has(projectType);
@@ -66,6 +196,602 @@ const TEXT_EXTENSIONS = new Set([
  * Files to skip during template copy.
  */
 const SKIP_FILES = new Set([".DS_Store", "Thumbs.db", ".gitkeep"]);
+
+/**
+ * Files a template stores under one name and a project must receive under another, as
+ * `[shipped, inProject]`.
+ *
+ * Two unrelated reasons converge on the same mechanism, which is why there is one table rather
+ * than a rename per case:
+ *
+ * `.gitignore` — npm removes it from every tarball it packs, always, and with no way to opt out;
+ * a `files` entry does not bring it back. A template storing it under its real name therefore
+ * keeps it in a checkout — which is what `--local-template` reads, and what everyone working on
+ * this repository uses — and loses it in the published CLI, which is what every user runs. The
+ * consequence is not cosmetic: a scaffold writes a real `.env`, so the first `git add .` in a new
+ * project commits it.
+ *
+ * `AGENTS.md` / `CLAUDE.md` — a coding agent reads these as instructions for whatever directory
+ * it finds them in. Stored under their real names they are live instructions for THIS repository,
+ * so an agent maintaining the template would follow scaffold guidance — an unresolved
+ * `{{databaseDialect}}` and commands meant for a generated standalone app — instead of the
+ * monorepo's own. The suffix keeps the source inert until it reaches a project.
+ *
+ * Storing a file under a name the tool restores on copy is what `create-next-app` and
+ * `create-vite` do, for the first of those reasons.
+ */
+/**
+ * How a restored file combines with one the project ALREADY has at that name.
+ *
+ * Scaffolding does not always start from an empty directory: the installer targets the current
+ * directory, and it offers "ignore files and continue" on a non-empty one. So the destination can
+ * hold a `.gitignore` the developer wrote, or an `AGENTS.md` full of their own notes. Replacing
+ * either destroys work that the tool has no claim on — and for the guide it would also break the
+ * promise the guide itself makes, that anything outside its managed block is preserved.
+ *
+ * Every strategy therefore keeps what is already there and adds only what the scaffold
+ * contributes. None of them can remove a line the developer wrote.
+ */
+type MergeStrategy = "managed-block" | "append-missing-lines";
+
+/**
+ * What to do when the destination name is a link rather than a regular file.
+ *
+ * The two cases are opposite, and treating them alike is what makes this a per-entry choice:
+ *
+ * - `preserve` — writing through the link would edit its referent, which may be a shared file
+ *   outside the project. The developer arranged the link deliberately; leave it and skip.
+ * - `materialize` — git does NOT follow a symlinked `.gitignore` at all (it reads the link, not
+ *   its target), so preserving one means the scaffold's patterns never take effect. Measured:
+ *   with `.gitignore` a symlink to a file containing `.env*`, `git check-ignore -v .env` reports
+ *   no match; as a regular file it matches. Since a scaffold writes a real `.env`, preserving the
+ *   link would leave it committable — the exact failure this table exists to prevent. So the link
+ *   is replaced by a regular file carrying its former contents plus the scaffold's, and the
+ *   referent is left untouched.
+ */
+type LinkPolicy = "preserve" | "materialize";
+
+/**
+ * Files a template stores under one name and a project must receive under another.
+ *
+ * Two unrelated reasons converge on the same mechanism, which is why there is one table rather
+ * than a rename per case:
+ *
+ * `.gitignore` — npm removes it from every tarball it packs, always, and with no way to opt out;
+ * a `files` entry does not bring it back. A template storing it under its real name therefore
+ * keeps it in a checkout — which is what `--local-template` reads, and what everyone working on
+ * this repository uses — and loses it in the published CLI, which is what every user runs. The
+ * consequence is not cosmetic: a scaffold writes a real `.env`, so the first `git add .` in a new
+ * project commits it.
+ *
+ * `AGENTS.md` / `CLAUDE.md` — a coding agent reads these as instructions for whatever directory
+ * it finds them in. Stored under their real names they are live instructions for THIS repository,
+ * so an agent maintaining the template would follow scaffold guidance — an unresolved
+ * `{{databaseDialect}}` and commands meant for a generated standalone app — instead of the
+ * monorepo's own. The suffix keeps the source inert until it reaches a project.
+ *
+ * Storing a file under a name the tool restores on copy is what `create-next-app` and
+ * `create-vite` do, for the first of those reasons.
+ */
+const RENAMED_ON_COPY: ReadonlyArray<{
+  readonly shipped: string;
+  readonly inProject: string;
+  readonly merge: MergeStrategy;
+  readonly onLink: LinkPolicy;
+}> = [
+  // Line-wise, because an ignore file is a set of patterns: the developer's entries stay and the
+  // scaffold's missing ones are added, so `.env` ends up ignored either way.
+  {
+    shipped: "gitignore",
+    inProject: ".gitignore",
+    merge: "append-missing-lines",
+    onLink: "materialize",
+  },
+  // The guide carries its content inside a managed block, which is exactly the region a
+  // regeneration is allowed to replace.
+  {
+    shipped: "AGENTS.md.template",
+    inProject: "AGENTS.md",
+    merge: "managed-block",
+    onLink: "preserve",
+  },
+  // One line pointing at the guide. If a project already points there, nothing to add; if it has
+  // its own instructions, they keep them and gain the pointer.
+  {
+    shipped: "CLAUDE.md.template",
+    inProject: "CLAUDE.md",
+    merge: "append-missing-lines",
+    onLink: "preserve",
+  },
+];
+
+/** Delimits the region of a guide that a regeneration owns. */
+const MANAGED_START = "<!-- nextly:managed:start -->";
+const MANAGED_END = "<!-- nextly:managed:end -->";
+
+/**
+ * Replace the managed region of `existing` with the one `incoming` carries, leaving every line
+ * outside it untouched.
+ *
+ * When `existing` has no managed region — a guide the developer wrote themselves — the block is
+ * APPENDED rather than substituted for the file. Their instructions are the ones an agent should
+ * read first, and the scaffold's are additional context rather than a correction.
+ *
+ * An unterminated region (a start marker with no end) is treated as absent. Splicing to the end of
+ * the file would be the alternative, and it would delete everything the developer wrote after the
+ * marker on the strength of a typo.
+ */
+function mergeManagedBlock(existing: string, incoming: string): string {
+  const block = extractManagedBlock(incoming);
+  const region = findManagedRegion(existing);
+
+  if (!region) return `${existing.trimEnd()}\n\n${block}\n`;
+  return existing.slice(0, region.start) + block + existing.slice(region.end);
+}
+
+/** Blank a matched region, preserving length and newlines so indices still line up. */
+function blankRegion(match: string): string {
+  return match.replace(/[^\n]/g, " ");
+}
+
+/**
+ * `text` with fenced code blocks blanked out.
+ *
+ * Used by the MARKER scan, which must keep reading HTML comments: the managed markers ARE HTML
+ * comments, so blanking those would blind it to every real region. A marker documented inside a
+ * fence is the only form of example it can encounter, because HTML comments do not nest.
+ */
+function withoutFencedExamples(text: string): string {
+  return text.replace(
+    /^[ \t]*(```|~~~)[\s\S]*?^[ \t]*\1[^\n]*$/gm,
+    blankRegion
+  );
+}
+
+/**
+ * `text` with everything that is not an ACTIVE instruction blanked out.
+ *
+ * Used by the include/pointer scan, which asks a different question from the marker scan and
+ * therefore needs a different answer. An `@AGENTS.md` is only an include when the file's reader
+ * would act on it, so three forms must not count:
+ *
+ * - inside a fenced block — an example of what a pointer looks like;
+ * - inside an HTML comment — commented out, deliberately inert;
+ * - inside an inline code span — quoted while being discussed in prose.
+ *
+ * HTML comments are safe to blank HERE precisely because this scan never looks for the managed
+ * markers, which are themselves HTML comments.
+ */
+function withoutInactiveText(text: string): string {
+  return withoutFencedExamples(text)
+    .replace(/<!--[\s\S]*?-->/g, blankRegion)
+    .replace(/`[^`\n]*`/g, blankRegion);
+}
+
+/**
+ * The bounds of the LAST self-contained marker pair in `text`, or null when there is none.
+ *
+ * Searching from the END, and requiring the end marker to follow the start it is paired with, is
+ * what keeps an unmatched marker from swallowing content. `indexOf` on each marker independently
+ * pairs the FIRST start with the FIRST end, so a file carrying a stray start marker — from a
+ * hand-edit, or from a previous run that appended a block below one — would have every
+ * developer-written line between the two replaced on the next merge.
+ *
+ * Taking the last pair rather than the first also means a re-run updates the block it appended
+ * previously, instead of walking further up the file each time.
+ */
+function findManagedRegion(
+  text: string
+): { start: number; end: number } | null {
+  // A pair is COMPLETE when an END follows a START with no other START between them; an
+  // intervening START means the first was never terminated. The region a regeneration owns is the
+  // LAST complete pair, and every marker outside it is the developer's own text.
+  //
+  // Stated structurally rather than as "the first" or "the last" occurrence of either marker,
+  // because a guide can hold an unmatched marker in any position — before the block, after it, or
+  // with no partner at all — and each arrangement sends occurrence-based arithmetic to a
+  // different wrong region.
+  const scan = withoutFencedExamples(text);
+  let cursor = 0;
+  let found: { start: number; end: number } | null = null;
+
+  for (;;) {
+    const startIndex = scan.indexOf(MANAGED_START, cursor);
+    if (startIndex === -1) return found;
+
+    const after = startIndex + MANAGED_START.length;
+    const endIndex = scan.indexOf(MANAGED_END, after);
+    if (endIndex === -1) return found;
+
+    const nextStart = scan.indexOf(MANAGED_START, after);
+    if (nextStart !== -1 && nextStart < endIndex) {
+      // Unterminated: another block opens before this one closes. Leave it to the developer and
+      // keep looking from the inner start.
+      cursor = nextStart;
+      continue;
+    }
+
+    found = { start: startIndex, end: endIndex + MANAGED_END.length };
+    cursor = found.end;
+  }
+}
+
+/**
+ * The managed region of `incoming`, or the whole of it when it carries no markers.
+ *
+ * Taking the region rather than the file keeps a merge from nesting one block inside another if a
+ * template ever wraps its guide in a preamble.
+ */
+function extractManagedBlock(incoming: string): string {
+  const start = incoming.indexOf(MANAGED_START);
+  const end = incoming.indexOf(MANAGED_END);
+  if (start === -1 || end === -1 || end < start) return incoming.trim();
+  return incoming.slice(start, end + MANAGED_END.length);
+}
+
+/**
+ * Append the lines of `incoming` that `existing` does not already contain, in order.
+ *
+ * TRAILING whitespace is ignored when comparing and LEADING whitespace is not, because that is
+ * what git does with an ignore pattern: it strips trailing spaces unless escaped, and treats a
+ * leading space as part of the pattern. So a file containing ` .env*` does NOT ignore `.env`
+ * (`git check-ignore -v .env` reports no match), and treating it as equal to `.env*` would skip
+ * adding the pattern that actually works — leaving the scaffold's real `.env` committable.
+ *
+ * Blank lines are dropped so a re-run cannot accumulate separators.
+ *
+ * The scaffold's lines go FIRST, and for `.gitignore` that is the whole point rather than a
+ * cosmetic choice: git applies the LAST matching pattern, so appending `.env*` after a
+ * deliberate `!/.env` would silently re-ignore a file the developer had un-ignored. Placing the
+ * defaults above leaves every existing rule able to override them, which is the precedence a
+ * developer editing their own file expects.
+ */
+function appendMissingLines(existing: string, incoming: string): string {
+  const key = (line: string): string => line.replace(/\s+$/, "");
+  // Lines inside a fenced example are text ABOUT the file, not lines of it — a guide showing
+  // `@AGENTS.md` in a code block has not installed the pointer.
+  const have = new Set(withoutInactiveText(existing).split("\n").map(key));
+  const missing = incoming
+    .split("\n")
+    .filter(line => line.trim() !== "" && !have.has(key(line)));
+
+  if (missing.length === 0) return existing;
+
+  // A UTF-8 BOM is only a BOM at byte zero. Prepending in front of one moves it into the middle
+  // of the file, where git stops stripping it and it becomes part of the developer's first
+  // pattern instead — so the BOM stays put and the scaffold's lines go after it.
+  const bom = existing.startsWith("\ufeff") ? "\ufeff" : "";
+  const body = existing.slice(bom.length);
+
+  // Only leading NEWLINES are dropped. `trimStart()` would take leading spaces too, and a leading
+  // space is part of a git ignore pattern — it would rewrite the developer's first rule.
+  return `${bom}${missing.join("\n")}\n\n${body.replace(/^\n+/, "")}`;
+}
+
+/**
+ * The command tokens, which belong to the GUIDES rather than to the scaffold as a whole.
+ *
+ * Kept out of the map the recursive pass uses. That pass walks every file in the target, and when
+ * scaffolding over an existing project the target contains the developer's files — one of which
+ * may legitimately hold a literal `{{runCommand}}`, in its own template or its documentation.
+ * Rendering these globally would rewrite that text.
+ *
+ * Only the two AGENTS.md templates use them, and those files are rendered during the
+ * restore, so scoping costs nothing.
+ *
+ * `packageManager` is REQUIRED on the copy options, so there is no default to fall back to and
+ * no path on which a guide can ship a literal `{{runCommand}}` in its command list. Widening it
+ * here would reintroduce exactly that, silently, by emitting npm commands into a Yarn project.
+ */
+function guidePlaceholders(
+  packageManager: PackageManager
+): Record<string, string> {
+  return {
+    "{{runCommand}}": scriptRunner(packageManager),
+    "{{execCommand}}": binaryRunner(packageManager),
+  };
+}
+
+/**
+ * Whether `incoming` is a pointer whose target resolves to `destination` itself.
+ *
+ * `@name` in an instruction file is an include. If the named file resolves to the file the
+ * pointer is being written into, the result imports itself — an agent following it goes in a
+ * circle instead of reaching a guide.
+ *
+ * Compared by RESOLVED path, because the case that produces this is a symlink: the two names
+ * differ while denoting one file. A target that cannot be resolved answers true as well — a
+ * dangling pointer installs nothing, so writing it has no upside to weigh against the risk.
+ */
+/**
+ * How many include hops the cycle check will follow.
+ *
+ * Termination is bounded HERE rather than by the visited key, because the key answers a
+ * different question: which arrivals are distinct. A directory symlink pointing back into the
+ * project (`loop -> .`) makes the lexical directory grow without bound, so no key built from it
+ * is finite — and a key made finite by canonicalising the directory collapses aliases whose
+ * relative includes genuinely differ. One key cannot be both, so the hop count carries
+ * termination on its own.
+ *
+ * Generous against real projects: an instruction file including another that includes another
+ * is already unusual, and this allows far deeper. A graph that exceeds it is pathological, and
+ * the conservative answer for a pathological graph is the one this returns.
+ */
+const MAX_INCLUDE_HOPS = 64;
+
+async function pointsAtItself(
+  targetDir: string,
+  destination: string,
+  incoming: string
+): Promise<boolean> {
+  // Nothing to trace when the incoming content includes nothing — the common case, and it must
+  // not pay for a filesystem call it cannot use.
+  // Depth is carried because an unresolvable name means two different things depending on where
+  // it sits. At depth 0 it is the pointer this function is deciding whether to write, and a
+  // pointer at nothing installs nothing. Deeper, it is a file the DEVELOPER included from a file
+  // they own, and a dead end there says nothing about whether any path returns here.
+  // Each entry carries the DIRECTORY its include was written in, because an `@name` is relative
+  // to the file containing it. A nested `rules/team.md` holding `@../CLAUDE.md` means the sibling
+  // of `rules/`, not of the project root, and rebasing every hop against `targetDir` resolves a
+  // different file — which then reads as a dead end and lets a real cycle be written.
+  const queue = includeTargets(incoming).map(name => ({
+    name,
+    depth: 0,
+    from: targetDir,
+  }));
+  if (queue.length === 0) return false;
+
+  const self = await fs.realpath(destination).catch(() => destination);
+
+  // Breadth-first over the whole include graph, not one hop. The chain that closes a cycle can
+  // run through files this tool never writes — `AGENTS.md` includes `RULES.md`, `RULES.md`
+  // includes the absent `CLAUDE.md` — and every file in it belongs to the developer, so its
+  // length is not something the scaffolder gets to bound.
+  const visited = new Set<string>();
+
+  let hops = 0;
+
+  while (queue.length > 0) {
+    // Exceeding the bound means the graph is pathological rather than merely deep. Answering
+    // TRUE declines to write the pointer, which is the conservative direction: a guide that is
+    // one hop further away costs a click, while a pointer that closes a cycle sends an agent in
+    // circles.
+    if (++hops > MAX_INCLUDE_HOPS) return true;
+
+    const { name, depth, from } = queue.shift()!;
+    const targetPath = path.resolve(from, name);
+
+    // Reaching the file being written closes the loop, whether directly or through a chain.
+    if (targetPath === destination) return true;
+
+    const resolved = await fs.realpath(targetPath).catch(() => null);
+
+    // ONE identity for a visited node, and it is the RESOLVED path where there is one. A
+    // directory symlink pointing back into the project makes every expansion produce a new
+    // spelling of one file — `loop/AGENTS.md`, `loop/loop/AGENTS.md` — which a lexical key never
+    // collapses, so the queue never empties and the scaffold hangs.
+    //
+    // Keeping a lexical key ALONGSIDE it is what broke: on Linux a resolved path equals its
+    // lexical one, so a node marked lexically was then seen as already-resolved and skipped
+    // before its contents were ever read — no includes expanded, no cycle found. On macOS the
+    // temporary directory resolves through `/private`, so the two never collided and the defect
+    // was invisible locally. Two keys for one question, disagreeing per platform.
+    // The identity of a visited node is the file AND the directory it was reached from, because
+    // that pair — not the file alone — determines the edges it emits. A relative `@../CLAUDE.md`
+    // resolves from the containing directory, so one file reached through two symlink aliases in
+    // different directories points at two different targets; keying on the referent alone skips
+    // the second alias before those edges are ever expanded.
+    //
+    // It still terminates. The symlink loop this guards against produces endless LEXICAL
+    // spellings of one file, but only finitely many (file, directory) pairs — the directory set
+    // is bounded by the real tree, which the spellings are not.
+    // Identity is the resolved file paired with the LEXICAL directory it was reached from,
+    // because that directory is what `path.resolve` uses for the node's outgoing edges. Two
+    // aliases of one file in different directories emit different edges and must stay distinct,
+    // and canonicalising the directory collapses exactly the case that matters: with
+    // `alias -> ../shared-dir`, the alias arrival's `..` reaches this project while the real
+    // directory's `..` does not.
+    //
+    // A lexical pair is not finite on its own — `loop -> .` grows `loop/loop/...` forever — so
+    // termination is a separate concern, bounded by hop count below rather than by folding two
+    // questions into one key. Three keys were tried before this: the referent alone (missed
+    // aliases), the lexical pair (unbounded), and the canonical pair (collapsed aliases). Each
+    // traded one property for the other because one key was answering both.
+    const identity = `${resolved ?? targetPath}\u0000${path.dirname(targetPath)}`;
+    if (visited.has(identity)) continue;
+    visited.add(identity);
+
+    if (resolved === null) {
+      // A DIRECT target that does not resolve means the pointer would install nothing, so there
+      // is no upside to weigh against the target appearing later. A deeper one is an ordinary
+      // dead end in the developer's own graph: it cannot be the destination, because the
+      // destination is a path being written, so it cannot close a cycle. Treating it as one
+      // deletes a guide that nothing points back to.
+      if (depth === 0) return true;
+      continue;
+    }
+    if (resolved === self) return true;
+
+    const contents = await fs.readFile(targetPath, "utf-8").catch(() => null);
+    if (contents !== null) {
+      queue.push(
+        ...includeTargets(contents).map(next => ({
+          name: next,
+          depth: depth + 1,
+          from: path.dirname(targetPath),
+        }))
+      );
+    }
+  }
+
+  return false;
+}
+
+/**
+ * The files an instruction file INCLUDES, from its `@name` lines.
+ *
+ * Fenced examples are excluded for the same reason the pointer scan excludes them: a guide
+ * showing what an include looks like has not made one.
+ */
+function includeTargets(text: string): string[] {
+  return withoutInactiveText(text)
+    .split("\n")
+    .map(line => line.trim())
+    .filter(line => line.startsWith("@") && line.length > 1)
+    .map(line => line.slice(1));
+}
+
+/**
+ * Give the project the real names for the files the templates ship renamed, without overwriting
+ * anything the project already has at those names.
+ *
+ * Each entry is a no-op when the template does not carry that file, so a template without an
+ * ignore file or without a guide is not given an empty one it never asked for.
+ *
+ * Runs BEFORE the recursive placeholder pass: the shipped suffix is not a text extension, so a
+ * guide renamed afterwards would keep its `{{databaseDialect}}` unresolved. When merging into a
+ * developer's file the incoming text is rendered HERE instead, because that later pass rewrites
+ * whole files — it would substitute a `{{databaseDialect}}` occurring in the developer's own
+ * prose, breaking the promise that text outside the managed block is left alone. A file this
+ * function merged into is therefore already complete and is excluded from that pass.
+ *
+ * @param placeholders - substitutions to render into merged content
+ * @returns project-relative names this function merged into, for the caller to skip later
+ */
+async function restoreShippedNames(
+  targetDir: string,
+  placeholders: Record<string, string>,
+  packageManager: PackageManager
+): Promise<Set<string>> {
+  const merged = new Set<string>();
+  // The restored files are the only ones that may contain command tokens, so they are the only
+  // ones rendered with them.
+  const forGuides = { ...placeholders, ...guidePlaceholders(packageManager) };
+
+  for (const { shipped, inProject, merge, onLink } of RENAMED_ON_COPY) {
+    const from = path.join(targetDir, shipped);
+    if (!(await fs.pathExists(from))) continue;
+
+    const to = path.join(targetDir, inProject);
+
+    // `lstat` describes the link itself; `pathExists` follows it and answers about the target. A
+    // dangling link is therefore "absent" to `pathExists` while still occupying the name, and a
+    // link to a real file reads as an ordinary destination.
+    const destination = await fs.lstat(to).catch(() => null);
+
+    if (!destination) {
+      // The same self-pointer check the merge path makes. A DANGLING `AGENTS.md -> CLAUDE.md`
+      // leaves this branch reachable — `lstat` on `CLAUDE.md` finds nothing, so there is no
+      // destination — and moving the pointer in makes that link live, pointing at the file just
+      // written. The result imports itself.
+      if (
+        await pointsAtItself(
+          targetDir,
+          to,
+          applyPlaceholders(await fs.readFile(from, "utf-8"), forGuides)
+        )
+      ) {
+        await fs.remove(from);
+        merged.add(inProject);
+        continue;
+      }
+      await fs.move(from, to);
+      // Rendered here rather than left to the recursive pass, which no longer carries the
+      // command tokens. Recorded as done so that pass does not read it again.
+      await fs.writeFile(
+        to,
+        applyPlaceholders(await fs.readFile(to, "utf-8"), forGuides),
+        "utf-8"
+      );
+      merged.add(inProject);
+      continue;
+    }
+
+    // Writing through a link edits whatever it points at. The arrangement that makes this
+    // concrete is the common `CLAUDE.md -> AGENTS.md`: merging the pointer would append
+    // `@AGENTS.md` INTO the guide that was just merged, and a link pointing outside the project
+    // would let a scaffold modify a file elsewhere on the machine entirely. Measured — the write
+    // lands on the target and leaves the link in place, so nothing in the project directory shows
+    // that it happened.
+    //
+    // A HARD link is the same hazard `lstat` cannot see through: it reports a regular file,
+    // because that is exactly what a hard link is. `nlink` is what separates them, an ordinary
+    // file having one directory entry. Checked alongside rather than instead of the symlink test
+    // — a file can only be one of the two, so neither subsumes the other. Same reasoning and the
+    // same pair of checks as `writeScaffoldNpmrc`.
+    //
+    // Skipping means the project keeps whatever that file already says and does not receive the
+    // guide. That is the right trade: the developer arranged the link deliberately, and silently
+    // editing a file the project shares with something else is not this tool's decision.
+    if (destination.isSymbolicLink() || destination.nlink > 1) {
+      if (onLink === "materialize") {
+        // Read THROUGH the link for its content, then unlink and write a regular file in its
+        // place. The referent keeps whatever it held; only this project's entry stops being a
+        // link, which is what git requires for the patterns to apply at all.
+        // Read through the link for its content, distinguishing the two ways that can fail.
+        // A DANGLING link has no referent, so there are no rules to carry and materializing
+        // over it is exactly right — that is the case `lstat` selected this branch for. Any
+        // other failure means a referent exists and could not be read (permissions, an
+        // unexpected target type, a transient I/O error); treating that as empty would DISCARD
+        // the developer's rules while reporting success, so it propagates and leaves the link
+        // untouched.
+        const existing = await fs
+          .readFile(to, "utf-8")
+          .catch((error: unknown) => {
+            if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return "";
+            throw error;
+          });
+        const incoming = await fs.readFile(from, "utf-8");
+        await fs.remove(to);
+        await fs.writeFile(
+          to,
+          appendMissingLines(
+            existing,
+            applyPlaceholders(incoming, placeholders)
+          ),
+          "utf-8"
+        );
+        await fs.remove(from);
+        merged.add(inProject);
+        continue;
+      }
+      await fs.remove(from);
+      // Recorded as untouchable, not merely un-merged. The recursive placeholder pass treats a
+      // HARD link as an ordinary file — `readdir`'s Dirent reports `isFile()` for it, unlike a
+      // symlink — so without this it would render `{{databaseDialect}}` through the shared inode
+      // and modify a file outside the project after the merge had carefully declined to.
+      merged.add(inProject);
+      continue;
+    }
+
+    // The destination is the developer's file. Combine into it, then drop the shipped copy so the
+    // project is not left carrying both names.
+    const [existing, incoming] = await Promise.all([
+      fs.readFile(to, "utf-8"),
+      fs.readFile(from, "utf-8"),
+    ]);
+    const rendered = applyPlaceholders(incoming, forGuides);
+    const combined =
+      merge === "managed-block"
+        ? mergeManagedBlock(existing, rendered)
+        : appendMissingLines(existing, rendered);
+
+    // A pointer that resolves back to this file makes the guide import itself. The arrangement
+    // is the REVERSE link — `AGENTS.md -> CLAUDE.md` — where the guide entry is skipped as a
+    // link and this entry would then add `@AGENTS.md` to the very file `AGENTS.md` resolves to.
+    if (await pointsAtItself(targetDir, to, incoming)) {
+      await fs.remove(from);
+      merged.add(inProject);
+      continue;
+    }
+
+    await fs.writeFile(to, combined, "utf-8");
+    await fs.remove(from);
+    merged.add(inProject);
+  }
+
+  return merged;
+}
 
 // ============================================================
 // Template Path Resolution
@@ -160,19 +886,40 @@ async function replacePlaceholdersInFile(
 
   if (!isTextFile) return;
 
-  let content = await fs.readFile(filePath, "utf-8");
-  let changed = false;
+  // A hard link shares its inode with every other name pointing at it, and `lstat` cannot tell
+  // one from an ordinary file — being a regular file is exactly what a hard link is. `nlink`
+  // separates them. Rewriting one would edit whatever else points there, possibly outside the
+  // project, so this refuses rather than substituting.
+  //
+  // Scoped to the whole walk rather than to the guide: any template file the developer had
+  // already hard-linked carries the same hazard, and a per-file skip list would only ever cover
+  // the names someone thought of.
+  const link = await fs.lstat(filePath).catch(() => null);
+  if (link && link.nlink > 1) return;
 
+  const content = await fs.readFile(filePath, "utf-8");
+  const rendered = applyPlaceholders(content, placeholders);
+
+  if (rendered !== content) {
+    await fs.writeFile(filePath, rendered, "utf-8");
+  }
+}
+
+/**
+ * Substitute `{{placeholder}}` markers in a string.
+ *
+ * The single implementation of what rendering MEANS, so the recursive pass over a scaffolded
+ * project and the merge into a developer's existing file cannot disagree about it.
+ */
+function applyPlaceholders(
+  content: string,
+  placeholders: Record<string, string>
+): string {
+  let rendered = content;
   for (const [placeholder, value] of Object.entries(placeholders)) {
-    if (content.includes(placeholder)) {
-      content = content.replaceAll(placeholder, value);
-      changed = true;
-    }
+    rendered = rendered.replaceAll(placeholder, value);
   }
-
-  if (changed) {
-    await fs.writeFile(filePath, content, "utf-8");
-  }
+  return rendered;
 }
 
 /**
@@ -180,7 +927,16 @@ async function replacePlaceholdersInFile(
  */
 async function replacePlaceholders(
   dir: string,
-  placeholders: Record<string, string>
+  placeholders: Record<string, string>,
+  /**
+   * Names, relative to the walk's root, that are already rendered and must not be rewritten.
+   *
+   * A file merged into one the developer already had carries their prose as well as the
+   * scaffold's, and this pass rewrites whole files — so running it over such a file would
+   * substitute a `{{placeholder}}` occurring in THEIR text.
+   */
+  skip: ReadonlySet<string> = new Set(),
+  root: string = dir
 ): Promise<void> {
   const entries = await fs.readdir(dir, { withFileTypes: true });
 
@@ -189,8 +945,9 @@ async function replacePlaceholders(
 
     if (entry.isDirectory()) {
       if (entry.name === "node_modules" || entry.name === ".git") continue;
-      await replacePlaceholders(fullPath, placeholders);
+      await replacePlaceholders(fullPath, placeholders, skip, root);
     } else if (entry.isFile()) {
+      if (skip.has(path.relative(root, fullPath))) continue;
       await replacePlaceholdersInFile(fullPath, placeholders);
     }
   }
@@ -331,12 +1088,24 @@ async function resolveRuntimeVersions(): Promise<Record<string, string>> {
  * @param useYalc - When true, omits @nextlyhq/* packages (they'll be yalc-added)
  * @param projectType - Selected template. Determines optional plugin deps
  *   (e.g. `@nextlyhq/plugin-form-builder` ships only with `blog`).
+ * @param templateDirs - The directories being copied for this scaffold. The
+ *   font packages are read from these, so they match the templates the project
+ *   actually receives.
  */
 export async function generatePackageJson(
   projectName: string,
   database: DatabaseConfig,
   useYalc: boolean = false,
-  projectType: ProjectType = "blank"
+  projectType: ProjectType = "blank",
+  templateDirs: readonly string[] = [],
+  /**
+   * The project directory, once every copy has finished.
+   *
+   * Decides the Pagefind build step, which has to be settled against what the project HAS rather
+   * than what its templates ship — see {@link projectHasSearchIndexScript}. Omitting it means
+   * "there is no project on disk to ask", and no search step is emitted.
+   */
+  targetDir?: string
 ): Promise<string> {
   // Plugins are a publishable library, not an app — different package.json.
   if (projectType === "plugin") {
@@ -360,6 +1129,15 @@ export async function generatePackageJson(
   // to provide it. Admin bundles its own copy, which does not satisfy that peer
   // under isolated node_modules layouts.
   dependencies["lucide-react"] = "^0.544.0";
+
+  // The faces the template's own layout imports. Scaffolded as dependencies
+  // because the layout loads them from `node_modules` rather than fetching them
+  // from fonts.googleapis.com, which made every `next build` — including the
+  // one a CI run does before its browser tests — depend on reaching a third
+  // party, and fail behind a proxy or offline.
+  for (const font of await collectFontDependencies(templateDirs)) {
+    dependencies[font] = FONT_PACKAGE_RANGE;
+  }
 
   if (!useYalc) {
     // Content templates (blog) track the `alpha` dist-tag so they always get a
@@ -405,11 +1183,20 @@ export async function generatePackageJson(
     tailwindcss: PINNED_VERSIONS.tailwindcss,
     eslint: PINNED_VERSIONS.eslint,
     "eslint-config-next": runtimeVersions["eslint-config-next"],
-    // Pagefind powers /search in the blog template. Zero-config
-    // static index generated at `next build` time. Templates that
-    // don't ship a /search page simply won't invoke it.
-    pagefind: "^1.1.0",
   };
+
+  // Read from the project that was just assembled, so the generated script can only name a
+  // file that is actually there.
+  const shipsSearchIndex = targetDir
+    ? await projectHasSearchIndexScript(targetDir)
+    : false;
+
+  // Pagefind builds the static index behind /search. DECLARED only where the
+  // builder ships, because the index script invokes it through `node`, which
+  // resolves from node_modules — an undeclared dependency that happens to be
+  // fetched on demand by some other route would build here and fail for a user
+  // whose registry or network says otherwise.
+  if (shipsSearchIndex) devDependencies.pagefind = "^1.1.0";
 
   // NOTE: the build-script allowlist (better-sqlite3, sharp, esbuild,
   // unrs-resolver) is NOT emitted here. pnpm 11 no longer reads the `pnpm`
@@ -427,12 +1214,29 @@ export async function generatePackageJson(
       // prompts, and child supervision. `nextly dev` is gone; the only
       // supported dev command is the standard `next dev`.
       dev: "next dev --turbopack",
-      // Build: migrate DB + compile Next.js + (if present) generate
-      // the Pagefind search index. Templates without the search
-      // script silently skip the last step.
-      build:
-        "nextly migrate && next build && (test -f scripts/build-search-index.mjs && node scripts/build-search-index.mjs || true)",
-      "search:index": "node scripts/build-search-index.mjs",
+      // Build: migrate the database, compile Next.js, and generate the Pagefind
+      // search index for the templates that ship its builder.
+      //
+      // Whether that last step appears is decided HERE, from the files the
+      // scaffold actually received, rather than by a shell conditional in the
+      // script. Two reasons, and both were live:
+      //
+      // `npm run` uses cmd.exe on Windows, which has no `test` and no `true` —
+      // so the `(test -f … || true)` form this replaces failed for every Windows
+      // user, after `next build` had already succeeded. `&&` is all that remains,
+      // and cmd.exe understands it.
+      //
+      // And `|| true` turned a failed index build into a successful one. The
+      // search page then ships pointing at an index that was never written,
+      // which fails in the browser rather than in CI.
+      build: shipsSearchIndex
+        ? "nextly migrate && next build && node scripts/build-search-index.mjs"
+        : "nextly migrate && next build",
+      // Offered only where the file exists. A script that always fails is worse
+      // than an absent one: it reads as a supported command.
+      ...(shipsSearchIndex
+        ? { "search:index": "node scripts/build-search-index.mjs" }
+        : {}),
       start: "next start",
       lint: "next lint",
       nextly: "nextly",
@@ -442,8 +1246,11 @@ export async function generatePackageJson(
       "db:setup": "nextly db:sync",
       "db:migrate": "nextly migrate",
       "db:migrate:status": "nextly migrate:status",
+      // No `db:migrate:reset`: `nextly migrate:reset` is not a command the CLI
+      // registers, so the script it generated failed for every scaffolded
+      // project. `migrate:fresh` is the one that drops all tables and re-runs
+      // the migrations, and it is already exposed above.
       "db:migrate:fresh": "nextly migrate:fresh",
-      "db:migrate:reset": "nextly migrate:reset",
       "types:generate": "nextly generate:types",
     },
     dependencies,
@@ -583,9 +1390,29 @@ export const NATIVE_BUILD_DEPENDENCIES = [
  *     reads the `pnpm` field from package.json at all.
  *   - pnpm 10.6+ reads `onlyBuiltDependencies` (an array; deprecated in 11).
  *
- * Both keys are emitted so native deps compile on any pnpm 10.6+/11. pnpm 9
- * runs build scripts by default and ignores this file; npm/yarn ignore it too,
- * so it is safe to ship in every scaffold regardless of package manager.
+ * Both keys are emitted so native deps compile on any pnpm 10.6+/11. npm and
+ * yarn ignore the file entirely, and pnpm 9 runs build scripts by default, so
+ * it is safe to ship in every scaffold regardless of package manager.
+ *
+ * `packages` is emitted for pnpm 9 specifically. Before pnpm repurposed this
+ * file as the general settings home, its mere presence declared a workspace
+ * and a missing `packages` key was fatal:
+ *
+ *   ERR_PNPM_INVALID_WORKSPACE_CONFIGURATION  packages field missing or empty
+ *
+ * so a scaffold shipping the allowlist alone could not be installed at all on
+ * those versions.
+ *
+ * Measured, installing the file exactly as generated: 8.15.9, 9.0.0, 9.0.6,
+ * 9.1.0, 9.2.0 and 9.3.0 all refuse it; 9.4.0, 9.7.0, 9.15.9, 10.5.2, 10.6.1,
+ * 10.18.3 and 11.0.0 all accept it with or without the key. So the affected
+ * range is pnpm 8 through 9.3 — which includes the 9.0.0 this repository pins,
+ * and therefore the pnpm a contributor following the setup instructions has.
+ *
+ * The empty list is the honest value — a scaffolded app has no workspace
+ * members — and it leaves `pnpm add` behaving normally, which declaring the
+ * project's own root as a member would also have done but with a claim about
+ * the layout that is not true.
  */
 export function generatePnpmWorkspaceYaml(): string {
   const allowBuilds = NATIVE_BUILD_DEPENDENCIES.map(
@@ -601,10 +1428,127 @@ export function generatePnpmWorkspaceYaml(): string {
     "# compiled binding (sqlite apps crash at boot) and sharp/esbuild degrade.\n" +
     "#\n" +
     "# pnpm 11+ reads `allowBuilds`; pnpm 10.6+ reads `onlyBuiltDependencies`.\n" +
-    "# npm, yarn, and pnpm 9 ignore this file (they run build scripts by default).\n" +
+    "# npm and yarn ignore this file; pnpm 9 needs neither key, because it runs\n" +
+    "# build scripts by default.\n" +
+    "#\n" +
+    "# It does still READ the file, which is what the empty `packages` list is\n" +
+    "# for: through pnpm 9.3 the presence of this file declares a workspace, and\n" +
+    "# a missing `packages` key fails the install outright. This app has no\n" +
+    "# workspace members.\n" +
+    "packages: []\n" +
     `allowBuilds:\n${allowBuilds}\n` +
     `onlyBuiltDependencies:\n${onlyBuilt}\n`
   );
+}
+
+/**
+ * Generate the `.npmrc` for a scaffolded project, or `null` when it needs none.
+ *
+ * Written only for pnpm scaffolds, and only to undo a side effect of shipping
+ * `pnpm-workspace.yaml`: through pnpm 9.3 the presence of that file makes the
+ * project a workspace ROOT, so an ordinary
+ *
+ *     pnpm add zod
+ *
+ * is refused with `ERR_PNPM_ADDING_TO_ROOT` and a suggestion to pass `-w`. The
+ * check exists to stop a dependency landing in a monorepo's root instead of the
+ * package that wanted it; a scaffolded app has no other package, so there is
+ * nothing for it to protect and it only obstructs.
+ *
+ * Measured: 9.0.0 refuses `pnpm add` without this and accepts it with; 10.18.3
+ * and 11.0.0 accept it either way. Two alternatives were measured and rejected —
+ * declaring the root as a member (`packages: ["."]`) is refused identically, and
+ * the same setting written into `pnpm-workspace.yaml` is not read by pnpm 9 at
+ * all, since that file only became the settings home in 10.6.
+ *
+ * NOT written for npm, yarn or bun, which is the whole reason this is a separate
+ * function rather than an unconditional file: npm reads `.npmrc` too and prints
+ *
+ *     npm warn Unknown project config "ignore-workspace-root-check".
+ *     This will stop working in the next major version of npm.
+ *
+ * on every command. A permanent warning for the majority is a poor trade for a
+ * setting they cannot use.
+ *
+ * The residual gap, stated rather than left to be discovered: a project
+ * scaffolded with npm and later opened with pnpm 9.3 or older still meets
+ * `ERR_PNPM_ADDING_TO_ROOT`. That error names its own remedy, and the affected
+ * pnpm range is closed and shrinking.
+ */
+export function generateNpmrc(packageManager: PackageManager): string | null {
+  if (packageManager !== "pnpm") return null;
+
+  return (
+    "# This project is a single package, not a monorepo. pnpm 9 treats the\n" +
+    "# pnpm-workspace.yaml shipped for its build allowlist as declaring a\n" +
+    "# workspace root, which makes `pnpm add <pkg>` demand a -w flag. There is no\n" +
+    "# other package here for that check to protect.\n" +
+    `${NPMRC_WORKSPACE_ROOT_KEY}=true\n`
+  );
+}
+
+/** The setting {@link generateNpmrc} exists to add, named once so the writer can look for it. */
+const NPMRC_WORKSPACE_ROOT_KEY = "ignore-workspace-root-check";
+
+/**
+ * Give a scaffolded project the `.npmrc` its package manager needs, WITHOUT destroying one that
+ * is already there.
+ *
+ * Appends rather than writes. A scaffold does not always land on an empty directory — the CLI
+ * can overlay an existing project, and a `--local-template` can carry its own `.npmrc` — and that
+ * file is where private registries, auth tokens, proxies and `node-linker` live. Replacing it
+ * would break the install that runs moments later, and would do it by pointing at the wrong
+ * registry rather than by failing loudly.
+ *
+ * An existing declaration of the key WINS, whatever its value. Someone who has written
+ * `ignore-workspace-root-check=false` on purpose means it, and a scaffold is not the right place
+ * to overrule them.
+ *
+ * One helper for both scaffold types, because two copies of "write this file" drift: a correction
+ * to the app path that misses the plugin path is invisible until someone scaffolds a plugin.
+ */
+async function writeScaffoldNpmrc(
+  targetDir: string,
+  packageManager: PackageManager
+): Promise<void> {
+  const addition = generateNpmrc(packageManager);
+  if (!addition) return;
+
+  const npmrcPath = path.join(targetDir, ".npmrc");
+
+  // A SYMLINK here is left completely alone. Reading and writing it back would follow the link
+  // and append to whatever it points at — commonly a shared or home-directory config — so a
+  // scaffold would silently edit settings belonging to every other project on the machine.
+  // `lstat` reports the link itself rather than its target, which is the only way to see this:
+  // `pathExists` and `readFile` both resolve it and report the referent as though it were here.
+  //
+  // Skipping means a pnpm 9 user with a linked `.npmrc` still meets ERR_PNPM_ADDING_TO_ROOT on
+  // their first `pnpm add`. That error names its own remedy; silently rewriting a file outside
+  // the project does not, and is not the scaffolder's to make.
+  const link = await fs.lstat(npmrcPath).catch(() => null);
+  if (link?.isSymbolicLink()) return;
+
+  // A HARD link is the same hazard wearing a disguise `lstat` cannot see through: it reports a
+  // regular file, because that is exactly what a hard link is. The shared config and the path
+  // here are one inode, so appending would edit every project pointing at it.
+  //
+  // `nlink` is what separates them — an ordinary file has one directory entry. Checked after the
+  // symlink test rather than instead of it: the two are different relationships and a file can
+  // only be one of them, so neither check subsumes the other.
+  if (link && link.nlink > 1) return;
+
+  const existing = link ? await fs.readFile(npmrcPath, "utf-8") : "";
+
+  // Matched at the start of a line so a value mentioning the key, or a commented-out example,
+  // is not read as a declaration.
+  const alreadyDeclared = new RegExp(
+    `^\\s*${NPMRC_WORKSPACE_ROOT_KEY}\\s*=`,
+    "m"
+  ).test(existing);
+  if (alreadyDeclared) return;
+
+  const separator = existing === "" || existing.endsWith("\n") ? "" : "\n";
+  await fs.writeFile(npmrcPath, existing + separator + addition, "utf-8");
 }
 
 // ============================================================
@@ -622,6 +1566,19 @@ export interface CopyTemplateOptions {
   approach?: ProjectApproach;
   /** Explicit paths to base and template directories (from download or --local-template) */
   templateSource?: { basePath: string; templatePath: string };
+  /**
+   * The package manager the project will be installed with, which decides
+   * whether a `.npmrc` is written — see {@link generateNpmrc}.
+   *
+   * REQUIRED, and deliberately so. As an optional field defaulting to npm, the
+   * CLI's one line wiring the detected manager through could be deleted and
+   * every scaffold would silently lose its `.npmrc` — a default is a decision
+   * made for a caller that never stated one, and here the wrong decision is
+   * indistinguishable from the right one until a user runs `pnpm add`. Required
+   * makes that deletion a compile error instead of something a test has to
+   * notice.
+   */
+  packageManager: PackageManager;
   /**
    * Suppress the internal "directory already exists" guard. Set by the
    * installer when it has already negotiated a directory conflict with
@@ -656,6 +1613,7 @@ export async function copyTemplate(
     useYalc = false,
     approach,
     templateSource,
+    packageManager,
     allowExistingTarget = false,
   } = options;
 
@@ -692,7 +1650,13 @@ export async function copyTemplate(
   // app — no base app, no next.config/.env generation, no frontend page. Copy
   // the plugin tree as-is, generate its package.json, fill placeholders, done.
   if (projectType === "plugin") {
-    await copyPluginTemplate({ projectName, typeDir, targetDir, useYalc });
+    await copyPluginTemplate({
+      projectName,
+      typeDir,
+      targetDir,
+      useYalc,
+      packageManager,
+    });
     return;
   }
 
@@ -776,6 +1740,18 @@ export async function copyTemplate(
     });
   }
 
+  // The build steps a template brings with it — the blog's Pagefind index builder is the only
+  // one today. Without this the template's own `package.json` scripts name a file the project
+  // never receives, which is how the search index came to be silently absent from every blog
+  // scaffold: the build invoked it behind a `test -f` guard that swallowed the miss.
+  const templateScriptsDir = path.join(typeDir, "scripts");
+  if (await fs.pathExists(templateScriptsDir)) {
+    await fs.copy(templateScriptsDir, path.join(targetDir, "scripts"), {
+      overwrite: false,
+      filter: src => !SKIP_FILES.has(path.basename(src)),
+    });
+  }
+
   const frontendPagePath = path.join(
     targetDir,
     "src",
@@ -792,11 +1768,15 @@ export async function copyTemplate(
   }
 
   // Step 6: Generate package.json
+  // The dirs copied above, so the fonts installed are the fonts this scaffold
+  // actually received rather than whatever a separately-resolved tree holds.
   const packageJsonContent = await generatePackageJson(
     projectName,
     database,
     useYalc,
-    projectType
+    projectType,
+    [baseDir, typeDir],
+    targetDir
   );
   await fs.writeFile(
     path.join(targetDir, "package.json"),
@@ -814,6 +1794,26 @@ export async function copyTemplate(
     "utf-8"
   );
 
+  // Step 6c: Give the project the real names for the files the template ships renamed — the
+  // ignore file npm strips out of the tarball, and the agent guide kept inert in the source.
+  // The placeholder map is built here rather than at step 9 because a merge into a file the
+  // developer already had must render the incoming text itself; step 9 then skips what it
+  // merged, so their prose is never rewritten.
+  const placeholders = buildPlaceholderMap({ database, databaseUrl });
+  if (approach) {
+    placeholders["{{approach}}"] = approach;
+  }
+  const alreadyRendered = await restoreShippedNames(
+    targetDir,
+    placeholders,
+    packageManager
+  );
+
+  // Step 6d: Undo the side effect of the workspace file above for the pnpm versions that
+  // read it as a workspace declaration. Only for pnpm, because npm warns about the setting
+  // on every command — see generateNpmrc.
+  await writeScaffoldNpmrc(targetDir, packageManager);
+
   // Step 7: Create SQLite data directory if needed
   // SQLite stores its database file at ./data/nextly.db and the parent
   // directory must exist before the adapter can create the file.
@@ -829,13 +1829,9 @@ export async function copyTemplate(
     "utf-8"
   );
 
-  // Step 9: Replace placeholders in all text files
-  // Include approach placeholder for seed scripts
-  const placeholders = buildPlaceholderMap({ database, databaseUrl });
-  if (approach) {
-    placeholders["{{approach}}"] = approach;
-  }
-  await replacePlaceholders(targetDir, placeholders);
+  // Step 9: Replace placeholders in all text files, except the ones step 6c already rendered
+  // while merging them into content the developer wrote.
+  await replacePlaceholders(targetDir, placeholders, alreadyRendered);
 }
 
 /**
@@ -848,8 +1844,9 @@ async function copyPluginTemplate(opts: {
   typeDir: string;
   targetDir: string;
   useYalc: boolean;
+  packageManager: PackageManager;
 }): Promise<void> {
-  const { projectName, typeDir, targetDir, useYalc } = opts;
+  const { projectName, typeDir, targetDir, useYalc, packageManager } = opts;
 
   if (!(await fs.pathExists(typeDir))) {
     throw new Error(
@@ -883,17 +1880,31 @@ async function copyPluginTemplate(opts: {
   // pnpm 11 ignores the package.json `pnpm` field, and the embedded dev/
   // playground uses better-sqlite3 (native build) — so this file is what lets
   // `pnpm install` build it instead of aborting with ERR_PNPM_IGNORED_BUILDS.
-  // Harmless for npm/yarn/pnpm 9.
   await fs.writeFile(
     path.join(targetDir, "pnpm-workspace.yaml"),
     generatePnpmWorkspaceYaml(),
     "utf-8"
   );
 
-  // Fill plugin placeholders across the copied tree (src/ + dev/).
+  // The plugin scaffold is a git repository too, and npm strips its ignore file the same way. It
+  // carries its own agent guide — a publishable library rather than an app, so the base guide
+  // would describe the wrong project — and that guide is restored by the same table.
   const nextlyRange = await resolvePluginNextlyRange(useYalc);
-  await replacePlaceholders(
+  const placeholders = buildPlaceholderMap({
+    pluginName: projectName,
+    nextlyRange,
+  });
+  const alreadyRendered = await restoreShippedNames(
     targetDir,
-    buildPlaceholderMap({ pluginName: projectName, nextlyRange })
+    placeholders,
+    packageManager
   );
+
+  // It installs like any other project too, so it meets the same workspace-root refusal the
+  // pnpm workspace file provokes on pnpm 9 — through the same writer as the app path.
+  await writeScaffoldNpmrc(targetDir, packageManager);
+
+  // Fill plugin placeholders across the copied tree (src/ + dev/), leaving alone whatever was
+  // rendered while merging into a file the developer already had.
+  await replacePlaceholders(targetDir, placeholders, alreadyRendered);
 }

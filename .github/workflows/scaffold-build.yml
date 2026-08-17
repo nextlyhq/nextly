@@ -1,0 +1,709 @@
+name: Scaffold build
+
+# Does a scaffolded project actually INSTALL and BUILD?
+#
+# The per-PR `scaffold-smoke` job in `ci.yml` answers a narrower question. It runs
+# `--skip-install` to stay fast, so it proves the CLI writes files and never that what it
+# wrote resolves. The nightly `scaffold-and-build` in `package-smoke.yml` does the real
+# install and build, and is gated `if: github.event_name != 'pull_request'`.
+#
+# Between them sits a class of change nothing on a pull request can see: one that alters
+# what a scaffolded project DEPENDS ON or IMPORTS. Its failure mode is not a red test —
+# it is every newly scaffolded project failing on the user's machine, hours before the
+# nightly reports it. A template that references a font package, a dependency the
+# generator stops emitting, an import that resolves here and not from a published
+# tarball: all merge green today.
+#
+# Deliberately NOT solved by relaxing the nightly job's gate. That workflow's
+# `pull_request.paths` filter already includes `pnpm-lock.yaml`, so dropping the `if:`
+# would put a ~30-minute install-and-build on every dependency bump — the most frequent
+# pull request in the repo, and the one least likely to change what a scaffold imports.
+# The cost belongs on changes to the scaffolder and its templates, which are rare.
+on:
+  pull_request:
+    paths:
+      # `templates/plugin/**` is deliberately absent. A plugin scaffold is a publishable
+      # LIBRARY rather than a Next app, so the assertions below — a root layout, font packages,
+      # a `.next` directory — do not describe it, and a job that triggered on it while testing
+      # something else would claim a coverage it does not have. Tracked separately.
+      #
+      - "templates/base/**"
+      - "templates/blank/**"
+      - "templates/blog/**"
+      - "packages/create-nextly-app/**"
+      - ".github/workflows/scaffold-build.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scaffold-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scaffold-build:
+    name: Scaffold ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    # One OS and one Node line. Cross-platform path handling is `scaffold-smoke`'s
+    # question and native-module ABI coverage is the nightly matrix's; repeating either
+    # here would buy minutes of duplicate signal.
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      # Legs are listed explicitly rather than crossed, because these axes are not independent:
+      # the template source is a property of the CLI rather than of any one package manager,
+      # and the pnpm version only means anything on a pnpm leg. A cross product would spend
+      # minutes on combinations that test nothing new.
+      #
+      # The rule each leg answers to: this job triggers on a set of paths, and every BEHAVIOUR
+      # those paths can change should be exercised by some leg. Triggering on a path whose
+      # behaviour no leg runs is the defect this job exists to catch, turned on itself.
+      #
+      # THREE behaviours are knowingly not covered, and they are listed rather than left for
+      # someone to infer from a green run:
+      #
+      # 1. The non-sqlite dialects. A scaffold's build script is `nextly migrate && next
+      #    build`, so a postgres or mysql leg needs a live and EMPTY database rather than only
+      #    a connection string — measured, a postgres scaffold fails its build with
+      #    ECONNREFUSED without one. That needs service containers, which is its own change;
+      #    until then a CLI edit that misnames an adapter passes here.
+      # 2. `downloadTemplate`, the runtime Codeload fetch. Only content templates are
+      #    downloaded — `blank` always resolves locally or from the packed tarball — and every
+      #    blog leg below passes `--local-template` so it reads the templates under review
+      #    rather than a published branch. A broken Codeload URL, archive filter, branch
+      #    handling or extraction path therefore still merges green. Covering it needs a leg
+      #    that passes `--branch`, which only works for a same-repository pull request: a fork's
+      #    branch does not exist under `nextlyhq/nextly` for Codeload to fetch. A leg that
+      #    silently no-ops on forks would report a coverage it does not have on exactly the
+      #    contributions least able to check it, so it is named here instead.
+      matrix:
+        include:
+          # The default scaffold, and the baseline everything else varies from.
+          - name: blank
+            template: blank
+            pm: npm
+            source: local
+
+          # npm installs a HOISTED tree, so an import of an undeclared transitive dependency
+          # resolves there and the build passes — while the same project fails for anyone
+          # invoking the CLI through pnpm, whose layout does not expose subdependencies at the
+          # root. The asymmetry is between the two RESOLVERS, so one template covers it.
+          #
+          # This leg runs the pnpm the repo pins (9.0.0), which is also the one STRICTEST about
+          # the generated `pnpm-workspace.yaml`: through 9.3, the presence of that file
+          # declared a workspace and a missing `packages` key failed the install outright.
+          # pnpm relaxed it in 9.4 when the file became the general settings home, so a leg on
+          # any current pnpm would not see it.
+          - name: blank-pnpm9
+            template: blank
+            pm: pnpm
+            source: local
+
+          # The same resolver on a modern pnpm, because the two read the generated workspace
+          # file DIFFERENTLY and each ignores what the other enforces. pnpm 9 runs dependency
+          # build scripts by default and never consults `allowBuilds` or
+          # `onlyBuiltDependencies` — so on that leg alone, a regression that dropped either
+          # key stays green while pnpm 10+ users get an install that aborts with
+          # ERR_PNPM_IGNORED_BUILDS and a better-sqlite3 with no compiled binding.
+          - name: blank-pnpm11
+            template: blank
+            pm: pnpm
+            source: local
+            pnpmVersion: "11"
+
+          # NO `--local-template`, so the CLI falls back to the templates BUNDLED in the packed
+          # tarball. Every other leg passes the flag, so a break in the bundled-template copy —
+          # or `templates` dropped from the published `files` — would leave all of them green
+          # while an ordinary `create-nextly-app --template blank` fails with
+          # "Template not found".
+          - name: blank-bundled
+            template: blank
+            pm: npm
+            source: bundled
+
+          # The blog template, which carries everything `blank` does not: a query layer over
+          # the Direct API, a generated build script with a search-index step, and migrations
+          # shipped as per-dialect SQL variants. `blank` exercises none of it, so a change that
+          # breaks the blog template alone reaches users through a green run without these.
+          - name: blog-code-first
+            template: blog
+            approach: code-first
+            pm: npm
+            source: local
+            core: workspace
+
+          # The SAME template through the schema-builder approach, which is a different config
+          # (`collections: []`, so the schema lives in the database) reaching the same query
+          # layer. The two approaches share every file under src/, so a repair verified on one
+          # says nothing about the other.
+          #
+          # On pnpm, because no blog leg has ever run one: the blog template pulls more
+          # dependencies than `blank` — Pagefind among them — and pnpm's non-hoisted layout is
+          # where an undeclared transitive import fails.
+          - name: blog-visual
+            template: blog
+            approach: visual
+            pm: pnpm
+            source: local
+            core: workspace
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the CLI and core
+        run: pnpm turbo build --filter=create-nextly-app --filter=nextly
+
+      # Packed and installed from the tarball rather than run from source, so the run
+      # exercises the `files` list a published package actually ships. A generator that
+      # works from the repo and omits a template from `files` is exactly the failure this
+      # is looking for.
+      - name: Pack the CLI
+        run: |
+          mkdir -p /tmp/nextly-pack
+          (cd packages/create-nextly-app && pnpm pack --pack-destination /tmp/nextly-pack)
+
+      # AFTER the repo's own install, build and pack, all of which must run on the pinned
+      # pnpm. Only the scaffold's install is being varied.
+      #
+      # Into its OWN prefix, placed on PATH through `GITHUB_PATH`, rather than a plain
+      # `npm install -g`. `pnpm/action-setup` has already put its own bin directory on PATH,
+      # and a global install landing behind it would leave the pinned pnpm in front — the leg
+      # would then run 9 while claiming 11. `GITHUB_PATH` entries are PREPENDED, so this wins.
+      - name: Install the pnpm the scaffold should use
+        if: matrix.pnpmVersion != ''
+        shell: bash
+        run: |
+          npm install -g --prefix /tmp/pnpm-shim "pnpm@${{ matrix.pnpmVersion }}"
+          echo "/tmp/pnpm-shim/bin" >> "$GITHUB_PATH"
+
+      # A separate step because `GITHUB_PATH` takes effect for SUBSEQUENT steps, so the check
+      # cannot live in the one above.
+      #
+      # Asked from the SCAFFOLD directory rather than the checkout, and the difference is not a
+      # detail: pnpm 10+ reads `packageManager` and re-executes itself as that version, so a
+      # freshly installed pnpm 11 answers `9.0.0` anywhere inside this repository — measured —
+      # while the scaffold, which runs outside it, is genuinely on 11. The version that governs
+      # an install is the one resolved where that install happens.
+      #
+      # Without this the leg is unfalsifiable: an install that failed, or landed off PATH,
+      # leaves the pinned pnpm in place and the leg reports a green for a version it never ran.
+      - name: Check the scaffold will use that pnpm
+        if: matrix.pnpmVersion != ''
+        shell: bash
+        run: |
+          mkdir -p /tmp/scaffold-build
+          actual=$(cd /tmp/scaffold-build && pnpm --version)
+          echo "pnpm resolved where the scaffold runs: $actual"
+          case "$actual" in
+            "${{ matrix.pnpmVersion }}".*) ;;
+            *) echo "expected pnpm ${{ matrix.pnpmVersion }}.x, got $actual"; exit 1 ;;
+          esac
+
+      # The other legs install `nextly` and its siblings from npm, which is the right
+      # question for them: does a project a user scaffolds TODAY install and build. It is the
+      # wrong question for a template change, because a template is merged together with the
+      # core changes it depends on and the published packages do not have them yet.
+      #
+      # Measured on the pull request that added these legs: the blog template sets
+      # `admin.defaultColumns`, which that branch adds to `CollectionAdminOptions`, and the
+      # published `nextly` rejects it. Against the registry the leg fails for a reason that is
+      # not a defect; after release it would pass while a core regression went untested.
+      #
+      # `pnpm pack` rather than a workspace link, because packing is what rewrites `workspace:*`
+      # to a concrete version — a linked source directory would carry the protocol into a
+      # project that is not a workspace and fail to install.
+      - name: Pack the workspace packages a scaffold installs
+        if: matrix.core == 'workspace'
+        shell: bash
+        run: |
+          mkdir -p /tmp/nextly-workspace-packs
+
+          # The set is DERIVED from the workspace, not listed here. A list was listed here,
+          # and it went stale: `nextly` and `plugin-sdk` both depend on
+          # `@nextlyhq/blocks-engine`, which was never packed — so `pnpm pack` rewrote that
+          # `workspace:*` to a concrete version and the install resolved it FROM THE REGISTRY.
+          # These legs were therefore testing the PUBLISHED blocks-engine while reporting on
+          # the workspace, and on a release PR — where the bumped version does not exist yet —
+          # the same gap fails outright with ETARGET.
+          #
+          # `create-nextly-app` is excluded because it is the scaffolder rather than a
+          # dependency of what it scaffolds; its own pack step covers it.
+          #
+          # The names are a question the manifests answer, and a second answer agrees only
+          # until someone adds a package. That is exactly what happened here once already.
+          PKGS=$(node -e '
+            const fs = require("node:fs");
+            const names = fs.readdirSync("packages").filter(dir => {
+              try {
+                const manifest = JSON.parse(
+                  fs.readFileSync(`packages/${dir}/package.json`, "utf8")
+                );
+                return manifest.private !== true && manifest.name &&
+                  manifest.name !== "create-nextly-app";
+              } catch { return false; }
+            });
+            if (names.length === 0) { throw new Error("no publishable packages found"); }
+            console.log(names.join(" "));
+          ')
+          echo "packing: $PKGS"
+
+          # Built with the same list. These packages publish only `dist`, so packing one
+          # unbuilt SUCCEEDS and yields a tarball of metadata with no code — the pin would
+          # then replace working registry packages with empty ones and the leg would fail to
+          # resolve an entry point, blaming the template. The trailing `...` includes each
+          # package itself as well as its dependencies.
+          FILTERS=""
+          for dir in $PKGS; do
+            NAME=$(node -p "require('./packages/$dir/package.json').name")
+            FILTERS="$FILTERS --filter=$NAME..."
+          done
+          # shellcheck disable=SC2086
+          pnpm turbo build $FILTERS
+
+          for dir in $PKGS; do
+            (cd "packages/$dir" && pnpm pack --pack-destination /tmp/nextly-workspace-packs)
+          done
+
+          # Controls on that loop. Counting files is not enough: `pnpm pack` exits 0 for an
+          # unbuilt package too, so the count would match while the tarballs held no code.
+          # Each one is opened and required to contain a `dist` entry.
+          #
+          # The expected count is DERIVED from the same list rather than a fixed number. A
+          # literal was what let the previous gap hide: nine tarballs satisfied `-ge 9` while
+          # the tenth package the scaffold needed was never packed at all.
+          expected=$(echo "$PKGS" | wc -w | tr -d ' ')
+          count=$(ls /tmp/nextly-workspace-packs/*.tgz 2>/dev/null | wc -l | tr -d ' ')
+          echo "packed tarballs: $count (expected $expected)"
+          [ "$count" -eq "$expected" ] || { echo "expected $expected tarballs, got $count"; exit 1; }
+
+          # Each tarball is opened and required to contain the FIRST path its own manifest
+          # declares under `files`. `pnpm pack` exits 0 for an unbuilt package too, so a
+          # count alone would be satisfied by tarballs of metadata with no code — the pin
+          # would then replace working registry packages with empty ones and the leg would
+          # fail to resolve an entry point, blaming the template.
+          #
+          # Read from the manifest rather than assuming `dist`. Not every publishable
+          # package builds: `@nextlyhq/admin-css` has no build script and publishes `src`
+          # and `bin`, so a hardcoded `dist` assertion fails it forever — which is the same
+          # mistake as the hardcoded package list this step just stopped making, one level
+          # down. Negation entries (`!dist/metafile-*.json`) are skipped: they subtract from
+          # a set rather than naming something that must be present.
+          for dir in $PKGS; do
+            NAME=$(node -p "require('./packages/$dir/package.json').name")
+            WANT=$(node -p "
+              (require('./packages/$dir/package.json').files || [])
+                .filter(entry => !entry.startsWith('!'))[0] || ''
+            ")
+            [ -n "$WANT" ] || { echo "$NAME declares no files[] — cannot verify its tarball"; exit 1; }
+
+            TGZ=$(ls /tmp/nextly-workspace-packs/*.tgz | while read -r f; do
+              tar -xzOf "$f" package/package.json 2>/dev/null \
+                | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{try{if(JSON.parse(d).name===process.argv[1])console.log(process.argv[2])}catch{}})" "$NAME" "$f"
+            done | head -1)
+            [ -n "$TGZ" ] || { echo "no tarball found for $NAME"; exit 1; }
+
+            entries=$(tar -tzf "$TGZ" | grep -c "^package/$WANT" || true)
+            echo "$(basename "$TGZ"): $entries entries under $WANT"
+            [ "$entries" -gt 0 ] || {
+              echo "$(basename "$TGZ") contains nothing under $WANT — it was packed unbuilt"
+              exit 1
+            }
+          done
+
+      # The packed tarballs are served from a registry running inside the job, and the
+      # scaffold installs them BY VERSION. The mechanism this replaces rewrote the generated
+      # manifest to `file:` specifiers, and pnpm applies that rewrite to peer RANGES as well as
+      # to dependency specs. No resolved semver version satisfies a `file:` range, so pnpm
+      # reported `unmet peer nextly@file:...: found 0.0.2-alpha.57` with a correct copy
+      # installed, never linked the peer, and the build failed on `Can't resolve
+      # '@nextlyhq/plugin-sdk/admin'`. npm's hoisted layout hid the same defect.
+      #
+      # Publishing real tarballs removes that class rather than narrowing it: peer ranges stay
+      # semver, and the generated manifest is not modified at all. The generator already writes
+      # `^0.0.2-alpha.<current>`, which the packed version satisfies, so the app resolves the
+      # packages under review while still declaring exactly the dependencies a user's project
+      # would. A boundary the resolver agrees with, rather than a check that looks for crossings.
+      - name: Serve the packed packages from a registry in this job
+        if: matrix.core == 'workspace'
+        shell: bash
+        run: |
+          mkdir -p /tmp/local-registry/storage
+
+          # `nextly` and `@nextlyhq/*` are served with NO uplink, so a copy already on npm can
+          # never answer for them. Everything else proxies, because the scaffold still installs
+          # react, next and the rest the way a user would.
+          cat > /tmp/local-registry/config.yaml <<'YAML'
+          storage: ./storage
+          uplinks:
+            npmjs:
+              url: https://registry.npmjs.org/
+          packages:
+            'nextly':
+              access: $all
+              publish: $all
+              unpublish: $all
+            '@nextlyhq/*':
+              access: $all
+              publish: $all
+              unpublish: $all
+            '**':
+              access: $all
+              publish: $all
+              proxy: npmjs
+          log: { type: stdout, format: pretty, level: warn }
+          YAML
+
+          # Written to the runner's home rather than passed as a flag, because the scaffold's
+          # install is run by the CLI rather than by this step, and pnpm and npm both read it.
+          #
+          # The scope line is not redundant with the registry line. A `@scope:registry` entry
+          # outranks even an explicit `--registry` argument, so without it every `@nextlyhq`
+          # request goes to npmjs and the leg silently tests the last release.
+          # STARTED BEFORE the redirect below, and the order is load-bearing. `verdaccio` is not a
+          # repository dependency, so this fetches it, and a redirect written first would point that
+          # fetch at a port nothing is listening on yet. It currently survives only because this
+          # step runs from the repository root, whose own `.npmrc` names npmjs and outranks the
+          # user-level file being written below — a working directory away from failing.
+          npx --yes verdaccio@6 --config /tmp/local-registry/config.yaml --listen 4873 \
+            > /tmp/local-registry/server.log 2>&1 &
+
+          {
+            echo "registry=http://localhost:4873/"
+            echo "@nextlyhq:registry=http://localhost:4873/"
+            echo "//localhost:4873/:_authToken=local-registry"
+            echo "provenance=false"
+          } >> "$HOME/.npmrc"
+
+          for _ in $(seq 1 90); do
+            curl -sf http://localhost:4873/-/ping > /dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -sf http://localhost:4873/-/ping > /dev/null 2>&1 || {
+            echo "the local registry never came up"
+            tail -20 /tmp/local-registry/server.log
+            exit 1
+          }
+
+          # Refuse to publish anything until both names resolve locally. These packages carry
+          # `publishConfig.registry: https://registry.npmjs.org/`, so a publish that reaches the
+          # network is a publish to the real registry — measured locally, where exactly that
+          # happened and was stopped only by the absence of a credential.
+          for key in registry @nextlyhq:registry; do
+            resolved=$(cd /tmp && npm config get "$key")
+            case "$resolved" in
+              http://localhost:4873*) echo "$key resolves to $resolved" ;;
+              *) echo "refusing to publish: $key resolves to '$resolved'"; exit 1 ;;
+            esac
+          done
+
+          # `--registry` is passed AS WELL as the config entry above, and neither is sufficient
+          # alone: the flag is what overrides each package's own `publishConfig.registry`, and
+          # the config entry is what wins for a scoped name where the flag does not.
+          # `--tag` is required because every version here is a prerelease.
+          #
+          # Every published version also carries the `alpha` tag. The generator resolves a version
+          # by asking npmjs for a package's dist-tags, and for a package whose only published
+          # artifact is its `0.0.0` name-claiming placeholder there is no `alpha` tag to find — so
+          # it writes the literal string `alpha` as the spec rather than a range. A local registry
+          # carrying only `latest` cannot satisfy that, and the leg would fail on an unavailable
+          # tag instead of testing the new package.
+          published=0
+          for f in /tmp/nextly-workspace-packs/*.tgz; do
+            (cd /tmp && npm publish "$f" \
+              --registry http://localhost:4873 --tag latest --provenance=false) \
+              >> /tmp/local-registry/publish.log 2>&1 && published=$((published + 1))
+
+            meta=$(tar -xzOf "$f" package/package.json)
+            spec=$(node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{const m=JSON.parse(d);console.log(m.name+'@'+m.version)})" <<<"$meta")
+            (cd /tmp && npm dist-tag add "$spec" alpha --registry http://localhost:4873) \
+              >> /tmp/local-registry/publish.log 2>&1
+          done
+
+          expected=$(ls /tmp/nextly-workspace-packs/*.tgz | wc -l | tr -d ' ')
+          echo "published $published of $expected"
+          [ "$published" -eq "$expected" ] || {
+            echo "not every packed package reached the local registry"
+            tail -30 /tmp/local-registry/publish.log
+            exit 1
+          }
+
+          if grep -q "registry.npmjs.org" /tmp/local-registry/publish.log; then
+            echo "a publish was aimed at the real registry"
+            exit 1
+          fi
+
+          # A publish loop that silently no-opped would satisfy the count above, so each
+          # package is asked for by the exact version the tarball carries.
+          for f in /tmp/nextly-workspace-packs/*.tgz; do
+            meta=$(tar -xzOf "$f" package/package.json)
+            name=$(node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>console.log(JSON.parse(d).name))" <<<"$meta")
+            version=$(node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>console.log(JSON.parse(d).version))" <<<"$meta")
+            got=$(cd /tmp && npm view "$name@$version" version 2>/dev/null)
+            [ "$got" = "$version" ] || {
+              echo "$name@$version is not resolvable from the local registry (got '$got')"
+              exit 1
+            }
+          done
+          echo "all $expected packages resolve from the local registry"
+
+      - name: Scaffold with a real install
+        shell: bash
+        run: |
+          mkdir -p /tmp/scaffold-build
+          cd /tmp/scaffold-build
+          tarball=$(ls /tmp/nextly-pack/*.tgz | head -1)
+          # `--local-template` points the CLI at THIS checkout, so the legs that pass it read
+          # the template contents under review rather than whatever the packed tarball carries.
+          # The `bundled` leg deliberately does not, which is how the tarball's own copy gets
+          # exercised.
+          #
+          # `npm exec --package=<tarball> -- <bin>` is the explicit form; `npx --yes <tarball>`
+          # routes the path through sh on npm 11 and fails on the tgz. No `--skip-install`: the
+          # install is the point.
+          #
+          # The package manager the CLI installs with follows the one that INVOKED it, so the
+          # leg is chosen here rather than by a flag.
+          args="--template ${{ matrix.template }} --yes"
+          # Only the content templates have approaches; `blank` rejects the flag.
+          if [ -n "${{ matrix.approach }}" ]; then
+            args="$args --approach ${{ matrix.approach }}"
+          fi
+          # Omitted on the `bundled` leg so the CLI falls back to the templates inside the
+          # packed tarball rather than reading this checkout.
+          if [ "${{ matrix.source }}" = "local" ]; then
+            args="$args --local-template $GITHUB_WORKSPACE/templates"
+          fi
+
+          if [ "${{ matrix.pm }}" = "pnpm" ]; then
+            pnpm dlx "$tarball" scaffolded-app $args
+          else
+            npm exec --yes --package="$tarball" -- create-nextly-app scaffolded-app $args
+          fi
+
+      # The controls, before the build's verdict is worth anything. A job that scaffolded
+      # nothing, or scaffolded into the wrong directory, would otherwise reach a build
+      # step with nothing to build and report whatever that produces.
+      - name: Check the scaffold produced what the build needs
+        shell: bash
+        run: |
+          cd /tmp/scaffold-build/scaffolded-app
+          test -f package.json || { echo "no package.json: the scaffold did not run"; exit 1; }
+          test -d node_modules || { echo "no node_modules: the install did not run"; exit 1; }
+          test -f src/app/layout.tsx || { echo "no root layout: the template did not copy"; exit 1; }
+
+          # A scaffold writes a real `.env`, so without this the first `git add .` in a new
+          # project commits it. Checked on every leg because the file reaches the project by two
+          # different routes — from this checkout on the `local` legs and from the packed tarball
+          # on `bundled` — and only the second is where npm strips it out.
+          test -f .gitignore || { echo "no .gitignore: a new project would commit its .env"; exit 1; }
+
+          # The agent guide, and the pointer that makes Claude Code read it. Asserted on
+          # every leg because they reach a project by two different routes — from this
+          # checkout on the `local` legs, from the packed tarball on `bundled` — and only
+          # the second is where a missing `files` entry would drop them.
+          test -f AGENTS.md || { echo "no AGENTS.md: the scaffold shipped no agent guide"; exit 1; }
+          test -f CLAUDE.md || { echo "no CLAUDE.md: nothing points Claude Code at AGENTS.md"; exit 1; }
+
+          # The guide is generated from a template, so an unresolved placeholder would ship
+          # `{{databaseDialect}}` to the reader as if it were the answer.
+          if grep -q '{{' AGENTS.md; then
+            echo "AGENTS.md still contains an unreplaced {{placeholder}}"
+            grep -n '{{' AGENTS.md
+            exit 1
+          fi
+
+          # `node_modules` says an install ran; it does not say WHICH installer ran. The CLI
+          # picks that from the forwarded `npm_config_user_agent`, so a regression there — or a
+          # pnpm release that stops forwarding it — would quietly run npm instead, and npm's
+          # hoisted, build-script-running tree passes everything these pnpm legs exist to check.
+          # The lockfile is the installer's own signature.
+          # Both directions, because the misclassification runs both ways. `pnpm/action-setup`
+          # has put pnpm on this runner, so an npm leg that was detected AS pnpm installs
+          # perfectly well here and `npm run build` reuses those modules — while an ordinary npm
+          # user, with no pnpm on their machine, fails during scaffolding. Asserting only the
+          # pnpm side would leave that one green.
+          case "${{ matrix.pm }}" in
+            pnpm)
+              test -f pnpm-lock.yaml || {
+                echo "no pnpm-lock.yaml: this leg claims pnpm but something else installed"
+                exit 1
+              }
+              ;;
+            npm)
+              test -f package-lock.json || {
+                echo "no package-lock.json: this leg claims npm but something else installed"
+                exit 1
+              }
+              ;;
+            *)
+              echo "unknown package manager '${{ matrix.pm }}': no lockfile to identify it by"
+              exit 1
+              ;;
+          esac
+
+          # Every package the layouts import must be installed. Derived from the sources
+          # rather than named here: a list in this file is a second answer to a question
+          # the templates already answer, and the two agree only until someone changes a
+          # face.
+          missing=""
+          for pkg in $(grep -rhoE '@fontsource(-variable)?/[a-z0-9-]+' src/ | sort -u); do
+            [ -d "node_modules/$pkg" ] || missing="$missing $pkg"
+          done
+          if [ -n "$missing" ]; then
+            echo "imported but not installed:$missing"
+            exit 1
+          fi
+
+          # A positive control on that loop. It reports success by finding nothing
+          # missing, which is also what a `grep` that matched nothing produces — so the
+          # count it scanned has to be non-zero.
+          found=$(grep -rhoE '@fontsource(-variable)?/[a-z0-9-]+' src/ | sort -u | wc -l)
+          echo "font packages imported by the scaffold: $found"
+          [ "$found" -gt 0 ] || { echo "scanned no font imports at all"; exit 1; }
+
+      # The scaffold's own install already resolved these from the local registry, so there is
+      # nothing to repin. What remains is the assertion that it did: the install exits 0 either
+      # way, and a published copy carries the same name and version as the packed one, so
+      # nothing about the manifest distinguishes them. The packed tarball's entry file is diffed
+      # against the installed one.
+      - name: Check the packages under review are the ones installed
+        if: matrix.core == 'workspace'
+        shell: bash
+        run: |
+          cd /tmp/scaffold-build/scaffolded-app
+          rm -rf /tmp/pack-check && mkdir -p /tmp/pack-check
+          tar -xzf /tmp/nextly-workspace-packs/nextly-*.tgz -C /tmp/pack-check
+          if ! diff -q /tmp/pack-check/package/dist/index.mjs \
+                       node_modules/nextly/dist/index.mjs > /dev/null; then
+            echo "installed nextly does NOT match the packed workspace build"
+            echo "the install fell through to a published copy; this leg would test the last release"
+            exit 1
+          fi
+          echo "installed nextly matches the packed workspace build"
+
+          # The generated manifest has to be exactly what the CLI wrote. What this replaces
+          # rewrote it, and every version of that rewrite widened the app's dependency graph:
+          # an import the generator deliberately never declares would then compile here and fail
+          # in a real project. Asserting the manifest is untouched is what keeps these legs a
+          # test of the dependency boundary rather than of a boundary CI invented.
+          node -e "
+            const manifest = require('/tmp/scaffold-build/scaffolded-app/package.json');
+            const specs = {
+              ...manifest.dependencies,
+              ...manifest.devDependencies,
+              ...manifest.optionalDependencies,
+            };
+            const rewritten = Object.entries(specs)
+              .filter(([, spec]) => String(spec).startsWith('file:'))
+              .map(([name]) => name);
+            if (rewritten.length > 0) {
+              console.error('the manifest carries file: specifiers: ' + rewritten.join(', '));
+              process.exit(1);
+            }
+            if (manifest.pnpm && manifest.pnpm.overrides) {
+              console.error('the manifest carries pnpm.overrides');
+              process.exit(1);
+            }
+            console.log('the generated manifest is unmodified');
+          "
+
+      - name: Build the scaffolded project
+        shell: bash
+        run: |
+          cd /tmp/scaffold-build/scaffolded-app
+          npm run build
+
+      # `next build` exiting 0 is the assertion, and this is the check that it did the
+      # work rather than short-circuiting: a build that produced no output would
+      # otherwise pass on its exit code alone.
+      - name: Check the build produced output
+        shell: bash
+        run: |
+          cd /tmp/scaffold-build/scaffolded-app
+          test -d .next || { echo "no .next: the build produced nothing"; exit 1; }
+
+          # Nothing may have been fetched from Google at build time. Asserted on the
+          # OUTPUT rather than on the log: Next emits these modules only when the
+          # `next/font/google` loader actually runs, so their absence is structural.
+          if grep -rq "internal/font/google" .next; then
+            echo "the build ran the Google font loader, which needs the network"
+            exit 1
+          fi
+
+      # The blog template ships a search page whose index is built after `next build`. Two
+      # separate questions, because one green can hide the other:
+      #
+      #  - is Pagefind DECLARED by the generated project? `npx -y pagefind` downloads on
+      #    demand, so the index appearing proves only that the network worked. Dropping
+      #    pagefind from the generated manifest leaves every artifact assertion passing while
+      #    an offline or locked-down install has nothing to run.
+      #  - can the index actually be PRODUCED? A fresh scaffold has no posts, so the real
+      #    build correctly indexes nothing and writes no bundle — meaning the success path
+      #    ships untested unless something gives it a page to read. The fixture below is that
+      #    positive control: without it this job asserts only that the empty case is handled.
+      - name: Check the blog can build its search index
+        if: matrix.template == 'blog'
+        shell: bash
+        run: |
+          cd /tmp/scaffold-build/scaffolded-app
+          node -e '
+            const pkg = require("./package.json");
+            const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+            if (!deps.pagefind) {
+              console.error("the generated project does not declare pagefind");
+              process.exit(1);
+            }
+            console.log("pagefind declared:", deps.pagefind);
+          '
+
+          # A page where the build puts posts, so the glob is exercised against the layout
+          # `next build` really produces rather than an assumed one.
+          test -d .next/server/app || { echo "no build output to place a fixture in"; exit 1; }
+          mkdir -p .next/server/app/blog
+          cat > .next/server/app/blog/ci-fixture.html <<'HTML'
+          <!doctype html><html lang="en"><body><main><h1>Indexable fixture</h1>
+          <p>Content that the search index must contain after this run.</p></main></body></html>
+          HTML
+
+          npm run search:index
+
+          test -f public/pagefind/pagefind.js || {
+            echo "the search index step reported success but wrote no bundle"
+            exit 1
+          }
+
+      # Installing once is not the whole of a package manager's job. Shipping
+      # `pnpm-workspace.yaml` for the build allowlist makes the project a workspace ROOT on
+      # pnpm 9, and pnpm refuses `pnpm add` into a workspace root without `-w`
+      # (ERR_PNPM_ADDING_TO_ROOT) — so a scaffold can install cleanly and still refuse the
+      # first thing a user does with it. Text assertions over the generated config cannot
+      # see that; only running the command can.
+      - name: Check the scaffold accepts a new dependency
+        if: matrix.pm == 'pnpm'
+        shell: bash
+        run: |
+          cd /tmp/scaffold-build/scaffolded-app
+          pnpm add is-odd --ignore-scripts
+          # `pnpm add` exiting 0 is the assertion; this is the control that it did the work.
+          # A version that resolved to nothing, or an add that no-opped, would otherwise pass
+          # on the exit code alone.
+          node -e '
+            const deps = require("./package.json").dependencies || {};
+            if (!deps["is-odd"]) { console.error("pnpm add exited 0 but added nothing"); process.exit(1); }
+            console.log("added is-odd", deps["is-odd"]);
+          '

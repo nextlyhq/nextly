@@ -8,6 +8,24 @@ import registry, { routeConfig } from "../pages/registry";
 
 import { matchPluginPage } from "./plugins/plugin-route-registry";
 
+/**
+ * Whether `pathname` is `base` or sits beneath it.
+ *
+ * Whole segments, so `/admin/plugins` does not claim `/admin/plugins-archive`
+ * — the reason this exists rather than each caller writing `includes()`. A
+ * substring test is a proxy for "is this route under that one", and the
+ * sibling paths that motivate writing the check are exactly the ones the proxy
+ * gets wrong.
+ *
+ * Callers pass `ROUTES.*` rather than a spelling, so a route that moves takes
+ * its classification with it.
+ */
+export function isUnder(pathname: string, base: string): boolean {
+  const path = pathname.replace(/\/$/, "");
+  const target = base.replace(/\/$/, "");
+  return path === target || path.startsWith(`${target}/`);
+}
+
 /** Props passed to page components by the router */
 export interface PageProps {
   params?: Record<string, string | string[]>;

@@ -31,6 +31,7 @@ import {
   Copy,
   Download,
 } from "@admin/components/icons";
+import type { PaginationProps } from "@admin/components/shared/pagination/types";
 import { DataTableView } from "@admin/components/ui/table/data-table";
 import type {
   DataTableSelection,
@@ -59,6 +60,15 @@ interface MediaListViewProps {
   hiddenColumns?: Set<string>;
   className?: string;
   emptyStateMessage?: string;
+  /**
+   * This list's pagination, forwarded to the table as data.
+   *
+   * Taken as a prop rather than owned here because the page owns the state, and
+   * handed to the table rather than rendered because the table is the only
+   * thing that knows whether the row or the card view is showing, and so the
+   * only thing that can place a pager for it.
+   */
+  pagination?: PaginationProps;
 }
 
 // Get the right icon for a media type
@@ -119,6 +129,7 @@ export function MediaListView({
   onRetry,
   className = "",
   emptyStateMessage,
+  pagination,
 }: MediaListViewProps) {
   const columns = useMemo<NextlyColumn<Media>[]>(() => {
     const allColumns: NextlyColumn<Media>[] = [
@@ -346,6 +357,7 @@ export function MediaListView({
       ariaLabel="Media files table"
       emptyMessage={emptyStateMessage}
       className={className}
+      pagination={pagination}
     />
   );
 }

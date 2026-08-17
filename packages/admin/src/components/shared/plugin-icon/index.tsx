@@ -2,13 +2,20 @@ import type React from "react";
 import { useState } from "react";
 
 import * as Icons from "@admin/components/icons";
-import { resolvePluginIcon } from "@admin/lib/plugins/resolve-plugin-icon";
+import { resolvePluginIconFrom } from "@admin/lib/plugins/resolve-plugin-icon";
 import { cn } from "@admin/lib/utils";
 import type { PluginMetadata } from "@admin/types/branding";
 
-interface PluginIconProps {
-  /** The plugin whose icon to render. Only `appearance` is read. */
-  plugin: Pick<PluginMetadata, "appearance">;
+type IconCandidate = Pick<PluginMetadata, "appearance"> | undefined;
+
+interface PluginIconFromProps {
+  /**
+   * Appearance sources in precedence order; the first that declares an icon
+   * wins. A caller with one source passes one. Callers with two — an installed
+   * plugin and the catalogue entry describing it — must not decide the order
+   * here: ask the module that owns the precedence rule for the list.
+   */
+  candidates: readonly IconCandidate[];
   /**
    * The lucide icon to use when the plugin declares none.
    *
@@ -23,6 +30,11 @@ interface PluginIconProps {
   alt?: string;
 }
 
+interface PluginIconProps extends Omit<PluginIconFromProps, "candidates"> {
+  /** The plugin whose icon to render. Only `appearance` is read. */
+  plugin: Pick<PluginMetadata, "appearance">;
+}
+
 /**
  * Render a plugin's icon, whether it ships an image or names a lucide glyph.
  *
@@ -33,28 +45,31 @@ interface PluginIconProps {
  *
  * @module components/shared/plugin-icon
  */
-export function PluginIcon({
-  plugin,
+export function PluginIconFrom({
+  candidates,
   fallback,
   className,
   alt = "",
-}: PluginIconProps): React.ReactElement {
+}: PluginIconFromProps): React.ReactElement {
   // A declared asset can still fail to arrive: a mistyped path, a deleted
   // file, or a Content-Security-Policy that blocks the origin. Without this the
   // surface keeps a broken-image glyph forever, which is worse than the plain
-  // icon it replaced. On failure the component re-resolves with assets
-  // disallowed, so it lands on whatever lucide name the plugin declared beside
-  // the asset before reaching the caller's fallback.
-  // The failed URL rather than a boolean. A boolean survives client-side
-  // navigation between two plugin detail pages, because the router renders the
-  // same component type without a key, so React keeps the state: one plugin's
-  // broken logo would suppress the next plugin's working one. Keying on the
-  // source means a different asset is always attempted.
-  const [failedSrc, setFailedSrc] = useState<string | null>(null);
-  const declaredAsset = plugin.appearance?.iconAsset;
-  const source = resolvePluginIcon(plugin, {
+  // icon it replaced.
+  //
+  // The URLs that have failed, not a boolean. A broken image on one candidate
+  // says nothing about a different image a later candidate ships, so each
+  // failure removes exactly one URL from consideration and the chain is
+  // re-resolved: the next asset is tried, and only when none load does it
+  // settle on a glyph. Keying on the URL also survives client-side navigation
+  // between two plugin detail pages, where the router renders the same
+  // component type without a key so React keeps this state — one plugin's
+  // broken logo must not suppress the next plugin's working one.
+  const [failedSrcs, setFailedSrcs] = useState<ReadonlySet<string>>(
+    () => new Set()
+  );
+  const source = resolvePluginIconFrom(candidates, {
     fallback,
-    allowAsset: declaredAsset !== undefined && declaredAsset !== failedSrc,
+    skipAssets: failedSrcs,
   });
 
   if (source.kind === "asset") {
@@ -67,7 +82,14 @@ export function PluginIcon({
       <img
         src={source.src}
         alt={alt}
-        onError={() => setFailedSrc(source.src)}
+        onError={() =>
+          setFailedSrcs(prev => {
+            if (prev.has(source.src)) return prev;
+            const next = new Set(prev);
+            next.add(source.src);
+            return next;
+          })
+        }
         className={cn("object-contain", className)}
       />
     );
@@ -81,4 +103,12 @@ export function PluginIcon({
   if (!Named) return <span className={className} aria-hidden="true" />;
 
   return <Named className={className} />;
+}
+
+/** The single-source case, which is every surface but the catalogue. */
+export function PluginIcon({
+  plugin,
+  ...rest
+}: PluginIconProps): React.ReactElement {
+  return <PluginIconFrom candidates={[plugin]} {...rest} />;
 }

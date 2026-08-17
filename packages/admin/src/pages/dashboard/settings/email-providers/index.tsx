@@ -44,7 +44,6 @@ import {
 } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
-import { Pagination } from "@admin/components/shared/pagination";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { toast } from "@admin/components/ui";
@@ -54,6 +53,7 @@ import type {
   NextlyColumn,
   RowAction,
 } from "@admin/components/ui/table/data-table";
+import { PAGINATION } from "@admin/constants/pagination";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import {
   useEmailProviders,
@@ -63,6 +63,7 @@ import {
   useTestProvider,
 } from "@admin/hooks/queries/useEmailProviders";
 import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
+import { usePagination } from "@admin/hooks/usePagination";
 import { navigateTo } from "@admin/lib/navigation";
 import type {
   EmailProviderDescriptor,
@@ -309,8 +310,7 @@ function ProviderTestDialog({
 const ALWAYS_VISIBLE = new Set(["name"]);
 
 function EmailProviderTable() {
-  const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState(10);
+  const { page, pageSize, setPage, setPageSize, resetPage } = usePagination();
   const [search, setSearch] = useState("");
   // `undefined` is "no filter". A hardcoded sentinel would have to be a string
   // no provider may register, and no such string exists -- a plugin is entitled
@@ -500,17 +500,12 @@ function EmailProviderTable() {
     [providerToTest, doTest]
   );
 
-  const handlePageSizeChange = useCallback((newPageSize: number) => {
-    setPageSize(newPageSize);
-    setPage(0);
-  }, []);
-
   const handleTypeChange = useCallback(
     (newType: string) => {
       setType(newType === allTypesValue ? undefined : newType);
-      setPage(0);
+      resetPage();
     },
-    [allTypesValue]
+    [allTypesValue, resetPage]
   );
 
   const allColumns = useMemo<NextlyColumn<EmailProviderRecord>[]>(
@@ -673,7 +668,7 @@ function EmailProviderTable() {
           onChange={setSearch}
           placeholder="Search providers by name..."
           isLoading={false}
-          className="w-full max-w-md bg-background text-foreground border-input"
+          className="w-full max-w-md"
         />
         <Alert variant="destructive">
           <AlertTriangle className="h-4 w-4" />
@@ -752,7 +747,7 @@ function EmailProviderTable() {
             onChange={setSearch}
             placeholder="Search providers by name..."
             isLoading={isLoading}
-            className="w-full bg-background text-foreground border-input"
+            className="w-full"
           />
         }
         filters={
@@ -816,20 +811,26 @@ function EmailProviderTable() {
             registryKey="email-providers"
             ariaLabel="Email providers table"
             emptyMessage="No email providers configured. Add a provider to start sending emails."
+            // The table owns the pager, so it is placed for whichever view is
+            // showing. The gate hides it only when a response reports no pages
+            // at all -- an empty list. A single-page list still shows it,
+            // deliberately: the page-size selector lives there, and it is the
+            // control that gets a longer list onto one screen.
+            pagination={
+              data && data.meta.totalPages > 0
+                ? {
+                    currentPage: page,
+                    totalPages: data.meta.totalPages,
+                    pageSize,
+                    pageSizeOptions: PAGINATION.TABLE_PAGE_SIZE_OPTIONS,
+                    onPageChange: setPage,
+                    onPageSizeChange: setPageSize,
+                    isLoading,
+                    totalItems,
+                  }
+                : undefined
+            }
           />
-
-          {data && data.meta.totalPages > 0 && (
-            <Pagination
-              currentPage={page}
-              totalPages={data.meta.totalPages}
-              pageSize={pageSize}
-              pageSizeOptions={[10, 25, 50]}
-              onPageChange={setPage}
-              onPageSizeChange={handlePageSizeChange}
-              isLoading={isLoading}
-              totalItems={totalItems}
-            />
-          )}
         </>
       )}
 

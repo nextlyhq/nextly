@@ -39,8 +39,9 @@ import type {
   ProjectApproach,
   ProjectType,
 } from "./types";
-import { detectProject } from "./utils/detect";
+import { detectPackageManager, detectProject } from "./utils/detect";
 import { emptyDirectory, isDirectoryNotEmpty } from "./utils/fs";
+import { scriptRunner } from "./utils/package-manager-commands";
 import { copyTemplate } from "./utils/template";
 
 /**
@@ -361,6 +362,12 @@ export async function createNextly(
         s.start("Scaffolding project...");
       }
 
+      // Decides whether the scaffold gets a `.npmrc`. Resolved from the user
+      // agent of the command that invoked this CLI, which is the package
+      // manager that will run the install a moment later; the target has no
+      // lockfile yet, so nothing else could answer.
+      const scaffoldPackageManager = await detectPackageManager(targetDir);
+
       await copyTemplate({
         projectName,
         projectType,
@@ -370,6 +377,7 @@ export async function createNextly(
         useYalc,
         approach,
         templateSource,
+        packageManager: scaffoldPackageManager,
         // Suppress copyTemplate's "directory already exists" guard when the
         // installer has already negotiated the conflict with the user
         // (either by emptying the dir or accepting an overlay). Without
@@ -507,10 +515,9 @@ export async function createNextly(
   // --- Success output ---
 
   const pm = projectInfo.packageManager;
-  // npm requires `npm run <script>`; pnpm/yarn/bun accept the bare
-  // form as a shorthand for `run`. Without this, scaffolds chosen
-  // with npm print `npm dev` which fails with "Unknown command: dev".
-  const devCommand = pm === "npm" ? "npm run dev" : `${pm} dev`;
+  // Through the shared renderer, so the next-steps screen and the agent guide written into the
+  // project cannot disagree about how this manager spells "run a script".
+  const devCommand = `${scriptRunner(pm)} dev`;
 
   // Build next steps content
   const lines: string[] = [];

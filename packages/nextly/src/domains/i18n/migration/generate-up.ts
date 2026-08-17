@@ -35,6 +35,17 @@ export const COMPANION_STRUCTURAL_COLUMNS: ReadonlySet<string> = new Set([
   COMPANION_STATUS_COLUMN,
 ]);
 
+/**
+ * The columns of a companion's composite PRIMARY KEY, in key order.
+ *
+ * Stated once and rendered into the `CREATE TABLE` below, because this pair is load-bearing at
+ * RUNTIME rather than merely structural: `upsertCompanionRow` names it as its conflict target, so a
+ * companion that lost the key fails every localized write on PostgreSQL and SQLite and silently
+ * accepts duplicate locale rows on MySQL. Anything checking that a live companion still has its key
+ * reads this rather than restating the pair.
+ */
+export const COMPANION_KEY_COLUMNS: readonly string[] = ["_parent", "_locale"];
+
 function buildCompanionCreateStatement(
   spec: CompanionMigrationSpec,
   ifNotExists: boolean
@@ -68,7 +79,7 @@ function buildCompanionCreateStatement(
     `  ${q("_locale", dialect)} VARCHAR(20) NOT NULL,\n` +
     statusDef +
     `${colDefs},\n` +
-    `  PRIMARY KEY (${q("_parent", dialect)}, ${q("_locale", dialect)}),\n` +
+    `  PRIMARY KEY (${COMPANION_KEY_COLUMNS.map(c => q(c, dialect)).join(", ")}),\n` +
     `  FOREIGN KEY (${q("_parent", dialect)}) REFERENCES ${q(mainTable, dialect)} (${q("id", dialect)}) ON DELETE CASCADE\n` +
     `)`
   );

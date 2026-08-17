@@ -107,6 +107,13 @@ export const ROUTES = {
 
   // Plugin routes
   PLUGINS: "/admin/plugins",
+  // Outside the `/admin/plugins/` namespace on purpose. A plugin's detail
+  // address is `/admin/plugins/<slug>`, and a slug is derived from a package
+  // name that may be any string, so a sibling static page there is a page a
+  // plugin can be named after — and whichever of the two wins, the other
+  // becomes unreachable. A different parent removes the collision instead of
+  // ranking it.
+  PLUGIN_BROWSE: "/admin/plugin-directory",
   PLUGIN_DETAIL: "/admin/plugins/[slug]",
   PLUGIN_SETTINGS: "/admin/plugins/[slug]/settings",
 } as const;
@@ -115,6 +122,42 @@ export const ROUTES = {
  * Type representing all possible route values
  */
 export type RouteValue = (typeof ROUTES)[keyof typeof ROUTES];
+
+/**
+ * Routes reachable without a session.
+ *
+ * Declared once here because three places need this answer and they cannot all
+ * ask the router:
+ *
+ * - the page registry pairs each path with its component and marks it public,
+ *   which is what wraps the page in `PublicRoute`;
+ * - the refresh interceptor suppresses its redirect to login on these paths,
+ *   because a 401 from a background query is expected while nobody is signed
+ *   in, and redirecting produces a loop;
+ * - the pages themselves live under `pages/(auth)/`.
+ *
+ * The interceptor cannot import the registry to find out. The registry imports
+ * every page, each page reaches `lib/api/fetcher`, and `fetcher` imports the
+ * interceptor, so that dependency closes a cycle. This module imports nothing,
+ * so both sides can depend on it.
+ *
+ * Adding a route here is not enough to make it reachable, and that is
+ * deliberate: the registry owns which component answers, and its public entries
+ * are keyed by {@link PublicRoutePath}, so a path added here without a page
+ * fails to compile rather than becoming a silently unguarded URL.
+ */
+export const PUBLIC_ROUTE_PATHS = [
+  ROUTES.SETUP,
+  ROUTES.LOGIN,
+  ROUTES.REGISTER,
+  ROUTES.FORGOT_PASSWORD,
+  ROUTES.RESET_PASSWORD,
+  ROUTES.VERIFY_EMAIL,
+  ROUTES.ACCEPT_INVITE,
+] as const;
+
+/** A route from {@link PUBLIC_ROUTE_PATHS}. */
+export type PublicRoutePath = (typeof PUBLIC_ROUTE_PATHS)[number];
 
 /**
  * Helper to build dynamic routes with parameters

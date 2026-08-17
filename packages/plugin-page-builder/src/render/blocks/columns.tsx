@@ -1,5 +1,3 @@
-import { Children } from "react";
-
 import { columnsStructure } from "../../core/block-structure";
 import { defineBlock } from "../../core/registry";
 
@@ -52,9 +50,14 @@ export const columns = defineBlock({
           flexWrap: "wrap",
         }}
       >
-        {Children.map(slots.default, child => (
-          <div style={{ flex: "1 1 240px", minWidth: 0 }}>{child}</div>
-        ))}
+        {/*
+          Children are rendered as they come, because each one is a
+          `core/column` that draws its own flex item. Wrapping them again here
+          would put a div between the row and the column that no block owns —
+          so a column's width, background and alignment would style the inner
+          element while the outer one decided the layout.
+        */}
+        {slots.default}
       </div>
     );
   },

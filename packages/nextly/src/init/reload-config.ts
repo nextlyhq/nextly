@@ -26,13 +26,16 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { type SQL } from "drizzle-orm";
 
 import type { CollectionHooks } from "../collections/config/define-collection";
+import { type ResolvedAuditRetentionConfig } from "../domains/audit/retention-config";
 import {
-  setAuditRetention,
-  type ResolvedAuditRetentionConfig,
-} from "../domains/audit/retention-config";
+  asAdminOptions,
+  resolveDescription,
+  toPersistedAdmin,
+} from "../domains/collections/services/collection-sync-service";
 import { withMigrationExcluded } from "../domains/field-groups/migration/sync-guard";
 import { chooseTypeColumns } from "../domains/field-groups/storage/resolve-storage-names";
 import type { I18nTransitionKind } from "../domains/i18n/migration/transition-state";
+import { publishRetentionPolicies } from "../domains/retention/published-policies";
 import { createApplyDesiredSchema } from "../domains/schema/pipeline/apply";
 import { RealClassifier } from "../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../domains/schema/pipeline/database-url";
@@ -318,10 +321,12 @@ function buildCollectionSyncPayload(collections: CollectionDef[]) {
         plural: c.labels?.plural ?? `${c.slug}s`,
       },
       fields: c.fields ?? [],
-      description: c.description,
+      description: resolveDescription(c),
       tableName: c.dbName,
       timestamps: c.timestamps,
-      admin: c.admin,
+      // Same projection as boot and the CLI: one decision about what `admin` may contain,
+      // applied wherever a collection reaches the registry.
+      admin: toPersistedAdmin(asAdminOptions(c.admin)),
       // Draft/Published flag + versioning persisted to dynamic_collections so a
       // code-first toggle reaches the registry.
       status: c.status === true,
@@ -1222,6 +1227,12 @@ async function runReload(opts?: {
         // This path applies DDL by design, so it may establish the lock table
         // rather than proceeding unprotected without one.
         mayCreateLock: true,
+        // Kept, and it is a trade rather than an oversight. This runs only under `next dev`,
+        // where Ctrl+C is how the server is stopped and a claim stranded behind a killed dev
+        // process would refuse every later reload until an operator cleared it by hand. The
+        // residual is a storage migration overlapping the tail of a reload, which takes someone
+        // deliberately running one against a development database.
+        releaseOnInterrupt: true,
       },
       () => {
         reloadStarted = true;
@@ -1420,7 +1431,7 @@ async function applyReload(opts?: {
     // policy the process explicitly rejected in force — deleting on windows
     // nothing accepted. The runners read the published value at run time, so
     // committing it here is what makes a saved change take effect.
-    setAuditRetention(newConfig?.auditRetention);
+    publishRetentionPolicies(newConfig);
   };
 
   // databaseAdapter doubles as our DI-readiness probe. We don't need any

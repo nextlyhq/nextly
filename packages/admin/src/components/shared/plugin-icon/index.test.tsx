@@ -7,6 +7,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
+import * as Icons from "@admin/components/icons";
 import { PluginIcon } from "@admin/components/shared/plugin-icon";
 import type { PluginMetadata } from "@admin/types/branding";
 
@@ -17,6 +18,31 @@ const withAsset = (src: string, icon?: string) =>
   >;
 
 describe("PluginIcon", () => {
+  /**
+   * The glyph `@nextlyhq/plugin-page-builder` declares. A name the barrel does
+   * not re-export resolves to nothing and falls through to the caller's
+   * fallback, so the plugin's own icon disappears everywhere in the admin
+   * while every surface still looks intact.
+   */
+  it("renders a first-party plugin's declared glyph rather than the fallback", () => {
+    const { container } = render(
+      <PluginIcon
+        plugin={{ appearance: { icon: "Layout" } }}
+        fallback="Package"
+      />
+    );
+
+    // Compared against what the barrel's own `Layout` draws rather than a
+    // pinned class name: lucide ships `Layout` as an alias, so the rendered
+    // class is the target's and hard-coding it would tie this to which icon
+    // lucide happens to alias it to.
+    const expected = render(<Icons.Layout />).container.querySelector("svg");
+    expect(container.querySelector("svg")?.getAttribute("class")).toBe(
+      expected?.getAttribute("class")
+    );
+    expect(container.querySelector(".lucide-package")).toBeNull();
+  });
+
   it("renders a declared asset", () => {
     render(<PluginIcon plugin={withAsset("/a.svg")} fallback="Package" />);
     expect(screen.getByRole("presentation", { hidden: true })).toBeTruthy();

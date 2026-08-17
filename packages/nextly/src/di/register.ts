@@ -37,11 +37,16 @@ import { createAdapterFromEnv, validateDatabaseEnv } from "../database/factory";
 import type { SchemaRegistry } from "../database/schema-registry";
 import { getNextly } from "../direct-api/nextly";
 import type { ResolvedAuditRetentionConfig } from "../domains/audit/retention-config";
-import { setAuditRetention } from "../domains/audit/retention-config";
 import type { ApiKeyService } from "../domains/auth/services/api-key-service";
 import type { AuthService } from "../domains/auth/services/auth-service";
 import type { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
 import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
+import {
+  resolveDescription,
+  toPersistedAdmin,
+} from "../domains/collections/services/collection-sync-service";
+import type { ResolvedEmailRetentionConfig } from "../domains/email/retention-config";
+import { emailRetentionAfterTransform } from "../domains/email/retention-config";
 import type { EmailDeliveryService } from "../domains/email/services/email-delivery-service";
 import {
   getEmailProviderRegistry,
@@ -55,6 +60,7 @@ import {
 } from "../domains/field-groups/storage/resolve-storage-names";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
 import type { MetaService } from "../domains/meta";
+import { publishRetentionPolicies } from "../domains/retention/published-policies";
 import {
   clearFieldTypes,
   registerFieldType,
@@ -95,8 +101,10 @@ import {
 import { registerCollectionHooks } from "../hooks/register-collection-hooks";
 import { registerSingleHooks } from "../hooks/register-single-hooks";
 import { createSanitizationHook } from "../hooks/sanitization-hooks";
+import { openBootMigrationsGate } from "../init/boot-migrations-gate";
 import type { PluginPermission, PluginRole } from "../plugins/contributions";
 import { getCoreVersion } from "../plugins/core-version";
+import { warnUndescribedPlugins } from "../plugins/describe-check";
 import { setInitializedPlugins } from "../plugins/initialized-plugins";
 import {
   collectCustomPermissions,
@@ -125,6 +133,8 @@ import {
   registerPluginService,
 } from "../plugins/services/plugin-services-registry";
 import { clearPluginSubscriptions } from "../plugins/subscription-tracker";
+import { validatePluginSlugs } from "../plugins/validate-slugs";
+import { setBootedConfig } from "../route-handler/auth-handler";
 import type {
   CollectionSource,
   FieldDefinition,
@@ -230,6 +240,15 @@ export interface NextlyServiceConfig {
 
   /** Optional directory for dynamic collection schemas. */
   schemasDir?: string;
+  /**
+   * Whether this boot will run migrations, so registration can open the
+   * boot-migrations gate before it publishes the container.
+   *
+   * Carried on the SERVICE config rather than read from `db` — which this shape
+   * flattens away — because `buildServiceConfig` is the one builder both boot
+   * paths use, so threading it there reaches both without either remembering.
+   */
+  runMigrationsOnBoot?: boolean;
 
   /** Optional directory for dynamic collection migrations. */
   migrationsDir?: string;
@@ -308,6 +327,17 @@ export interface NextlyServiceConfig {
    * which case no audit pass is registered and neither trail is pruned.
    */
   auditRetention?: ResolvedAuditRetentionConfig;
+
+  /**
+   * Resolved delivery-log retention.
+   *
+   * Read by the email registration to decide whether to offer a sweep from the
+   * send path. `undefined` means it was never carried through initialization,
+   * in which case nothing prunes `email_deliveries` and the table grows with
+   * every send — which is the state this exists to end, so absence is a real
+   * outcome rather than a neutral default.
+   */
+  emailRetention?: ResolvedEmailRetentionConfig;
 
   /**
    * Whether the audit seam forces outbox recording regardless of endpoints.
@@ -429,6 +459,12 @@ export async function registerServices(
   // Layer 0b: Process Plugin Config Transformers (resolved order)
   // ----------------------------------------
   const setupConfig = await applyPluginConfigTransformers(resolvedConfig);
+  // Again on the transformed list, because a `setup` transformer may add,
+  // rename or replace entries in `plugins` — and everything from here down
+  // consumes the transformed config, not the list `resolvePlugins` checked.
+  // Boot is where this should fail; without it a transformer-introduced
+  // collision would surface on the first admin-meta request instead.
+  validatePluginSlugs(setupConfig.plugins ?? []);
 
   // ----------------------------------------
   // Layer 0c: Fold declarative plugin schema contributions (D3/D12/D50)
@@ -441,8 +477,38 @@ export async function registerServices(
   // targets that aren't code/plugin entities are DEFERRED here (candidate
   // Builder-made collections) and finalized after the DB is reachable below —
   // this is how extending/relating to a Builder collection works (P8/D3/R2).
-  const { config: transformedConfig, deferredExtends } =
+  const { config: contributedConfig, deferredExtends } =
     applyPluginSchemaContributionsDeferred(setupConfig, resolvedPlugins);
+
+  // Re-resolved from the TRANSFORMED nested block, because a `setup`
+  // transformer may have replaced it. The flattened `emailRetention` was
+  // computed by `sanitizeConfig` BEFORE any transformer ran, so a plugin
+  // returning `email: { ...config.email, retention: false }` left the two
+  // representations disagreeing — and every reader takes the flattened one, so
+  // the plugin's keep-forever decision was silently overruled by the original
+  // 90-day default.
+  //
+  // UNCONDITIONAL when a nested block exists, and that is the whole point. An
+  // earlier version only recomputed when the flattened field was ABSENT, which
+  // is exactly backwards: on the ordinary `defineConfig()` path sanitization
+  // always populates it, so the guard was false precisely in the case the
+  // recomputation exists for. A derived value has to be recomputed wherever its
+  // SOURCE can change, not wherever it happens to be missing.
+  //
+  // The cost is that an `emailRetention` passed directly to `registerServices`
+  // alongside an `email` block is superseded by that block. The nested form is
+  // the one a transformer can speak for, and a caller supplying both has stated
+  // the same setting twice.
+  const transformedConfig: typeof contributedConfig =
+    contributedConfig.email !== undefined
+      ? {
+          ...contributedConfig,
+          emailRetention: emailRetentionAfterTransform(
+            contributedConfig.email,
+            contributedConfig.emailRetention
+          ),
+        }
+      : contributedConfig;
 
   // Collect every relationTo (code + plugin) that doesn't resolve to a merged
   // collection (or core target); require dependsOn for cross-plugin relations
@@ -490,6 +556,7 @@ export async function registerServices(
   // would newly refuse pre-existing declarations that boot fine today, whereas a
   // rule that can fire here has to have been written against a field type in
   // this same process.
+
   assertPluginFieldDeclarations(transformedConfig);
 
   const {
@@ -524,6 +591,13 @@ export async function registerServices(
   if (transformedConfig.plugins && transformedConfig.plugins.length > 0) {
     const pluginNames = transformedConfig.plugins.map(p => p.name).join(", ");
     resolvedLogger.info?.(`Registered plugins: ${pluginNames}`);
+
+    // Beside the line that names them, because that line is the symptom: a
+    // plugin with no description is one the admin can only ever show by its
+    // package specifier. Warned rather than thrown — the omission is the
+    // plugin author's and breaks nothing, and an operator cannot fix a
+    // third-party package from their own config.
+    warnUndescribedPlugins(transformedConfig.plugins, resolvedLogger);
   }
 
   // ----------------------------------------
@@ -1037,7 +1111,56 @@ export async function registerServices(
     container.register("nextlyDirectAPI", () => getNextly());
   }
 
+  // Opened immediately BEFORE registration publishes, which is the last point
+  // that is both late enough and early enough.
+  //
+  // Early enough: the window this closes is "registered but schema unverified",
+  // and the flag below is what opens that window — so a consumer can never see
+  // registration without also seeing the gate.
+  //
+  // Late enough: everything that can abort a registration — adapter connection,
+  // schema synchronisation, plugin init — has already run. An abort therefore
+  // never leaves a gate open with nobody left to settle it, which would block
+  // every later retry forever on a gate whose owner died.
+  //
+  // No-op unless production boot migrations are configured, so the CLI and the
+  // test harness never open a gate nothing would close.
+  // The UNTRANSFORMED flag, matching what `runProdMigrationsIfEnabled` reads.
+  // `transformedConfig` is the config after plugin `setup` transformers have
+  // run, and that side decides from the nested `db` block, so reading the
+  // transformed value here lets a transformer make the two disagree — opening
+  // no gate while migrations run, or a gate nothing settles. No first-party
+  // transformer touches it today, which is a property of the current plugin set
+  // rather than of the code, and this PR exists because of a window nobody
+  // thought reachable.
+  openBootMigrationsGate(config.runMigrationsOnBoot === true);
+
   globalForReg.__nextly_isRegistered = true;
+
+  // Re-point the handler store at the TRANSFORMED plugin list, and only now.
+  //
+  // `createDynamicHandlers` stores the raw config when the route module is
+  // imported, which is the earliest the config exists but is before any `setup`
+  // transformer has run — so the public admin-meta endpoint, which reads that
+  // store without initializing services, was describing plugins as their author
+  // declared them rather than as they boot. A plugin a transformer enables was
+  // reported disabled while its routes were mounted.
+  //
+  // AFTER the registered flag, not beside the transform that produced the list,
+  // because this metadata claims a runtime that only exists once registration
+  // has succeeded. Published early, a failure in adapter connection, schema
+  // synchronisation or plugin init would leave the endpoint reporting routes as
+  // active for a boot that never mounted them — and admin-meta deliberately
+  // bypasses service initialisation, so nothing downstream would correct it.
+  //
+  // Unconditional: a config whose transformers removed every plugin must clear
+  // the store rather than leave the author's raw list standing there.
+  // The WHOLE transformed config, not a hand-picked field list. A `setup`
+  // transformer may add a top-level collection or single as well as change the
+  // plugin list, and the permission fold decides whether a `publish`
+  // declaration names an entity — so anything left out here silently leaves the
+  // endpoint folding against the raw route config for that field.
+  setBootedConfig(transformedConfig);
 }
 
 // ============================================================
@@ -1662,10 +1785,14 @@ async function syncCodeFirstCollections(
         plural: collection.labels?.plural ?? `${collection.slug}s`,
       },
       fields: collection.fields,
-      description: collection.description,
+      description: resolveDescription(collection),
       tableName: collection.dbName,
       timestamps: collection.timestamps,
-      admin: collection.admin,
+      // Through the SAME projection the CLI path uses. Forwarding the authored object
+      // instead would store whatever it holds — including a `preview.url` function that
+      // JSON.stringify drops silently, leaving a preview config that cannot work — and would
+      // put the primary write path outside the boundary that decides what `admin` may contain.
+      admin: toPersistedAdmin(collection.admin),
       source: sourceBySlug.get(collection.slug) ?? "code",
       // Forward Draft/Published flag from code-first config so the boot-time
       // sync persists it to dynamic_collections.status.
@@ -2744,7 +2871,7 @@ export async function shutdownServices(): Promise<void> {
     // process-global too, and its provider closes over this container's
     // registry; clear it so a later instance never resolves a dead one.
     resetWebhookActivation();
-    setAuditRetention(undefined);
+    publishRetentionPolicies(undefined);
     // Hooks live in a registry that outlives the container. Registration runs
     // from config on every init, so leaving it populated means a second
     // instance in the same process appends a fresh copy of every handler and
@@ -2767,7 +2894,7 @@ export function clearServices(): void {
   // Clear the process-global recording activation for the same reason; its
   // provider closes over this container's registry.
   resetWebhookActivation();
-  setAuditRetention(undefined);
+  publishRetentionPolicies(undefined);
   // Cleared with the container for the same reason: re-initializing would
   // otherwise register every configured hook a second time.
   clearActiveHookRegistry();

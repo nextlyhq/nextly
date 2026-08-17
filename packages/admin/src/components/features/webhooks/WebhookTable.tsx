@@ -11,7 +11,6 @@ import type React from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Edit, List, Power, Send, Trash2 } from "@admin/components/icons";
-import { Pagination } from "@admin/components/shared/pagination";
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { DataTableView } from "@admin/components/ui/table/data-table";
 import type {
@@ -19,6 +18,8 @@ import type {
   RowAction,
 } from "@admin/components/ui/table/data-table";
 import { ListShell } from "@admin/components/ui/table/list-shell";
+import { PAGINATION } from "@admin/constants/pagination";
+import { usePagination } from "@admin/hooks/usePagination";
 import type { WebhookEndpointSummary } from "@admin/types/webhooks";
 
 import { EndpointStatusBadge, describeEvents } from "./status";
@@ -52,18 +53,12 @@ export const WebhookTable: React.FC<WebhookTableProps> = ({
   onViewDeliveries,
 }) => {
   const [search, setSearch] = useState("");
-  const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState(10);
-
-  const handlePageSizeChange = useCallback((next: number) => {
-    setPageSize(next);
-    setPage(0);
-  }, []);
+  const { page, pageSize, setPage, setPageSize, resetPage } = usePagination();
 
   // Reset to the first page whenever the search term changes.
   useEffect(() => {
-    setPage(0);
-  }, [search]);
+    resetPage();
+  }, [search, resetPage]);
 
   const columns = useMemo(
     (): NextlyColumn<WebhookEndpointSummary>[] => [
@@ -150,7 +145,7 @@ export const WebhookTable: React.FC<WebhookTableProps> = ({
   useEffect(() => {
     const lastPage = Math.max(0, totalPages - 1);
     if (page > lastPage) setPage(lastPage);
-  }, [page, totalPages]);
+  }, [page, totalPages, setPage]);
 
   const rowActions = useCallback(
     (webhook: WebhookEndpointSummary): RowAction<WebhookEndpointSummary>[] => {
@@ -217,7 +212,7 @@ export const WebhookTable: React.FC<WebhookTableProps> = ({
             onChange={setSearch}
             placeholder="Search endpoints by name or URL..."
             isLoading={isLoading}
-            className="w-full bg-background text-foreground border-input"
+            className="w-full"
           />
         </div>
       }
@@ -232,18 +227,16 @@ export const WebhookTable: React.FC<WebhookTableProps> = ({
         rowActions={rowActions}
         registryKey="webhooks"
         ariaLabel="Webhook endpoints table"
-        footer={
-          <Pagination
-            currentPage={page}
-            totalPages={Math.max(1, totalPages)}
-            pageSize={pageSize}
-            pageSizeOptions={[10, 25, 50]}
-            onPageChange={setPage}
-            onPageSizeChange={handlePageSizeChange}
-            totalItems={totalItems}
-            isLoading={isLoading}
-          />
-        }
+        pagination={{
+          currentPage: page,
+          totalPages: Math.max(1, totalPages),
+          pageSize,
+          pageSizeOptions: PAGINATION.TABLE_PAGE_SIZE_OPTIONS,
+          onPageChange: setPage,
+          onPageSizeChange: setPageSize,
+          totalItems,
+          isLoading,
+        }}
         emptyMessage="No webhook endpoints yet. Create one to start receiving events."
       />
     </ListShell>

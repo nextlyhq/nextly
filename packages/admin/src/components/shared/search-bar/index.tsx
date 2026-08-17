@@ -3,8 +3,14 @@
 import * as React from "react";
 
 import { Loader2, Search, X } from "@admin/components/icons";
+import { Input } from "@admin/components/ui";
 import { cn } from "@admin/lib/utils";
 
+import {
+  WRAPPER_BASE,
+  inertClassMessage,
+  inertClassesIn,
+} from "./inert-classes";
 import type { SearchBarProps } from "./types";
 
 /**
@@ -115,6 +121,31 @@ export const SearchBar = React.forwardRef<HTMLInputElement, SearchBarProps>(
     // Internal state for immediate UI updates
     const [internalValue, setInternalValue] = React.useState(value);
 
+    // Merged once and used for both the element and the warning. The prop is
+    // not what renders: `cn` drops the loser of any conflict, so a caller
+    // passing `border-input border-destructive` puts only the second on the
+    // element, and judging the prop would name a class the DOM never had.
+    const wrapperClassName = cn(WRAPPER_BASE, className);
+
+    // A class aimed at the field reaches the wrapper and does nothing there,
+    // silently. Warned from inside the component because this is the only
+    // place the FINAL class string exists: a source check has to predict it,
+    // and the ways to write one -- an aliased import, a template, a
+    // concatenation, a character reference, a helper's return value -- are the
+    // whole of JavaScript. Here it is just a string.
+    //
+    // Development only, and effectful rather than computed during render.
+    React.useEffect(() => {
+      // Opted INTO development rather than out of production. That is the
+      // polarity the rest of the admin uses, and it is the one that fails
+      // safe: if the value is ever absent, or folded to something unexpected
+      // by a bundler, an opt-in stays silent while an opt-out ships a console
+      // warning to every consumer of the published package.
+      if (process.env.NODE_ENV !== "development") return;
+      const inert = inertClassesIn(wrapperClassName);
+      if (inert.length > 0) console.warn(inertClassMessage(inert));
+    }, [wrapperClassName]);
+
     // Sync internal value when parent value changes externally
     React.useEffect(() => {
       setInternalValue(value);
@@ -148,20 +179,47 @@ export const SearchBar = React.forwardRef<HTMLInputElement, SearchBarProps>(
     };
 
     return (
-      <div className={cn("relative w-full max-w-lg", className)}>
+      <div className={wrapperClassName}>
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-        {/* The edge uses border-input (a visible 3:1 boundary) rather than the
-            decorative border-border: an empty field has nothing else to
-            identify it. */}
-        <input
+        {/* Composes Input rather than restating its classes. The copy this
+            replaced had drifted from the original in twelve ways that a reader
+            comparing them would not notice: no `aria-invalid` or
+            `data-[invalid=true]` handling at all, so a search field could not
+            show an error state; `focus:border-primary` without the `!` Input
+            uses, so the focus ring lost to any later border utility; and no
+            `selection:*` colours, `placeholder:opacity-50` or
+            `disabled:pointer-events-none`.
+
+            It also meant palette work reached every input EXCEPT this one,
+            because the border token was named in two places and only one of
+            them was maintained. Only the search-specific parts stay here: room
+            for the leading icon and the trailing clear button. */}
+        <Input
+          // Before the spread, not after: a caller passing its own
+          // `data-testid` must win. This is a publicly exported component whose
+          // props extend the native input's, so silently replacing a consumer's
+          // test hook with an internal one breaks their tests and gives them no
+          // way to address the field.
+          data-testid="search-input"
           {...props}
           ref={ref}
-          type="text"
+          // `search`, not `text`: assistive technology announces it as a search
+          // field, and the suite has asserted this since it was written. The
+          // native WebKit cancel button is suppressed because this component
+          // renders its own clear affordance, which also handles focus return.
+          type="search"
           placeholder={placeholder}
           value={internalValue}
           onChange={handleChange}
           aria-busy={isLoading}
-          className="h-10 w-full rounded-md border border-input bg-background text-foreground pl-10 pr-10 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus:outline-none focus:border-primary disabled:cursor-not-allowed disabled:opacity-50 transition-all"
+          // Only what is search-specific: room for the leading icon and the
+          // trailing clear button, and no native cancel glyph beside our own.
+          // Height is deliberately absent -- Input sizes itself from
+          // `--nx-control-height`, and restating it here as `h-10` pinned this
+          // one field at 40px while every other default control followed the
+          // token. That is the same drift this component was rewritten to
+          // remove, one property further in.
+          className="pl-10 pr-10 [&::-webkit-search-cancel-button]:appearance-none"
         />
 
         {/* Right side icons (clear button + loading spinner) */}

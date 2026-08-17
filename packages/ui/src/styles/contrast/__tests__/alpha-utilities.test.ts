@@ -154,6 +154,20 @@ function surfaceFor(name: string): string {
  * opacities (`border-primary/[0.08]`). Rings are included because a focus
  * indicator is a UI boundary held to 3:1.
  */
+/**
+ * Whether a matched path is source that RENDERS.
+ *
+ * Both scans in this file ask this, and they must answer identically. The
+ * measuring scan skips tests because a suite naming `border-input/50` as a
+ * fixture paints nothing — but the fingerprint asking a different question of
+ * the same corpus would fail the run over a package whose only match is in a
+ * test, demanding coverage for a file the measurement then ignores. One
+ * predicate, so the two cannot disagree about what counts as UI.
+ */
+function rendersUi(path: string): boolean {
+  return !/\.test\.|\/__tests__\//.test(path);
+}
+
 function scanCombos(): Map<string, number> {
   const dirs = SCANNED_DIRS.map(d => `${repo}/${d}`);
   // Fail loudly if a scanned dir is missing (a moved or misspelled entry must
@@ -163,8 +177,15 @@ function scanCombos(): Map<string, number> {
       throw new Error(`scanned dir does not exist: ${dir}`);
     }
   }
+  // `-H` so the path survives: test files are excluded below, and without the
+  // filename there is nothing to exclude them by. The subject here is what a
+  // component RENDERS, and a test naming a class as a fixture renders nothing
+  // -- a suite asserting that `border-input/50` is reported would otherwise be
+  // failed by this scan for containing the string it was written to describe.
+  // The sibling assertion in this file already excluded tests for the same
+  // reason; this one had not, which is the inconsistency rather than the rule.
   const out = execSync(
-    `grep -rohE '${UTILITY_PATTERN}' ${dirs.join(" ")} || true`,
+    `grep -rHoE '${UTILITY_PATTERN}' ${dirs.join(" ")} || true`,
     {
       encoding: "utf8",
       maxBuffer: 64 * 1024 * 1024,
@@ -172,7 +193,11 @@ function scanCombos(): Map<string, number> {
   );
   const combos = new Map<string, number>();
   for (const line of out.split("\n")) {
-    const t = line.trim();
+    const separator = line.indexOf(":");
+    if (separator === -1) continue;
+    const path = line.slice(0, separator);
+    if (!rendersUi(path)) continue;
+    const t = line.slice(separator + 1).trim();
     if (!t) continue;
     const name = nameOf(t);
     if (name && isScannableColor(name)) {
@@ -253,9 +278,15 @@ describe("alpha-opacity color utilities", () => {
     for (const line of hits.split("\n")) {
       const sep = line.indexOf(":");
       if (sep === -1) continue;
+      const path = line.slice(0, sep);
+      // Same predicate the measuring scan uses. Without it this demands
+      // coverage for a package whose only match is a test fixture -- a file
+      // the measurement deliberately ignores -- so the run fails asking for
+      // something that would change nothing.
+      if (!rendersUi(path)) continue;
       const name = nameOf(line.slice(sep + 1).trim());
       if (!name || !isScannableColor(name)) continue;
-      const pkg = /\/packages\/([^/]+)\/src\//.exec(line.slice(0, sep))?.[1];
+      const pkg = /\/packages\/([^/]+)\/src\//.exec(path)?.[1];
       if (pkg) used.add(pkg);
     }
     const scanned = new Set(
@@ -267,7 +298,12 @@ describe("alpha-opacity color utilities", () => {
         `package "${p}" uses alpha color utilities but is not in SCANNED_DIRS`
       ).toBe(true);
     }
-  });
+    // A whole-monorepo `grep` in a subprocess, so the budget is I/O rather than
+    // work this test controls. Vitest's 5s default left it about twice its own
+    // measured runtime, which any parallel suite on the same machine can take
+    // away; stated explicitly so a slower neighbour reads as a slower neighbour
+    // rather than as this scan failing.
+  }, 60_000);
 
   it("no faint text/border alpha utility falls below WCAG outside the allowlist", () => {
     const offenders: string[] = [];
@@ -286,6 +322,38 @@ describe("alpha-opacity color utilities", () => {
         `semantic token (text-muted-foreground, border-border/border-input, or the ` +
         `full-strength status token), or, if genuinely decorative, add it to ` +
         `ALLOWED_DECORATIVE with a reason:\n${offenders.join("\n")}`
+    ).toEqual([]);
+  });
+
+  it("puts no alpha on the control boundary, in any utility", () => {
+    // `--nx-control-border` is the one token whose entire reason for existing is
+    // to clear 1.4.11's 3:1 where `--nx-input` deliberately does not. Any alpha
+    // composites it toward its surface and removes exactly that, so the
+    // modifier is refused outright rather than measured -- there is no value of
+    // N for which this is the right token to fade.
+    //
+    // Scanned across ALL utility prefixes on purpose. The pattern the rest of
+    // this file uses covers `text`, `border` and `ring`; a `bg-control-border/80`
+    // on the switch track was invisible to it for that reason, and rendered at
+    // 2.65:1 on muted while every contrast test stayed green -- because the
+    // pairings measure the TOKEN and the component was painting something else.
+    // Test files are excluded because the subject is what a COMPONENT renders,
+    // and because this assertion's own comment names the offending utility --
+    // a scan that reads its own prose reports a hit that no user can see, which
+    // is the same mistake in the opposite direction.
+    const hits = execSync(
+      `grep -rHoE '\\b[a-z-]+-control-border/[0-9[]' ${repo}/packages/*/src 2>/dev/null || true`,
+      { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }
+    )
+      .split("\n")
+      .map(line => line.trim())
+      .filter(Boolean)
+      .filter(line => !/\.test\.|\/__tests__\//.test(line));
+
+    expect(
+      hits,
+      `An opacity on --nx-control-border voids the 3:1 it exists to hold. Use ` +
+        `the token at full strength, or a different token:\n${hits.join("\n")}`
     ).toEqual([]);
   });
 
