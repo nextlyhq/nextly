@@ -35,6 +35,7 @@ import { columns } from "./columns";
 import { divider } from "./divider";
 import { embed } from "./embed";
 import { form } from "./form";
+import { gallery } from "./gallery";
 import { heading } from "./heading";
 import { image } from "./image";
 import { list } from "./list";
@@ -73,6 +74,10 @@ export {
   type FormMethod,
   type FormProps,
 } from "./form";
+// `GALLERY_BLOCK` / `GALLERY_ITEM_BLOCK` are deliberately NOT re-exported, for
+// the reason recorded on the columns pair: they exist so this block names its
+// own type and its allowed child once.
+export { gallery } from "./gallery";
 export {
   heading,
   HEADING_LEVELS,
@@ -124,6 +129,8 @@ export const coreBlocks = [
   image,
   button,
   form,
+  // Registered after `image`, the only block its slot allows.
+  gallery,
   // Structure
   divider,
   quote,
