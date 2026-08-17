@@ -61,4 +61,32 @@ export interface PluginRoute {
   public?: boolean;
   /** Ordered, typed route-level middleware chain. */
   middleware?: Middleware[];
+  /**
+   * Where the route is served. `"plugins"` (default) mounts it under the
+   * plugin namespace (`/admin/api/plugins/<name><path>`); `"admin-api"` mounts
+   * it directly at the admin API root (`/admin/api<path>`) — for surfaces that
+   * read as first-party API (e.g. the docs plugin's `/docs`). Admin-api routes
+   * are refused at boot when their first path segment collides with the system
+   * REST surface, so a plugin cannot shadow built-in routes.
+   */
+  mount?: "plugins" | "admin-api";
+  /**
+   * Optional OpenAPI metadata for this route. Derivation stays zero-action by
+   * default (path, method, and security come from the route itself); this only
+   * enriches the generated operation with a summary/description/tags. (Plan P5.)
+   */
+  openapi?: PluginRouteOpenApi;
+}
+
+/**
+ * @public Optional OpenAPI metadata a plugin attaches to a route (Plan P5).
+ * Every field is optional and flows into the generated operation verbatim.
+ */
+export interface PluginRouteOpenApi {
+  /** A short, human-readable operation summary. */
+  summary?: string;
+  /** A longer operation description. */
+  description?: string;
+  /** Extra OpenAPI tags for grouping, merged with the plugin's default tag. */
+  tags?: string[];
 }

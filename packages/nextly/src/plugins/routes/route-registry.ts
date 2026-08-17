@@ -1,3 +1,4 @@
+import type { PermissionSlug } from "../contributions";
 import type { PluginContext } from "../plugin-context";
 
 import { pluginRouteFullPath } from "./route-path";
@@ -44,7 +45,9 @@ export class PluginRouteRegistry {
     route: PluginRoute,
     baseCtx: PluginContext
   ): void {
-    const fullPath = pluginRouteFullPath(pluginName, route.path);
+    // Same helper collection uses, so the match path can never disagree with
+    // the collision-checked path.
+    const fullPath = pluginRouteFullPath(pluginName, route);
     this.routes.push({
       pluginName,
       method: route.method,
@@ -114,4 +117,43 @@ export function getPluginRouteRegistry(): PluginRouteRegistry {
 /** Reset the global plugin route registry (testing + per-boot). */
 export function resetPluginRouteRegistry(): void {
   globalRegistry.clear();
+}
+
+/**
+ * A read-only, safe view of one registered plugin route for introspection
+ * consumers (the api-docs plugin, tooling). Deliberately excludes the boot-built
+ * `baseCtx` — that carries services and db handles no introspection reader
+ * should be handed.
+ */
+export interface PluginRouteInfo {
+  pluginName: string;
+  method: RouteMethod;
+  /** Path within the plugin namespace (leading "/", `:param` segments). */
+  path: string;
+  /** Namespaced path: `/plugins/<pluginName><path>`. */
+  fullPath: string;
+  /** Whether the route is publicly callable (secure by default otherwise). */
+  public: boolean;
+  /** The permission slug required to call the route, when gated. */
+  requiredPermission?: PermissionSlug;
+  /** The route's optional OpenAPI annotation, verbatim. */
+  openapi?: PluginRoute["openapi"];
+}
+
+/**
+ * List every registered plugin route as a safe, read-only view. General
+ * introspection (the mirror of `listAdminRestOperations` for plugin-contributed
+ * routes) — the docs plugin consumes it, and nothing here exposes handler
+ * functions or contexts.
+ */
+export function listPluginRoutes(): PluginRouteInfo[] {
+  return globalRegistry.list().map(entry => ({
+    pluginName: entry.pluginName,
+    method: entry.method,
+    path: entry.route.path,
+    fullPath: entry.fullPath,
+    public: entry.route.public === true,
+    requiredPermission: entry.route.requiredPermission,
+    openapi: entry.route.openapi,
+  }));
 }

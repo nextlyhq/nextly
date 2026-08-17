@@ -150,11 +150,55 @@ export type {
  */
 export type {
   PluginRoute,
+  PluginRouteOpenApi,
   PluginRouteContext,
   PluginRouteHandler,
   Middleware,
   RouteMethod,
 } from "nextly";
+
+/**
+ * Admin REST introspection — the seam through which a plugin can learn what REST
+ * operations the admin catch-all exposes (paths, verbs, auth modes), without
+ * importing the dispatcher. Consumed by the api-docs plugin; general enough for
+ * any introspection tooling.
+ * @public
+ */
+export {
+  listAdminRestOperations,
+  type AdminRestOperation,
+  type RestHttpMethod,
+  type RestAuthMode,
+} from "nextly";
+
+/**
+ * Runtime content-surface introspection — every registered collection and
+ * single with its fields, covering code-first, plugin-contributed, AND
+ * collections created dynamically through the admin Schema Builder (read fresh
+ * from the database on every call). Consumed by the api-docs plugin so
+ * dynamically created content appears in the spec immediately.
+ * @public
+ */
+export {
+  listContentSurfaces,
+  type ContentSurfaceInfo,
+  type ContentSurfaces,
+} from "nextly";
+
+/**
+ * Read-only view of every registered plugin's contributed routes (paths, verbs,
+ * auth flags, optional OpenAPI annotations). The safe introspection mirror of
+ * `listAdminRestOperations` for plugin-contributed surfaces.
+ * @public
+ */
+export { listPluginRoutes, type PluginRouteInfo } from "nextly";
+
+/**
+ * The canonical error-code → HTTP-status enum. Public core data a docs plugin
+ * (or any API-surface tooling) needs to describe errors accurately.
+ * @public
+ */
+export { NEXTLY_ERROR_STATUS, type NextlyErrorCode } from "nextly/errors";
 
 /**
  * Admin UI contributions (P5, D19–D23) — `contributes.admin` author surface.

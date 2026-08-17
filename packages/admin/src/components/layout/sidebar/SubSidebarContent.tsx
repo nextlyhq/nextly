@@ -2,6 +2,7 @@ import { DynamicCollectionNav } from "@admin/components/features/dashboard/Dynam
 import { DynamicPluginNav } from "@admin/components/features/dashboard/DynamicPluginNav";
 import { DynamicPluginSectionItems } from "@admin/components/features/dashboard/DynamicPluginSectionItems";
 import { DynamicSingleNav } from "@admin/components/features/dashboard/DynamicSingleNav";
+import { PluginMenuItems } from "@admin/components/features/dashboard/PluginMenuItems";
 import * as Icons from "@admin/components/icons";
 import { Layers, Puzzle, FileText, Database } from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";
@@ -107,8 +108,10 @@ export function SubSidebarContent({
           onChange={onPluginSearchChange}
         />
         <div className="space-y-1">
-          {/* Names what the panel contains: the installed-plugins overview and
-              navigation into each plugin's collections. Nothing here installs
+          {/* Names what the panel contains: the installed-plugins overview,
+              navigation into each plugin's collections, and any declarative
+              menu items plugins contribute via `contributes.admin.menu` (D20) —
+              e.g. the api-docs plugin's reference link. Nothing here installs
               a plugin, which happens through the Nextly config. */}
           <p className="text-xs font-bold uppercase tracking-wider text-sidebar-foreground px-3 mb-2">
             Plugins
@@ -138,6 +141,7 @@ export function SubSidebarContent({
                 </SidebarMenuButton>
               </SidebarMenuItem>
             )}
+            <PluginMenuItems isActive={isActive} />
           </SidebarMenu>
         </div>
       </div>

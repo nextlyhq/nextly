@@ -38,7 +38,10 @@ import type { MethodHandler, Params } from "../types";
 
 type UsersService = ServiceContainer["users"];
 
-const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
+// Exported (additive; dispatch behaviour unchanged) so the OpenAPI route-
+// descriptor registry's agreement test can assert its `users` operations are a
+// subset of this live map — the single source of truth for which methods exist.
+export const USER_METHODS: Record<string, MethodHandler<UsersService>> = {
   listUsers: {
     execute: async (svc, p) => {
       const result = await svc.listUsers({

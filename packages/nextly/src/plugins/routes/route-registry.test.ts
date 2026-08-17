@@ -21,6 +21,17 @@ describe("PluginRouteRegistry", () => {
     expect(m?.route.path).toBe("/ping");
   });
 
+  it("matches an admin-api route without adding the plugin namespace", () => {
+    const reg = getPluginRouteRegistry();
+    reg.register(
+      "@acme/docs",
+      { method: "GET", path: "/docs", mount: "admin-api", handler },
+      baseCtx
+    );
+    expect(reg.match("GET", "/docs")?.pluginName).toBe("@acme/docs");
+    expect(reg.match("GET", "/plugins/@acme/docs/docs")).toBeNull();
+  });
+
   it("captures :params and ignores the wrong method", () => {
     const reg = getPluginRouteRegistry();
     reg.register(
