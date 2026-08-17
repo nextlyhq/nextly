@@ -86,6 +86,9 @@ export type {
  *   values, CSV/JSON import, and whole-batch duplicate reporting;
  *   `withOptionIds` seeds drag ids onto plain `{label,value}` data.
  * - `FieldDefaultValueInput` — a type-aware default-value input.
+ * - `ValidationNumberField` — one numeric validation bound, owning the
+ *   empty-means-unset coercion, the whole/non-negative constraint for bounds
+ *   that count things, and its own id.
  * - `ConditionRow` — one condition as source / operator / value, with the
  *   operators and value editor chosen from the source's type. It owns the ROW
  *   and not the container, so your surface keeps its own chrome; pass
@@ -108,6 +111,7 @@ export {
   ConditionRow,
   operatorsForType,
   operatorTakesValue,
+  ValidationNumberField,
 } from "@nextlyhq/admin";
 
 /**
@@ -131,6 +135,7 @@ export type {
   ConditionSource,
   ConditionSourceOption,
   ConditionValue,
+  ValidationNumberFieldProps,
 } from "@nextlyhq/admin";
 
 // The declarative `contributes.admin` contract types (the same ones exported

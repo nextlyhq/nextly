@@ -12,6 +12,7 @@ import type { FieldValidationRule } from "nextly/field-catalog";
 import { validationRulesForFieldType } from "nextly/field-catalog";
 import { useId } from "react";
 
+import { ValidationNumberField } from "@admin/components/field-ui";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { pluginFieldTypeStorage } from "@admin/lib/builder/plugin-field-type-entries";
 
@@ -26,23 +27,20 @@ type Props = {
 /**
  * How each numeric rule presents and what values it admits.
  *
- * `step` and `min` are part of the rule rather than of the input: a length or a
- * row count is a whole number of things and cannot be negative, while a numeric
- * bound may legitimately be fractional or below zero. Leaving both unset let a
- * `minLength` of `-5` or `2.7` be typed and persisted.
+ * Whether a bound COUNTS things decides what it admits: a length or a row count
+ * is a whole number of zero or more, while a bound on a value may legitimately
+ * be fractional or negative. The kit control turns that one flag into the input
+ * constraints, so every surface applies the same answer.
  */
 const NUMERIC_RULES = {
-  minLength: { label: "Min length", integer: true, min: 0 },
-  maxLength: { label: "Max length", integer: true, min: 0 },
-  minRows: { label: "Min rows", integer: true, min: 0 },
-  maxRows: { label: "Max rows", integer: true, min: 0 },
-  min: { label: "Min", integer: false, min: undefined },
-  max: { label: "Max", integer: false, min: undefined },
+  minLength: { label: "Min length", counts: true },
+  maxLength: { label: "Max length", counts: true },
+  minRows: { label: "Min rows", counts: true },
+  maxRows: { label: "Max rows", counts: true },
+  min: { label: "Min", counts: false },
+  max: { label: "Max", counts: false },
 } as const satisfies Partial<
-  Record<
-    FieldValidationRule,
-    { label: string; integer: boolean; min: number | undefined }
-  >
+  Record<FieldValidationRule, { label: string; counts: boolean }>
 >;
 
 type NumericRule = keyof typeof NUMERIC_RULES;
@@ -78,12 +76,13 @@ export function ValidationTab({ field, readOnly = false, onChange }: Props) {
           {[lo, hi]
             .filter(rule => allowed.has(rule))
             .map(rule => (
-              <NumberRow
+              <ValidationNumberField
                 key={rule}
-                rule={rule}
+                label={NUMERIC_RULES[rule].label}
+                counts={NUMERIC_RULES[rule].counts}
                 value={v[rule]}
                 disabled={readOnly}
-                onChange={n => setV({ [rule]: n })}
+                onChange={(n: number | undefined) => setV({ [rule]: n })}
               />
             ))}
         </div>
@@ -105,41 +104,6 @@ export function ValidationTab({ field, readOnly = false, onChange }: Props) {
           onChange={message => setV({ message })}
         />
       )}
-    </div>
-  );
-}
-
-function NumberRow({
-  rule,
-  value,
-  disabled,
-  onChange,
-}: {
-  rule: NumericRule;
-  value: number | undefined;
-  disabled?: boolean;
-  onChange: (n: number | undefined) => void;
-}) {
-  // `useId` rather than a value derived from the label: two field editors open
-  // at once would otherwise mint the same document-global id, and a label then
-  // resolves to whichever input rendered first.
-  const id = useId();
-  const spec = NUMERIC_RULES[rule];
-
-  return (
-    <div className="space-y-1">
-      <Label htmlFor={id}>{spec.label}</Label>
-      <Input
-        id={id}
-        type="number"
-        step={spec.integer ? 1 : undefined}
-        min={spec.min}
-        value={value ?? ""}
-        disabled={disabled}
-        onChange={e =>
-          onChange(e.target.value === "" ? undefined : Number(e.target.value))
-        }
-      />
     </div>
   );
 }
