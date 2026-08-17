@@ -14,7 +14,13 @@ import type { BuilderConfig } from "@admin/components/features/schema-builder/bu
 
 export const SINGLE_BUILDER_CONFIG: BuilderConfig = {
   kind: "single",
-  basicsFields: ["singularName", "slug", "description", "icon"],
+  basicsFields: [
+    "singularName",
+    "slug",
+    "description",
+    "icon",
+    "startingField",
+  ],
   // showSystemFields added in PR B so singles can also surface the toggle.
   advancedFields: [
     "status",

@@ -24,7 +24,7 @@ import {
 } from "@nextlyhq/ui";
 import { useState } from "react";
 
-import type { BuilderConfig } from "./builder-config";
+import type { BasicsField, BuilderConfig } from "./builder-config";
 import { AdvancedTab } from "./builder-settings-modal/AdvancedTab";
 import { BasicsTab } from "./builder-settings-modal/BasicsTab";
 
@@ -40,7 +40,35 @@ import { BasicsTab } from "./builder-settings-modal/BasicsTab";
  * removed `adminGroup` and `order` from the modal — server-side
  * `admin.group` / `admin.order` continue to work for code-first config.
  */
+/**
+ * Basics rows that only make sense while the entity is being created.
+ *
+ * `startingField` seeds a field on the create call and has no meaning
+ * afterwards: shown in edit mode it would offer to choose something already
+ * chosen, and choosing again would do nothing. Filtered here rather than in the
+ * per-kind config, because the config describes the KIND and this depends on
+ * the mode.
+ */
+const CREATE_ONLY_BASICS: readonly BasicsField[] = ["startingField"];
+
+function basicsFieldsFor(
+  mode: "create" | "edit",
+  fields: readonly BasicsField[]
+): readonly BasicsField[] {
+  if (mode === "create") return fields;
+  return fields.filter(field => !CREATE_ONLY_BASICS.includes(field));
+}
+
 export type BuilderSettingsValues = {
+  /**
+   * The field type a newly created entity starts with, or undefined for none.
+   *
+   * Create-only and never persisted: it decides what the create call seeds and
+   * has no meaning afterwards, so editing an existing entity neither reads nor
+   * writes it. Kept here rather than in a second form state because the Basics
+   * tab renders it beside the other create-time answers.
+   */
+  startingFieldType?: string;
   singularName: string;
   pluralName?: string;
   slug: string;
@@ -152,7 +180,7 @@ export function BuilderSettingsModal({
                 no per-field wiring; the tab triggers stay outside it. */}
             <fieldset disabled={readOnly} className="min-w-0 border-0 p-0 m-0">
               <BasicsTab
-                fields={config.basicsFields}
+                fields={basicsFieldsFor(mode, config.basicsFields)}
                 kind={config.kind}
                 values={values}
                 onChange={setValues}
