@@ -430,6 +430,51 @@ export function checkTokenKind(
  * one token re-widths every container on the site. A default set that tried to
  * be a design system would be a set most sites delete.
  */
+/**
+ * The token set a site actually renders with: the defaults, with a site's own
+ * definitions layered over them by NAME.
+ *
+ * **Layered rather than replacing, and that is the whole point.** A site that
+ * defines a brand colour should not thereby lose `content.width` and
+ * `space.4` — every block reading those would fall back to its initial value,
+ * silently, because an unresolved custom property invalidates the declaration
+ * rather than reporting anything. Replacing is the shape that produces that,
+ * and it is the shape a caller writes by accident when the merge is left to
+ * them.
+ *
+ * The three-tier arrangement this implements is the one Gutenberg's
+ * `theme.json` reaches: core defaults, then the theme's file, then the user's
+ * saved styles, each overriding the last by name. This function is the first
+ * two tiers; a stored per-site override is the third and layers the same way.
+ *
+ * **ONE implementation of "what tokens does this site have", deliberately.** The
+ * emitter and any future editor must not answer it separately — two answers
+ * that agree today drift, and the drift is invisible because a missing token
+ * looks exactly like a token whose value did not apply.
+ *
+ * `prefix` and `darkMode` come from the override when it states them, because
+ * they are site-wide decisions rather than per-token values. A site that sets a
+ * prefix must set it in ONE place: `compileSiteSheet` derives the prefix used
+ * for declaring and for referencing from a single value for exactly this
+ * reason.
+ */
+export function resolveSiteTokens(override?: SiteTokenSet): SiteTokenSet {
+  const byName = new Map<string, SiteToken>();
+  for (const token of defaultSiteTokens()) byName.set(token.name, token);
+  // Second, so a site's own definition wins the name. Iterated rather than
+  // spread, because a later duplicate WITHIN the override must also win — an
+  // imported DTCG file can carry one, and taking the first would apply a value
+  // the author replaced.
+  for (const token of override?.tokens ?? []) byName.set(token.name, token);
+  return {
+    tokens: [...byName.values()],
+    ...(override?.prefix === undefined ? {} : { prefix: override.prefix }),
+    ...(override?.darkMode === undefined
+      ? {}
+      : { darkMode: override.darkMode }),
+  };
+}
+
 export function defaultSiteTokens(): SiteToken[] {
   return [
     {

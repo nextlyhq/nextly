@@ -12,6 +12,7 @@ import {
   checkTokenKind,
   DARK_MODE_ATTRIBUTE,
   defaultSiteTokens,
+  resolveSiteTokens,
   emitFontFaces,
   emitTokenBlocks,
   isTokenName,
@@ -622,5 +623,77 @@ describe("stored data reaching the stylesheet", () => {
       { family: "B", src: [{ url: "/f.woff2", format: 'woff2");}body{x:y' }] },
     ]);
     expect(css).toBe("");
+  });
+});
+
+describe("resolveSiteTokens", () => {
+  it("returns the defaults when a site defines nothing", () => {
+    expect(
+      resolveSiteTokens()
+        .tokens.map(t => t.name)
+        .sort()
+    ).toEqual(
+      defaultSiteTokens()
+        .map(t => t.name)
+        .sort()
+    );
+  });
+
+  it("lets a site override a default BY NAME without losing the others", () => {
+    // The defect this exists to make unreachable. A site that REPLACES the set
+    // to change one colour loses `content.width` and `space.4`, and every block
+    // reading those falls back to its initial value — silently, because an
+    // unresolved custom property invalidates the declaration rather than
+    // reporting anything.
+    const resolved = resolveSiteTokens({
+      tokens: [
+        { name: "color.primary", kind: "color", values: { light: "#ff0000" } },
+      ],
+    });
+
+    expect(
+      resolved.tokens.find(t => t.name === "color.primary")?.values.light
+    ).toBe("#ff0000");
+    // The SURVIVORS are the assertion, not the override.
+    const names = resolved.tokens.map(t => t.name);
+    expect(names).toContain("content.width");
+    expect(names).toContain("space.4");
+    expect(names).toContain("color.text");
+  });
+
+  it("adds a token the defaults do not define", () => {
+    const resolved = resolveSiteTokens({
+      tokens: [
+        { name: "color.surface", kind: "color", values: { light: "#f6f6f6" } },
+      ],
+    });
+
+    expect(resolved.tokens.map(t => t.name)).toContain("color.surface");
+    expect(resolved.tokens.length).toBe(defaultSiteTokens().length + 1);
+  });
+
+  it("takes the LAST duplicate within the override, not the first", () => {
+    // An imported DTCG file can carry a duplicate name; taking the first would
+    // apply the value the author replaced.
+    const resolved = resolveSiteTokens({
+      tokens: [
+        { name: "color.primary", kind: "color", values: { light: "#111111" } },
+        { name: "color.primary", kind: "color", values: { light: "#222222" } },
+      ],
+    });
+
+    expect(
+      resolved.tokens.find(t => t.name === "color.primary")?.values.light
+    ).toBe("#222222");
+  });
+
+  it("carries prefix and darkMode from the override, and omits them otherwise", () => {
+    // Site-wide decisions rather than per-token values. A prefix set in two
+    // places is how a site declares `--brand-x` while its pages ask for
+    // `--site-x`; `compileSiteSheet` derives ONE prefix for that reason.
+    expect(resolveSiteTokens().prefix).toBeUndefined();
+    expect(
+      resolveSiteTokens({ tokens: [], prefix: "brand", darkMode: "media" })
+    ).toMatchObject({ prefix: "brand", darkMode: "media" });
   });
 });
