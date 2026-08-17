@@ -70,7 +70,13 @@ const queryClient = new QueryClient({
  * `control`, and a locale switch arrives as `form.reset(...)` with another language's
  * value — the exact external-change path the editor must follow.
  */
-function Harness({ initial }: { initial: SerializedEditorState | null }) {
+function Harness({
+  initial,
+  readOnly = false,
+}: {
+  initial: SerializedEditorState | null;
+  readOnly?: boolean;
+}) {
   const form = useForm<{ body: unknown }>({
     defaultValues: { body: initial },
   });
@@ -79,7 +85,12 @@ function Harness({ initial }: { initial: SerializedEditorState | null }) {
     // tooltips, so the harness supplies the same app-level providers the admin does.
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <RichTextInput name="body" field={FIELD} control={form.control} />
+        <RichTextInput
+          name="body"
+          field={FIELD}
+          control={form.control}
+          readOnly={readOnly}
+        />
         <button onClick={() => form.reset({ body: doc("Cuerpo espanol") })}>
           switch-es
         </button>
@@ -142,5 +153,29 @@ describe("RichTextInput — external value sync", () => {
     // The editor is still alive: a follow-up valid value loads normally.
     await userEvent.click(screen.getByText("switch-es"));
     expect(await screen.findByText("Cuerpo espanol")).toBeInTheDocument();
+  });
+});
+
+describe("RichTextInput — read-only", () => {
+  it("offers the formatting toolbar while the field is editable", async () => {
+    render(<Harness initial={doc("Body copy")} />);
+
+    // The control for the negative below: without this, an absent toolbar in
+    // the read-only case would be satisfied by a harness that renders no
+    // toolbar under any circumstances.
+    expect(
+      await screen.findByRole("toolbar", { name: /text formatting/i })
+    ).toBeInTheDocument();
+  });
+
+  it("renders no formatting toolbar when the field is read-only", async () => {
+    render(<Harness initial={doc("Body copy")} readOnly />);
+
+    // The content still has to be there — an absent toolbar proves nothing if
+    // the editor failed to mount at all.
+    expect(await screen.findByText("Body copy")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("toolbar", { name: /text formatting/i })
+    ).toBeNull();
   });
 });
