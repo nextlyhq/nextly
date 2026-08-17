@@ -14,7 +14,7 @@ import type {
   NextlyColumn,
   RowAction,
 } from "@admin/components/ui/table/data-table";
-import { ListView } from "@admin/components/ui/table/list-view";
+import { ListView, useListColumns } from "@admin/components/ui/table/list-view";
 import { PAGINATION } from "@admin/constants/pagination";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import {
@@ -43,7 +43,6 @@ const ALWAYS_VISIBLE = new Set(["roleName"]);
 export default function RoleTable() {
   const { page, pageSize, setPage, setPageSize, resetPage } = usePagination();
   const [search, setSearch] = useState("");
-  const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [roleToDelete, setRoleToDelete] = useState<{
@@ -255,25 +254,25 @@ export default function RoleTable() {
     ];
   }, []);
 
-  const columns = useMemo(
-    () =>
-      allColumns.map(col => ({ ...col, hidden: hiddenColumns.has(col.name) })),
-    [allColumns, hiddenColumns]
-  );
-
   const toggleableColumns = useMemo(
     () => allColumns.filter(col => !ALWAYS_VISIBLE.has(col.name)),
     [allColumns]
   );
 
-  const toggleColumn = useCallback((columnKey: string) => {
-    setHiddenColumns(prev => {
-      const next = new Set(prev);
-      if (next.has(columnKey)) next.delete(columnKey);
-      else next.add(columnKey);
-      return next;
-    });
-  }, []);
+  /* The reader's column choice outlives the tab it was made in. */
+  const columnsControl = useListColumns({
+    storageKey: "roles",
+    columns: toggleableColumns,
+  });
+
+  const columns = useMemo(
+    () =>
+      allColumns.map(col => ({
+        ...col,
+        hidden: !columnsControl.isColumnVisible(col.name),
+      })),
+    [allColumns, columnsControl]
+  );
 
   const selection = useMemo<DataTableSelection<Role>>(
     () => ({
@@ -342,11 +341,7 @@ export default function RoleTable() {
             </>
           ) : undefined
         }
-        columnsControl={{
-          columns: toggleableColumns,
-          isColumnVisible: name => !hiddenColumns.has(name),
-          onToggleColumn: toggleColumn,
-        }}
+        columnsControl={columnsControl}
         columns={columns}
         rows={roles}
         loading={isLoading}
