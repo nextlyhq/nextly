@@ -1,7 +1,15 @@
 import { config } from "@nextlyhq/eslint-config/base";
+import { designTokensConfig } from "@nextlyhq/eslint-config/design-tokens";
 import { reactRules } from "@nextlyhq/eslint-config/react-internal";
 
 import { bareErrorConfig } from "./packages/nextly/eslint-bare-error-rule.js";
+
+// Admin UI shipped by a first-party plugin is held to the same token contract
+// third-party plugins are, since these are the packages authors read as the
+// worked example. `packages/admin` and `packages/ui` are deliberately not here
+// yet: they carry violations that need triage rather than a blanket fix, and
+// enabling the rules before that would fail the build on legitimate code.
+const PLUGIN_UI_FILES = ["packages/plugin-*/src/**/*.{ts,tsx}"];
 
 // Apply the React + react-hooks rule set to React-bearing paths so
 // inline `// eslint-disable-next-line react-hooks/...` directives
@@ -28,6 +36,7 @@ export default [
   // includes lint-staged, the hook that runs before a commit is written. Same reason as the
   // React block above.
   bareErrorConfig("packages/nextly/"),
+  ...designTokensConfig(PLUGIN_UI_FILES),
   {
     ignores: [
       "packages/*/dist/**",
