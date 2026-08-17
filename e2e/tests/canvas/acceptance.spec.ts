@@ -1173,6 +1173,25 @@ test.describe("a canvas any Nextly editor could ship", () => {
     await dragFromPanel(driver);
     await driver.cancel();
 
+    // The drag must be OVER before the document is judged, and this is the whole
+    // difficulty of asserting that nothing changed. A read taken in the same tick as
+    // the cancel is satisfied by the document not having been mutated YET — so a
+    // canvas that corrupts the tree one commit later passes, and the assertion that
+    // exists to catch exactly that reports success.
+    //
+    // `expect.poll` cannot fix it: polling retries until a condition becomes TRUE, and
+    // "unchanged" is already true at t=0, so it returns immediately having waited for
+    // nothing. What is needed is a BARRIER, and the drag ending is the right one —
+    // a drag that has finished cannot mutate the document afterwards, which is a
+    // property of the system rather than a duration someone guessed.
+    await expect
+      .poll(async () => driver.isDragging(), {
+        message:
+          "the drag must be over before the document is judged unchanged",
+        timeout: ESCAPE_SETTLE_MS,
+      })
+      .toBe(false);
+
     // Two of the three claims. Split from the third because a canvas can
     // satisfy any two, and folding them into one assertion would let this
     // canvas's shortfall on the third hide the regression cover the first two
