@@ -29,56 +29,73 @@
  * A genuine exception gets an inline `design-lint-ok: <reason>` comment rather than
  * silencing the whole check. Run with `pnpm lint:design`.
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { execSync } from "node:child_process";
 
-const ROOTS = [
-  "packages/admin/src",
-  "packages/plugin-form-builder/src",
-  "packages/plugin-page-builder/src",
+import {
+  createColorLiteralPattern,
+  createPaletteClassPattern,
+  createTokenWrapPattern,
+  paletteAdvice,
+  stripExemptColorPieces,
+} from "@nextlyhq/eslint-plugin/vocabulary";
+
+/**
+ * The scanned trees, DISCOVERED rather than listed.
+ *
+ * A hardcoded list is complete only against the repository it was written for.
+ * Every plugin package added afterwards is outside it, and the guard then
+ * reports clean on that package in exactly the same words it uses for one it
+ * examined — so the coverage silently stops growing with the repo.
+ *
+ * `templates/plugin` is here because the exemplar every plugin author copies is
+ * held to the contract it teaches. The other templates are deliberately absent:
+ * they are site starters, and a palette colour on someone's own marketing page
+ * is their design decision rather than a theme violation.
+ */
+function deriveRoots() {
+  const roots = [];
+  const add = path => {
+    if (existsSync(path)) roots.push(path);
+  };
+
+  add("packages/admin/src");
   // The shared token source is covered too, so token-consistency bugs (e.g. a
   // shadow that hardcodes a color instead of deriving from its token) can't ship
   // in the file every consumer depends on.
-  "packages/ui/src",
-];
+  add("packages/ui/src");
+  for (const entry of readdirSync("packages", { withFileTypes: true })) {
+    if (entry.isDirectory() && entry.name.startsWith("plugin-")) {
+      add(`packages/${entry.name}/src`);
+    }
+  }
+  add("templates/plugin/src");
+
+  return roots;
+}
 
 // Files whose color literals are page-theme output defaults, not admin UI theming.
 const FILE_ALLOWLIST = ["plugin-page-builder/src/core/style-compiler.ts"];
 
-const PLUGIN_MARKER = "packages/plugin-";
+/**
+ * Whether a file is a plugin surface, which decides the stricter rules.
+ *
+ * Matched on the path SHAPE rather than on a `"packages/plugin-"` substring.
+ * The substring answers "no" for `templates/plugin/src/admin/SettingsPage.tsx`
+ * — the one file the plugin rules most need to reach, since it is what every
+ * third-party plugin is copied from — and it answers no silently, leaving the
+ * exemplar exempt from the contract it demonstrates.
+ */
+const PLUGIN_SURFACE_RE =
+  /(?:^|\/)(?:packages\/plugin-[^/]+|templates\/plugin)\//;
+
 // Admin's reviewed `!important` baseline (see packages/admin/src/styles/globals.css). The
 // guard fails if this grows; lower it when overrides are removed.
 const ADMIN_IMPORTANT_BASELINE = 35;
 
-const TOKEN_WRAP_RE = /\b(?:hsl|hsla|rgb|rgba)\(\s*var\(/;
-const COLOR_LITERAL_RE = /#[0-9a-fA-F]{3,8}\b|\b(?:rgb|rgba|hsl|hsla)\(\s*[0-9.]/;
-
-// Tailwind's built-in palette, which ships with the framework whether or not
-// theme.css redefines a given hue — so `bg-emerald-50` compiles even though no
-// `--color-emerald-*` is declared anywhere here. That is exactly why this needs
-// its own rule.
-const PALETTE_HUES =
-  "slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose";
-const COLOR_UTILS =
-  "text|bg|border|ring|ring-offset|from|via|to|fill|stroke|shadow|outline|decoration|accent|caret|divide|placeholder";
-// Longest shade first: `50|\d{3}` would match `500` as `50` and let it through.
-const PALETTE_SHADES = "950|900|800|700|600|500|400|300|200|100|50";
-// Anchored on a class-list boundary so `translate-x-1/2` (which contains
-// "slate-x") and a prose mention of a colour are not read as utilities.
-const PALETTE_CLASS_RE = new RegExp(
-  `(?:^|[\\s"'\`{])((?:[a-z-]+:)*!?(?:${COLOR_UTILS})-(?:${PALETTE_HUES})-(?:${PALETTE_SHADES})(?:\\/\\d{1,3})?)(?![\\w-])`
-);
-
-/** The token scale that replaced each hue, so the error says what to do next. */
-const HUE_REPLACEMENT = {
-  green: "success-*",
-  emerald: "success-*",
-  red: "destructive-*",
-  rose: "destructive-*",
-  amber: "warning-*",
-  yellow: "warning-*",
-  orange: "warning-*",
-};
+const TOKEN_WRAP_RE = createTokenWrapPattern();
+const COLOR_LITERAL_RE = createColorLiteralPattern();
+const PALETTE_CLASS_RE = createPaletteClassPattern();
 
 /** True for a line that is nothing but a comment — `//`, `/* … *​/`, or a JSDoc `*`. */
 function isCommentLine(line) {
@@ -86,16 +103,9 @@ function isCommentLine(line) {
   return t.startsWith("//") || t.startsWith("*") || t.startsWith("/*");
 }
 
-function paletteAdvice(match) {
-  const hue = new RegExp(`(${PALETTE_HUES})`).exec(match)?.[1];
-  const replacement = hue && HUE_REPLACEMENT[hue];
-  if (replacement) return `use ${replacement}`;
-  return "use a semantic scale (success-*/warning-*/destructive-*/primary-*) or a neutral token";
-}
-
-const listFiles = () =>
+const listFiles = roots =>
   execSync(
-    `find ${ROOTS.join(" ")} -type f \\( -name "*.css" -o -name "*.tsx" -o -name "*.ts" \\)`,
+    `find ${roots.join(" ")} -type f \\( -name "*.css" -o -name "*.tsx" -o -name "*.ts" \\)`,
     { encoding: "utf8" }
   )
     .trim()
@@ -111,24 +121,22 @@ function colorLiteralIsExempt(line, file) {
   // source of truth in theme.css; only these `--color-*` scale definitions are
   // allowed to hardcode. Semantic tokens and shadows must still derive from them.
   if (/--color-[a-z]+-\d+\s*:/.test(line)) return true;
-  let rest = line
-    // strip inline comments (a hex inside `/* … */` is documentation, not code)
-    .replace(/\/\*.*?\*\//g, "")
-    .replace(/url\([^)]*\)/g, "")
-    .replace(/placeholder\s*[:=]\s*["'][^"']*["']/g, "")
-    // black / white, with an optional 2-digit alpha (`#00000033` shadow scrims)
-    .replace(/#(?:ffffff|fff|000000|000)(?:[0-9a-f]{2})?\b/gi, "")
-    .replace(/rgba?\(\s*0\s*[,\s]\s*0\s*[,\s]\s*0[^)]*\)/gi, "")
-    .replace(/rgba?\(\s*255\s*[,\s]\s*255\s*[,\s]\s*255[^)]*\)/gi, "");
-  return !COLOR_LITERAL_RE.test(rest);
+  // The mode-invariant strip is shared with the published ESLint rules, so the
+  // two guards cannot disagree about which literals are legitimate.
+  return !COLOR_LITERAL_RE.test(stripExemptColorPieces(line));
 }
+
+const roots = deriveRoots();
+const files = listFiles(roots);
 
 const violations = [];
 let adminImportant = 0;
+let pluginClassified = 0;
 
-for (const file of listFiles()) {
+for (const file of files) {
   const isCss = file.endsWith(".css");
-  const isPlugin = file.includes(PLUGIN_MARKER);
+  const isPlugin = PLUGIN_SURFACE_RE.test(file);
+  if (isPlugin) pluginClassified += 1;
   // The theme declares the palette scales themselves; it is the one place the
   // hue names are the subject rather than a shortcut past the tokens.
   const isThemeSource = file.endsWith("ui/src/styles/theme.css");
@@ -171,6 +179,33 @@ for (const file of listFiles()) {
   });
 }
 
+/**
+ * What the run actually read, asserted before any verdict is reported.
+ *
+ * A scan whose roots resolved to nothing finds no violations and exits 0, which
+ * is byte-identical to a clean repository. The three populations are reported
+ * separately because they fail independently: roots can resolve while matching
+ * no files, and files can be read while none of them is classified as a plugin
+ * surface — and that last case makes every plugin-only rule inert while the
+ * summary still reads as a pass.
+ */
+const populations = [
+  ["roots", roots.length],
+  ["files", files.length],
+  ["plugin-surface files", pluginClassified],
+];
+const empty = populations.filter(([, count]) => count === 0);
+if (empty.length > 0) {
+  console.error(
+    `\n✖ Design lint could not run: ${empty
+      .map(([label]) => `no ${label}`)
+      .join(", ")}.\n\n` +
+      "  This is not a pass. The guard reports nothing when it reads nothing,\n" +
+      "  so an empty population is a tooling failure rather than a clean tree.\n"
+  );
+  process.exit(1);
+}
+
 if (adminImportant > ADMIN_IMPORTANT_BASELINE) {
   violations.push(
     `admin: ${adminImportant} \`!important\` exceed the reviewed baseline of ${ADMIN_IMPORTANT_BASELINE}. ` +
@@ -188,5 +223,8 @@ if (violations.length) {
 }
 
 console.log(
-  `✓ Design lint passed (admin \`!important\`: ${adminImportant}/${ADMIN_IMPORTANT_BASELINE}).`
+  `✓ Design lint passed — ${files.length} files across ${roots.length} roots ` +
+    `(${pluginClassified} plugin-surface), admin \`!important\`: ` +
+    `${adminImportant}/${ADMIN_IMPORTANT_BASELINE}.`
 );
+console.log(`  roots: ${roots.join(", ")}`);
