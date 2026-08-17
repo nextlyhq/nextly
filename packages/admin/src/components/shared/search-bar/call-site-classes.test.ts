@@ -238,8 +238,28 @@ describe("SearchBar call sites", () => {
     const elements = sources.flatMap(path =>
       searchBarTags(parse(path, readFileSync(path, "utf8")))
     );
-    expect(sources.length).toBeGreaterThan(10);
-    expect(elements.length).toBeGreaterThan(10);
+
+    /*
+     * MEMBERSHIP before count. A threshold is the same substitution one level
+     * up: it passes on any set of the right size, so a scan that lost the
+     * surfaces it cares about and gained unrelated ones reads as healthy. It
+     * also rots — the number was 10 while lists composed their own toolbars,
+     * and it broke when they stopped, which says nothing about whether the scan
+     * still works.
+     *
+     * These two are named because they are the call sites that must exist for
+     * this file to mean anything: the shared toolbar, which is now the only
+     * place a list renders the field, and the media picker, which renders it
+     * with no list at all.
+     */
+    const scanned = sources.map(path => path.replace(/^.*\/src\//, "src/"));
+    expect(scanned).toContain(
+      "src/components/ui/table/list-view/ListToolbar.tsx"
+    );
+    expect(
+      scanned.some(p => p.includes("media-library/MediaPickerDialog"))
+    ).toBe(true);
+    expect(elements.length).toBeGreaterThan(3);
   });
 
   it("finds a call site however the component is bound", () => {
