@@ -69,6 +69,7 @@ import { resolveBuilderWebhooks } from "../../domains/webhooks/builder-webhooks"
 import { NextlyError } from "../../errors";
 import { transformRichTextFields } from "../../lib/field-transform";
 import { resolveBuilderRevalidate } from "../../revalidation/builder-revalidate";
+import { withSessionCacheHeaders } from "../../routeHandler";
 import { getProductionNotifier } from "../../runtime/notifications/index";
 import { isReservedResourceSlug } from "../../schemas/_zod/rbac";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
@@ -77,6 +78,7 @@ import {
   listEffectivePermissions,
 } from "../../services/lib/permissions";
 import { assertGlobalResourceSlugAvailable } from "../../services/lib/resource-slug-guard";
+import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
 import {
   readAuthenticatedActor,
   readAuthenticatedScope,
@@ -109,6 +111,9 @@ import type { MethodHandler, Params } from "../types";
 import { assertSchemaVersionMatch } from "./schema-version-guard";
 import {
   assertLabelRequestValid,
+  autosaveForDocument,
+  getAutosaveForDocument,
+  requireSnapshotBody,
   getVersionDiffForDocument,
   getVersionForDocument,
   restoreVersionForDocument,
@@ -313,6 +318,60 @@ export const SINGLE_VERSION_METHODS: Record<
         params: p,
       });
       return respondMutation("Version renamed.", row);
+    },
+  },
+  autosaveSingle: {
+    execute: async (_svc, p, body) => {
+      const slug = String(p.slug ?? "");
+      // Validate the body BEFORE resolving the live document. Otherwise one
+      // malformed request answers 404 for an unmaterialized Single and 400 for
+      // a materialized one, which tells a caller whose per-document rule has
+      // not been evaluated yet whether the document exists. Same ordering the
+      // label handler uses, and for the same reason.
+      const snapshot = requireSnapshotBody(body);
+      // As everywhere in this handler, the document id comes from the live row
+      // rather than the URL: a Single has exactly one document and the client
+      // must not name which one it is writing a recovery point for.
+      const entryId = await requireLiveSingleId(slug);
+      const item = await autosaveForDocument({
+        scopeKind: "single",
+        slug,
+        entryId,
+        user: userFromParams(p),
+        params: p,
+        // The body IS the snapshot. See the collection handler.
+        snapshot,
+        locale: typeof p.locale === "string" && p.locale ? p.locale : null,
+      });
+      return respondMutation("Draft recovery point saved.", item);
+    },
+  },
+  getSingleAutosave: {
+    execute: async (_svc, p) => {
+      const slug = String(p.slug ?? "");
+      const entryId = await requireLiveSingleId(slug);
+      const item = await getAutosaveForDocument({
+        scopeKind: "single",
+        slug,
+        entryId,
+        user: userFromParams(p),
+        params: p,
+      });
+      // Private, never shared. This returns one author's unpublished snapshot
+      // under a session cookie, so a shared HTTP cache holding it could serve
+      // it to a different authenticated user without authorization running
+      // again. Uses the same helper the session-bearing routes in the route
+      // handler use rather than restating the header pair.
+      // Opaque to the timezone pass. The snapshot is the author's raw form
+      // values, so a TEXT field whose literal content happens to look like an
+      // ISO timestamp would be shifted by the global rewrite and come back
+      // different from what they typed -- a recovery point that does not
+      // recover. The row's own metadata is UTC and the client formats it.
+      return withSessionCacheHeaders(
+        respondDoc(item, {
+          headers: { [SKIP_TIMEZONE_FORMAT_HEADER]: "1" },
+        })
+      );
     },
   },
 };

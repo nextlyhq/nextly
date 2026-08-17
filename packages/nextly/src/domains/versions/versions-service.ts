@@ -16,10 +16,12 @@
  */
 
 import { NextlyError } from "../../errors";
+import type { VersionStatus } from "../../schemas/versions/types";
 
 import type { VersionsDbApi } from "./db-api";
 import {
   VersionsRepository,
+  type AutosaveWriteResult,
   type VersionMeta,
   type VersionRef,
   type VersionRow,
@@ -104,5 +106,44 @@ export class VersionsService {
     locale: string | null
   ): Promise<number> {
     return this.repo.deleteWorkingDraft(ref, locale);
+  }
+
+  /**
+   * Record one author's rolling recovery point for a document.
+   *
+   * Outside any transaction, unlike durable capture. A durable version is part
+   * of the write that produced it and must land or roll back with it; a
+   * recovery point describes work that has not been written at all, so there is
+   * no surrounding write for it to join. That also keeps a slow snapshot from
+   * holding a transaction open while somebody types.
+   *
+   * Rewrites the one row this author holds for this document rather than adding
+   * to history, so an editing session costs a single row and durable history is
+   * untouched.
+   */
+  async autosave(input: {
+    ref: VersionRef;
+    status: VersionStatus;
+    snapshot: unknown;
+    locale?: string | null;
+    createdBy?: string | null;
+  }): Promise<AutosaveWriteResult> {
+    return this.repo.upsertAutosave(input);
+  }
+
+  /**
+   * One author's current recovery point, or undefined when they have none.
+   *
+   * Scoped to the caller rather than the document: an autosave is unpublished,
+   * unvalidated work in progress, so one author's must never be offered to
+   * another. This is the only way a stored autosave can be read back --
+   * history listings and version reads both exclude them by construction,
+   * since a recovery point carries no version number to be addressed by.
+   */
+  async getAutosave(
+    ref: VersionRef,
+    createdBy: string | null
+  ): Promise<VersionRow | undefined> {
+    return this.repo.findAutosave(ref, createdBy);
   }
 }

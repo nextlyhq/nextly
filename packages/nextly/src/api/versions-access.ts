@@ -18,15 +18,24 @@
 import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import type { FieldConfig } from "../collections/fields/types";
 import { getService } from "../di";
+import { container } from "../di/container";
+import type { FieldGroupDataService } from "../domains/field-groups/services/field-group-data-service";
 import { checkSingleAccess } from "../domains/singles";
 import type { UserContext } from "../domains/singles/types";
 import { computeVersionDiff } from "../domains/versions/diff";
 import type { VersionDiff } from "../domains/versions/diff";
 import { hydrateDiffReferences } from "../domains/versions/diff-references";
 import { hydrateSnapshotReferences } from "../domains/versions/snapshot-references";
+import {
+  resolveComponentFieldMap,
+  stripPasswordsThroughComponents,
+} from "../domains/versions/tag-component-types";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
-import type { VersionScopeKind } from "../schemas/versions/types";
+import type {
+  ResolvedVersionsConfig,
+  VersionScopeKind,
+} from "../schemas/versions/types";
 import { AccessControlService } from "../services/access/access-control-service";
 import { resolveRoleSlugs } from "../services/lib/permissions";
 import { applyFieldReadAccess } from "../shared/lib/field-level-registry";
@@ -383,9 +392,43 @@ export async function redactSnapshotForUser(
   // read path. Capture already strips password values, but a field converted to
   // `password` after a snapshot was written — or history imported from before
   // that rule existed — would otherwise hand back a value the live read hides.
-  const fields = await resolveCurrentFields(scopeKind, slug);
+  // The STRICT resolver: `null` means the lookup failed, which is different
+  // from an entity that genuinely has no user-defined fields. Collapsing the
+  // two would skip redaction entirely on a transient failure and hand back a
+  // value the live read hides -- an assertion satisfied by absence, in the one
+  // place where absence must stop the read.
+  const fields = await tryResolveCurrentFields(scopeKind, slug);
+  if (fields === null) {
+    throw NextlyError.internal({
+      logContext: {
+        reason: "version-redaction-field-resolution-failed",
+        scopeKind,
+        scopeSlug: slug,
+      },
+    });
+  }
   if (fields.length > 0) {
-    stripPasswordFieldValues(entry, fields);
+    // Through component REFERENCES as well. A `component` field carries only a
+    // slug, so a walker given the top-level list alone sees a leaf: a password
+    // declared inside a referenced component would be handed back even though
+    // the live read hides it. Same reasoning as the field converted to
+    // `password` after the fact -- the CURRENT schema decides, wherever the
+    // field is declared.
+    const dataService = container.has("fieldGroupDataService")
+      ? container.get<FieldGroupDataService>("fieldGroupDataService")
+      : null;
+    const componentFields = dataService
+      ? await resolveComponentFieldMap(fields, componentSlug =>
+          dataService.getComponentFields(componentSlug)
+        )
+      : new Map<string, FieldConfig[]>();
+
+    stripPasswordsThroughComponents(
+      entry,
+      fields,
+      componentFields,
+      stripPasswordFieldValues
+    );
   }
 
   await applyFieldReadAccess({
@@ -403,10 +446,52 @@ export async function redactSnapshotForUser(
  * yields an empty list rather than failing the request (redaction then falls
  * back to field-level access alone; a diff falls back to raw-key comparison).
  */
-export async function resolveCurrentFields(
+/**
+ * The entity's stored versioning policy, as the registry persisted it.
+ *
+ * Deliberately NOT wrapped in a catch. `tryResolveCurrentFields` flattens a
+ * failed lookup because its callers can degrade safely; a policy check cannot.
+ * "I could not read the setting" and "the setting permits this" must never be
+ * the same answer on a path that decides whether to store unpublished content,
+ * so a lookup failure propagates and the caller refuses.
+ *
+ * Returns `null` for an entity that records no versions at all, which is a
+ * definite answer rather than missing information: the registry writes the
+ * property and sets it to null when versioning is off.
+ */
+export async function resolveVersionsPolicy(
   scopeKind: "collection" | "single",
   slug: string
-): Promise<FieldConfig[]> {
+): Promise<ResolvedVersionsConfig | null> {
+  if (scopeKind === "single") {
+    const registry = getService("singleRegistryService");
+    const record = await registry.getSingleBySlug(slug);
+    return (
+      (record as { versions?: ResolvedVersionsConfig | null } | null)
+        ?.versions ?? null
+    );
+  }
+  const collections = getService("collectionService");
+  const collection = await collections.getCollection(slug, {});
+  return (
+    (collection as { versions?: ResolvedVersionsConfig | null } | null)
+      ?.versions ?? null
+  );
+}
+
+/**
+ * Current fields, or `null` when the lookup itself failed.
+ *
+ * Separated from `resolveCurrentFields` because the two answers are different:
+ * a valid entity can legitimately have NO user-defined fields (a freshly
+ * created Single whose identity columns alone form a document), and collapsing
+ * that into the same empty array as a failed lookup forces every caller to
+ * guess which happened. Callers that must fail closed read this one.
+ */
+export async function tryResolveCurrentFields(
+  scopeKind: "collection" | "single",
+  slug: string
+): Promise<FieldConfig[] | null> {
   try {
     if (scopeKind === "single") {
       const registry = getService("singleRegistryService");
@@ -420,8 +505,22 @@ export async function resolveCurrentFields(
     return ((collection as { fields?: unknown[] } | null)?.fields ??
       []) as FieldConfig[];
   } catch {
-    return [];
+    return null;
   }
+}
+
+/**
+ * Current fields, with a failed lookup flattened to an empty list.
+ *
+ * Kept for the redaction paths, where "no fields" and "could not look" lead to
+ * the same conservative behaviour. Derived from the strict form above rather
+ * than repeating the lookups.
+ */
+export async function resolveCurrentFields(
+  scopeKind: "collection" | "single",
+  slug: string
+): Promise<FieldConfig[]> {
+  return (await tryResolveCurrentFields(scopeKind, slug)) ?? [];
 }
 
 /**

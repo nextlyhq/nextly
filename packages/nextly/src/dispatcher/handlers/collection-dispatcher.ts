@@ -66,6 +66,7 @@ import {
   type CollectionWithAdmin,
 } from "../../plugins/admin-views";
 import { getHandlerConfig } from "../../route-handler/auth-handler";
+import { withSessionCacheHeaders } from "../../routeHandler";
 import { getProductionNotifier } from "../../runtime/notifications/index";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import {
@@ -79,6 +80,7 @@ import {
   isSuperAdmin,
   listEffectivePermissions,
 } from "../../services/lib/permissions";
+import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
 import {
   readAuthenticatedActor,
   readAuthenticatedScope,
@@ -124,6 +126,9 @@ import {
   listVersionsForDocument,
   setVersionLabelForDocument,
   userFromParams,
+  autosaveForDocument,
+  getAutosaveForDocument,
+  requireSnapshotBody,
 } from "./versions-methods";
 
 type CollectionsHandlerType = CollectionsHandler;
@@ -229,6 +234,52 @@ export const COLLECTION_VERSION_METHODS: Record<
         params: p,
       });
       return respondMutation("Working draft discarded.", item);
+    },
+  },
+  autosaveEntry: {
+    execute: async (_svc, p, body) => {
+      const item = await autosaveForDocument({
+        scopeKind: "collection",
+        slug: String(p.collectionName ?? ""),
+        entryId: String(p.entryId ?? ""),
+        user: userFromParams(p),
+        params: p,
+        // The body IS the snapshot. Its CONTENTS are stored unvalidated,
+        // because a recovery point records what the author had and someone
+        // part-way through a required field still has work worth not losing.
+        // That it is an object at all is a different question, and one a
+        // malformed request must be told about rather than being answered with
+        // a serialization failure.
+        snapshot: requireSnapshotBody(body),
+        locale: typeof p.locale === "string" && p.locale ? p.locale : null,
+      });
+      return respondMutation("Draft recovery point saved.", item);
+    },
+  },
+  getEntryAutosave: {
+    execute: async (_svc, p) => {
+      const item = await getAutosaveForDocument({
+        scopeKind: "collection",
+        slug: String(p.collectionName ?? ""),
+        entryId: String(p.entryId ?? ""),
+        user: userFromParams(p),
+        params: p,
+      });
+      // Private, never shared. This returns one author's unpublished snapshot
+      // under a session cookie, so a shared HTTP cache holding it could serve
+      // it to a different authenticated user without authorization running
+      // again. Uses the same helper the session-bearing routes in the route
+      // handler use rather than restating the header pair.
+      // Opaque to the timezone pass. The snapshot is the author's raw form
+      // values, so a TEXT field whose literal content happens to look like an
+      // ISO timestamp would be shifted by the global rewrite and come back
+      // different from what they typed -- a recovery point that does not
+      // recover. The row's own metadata is UTC and the client formats it.
+      return withSessionCacheHeaders(
+        respondDoc(item, {
+          headers: { [SKIP_TIMEZONE_FORMAT_HEADER]: "1" },
+        })
+      );
     },
   },
   getEntryVersion: {
