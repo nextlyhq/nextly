@@ -315,6 +315,7 @@ describe("the blocks entry", () => {
       "divider",
       "embed",
       "form",
+      "gallery",
       "heading",
       "image",
       "list",

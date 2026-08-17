@@ -180,6 +180,7 @@ describe("every default the core library declares", () => {
       "core/column",
       "core/columns",
       "core/form",
+      "core/gallery",
     ]);
   });
 
