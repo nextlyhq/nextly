@@ -295,6 +295,125 @@ test.describe("a narrow CONTAINER inside a wide window", () => {
   });
 });
 
+test.describe("overlays opened inside the shell", () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+
+  const HOST = '[data-slot="builder-overlay-host"]';
+
+  test("land in the shell's own host rather than the document body", async ({
+    page,
+  }) => {
+    // The containment property. An overlay leaves the DOM position it was
+    // opened from, so nothing about the region that owns it can reach the
+    // content — which is why an open dropdown used to survive the shell being
+    // hidden. Asserted as ANCESTRY rather than by looking for the element,
+    // since finding it says nothing about where it went.
+    const shell = createShellDriver(page);
+    await shell.goto();
+
+    await page.getByTestId("overlay-trigger").click();
+    const content = page.getByTestId("overlay-content");
+    await expect(content).toBeVisible();
+
+    expect(
+      await content.evaluate((node, host) => node.closest(host) !== null, HOST)
+    ).toBe(true);
+  });
+
+  test("render with a real box when opened at a scrolled panel edge", async ({
+    page,
+  }) => {
+    // The trigger sits at the BOTTOM of a scrolling inspector, which is where a
+    // container placed inside that scroll box would cut the dropdown off.
+    //
+    // WHAT THIS DOES NOT COVER, measured rather than assumed. Every overlay
+    // positions itself `fixed`, and `overflow` only clips a fixed descendant
+    // when an ancestor is a containing block for it — a `transform`, `filter`,
+    // `contain` or `will-change`. There is none anywhere in the shell today, so
+    // a container placed inside the inspector would NOT clip either, and this
+    // test would pass on that placement as readily as on the correct one. It
+    // cannot currently distinguish them.
+    //
+    // What actually guards the placement is the unit assertion that no ancestor
+    // of the host carries one of those properties
+    // (`builder-shell.test.tsx`), which is the condition that would make
+    // clipping possible. This test is the smoke check beside it: the overlay
+    // opens, is painted, and has a box — which is worth having, and is not the
+    // clipping guard.
+    const shell = createShellDriver(page);
+    await shell.goto();
+
+    const trigger = page.getByTestId("overlay-trigger");
+    await trigger.scrollIntoViewIfNeeded();
+    await trigger.click();
+
+    const content = page.getByTestId("overlay-content");
+    await expect(content).toBeVisible();
+
+    const box = await content.boundingBox();
+    expect(box).not.toBeNull();
+    if (box === null) return;
+    expect(box.height).toBeGreaterThan(20);
+    expect(box.width).toBeGreaterThan(20);
+  });
+
+  test("resolve the design-system tokens from inside that host", async ({
+    page,
+  }) => {
+    // The admin re-applies `nextly-admin` on its own portal root because that
+    // class selects the token values. This host inherits instead, being nested
+    // inside the shell, and inheritance is a different path from re-declaring:
+    // an overlay whose background resolves to nothing renders as unstyled text
+    // over the canvas, which is legible enough to pass a screenshot glance.
+    const shell = createShellDriver(page);
+    await shell.goto();
+
+    await page.getByTestId("overlay-trigger").click();
+    const content = page.getByTestId("overlay-content");
+    await expect(content).toBeVisible();
+
+    // Read through the BROWSER's computed value, never the custom property:
+    // asking for `--nx-builder-surface` returns the declared token stream
+    // whether or not anything defines it, which is how an unstyled overlay
+    // passes a check that looks like this one.
+    //
+    // Not routed through the driver's `isUnpainted`, deliberately. That
+    // predicate takes a whole `ShellRenderMeasurement` and reads the alpha from
+    // a separator its own measurement produces; supplying that here would mean
+    // re-deriving the alpha beside it, which is the duplication the driver
+    // exists to prevent. The narrower question this test needs — did the
+    // background resolve to anything at all — is answerable without it.
+    const background = await content.evaluate(
+      node => getComputedStyle(node).backgroundColor
+    );
+    expect(background.trim()).not.toBe("");
+    expect(background.trim()).not.toBe("transparent");
+    expect(background).not.toMatch(/(rgba?\([^)]*[,/]\s*0(\.0+)?\s*\))/);
+  });
+
+  test("disappear with the shell when its container is too narrow", async ({
+    page,
+  }) => {
+    // The defect this whole change exists for, end to end. Opened while the
+    // shell is usable, then the CONTAINER is narrowed underneath it: the
+    // dropdown must go with the editor rather than floating over the notice
+    // that says the editor is unavailable.
+    const shell = createShellDriver(page);
+    await shell.goto();
+
+    await page.getByTestId("overlay-trigger").click();
+    await expect(page.getByTestId("overlay-content")).toBeVisible();
+
+    await page.getByTestId("shell-container").evaluate((node, width) => {
+      node.style.width = `${width}px`;
+    }, MIN_SHELL_WIDTH - 100);
+
+    await expect(page.getByText(/needs more width/i)).toBeVisible();
+    await expect(page.getByTestId("overlay-content")).toBeHidden();
+    void shell;
+  });
+});
+
 test.describe("the readiness diagnostic itself", () => {
   test.use({ viewport: { width: 1440, height: 900 } });
 

@@ -400,6 +400,109 @@ describe("preferences", () => {
   });
 });
 
+describe("where overlays inside the shell portal to", () => {
+  /** The host the shell publishes for portalled overlay content. */
+  function overlayHost(): HTMLElement {
+    const host = document.querySelector<HTMLElement>(
+      '[data-slot="builder-overlay-host"]'
+    );
+    if (host === null) throw new Error("the shell rendered no overlay host");
+    return host;
+  }
+
+  it("puts the host inside the subtree that goes inert", () => {
+    // The whole point. `hidden` and `inert` are attributes on an element and
+    // reach descendants only, so an overlay portalled to `document.body` could
+    // never be covered by them — it stayed visible and clickable on top of the
+    // notice saying the editor was unavailable. Containment is what makes that
+    // impossible rather than something each control has to remember.
+    stubContainerFits(false);
+    render(
+      <BuilderShell onExit={vi.fn()} store={memoryStore()}>
+        <p>canvas</p>
+      </BuilderShell>
+    );
+
+    const inert = overlayHost().closest("[inert]");
+    expect(inert).not.toBeNull();
+    // And the same element is the one taken out of layout, so portalled
+    // content inherits `display: none` rather than merely losing pointers.
+    expect(inert?.hasAttribute("hidden")).toBe(true);
+  });
+
+  it("keeps the host out of every scrollable region", () => {
+    // The failure a naive placement produces, and it is worse than the one
+    // being fixed because it is silent: the panel, the canvas and the
+    // inspector are each `overflow-auto`, so an overlay opened near a panel
+    // edge would be CLIPPED rather than merely misplaced. Asserted
+    // structurally because jsdom computes no styles — what it can decide is
+    // that the host is not a descendant of any of them.
+    renderShell({ renderPanel: panel => <p>{panel} panel</p> });
+    fireEvent.click(screen.getByRole("button", { name: "Insert" }));
+
+    const host = overlayHost();
+    for (const region of [
+      screen.getByRole("region", { name: "Canvas" }),
+      screen.getByRole("complementary", { name: "Inspector" }),
+      screen.getByRole("navigation", { name: "Editor panels" }),
+    ]) {
+      expect(region.contains(host)).toBe(false);
+    }
+  });
+
+  it("keeps the host out of any ancestor that would trap fixed positioning", () => {
+    // A guard rather than a comment, because the invariant is fragile by
+    // construction and its violation is silent.
+    //
+    // Every overlay positions itself `fixed`. A `transform`, `filter`,
+    // `backdrop-filter`, `perspective`, `contain` or `will-change` on an
+    // ancestor makes that ancestor the containing block instead of the
+    // viewport, so a centred dialog would centre on the canvas and a dropdown
+    // would land somewhere unrelated. The same properties create a stacking
+    // context, which additionally makes every z-index inside the host local
+    // and unable to compete with admin-level overlays.
+    //
+    // A page builder acquires canvas zoom eventually, and the day a `scale-`
+    // lands on an ancestor of this host is the day overlays quietly
+    // mispositioned. This fails then rather than in a bug report.
+    const TRAPS =
+      /(^|[\s:])(scale|rotate|translate|skew|transform|filter|blur|backdrop|perspective|isolate|contain|will-change|opacity)-/;
+
+    renderShell({ renderPanel: panel => <p>{panel} panel</p> });
+
+    const offenders: string[] = [];
+    for (
+      let node: HTMLElement | null = overlayHost().parentElement;
+      node !== null;
+      node = node.parentElement
+    ) {
+      const classes = node.className;
+      if (typeof classes === "string" && TRAPS.test(classes)) {
+        offenders.push(`${node.tagName.toLowerCase()}: ${classes}`);
+      }
+    }
+
+    expect(offenders).toEqual([]);
+  });
+
+  it("walked real ancestors, so the guard above is not vacuous", () => {
+    // The positive control. A host with no parents, or a selector that found
+    // nothing, would satisfy the empty-offenders check perfectly.
+    renderShell();
+
+    let depth = 0;
+    for (
+      let node: HTMLElement | null = overlayHost().parentElement;
+      node !== null;
+      node = node.parentElement
+    ) {
+      depth += 1;
+    }
+
+    expect(depth).toBeGreaterThan(2);
+  });
+});
+
 describe("the server render and the first client render agree", () => {
   it("emits the defaults even when the store has preferences", () => {
     // The hydration property, and it needs a real server render to state.
