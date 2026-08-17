@@ -632,9 +632,15 @@ export function stripPasswordsThroughComponents(
       const rows = entry[name];
       if (Array.isArray(rows)) {
         for (const row of rows) {
+          // ASKED, not read. The storage migration renames this key inside
+          // stored JSON, so a snapshot written under the other spelling would
+          // read as untyped -- and an untyped row falls back to the union,
+          // which is exactly the over-stripping this per-row selection exists
+          // to avoid. The accessor tries both spellings in the migration's own
+          // order.
           const tagged =
             row && typeof row === "object"
-              ? (row as { _componentType?: unknown })._componentType
+              ? readFieldGroupType(row as Record<string, unknown>)
               : undefined;
           const rowFields =
             typeof tagged === "string" && slugs.includes(tagged)
