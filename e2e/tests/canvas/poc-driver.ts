@@ -137,6 +137,15 @@ const DRAG_THRESHOLD_PX = 12;
  * guessing produce two seams. This is the contract, such as it is — one element carrying a
  * base-10 count of undoable entries, in either document.
  */
+/**
+ * How long `startDragAt` waits for its press to become a drag, in milliseconds.
+ *
+ * A ceiling the poll stops early on rather than a wait anyone pays: activation
+ * is synchronous with the threshold-crossing move in the healthy case. Generous
+ * enough that a loaded runner does not read as a refusal.
+ */
+const ACTIVATION_TIMEOUT_MS = 2_000;
+
 const UNDO_DEPTH_ATTR = "data-nx-undo-depth";
 const UNDO_DEPTH_SELECTOR = `[${UNDO_DEPTH_ATTR}]`;
 
@@ -494,6 +503,28 @@ export function createPocDriver(page: Page): CanvasDriver {
       await page.mouse.move(pointer.x, pointer.y);
       await page.mouse.down();
       await driver.crossActivationThreshold();
+      // Crossing the threshold is this method's whole contract, so a press that
+      // did not become a drag is a broken precondition rather than a result, and
+      // it is refused here instead of being returned as one.
+      //
+      // The refusal is load-bearing rather than defensive. Gestures issued
+      // back-to-back faster than a person can produce them lose every second
+      // activation, and a caller that reads the drag state itself sees a
+      // plausible `false`, while one that goes straight on to move the pointer
+      // measures a drag that never started and reports it as a canvas result.
+      // Both are silent. Anything wanting a press WITHOUT activation has
+      // `pressAt`, which makes no such promise.
+      //
+      // Bounded by a poll rather than a fixed wait, so the happy path costs one
+      // read and only a genuine failure pays the timeout.
+      await expect
+        .poll(async () => driver.isDragging(), {
+          message:
+            "the press did not become a drag; if gestures are being issued in " +
+            "a loop, they need an idle gap between them",
+          timeout: ACTIVATION_TIMEOUT_MS,
+        })
+        .toBe(true);
     },
 
     async pressAt(point: Point) {

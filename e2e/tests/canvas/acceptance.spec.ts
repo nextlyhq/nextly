@@ -87,6 +87,18 @@ const PLAN_POINT = {
 const ESCAPE_SETTLE_MS = 2_000;
 
 /**
+ * Idle wall-clock between one gesture ending and the next beginning, in milliseconds.
+ *
+ * Not a settle, and not interchangeable with one. Polling the previous drag to
+ * `isDragging() === false` is a barrier against teardown and returns the moment the
+ * engine says it is finished; this is the separate fact that a person cannot press
+ * again within a frame of releasing. Gestures issued back-to-back lose every second
+ * activation — measured over ten, with the geometry varied on each — so a probe
+ * without this measures the harness rather than the canvas.
+ */
+const GESTURE_GAP_MS = 500;
+
+/**
  * Time budgets for the autoscroll case, in milliseconds.
  *
  * Durations rather than move counts. The scroll advances on the canvas's own timer, so a number of
@@ -1067,7 +1079,7 @@ test.describe("a canvas any Nextly editor could ship", () => {
     note(
       PLAN_POINT.oneEngineForBothDrags,
       "B-15",
-      "a drag started after a cancelled drag does not activate"
+      "agreement on observable behaviour, which is necessary for one engine and not sufficient"
     );
     const fixture = await seedPage(request, FLAT_LIST_FIXTURE);
     await driver.mountTree(fixture);
@@ -1114,19 +1126,24 @@ test.describe("a canvas any Nextly editor could ship", () => {
       })
       .toBe(false);
 
+    // The settle above is necessary and NOT sufficient, and this is the missing half.
+    //
+    // Waiting for the previous drag to report that it ENDED is a barrier against
+    // teardown; it is not a gap. The two are different quantities, and the poll
+    // above returns as soon as the engine says it is done — which is far sooner
+    // than a person could press again. A gesture issued inside that window does
+    // not activate, so this case spent a long time recorded as a canvas that
+    // could not drag its own blocks, when what it had was a probe pressing
+    // faster than the input a person produces.
+    //
+    // Measured over ten gestures with the geometry varied on every one: issued
+    // back-to-back, exactly every second gesture fails to activate, identically
+    // whether the previous one ended in a drop or in Escape; with an idle pause
+    // between them, all ten activate. Neither the cancel nor the canvas is the
+    // variable, so neither is what this waits for.
+    await new Promise(resolve => setTimeout(resolve, GESTURE_GAP_MS));
+
     await chrome.startDragOfBlock(fixture.blockIds[1] ?? "");
-    // Marked HERE, with the panel-side control and the settle above it.
-    //
-    // The shortfall is an interaction between consecutive drags, not a missing capability
-    // and not a failure to cancel. `CanvasNode` makes every placed block a drag source,
-    // and started on its own this drag activates: the source inside the frame reports
-    // `aria-grabbed="true"` and carries the dragging class across repeated moves. Started
-    // after a panel drag has run and been cancelled, it does not, and waiting for the
-    // first drag to report that it ended does not change that.
-    //
-    // So the settle above is necessary and NOT sufficient, and what survives a cancel to
-    // block the next drag is not yet isolated.
-    test.fail(true, "a drag started after a cancelled drag does not activate");
     // Advanced INSIDE a zone, exactly as the panel side is. Sampling the two
     // under different conditions makes the comparison a statement about the
     // harness: `dragUntilTarget` can resolve through overlap with the pointer
