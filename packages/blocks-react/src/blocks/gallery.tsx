@@ -40,9 +40,15 @@
  * `minmax(180px, 1fr)` makes a single track wider than its parent and the
  * pictures overflow. `min(180px, 100%)` lets the last one fit.
  *
- * **No default gap of its own beyond the guaranteed token, and no aspect
- * ratio.** `defaultSiteTokens()` guarantees `space.4`, so the gap resolves
- * under every theme. A default `aspect-ratio` was considered and refused: it
+ * **The gap is a plain length, and no aspect ratio.** `defaultSiteTokens()`
+ * NAMES `space.4` but guarantees nothing: `compileSiteSheet` — the only thing
+ * that turns a token set into CSS — has zero consumers outside `blocks-engine`,
+ * and `--site-` appears in no source file outside the engine (positive control:
+ * `--nx-` appears in 103). This block shipped with `{ $token: "space.4" }` and
+ * its tiles rendered touching, because an unresolved `var()` makes the
+ * declaration invalid at computed-value time and `gap` falls back to `normal`,
+ * which is zero for a grid. `1rem` is what `space.4` itself declares, so the
+ * value survives the change back once tokens are emitted. A default `aspect-ratio` was considered and refused: it
  * would crop every picture in the library to one shape, and the crop is
  * invisible in the editor's own preview because the same rule applies there.
  * Uniform tiles are a real want, so `aspectRatio` stays available on the image

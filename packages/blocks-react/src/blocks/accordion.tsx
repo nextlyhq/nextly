@@ -32,7 +32,9 @@
  * its dividers with `var(--nx-color-border)`, which is the ADMIN token
  * namespace — so that declaration validates, compiles, ships, and then resolves
  * to nothing on the visitor's page while looking correct inside an admin
- * preview.
+ * preview. **Three blocks reached for that namespace independently**, which
+ * makes it design pressure rather than three mistakes: when the correct
+ * mechanism is unreachable, the thing that LOOKS like it works gets reached for.
  *
  * This docblock used to continue "…this renderer emits `--site-*`", and to say
  * `defaultSiteTokens()` "guarantees" a named set. **Both were false and the
@@ -43,6 +45,11 @@
  * the default token set is a default nobody applies, and a `{ $token }` here
  * would dangle for the same reason `--nx-*` does — not a different namespace,
  * the same emptiness.
+ *
+ * That is not hypothetical here: this block shipped with `{ $token: "space.4" }`
+ * and its sections rendered touching, because an unresolved `var()` makes the
+ * declaration invalid at computed-value time and `gap` falls back to `normal` —
+ * zero for a grid.
  *
  * Separation between sections is therefore a LENGTH, which needs no stylesheet
  * to resolve, and the divider is left to the author until the site stylesheet
@@ -70,9 +77,9 @@ export { ACCORDION_BLOCK, ACCORDION_ITEM_BLOCK } from "./accordion-item";
  * are absent), so a flex layout here would leave the sections unable to express
  * how they take space; a grid puts that on the track list, which the group owns.
  *
- * `space.4` is one of the six tokens `defaultSiteTokens()` guarantees, so this
- * default resolves under every theme rather than only where a site happens to
- * define a spacing scale.
+ * The gap is a LENGTH rather than `{ $token: "space.4" }`, and `1rem` is what
+ * `space.4` itself declares — so the value survives the change back once
+ * `compileSiteSheet` is wired into the render path and tokens resolve.
  */
 export const ACCORDION_BASE_STYLES = {
   base: {
