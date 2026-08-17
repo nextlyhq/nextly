@@ -23,6 +23,19 @@ export interface BlockBoundaryProps {
    * own object is never rewritten and no block can supply its own.
    */
   hostPolicy?: BlockHostPolicy;
+  /**
+   * Emit `data-nx-node="<node id>"` on each block's root element.
+   *
+   * OFF by default: a published page should not carry editor concerns, which is
+   * the same reason Gutenberg emits its `data-block` in the editor and not in
+   * post content. An editor turns it on and gets a stable address per node.
+   *
+   * It is the ONLY per-node hook that reaches the DOM independently of styling.
+   * The scoped class does not: `classNameFor` returns the block-TYPE class alone
+   * for a node with no compiled styles, so hit-testing on the class cannot
+   * address an unstyled node and would resolve to the wrong one.
+   */
+  nodeAttribute?: boolean;
 }
 
 /**
@@ -99,7 +112,14 @@ function isAllowedAttribute(name: string): boolean {
  * root. Output that is not a single element has no root to carry them and is
  * returned untouched rather than guessed at.
  */
-function withNodeAttributes(output: ReactNode, node: BlockNode): ReactNode {
+/** The attribute an editor addresses a node by. Named, so one string decides it. */
+export const NODE_ID_ATTRIBUTE = "data-nx-node";
+
+function withNodeAttributes(
+  output: ReactNode,
+  node: BlockNode,
+  nodeAttribute = false
+): ReactNode {
   const cssId = typeof node.cssId === "string" ? node.cssId : undefined;
   // A stored envelope is whatever the database returned: `attributes: null`
   // reaches `Object.keys` and throws here, after the render try/catch and after
@@ -112,7 +132,13 @@ function withNodeAttributes(output: ReactNode, node: BlockNode): ReactNode {
       : undefined;
   const hasAttributes =
     attributes !== undefined && Object.keys(attributes).length > 0;
-  if (cssId === undefined && !hasAttributes) return output;
+  // The node-id attribute is applied UNCONDITIONALLY when asked for, which is
+  // why it is checked before this early return rather than added to the
+  // allowlist loop below. That return fires for any node carrying no `cssId`
+  // and no `attributes` — which is nearly every node on a real page — so an
+  // editor address joined to the loop would land on almost nothing while a
+  // fixture that happened to set either field passed.
+  if (cssId === undefined && !hasAttributes && !nodeAttribute) return output;
   if (!isValidElement(output)) return output;
   // Only a host element has a DOM root to carry them. `nodeRootReason` has
   // already refused the combination that would land here otherwise, so this is
@@ -120,6 +146,9 @@ function withNodeAttributes(output: ReactNode, node: BlockNode): ReactNode {
   if (typeof output.type !== "string") return output;
 
   const extra: Record<string, string> = {};
+  // Written before the author's own attributes so it cannot be overwritten by
+  // one: the editor's address for a node is not a value the document may set.
+  if (nodeAttribute) extra[NODE_ID_ATTRIBUTE] = node.id;
   if (attributes) {
     for (const [name, value] of Object.entries(attributes)) {
       if (!isAllowedAttribute(name)) continue;
@@ -297,7 +326,9 @@ function checkedOutput(
   // block's root, being a list, received none of them.
   isBlockRoot: boolean,
   /** What the block declared about these props, decided once by the caller. */
-  declaresNothing: boolean
+  declaresNothing: boolean,
+  /** Whether the editor asked for a per-node DOM address. */
+  nodeAttribute = false
 ): ReactNode {
   const result = normalizeRenderable(value, {
     // A promise the block returned inside a list is awaited under the same
@@ -313,6 +344,7 @@ function checkedOutput(
           fallback={fallback}
           isBlockRoot={false}
           declaresNothing={declaresNothing}
+          nodeAttribute={nodeAttribute}
         />
       </Suspense>
     ),
@@ -347,7 +379,7 @@ function checkedOutput(
   // nothing can be substituted into an element that already exists. React
   // suspends on them, so they still need a boundary above.
   const withAttributes = isBlockRoot
-    ? withNodeAttributes(result.node, node)
+    ? withNodeAttributes(result.node, node, nodeAttribute)
     : result.node;
   if (!result.hasUnwrappedThenable) return withAttributes;
   return <Suspense fallback={fallback}>{withAttributes}</Suspense>;
@@ -369,6 +401,7 @@ async function AsyncBlockOutput({
   fallback,
   isBlockRoot,
   declaresNothing,
+  nodeAttribute,
 }: {
   pending: PromiseLike<unknown>;
   node: BlockNode;
@@ -376,6 +409,8 @@ async function AsyncBlockOutput({
   isBlockRoot: boolean;
   /** Carried from the caller, which asked the definition once before rendering. */
   declaresNothing: boolean;
+  /** Whether the editor asked for a per-node DOM address. */
+  nodeAttribute?: boolean;
 }): Promise<ReactNode> {
   try {
     return checkedOutput(
@@ -383,7 +418,8 @@ async function AsyncBlockOutput({
       node,
       fallback,
       isBlockRoot,
-      declaresNothing
+      declaresNothing,
+      nodeAttribute
     );
   } catch (error) {
     return (
@@ -427,6 +463,7 @@ export function BlockBoundary({
   classes,
   fallback,
   hostPolicy,
+  nodeAttribute,
 }: BlockBoundaryProps): ReactNode {
   // A node the migration pass could not bring to its block's current version
   // keeps its last-good props, which the current render would misread. The
@@ -519,6 +556,7 @@ export function BlockBoundary({
           classes={classes}
           fallback={fallback}
           {...(hostPolicy === undefined ? {} : { hostPolicy })}
+          {...(nodeAttribute === undefined ? {} : { nodeAttribute })}
         />
       ),
     });
@@ -538,7 +576,14 @@ export function BlockBoundary({
   // block's placeholder. A predicate that could raise would do so out here,
   // past the try block above, and take the page with it.
   if (!isThenable(output)) {
-    return checkedOutput(output, node, fallback, true, declaresNothing);
+    return checkedOutput(
+      output,
+      node,
+      fallback,
+      true,
+      declaresNothing,
+      nodeAttribute
+    );
   }
 
   return (
@@ -549,6 +594,7 @@ export function BlockBoundary({
         fallback={fallback}
         isBlockRoot
         declaresNothing={declaresNothing}
+        nodeAttribute={nodeAttribute}
       />
     </Suspense>
   );
@@ -561,6 +607,19 @@ export interface BlockListProps {
   classes: Record<string, string>;
   fallback?: ReactNode;
   hostPolicy?: BlockHostPolicy;
+  /**
+   * Emit `data-nx-node="<node id>"` on each block's root element.
+   *
+   * OFF by default: a published page should not carry editor concerns, which is
+   * the same reason Gutenberg emits its `data-block` in the editor and not in
+   * post content. An editor turns it on and gets a stable address per node.
+   *
+   * It is the ONLY per-node hook that reaches the DOM independently of styling.
+   * The scoped class does not: `classNameFor` returns the block-TYPE class alone
+   * for a node with no compiled styles, so hit-testing on the class cannot
+   * address an unstyled node and would resolve to the wrong one.
+   */
+  nodeAttribute?: boolean;
 }
 
 /**
@@ -577,6 +636,7 @@ export function BlockList({
   classes,
   fallback,
   hostPolicy,
+  nodeAttribute,
 }: BlockListProps): ReactNode {
   return nodes
     .filter(isUnconditional)
@@ -589,6 +649,7 @@ export function BlockList({
         classes={classes}
         fallback={fallback}
         {...(hostPolicy === undefined ? {} : { hostPolicy })}
+        {...(nodeAttribute === undefined ? {} : { nodeAttribute })}
       />
     ));
 }
