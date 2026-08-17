@@ -4,12 +4,17 @@ import { reactRules } from "@nextlyhq/eslint-config/react-internal";
 
 import { bareErrorConfig } from "./packages/nextly/eslint-bare-error-rule.js";
 
-// Admin UI shipped by a first-party plugin is held to the same token contract
-// third-party plugins are, since these are the packages authors read as the
-// worked example. `packages/admin` and `packages/ui` are deliberately not here
-// yet: they carry violations that need triage rather than a blanket fix, and
-// enabling the rules before that would fail the build on legitimate code.
-const PLUGIN_UI_FILES = ["packages/plugin-*/src/**/*.{ts,tsx}"];
+// Every surface that paints admin chrome is held to the token contract: the
+// first-party plugins, the admin itself, and the kit they both draw from.
+// Anything genuinely outside it — an email preview that mail clients render, a
+// colour picker whose subject IS the colour — carries a `design-lint-ok`
+// directive naming the reason, rather than being excluded here where the
+// exclusion would silently cover whatever is added next.
+const ADMIN_UI_FILES = [
+  "packages/plugin-*/src/**/*.{ts,tsx}",
+  "packages/admin/src/**/*.{ts,tsx}",
+  "packages/ui/src/**/*.{ts,tsx}",
+];
 
 // Apply the React + react-hooks rule set to React-bearing paths so
 // inline `// eslint-disable-next-line react-hooks/...` directives
@@ -36,7 +41,7 @@ export default [
   // includes lint-staged, the hook that runs before a commit is written. Same reason as the
   // React block above.
   bareErrorConfig("packages/nextly/"),
-  ...designTokensConfig(PLUGIN_UI_FILES),
+  ...designTokensConfig(ADMIN_UI_FILES),
   {
     ignores: [
       "packages/*/dist/**",

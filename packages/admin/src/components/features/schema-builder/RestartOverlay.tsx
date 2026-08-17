@@ -26,18 +26,9 @@ export function RestartOverlay() {
       <div className="text-center text-white">
         {/* Pulsing dots animation */}
         <div className="mb-4 flex items-center justify-center gap-1.5">
-          <span
-            className="inline-block h-2 w-2 rounded-full bg-white animate-pulse"
-            style={{ animationDelay: "0s" }}
-          />
-          <span
-            className="inline-block h-2 w-2 rounded-full bg-white animate-pulse"
-            style={{ animationDelay: "0.2s" }}
-          />
-          <span
-            className="inline-block h-2 w-2 rounded-full bg-white animate-pulse"
-            style={{ animationDelay: "0.4s" }}
-          />
+          <span className="inline-block h-2 w-2 rounded-full bg-white animate-pulse [animation-delay:0s]" />
+          <span className="inline-block h-2 w-2 rounded-full bg-white animate-pulse [animation-delay:0.2s]" />
+          <span className="inline-block h-2 w-2 rounded-full bg-white animate-pulse [animation-delay:0.4s]" />
         </div>
 
         <p className="text-sm font-medium">{statusMessage}</p>

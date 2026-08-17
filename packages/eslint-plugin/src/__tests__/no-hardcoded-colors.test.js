@@ -31,8 +31,25 @@ ruleTester.run("no-hardcoded-colors", rule, {
     `const a = "commit 1f4b";`,
     `// design-lint-ok: mirrors a third-party embed's fixed palette
        const a = "#ff0000";`,
+    // A directive annotates the CONSTRUCT it precedes, so a named palette does
+    // not need the reason repeated on every line inside it.
+    `// design-lint-ok: an email client cannot resolve custom properties
+     const palette = {
+       text: "#e5e7eb",
+       background: "#0b0b0f",
+       muted: "#9ca3af",
+     };`,
+    // A trailing directive on the violation's own line.
+    `const a = "#ff0000"; // design-lint-ok: matches an external embed`,
   ],
   invalid: [
+    {
+      // The reach is BOUNDED: a directive above a function does not exempt
+      // everything inside it, which would be a blanket disable by another name.
+      code: `// design-lint-ok: blanket attempt
+             function paint() { return "#ff0000"; }`,
+      errors: 1,
+    },
     {
       code: `const a = "#ff0000";`,
       errors: [{ messageId: "hardcodedColor", data: { literal: "#ff0000" } }],
