@@ -22,9 +22,9 @@ function tokensOf(el: Element | null): string[] {
   return [...(el?.classList ?? [])];
 }
 
-function renderTabs() {
+function renderTabs(orientation?: "horizontal" | "vertical") {
   const { container } = render(
-    <Tabs defaultValue="one">
+    <Tabs defaultValue="one" orientation={orientation}>
       <TabsList>
         <TabsTrigger value="one">One</TabsTrigger>
         <TabsTrigger value="two">Two</TabsTrigger>
@@ -77,5 +77,48 @@ describe("tabs rail", () => {
   it("keeps the strip square, so the rail stays flush with the tab edges", () => {
     const { list } = renderTabs();
     expect(tokensOf(list)).toContain("rounded-none");
+  });
+
+  /**
+   * The list documents vertical support, so the rail has to follow the trailing
+   * EDGE rather than sit on a fixed one. A bottom rail under a vertical list is
+   * a horizontal line beneath a column of tabs.
+   *
+   * The indicator switches with it. Moving only one of the two puts the
+   * selection affordance on one axis and the line it sits on the other, which
+   * is worse than either being wrong alone.
+   */
+  describe("vertical orientation", () => {
+    it("moves the rail to the trailing edge", () => {
+      const { list } = renderTabs("vertical");
+      const tokens = tokensOf(list);
+      expect(tokens).toContain("data-[orientation=vertical]:border-r");
+      expect(tokens).toContain("data-[orientation=vertical]:border-b-0");
+    });
+
+    it("moves the indicator and its pull onto the same axis as the rail", () => {
+      const { trigger } = renderTabs("vertical");
+      const tokens = tokensOf(trigger);
+      expect(tokens).toContain("data-[orientation=vertical]:border-r-2");
+      expect(tokens).toContain("data-[orientation=vertical]:-mr-0.5");
+      expect(tokens).toContain("data-[orientation=vertical]:border-b-0");
+      expect(tokens).toContain("data-[orientation=vertical]:mb-0");
+    });
+
+    /**
+     * The population control: Radix must actually be stamping the attribute,
+     * or every assertion above is about class strings nothing will ever match.
+     */
+    it("is actually marked vertical by Radix", () => {
+      const { list, trigger } = renderTabs("vertical");
+      expect(list?.getAttribute("data-orientation")).toBe("vertical");
+      expect(trigger?.getAttribute("data-orientation")).toBe("vertical");
+    });
+
+    it("stays horizontal by default", () => {
+      const { list, trigger } = renderTabs();
+      expect(list?.getAttribute("data-orientation")).toBe("horizontal");
+      expect(trigger?.getAttribute("data-orientation")).toBe("horizontal");
+    });
   });
 });
