@@ -111,8 +111,17 @@ describe("turbo hashes every TypeScript module it type-checks", () => {
   // resolved to the wrong directory. Naming packages that must be present, and
   // a tree whose size is known, means silence has to be earned.
   //
-  // `e2e` is named because it is the package this guard exists for: 30 modules
-  // under `tests/`, none of which the previous input globs reached.
+  // `e2e` is named because it is the package this guard exists for: its modules
+  // under `tests/` are the ones the previous input globs did not reach.
+  //
+  // Named files rather than a count, for the reason stated above and because a
+  // count broke here once. A floor of `> 25` was written when the directory held
+  // 33 modules; retiring ten of them left 23 and turned a correct deletion into a
+  // red `main` on a package the deletion had nothing to do with. A magic number
+  // is a claim about the tree's SIZE, and nobody deleting a file thinks to go and
+  // re-tune it — whereas naming files states what the read must CONTAIN, which is
+  // the property the guard is actually for and which deleting an unrelated module
+  // cannot invalidate.
   it("reads a populated set of packages and their TypeScript", () => {
     expect(tasks.length).toBeGreaterThan(15);
     const names = tasks.map(task => task.package);
@@ -123,7 +132,15 @@ describe("turbo hashes every TypeScript module it type-checks", () => {
     const underTests = trackedTypeScript(e2e.directory).filter(file =>
       file.startsWith("tests/")
     );
-    expect(underTests.length).toBeGreaterThan(25);
+    // Long-lived suites covering three different areas, so the assertion fails
+    // when the READ is blind rather than when the tree changes size.
+    expect(underTests).toEqual(
+      expect.arrayContaining([
+        "tests/admin-smoke.spec.ts",
+        "tests/permissions-matrix.spec.ts",
+        "tests/support/admin.ts",
+      ])
+    );
   });
 
   it.each(tasks.map(task => [task.package, task]))(
