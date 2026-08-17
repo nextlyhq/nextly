@@ -137,6 +137,11 @@ describe("turbo hashes every TypeScript module it type-checks", () => {
     // something real -- and it fails only when one of these actually goes.
     expect(underTests).toContain("tests/admin-smoke.spec.ts");
     expect(underTests).toContain("tests/permissions-matrix.spec.ts");
+    // A third name, in a third AREA. Two files in ONE directory survive a size
+    // change but not that directory being retired -- which is exactly what
+    // happened here. Spanning three areas means no single retirement can empty
+    // the list.
+    expect(underTests).toContain("tests/support/admin.ts");
     // A floor as well, low enough to survive ordinary churn: it catches a
     // listing that collapsed to just the named files without pretending to
     // measure coverage.
