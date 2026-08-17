@@ -90,8 +90,8 @@ export const MIN_CANVAS_WIDTH = 480;
  * Below this the rail, both panels and a usable canvas do not fit at their
  * minimum widths, so the shell does not try: it shows the canvas and says where
  * to edit instead. A builder that merely gets cramped is worse than one that
- * says it needs a wider screen, because the author discovers the limit by
- * failing at a task.
+ * says it needs more width, because the author discovers the limit by failing
+ * at a task.
  */
 export const MIN_SHELL_WIDTH = 1280;
 

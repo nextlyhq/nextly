@@ -607,7 +607,7 @@ describe("which shell F6 belongs to", () => {
     );
 
     // Exactly one shell is usable.
-    expect(screen.queryAllByText(/wider screen/i)).toHaveLength(1);
+    expect(screen.queryAllByText(/needs more width/i)).toHaveLength(1);
     const rails = screen.getAllByRole("navigation", { name: "Editor panels" });
     expect(rails).toHaveLength(1);
 
@@ -666,12 +666,12 @@ describe("an embedded host with nowhere to exit to", () => {
 
 describe("a viewport too narrow for the shell", () => {
   it("says where to edit instead of compressing", () => {
-    // An editor that merely gets cramped is worse than one that says it needs a
-    // wider screen: the author otherwise discovers the limit by failing a task.
+    // An editor that merely gets cramped is worse than one that says it needs
+    // more width: the author otherwise discovers the limit by failing a task.
     stubContainerFits(false);
     render(<BuilderShell onExit={vi.fn()} store={memoryStore()} />);
 
-    expect(screen.getByText(/needs a wider screen/i)).toBeTruthy();
+    expect(screen.getByText(/needs more width/i)).toBeTruthy();
     expect(screen.queryByRole("region", { name: "Canvas" })).toBeNull();
   });
 
@@ -695,7 +695,7 @@ describe("a viewport too narrow for the shell", () => {
     stubContainerFits(false);
     render(<BuilderShell store={memoryStore()} />);
 
-    expect(screen.getByText(/needs a wider screen/i)).toBeTruthy();
+    expect(screen.getByText(/needs more width/i)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Exit editor" })).toBeNull();
     expect(screen.queryByText(/from the admin/i)).toBeNull();
   });
@@ -717,7 +717,7 @@ describe("a viewport too narrow for the shell", () => {
       </BuilderShell>
     );
 
-    expect(screen.getByText(/needs a wider screen/i)).toBeTruthy();
+    expect(screen.getByText(/needs more width/i)).toBeTruthy();
     expect(screen.queryByTestId("canvas-slot")).not.toBeNull();
   });
 
@@ -759,7 +759,7 @@ describe("a viewport too narrow for the shell", () => {
     );
 
     expect(screen.queryByRole("region", { name: "Canvas" })).not.toBeNull();
-    expect(screen.queryByText(/wider screen/i)).toBeNull();
+    expect(screen.queryByText(/needs more width/i)).toBeNull();
   });
 
   it("refuses one pixel below that boundary", () => {
@@ -773,7 +773,7 @@ describe("a viewport too narrow for the shell", () => {
       </BuilderShell>
     );
 
-    expect(screen.queryByText(/wider screen/i)).not.toBeNull();
+    expect(screen.queryByText(/needs more width/i)).not.toBeNull();
     expect(screen.queryByRole("region", { name: "Canvas" })).toBeNull();
   });
 
@@ -790,7 +790,7 @@ describe("a viewport too narrow for the shell", () => {
       </BuilderShell>
     );
 
-    expect(screen.queryByText(/wider screen/i)).not.toBeNull();
+    expect(screen.queryByText(/needs more width/i)).not.toBeNull();
     expect(screen.queryByRole("region", { name: "Canvas" })).toBeNull();
   });
 
@@ -807,7 +807,7 @@ describe("a viewport too narrow for the shell", () => {
     );
 
     expect(screen.queryByRole("region", { name: "Canvas" })).not.toBeNull();
-    expect(screen.queryByText(/wider screen/i)).toBeNull();
+    expect(screen.queryByText(/needs more width/i)).toBeNull();
   });
 
   it("recovers into the band where the notice's own padding would hide it", () => {
@@ -834,7 +834,7 @@ describe("a viewport too narrow for the shell", () => {
         <p>canvas</p>
       </BuilderShell>
     );
-    expect(screen.queryByText(/wider screen/i)).not.toBeNull();
+    expect(screen.queryByText(/needs more width/i)).not.toBeNull();
 
     act(() => {
       observedWidth = inBand;
@@ -842,7 +842,7 @@ describe("a viewport too narrow for the shell", () => {
     });
 
     expect(screen.queryByRole("region", { name: "Canvas" })).not.toBeNull();
-    expect(screen.queryByText(/wider screen/i)).toBeNull();
+    expect(screen.queryByText(/needs more width/i)).toBeNull();
   });
 
   it("re-renders the editor when the measured width comes back up", () => {
@@ -868,7 +868,7 @@ describe("a viewport too narrow for the shell", () => {
         <p data-testid="canvas-slot">the caller&apos;s canvas</p>
       </BuilderShell>
     );
-    expect(screen.queryByText(/wider screen/i)).not.toBeNull();
+    expect(screen.queryByText(/needs more width/i)).not.toBeNull();
     expect(screen.queryByRole("region", { name: "Canvas" })).toBeNull();
 
     act(() => {
@@ -876,7 +876,7 @@ describe("a viewport too narrow for the shell", () => {
     });
 
     expect(screen.queryByRole("region", { name: "Canvas" })).not.toBeNull();
-    expect(screen.queryByText(/wider screen/i)).toBeNull();
+    expect(screen.queryByText(/needs more width/i)).toBeNull();
   });
 
   it("keeps a portalling slot child from opening over the notice", () => {
@@ -960,7 +960,7 @@ describe("a viewport too narrow for the shell", () => {
 
     const notice = container.querySelector(".host-placed-me");
     expect(notice).not.toBeNull();
-    expect(notice?.textContent).toMatch(/needs a wider screen/i);
+    expect(notice?.textContent).toMatch(/needs more width/i);
   });
 });
 
