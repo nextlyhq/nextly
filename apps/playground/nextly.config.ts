@@ -23,6 +23,7 @@
  * runtime ignores this field. See packages/nextly/src/auth/handlers/session.ts.
  */
 
+import { apiDocsPlugin } from "@nextlyhq/plugin-api-docs";
 import { formBuilderPlugin } from "@nextlyhq/plugin-form-builder";
 import { pageBuilder } from "@nextlyhq/plugin-page-builder";
 import { defineConfig } from "nextly/config";
@@ -82,17 +83,21 @@ export default defineConfig({
   singles: [Homepage, LandingPage, SiteSettings],
   fieldGroups: [Seo],
   // Dev-harness plugins: page builder and form builder are what a contributor
-  // works against.
+  // works against. The api-docs plugin is the local test surface for OpenAPI
+  // documentation — it serves the spec + Scalar reference under
+  // /admin/api/plugins/@nextlyhq/plugin-api-docs/ and adds an "API Docs"
+  // sidebar entry.
   //
   // The styling fixture is registered only for the e2e run. It exists so
-  // plugin-admin-styling.spec.ts can prove a plugin's admin UI is styled in the
-  // real admin, and plugin-page-routing.spec.ts can resolve a deep link to a
+  // plugin-admin-styling.spec.ts can prove a plugin's admin UI is styled in
+  // the real admin, and plugin-page-routing.spec.ts can resolve a deep link to a
   // plugin page. In a normal `pnpm dev:app` it is neither of those things: it
   // is a test double listed among real plugins, and it injects a showcase
   // section into the Posts collection list, both of which read as product.
   plugins: [
     pageBuilder(),
     formBuilderPlugin,
+    apiDocsPlugin(),
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
       ? [styleFixturePlugin]
       : []),

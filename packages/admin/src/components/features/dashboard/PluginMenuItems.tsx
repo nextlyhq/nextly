@@ -16,7 +16,6 @@ import {
   SidebarMenuSubButton,
   SidebarMenuSubItem,
 } from "@admin/components/layout/sidebar";
-import { Link } from "@admin/components/ui/link";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { resolveVisibleMenuItems } from "@admin/lib/plugins/menu";
@@ -74,12 +73,17 @@ function PluginMenuLeaf({
   return (
     <SidebarMenuItem>
       <SidebarMenuButton asChild isActive={active} tooltip={item.label}>
-        <Link href={item.to}>
+        {/* A plugin menu item is an arbitrary URL by contract — it may point at
+            a plugin HTTP route (e.g. the api-docs reference) rather than an
+            admin page. Client-side routing such a URL resolves against the page
+            tree and lands on the admin 404, so plugin items navigate with a
+            full page load. */}
+        <a href={item.to}>
           <Icon
             className={cn("shrink-0", !active && "text-muted-foreground")}
           />
           <span>{item.label}</span>
-        </Link>
+        </a>
       </SidebarMenuButton>
     </SidebarMenuItem>
   );
@@ -121,10 +125,12 @@ function PluginMenuBranch({
               return (
                 <SidebarMenuSubItem key={child.to}>
                   <SidebarMenuSubButton asChild isActive={childActive}>
-                    <Link href={child.to}>
+                    {/* Same full-load contract as the leaf: a child may target a
+                        plugin HTTP route, which is not an admin page. */}
+                    <a href={child.to}>
                       <ChildIcon className="h-3.5 w-3.5 shrink-0" />
                       <span>{child.label}</span>
-                    </Link>
+                    </a>
                   </SidebarMenuSubButton>
                 </SidebarMenuSubItem>
               );

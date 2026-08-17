@@ -19,7 +19,11 @@ function thrownCode(fn: () => unknown): string {
 
 function plugin(
   name: string,
-  routes: Array<{ method: "GET" | "POST"; path: string }>,
+  routes: Array<{
+    method: "GET" | "POST";
+    path: string;
+    mount?: "admin-api";
+  }>,
   enabled?: boolean
 ): PluginDefinition {
   return {
@@ -60,6 +64,25 @@ describe("collectPluginRoutes", () => {
       ]),
     ]);
     expect(collected).toHaveLength(2);
+  });
+
+  it("keeps an admin-api route directly under the admin API root", () => {
+    const [route] = collectPluginRoutes([
+      plugin("@a/docs", [{ method: "GET", path: "/docs", mount: "admin-api" }]),
+    ]);
+    expect(route?.fullPath).toBe("/docs");
+  });
+
+  it("rejects an admin-api route that would shadow the REST surface", () => {
+    expect(
+      thrownCode(() =>
+        collectPluginRoutes([
+          plugin("@a/docs", [
+            { method: "GET", path: "/users", mount: "admin-api" },
+          ]),
+        ])
+      )
+    ).toBe("NEXTLY_ROUTE_COLLISION");
   });
 
   it("rejects a path without a leading slash", () => {

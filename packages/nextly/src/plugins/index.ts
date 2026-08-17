@@ -66,8 +66,15 @@ export type {
 // Plugin HTTP routes — `contributes.routes` surface.
 export type {
   PluginRoute,
+  PluginRouteOpenApi,
   PluginRouteContext,
   PluginRouteHandler,
   Middleware,
   RouteMethod,
 } from "./routes/route-types";
+
+// Read-only plugin-route introspection (safe view, no contexts/handlers).
+export {
+  listPluginRoutes,
+  type PluginRouteInfo,
+} from "./routes/route-registry";

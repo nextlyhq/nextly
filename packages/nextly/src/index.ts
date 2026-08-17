@@ -436,6 +436,7 @@ export {
   type PluginFilterRegistry,
   type PluginActionRegistry,
   type PluginRoute,
+  type PluginRouteOpenApi,
   type PluginRouteContext,
   type PluginRouteHandler,
   type Middleware,
@@ -819,3 +820,34 @@ export {
   type MediaLike,
   type GetMediaVariantOptions,
 } from "./lib/media-variant";
+
+// ============================================================
+// ADMIN REST INTROSPECTION
+// ============================================================
+
+// General "what REST operations does the admin catch-all expose" seam. Not
+// OpenAPI-specific — the api-docs plugin consumes it, and any introspection
+// tooling (client generators, permission auditors) can too.
+export {
+  listAdminRestOperations,
+  restOperationsForService,
+  dedupeRestOperations,
+  type AdminRestOperation,
+  type RestHttpMethod,
+  type RestAuthMode,
+} from "./route-handler/admin-rest-descriptors";
+
+// Content-surface introspection: every registered collection/single with its
+// fields, across code-first, plugin-contributed, and admin-Builder origins.
+export {
+  listContentSurfaces,
+  type ContentSurfaceInfo,
+  type ContentSurfaces,
+} from "./route-handler/content-surfaces";
+
+// Read-only view of plugin-contributed routes (the plugin-route mirror of the
+// admin REST introspection above).
+export {
+  listPluginRoutes,
+  type PluginRouteInfo,
+} from "./plugins/routes/route-registry";

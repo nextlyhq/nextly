@@ -1,3 +1,5 @@
+import type { PluginRoute } from "./route-types";
+
 /**
  * The namespace a plugin's route is served under.
  *
@@ -19,7 +21,9 @@
  */
 export function pluginRouteFullPath(
   pluginName: string,
-  routePath: string
+  route: Pick<PluginRoute, "mount" | "path">
 ): string {
-  return `/plugins/${pluginName}${routePath}`;
+  return route.mount === "admin-api"
+    ? route.path
+    : `/plugins/${pluginName}${route.path}`;
 }
