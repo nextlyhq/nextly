@@ -1629,9 +1629,29 @@ export function EmailTemplateForm({
         )}
 
         {/* ── Body: three panes (fixed rail + two equal panes) ── */}
+        {/*
+         * `auto-rows-min` is what makes the stacked layout scroll instead of
+         * overlap, and it is load-bearing below `xl`.
+         *
+         * Stacked, the panes are rows of a grid whose own height is definite
+         * (`flex-1` inside a fixed-height column). Default `auto` rows in a
+         * definite-height grid are STRETCHED to fill it, so three rows share
+         * the height and each lands near 250px — while the editor and preview
+         * carry `min-h-[380px]` and `min-h-[420px]` floors. A row shorter than
+         * its content would normally scroll, but each pane also carries
+         * `min-h-0` and its overflow is only hidden at `xl`, so the content
+         * spilled out of its own row and drew on top of the pane below it.
+         *
+         * Sizing the rows to their content instead lets `overflow-y-auto` on
+         * this container do the scrolling, which is what it was there for.
+         *
+         * Reset at `xl`, where the panes become side-by-side columns that must
+         * FILL the viewport height rather than shrink to their content —
+         * `min-content` there leaves a dead band below them.
+         */}
         <div
           className={cn(
-            "grid min-h-0 flex-1 grid-cols-1 overflow-y-auto xl:overflow-hidden",
+            "grid min-h-0 flex-1 auto-rows-min grid-cols-1 overflow-y-auto xl:auto-rows-auto xl:overflow-hidden",
             railOpen ? "xl:grid-cols-[320px_1fr_1fr]" : "xl:grid-cols-[1fr_1fr]"
           )}
         >
