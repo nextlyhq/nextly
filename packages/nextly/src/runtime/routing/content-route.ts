@@ -40,12 +40,29 @@ import {
   type NextlyContentReader,
 } from "./resolve-content";
 
-/** Where a resolved entry was found. */
+/** Where a resolved entry was found, and in which language. */
 export interface ResolvedContext {
   /** The collection the entry was resolved from. */
   collection: string;
   /** The joined slug path (no leading slash), e.g. `"about/team"`. */
   slug: string;
+  /**
+   * The locale this route was configured to read in, verbatim.
+   *
+   * Carried explicitly rather than read back off the row: the companion overlay
+   * copies localized values ONTO the entry without stamping which locale they
+   * came from, so a consumer inferring it from the row would find nothing on
+   * exactly the localized pages that need it.
+   *
+   * It sits on the base shape rather than on the render's, because the `draft`
+   * decision needs it too and needs the SAME one. A decision taken against a
+   * different locale than the read that follows authorizes one translation and
+   * serves another.
+   *
+   * Absent when {@link ContentRouteConfig.locale} was not set — which a
+   * localized site must not do, for the reason documented there.
+   */
+  locale?: string;
 }
 
 /**
@@ -62,19 +79,7 @@ export interface ResolvedContext {
  * `nextly` and uses it directly, where the posture is visibly theirs to choose
  * rather than inherited from a field that looks like a convenience.
  */
-export interface RenderContext extends ResolvedContext {
-  /**
-   * The locale this route read in, when it was configured for one.
-   *
-   * Carried explicitly rather than read back off the row: the companion
-   * overlay copies localized values ONTO the entry without stamping which
-   * locale they came from, so a render inferring it from the row would find
-   * nothing on exactly the localized pages that need it — and a block or data
-   * provider reading in a different language than the page around it is a
-   * mismatch nothing surfaces as an error.
-   */
-  locale?: string;
-}
+export type RenderContext = ResolvedContext;
 
 /**
  * Config for {@link createContentRoute}. `TNode` is the render output (your
@@ -158,8 +163,23 @@ export interface ContentRouteConfig<TNode> {
     | boolean
     | ((context: ResolvedContext) => DraftGrant | Promise<DraftGrant>);
   /**
-   * Read this locale on localized collections, and report it to `render` and
-   * `buildMetadata` as `context.locale`. Omit for the default locale.
+   * Read this locale on localized collections, and report it to `render`,
+   * `buildMetadata` and the `draft` decision as `context.locale`.
+   *
+   * **State it on a localized site even when it is the default language.** The
+   * read defaults an absent locale internally, so omitting it still serves the
+   * right page — but `draft` is handed exactly what is written here, and a
+   * preview token always names a resolved locale rather than a blank one. An
+   * omitted locale therefore compares `"en"` against nothing and refuses every
+   * preview of the default language, while the published page it falls back to
+   * looks entirely normal.
+   *
+   * Nothing infers the default on your behalf, deliberately: inferring it means
+   * reading the site's configuration at request time, and a reader is allowed
+   * to defer booting until its first query, so that read answers differently on
+   * the first request of a cold process than on the next one.
+   *
+   * Omit it only where the site configures no localization at all.
    */
   locale?: string;
   /**
@@ -458,10 +478,28 @@ function buildRoute<TNode>(
     slug: string
   ): Promise<{ entry: ContentEntry; context: RenderContext } | null> {
     for (const collection of collections) {
+      // Built once and handed to both the draft decision and the render, so the
+      // locale a grant was authorized against is the locale the page is read
+      // in. Two matching literals would agree today and diverge on the first
+      // edit to either.
+      //
+      // Taken from the configuration verbatim, with nothing inferred. Resolving
+      // an unstated locale against the site's default would mean READING that
+      // default, and the read cannot happen here: a route's reader is allowed
+      // to defer booting until its first query — the pattern these templates
+      // use — so a lookup at this point answers "no localization" on the first
+      // request of a cold process and something else on every request after.
+      // A locale that is sometimes right authorizes previews intermittently,
+      // which is harder to diagnose than one that is never inferred at all.
+      const context: ResolvedContext = {
+        collection,
+        slug,
+        ...(config.locale ? { locale: config.locale } : {}),
+      };
       // Asked per collection, not once per request: the answer is scoped to a
       // document, and the same slug can name a different document in each
       // configured collection.
-      const grant = await draftForThisPath({ collection, slug });
+      const grant = await draftForThisPath(context);
       // A grant that NAMES an entry is resolved by that id rather than by slug,
       // so a duplicate slug cannot decide which document a preview opens. A
       // bare `true` names nothing and keeps the ordinary lookup.
@@ -519,14 +557,7 @@ function buildRoute<TNode>(
       // compares a POST-`afterRead` document, so a collection that reshapes its
       // public read would fail a valid grant and send the editor to live
       // content.
-      return {
-        entry,
-        context: {
-          collection,
-          slug,
-          ...(config.locale ? { locale: config.locale } : {}),
-        },
-      };
+      return { entry, context };
     }
     return null;
   }

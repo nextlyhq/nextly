@@ -17,6 +17,7 @@
  * @module runtime/preview/preview-draft-gate
  */
 import type { PreviewTokenScope } from "../../auth/preview/preview-token";
+import type { ResolvedContext } from "../routing/content-route";
 
 import { previewGrantsDraft, readPreviewScope } from "./preview-route";
 import type { PreviewScopeReaderConfig } from "./preview-route";
@@ -24,32 +25,21 @@ import type { PreviewScopeReaderConfig } from "./preview-route";
 /**
  * What a content route hands its `draft` hook for the path being resolved.
  *
- * Declared structurally rather than imported from `runtime/routing`, so this
- * module stays inside `runtime/preview` and the two do not become mutually
- * dependent for one parameter shape.
+ * DERIVED from the route's own context rather than restated, and the `locale`
+ * member is why. Restating it compiles for as long as the two spellings agree,
+ * and the day the route renames or drops that member this gate reads
+ * `undefined` and stops comparing locale at all — granting a token minted for
+ * one translation against every other. Naming the members here makes that a
+ * compile error. The import is type-only, so nothing links `runtime/preview` to
+ * `runtime/routing` at runtime.
  */
-export interface DraftGateRequest {
-  collection: string;
-  slug: string;
-}
+export type DraftGateRequest = Pick<
+  ResolvedContext,
+  "collection" | "slug" | "locale"
+>;
 
 /** Options for {@link previewDraftGate}. */
-export interface PreviewDraftGateConfig extends PreviewScopeReaderConfig {
-  /**
-   * The locale this route reads in, when the site is localized.
-   *
-   * A token may be scoped to one locale, and that is the third thing
-   * {@link previewTokenCovers} compares. The hook is told the collection and the
-   * slug, never the locale, so a gate that could not be given it would have to
-   * skip that comparison — silently widening a token minted for one translation
-   * to every translation of the same entry.
-   *
-   * Omit it only for a site with no locales. A token carrying no locale covers
-   * every locale by design, so omitting this is correct there and nothing is
-   * skipped.
-   */
-  locale?: string;
-}
+export type PreviewDraftGateConfig = PreviewScopeReaderConfig;
 
 /**
  * A `draft` hook that grants exactly what the request's preview token covers.
@@ -81,7 +71,7 @@ export interface PreviewDraftGateConfig extends PreviewScopeReaderConfig {
 export function previewDraftGate(
   config: PreviewDraftGateConfig
 ): (request: DraftGateRequest) => Promise<{ entryId: string } | false> {
-  return async ({ collection }) => {
+  return async ({ collection, locale }) => {
     // Re-read per request. The config is captured once at module scope while
     // whether this visitor is previewing — and whether their token has since
     // expired or been revoked — is a fact about the request in hand.
@@ -100,10 +90,15 @@ export function previewDraftGate(
     // leaves the entry comparison to the route, made against the row it
     // actually resolved — a stronger check than any this function could do
     // from a slug.
+    // The locale comes from the REQUEST, so it is the one the route is about to
+    // read in. Taking it from this gate's own config made it a second
+    // declaration of a value the route already holds, and the two disagreeing
+    // is not a type error: a token scoped to `en` satisfies an `en` gate, and
+    // the entry it names is then resolved in the route's `fr`.
     const requested: PreviewTokenScope = {
       collection,
       entryId: scope.entryId,
-      ...(config.locale === undefined ? {} : { locale: config.locale }),
+      ...(locale === undefined ? {} : { locale }),
     };
     if (!previewGrantsDraft(scope, requested)) return false;
 
