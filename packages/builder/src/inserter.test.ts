@@ -278,6 +278,72 @@ describe("groupByCategory", () => {
     ]);
   });
 
+  it("offers preferred categories first, in the order declared", () => {
+    // The separating case. Sorted by label these arrive Accordion(interactive)
+    // then Box(layout), so first-appearance puts "interactive" on top — which
+    // is what the panel actually showed before this existed. A page starts as
+    // structure, so "layout" belongs above it.
+    const entries = catalog([
+      {
+        ...base,
+        name: "acme/accordion",
+        editor: { label: "Accordion", category: "interactive" },
+      },
+      {
+        ...base,
+        name: "acme/box",
+        editor: { label: "Box", category: "layout" },
+      },
+    ]);
+
+    expect(groupByCategory(entries).map(g => g.category)).toEqual([
+      "interactive",
+      "layout",
+    ]);
+    expect(
+      groupByCategory(entries, ["layout", "interactive"]).map(g => g.category)
+    ).toEqual(["layout", "interactive"]);
+  });
+
+  it("keeps a category the preferred list never names", () => {
+    // A plugin shipping its own category must still get a heading. Dropping it
+    // would make its blocks unreachable through the panel that exists to reach
+    // them, and the failure is silent because a shorter list looks tidy.
+    const entries = catalog([
+      {
+        ...base,
+        name: "acme/box",
+        editor: { label: "Box", category: "layout" },
+      },
+      {
+        ...base,
+        name: "acme/chart",
+        editor: { label: "Chart", category: "acme-data" },
+      },
+    ]);
+
+    expect(groupByCategory(entries, ["layout"]).map(g => g.category)).toEqual([
+      "layout",
+      "acme-data",
+    ]);
+  });
+
+  it("ignores a preferred category nothing claims", () => {
+    // The preferred list describes intent, not this catalogue. A heading with
+    // no blocks under it would render as an empty section.
+    const entries = catalog([
+      {
+        ...base,
+        name: "acme/box",
+        editor: { label: "Box", category: "layout" },
+      },
+    ]);
+
+    expect(
+      groupByCategory(entries, ["media", "layout"]).map(g => g.category)
+    ).toEqual(["layout"]);
+  });
+
   it("puts uncategorised blocks under one heading rather than dropping them", () => {
     const entries = catalog([{ ...base, name: "acme/loose" }]);
 

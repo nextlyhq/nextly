@@ -62,6 +62,7 @@ import { defineBlock } from "@nextlyhq/blocks-engine";
 import type { PageContext } from "../context";
 
 import { ACCORDION_BLOCK, ACCORDION_ITEM_BLOCK } from "./accordion-item";
+import { INTERACTIVE } from "./categories";
 import { CONTAINER_SUPPORTS, renderContainer } from "./container";
 import type { ContainerProps } from "./container";
 
@@ -99,6 +100,14 @@ export const accordion = defineBlock<ContainerProps, PageContext>({
   version: 1,
   description:
     "A group of disclosure sections. Restricts its slot to core/accordion-item so a stray block cannot render outside every section and stay permanently visible.",
+  // Palette metadata. The category is imported rather than spelled here so
+  // nineteen blocks cannot drift into nineteen headings; keywords are what
+  // let a search for a word the description never uses still find this.
+  editor: {
+    label: "Accordion",
+    category: INTERACTIVE,
+    keywords: ["disclosure", "faq", "collapse", "toggle"],
+  },
   props: {
     as: { type: "select", options: ["div", "section", "article"] },
     contained: { type: "checkbox" },

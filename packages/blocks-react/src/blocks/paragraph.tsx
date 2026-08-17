@@ -14,6 +14,7 @@ import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
 
+import { CONTENT } from "./categories";
 import { text } from "./props";
 
 export interface ParagraphProps {
@@ -37,6 +38,14 @@ export const paragraph = defineBlock<ParagraphProps, PageContext>({
   version: 1,
   description:
     "A paragraph of plain text. Rich formatting lives in the rich-text block, which carries its own editor.",
+  // Palette metadata. The category is imported rather than spelled here so
+  // nineteen blocks cannot drift into nineteen headings; keywords are what
+  // let a search for a word the description never uses still find this.
+  editor: {
+    label: "Text",
+    category: CONTENT,
+    keywords: ["paragraph", "copy", "body", "prose"],
+  },
   props: { text: { type: "textarea" } },
   defaultProps: { text: "" },
   // The opening prose is what a search result should quote. Offered whole and

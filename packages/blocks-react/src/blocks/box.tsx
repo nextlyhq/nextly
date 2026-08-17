@@ -14,6 +14,7 @@ import { defineBlock } from "@nextlyhq/blocks-engine";
 
 import type { PageContext } from "../context";
 
+import { LAYOUT } from "./categories";
 import { CONTAINER_SUPPORTS, renderContainer } from "./container";
 import type { ContainerProps } from "./container";
 
@@ -26,6 +27,14 @@ export const box = defineBlock<ContainerProps, PageContext>({
   version: 1,
   description:
     "A generic container. Full width with no padding of its own; use display to make it a flex row, a stack, or a grid.",
+  // Palette metadata. The category is imported rather than spelled here so
+  // nineteen blocks cannot drift into nineteen headings; keywords are what
+  // let a search for a word the description never uses still find this.
+  editor: {
+    label: "Box",
+    category: LAYOUT,
+    keywords: ["container", "div", "group", "wrapper"],
+  },
   props: {
     as: { type: "select", options: ["div", "article", "aside"] },
     // Declared even though a box is full width by default: a preset differs

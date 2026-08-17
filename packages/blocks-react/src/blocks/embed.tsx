@@ -28,6 +28,7 @@ import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
 
+import { MEDIA } from "./categories";
 import { flag, isTrustedOrigin, text, url } from "./props";
 
 /**
@@ -99,6 +100,14 @@ export const embed = defineBlock<EmbedProps, PageContext>({
   version: 1,
   description:
     "Third-party content in a sandboxed iframe, with an accessible name and a referrer policy that does not leak the page's path.",
+  // Palette metadata. The category is imported rather than spelled here so
+  // nineteen blocks cannot drift into nineteen headings; keywords are what
+  // let a search for a word the description never uses still find this.
+  editor: {
+    label: "Embed",
+    category: MEDIA,
+    keywords: ["video", "iframe", "youtube", "external"],
+  },
   props: {
     src: { type: "url" },
     title: { type: "text" },

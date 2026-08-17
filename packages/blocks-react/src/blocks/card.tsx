@@ -50,6 +50,7 @@ import { defineBlock } from "@nextlyhq/blocks-engine";
 
 import type { PageContext } from "../context";
 
+import { LAYOUT } from "./categories";
 import { CONTAINER_SUPPORTS, renderContainer } from "./container";
 import type { ContainerProps } from "./container";
 
@@ -104,6 +105,14 @@ export const card = defineBlock<ContainerProps, PageContext>({
   version: 1,
   description:
     "A rounded container that clips its contents, so an image sitting at its top edge follows the corner instead of overhanging it.",
+  // Palette metadata. The category is imported rather than spelled here so
+  // nineteen blocks cannot drift into nineteen headings; keywords are what
+  // let a search for a word the description never uses still find this.
+  editor: {
+    label: "Card",
+    category: LAYOUT,
+    keywords: ["panel", "tile", "surface"],
+  },
   props: {
     // `article` is offered rather than defaulted. It is the right element for a
     // card that is independently distributable — a post, a product — and it is

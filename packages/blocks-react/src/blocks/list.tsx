@@ -12,6 +12,7 @@ import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
 
+import { CONTENT } from "./categories";
 import { number, oneOf, text } from "./props";
 
 export const LIST_KINDS = ["unordered", "ordered"] as const;
@@ -81,6 +82,14 @@ export const list = defineBlock<ListProps, PageContext>({
   version: 1,
   description:
     "An ordered or unordered list of items, rendered as real list elements so its length and positions are announced.",
+  // Palette metadata. The category is imported rather than spelled here so
+  // nineteen blocks cannot drift into nineteen headings; keywords are what
+  // let a search for a word the description never uses still find this.
+  editor: {
+    label: "List",
+    category: CONTENT,
+    keywords: ["bullets", "ordered", "unordered", "items"],
+  },
   props: {
     kind: { type: "select", options: [...LIST_KINDS] },
     items: { type: "array", of: "text" },

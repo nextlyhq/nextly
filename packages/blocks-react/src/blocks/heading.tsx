@@ -15,6 +15,7 @@ import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
 
+import { CONTENT } from "./categories";
 import { oneOf, relFor, text, url } from "./props";
 
 /** The levels a heading may render. */
@@ -73,6 +74,14 @@ export const heading = defineBlock<HeadingProps, PageContext>({
   version: 1,
   description:
     "A section title. The level is chosen by the author, so the page outline stays stable when blocks move.",
+  // Palette metadata. The category is imported rather than spelled here so
+  // nineteen blocks cannot drift into nineteen headings; keywords are what
+  // let a search for a word the description never uses still find this.
+  editor: {
+    label: "Heading",
+    category: CONTENT,
+    keywords: ["title", "headline", "h1", "h2"],
+  },
   props: {
     text: { type: "text" },
     level: { type: "select", options: [...HEADING_LEVELS] },

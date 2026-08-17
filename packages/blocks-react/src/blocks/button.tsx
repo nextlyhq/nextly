@@ -13,6 +13,7 @@ import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
 
+import { INTERACTIVE } from "./categories";
 import { oneOf, relFor, text, url } from "./props";
 
 /** The button's HTML behaviour when it is not a link. */
@@ -91,6 +92,14 @@ export const button = defineBlock<ButtonProps, PageContext>({
   version: 1,
   description:
     "A call to action. Renders a link when it has a destination and a button when it does not, so it is operable either way.",
+  // Palette metadata. The category is imported rather than spelled here so
+  // nineteen blocks cannot drift into nineteen headings; keywords are what
+  // let a search for a word the description never uses still find this.
+  editor: {
+    label: "Button",
+    category: INTERACTIVE,
+    keywords: ["link", "cta", "call to action"],
+  },
   props: {
     label: { type: "text" },
     href: { type: "url" },

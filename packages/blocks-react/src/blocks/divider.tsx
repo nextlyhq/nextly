@@ -13,6 +13,8 @@ import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
 
+import { CONTENT } from "./categories";
+
 export type DividerProps = Record<string, never>;
 
 export function renderDivider({
@@ -30,6 +32,14 @@ export const divider = defineBlock<DividerProps, PageContext>({
   version: 1,
   description:
     "A thematic break between sections, announced as a separator rather than drawn as a decorative line.",
+  // Palette metadata. The category is imported rather than spelled here so
+  // nineteen blocks cannot drift into nineteen headings; keywords are what
+  // let a search for a word the description never uses still find this.
+  editor: {
+    label: "Divider",
+    category: CONTENT,
+    keywords: ["hr", "rule", "separator", "break"],
+  },
   props: {},
   defaultProps: {},
   example: { props: {} },

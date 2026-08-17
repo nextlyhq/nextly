@@ -27,6 +27,8 @@ import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
 
+import { CONTENT } from "./categories";
+
 export interface CollectionLoopProps {
   /** The collection queried. */
   collection?: string;
@@ -141,6 +143,14 @@ export const collectionLoop = defineBlock<CollectionLoopProps, PageContext>({
   version: 1,
   description:
     "Repeats its children once per entry in a collection. Renders its template once while no collection is chosen, and renders empty when the data source cannot be reached.",
+  // Palette metadata. The category is imported rather than spelled here so
+  // nineteen blocks cannot drift into nineteen headings; keywords are what
+  // let a search for a word the description never uses still find this.
+  editor: {
+    label: "Collection loop",
+    category: CONTENT,
+    keywords: ["repeat", "query", "entries", "dynamic"],
+  },
   props: {
     collection: { type: "text" },
     limit: { type: "number", min: 1, max: 100 },

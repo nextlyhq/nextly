@@ -216,3 +216,31 @@
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+
+/*
+ * Rows grow to their content.
+ *
+ * The command primitives size an item for a single line, which clips any label
+ * that wraps — "Collection loop" lost its second line. Labels come from block
+ * authors and cannot be assumed short, and a clipped row is worse than a taller
+ * one: the author reads a truncated name with nothing indicating it was cut.
+ *
+ * `align-items: start` so a two-line label does not drag its description to the
+ * vertical centre, which reads as misalignment against the single-line rows
+ * above and below it.
+ */
+.nx-insert-panel [cmdk-item] {
+  height: auto;
+  min-height: 2.5rem;
+  align-items: start;
+  padding-block: 0.375rem;
+}
+
+/*
+ * The label keeps its own column and never wraps mid-word. A block named
+ * "Collection loop" breaks at the space; one named "Collectionloop" would
+ * otherwise break mid-word and read as two words.
+ */
+.nx-insert-panel__label {
+  overflow-wrap: break-word;
+}
