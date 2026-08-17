@@ -498,6 +498,55 @@ export function defaultSiteTokens(): SiteToken[] {
       kind: "color",
       values: { light: "#2563eb", dark: "#60a5fa" },
     },
+    /**
+     * A raised surface: a card, a panel, a table header. DISTINCT from
+     * `color.background`, which is the page itself.
+     *
+     * Its absence is what made four blocks compromise and what created a whole
+     * defect class. `core/card` shipped with no background and no border;
+     * `badge` was unbuildable, because a tinted background IS the block; the
+     * accordion had no divider and the table no border colour. And because
+     * nothing in this set could express a surface, **six blocks across three
+     * lanes independently reached for `--nx-*`** — the ADMIN namespace, which no
+     * published page emits. That is design pressure rather than six mistakes:
+     * when the correct mechanism is missing, whatever resembles it gets used.
+     *
+     * One step off `color.background` in each mode rather than a strong tint, so
+     * a surface reads as raised without needing a border to be legible — and
+     * still contrasts with one when a border is used.
+     */
+    {
+      name: "color.surface",
+      kind: "color",
+      values: { light: "#f9fafb", dark: "#151b2b" },
+    },
+    /**
+     * A hairline: a card outline, a table rule, a divider between sections.
+     *
+     * ONE border colour rather than a subtle/strong scale. A scale is far harder
+     * to remove from a guaranteed set than to add to it, and no block has yet
+     * asked for the distinction — the admin has three tiers because its density
+     * demands them, and a content page is not that. A site wanting more defines
+     * its own; `resolveSiteTokens` layers additions by name.
+     */
+    {
+      name: "color.border",
+      kind: "color",
+      values: { light: "#e5e7eb", dark: "#1f2937" },
+    },
+    /**
+     * Secondary text: a caption, a timestamp, a field hint.
+     *
+     * Chosen to clear WCAG AA against `color.background` in both modes rather
+     * than by eye — `#6b7280` on `#ffffff` is about 4.8:1 and `#9ca3af` on
+     * `#0b0f19` is far higher. A "muted" token that fails contrast is worse than
+     * none, because it reads as sanctioned.
+     */
+    {
+      name: "color.muted",
+      kind: "color",
+      values: { light: "#6b7280", dark: "#9ca3af" },
+    },
     { name: "font.body", kind: "fontFamily", values: { light: "system-ui" } },
     { name: "space.4", kind: "dimension", values: { light: "1rem" } },
   ];

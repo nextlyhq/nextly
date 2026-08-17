@@ -664,11 +664,11 @@ describe("resolveSiteTokens", () => {
   it("adds a token the defaults do not define", () => {
     const resolved = resolveSiteTokens({
       tokens: [
-        { name: "color.surface", kind: "color", values: { light: "#f6f6f6" } },
+        { name: "color.accent", kind: "color", values: { light: "#f6f6f6" } },
       ],
     });
 
-    expect(resolved.tokens.map(t => t.name)).toContain("color.surface");
+    expect(resolved.tokens.map(t => t.name)).toContain("color.accent");
     expect(resolved.tokens.length).toBe(defaultSiteTokens().length + 1);
   });
 
@@ -695,5 +695,49 @@ describe("resolveSiteTokens", () => {
     expect(
       resolveSiteTokens({ tokens: [], prefix: "brand", darkMode: "media" })
     ).toMatchObject({ prefix: "brand", darkMode: "media" });
+  });
+});
+
+describe("the surface, border and muted tokens", () => {
+  const NEW = ["color.surface", "color.border", "color.muted"];
+
+  it("are in the guaranteed set", () => {
+    // Their absence made four blocks compromise — card shipped with no
+    // background or border, badge was unbuildable, the accordion had no divider
+    // and the table no border colour — and it is what made six blocks across
+    // three lanes reach for the ADMIN `--nx-*` namespace, which no published
+    // page emits.
+    const names = defaultSiteTokens().map(t => t.name);
+
+    for (const name of NEW) expect(names).toContain(name);
+  });
+
+  it("define BOTH modes, so none of them vanishes in dark", () => {
+    // `values.dark` is optional on the type, and a colour defined only for light
+    // is a colour that silently keeps its light value on a dark page. Asserted
+    // for every colour token, not only the new ones, so the next addition is
+    // held to it too.
+    const colours = defaultSiteTokens().filter(t => t.kind === "color");
+
+    expect(colours.length).toBeGreaterThan(3);
+    for (const token of colours) {
+      expect(
+        token.values.dark,
+        `${token.name} has no dark value`
+      ).toBeDefined();
+    }
+  });
+
+  it("distinguishes a surface from the page background", () => {
+    // A surface equal to the background is not a surface: a card would be
+    // invisible without a border, which is the compromise these tokens exist to
+    // remove. Asserted per mode, because equal-in-dark-only is the easy miss.
+    const find = (name: string) =>
+      defaultSiteTokens().find(t => t.name === name)?.values;
+    const surface = find("color.surface");
+    const background = find("color.background");
+
+    expect(surface?.light).not.toBe(background?.light);
+    expect(surface?.dark).not.toBe(background?.dark);
   });
 });
