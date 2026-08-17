@@ -18,15 +18,6 @@ import { versionApi, type VersionScope } from "@admin/services/versionApi";
 export interface UseAutosaveRecoveryOptions {
   /** The document to read a recovery point for, or `null` when there is none. */
   scope: VersionScope | null;
-
-  /**
-   * When the stored document was last written, as the API reports it.
-   *
-   * Used to decide whether the recovery point still says anything: a save that
-   * happened after it means the author already committed that work, and
-   * offering it back would invite them to restore what they are looking at.
-   */
-  documentUpdatedAt?: string | null;
 }
 
 export interface AutosaveRecoveryOffer {
@@ -67,7 +58,6 @@ export interface UseAutosaveRecoveryResult {
  */
 export function useAutosaveRecovery({
   scope,
-  documentUpdatedAt = null,
 }: UseAutosaveRecoveryOptions): UseAutosaveRecoveryResult {
   const [dismissed, setDismissed] = useState(false);
 
@@ -101,22 +91,16 @@ export function useAutosaveRecovery({
   if (Number.isNaN(savedAt.getTime()))
     return { offer: null, isResolved, dismiss };
 
-  // A save after the recovery point means the author already committed that
-  // work, so the recovery point describes a state that is no longer ahead of
-  // the document and there is nothing to rescue.
+  // No comparison against the document's own timestamp, deliberately.
   //
-  // An UNKNOWN document timestamp offers anyway. The two errors are not
-  // symmetric: a spurious offer costs one dismissal, while a suppressed one
-  // loses work that was recorded specifically so it could not be lost.
-  if (documentUpdatedAt) {
-    const documentAt = new Date(documentUpdatedAt);
-    if (
-      !Number.isNaN(documentAt.getTime()) &&
-      savedAt.getTime() <= documentAt.getTime()
-    ) {
-      return { offer: null, isResolved, dismiss };
-    }
-  }
+  // A real save now DELETES this author's recovery point, so a row existing at
+  // all already means there is unsaved work. Asking "is it newer than the
+  // document" would be asking a question the data answers by existing.
+  //
+  // It would also be the wrong question to ask. The two timestamps live in
+  // different tables and do not share a clock: one records UTC and the other
+  // local time carrying a `Z`, so the comparison was wrong by the server's
+  // offset and silently withheld every offer on a Single.
 
   return { offer: { savedAt, snapshot: data.snapshot }, isResolved, dismiss };
 }

@@ -99,6 +99,7 @@ import {
 } from "../../versions/tag-component-types";
 import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
+import { VersionsRepository } from "../../versions/versions-repository";
 import { expandComponentFields } from "../../webhooks/expand-component-fields";
 import { recordMutationEvent } from "../../webhooks/record-mutation-event";
 import { isOutboxRecordingActive } from "../../webhooks/recording-activation";
@@ -2089,6 +2090,25 @@ export class SingleMutationService extends BaseService {
                 maxPerDoc: versionsConfig.maxPerDoc,
               });
             }
+
+            // A real save SUPERSEDES this author's recovery point, exactly as on
+            // the collection write path. The work it held is now in the
+            // document, and a Single that kept it would offer the same stale
+            // draft back on every open forever -- nothing else ever removes it,
+            // because the only other sweep runs when the ENTITY is deleted.
+            //
+            // Scoped to the SAVING author, so a second editor's unsaved work
+            // survives somebody else's save, and inside the write transaction,
+            // so a failed save leaves the recovery point rather than destroying
+            // the only copy of work it did not store.
+            await new VersionsRepository(tx).deleteAutosaves(
+              {
+                scopeKind: "single",
+                scopeSlug: slug,
+                entryId: existingDoc.id,
+              },
+              options.user?.id ?? null
+            );
 
             // Append the outbox event(s) in the SAME transaction, so they commit
             // with the write and are never recorded for a write that rolls back.

@@ -380,7 +380,6 @@ export function EntryForm({
   // The other half of recording: offer the work back when the editor opens.
   const recovery = useAutosaveRecovery({
     scope: autosaveScope,
-    documentUpdatedAt: entry?.updatedAt ?? null,
   });
   const restoreRecovery = useCallback(() => {
     if (!recovery.offer) return;

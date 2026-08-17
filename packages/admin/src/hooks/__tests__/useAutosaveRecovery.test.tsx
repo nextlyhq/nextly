@@ -32,6 +32,13 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+/**
+ * The tests that pinned a comparison against the document's own timestamp are
+ * deliberately GONE rather than adapted. A real save now deletes the author's
+ * recovery point, so a row existing at all means there is unsaved work and the
+ * comparison no longer exists to test. Keeping them would have asserted a rule
+ * the code does not have.
+ */
 describe("useAutosaveRecovery", () => {
   it("offers a recovery point newer than the saved document", async () => {
     getSpy.mockResolvedValue({
@@ -44,7 +51,6 @@ describe("useAutosaveRecovery", () => {
       () =>
         useAutosaveRecovery({
           scope: SCOPE,
-          documentUpdatedAt: "2026-08-17T09:00:00.000Z",
         }),
       { wrapper }
     );
@@ -54,54 +60,6 @@ describe("useAutosaveRecovery", () => {
     expect(result.current.offer?.savedAt).toEqual(
       new Date("2026-08-17T10:00:00.000Z")
     );
-  });
-
-  /**
-   * A save AFTER the recovery point means the author already committed that
-   * work. Offering it back would invite them to restore what they are looking
-   * at, and worse, it would present a real document as though it were at risk.
-   */
-  it("stays silent when the document was saved after the recovery point", async () => {
-    getSpy.mockResolvedValue({
-      snapshot: { title: "stale" },
-      updatedAt: "2026-08-17T09:00:00.000Z",
-      locale: null,
-    });
-
-    const { result } = renderHook(
-      () =>
-        useAutosaveRecovery({
-          scope: SCOPE,
-          documentUpdatedAt: "2026-08-17T10:00:00.000Z",
-        }),
-      { wrapper }
-    );
-
-    // Waits for the ANSWER, not merely for the request. Asserting on
-    // `offer === null` before the read returns is satisfied by the result not
-    // having arrived, which passes whether or not the rule under test exists.
-    await waitFor(() => expect(result.current.isResolved).toBe(true));
-    expect(result.current.offer).toBeNull();
-  });
-
-  /**
-   * The asymmetry, made explicit. With no document timestamp the rule cannot
-   * tell whether the recovery point is ahead, and it offers anyway: one
-   * dismissal is a smaller cost than silently withholding recorded work.
-   */
-  it("offers anyway when the document's own timestamp is unknown", async () => {
-    getSpy.mockResolvedValue({
-      snapshot: { title: "maybe newer" },
-      updatedAt: "2026-08-17T09:00:00.000Z",
-      locale: null,
-    });
-
-    const { result } = renderHook(
-      () => useAutosaveRecovery({ scope: SCOPE, documentUpdatedAt: null }),
-      { wrapper }
-    );
-
-    await waitFor(() => expect(result.current.offer).not.toBeNull());
   });
 
   it("stays silent when the author has no recovery point", async () => {
