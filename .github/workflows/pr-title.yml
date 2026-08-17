@@ -55,6 +55,7 @@ jobs:
             plugin-sdk
             create-nextly-app
             eslint-config
+            eslint-plugin
             prettier-config
             tsconfig
             telemetry

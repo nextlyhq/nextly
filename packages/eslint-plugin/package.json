@@ -1,0 +1,55 @@
+{
+  "name": "@nextlyhq/eslint-plugin",
+  "version": "0.0.2-alpha.58",
+  "description": "ESLint rules that keep Nextly admin UI on the design-token system — for first-party packages and for plugins built by anyone else.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nextlyhq/nextly.git",
+    "directory": "packages/eslint-plugin"
+  },
+  "homepage": "https://nextlyhq.com/docs/plugins",
+  "bugs": {
+    "url": "https://github.com/nextlyhq/nextly/issues"
+  },
+  "type": "module",
+  "exports": {
+    ".": "./src/index.js",
+    "./vocabulary": "./src/vocabulary.js"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint ."
+  },
+  "peerDependencies": {
+    "eslint": ">=9.0.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.34.0",
+    "@typescript-eslint/parser": "^8.59.0",
+    "eslint": "^9.39.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.0"
+  },
+  "engines": {
+    "node": "^20.19.0 || ^22.12.0 || >=24.0.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/",
+    "provenance": true
+  },
+  "keywords": [
+    "eslint",
+    "eslintplugin",
+    "eslint-plugin",
+    "nextly",
+    "nextly-plugin",
+    "design-tokens"
+  ]
+}
