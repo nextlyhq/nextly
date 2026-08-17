@@ -15,16 +15,18 @@ import { editorChoiceFields } from "./editorChoice";
 export const PAGE_BUILDER_CUSTOM_CSS_FIELD = "customCss";
 
 /**
- * Registry path of the full-screen builder Edit view — still exported (and registered)
- * for hosts that want a builder-only collection. The default `pages` collection below
- * instead offers a per-entry CHOICE between the normal Nextly editor and the builder.
+ * There is no builder Edit-view path any more.
+ *
+ * This named a full-screen edit view a host could register for a builder-only
+ * collection. The view is gone with the editor that backed it, and the constant
+ * went with it rather than being kept pointing at a component nothing exports —
+ * a registry path is a STRING, so an unresolvable one fails at render time in
+ * the admin rather than at build time here.
  */
-export const EDIT_VIEW_PATH =
-  "@nextlyhq/plugin-page-builder/admin#PageBuilderEditView";
 
 /**
  * The plugin-owned `pages` collection. Each page CHOOSES its editor (Elementor-style):
- *  - "Page Builder" → the visual block tree (`content`, a `pageBuilderField`).
+ *  - "Page Builder" → the visual block tree (`content`, a `blocks` field).
  *  - "Normal editor" → Nextly's default rich-text form (`body`).
  * The front-end renders whichever was chosen. Using field conditions (not an Edit-view
  * override) keeps the normal editor available — a single Edit view can't offer both.
