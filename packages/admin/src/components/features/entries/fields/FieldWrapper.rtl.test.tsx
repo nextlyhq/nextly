@@ -97,19 +97,28 @@ describe("FieldWrapper RTL direction", () => {
 });
 
 describe("FieldWrapper shared-across-languages affordance", () => {
+  // The badge states the whole fact instead of abbreviating to "Shared" behind
+  // a `title` tooltip. All three queries below name the full string: matching
+  // on the old short text would make the two NEGATIVE assertions pass for the
+  // wrong reason, since an exact query for "Shared" no longer matches the
+  // element that is now rendered either.
   it("marks a shared field in a multilingual collection", () => {
     renderField(numberField, { collectionLocalized: true });
-    expect(screen.getByText("Shared")).toBeInTheDocument();
+    expect(screen.getByText("Shared across languages")).toBeInTheDocument();
   });
 
   it("does NOT mark a translatable field", () => {
     renderField(textField, { collectionLocalized: true });
-    expect(screen.queryByText("Shared")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Shared across languages")
+    ).not.toBeInTheDocument();
   });
 
   it("shows no affordance when the collection is not localized", () => {
     renderField(numberField, { collectionLocalized: false });
-    expect(screen.queryByText("Shared")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Shared across languages")
+    ).not.toBeInTheDocument();
   });
 });
 
