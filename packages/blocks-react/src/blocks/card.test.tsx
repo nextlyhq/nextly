@@ -9,7 +9,11 @@
  * by `base-styles.test.tsx`, which derives the check from every block that
  * declares them rather than repeating one here.
  */
+import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
+
+import type { BlockResolver } from "../resolver";
+import { resolvePageStyles } from "../styles";
 
 import { box } from "./box";
 import { card, CARD_BLOCK } from "./card";
@@ -80,5 +84,67 @@ describe("core/card", () => {
       expect(card.name).toBe(CARD_BLOCK);
       expect(coreBlocks.map(block => block.name)).toContain(CARD_BLOCK);
     });
+  });
+});
+
+describe("the surface and border it carries", () => {
+  /**
+   * Asserts the COMPILED CSS, because that is where this block's history lives:
+   * it declined a background and a border for as long as no token resolved, and
+   * an object assertion would have passed throughout — the declaration was never
+   * the missing part.
+   */
+  function compiledCss(): string {
+    const doc: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "c", type: CARD_BLOCK, version: 1, props: {} }],
+    };
+    const resolver: BlockResolver = {
+      get: (name: string) =>
+        coreBlocks.find(block => block.name === name) as never,
+    };
+    return (
+      resolvePageStyles(
+        doc,
+        undefined,
+        {
+          breakpoints: {
+            viewport: [{ id: "base", label: "Desktop" }],
+            container: [],
+          },
+        },
+        resolver
+      ).css ?? ""
+    );
+  }
+
+  it("emits a surface colour and a hairline, as token references", () => {
+    const css = compiledCss();
+
+    // The VAR, not a hex. A literal colour is wrong in whichever of light and
+    // dark it was not chosen for, which is the whole reason the token set exists
+    // — so a compiled hex here would mean the token had been abandoned.
+    expect(css).toContain("background-color: var(--site-color-surface)");
+    expect(css).toContain("border-color: var(--site-color-border)");
+  });
+
+  it("emits the hairline on all four LOGICAL sides", () => {
+    // Logical rather than physical, so a right-to-left page borders the side an
+    // author means rather than the side an English-speaking author assumed.
+    const css = compiledCss();
+
+    expect(css).toContain("border-block-start-width: 1px");
+    expect(css).toContain("border-inline-start-width: 1px");
+    expect(css).toContain("border-style: solid");
+  });
+
+  it("still clips, because a border does not remove the reason for the clip", () => {
+    // A bordered card with square-cornered image children is the same defect the
+    // clip exists for; adding the border must not have displaced it.
+    const css = compiledCss();
+
+    expect(css).toContain("overflow: hidden");
+    expect(css).toContain("border-radius: 12px");
   });
 });
