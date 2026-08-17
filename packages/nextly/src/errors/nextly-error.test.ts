@@ -337,3 +337,32 @@ describe("NextlyError type guards", () => {
     expect(NextlyError.isNotFound(NextlyError.forbidden())).toBe(false);
   });
 });
+
+/**
+ * Some causes of an unavailable service are not transient, and there the
+ * default advice — wait and retry — is the one thing that cannot work.
+ */
+describe("serviceUnavailable public message", () => {
+  it("advises retrying when the caller says nothing else", () => {
+    // The control for the override below: without it, an assertion that the
+    // message equals the override is satisfied by a factory that ignores its
+    // argument and happens to be called with the default text.
+    expect(NextlyError.serviceUnavailable().publicMessage).toBe(
+      "Service unavailable. Please try again later."
+    );
+  });
+
+  it("carries the caller's message when waiting is the wrong advice", () => {
+    const error = NextlyError.serviceUnavailable({
+      publicMessage: "Run `nextly migrate:field-groups`.",
+    });
+    expect(error.publicMessage).toBe("Run `nextly migrate:field-groups`.");
+  });
+
+  it("keeps the code, so callers still classify it as unavailable", () => {
+    // The override changes what a person is told and must not change what a
+    // client branches on.
+    const error = NextlyError.serviceUnavailable({ publicMessage: "anything" });
+    expect(error.code).toBe("SERVICE_UNAVAILABLE");
+  });
+});

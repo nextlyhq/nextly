@@ -373,13 +373,24 @@ export class NextlyError extends Error {
   // route) can record a specific operator narrative ("Health check failed")
   // while the public message stays canonical per spec §13.8.5.
   static serviceUnavailable(opts?: {
+    /**
+     * What the caller is told, when "try again later" is the wrong advice.
+     *
+     * The default assumes waiting resolves it. Some causes are not transient —
+     * a lock with no expiry is held until an operator clears it — and there the
+     * default sends someone to retry a request that cannot start succeeding.
+     * Supply a message naming what to DO; it reaches an API response, so it
+     * carries a remedy rather than internal state.
+     */
+    publicMessage?: string;
     logMessage?: string;
     cause?: Error;
     logContext?: Record<string, unknown>;
   }): NextlyError {
     return new NextlyError({
       code: "SERVICE_UNAVAILABLE",
-      publicMessage: "Service unavailable. Please try again later.",
+      publicMessage:
+        opts?.publicMessage ?? "Service unavailable. Please try again later.",
       logMessage: opts?.logMessage,
       cause: opts?.cause,
       logContext: opts?.logContext,
