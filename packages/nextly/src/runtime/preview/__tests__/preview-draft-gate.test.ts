@@ -116,18 +116,34 @@ describe("previewDraftGate", () => {
     ).toEqual({ entryId: "entry-1" });
   });
 
-  it("refuses a locale-scoped token on a route that states no locale", async () => {
-    // The direction a config-supplied locale could not express. An unlocalized
-    // request carries no locale to compare, so a token scoped to one covers
-    // nothing here — rather than covering everything.
+  it("grants the default language, whose request names the resolved locale", async () => {
+    // The commonest preview there is, and the one a locale-less request breaks.
+    // The editor spells the default language as "no locale" and the mint route
+    // resolves it, so the token names `en` — a request that named nothing would
+    // compare `en` against undefined and refuse every default-language preview.
     const cookies = await cookiesFor({
       collection: "pages",
       entryId: "entry-1",
       locale: "en",
     });
 
-    expect(await gate(cookies)({ collection: "pages", slug: "about" })).toBe(
-      false
+    expect(
+      await gate(cookies)({ collection: "pages", slug: "about", locale: "en" })
+    ).toEqual({ entryId: "entry-1" });
+  });
+
+  it("grants an unscoped token where the site has no locale at all", async () => {
+    // Kept separate from the case above, because only a site configuring no
+    // localization reaches the gate with no locale. A non-localized collection
+    // mints an unscoped token, which covers the entry rather than a
+    // translation, so nothing is compared and nothing is refused.
+    const cookies = await cookiesFor({
+      collection: "pages",
+      entryId: "entry-1",
+    });
+
+    expect(await gate(cookies)({ collection: "pages", slug: "about" })).toEqual(
+      { entryId: "entry-1" }
     );
   });
 

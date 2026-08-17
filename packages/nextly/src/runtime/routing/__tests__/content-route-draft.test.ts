@@ -6,8 +6,9 @@
  * route asks on every resolve. These cover that it is asked, that its answer
  * reaches the read, and that a build-time scan ignores it entirely.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
+import { container } from "../../../di/container";
 import type {
   FindArgs,
   FindByIDArgs,
@@ -102,6 +103,13 @@ function publicRouteWith(
 const params = { params: { slug: ["a"] } };
 
 describe("the content route's draft decision", () => {
+  afterEach(() => {
+    // The route reads the site's default locale from the container, so a config
+    // left registered here would hand a locale to every later case — including
+    // the ones asserting a context that names none.
+    container.clear();
+  });
+
   it("reads published content when nothing asks for a draft", async () => {
     const { reader, calls, byIdCalls } = stubReader();
 
@@ -237,6 +245,54 @@ describe("the content route's draft decision", () => {
       { collection: "pages", slug: "a" },
       { collection: "docs", slug: "a" },
     ]);
+  });
+
+  it("fills in the site's default locale when the route states none", async () => {
+    // `locale` is documented as omitted for the default language, and the read
+    // resolves that default internally — so a context repeating the omission
+    // describes a page as having no language while it is served in one. The
+    // preview token names the RESOLVED default, so the omission refuses every
+    // default-language preview.
+    const { reader } = stubReader(null);
+    const seen: ResolvedContext[] = [];
+    container.register("config", () => ({
+      localization: { defaultLocale: "en" },
+    }));
+
+    await createContentRoute({
+      collections: ["pages"],
+      nextly: reader,
+      render: (entry: ContentEntry) => entry,
+      buildMetadata: (entry: ContentEntry) => ({ title: String(entry.id) }),
+      draft: context => {
+        seen.push(context);
+        return false;
+      },
+    }).generateMetadata(params);
+
+    expect(seen).toEqual([{ collection: "pages", slug: "a", locale: "en" }]);
+  });
+
+  it("states no locale when the site configures no localization", async () => {
+    // The one case with no language to name. Kept separate from the default
+    // above, because collapsing the two is what made a localized default look
+    // like an unlocalized site.
+    const { reader } = stubReader(null);
+    const seen: ResolvedContext[] = [];
+    container.register("config", () => ({}));
+
+    await createContentRoute({
+      collections: ["pages"],
+      nextly: reader,
+      render: (entry: ContentEntry) => entry,
+      buildMetadata: (entry: ContentEntry) => ({ title: String(entry.id) }),
+      draft: context => {
+        seen.push(context);
+        return false;
+      },
+    }).generateMetadata(params);
+
+    expect(seen).toEqual([{ collection: "pages", slug: "a" }]);
   });
 
   it("hands the decision the locale the route reads in", async () => {
