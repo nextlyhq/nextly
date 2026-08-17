@@ -13,7 +13,7 @@
  * @module lib/plugins/plugin-route-registry
  */
 
-import type { NavSection } from "@admin/constants/nav-sections";
+import type { ActiveNavSection } from "@admin/constants/nav-sections";
 
 export interface RegisteredPluginPage {
   /** Full namespaced admin path: `/admin/plugins/<slug>/<path>`. */
@@ -27,7 +27,7 @@ export interface RegisteredPluginPage {
    * contributing plugin. Absent means the plugin expressed no preference and
    * the page belongs under Plugins.
    */
-  section?: NavSection;
+  section?: ActiveNavSection;
 }
 
 const registry = new Map<string, RegisteredPluginPage>();
@@ -44,7 +44,7 @@ export function registerPluginPage(args: {
   path: string;
   component: string;
   requiredPermission?: string;
-  section?: NavSection;
+  section?: ActiveNavSection;
 }): void {
   const fullPath = pluginPagePath(args.slug, args.path);
   registry.set(fullPath, {
@@ -62,7 +62,7 @@ export function registerPluginPages(
     path: string;
     component: string;
     requiredPermission?: string;
-    section?: NavSection;
+    section?: ActiveNavSection;
   }>
 ): void {
   for (const page of pages) {

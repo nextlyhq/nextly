@@ -12,6 +12,19 @@ export interface ResolvedBrandingColors {
 }
 
 /**
+ * Where a plugin's admin surfaces appear in the sidebar, as delivered via
+ * `/admin-meta`. Mirrors the server's `PluginNavSection`.
+ */
+export type PluginNavSectionMeta =
+  | "dashboard"
+  | "collections"
+  | "singles"
+  | "media"
+  | "plugins"
+  | "settings"
+  | "standalone";
+
+/**
  * A plugin sidebar menu item, delivered via `/admin-meta`. Mirrors the
  * server `PluginMenuItem` contract; one level of `children`.
  */
@@ -21,6 +34,11 @@ export interface PluginMenuItemMeta {
   icon?: string;
   order?: number;
   requiredPermission?: string;
+  /**
+   * Which sidebar section lists this item, as declared by the plugin. Absent
+   * defers to the plugin's own `placement` rather than meaning "Plugins".
+   */
+  section?: PluginNavSectionMeta;
   children?: PluginMenuItemMeta[];
 }
 
@@ -29,6 +47,11 @@ export interface PluginPageMeta {
   path: string;
   component: string;
   requiredPermission?: string;
+  /**
+   * Which sidebar section is selected while this page is open, as declared by
+   * the plugin. Absent defers to the plugin's own `placement`.
+   */
+  section?: PluginNavSectionMeta;
 }
 
 /** A plugin dashboard widget, delivered via `/admin-meta`. */

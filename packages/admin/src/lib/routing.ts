@@ -5,7 +5,7 @@ import { PluginPageHost } from "@admin/components/shared/plugin-page-host";
 
 import { ROUTES } from "../constants/routes";
 import registry, { routeConfig } from "../pages/registry";
-import type { RouteSection } from "../types/route-section";
+import type { CarriedRouteSection } from "../types/route-section";
 
 import { matchPluginPage } from "./plugins/plugin-route-registry";
 
@@ -48,7 +48,7 @@ export interface RouteResult {
    * a declaration instead of matching the pathname. Absent only when no route
    * matched, which is a genuine 404 rather than a route without a section.
    */
-  section?: RouteSection;
+  section?: CarriedRouteSection;
 }
 
 type Params = Record<string, string | string[]>;
@@ -121,7 +121,7 @@ function matchDynamicRoute(pathname: string): {
   routeType?: "public" | "private";
   requiredPermission?: string | string[];
   requiresBuilder?: boolean;
-  section?: RouteSection;
+  section?: CarriedRouteSection;
   pattern: string;
 } | null {
   for (const [pattern, Component] of Object.entries(registry)) {

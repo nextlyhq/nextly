@@ -1,6 +1,7 @@
-import type {
-  ActiveNavSection,
-  NavSection,
+import {
+  isNavSection,
+  type ActiveNavSection,
+  type NavSection,
 } from "@admin/constants/nav-sections";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 import type { RouteSectionContext } from "@admin/types/route-section";
@@ -105,4 +106,35 @@ export function collectionContentSection(
   }
 
   return sectionFromParam(context.from) ?? "collections";
+}
+
+/**
+ * Which rail entry a plugin's own surface belongs to.
+ *
+ * Resolved once, at registration, because that is the only place all three
+ * facts are in hand: what the surface declared, what its plugin declared, and
+ * which slug a standalone entry would be addressed by.
+ *
+ * The order is a deferral chain rather than a list of defaults. A surface that
+ * names a section means it; one that says nothing defers to its plugin, so a
+ * plugin already placed under Settings does not repeat itself on every page;
+ * and a plugin that has said nothing either belongs under Plugins.
+ *
+ * An unrecognised value falls to Plugins rather than being trusted. A plugin
+ * built against a newer vocabulary can name a section this admin does not
+ * have, and landing somewhere visible is recoverable where selecting nothing
+ * is not.
+ */
+export function pluginSurfaceSection(
+  declared: string | undefined,
+  pluginPlacement: string | undefined,
+  slug: string
+): ActiveNavSection {
+  const chosen = declared ?? pluginPlacement;
+  if (chosen === "standalone") return `standalone-${slug}`;
+  // "users" is rendered inside the Settings sub-sidebar rather than a rail
+  // entry of its own, matching how a plugin collection placed there behaves.
+  if (chosen === "users") return "settings";
+  if (chosen && isNavSection(chosen)) return chosen;
+  return "plugins";
 }

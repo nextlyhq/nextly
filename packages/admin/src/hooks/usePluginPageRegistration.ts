@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 
+import { pluginSurfaceSection } from "@admin/lib/navigation/section-resolvers";
 import { autoRegisterPluginComponents } from "@admin/lib/plugins/component-registry";
 import {
   registerPluginPages,
@@ -49,6 +50,7 @@ export function usePluginPageRegistration(
             path: page.path,
             component: page.component,
             requiredPermission: page.requiredPermission,
+            section: pluginSurfaceSection(page.section, plugin.placement, slug),
           }))
         );
         for (const page of plugin.pages) {

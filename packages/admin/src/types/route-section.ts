@@ -51,3 +51,13 @@ export interface RouteSectionContext {
 export type RouteSection =
   | NavSection
   | ((context: RouteSectionContext) => ActiveNavSection);
+
+/**
+ * What a resolved route carries: either what a static route DECLARED, or the
+ * entry a plugin surface was already resolved to at registration.
+ *
+ * Wider than `RouteSection` because a plugin page can legitimately land on a
+ * standalone id, which a static declaration cannot name — that resolution
+ * happens where the plugin's slug is known, and the result travels as a value.
+ */
+export type CarriedRouteSection = RouteSection | ActiveNavSection;

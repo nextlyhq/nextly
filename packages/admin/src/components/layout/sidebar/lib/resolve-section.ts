@@ -1,7 +1,7 @@
 import type { ActiveNavSection } from "@admin/constants/nav-sections";
 import { resolveRoute } from "@admin/lib/routing";
 import type {
-  RouteSection,
+  CarriedRouteSection,
   RouteSectionContext,
 } from "@admin/types/route-section";
 
@@ -25,7 +25,7 @@ export type {
  * own from the URL.
  */
 export function evaluateRouteSection(
-  declared: RouteSection,
+  declared: CarriedRouteSection,
   context: RouteSectionContext
 ): ActiveNavSection {
   return typeof declared === "function" ? declared(context) : declared;
