@@ -65,5 +65,23 @@ export type { CanvasProps } from "./canvas";
  * handler and an agent all reach the same `apply`, so undo covers every one of
  * them rather than only the path that happened to implement it.
  */
+/**
+ * The inserter, behind the same client banner as the shell it fills: it holds
+ * search state and composes the command primitives, so it is interactive in its
+ * own right.
+ *
+ * Published here rather than from the root for the reason the canvas is — the
+ * root entry stays server-callable, and a value re-export of a client component
+ * would make importing the frame geometry pull React into a server bundle.
+ *
+ * The derivations it draws from are deliberately NOT re-exported beside it.
+ * They are the editor's internal answer to what may be inserted where, and
+ * publishing them would invite a host to compute a palette of its own — which
+ * is the second implementation of the nesting rule that the engine exists to
+ * prevent.
+ */
+export { InsertPanel } from "./insert-panel";
+export type { InsertPanelProps } from "./insert-panel";
+
 export { MAX_HISTORY, useEditorState } from "./editor-state";
 export type { EditorState, UseEditorStateArgs } from "./editor-state";
