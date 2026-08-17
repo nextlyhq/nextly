@@ -26,6 +26,7 @@ import * as React from "react";
 import { devWarnOnce } from "./dev-warn";
 import {
   DEFAULT_PREFERENCES,
+  fitsFullShell,
   LEFT_PANELS,
   MIN_CANVAS_WIDTH,
   MIN_SHELL_WIDTH,
@@ -170,7 +171,13 @@ function browserStore(): PreferenceStore {
 }
 
 /**
- * Whether the viewport can carry the full shell, tracked as it changes.
+ * Whether the shell's own CONTAINER can carry the full layout, as it changes.
+ *
+ * The container rather than the viewport, because that is what the shell sizes
+ * to — `h-full w-full`, no viewport units anywhere. The two agree only when the
+ * shell happens to fill the window, so an editor embedded in a narrow column on
+ * a wide display was told it fitted and compressed its regions past their
+ * minimums.
  *
  * Starts as `true` on purpose. The alternative is measuring during render,
  * which the server cannot do — it would emit the narrow-viewport message and the
@@ -178,18 +185,81 @@ function browserStore(): PreferenceStore {
  * the supported case and correcting after mount makes both first renders
  * identical.
  */
-function useFitsFullShell(): boolean {
+function useFitsFullShell(): [(node: HTMLElement | null) => void, boolean] {
   const [fits, setFits] = React.useState(true);
+  const observer = React.useRef<ResizeObserver | null>(null);
 
-  React.useEffect(() => {
-    const query = window.matchMedia(`(min-width: ${MIN_SHELL_WIDTH}px)`);
-    const sync = () => setFits(query.matches);
-    sync();
-    query.addEventListener("change", sync);
-    return () => query.removeEventListener("change", sync);
+  /*
+   * A CALLBACK ref, not an effect over a `useRef`.
+   *
+   * The observed element is REPLACED when the answer flips — the notice and the
+   * shell root are different nodes, and only one of them is on screen at a time
+   * — so an effect keyed on mount would observe whichever rendered first and go
+   * on observing it after React swapped it out.
+   */
+  const measure = React.useCallback((node: HTMLElement | null) => {
+    observer.current?.disconnect();
+    observer.current = null;
+    if (node === null) return;
+    // jsdom implements no `ResizeObserver`. Falling back to `fits` rather than
+    // to a notice matches the initial state's reasoning: a shell that cannot
+    // measure renders fully rather than showing a message it has no evidence
+    // for.
+    if (typeof ResizeObserver === "undefined") {
+      setFits(true);
+      return;
+    }
+    const next = new ResizeObserver(entries => {
+      const entry = entries[entries.length - 1];
+      if (entry === undefined) return;
+      // The CONTENT box of the measuring wrapper, which is by construction the
+      // space the regions will be laid out in.
+      //
+      // Getting this right took two wrong answers, and both were wrong for the
+      // same underlying reason — the observed element kept being something
+      // other than the box the regions actually get.
+      //
+      // Observing whichever ROOT was visible made the answer depend on that
+      // root's own padding: the notice is `p-6` and the shell root is not, so
+      // the content box reported the same container 48px narrower while the
+      // notice was up, and a container growing back into that band could never
+      // recover. Switching to the border box fixed the asymmetry and introduced
+      // the opposite error, because a border box INCLUDES whatever padding or
+      // border the caller put on `className` — decoration the regions never
+      // receive — so a 1280px root with `p-6` reported that it fitted while
+      // leaving 1232px to lay out in.
+      //
+      // Both disappear once the measured element is a single always-rendered
+      // wrapper that carries the caller's `className` and nothing else. Its
+      // content box is the space inside the caller's decoration, which is
+      // exactly what its children are given, and it is the same element in both
+      // states so no branch's padding can move the threshold. The notice's own
+      // `p-6` is inside it and cannot be seen from here.
+      //
+      // `contentRect` rather than `getBoundingClientRect` for the reason it
+      // always was: both are layout sizes, so a transformed ancestor — this
+      // editor has canvas zoom — does not scale the number against a minimum
+      // expressed in CSS pixels.
+
+      // The comparison itself comes from `shell-state`, which exports and tests
+      // it. Repeating `>= MIN_SHELL_WIDTH` here would be a second answer to one
+      // question, and the two would first disagree exactly at the boundary the
+      // helper's tests pin.
+      setFits(fitsFullShell(entry.contentRect.width));
+    });
+    next.observe(node);
+    observer.current = next;
   }, []);
 
-  return fits;
+  React.useEffect(
+    () => () => {
+      observer.current?.disconnect();
+      observer.current = null;
+    },
+    []
+  );
+
+  return [measure, fits];
 }
 
 /**
@@ -387,22 +457,33 @@ function useDesignSystemStylesheet(
 }
 
 /**
- * How many shells are mounted right now.
+ * How many shells are ACTIVE right now — mounted and wide enough to be used.
  *
  * Read only to decide whether "focus is nowhere in particular" identifies a
- * shell unambiguously. With one on the page it does; with several it does not,
- * and the tie has to be declined rather than won by whichever registered last.
+ * shell unambiguously. With one usable editor on the page it does; with several
+ * it does not, and the tie has to be declined rather than won by whichever
+ * registered last.
+ *
+ * Active rather than merely mounted, and that distinction only became
+ * observable once each shell measured its OWN container: siblings in columns of
+ * different widths can now disagree about whether they fit, so a form can hold
+ * one usable editor beside several showing their narrow notices. Counting every
+ * mount there makes the one editor that CAN answer decline, because it sees
+ * more than one — and the others decline too, since their binding is disabled.
+ * F6 would reach nothing at all. A shell behind its notice is not a candidate
+ * for the key, so it is not part of the ambiguity either.
  */
-let mountedShells = 0;
+let activeShells = 0;
 
-function useMountedShellCount(): () => number {
+function useActiveShellCount(active: boolean): () => number {
   React.useEffect(() => {
-    mountedShells += 1;
+    if (!active) return;
+    activeShells += 1;
     return () => {
-      mountedShells -= 1;
+      activeShells -= 1;
     };
-  }, []);
-  return () => mountedShells;
+  }, [active]);
+  return () => activeShells;
 }
 
 /**
@@ -453,7 +534,7 @@ function useRegionCycling(
   rootRef: React.RefObject<HTMLElement | null>,
   enabled: boolean
 ): void {
-  const shellCount = useMountedShellCount();
+  const shellCount = useActiveShellCount(enabled);
   // Read through a ref so the binding's `when` sees the CURRENT answer. The
   // manager checks it at press time, and a value captured when the binding was
   // registered would keep reporting whatever was true then.
@@ -896,7 +977,7 @@ export function BuilderShell({ store, ...props }: BuilderShellProps) {
   fallbackStore.current ??= browserStore();
   const resolvedStore = store ?? fallbackStore.current;
   const [preferences, update, loadCount] = usePreferences(resolvedStore);
-  const fitsFullShell = useFitsFullShell();
+  const [measureShell, shellFits] = useFitsFullShell();
 
   return (
     <ShortcutProvider>
@@ -905,56 +986,73 @@ export function BuilderShell({ store, ...props }: BuilderShellProps) {
           them depends on this and should not make it someone else's setup step.
           Radix nests providers safely — a host with its own keeps its delay. */}
       <TooltipProvider delayDuration={300}>
-        {!fitsFullShell ? (
-          <div
-            // The caller's className reaches this branch too. It is what
-            // positions the shell in the host's layout — a grid area, a height,
-            // a border — and dropping it on the narrow path made the fallback
-            // escape the box the shell had been given, in the layout least able
-            // to absorb it.
-            className={cn(
-              "nx-builder-chrome flex h-full w-full flex-col items-center justify-center gap-3 p-6 text-center",
-              props.className
-            )}
-          >
-            <p className="text-sm font-medium">
-              The page editor needs a wider screen
-            </p>
-            {/*
-             * The escape sentence and the button below it are ONE UNIT with the
-             * handler: all three present, or all three absent.
-             *
-             * Keeping the copy while dropping the control would instruct the
-             * author to go somewhere and then offer nothing to get there — and
-             * keeping a button with no handler is worse, because it looks
-             * operable. A host that supplies no `onExit` has no destination to
-             * offer, and an embedded one needs none: the author is already
-             * inside the surrounding form and can scroll to the rest of it.
-             */}
-            {props.onExit ? (
-              <>
-                <p className="text-[color:var(--nx-builder-text-muted)] max-w-sm text-sm">
-                  Editing a layout needs at least {MIN_SHELL_WIDTH}px. On a
-                  smaller screen you can still edit this page&apos;s content
-                  from the admin.
-                </p>
-                <button
-                  type="button"
-                  onClick={props.onExit}
-                  className="border-[color:var(--nx-builder-border)] focus-visible:ring-ring rounded-md border px-3 py-1.5 text-sm font-medium focus-visible:ring-2 focus-visible:outline-none"
-                >
-                  Exit editor
-                </button>
-              </>
-            ) : (
-              <p className="text-[color:var(--nx-builder-text-muted)] max-w-sm text-sm">
-                Editing a layout needs at least {MIN_SHELL_WIDTH}px.
+        {/*
+         * THE measured element, and the only one.
+         *
+         * Always rendered, whichever branch is showing, so it always has a box
+         * to measure — which is what makes the decision reversible. Observing a
+         * branch instead made the answer depend on that branch's own padding
+         * and, in the editor's case, on a wrapper that is `display: contents`
+         * when visible and `hidden` when narrow and therefore reports 0.
+         *
+         * It carries the caller's `className` and nothing else of its own, so
+         * its CONTENT box is the space inside whatever padding, border or grid
+         * area the host gave the shell — which is precisely the space its
+         * children have to lay out in. Both branches are sized from it rather
+         * than from the host directly, so neither can disagree with the
+         * measurement.
+         */}
+        <div
+          ref={measureShell}
+          className={cn("h-full w-full", props.className)}
+        >
+          {!shellFits ? (
+            <div
+              // No caller `className` here: the wrapper above owns the host's
+              // positioning now, and repeating it would apply a grid area or a
+              // border twice.
+              className={cn(
+                "nx-builder-chrome flex h-full w-full flex-col items-center justify-center gap-3 p-6 text-center"
+              )}
+            >
+              <p className="text-sm font-medium">
+                The page editor needs a wider screen
               </p>
-            )}
-          </div>
-        ) : null}
+              {/*
+               * The escape sentence and the button below it are ONE UNIT with the
+               * handler: all three present, or all three absent.
+               *
+               * Keeping the copy while dropping the control would instruct the
+               * author to go somewhere and then offer nothing to get there — and
+               * keeping a button with no handler is worse, because it looks
+               * operable. A host that supplies no `onExit` has no destination to
+               * offer, and an embedded one needs none: the author is already
+               * inside the surrounding form and can scroll to the rest of it.
+               */}
+              {props.onExit ? (
+                <>
+                  <p className="text-[color:var(--nx-builder-text-muted)] max-w-sm text-sm">
+                    Editing a layout needs at least {MIN_SHELL_WIDTH}px. On a
+                    smaller screen you can still edit this page&apos;s content
+                    from the admin.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={props.onExit}
+                    className="border-[color:var(--nx-builder-border)] focus-visible:ring-ring rounded-md border px-3 py-1.5 text-sm font-medium focus-visible:ring-2 focus-visible:outline-none"
+                  >
+                    Exit editor
+                  </button>
+                </>
+              ) : (
+                <p className="text-[color:var(--nx-builder-text-muted)] max-w-sm text-sm">
+                  Editing a layout needs at least {MIN_SHELL_WIDTH}px.
+                </p>
+              )}
+            </div>
+          ) : null}
 
-        {/* The editor stays MOUNTED while the notice is up, rather than being
+          {/* The editor stays MOUNTED while the notice is up, rather than being
             swapped out for it.
 
             Returning the notice instead unmounted every slot the caller had
@@ -971,27 +1069,35 @@ export function BuilderShell({ store, ...props }: BuilderShellProps) {
             the editor goes on occupying memory while hidden, which is the
             deliberate trade: an author's unsaved work is worth more than the
             allocation. */}
-        <div
-          hidden={!fitsFullShell}
-          inert={!fitsFullShell}
-          // `display: contents` while visible, so this wrapper adds no box of
-          // its own and the shell keeps sizing against the caller's container.
-          // Omitted while hidden, where the `hidden` attribute's own
-          // `display: none` has to be the one that applies.
-          className={fitsFullShell ? "contents" : undefined}
-        >
-          {/* Published as context as well as applied as attributes, because `hidden` and `inert`
+          <div
+            hidden={!shellFits}
+            inert={!shellFits}
+            // `display: contents` while visible, so this wrapper adds no box of
+            // its own and the shell keeps sizing against the caller's container.
+            // Omitted while hidden, where the `hidden` attribute's own
+            // `display: none` has to be the one that applies.
+            className={shellFits ? "contents" : undefined}
+          >
+            {/* Published as context as well as applied as attributes, because `hidden` and `inert`
               only reach what renders INSIDE this wrapper. Slot content that portals to the body
               escapes both, and needs to be told rather than contained. */}
-          <ShellActiveContext.Provider value={fitsFullShell}>
-            <ShellRegions
-              {...props}
-              preferences={preferences}
-              update={update}
-              active={fitsFullShell}
-              loadCount={loadCount}
-            />
-          </ShellActiveContext.Provider>
+            <ShellActiveContext.Provider value={shellFits}>
+              <ShellRegions
+                {...props}
+                preferences={preferences}
+                update={update}
+                active={shellFits}
+                loadCount={loadCount}
+                /*
+                 * The caller's `className` stops here: the measuring wrapper
+                 * above carries it. Passing it on would apply the host's grid
+                 * area, height or border a second time, on a box nested inside
+                 * the one already carrying it.
+                 */
+                className={undefined}
+              />
+            </ShellActiveContext.Provider>
+          </div>
         </div>
       </TooltipProvider>
     </ShortcutProvider>
