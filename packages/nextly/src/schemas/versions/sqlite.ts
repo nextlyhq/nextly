@@ -54,6 +54,10 @@ export const nextlyVersionsSqlite = sqliteTable(
     updatedAt: integer("updated_at", { mode: "timestamp" })
       .$defaultFn(() => new Date())
       .notNull(),
+    // Compare-and-set token for the in-place autosave rewrite. Carries the
+    // ordering that `updated_at` cannot here: `mode: "timestamp"` stores whole
+    // epoch SECONDS, so two rewrites inside one second are stored identically.
+    revision: integer("revision").default(0).notNull(),
   },
   table => [
     // Durable version_no uniqueness per document. A FULL (non-partial) unique

@@ -208,7 +208,8 @@ export function generateSqliteCoreTableStatements(): string[] {
       "source_version_no" INTEGER,
       "created_by" TEXT,
       "created_at" INTEGER NOT NULL,
-      "updated_at" INTEGER NOT NULL
+      "updated_at" INTEGER NOT NULL,
+      "revision" INTEGER NOT NULL DEFAULT 0
     )`,
     `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_versions_seq_uidx"
       ON "nextly_versions" ("scope_kind", "scope_slug", "entry_id", "version_no")`,

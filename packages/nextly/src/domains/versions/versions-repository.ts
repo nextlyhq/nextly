@@ -585,12 +585,12 @@ export class VersionsRepository {
     const where = this.autosaveWhere(input.ref, createdBy);
     // Project only the id: the existence check must not transfer the (possibly
     // large) snapshot of the row it is about to overwrite.
-    const existing = await this.db.select<{ id: string; updatedAt: Date }>(
+    const existing = await this.db.select<{ id: string; revision: number }>(
       TABLE,
       {
-        // `updatedAt` rides along so the update can compare against the value
+        // `revision` rides along so the update can compare against the value
         // this read OBSERVED rather than against a clock.
-        columns: ["id", "updatedAt"],
+        columns: ["id", "revision"],
         where,
         limit: 1,
       }
@@ -612,6 +612,10 @@ export class VersionsRepository {
           status: input.status,
           locale: input.locale ?? null,
           updatedAt: now,
+          // Advancing the token is what makes the next writer's predicate fail.
+          // Computed from the OBSERVED value rather than read again, so the
+          // value written is the successor of the one being compared against.
+          revision: existing[0].revision + 1,
         },
         // Flattened into the same conjunction rather than nested, so the
         // predicate stays one readable list of conditions.
@@ -620,18 +624,21 @@ export class VersionsRepository {
             ...(where.and ?? []),
             // EQUALITY against the value this read observed: apply only while
             // the row still holds it, which is what compare-and-set means. A
-            // concurrent writer changes the value, this matches nothing, and
-            // the slower write is dropped rather than overwriting newer work.
+            // concurrent writer advances it, this matches nothing, and the
+            // slower write is dropped rather than overwriting newer work.
             //
-            // Not `<` against a clock: SQLite stores this column as integer
-            // epoch SECONDS, so a rewrite inside the same second serializes
-            // identically and an ordering comparison would match nothing even
-            // with no contention, silently dropping every autosave after the
-            // first.
+            // The token is `revision` rather than `updatedAt` because a
+            // timestamp's stored resolution differs per dialect and can run
+            // out: SQLite keeps whole epoch SECONDS, so two rewrites inside one
+            // second are indistinguishable, and the second writer's read
+            // observes exactly what the first wrote. Its predicate then matches
+            // and it overwrites newer work believing the row untouched. A
+            // counter advances on every write regardless of how close together
+            // they fall.
             {
-              column: "updatedAt",
+              column: "revision",
               op: "=" as const,
-              value: existing[0].updatedAt,
+              value: existing[0].revision,
             },
           ],
         }
@@ -662,6 +669,9 @@ export class VersionsRepository {
           createdBy,
           createdAt: now,
           updatedAt: now,
+          // Stated rather than left to the column default, so the first value
+          // the compare-and-set will read is fixed by this insert.
+          revision: 0,
         },
         { returning: [] }
       );

@@ -53,6 +53,10 @@ export const nextlyVersionsMysql = mysqlTable(
     updatedAt: datetime("updated_at", { fsp: 3 })
       .$defaultFn(() => new Date())
       .notNull(),
+    // Compare-and-set token for the in-place autosave rewrite. `updated_at`
+    // resolves to milliseconds here, which is finer than SQLite but still a
+    // resolution two rewrites can share; a counter cannot collide.
+    revision: int("revision").default(0).notNull(),
   },
   table => [
     // Durable version_no uniqueness per document. A FULL (non-partial) unique
