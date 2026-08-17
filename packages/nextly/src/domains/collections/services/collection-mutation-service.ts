@@ -6277,6 +6277,32 @@ export class CollectionMutationService extends BaseService {
               previousSlug = readStringField(previousDocument, "slug");
             }
           }
+
+          // A real save SUPERSEDES this author's recovery point. The work it
+          // held is now in the document, so leaving it would offer it back on
+          // every subsequent open as though it were still unsaved.
+          //
+          // This is also what removes the need to compare a recovery point's
+          // timestamp against the document's. Those two live in different
+          // tables and do not share a clock -- one records UTC and the other
+          // local time carrying a `Z` -- so every such comparison is wrong by
+          // the server's offset. A row that only exists while there IS unsaved
+          // work needs no comparison at all.
+          //
+          // Scoped to the SAVING author: another editor's recovery point is
+          // their own unsaved work and must survive somebody else's save.
+          //
+          // Inside the write transaction, so a save that fails leaves the
+          // recovery point intact rather than destroying the only copy of work
+          // the save did not manage to store.
+          await new VersionsRepository(tx).deleteAutosaves(
+            {
+              scopeKind: "collection",
+              scopeSlug: params.collectionName,
+              entryId: params.entryId,
+            },
+            params.user?.id ?? null
+          );
         })
       );
       // The transaction committed (skipped if the retry ultimately threw), so

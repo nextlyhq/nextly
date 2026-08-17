@@ -167,25 +167,6 @@ test.describe("autosave recovery", () => {
 test.describe("autosave recovery for a Single", () => {
   const SINGLE_AUTOSAVE = /\/singles\/site-settings\/versions\/autosave/;
 
-  /**
-   * KNOWN FAILING, and deliberately kept executable rather than deleted or
-   * weakened.
-   *
-   * The write lands and the read returns the row, but the offer is suppressed
-   * because the two timestamps being compared do not share a clock. Measured on
-   * a single run, seconds apart:
-   *
-   *   recovery point updatedAt   10:25:33Z
-   *   single document updatedAt  15:25:31Z
-   *
-   * Five hours is the server's UTC offset, so the document's timestamp is local
-   * time carrying a `Z`. The recovery rule then correctly concludes, from wrong
-   * inputs, that the document is newer and withholds the offer.
-   *
-   * `test.fail()` rather than a skip: this still runs, still proves the defect
-   * is present, and turns RED the moment it is fixed, which a skip would not.
-   */
-  test.fail();
   test("records and offers back a Single's unsaved work", async ({ page }) => {
     await gotoAdmin(page, "/singles/site-settings");
 
@@ -222,4 +203,45 @@ test.describe("autosave recovery for a Single", () => {
       "restoring must put the Single's recorded values back"
     ).toHaveValue(recovered);
   });
+});
+
+/**
+ * The property the supersede exists for: a real save clears the recovery point,
+ * so reopening a SAVED document offers nothing.
+ *
+ * Without this, the only coverage of the delete would be that the other tests
+ * still pass -- and they would pass just as well if the delete never ran, since
+ * they never save after autosaving. This is the case that fails when the
+ * supersede is removed.
+ */
+test("offers nothing after the work has actually been saved", async ({
+  page,
+}) => {
+  await createSavedPost(page, `Superseded ${Date.now()}`);
+
+  const written = page.waitForResponse(
+    r => AUTOSAVE_WRITE.test(r.url()) && r.request().method() === "PUT",
+    { timeout: 30_000 }
+  );
+  await page
+    .getByRole("textbox", { name: "Excerpt", exact: true })
+    .fill("typed, then saved for real");
+  expect((await written).status()).toBeLessThan(400);
+
+  // The real save. This is what must supersede the recovery point.
+  await page.getByRole("button", { name: /save/i }).first().click();
+  await expect(page.locator("main")).toBeVisible({ timeout: 30_000 });
+
+  await page.reload();
+  await expect(page.locator("main")).toBeVisible({ timeout: 30_000 });
+
+  // Population before verdict: the editor has to have drawn before an absence
+  // means anything, or a slow page would satisfy this assertion by itself.
+  await expect(
+    page.getByRole("textbox", { name: "Excerpt", exact: true })
+  ).toBeVisible({ timeout: 15_000 });
+  await expect(
+    page.getByText(/unsaved changes from/i),
+    "a saved document must not offer its own saved work back"
+  ).toBeHidden();
 });

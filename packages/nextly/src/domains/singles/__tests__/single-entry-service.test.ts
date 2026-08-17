@@ -1065,7 +1065,15 @@ describe("SingleEntryService", () => {
       // The write is gated within a transaction (so the insert is rolled back on
       // denial), and no compensating delete is issued.
       expect(ctx.adapter.transaction).toHaveBeenCalled();
-      expect(ctx.adapter.delete).not.toHaveBeenCalled();
+      // No delete of the DOCUMENT. A successful save does delete the saving
+      // author's recovery point, which is the supersede that keeps a saved
+      // document from offering its own saved work back, so "no deletes at all"
+      // is now too broad a statement of what this test is about.
+      expect(
+        ctx.adapter.delete.mock.calls.filter(
+          ([table]: [string]) => table !== "nextly_versions"
+        )
+      ).toHaveLength(0);
     });
 
     it("persists the default and publishes when a first publish is allowed", async () => {
@@ -1094,7 +1102,15 @@ describe("SingleEntryService", () => {
         (c: unknown[]) => c[0] !== "nextly_events"
       );
       expect(rowInserts).toHaveLength(1);
-      expect(ctx.adapter.delete).not.toHaveBeenCalled();
+      // No delete of the DOCUMENT. A successful save does delete the saving
+      // author's recovery point, which is the supersede that keeps a saved
+      // document from offering its own saved work back, so "no deletes at all"
+      // is now too broad a statement of what this test is about.
+      expect(
+        ctx.adapter.delete.mock.calls.filter(
+          ([table]: [string]) => table !== "nextly_versions"
+        )
+      ).toHaveLength(0);
     });
 
     it("reuses a row a hook auto-created instead of inserting a duplicate", async () => {

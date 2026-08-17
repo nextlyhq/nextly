@@ -55,7 +55,7 @@ export type {
   BlocksFieldConfig,
 } from "./fields/blocks-options";
 export { blocks, isBlocksField } from "./fields/blocksHelper";
-export { pagesCollection, EDIT_VIEW_PATH } from "./collections/pages";
+export { pagesCollection } from "./collections/pages";
 export { editorChoiceFields } from "./collections/editorChoice";
 export type { EditorChoiceOptions } from "./collections/editorChoice";
 

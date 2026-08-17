@@ -199,14 +199,20 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) =>
         menu: [
           { label: "Pages", to: "/admin/collections/pages", icon: "Layout" },
         ],
-        // Schema-builder "Use Page Builder" toggle, rendered generically by the
-        // admin above the field list in the collection/single builders.
-        schemaBuilderSlot:
-          "@nextlyhq/plugin-page-builder/admin#PageBuilderToggle",
-        // Per-entry Normal / Page Builder toggle, rendered in the entry/single
-        // form header toolbar (drives the hidden editor-mode field).
-        entryFormToolbarSlot:
-          "@nextlyhq/plugin-page-builder/admin#PageBuilderModeToggle",
+        // No `schemaBuilderSlot` and no `entryFormToolbarSlot`.
+        //
+        // Both named components this package no longer ships: a schema-builder
+        // toggle for turning a collection into a page-builder one, and a
+        // per-entry Normal / Page Builder switch. They belonged to an editor
+        // that stored its own document format, so the choice they offered was
+        // between two storage shapes rather than between two ways of editing
+        // one.
+        //
+        // A slot is registered by SPECIFIER, so nothing type-checks the name:
+        // pointing at a component that is not exported resolves to nothing at
+        // render time, in the admin, at the moment an author opens the form.
+        // Declaring them is therefore worse than omitting them — the admin
+        // reserves the slot either way and only the populated case works.
       },
     },
   });
