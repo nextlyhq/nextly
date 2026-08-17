@@ -45,6 +45,10 @@ export default [
       // reason: shared eslint-config package's own .js files are not in
       // any tsconfig project; type-aware linting would fail on them
       "packages/eslint-config/**",
+      // reason: same case — the eslint-plugin package ships plain ESM rule
+      // modules with no tsconfig project, and is linted by its own config
+      // (`js.configs.recommended`) through its package `lint` script.
+      "packages/eslint-plugin/**",
       // reason: per-package eslint.config.{js,mjs,ts} files and root-level
       // config files aren't in any tsconfig project; they are meant to be
       // maintained by hand, not linted as TS source

@@ -28,6 +28,7 @@
       "@nextlyhq/plugin-seo",
       "@nextlyhq/plugin-sdk",
       "@nextlyhq/eslint-config",
+      "@nextlyhq/eslint-plugin",
       "@nextlyhq/prettier-config",
       "@nextlyhq/telemetry",
       "@nextlyhq/tsconfig",
