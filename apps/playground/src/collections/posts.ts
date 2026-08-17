@@ -1,4 +1,4 @@
-import { blocks, pageBuilderField } from "@nextlyhq/plugin-page-builder";
+import { blocks } from "@nextlyhq/plugin-page-builder";
 import {
   defineCollection,
   text,
@@ -47,11 +47,6 @@ export const Posts = defineCollection({
     richText({
       name: "content",
       admin: { condition: { field: "editorMode", equals: "standard" } },
-    }),
-    // Visual page builder — shown only in "page-builder" mode.
-    pageBuilderField("layout", {
-      label: "Visual Layout",
-      condition: { field: "editorMode", equals: "page-builder" },
     }),
     // A contributed field type declared code-first. `blocks` lives in the
     // page-builder plugin, so this is also the harness's proof that a plugin

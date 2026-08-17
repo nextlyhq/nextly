@@ -14,7 +14,6 @@ import {
   registerCoreBlocks,
   registerDeclaredBlocks,
 } from "./blocks/registration-service";
-import { PAGE_BUILDER_FIELD_TYPE } from "./collections/pageBuilderEntry";
 import { pagesCollection } from "./collections/pages";
 import type { RemotePattern } from "./core/url-policy";
 import { BLOCKS_FIELD_TYPE } from "./fields/blocksField";
@@ -154,7 +153,13 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) =>
         [BLOCK_SERVICE]: () => createBlockRegistrationService(),
       },
       collections: [pagesCollection()],
-      fieldTypes: [PAGE_BUILDER_FIELD_TYPE, BLOCKS_FIELD_TYPE],
+      // One field type, where there were two. The other named the previous
+      // editor's document — a shape this package defined itself, stored under a
+      // synthetic root, and validated with its own rules. A site that declared
+      // it got a field the engine could not read and the current renderer could
+      // not draw, so the two field types were not alternatives but rival
+      // formats, and only this one is a format anything else understands.
+      fieldTypes: [BLOCKS_FIELD_TYPE],
       // No `publish` permission. One was declared here and nothing ever read
       // it: publishing a page is a status change on the entry, which
       // `update-pages` already covers, and no code path asked whether the user

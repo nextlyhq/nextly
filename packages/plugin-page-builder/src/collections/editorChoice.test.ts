@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { FIELD_COMPONENT_PATH } from "./pageBuilderField";
+import { BLOCKS_TYPE } from "../fields/blocksField";
 import { editorChoiceFields } from "./editorChoice";
 
 describe("editorChoiceFields", () => {
@@ -14,9 +14,13 @@ describe("editorChoiceFields", () => {
     expect(mode.defaultValue).toBe("builder");
 
     expect(builder.name).toBe("content");
-    expect((builder.admin as { component?: string }).component).toBe(
-      FIELD_COMPONENT_PATH
-    );
+    // The TYPE, not a per-field component path. The previous editor's helper
+    // stamped `admin.component` onto every field it produced; the blocks field
+    // declares its component once on the registered field type, so a call site
+    // names the type and the admin resolves the component from it. Asserting a
+    // component here again would re-introduce the duplication as a test.
+    expect(builder.type).toBe(BLOCKS_TYPE);
+    expect((builder.admin as { component?: string }).component).toBeUndefined();
     expect(
       (builder.admin as { condition?: { equals?: string } }).condition?.equals
     ).toBe("builder");
