@@ -901,6 +901,24 @@ export async function withMigrationSession<T>(
     // anything that is not already a DatabaseError and would strip this of its
     // status and its context.
     throw NextlyError.serviceUnavailable({
+      /*
+       * "Try again later" is wrong advice for half of what reaches here.
+       *
+       * A lock table that predates `expires_at` grants an owner-only claim,
+       * which has no takeover — so a killed process leaves a claim that no
+       * later run can reclaim, and every schema change refuses until an
+       * operator intervenes. Retrying cannot start working, and the default
+       * message asks the caller to do exactly that.
+       *
+       * Both causes are named because this code cannot tell them apart: that
+       * is the same missing expiry. Saying which one it is would be a guess,
+       * and naming only the transient one is what left a developer restarting
+       * a server that was never going to recover.
+       */
+      publicMessage:
+        "The schema is locked by another run. If none is in progress, the " +
+        "lock predates its expiry column and cannot be reclaimed " +
+        "automatically — run `nextly migrate:field-groups` to add it.",
       logMessage:
         "field-group migration could not take the migration lock; another run holds it",
       logContext: {
