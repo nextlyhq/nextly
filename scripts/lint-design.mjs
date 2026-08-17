@@ -126,7 +126,29 @@ function colorLiteralIsExempt(line, file) {
   return !COLOR_LITERAL_RE.test(stripExemptColorPieces(line));
 }
 
+/**
+ * Refuse, rather than report, when the run read nothing.
+ *
+ * Separate from the violation list because the two are different outcomes: no
+ * violations is a verdict, and nothing scanned is the absence of one. Reporting
+ * the second as the first is the failure this guard is meant not to have.
+ */
+function refuse(missing) {
+  console.error(
+    `\n✖ Design lint could not run: ${missing.join(", ")}.\n\n` +
+      "  This is not a pass. The guard reports nothing when it reads nothing,\n" +
+      "  so an empty population is a tooling failure rather than a clean tree.\n"
+  );
+  process.exit(1);
+}
+
 const roots = deriveRoots();
+// Checked before `listFiles`, which shells out to `find`: with no paths that
+// command fails and takes the process down before any population is reported,
+// so the refusal below would be unreachable and the operator would see a stack
+// trace instead of the reason.
+if (roots.length === 0) refuse(["no roots"]);
+
 const files = listFiles(roots);
 
 const violations = [];
@@ -189,22 +211,11 @@ for (const file of files) {
  * surface — and that last case makes every plugin-only rule inert while the
  * summary still reads as a pass.
  */
-const populations = [
-  ["roots", roots.length],
+const empty = [
   ["files", files.length],
   ["plugin-surface files", pluginClassified],
-];
-const empty = populations.filter(([, count]) => count === 0);
-if (empty.length > 0) {
-  console.error(
-    `\n✖ Design lint could not run: ${empty
-      .map(([label]) => `no ${label}`)
-      .join(", ")}.\n\n` +
-      "  This is not a pass. The guard reports nothing when it reads nothing,\n" +
-      "  so an empty population is a tooling failure rather than a clean tree.\n"
-  );
-  process.exit(1);
-}
+].filter(([, count]) => count === 0);
+if (empty.length > 0) refuse(empty.map(([label]) => `no ${label}`));
 
 if (adminImportant > ADMIN_IMPORTANT_BASELINE) {
   violations.push(
