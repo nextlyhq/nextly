@@ -1,15 +1,11 @@
 "use client";
 
 import {
-  Alert,
   Badge,
   Button,
-  DropdownMenu,
   DropdownMenuCheckboxItem,
-  DropdownMenuContent,
   DropdownMenuLabel,
   DropdownMenuSeparator,
-  DropdownMenuTrigger,
   Skeleton,
   Tooltip,
   TooltipContent,
@@ -17,11 +13,12 @@ import {
 } from "@nextlyhq/ui";
 import {
   Eye,
-  Pencil,
-  Trash2,
-  List,
   FileCode,
-  Table as Filter,
+  Layers,
+  List,
+  Pencil,
+  Plus,
+  Trash2,
 } from "lucide-react";
 import { useState, useEffect, useMemo, useCallback } from "react";
 
@@ -29,14 +26,14 @@ import { BulkActionBar } from "@admin/components/features/entries/EntryList/Bulk
 import * as Icons from "@admin/components/icons";
 import { Lock } from "@admin/components/icons";
 import { BulkDeleteDialog } from "@admin/components/shared/bulk-action-dialogs";
-import { SearchBar } from "@admin/components/shared/search-bar";
 import { toast } from "@admin/components/ui";
-import { DataTableView } from "@admin/components/ui/table/data-table";
+import { Link } from "@admin/components/ui/link";
 import type {
   DataTableSelection,
   NextlyColumn,
   RowAction,
 } from "@admin/components/ui/table/data-table";
+import { ListView } from "@admin/components/ui/table/list-view";
 import { PAGINATION } from "@admin/constants/pagination";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { UI } from "@admin/constants/ui";
@@ -56,7 +53,6 @@ import type {
   MigrationStatus,
 } from "@admin/types/entities";
 
-import { CollectionsEmptyState } from "./CollectionsEmptyState";
 import { CollectionTableSkeleton } from "./CollectionTableSkeleton";
 
 /** Source badge label + icon. */
@@ -461,205 +457,178 @@ export default function CollectionTable() {
 
   const showLoadingSkeleton =
     (isLoading || isFetching) && (!data || data.items.length === 0);
-  const isEmpty = filteredData.length === 0;
-  const isSearching = search.trim() !== "";
   const isFiltering = sourceFilter !== "all" || migrationFilter !== "all";
 
   return (
-    <div className="space-y-4">
-      {selectedCount > 0 && (
-        <BulkActionBar
-          selectedCount={selectedCount}
-          collection={undefined}
-          onDelete={handleBulkDelete}
-          onClear={clearSelection}
-          itemLabel="collection"
-        />
-      )}
-
-      {/* Search and filters */}
-      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        <SearchBar
-          value={search}
-          onChange={setSearch}
-          placeholder="Search collections..."
-          isLoading={isFetching}
-          className="w-full md:max-w-sm"
-        />
-
-        <div className="flex w-full items-center justify-between gap-2 sm:justify-end md:w-auto">
-          {showLoadingSkeleton ? (
+    <>
+      <ListView<ApiCollection>
+        search={{
+          value: search,
+          onChange: setSearch,
+          placeholder: "Search collections...",
+          isLoading: isFetching,
+        }}
+        hasActiveFilters={isFiltering}
+        // Withheld while the first response is outstanding: a filter menu built
+        // from data nobody has yet would open onto nothing. The skeletons below
+        // hold their place so the row does not resize when they arrive.
+        filters={
+          showLoadingSkeleton ? undefined : (
+            <>
+              <DropdownMenuLabel>Filter by</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuCheckboxItem
+                checked={sourceFilter === "all"}
+                onCheckedChange={() => handleSourceFilterChange("all")}
+              >
+                All Sources
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={sourceFilter === "code"}
+                onCheckedChange={() => handleSourceFilterChange("code")}
+              >
+                Code
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={sourceFilter === "ui"}
+                onCheckedChange={() => handleSourceFilterChange("ui")}
+              >
+                UI
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={sourceFilter === "built-in"}
+                onCheckedChange={() => handleSourceFilterChange("built-in")}
+              >
+                Built-in
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuCheckboxItem
+                checked={migrationFilter === "all"}
+                onCheckedChange={() => handleMigrationFilterChange("all")}
+              >
+                All Status
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={migrationFilter === "synced"}
+                onCheckedChange={() => handleMigrationFilterChange("synced")}
+              >
+                Synced
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={migrationFilter === "pending"}
+                onCheckedChange={() => handleMigrationFilterChange("pending")}
+              >
+                Pending
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={migrationFilter === "generated"}
+                onCheckedChange={() => handleMigrationFilterChange("generated")}
+              >
+                Generated
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={migrationFilter === "applied"}
+                onCheckedChange={() => handleMigrationFilterChange("applied")}
+              >
+                Applied
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={migrationFilter === "failed"}
+                onCheckedChange={() => handleMigrationFilterChange("failed")}
+              >
+                Failed
+              </DropdownMenuCheckboxItem>
+            </>
+          )
+        }
+        columnsControl={
+          showLoadingSkeleton
+            ? undefined
+            : {
+                columns: toggleableColumns,
+                isColumnVisible: name => !hiddenColumns.has(name),
+                onToggleColumn: toggleColumn,
+              }
+        }
+        toolbarActions={
+          showLoadingSkeleton ? (
             <>
               <Skeleton className="h-9 w-20" />
               <Skeleton className="h-9 w-24" />
             </>
-          ) : (
-            <>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="outline"
-                    size="md"
-                    className="relative border-border bg-background text-foreground hover:bg-accent/10"
-                  >
-                    <Filter className="h-4 w-4" />
-                    Filter
-                    {isFiltering && (
-                      // Notification dot: a fixed circle, not a --radius step.
-                      <span className="absolute -right-1 -top-1 flex h-3 w-3 rounded-full bg-primary" />
-                    )}
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-48">
-                  <DropdownMenuLabel>Filter by</DropdownMenuLabel>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuCheckboxItem
-                    checked={sourceFilter === "all"}
-                    onCheckedChange={() => handleSourceFilterChange("all")}
-                  >
-                    All Sources
-                  </DropdownMenuCheckboxItem>
-                  <DropdownMenuCheckboxItem
-                    checked={sourceFilter === "code"}
-                    onCheckedChange={() => handleSourceFilterChange("code")}
-                  >
-                    Code
-                  </DropdownMenuCheckboxItem>
-                  <DropdownMenuCheckboxItem
-                    checked={sourceFilter === "ui"}
-                    onCheckedChange={() => handleSourceFilterChange("ui")}
-                  >
-                    UI
-                  </DropdownMenuCheckboxItem>
-                  <DropdownMenuCheckboxItem
-                    checked={sourceFilter === "built-in"}
-                    onCheckedChange={() => handleSourceFilterChange("built-in")}
-                  >
-                    Built-in
-                  </DropdownMenuCheckboxItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuCheckboxItem
-                    checked={migrationFilter === "all"}
-                    onCheckedChange={() => handleMigrationFilterChange("all")}
-                  >
-                    All Status
-                  </DropdownMenuCheckboxItem>
-                  <DropdownMenuCheckboxItem
-                    checked={migrationFilter === "synced"}
-                    onCheckedChange={() =>
-                      handleMigrationFilterChange("synced")
-                    }
-                  >
-                    Synced
-                  </DropdownMenuCheckboxItem>
-                  <DropdownMenuCheckboxItem
-                    checked={migrationFilter === "pending"}
-                    onCheckedChange={() =>
-                      handleMigrationFilterChange("pending")
-                    }
-                  >
-                    Pending
-                  </DropdownMenuCheckboxItem>
-                  <DropdownMenuCheckboxItem
-                    checked={migrationFilter === "generated"}
-                    onCheckedChange={() =>
-                      handleMigrationFilterChange("generated")
-                    }
-                  >
-                    Generated
-                  </DropdownMenuCheckboxItem>
-                  <DropdownMenuCheckboxItem
-                    checked={migrationFilter === "applied"}
-                    onCheckedChange={() =>
-                      handleMigrationFilterChange("applied")
-                    }
-                  >
-                    Applied
-                  </DropdownMenuCheckboxItem>
-                  <DropdownMenuCheckboxItem
-                    checked={migrationFilter === "failed"}
-                    onCheckedChange={() =>
-                      handleMigrationFilterChange("failed")
-                    }
-                  >
-                    Failed
-                  </DropdownMenuCheckboxItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="outline"
-                    size="md"
-                    className="border-border bg-background text-foreground hover:bg-accent/10"
-                  >
-                    <Icons.Columns className="h-4 w-4" />
-                    Columns
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-48">
-                  <DropdownMenuLabel>Toggle columns</DropdownMenuLabel>
-                  <DropdownMenuSeparator />
-                  {toggleableColumns.map(col => (
-                    <DropdownMenuCheckboxItem
-                      key={col.name}
-                      checked={!hiddenColumns.has(col.name)}
-                      onCheckedChange={() => toggleColumn(col.name)}
-                    >
-                      {typeof col.header === "string" ? col.header : col.name}
-                    </DropdownMenuCheckboxItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* States */}
-      {isError ? (
-        <Alert variant="destructive">
-          {error instanceof Error
-            ? error.message
-            : "Failed to load collections. Please try again."}
-        </Alert>
-      ) : showLoadingSkeleton ? (
-        <CollectionTableSkeleton />
-      ) : isEmpty ? (
-        <CollectionsEmptyState isSearching={isSearching || isFiltering} />
-      ) : (
-        <>
-          <DataTableView<ApiCollection>
-            columns={columns}
-            rows={filteredData}
-            onRowClick={collection => handleEdit(collection)}
-            primaryColumn="label"
-            selection={selection}
-            rowActions={rowActions}
-            registryKey="collections"
-            ariaLabel="Collections table"
-            emptyMessage="No collections found. Try adjusting your search or filters."
-            // The table owns the pager so it lands inside the card on desktop,
-            // in the column's gap on mobile. The gate is
-            // unchanged and still hides the pager before the first response, so
-            // an empty list shows no controls to page through.
-            pagination={
-              data && data.meta.totalPages > 0
-                ? {
-                    currentPage: page,
-                    totalPages: data.meta.totalPages,
-                    pageSize,
-                    pageSizeOptions: PAGINATION.TABLE_PAGE_SIZE_OPTIONS,
-                    onPageChange: setPage,
-                    onPageSizeChange: setPageSize,
-                    isLoading: isFetching,
-                    totalItems: data.meta.total,
-                  }
-                : undefined
-            }
-          />
-        </>
-      )}
+          ) : undefined
+        }
+        bulkBar={
+          selectedCount > 0 ? (
+            <BulkActionBar
+              selectedCount={selectedCount}
+              collection={undefined}
+              onDelete={handleBulkDelete}
+              onClear={clearSelection}
+              itemLabel="collection"
+            />
+          ) : undefined
+        }
+        loading={showLoadingSkeleton}
+        skeleton={<CollectionTableSkeleton />}
+        // The failure is a table state, so the list reports it the way every
+        // other list does rather than through an Alert of its own beside a
+        // table that is still drawn.
+        error={
+          isError
+            ? error instanceof Error
+              ? error.message
+              : "Failed to load collections. Please try again."
+            : null
+        }
+        empty={{
+          icon: <Layers className="h-5 w-5" aria-hidden="true" />,
+          title: "No collections yet",
+          description:
+            "Get started by creating your first collection to organize and manage your content.",
+          action: (
+            <Link href={ROUTES.BUILDER_COLLECTIONS_NEW}>
+              <Button size="md">
+                <Plus className="h-4 w-4" />
+                Create Collection
+              </Button>
+            </Link>
+          ),
+        }}
+        emptyFiltered={{
+          icon: <Layers className="h-5 w-5" aria-hidden="true" />,
+          title: "No collections found",
+          description:
+            "No collections match your search. Try adjusting your search terms or filters.",
+        }}
+        columns={columns}
+        rows={filteredData}
+        onRowClick={collection => handleEdit(collection)}
+        primaryColumn="label"
+        selection={selection}
+        rowActions={rowActions}
+        registryKey="collections"
+        ariaLabel="Collections table"
+        emptyMessage="No collections found. Try adjusting your search or filters."
+        // The table owns the pager so it lands inside the card on desktop,
+        // in the column's gap on mobile. The gate is
+        // unchanged and still hides the pager before the first response, so
+        // an empty list shows no controls to page through.
+        pagination={
+          data && data.meta.totalPages > 0
+            ? {
+                currentPage: page,
+                totalPages: data.meta.totalPages,
+                pageSize,
+                pageSizeOptions: PAGINATION.TABLE_PAGE_SIZE_OPTIONS,
+                onPageChange: setPage,
+                onPageSizeChange: setPageSize,
+                isLoading: isFetching,
+                totalItems: data.meta.total,
+              }
+            : undefined
+        }
+      />
 
       <BulkDeleteDialog
         open={deleteDialogOpen}
@@ -692,6 +661,6 @@ export default function CollectionTable() {
         onConfirm={handleConfirmBulkDelete}
         isLoading={isBulkDeleting}
       />
-    </div>
+    </>
   );
 }
