@@ -153,3 +153,73 @@ test.describe("autosave recovery", () => {
     ).toBeVisible({ timeout: 15_000 });
   });
 });
+
+/**
+ * The same loop for a Single.
+ *
+ * Worth covering separately rather than trusting the shared hook: a Single is
+ * addressed by its own document id rather than an entry id, it has no create
+ * step, and `site-settings` is LOCALIZED -- so this is also the only coverage of
+ * the locale travelling with the write. The collection path proved that a
+ * shared transport can still be wrong at one call site, which is exactly the
+ * assumption "it uses the same hook" would rest on.
+ */
+test.describe("autosave recovery for a Single", () => {
+  const SINGLE_AUTOSAVE = /\/singles\/site-settings\/versions\/autosave/;
+
+  /**
+   * KNOWN FAILING, and deliberately kept executable rather than deleted or
+   * weakened.
+   *
+   * The write lands and the read returns the row, but the offer is suppressed
+   * because the two timestamps being compared do not share a clock. Measured on
+   * a single run, seconds apart:
+   *
+   *   recovery point updatedAt   10:25:33Z
+   *   single document updatedAt  15:25:31Z
+   *
+   * Five hours is the server's UTC offset, so the document's timestamp is local
+   * time carrying a `Z`. The recovery rule then correctly concludes, from wrong
+   * inputs, that the document is newer and withholds the offer.
+   *
+   * `test.fail()` rather than a skip: this still runs, still proves the defect
+   * is present, and turns RED the moment it is fixed, which a skip would not.
+   */
+  test.fail();
+  test("records and offers back a Single's unsaved work", async ({ page }) => {
+    await gotoAdmin(page, "/singles/site-settings");
+
+    const written = page.waitForResponse(
+      r => SINGLE_AUTOSAVE.test(r.url()) && r.request().method() === "PUT",
+      { timeout: 30_000 }
+    );
+
+    const recovered = `tagline never saved ${Date.now()}`;
+    await page
+      .getByRole("textbox", { name: "Tagline", exact: true })
+      .fill(recovered);
+
+    // Population before verdict, as on the collection path: a banner that never
+    // appears means "the read is broken" only once a write is known to have
+    // landed.
+    expect(
+      (await written).status(),
+      "the Single's autosave write must be accepted"
+    ).toBeLessThan(400);
+
+    await page.reload();
+    await expect(page.locator("main")).toBeVisible({ timeout: 30_000 });
+
+    await expect(
+      page.getByText(/unsaved changes from/i),
+      "a Single's recovery offer must survive a reload"
+    ).toBeVisible({ timeout: 15_000 });
+
+    await page.getByRole("button", { name: /^restore$/i }).click();
+
+    await expect(
+      page.getByRole("textbox", { name: "Tagline", exact: true }),
+      "restoring must put the Single's recorded values back"
+    ).toHaveValue(recovered);
+  });
+});
