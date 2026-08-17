@@ -4,6 +4,10 @@
  */
 import { describe, it, expect } from "vitest";
 
+import {
+  COLLECTION_ENTRY_METHODS,
+  SINGLE_DOCUMENT_METHODS,
+} from "../../routeHandler";
 import { parseRestRoute } from "../route-parser";
 
 describe("version routes", () => {
@@ -166,6 +170,79 @@ describe("version routes", () => {
     ).toBeUndefined();
   });
 
+  it("parses a collection entry's autosave as a write", () => {
+    const parsed = parseRestRoute(
+      ["collections", "posts", "entries", "e1", "versions", "autosave"],
+      "PUT"
+    );
+
+    expect(parsed).toMatchObject({
+      service: "collections",
+      method: "autosaveEntry",
+      // A recovery point holds the entry's own content, so storing one owes the
+      // rules updating it owes rather than the rules for reading history.
+      operation: "update",
+      routeParams: { collectionName: "posts", entryId: "e1" },
+    });
+    // `autosave` is a named sub-resource, never captured as a version number.
+    expect(parsed.routeParams?.versionNo).toBeUndefined();
+  });
+
+  it("parses a Single's autosave as a write, with no entry id in the URL", () => {
+    const parsed = parseRestRoute(
+      ["singles", "settings", "versions", "autosave"],
+      "PUT"
+    );
+
+    expect(parsed).toMatchObject({
+      service: "singles",
+      method: "autosaveSingle",
+      operation: "update",
+      routeParams: { slug: "settings" },
+    });
+    // A Single has exactly one document and the server resolves its id from the
+    // live row, so the client never names which document it is writing.
+    expect(parsed.routeParams?.entryId).toBeUndefined();
+    expect(parsed.routeParams?.versionNo).toBeUndefined();
+  });
+
+  it("resolves each verb on the autosave path to its own route", () => {
+    // Asserted as an exact method per verb rather than "not the write method".
+    // The weaker form passes when a verb resolves to something else wrong, and
+    // it passed here while GET fell through to the ordinary version read with
+    // `autosave` in the version-NUMBER position -- which is no longer true now
+    // that the read has its own route, and would have gone unnoticed.
+    const entry = [
+      "collections",
+      "posts",
+      "entries",
+      "e1",
+      "versions",
+      "autosave",
+    ];
+    const single = ["singles", "settings", "versions", "autosave"];
+
+    expect(parseRestRoute(entry, "PUT").method).toBe("autosaveEntry");
+    expect(parseRestRoute(entry, "GET").method).toBe("getEntryAutosave");
+    expect(parseRestRoute(single, "PUT").method).toBe("autosaveSingle");
+    expect(parseRestRoute(single, "GET").method).toBe("getSingleAutosave");
+
+    // A rename on this path is a version LABEL write, and the handler coerces
+    // the segment to a number, so `autosave` is rejected there rather than
+    // reaching a route that would treat it as a version.
+    expect(parseRestRoute(entry, "PATCH").method).toBe("setEntryVersionLabel");
+    expect(parseRestRoute(single, "PATCH").method).toBe(
+      "setSingleVersionLabel"
+    );
+
+    // Neither verb owns a route on this path, and neither may fall through to
+    // one that writes or reads a recovery point.
+    for (const httpMethod of ["POST", "DELETE"]) {
+      expect(parseRestRoute(entry, httpMethod).method).toBeUndefined();
+      expect(parseRestRoute(single, httpMethod).method).toBeUndefined();
+    }
+  });
+
   it("still matches the entry itself when no segments trail", () => {
     // The guard must not cost the entry routes their own paths.
     expect(
@@ -317,5 +394,77 @@ describe("version label routes", () => {
         "DELETE"
       ).method
     ).toBeUndefined();
+  });
+});
+
+/**
+ * The parser decides a route's `operation`, but `resolveAuthorization` only
+ * reads it for methods named in these sets. A method missing from its set skips
+ * the per-slug branch entirely and lands on the definition fallthrough, which
+ * demands `manage-settings` -- denying the editors who hold `update-{slug}` and
+ * admitting a caller who holds settings but no access to the document. Nothing
+ * in the type system joins the two, so the join is asserted here.
+ *
+ * The methods are read back OUT of the parser rather than restated, so a route
+ * whose method name is renamed on one side is compared against the other.
+ */
+describe("version routes resolve to a per-document permission", () => {
+  const COLLECTION_ROUTES: ReadonlyArray<[string[], string]> = [
+    [["collections", "posts", "entries", "e1", "versions"], "GET"],
+    [["collections", "posts", "entries", "e1", "versions", "3"], "GET"],
+    [["collections", "posts", "entries", "e1", "versions", "diff"], "GET"],
+    [["collections", "posts", "entries", "e1", "versions", "3"], "PATCH"],
+    [
+      ["collections", "posts", "entries", "e1", "versions", "3", "restore"],
+      "POST",
+    ],
+    [
+      ["collections", "posts", "entries", "e1", "versions", "working-draft"],
+      "DELETE",
+    ],
+    [["collections", "posts", "entries", "e1", "versions", "autosave"], "PUT"],
+  ];
+
+  const SINGLE_ROUTES: ReadonlyArray<[string[], string]> = [
+    [["singles", "settings", "versions"], "GET"],
+    [["singles", "settings", "versions", "3"], "GET"],
+    [["singles", "settings", "versions", "diff"], "GET"],
+    [["singles", "settings", "versions", "3"], "PATCH"],
+    [["singles", "settings", "versions", "3", "restore"], "POST"],
+    [["singles", "settings", "versions", "autosave"], "PUT"],
+  ];
+
+  it.each(COLLECTION_ROUTES)(
+    "authorizes %s %s against the collection",
+    (segments, httpMethod) => {
+      const { method } = parseRestRoute(segments, httpMethod);
+      // Guards against the route silently ceasing to parse, which would leave
+      // an undefined method vacuously "absent from the set" for a second reason.
+      expect(method).toBeDefined();
+      expect(COLLECTION_ENTRY_METHODS).toContain(method);
+    }
+  );
+
+  it.each(SINGLE_ROUTES)(
+    "authorizes %s %s against the Single",
+    (segments, httpMethod) => {
+      const { method } = parseRestRoute(segments, httpMethod);
+      expect(method).toBeDefined();
+      expect(SINGLE_DOCUMENT_METHODS).toContain(method);
+    }
+  );
+
+  it("does not admit definition mutations to either set", () => {
+    // Without this, a set containing everything would satisfy both assertions
+    // above while authorizing nothing. Schema mutations must keep falling
+    // through to the `manage-settings` branch.
+    for (const method of [
+      "createCollection",
+      "updateCollection",
+      "deleteCollection",
+    ]) {
+      expect(COLLECTION_ENTRY_METHODS).not.toContain(method);
+      expect(SINGLE_DOCUMENT_METHODS).not.toContain(method);
+    }
   });
 });

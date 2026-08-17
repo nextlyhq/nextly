@@ -6,8 +6,9 @@
  * route asks on every resolve. These cover that it is asked, that its answer
  * reaches the read, and that a build-time scan ignores it entirely.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
+import { container } from "../../../di/container";
 import type {
   FindArgs,
   FindByIDArgs,
@@ -102,6 +103,13 @@ function publicRouteWith(
 const params = { params: { slug: ["a"] } };
 
 describe("the content route's draft decision", () => {
+  afterEach(() => {
+    // The route reads the site's default locale from the container, so a config
+    // left registered here would hand a locale to every later case — including
+    // the ones asserting a context that names none.
+    container.clear();
+  });
+
   it("reads published content when nothing asks for a draft", async () => {
     const { reader, calls, byIdCalls } = stubReader();
 
@@ -237,6 +245,56 @@ describe("the content route's draft decision", () => {
       { collection: "pages", slug: "a" },
       { collection: "docs", slug: "a" },
     ]);
+  });
+
+  it("infers no locale from the site's configuration, even when one is registered", async () => {
+    // A registered default is deliberately NOT consulted. Reading it here would
+    // answer differently on the first request of a cold process, because a
+    // reader may defer booting until its first query — so a preview would be
+    // authorized intermittently. The route reports what it was told and
+    // nothing else.
+    const { reader } = stubReader(null);
+    const seen: ResolvedContext[] = [];
+    container.register("config", () => ({
+      localization: { defaultLocale: "en" },
+    }));
+
+    await createContentRoute({
+      collections: ["pages"],
+      nextly: reader,
+      render: (entry: ContentEntry) => entry,
+      buildMetadata: (entry: ContentEntry) => ({ title: String(entry.id) }),
+      draft: context => {
+        seen.push(context);
+        return false;
+      },
+    }).generateMetadata(params);
+
+    expect(seen).toEqual([{ collection: "pages", slug: "a" }]);
+  });
+
+  it("hands the decision the locale the route reads in", async () => {
+    // The decision and the read it authorizes have to be about the same
+    // translation. A hook that is told nothing here cannot compare locale, so a
+    // token minted for one translation is accepted for every other — and the
+    // entry it names is then resolved in the route's language rather than the
+    // token's.
+    const { reader } = stubReader(null);
+    const seen: ResolvedContext[] = [];
+
+    await createContentRoute({
+      collections: ["pages"],
+      locale: "fr",
+      nextly: reader,
+      render: (entry: ContentEntry) => entry,
+      buildMetadata: (entry: ContentEntry) => ({ title: String(entry.id) }),
+      draft: context => {
+        seen.push(context);
+        return false;
+      },
+    }).generateMetadata(params);
+
+    expect(seen).toEqual([{ collection: "pages", slug: "a", locale: "fr" }]);
   });
 
   it("refuses a draft for an object grant that names no entry", async () => {

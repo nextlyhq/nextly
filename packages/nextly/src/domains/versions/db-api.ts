@@ -10,6 +10,8 @@
 
 import type { SqlParam } from "@nextlyhq/adapter-drizzle/types";
 
+import type { SupportedDialect } from "../../types/database";
+
 /** A single filter condition (subset of the adapter WhereClause). */
 export interface VersionsWhereCondition {
   column: string;
@@ -48,6 +50,16 @@ export interface VersionsSelectOptions {
 
 /** The database methods the versions repository depends on. */
 export interface VersionsDbApi {
+  /**
+   * Which engine this handle talks to, where the handle knows.
+   *
+   * Optional so the transaction context, which does not carry it, still
+   * satisfies this port. Only the autosave upsert reads it, and only to
+   * classify a driver error: a constraint code means different things per
+   * engine, so a handle that cannot say which engine it is must not have its
+   * errors guessed at.
+   */
+  readonly dialect?: SupportedDialect;
   insert<T = unknown>(
     table: string,
     data: Record<string, unknown>,

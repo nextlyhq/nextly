@@ -17,6 +17,7 @@
  */
 
 import type { FieldConfig } from "../../collections/fields/types";
+import { NextlyError } from "../../errors";
 import { storageTypeToken } from "../../shared/lib/plugin-storage";
 import {
   clearFieldGroupType,
@@ -524,4 +525,233 @@ export function rehydrateSnapshotDates(
       }
     }
   }
+}
+
+/**
+ * Strip password values out of a snapshot, following component REFERENCES.
+ *
+ * Recursion is bounded by the DATA, not by the schema. A component schema may
+ * reference itself, so expanding the schema ahead of time either loops forever
+ * or has to stop at some depth -- and stopping is what leaks: the values below
+ * the cut-off keep their passwords. A snapshot is finite, so walking it
+ * terminates on its own and every level present gets stripped.
+ *
+ * Leaf work is delegated to `stripPasswordFieldValues`, so "what counts as a
+ * password field", including inline groups and repeaters, has one definition
+ * rather than two that would drift.
+ */
+export function stripPasswordsThroughComponents(
+  value: unknown,
+  fields: FieldConfig[],
+  componentFields: Map<string, FieldConfig[]>,
+  strip: (entry: Record<string, unknown>, fields: FieldConfig[]) => void,
+  /**
+   * Called with a slug the map does not carry. `resolveComponentFieldMap`
+   * records a component only when the lookup RETURNED fields, so an unknown
+   * slug is simply absent -- and treating absence as "no fields" would descend
+   * into that value stripping nothing, leaving any password inside it in the
+   * snapshot. Absence is missing information, never permission, so the caller
+   * decides and the default refuses.
+   */
+  onUnresolvedComponent: (slug: string) => void = slug => {
+    throw NextlyError.internal({
+      logContext: { reason: "unresolved-component-schema", slug },
+    });
+  }
+): void {
+  if (!value || typeof value !== "object") return;
+
+  // An array is a repeater or a dynamic zone: each row is its own document
+  // against the same field list.
+  if (Array.isArray(value)) {
+    for (const row of value) {
+      stripPasswordsThroughComponents(
+        row,
+        fields,
+        componentFields,
+        strip,
+        onUnresolvedComponent
+      );
+    }
+    return;
+  }
+
+  const entry = value as Record<string, unknown>;
+  // Direct fields first, which removes the passwords declared at THIS level.
+  strip(entry, fields);
+
+  for (const field of fields) {
+    const name = (field as { name?: unknown }).name;
+
+    // An UNNAMED field is presentational -- a layout group with no key of its
+    // own -- so its children's values live at THIS level rather than nested
+    // under it. Skipping it because it has no name would leave a password
+    // declared inside it, or inside a component it references, untouched at
+    // the parent level. Recurse into the same entry with the child list.
+    if (typeof name !== "string") {
+      const nested = (field as { fields?: unknown }).fields;
+      if (Array.isArray(nested)) {
+        stripPasswordsThroughComponents(
+          entry,
+          nested as FieldConfig[],
+          componentFields,
+          strip,
+          onUnresolvedComponent
+        );
+      }
+      continue;
+    }
+
+    if (!(name in entry)) continue;
+
+    const slugs: string[] = [];
+    const one = (field as { component?: unknown }).component;
+    if (typeof one === "string") slugs.push(one);
+    const many = (field as { components?: unknown }).components;
+    if (Array.isArray(many)) {
+      for (const slug of many) if (typeof slug === "string") slugs.push(slug);
+    }
+
+    if (slugs.length > 0) {
+      const fieldsFor = (slug: string): FieldConfig[] => {
+        const resolved = componentFields.get(slug);
+        if (resolved === undefined) {
+          onUnresolvedComponent(slug);
+          return [];
+        }
+        return resolved;
+      };
+
+      // A dynamic-zone row carries its OWN `_componentType`, so judge it
+      // against that component's schema rather than the union of every
+      // candidate. The union is safe against leaks but not against damage:
+      // where two alternatives share a field name and only one declares it a
+      // password, unioning deletes that field from rows of the OTHER
+      // alternative, quietly emptying a legitimate value out of the recovery
+      // point. The tag is present, so there is no reason to guess.
+      const rows = entry[name];
+      if (Array.isArray(rows)) {
+        for (const row of rows) {
+          // ASKED, not read. The storage migration renames this key inside
+          // stored JSON, so a snapshot written under the other spelling would
+          // read as untyped -- and an untyped row falls back to the union,
+          // which is exactly the over-stripping this per-row selection exists
+          // to avoid. The accessor tries both spellings in the migration's own
+          // order.
+          const tagged =
+            row && typeof row === "object"
+              ? readFieldGroupType(row as Record<string, unknown>)
+              : undefined;
+          const rowFields =
+            typeof tagged === "string" && slugs.includes(tagged)
+              ? fieldsFor(tagged)
+              : // Untagged rows fall back to the union: without a tag there is
+                // nothing to select on, and over-stripping beats leaking.
+                slugs.flatMap(fieldsFor);
+          stripPasswordsThroughComponents(
+            row,
+            rowFields,
+            componentFields,
+            strip,
+            onUnresolvedComponent
+          );
+        }
+        continue;
+      }
+
+      const inner: FieldConfig[] = slugs.flatMap(fieldsFor);
+      stripPasswordsThroughComponents(
+        entry[name],
+        inner,
+        componentFields,
+        strip,
+        onUnresolvedComponent
+      );
+      continue;
+    }
+
+    const children = (field as { fields?: unknown }).fields;
+    if (Array.isArray(children)) {
+      stripPasswordsThroughComponents(
+        entry[name],
+        children as FieldConfig[],
+        componentFields,
+        strip,
+        onUnresolvedComponent
+      );
+    }
+  }
+}
+
+/**
+ * Rewrite component REFERENCES into the container shapes a field walker
+ * already understands, carrying the referenced component's own fields.
+ *
+ * A `component` field is a reference: its schema lives under another slug, so
+ * a walker looking only at the field list sees `{ type: "component" }` and has
+ * nothing to descend into. Expanding it into a `group` (and a dynamic zone
+ * into a `repeater`) lets one existing walker handle inline containers and
+ * referenced ones alike, instead of a second walker that would have to agree
+ * with the first about what a password field is.
+ *
+ * A dynamic zone becomes the UNION of its candidate components' fields. A
+ * per-instance `_componentType` would let each row be judged against its own
+ * schema, but resolving that here would duplicate the tagging logic above. For
+ * the redaction this exists for, the union errs the safe way: it can only
+ * strip a value some OTHER candidate component happens to name the same, never
+ * miss one the actual component declares.
+ *
+ * `seen` breaks reference cycles. A component that reaches itself would
+ * otherwise expand forever, and a schema is free to be recursive.
+ */
+export function expandComponentFields(
+  fields: FieldConfig[],
+  componentFields: Map<string, FieldConfig[]>,
+  seen: ReadonlySet<string> = new Set()
+): FieldConfig[] {
+  const expandUnder = (
+    slugs: string[],
+    type: "group" | "repeater",
+    field: FieldConfig
+  ) => {
+    const next = new Set(seen);
+    const inner: FieldConfig[] = [];
+    for (const slug of slugs) {
+      if (next.has(slug)) continue;
+      next.add(slug);
+      inner.push(...(componentFields.get(slug) ?? []));
+    }
+    return {
+      ...(field as unknown as Record<string, unknown>),
+      type,
+      fields: expandComponentFields(inner, componentFields, next),
+    } as unknown as FieldConfig;
+  };
+
+  return fields.map(field => {
+    const one = (field as { component?: unknown }).component;
+    if (typeof one === "string") return expandUnder([one], "group", field);
+
+    const many = (field as { components?: unknown }).components;
+    if (Array.isArray(many)) {
+      return expandUnder(
+        many.filter((s): s is string => typeof s === "string"),
+        "repeater",
+        field
+      );
+    }
+
+    const children = (field as { fields?: unknown }).fields;
+    if (Array.isArray(children)) {
+      return {
+        ...(field as unknown as Record<string, unknown>),
+        fields: expandComponentFields(
+          children as FieldConfig[],
+          componentFields,
+          seen
+        ),
+      } as unknown as FieldConfig;
+    }
+    return field;
+  });
 }

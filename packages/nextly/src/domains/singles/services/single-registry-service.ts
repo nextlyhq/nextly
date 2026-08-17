@@ -52,6 +52,7 @@ import {
   calculateSchemaHash,
   schemaHashesMatch,
 } from "../../schema/services/schema-hash";
+import { VersionsRepository } from "../../versions/versions-repository";
 import {
   clearWebhookRecording,
   setWebhookRecording,
@@ -644,10 +645,24 @@ export class SingleRegistryService extends BaseRegistryService<
     }
 
     try {
-      const count = await this.adapter.delete(
-        this.registryTableName,
-        this.whereEq("slug", slug)
-      );
+      // Recovery points go with the Single, in the SAME transaction as the
+      // registry row. Ordering alone cannot get this right: sweeping first and
+      // then failing to delete destroys unsaved work belonging to a Single
+      // that still exists, while sweeping afterwards can leave rows nothing
+      // else collects -- they are excluded from history listings, version
+      // reads and retention pruning alike. Atomicity avoids both, and it is
+      // available here because this service talks to the adapter directly.
+      //
+      // Durable history and working drafts are deliberately NOT touched. What
+      // a deletion owes a document's recorded past is a wider question, and
+      // answering it as a side effect here would decide it by accident.
+      const count = await this.adapter.transaction(async tx => {
+        await new VersionsRepository(tx).deleteAutosavesForEntity(
+          "single",
+          slug
+        );
+        return tx.delete(this.registryTableName, this.whereEq("slug", slug));
+      });
 
       if (count === 0) {
         // §13.8: generic "Not found." — slug in logContext only.

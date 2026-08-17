@@ -24,13 +24,17 @@
  * @module blocks
  */
 
+import { accordion } from "./accordion";
+import { accordionItem } from "./accordion-item";
 import { box } from "./box";
 import { button } from "./button";
+import { card } from "./card";
 import { collectionLoop } from "./collection-loop";
 import { column } from "./column";
 import { columns } from "./columns";
 import { divider } from "./divider";
 import { embed } from "./embed";
+import { form } from "./form";
 import { heading } from "./heading";
 import { image } from "./image";
 import { list } from "./list";
@@ -39,8 +43,17 @@ import { quote } from "./quote";
 import { section } from "./section";
 import { spacer } from "./spacer";
 
+// `ACCORDION_BLOCK` / `ACCORDION_ITEM_BLOCK` are deliberately NOT re-exported,
+// for the reason recorded below for the columns pair: they exist so the two
+// halves of the nesting rule name each other without a repeated string literal.
+export { accordion } from "./accordion";
+export { accordionItem, type AccordionItemProps } from "./accordion-item";
 export { box } from "./box";
 export { button, BUTTON_TYPES, type ButtonProps } from "./button";
+// `CARD_BLOCK` is deliberately NOT re-exported, for the reason recorded below
+// for the columns pair: it exists so this block's own tests name it once, which
+// is internal coupling rather than a contract a consumer needs.
+export { card } from "./card";
 export { collectionLoop } from "./collection-loop";
 export { column } from "./column";
 // `COLUMN_BLOCK` / `COLUMNS_BLOCK` are deliberately NOT re-exported. They exist
@@ -51,6 +64,15 @@ export { column } from "./column";
 export { columns } from "./columns";
 export { divider, type DividerProps } from "./divider";
 export { embed, type EmbedProps } from "./embed";
+export {
+  form,
+  FORM_FIELD_TYPES,
+  FORM_METHODS,
+  type FormFieldSpec,
+  type FormFieldType,
+  type FormMethod,
+  type FormProps,
+} from "./form";
 export {
   heading,
   HEADING_LEVELS,
@@ -88,6 +110,11 @@ export const coreBlocks = [
   // and a resolver built by iterating this list should meet the parent first.
   columns,
   column,
+  card,
+  // Parent before child, for the reason recorded on the columns pair: a
+  // resolver built by iterating this list should meet the group first.
+  accordion,
+  accordionItem,
   spacer,
   // Typography
   heading,
@@ -96,6 +123,7 @@ export const coreBlocks = [
   // Media and interaction
   image,
   button,
+  form,
   // Structure
   divider,
   quote,

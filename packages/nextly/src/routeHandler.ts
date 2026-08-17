@@ -541,8 +541,18 @@ async function handleEmailRequest(
 // Authorization Helpers
 // ============================================================================
 
-/** Collection entry methods that operate on collection data (not definitions). */
-const COLLECTION_ENTRY_METHODS = new Set([
+/**
+ * Collection entry methods that operate on collection data (not definitions).
+ *
+ * Membership decides which permission a method resolves to, and the fallthrough
+ * is not a refusal: a method absent from this set lands on the definition branch
+ * and demands `manage-settings`. That denies the editors who hold
+ * `update-{slug}` and grants the request to a caller who holds settings but no
+ * access to the collection, so an omission fails in both directions at once.
+ * Exported so the route-parser suite can assert every entry route's method
+ * against it rather than restating the list.
+ */
+export const COLLECTION_ENTRY_METHODS = new Set([
   "listEntries",
   "createEntry",
   "getEntry",
@@ -569,10 +579,19 @@ const COLLECTION_ENTRY_METHODS = new Set([
   // route parser marks it an `update` operation, so it resolves to the
   // `update-{slug}` permission rather than a definition mutation's manage-settings.
   "discardWorkingDraft",
+  // Storing a recovery point writes the entry's content into history, so it is
+  // authorized as an update of the entry like a discard is.
+  "autosaveEntry",
+  // Reading one back is a read of the entry's own content.
+  "getEntryAutosave",
 ]);
 
-/** Single document methods (read/update content, not schema definitions). */
-const SINGLE_DOCUMENT_METHODS = new Set([
+/**
+ * Single document methods (read/update content, not schema definitions).
+ *
+ * Carries the same fallthrough hazard as `COLLECTION_ENTRY_METHODS` above.
+ */
+export const SINGLE_DOCUMENT_METHODS = new Set([
   "getSingleDocument",
   "updateSingleDocument",
   // Read-only history for the document, guarded by the same read permission.
@@ -584,6 +603,12 @@ const SINGLE_DOCUMENT_METHODS = new Set([
   // Also a write. Deliberately absent from the read allowlist below, so the
   // action resolves to `update` by default.
   "setSingleVersionLabel",
+  // A write for the same reason as the collection entry's autosave, and left
+  // out of the read branch below so it resolves to `update`.
+  "autosaveSingle",
+  // The matching read. Named in the read branch below, so it resolves to
+  // `read` rather than demanding update permission by sharing this set.
+  "getSingleAutosave",
 ]);
 
 /**
@@ -609,6 +634,13 @@ const SINGLE_DOCUMENT_METHODS = new Set([
  * silently ignores the rule it was configured with is the worse tradeoff.
  */
 const ROLE_AWARE_READ_METHODS = new Set([
+  // The autosave reads evaluate the document's stored access rules through the
+  // same gate the version reads use, so they need resolved roles for the same
+  // reason: without them a caller arrives as a non-super-admin holding no
+  // roles, and a role-based rule answers not-found for the author whose own
+  // recovery point it is.
+  "getEntryAutosave",
+  "getSingleAutosave",
   "listEntries",
   "getEntry",
   "countEntries",
@@ -685,7 +717,8 @@ async function resolveAuthorization(
         method === "getSingleDocument" ||
         method === "listSingleVersions" ||
         method === "getSingleVersion" ||
-        method === "getSingleVersionDiff"
+        method === "getSingleVersionDiff" ||
+        method === "getSingleAutosave"
           ? "read"
           : "update";
       const slug = routeParams?.slug || "";
@@ -1200,6 +1233,20 @@ async function handleServiceRequest(
         );
       }
     }
+    // A REFUSAL from a session-private read must not be cacheable either. The
+    // success path already carries these headers, but a shared cache holding
+    // the 404 this produces would replay it to a caller the gate WOULD have
+    // allowed -- hiding their own recovery point rather than exposing anyone
+    // else's. The failure direction is availability, and it is the one a
+    // success-only fix leaves open.
+    if (SESSION_PRIVATE_METHODS.has(method)) {
+      return withSessionCacheHeaders(
+        new Response(
+          JSON.stringify({ error: nextlyErr.toResponseJSON(requestId) }),
+          { status: nextlyErr.statusCode, headers: errorHeaders }
+        )
+      );
+    }
     return new Response(
       JSON.stringify({ error: nextlyErr.toResponseJSON(requestId) }),
       {
@@ -1397,7 +1444,20 @@ function respondAdminMeta(payload: Record<string, unknown>): Response {
  * request that does carry a session is the same defect pointing the other way,
  * and it is the direction that looks like a working gate.
  */
-function withSessionCacheHeaders(response: Response): Response {
+/**
+ * Methods whose responses are scoped to ONE caller's session, success or
+ * failure alike.
+ *
+ * A recovery point belongs to a person rather than to a document, so both the
+ * snapshot and the refusal are caller-specific: a cached 404 replayed to an
+ * authorized reader hides their own unsaved work.
+ */
+const SESSION_PRIVATE_METHODS = new Set([
+  "getEntryAutosave",
+  "getSingleAutosave",
+]);
+
+export function withSessionCacheHeaders(response: Response): Response {
   response.headers.set("Cache-Control", "private, no-store");
   response.headers.set("Vary", "Cookie");
   return response;

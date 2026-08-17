@@ -59,6 +59,7 @@ import { affectedRowCount } from "../../auth/services/auth-service";
 import { deliveriesTableFor } from "../../email/deliveries-table";
 import { eraseRecipientDeliveries } from "../../email/erase-recipient";
 import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
+import { VersionsRepository } from "../../versions/versions-repository";
 import { recordMutationEventInTx } from "../../webhooks/record-mutation-event";
 
 import type { UserExtSchemaService } from "./user-ext-schema-service";
@@ -1587,6 +1588,40 @@ export class UserMutationService extends BaseService {
       if (NextlyError.is(err)) throw err;
       // Normalise raw driver errors so fk/etc. produce the right NextlyError kind.
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
+    }
+
+    // The removed account's recovery points, swept once the deletion is
+    // visible. Deliberately a DELETE rather than the scrub the audit surfaces
+    // receive: an audit row is a record, and stripping the person from it
+    // keeps a trail worth keeping, whereas a recovery point is that person's
+    // unsaved draft. Scrubbing its author would strand the snapshot with
+    // nobody able to claim it, and nothing else collects autosave rows -- they
+    // are excluded from history listings, version reads and retention alike.
+    //
+    // AFTER the commit rather than before it. Sweeping first would destroy a
+    // living person's unsaved work whenever the deletion itself then failed,
+    // which is a user-visible loss for an account that still exists. Sweeping
+    // here can instead leave rows behind if this pass fails after the account
+    // is gone; that is the same window the erasure below already accepts, and
+    // the delete is idempotent, so a later pass costs nothing.
+    //
+    // Atomicity would beat both orderings. It is not available cheaply here:
+    // `withTransaction` yields a raw Drizzle handle rather than the adapter
+    // surface this repository is built on, so joining the transaction would
+    // mean a second implementation of which rows are autosaves.
+    try {
+      await new VersionsRepository(this.adapter).deleteAutosavesByAuthor(
+        String(userId)
+      );
+    } catch (err) {
+      // Never fail the deletion for this. The account is already gone; a
+      // surviving recovery point is dead weight rather than a live risk, and
+      // reporting the removal as failed would invite a retry that now answers
+      // not-found.
+      this.logger.error("Failed to remove deleted user's recovery points", {
+        userId: String(userId),
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
 
     // Sweep once more now the removal is visible. The erasure inside the

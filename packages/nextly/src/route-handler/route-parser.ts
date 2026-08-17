@@ -849,6 +849,51 @@ function parseCollectionEntryVersionRoutes(
     };
   }
 
+  // `versions/autosave` PUT records the author's rolling recovery point.
+  // `autosave` is a named sub-resource and a version number is always numeric,
+  // so the two can never collide.
+  //
+  // PUT rather than POST because it is idempotent by construction: there is one
+  // autosave row per document and author, rewritten in place, so repeating the
+  // request leaves the same single row rather than accumulating them.
+  //
+  // Authorized as an UPDATE of the entry. A recovery point holds the same
+  // content the entry does, so anyone who may not change the entry must not be
+  // able to store its contents, and anyone editing it already holds this.
+  if (
+    additionalParams.length === 2 &&
+    additionalParams[1] === "autosave" &&
+    httpMethod === "PUT"
+  ) {
+    routeParams.collectionName = id;
+    routeParams.entryId = subId;
+    return {
+      service: "collections",
+      operation: "update",
+      method: "autosaveEntry",
+      routeParams,
+    };
+  }
+
+  // The matching read. Claimed here rather than left to the generic version
+  // read below, which would take `autosave` as a version NUMBER and answer a
+  // validation error for a path that has a real handler. Authorized as a read:
+  // it returns the caller's own recovery point and nothing else.
+  if (
+    additionalParams.length === 2 &&
+    additionalParams[1] === "autosave" &&
+    httpMethod === "GET"
+  ) {
+    routeParams.collectionName = id;
+    routeParams.entryId = subId;
+    return {
+      service: "collections",
+      operation: "single",
+      method: "getEntryAutosave",
+      routeParams,
+    };
+  }
+
   if (
     // Only `versions` or `versions/{versionNo}`; anything deeper is not a
     // route this owns and must not be silently truncated to one that is.
@@ -923,6 +968,44 @@ function parseSingleVersionRoutes(
       // Restoring writes the document, so it is authorized as an update.
       operation: "update",
       method: "restoreSingleVersion",
+      routeParams,
+    };
+  }
+
+  // `versions/autosave` PUT records the author's rolling recovery point, the
+  // Single equivalent of the collection route above and PUT for the same reason:
+  // one row per document and author, rewritten in place, so repeating the
+  // request leaves the same single row.
+  //
+  // A Single's history nests directly under the document, so `autosave` arrives
+  // as `subId` where the collection parser sees it in `additionalParams`. It is
+  // a named sub-resource and a version number is always numeric, so the two
+  // cannot collide here either.
+  if (
+    subId === "autosave" &&
+    additionalParams.length === 0 &&
+    httpMethod === "PUT"
+  ) {
+    routeParams.slug = id;
+    return {
+      service: "singles",
+      operation: "update",
+      method: "autosaveSingle",
+      routeParams,
+    };
+  }
+
+  // The matching read, claimed here for the same reason as the collection one.
+  if (
+    subId === "autosave" &&
+    additionalParams.length === 0 &&
+    httpMethod === "GET"
+  ) {
+    routeParams.slug = id;
+    return {
+      service: "singles",
+      operation: "single",
+      method: "getSingleAutosave",
       routeParams,
     };
   }

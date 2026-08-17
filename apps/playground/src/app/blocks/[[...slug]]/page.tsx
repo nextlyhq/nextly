@@ -136,6 +136,14 @@ const { ContentPage, generateMetadata } = createBlocksPage({
   collections: ["block-pages"],
   field: "content",
   nextly: reader,
+  // Stated even though it is this site's default language, because the read is
+  // not the only thing it feeds. An omitted locale still serves the right page
+  // — the read defaults it internally — but it is also what a `draft` decision
+  // compares a preview token against, and a token always names a resolved
+  // locale rather than a blank one. Omitting it here would leave the next route
+  // that adds a preview gate refusing every default-language preview, behind a
+  // published page that looks entirely correct.
+  locale: "en",
   // An explicit set, not the process registry. `registeredBlocks()` reads the
   // engine's global registry, which is populated by whatever booted the
   // editor — so a public route depending on it renders the unknown-block
