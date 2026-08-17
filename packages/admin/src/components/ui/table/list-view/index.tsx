@@ -39,6 +39,8 @@ export interface ListViewProps<Row extends object>
   search?: ListSearch;
   /** Filter controls, rendered inside the toolbar's filter dropdown. */
   filters?: ReactNode;
+  /** Filter controls that stay visible in the row rather than in a dropdown. */
+  inlineFilters?: ReactNode;
   hasActiveFilters?: boolean;
   columnsControl?: ListColumnsControl<Row>;
   /** Buttons acting on the list as a whole, placed after the toolbar controls. */
@@ -79,6 +81,7 @@ export interface ListViewProps<Row extends object>
 export function ListView<Row extends object>({
   search,
   filters,
+  inlineFilters,
   hasActiveFilters,
   columnsControl,
   toolbarActions,
@@ -93,6 +96,7 @@ export function ListView<Row extends object>({
   const toolbar = {
     search,
     filters,
+    inlineFilters,
     hasActiveFilters,
     columnsControl,
     actions: toolbarActions,

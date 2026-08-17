@@ -72,6 +72,42 @@ describe("ListView toolbar", () => {
   });
 });
 
+/**
+ * Carried over from the shell this component replaces, because the property is
+ * still live and the reason for it has not changed.
+ *
+ * An earlier shell drew the card and placed the pagination, which meant it had
+ * to decide whether the table was in row form or card form — a decision
+ * `DataTableView` was already making from a NARROWER box, since this one is
+ * wider by exactly the card's border. Two owners, two container queries, and a
+ * band of widths where they disagreed and nested a card inside a card.
+ */
+describe("ListView draws no surface of its own", () => {
+  it("puts no card chrome on its root", () => {
+    const { container } = renderList();
+    const root = container.firstElementChild;
+    const classes = [...(root?.classList ?? [])];
+
+    for (const banned of [
+      "border",
+      "rounded-md",
+      "bg-card",
+      "overflow-hidden",
+    ]) {
+      expect(classes).not.toContain(banned);
+    }
+  });
+
+  it("asks no container query, so it cannot disagree with the table", () => {
+    const { container } = renderList();
+    const classes = [...(container.firstElementChild?.classList ?? [])];
+
+    // Naming a container is how the previous shell came to hold an opinion
+    // about the responsive question that belongs to the table.
+    expect(classes.some(c => c.startsWith("@container"))).toBe(false);
+  });
+});
+
 describe("ListView empty states", () => {
   it("shows the empty state instead of the table when there are no rows", () => {
     renderList({ rows: [], empty: { title: "No users yet" } });

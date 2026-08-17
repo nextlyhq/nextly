@@ -36,6 +36,14 @@ export interface ListToolbarProps<Row extends object> {
   search?: ListSearch;
   /** Filter controls, rendered inside the toolbar's filter dropdown. */
   filters?: ReactNode;
+  /**
+   * Filter controls that stay VISIBLE in the row, for a small closed set where
+   * a dropdown would hide the current state behind a click — a status segmented
+   * control, say. Rendered before the columns control, so the row reads
+   * filters, then display options, then actions, in that order at every
+   * surface.
+   */
+  inlineFilters?: ReactNode;
   /** Drives the filter control's applied-state dot. */
   hasActiveFilters?: boolean;
   columnsControl?: ListColumnsControl<Row>;
@@ -51,20 +59,24 @@ export interface ListToolbarProps<Row extends object> {
 export function isToolbarEmpty<Row extends object>({
   search,
   filters,
+  inlineFilters,
   columnsControl,
   actions,
 }: ListToolbarProps<Row>): boolean {
-  return !search && !filters && !columnsControl && !actions;
+  return !search && !filters && !inlineFilters && !columnsControl && !actions;
 }
 
 export function ListToolbar<Row extends object>({
   search,
   filters,
+  inlineFilters,
   hasActiveFilters,
   columnsControl,
   actions,
 }: ListToolbarProps<Row>) {
-  const hasControls = Boolean(filters || columnsControl || actions);
+  const hasControls = Boolean(
+    filters || inlineFilters || columnsControl || actions
+  );
 
   return (
     // Named so its PRESENCE is observable. The failure this component guards
@@ -112,6 +124,8 @@ export function ListToolbar<Row extends object>({
               </DropdownMenuContent>
             </DropdownMenu>
           )}
+
+          {inlineFilters}
 
           {columnsControl && <ListColumnsMenu {...columnsControl} />}
 
