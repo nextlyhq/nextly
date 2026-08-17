@@ -15,6 +15,12 @@ ruleTester.run("no-hardcoded-colors", rule, {
     `const a = "rgb(255,255,255)";`,
     // A scrim's two-digit alpha on black stays exempt.
     `const a = "#00000033";`,
+    // `#RGB` takes a ONE-digit alpha, so the four-digit spelling of the same
+    // mode-invariant colours is exempt for the same reason the others are.
+    `const a = "#0000";`,
+    `const a = "#fff8";`,
+    `const a = "#ffff";`,
+    `const a = "#0008";`,
     // A data URI's payload is content, not styling.
     `const a = "url(data:image/svg+xml;base64,PHN2ZyBmaWxsPScjZmYwMDAwJy8+)";`,
     // A hex that is not a colour at all.
