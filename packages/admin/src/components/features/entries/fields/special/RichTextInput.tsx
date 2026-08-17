@@ -381,8 +381,13 @@ export function RichTextInput<TFieldValues extends FieldValues = FieldValues>({
       data-richtext-editor
     >
       <LexicalComposer initialConfig={initialConfig}>
-        {/* Toolbar */}
-        <RichTextToolbar features={field.features} disabled={!isEditable} />
+        {/* Toolbar, omitted rather than disabled when the field cannot be
+            edited. A row of dead controls advertises actions that are not
+            available, costs a band of vertical space on every read-only
+            field, and reaches assistive technology as a toolbar with a dozen
+            unusable buttons. The other structured inputs already drop their
+            controls this way; this one greyed them instead. */}
+        {isEditable ? <RichTextToolbar features={field.features} /> : null}
 
         {/* Main editor area */}
         <div className="relative" ref={setEditorAnchor}>
