@@ -8,7 +8,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { canBeRoot, canNest } from "./nesting";
+import { canBeRoot, canNest, canNestInSlot } from "./nesting";
 import type { NestingSource } from "./nesting";
 import { clearBlocks, registerBlocks, registryNestingSource } from "./registry";
 
@@ -157,5 +157,129 @@ describe("a source that answers outside the registry's shape", () => {
     // rather than obeyed: registration is where that declaration is rejected
     // with a message naming it.
     expect(canNest("acme/x", "core/columns", source).allowed).toBe(true);
+  });
+});
+
+describe("canNestInSlot — the parent's half of the rule", () => {
+  const source: NestingSource = {
+    parentsOf: () => undefined,
+    slotAllowOf: (parent, slot) =>
+      parent === "core/accordion" && slot === "children"
+        ? ["core/accordion-item"]
+        : parent === "core/box" && slot === "wide"
+          ? ["core/*"]
+          : undefined,
+  };
+
+  it("admits a type the slot names", () => {
+    expect(
+      canNestInSlot("core/accordion-item", "core/accordion", "children", source)
+        .allowed
+    ).toBe(true);
+  });
+
+  it("REFUSES a type the slot does not name, carrying the permitted set", () => {
+    const verdict = canNestInSlot(
+      "core/heading",
+      "core/accordion",
+      "children",
+      source
+    );
+    expect(verdict.allowed).toBe(false);
+    expect(verdict.reason).toBe("not-allowed-in-slot");
+    // The permitted set travels, because the caller explaining the refusal is
+    // the only place it is still known.
+    expect(verdict.permitted).toEqual(["core/accordion-item"]);
+  });
+
+  it("admits any member of a namespace an entry ends `/*` on", () => {
+    expect(
+      canNestInSlot("core/heading", "core/box", "wide", source).allowed
+    ).toBe(true);
+  });
+
+  it("binds the wildcard to the SEPARATOR, so `core/*` refuses `coreevil/x`", () => {
+    // A prefix test without the `/` admits this, and the name is close enough
+    // to read past in a review.
+    expect(
+      canNestInSlot("coreevil/banner", "core/box", "wide", source).allowed
+    ).toBe(false);
+  });
+
+  it("admits anything when the slot declares no allow-list", () => {
+    // The control for every refusal above: a rule that refused by default would
+    // pass those and make every undeclared slot unfillable.
+    expect(
+      canNestInSlot("core/heading", "core/section", "children", source).allowed
+    ).toBe(true);
+  });
+
+  it("admits anything when the source predates `slotAllowOf` entirely", () => {
+    // An older caller supplying only `parentsOf` keeps the behaviour it had.
+    expect(
+      canNestInSlot("core/heading", "core/accordion", "children", {
+        parentsOf: () => undefined,
+      }).allowed
+    ).toBe(true);
+  });
+});
+
+describe("the nesting rule is reachable from the package entry", () => {
+  // Imported as a NAMESPACE and asserted by key at runtime, rather than as
+  // named bindings. A named import of something the entry does not export is a
+  // COMPILE error, so the file would stop building and no assertion in it would
+  // ever run — a red that says the import was malformed and nothing about the
+  // surface. Reading keys off the loaded module makes a missing export a
+  // runtime failure, which is the only kind this file can observe.
+  it("exports both halves of the rule and the registry's source", async () => {
+    const entry = await import("./index");
+
+    // The population first. An entry that failed to load, or that resolved to
+    // something empty, satisfies every membership check below by having no keys
+    // to contradict them — and reports as a clean pass.
+    expect(Object.keys(entry).length).toBeGreaterThan(0);
+    expect(entry).toHaveProperty("canNest");
+
+    // The child's half, the parent's half, and the root case. A caller deciding
+    // a placement needs all three: `block.ts` is explicit that neither half
+    // implies the other, so an entry offering one obliges a consumer to compute
+    // the rest itself.
+    expect(typeof entry.canNest).toBe("function");
+    expect(typeof entry.canNestInSlot).toBe("function");
+    expect(typeof entry.canBeRoot).toBe("function");
+
+    // The adapter that answers both halves from the live registry. Without it a
+    // consumer holding only the rules has to build its own `NestingSource`,
+    // which is where the resolution — not the rule — gets restated.
+    expect(typeof entry.registryNestingSource).toBe("function");
+  });
+
+  it("answers the same verdict through the entry as through the module", async () => {
+    // Membership alone is satisfied by a re-export that resolves to a different
+    // implementation — a shadowing local, a stale barrel, a name rebound during
+    // a refactor. Asking both spellings the same question is what pins the
+    // export to THIS rule rather than to something that merely shares its name.
+    const entry = await import("./index");
+    clearBlocks();
+    registerBlocks([
+      {
+        ...base,
+        name: "core/accordion",
+        slots: { children: { allow: ["core/accordion-item"] } },
+      },
+      { ...base, name: "core/accordion-item" },
+      { ...base, name: "core/heading" },
+    ]);
+    const live = registryNestingSource();
+
+    expect(
+      entry.canNestInSlot("core/heading", "core/accordion", "children", live)
+    ).toEqual(
+      canNestInSlot("core/heading", "core/accordion", "children", live)
+    );
+    expect(
+      entry.canNestInSlot("core/heading", "core/accordion", "children", live)
+        .allowed
+    ).toBe(false);
   });
 });
