@@ -75,6 +75,14 @@ export const Posts = defineCollection({
   // buttons in the entry editor and Bulk Publish / Unpublish actions in
   // the entry-table bulk-action bar.
   status: true,
+  // Drafts and autosave, ON, so the dev harness exercises the working-draft
+  // split and the recovery-point path rather than only the simple lifecycle.
+  //
+  // `status: true` alone resolves to `{ drafts: false }`, which disables
+  // autosave at the policy gate -- so without this the editor records nothing
+  // and the endpoint answers forbidden. No collection here or in any template
+  // set it, which is why nothing had ever exercised that path.
+  versions: { drafts: true },
   admin: {
     useAsTitle: "title",
   },

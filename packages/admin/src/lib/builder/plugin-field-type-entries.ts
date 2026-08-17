@@ -5,7 +5,11 @@
 // A picker "surface" (entries, users, forms) only offers a plugin type whose
 // declared `surfaces` include it; an omitted `surfaces` means the entry/single
 // surface only, so a type never auto-appears where its author did not opt in.
-import type { FieldSurface, FieldTypeCatalogEntry } from "nextly/field-catalog";
+import type {
+  FieldStoragePrimitive,
+  FieldSurface,
+  FieldTypeCatalogEntry,
+} from "nextly/field-catalog";
 import { DEFAULT_FIELD_SURFACES } from "nextly/field-catalog";
 
 import type { PluginMetadata } from "@admin/types/branding";
@@ -54,4 +58,26 @@ export function pluginFieldTypeCatalogEntries(
         icon: fieldType.icon ?? "Puzzle",
       }))
   );
+}
+
+/**
+ * The storage primitive a plugin declared for one of its field types, or
+ * `undefined` when no plugin owns that type.
+ *
+ * The primitive is what lets anything reason about a plugin type's values
+ * without knowing the type: it names the built-in type the value behaves as.
+ * A DISABLED plugin is still consulted here, unlike in the picker above — an
+ * existing field of its type keeps rendering, and describing the value it
+ * already holds is not the same act as offering the type to something new.
+ */
+export function pluginFieldTypeStorage(
+  plugins: readonly PluginMetadata[] | undefined,
+  type: string
+): FieldStoragePrimitive | undefined {
+  for (const plugin of plugins ?? []) {
+    for (const fieldType of plugin.fieldTypes ?? []) {
+      if (fieldType.type === type) return fieldType.storage;
+    }
+  }
+  return undefined;
 }

@@ -26,6 +26,7 @@ import { registerMigrateBaselineCommand } from "./commands/migrate-baseline";
 import { registerMigrateCheckCommand } from "./commands/migrate-check";
 import { registerMigrateCreateCommand } from "./commands/migrate-create";
 import { registerMigrateDownCommand } from "./commands/migrate-down";
+import { registerMigrateFieldGroupsCommand } from "./commands/migrate-field-groups";
 import { registerMigrateFreshCommand } from "./commands/migrate-fresh";
 import { registerMigrateResolveCommand } from "./commands/migrate-resolve";
 // F11 PR 2 (Q4=A): migrate:reset deleted. SP-2 adds single-step rollback via
@@ -217,6 +218,7 @@ function registerCommands(program: Command): void {
   registerMigrateCheckCommand(program); // F11 PR 4
   registerMigrateStatusCommand(program);
   registerMigrateBaselineCommand(program); // adopt an existing DB into the history
+  registerMigrateFieldGroupsCommand(program); // rename field-group storage, previewing by default
   registerMigrateResolveCommand(program); // Plan C3 — recovery command
   registerPruneCommand(program); // P2b — drop orphaned plugin/code schema (D14)
   registerWebhooksPruneCommand(program); // manual webhook-queue retention pass

@@ -42,6 +42,19 @@ export type {
 } from "@nextlyhq/admin";
 
 /**
+ * Ask the admin to hide its own chrome while an immersive surface is mounted
+ * (@experimental) — a full-bleed editor, a media browser, a preview mode.
+ *
+ * Scoped to the mount rather than to a route: the request is released when the
+ * component unmounts, so navigating away restores the chrome with nothing to
+ * undo. `canExit` must state whether this surface renders its own way back to
+ * the admin, DERIVED from the affordance rather than asserted beside it — the
+ * primary navigation rail is only ever hidden for a surface that can be left.
+ */
+export { useSuppressAdminChrome } from "@nextlyhq/admin";
+export type { AdminChromeLayer } from "@nextlyhq/admin";
+
+/**
  * The unified admin data table + its extension points (@experimental). Render
  * `DataTable` (batteries-included) or `DataTableView` (controlled) to match the
  * admin's lists, and contribute cell renderers, columns, column transforms, and
@@ -86,6 +99,9 @@ export type {
  *   values, CSV/JSON import, and whole-batch duplicate reporting;
  *   `withOptionIds` seeds drag ids onto plain `{label,value}` data.
  * - `FieldDefaultValueInput` — a type-aware default-value input.
+ * - `ValidationNumberField` — one numeric validation bound, owning the
+ *   empty-means-unset coercion, the whole/non-negative constraint for bounds
+ *   that count things, and its own id.
  * - `ConditionRow` — one condition as source / operator / value, with the
  *   operators and value editor chosen from the source's type. It owns the ROW
  *   and not the container, so your surface keeps its own chrome; pass
@@ -108,6 +124,7 @@ export {
   ConditionRow,
   operatorsForType,
   operatorTakesValue,
+  ValidationNumberField,
 } from "@nextlyhq/admin";
 
 /**
@@ -131,6 +148,7 @@ export type {
   ConditionSource,
   ConditionSourceOption,
   ConditionValue,
+  ValidationNumberFieldProps,
 } from "@nextlyhq/admin";
 
 // The declarative `contributes.admin` contract types (the same ones exported
