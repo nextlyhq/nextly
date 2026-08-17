@@ -692,9 +692,16 @@ export function getEntryTitleField(
  */
 export function buildEntryColumns(
   collection: CollectionForColumns,
-  columnVisibility?: Record<string, boolean>
+  /**
+   * Whether a column is visible to this reader. Taken as the predicate the
+   * shared columns control already exposes, rather than as a record of hidden
+   * names — a record is a second spelling of the same question, and only this
+   * file knew how to read it.
+   */
+  isColumnVisible?: (name: string) => boolean
 ): NextlyColumn<Record<string, unknown>>[] {
-  const isHidden = (name: string) => columnVisibility?.[name] === false;
+  const isHidden = (name: string) =>
+    isColumnVisible ? !isColumnVisible(name) : false;
 
   const columnNames = getAvailableColumns(collection).filter(
     name => name !== "select" && name !== "actions"
