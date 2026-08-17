@@ -58,6 +58,19 @@ export const nextlyVersionsPg = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .$defaultFn(() => new Date())
       .notNull(),
+    // Monotonic per-row counter, bumped on every in-place rewrite of the
+    // coalesced autosave row. This is the compare-and-set token: a writer reads
+    // the value, then applies its update only while the row still holds it.
+    //
+    // `updated_at` cannot serve that purpose across dialects. Its stored
+    // resolution varies (SQLite keeps whole seconds, MySQL milliseconds), so
+    // two rewrites close enough together serialize to the SAME value and become
+    // indistinguishable: the second writer's read observes what the first
+    // wrote, its predicate matches, and it overwrites newer work believing the
+    // row untouched. A counter has no resolution to run out of.
+    //
+    // Insert-only rows (durable versions are never rewritten) stay at 0.
+    revision: integer("revision").default(0).notNull(),
   },
   table => [
     // Durable versions get a unique, monotonic sequence per document.

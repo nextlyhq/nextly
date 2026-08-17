@@ -25,7 +25,7 @@ const REF = {
  * Records every insert and update so a test can assert which was issued, and
  * the `where` of each so the addressing can be checked rather than assumed.
  */
-function stubDb(existing: Array<{ id: string }> = []) {
+function stubDb(existing: Array<{ id: string; revision: number }> = []) {
   const inserts: Array<Record<string, unknown>> = [];
   const updates: Array<{
     values: Record<string, unknown>;
@@ -74,6 +74,10 @@ describe("VersionsRepository.upsertAutosave", () => {
       // and surface in history.
       versionNo: null,
       createdBy: "user-1",
+      // The compare-and-set token starts at a known value rather than being
+      // left to the column default, so the first rewrite of this row compares
+      // against something this insert decided.
+      revision: 0,
     });
   });
 
@@ -84,7 +88,9 @@ describe("VersionsRepository.upsertAutosave", () => {
    * and on MySQL and SQLite nothing would stop it.
    */
   it("updates in place when a row already exists, and inserts nothing", async () => {
-    const { db, inserts, updates } = stubDb([{ id: "existing-row" }]);
+    const { db, inserts, updates } = stubDb([
+      { id: "existing-row", revision: 7 },
+    ]);
 
     await new VersionsRepository(db).upsertAutosave({
       ...input,
@@ -101,7 +107,7 @@ describe("VersionsRepository.upsertAutosave", () => {
    * other's, and the loser would recover somebody else's work.
    */
   it("addresses the row by author as well as document", async () => {
-    const { db, updates } = stubDb([{ id: "existing-row" }]);
+    const { db, updates } = stubDb([{ id: "existing-row", revision: 7 }]);
 
     await new VersionsRepository(db).upsertAutosave(input);
 
@@ -128,12 +134,38 @@ describe("VersionsRepository.upsertAutosave", () => {
     // Inverting it to `!=` makes every uncontended write match nothing and
     // silently do nothing, so the operator is pinned here rather than left to
     // read correctly at a glance.
-    expect(conditions).toContainEqual(
-      expect.objectContaining({ column: "updatedAt", op: "=" })
-    );
+    //
+    // The VALUE is pinned too. A predicate naming the right column and
+    // comparing against a fresh read, or against the value being written,
+    // matches unconditionally and blocks nothing, which the operator alone
+    // cannot separate from a working compare-and-set.
+    expect(conditions).toContainEqual({
+      column: "revision",
+      op: "=",
+      value: 7,
+    });
     // And nothing else: an extra condition would narrow the lookup in a way
     // this test would otherwise not notice.
     expect(conditions).toHaveLength(6);
+  });
+
+  /**
+   * The other half of compare-and-set, and the half a predicate test cannot
+   * see. Comparing against the observed token only excludes a racing writer if
+   * the winning write ADVANCES that token: a rewrite leaving it unchanged
+   * satisfies every assertion about the predicate while both racers succeed and
+   * the older snapshot lands last.
+   *
+   * Pinned as the exact successor rather than merely "greater". A write that
+   * jumped ahead would leave the values a second writer can hold unbounded, and
+   * a timestamp is precisely the unbounded version this column replaced.
+   */
+  it("advances the token to the successor of the value it compared against", async () => {
+    const { db, updates } = stubDb([{ id: "existing-row", revision: 7 }]);
+
+    await new VersionsRepository(db).upsertAutosave(input);
+
+    expect(updates[0]?.values.revision).toBe(8);
   });
 
   /**
@@ -142,7 +174,7 @@ describe("VersionsRepository.upsertAutosave", () => {
    * to find the existing row and insert a second one on every save.
    */
   it("matches a null author with IS NULL rather than equality", async () => {
-    const { db, updates } = stubDb([{ id: "existing-row" }]);
+    const { db, updates } = stubDb([{ id: "existing-row", revision: 7 }]);
 
     await new VersionsRepository(db).upsertAutosave({
       ...input,
