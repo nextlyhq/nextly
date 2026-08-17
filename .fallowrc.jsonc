@@ -77,59 +77,42 @@
     "../dist/render/index.js",
   ],
 
-  // Declared and genuinely used, through a mechanism no import records.
-  // Adding a name here asserts that; anything whose usage cannot be pointed
-  // at belongs in the manifest's history instead.
-  "ignoreDependencies": [
-    // ---- packages/admin -------------------------------------------------
-    // Never imported by admin/src. They arrive through @nextlyhq/ui and are
-    // inlined into the admin bundle by the NO_EXTERNAL_DEPS list in
-    // packages/admin/tsup.config.ts, so a consumer installs @nextlyhq/admin
-    // instead of two dozen UI libraries. They are build inputs: remove one
-    // and the bundle loses the component that needed it.
-    "@lexical/history",
-    "@radix-ui/react-accordion",
-    "@radix-ui/react-alert-dialog",
-    "@radix-ui/react-avatar",
-    "@radix-ui/react-checkbox",
-    "@radix-ui/react-collapsible",
-    "@radix-ui/react-dialog",
-    "@radix-ui/react-dropdown-menu",
-    "@radix-ui/react-popover",
-    "@radix-ui/react-radio-group",
-    "@radix-ui/react-select",
-    "@radix-ui/react-separator",
-    "@radix-ui/react-switch",
-    "@radix-ui/react-tabs",
-    "@radix-ui/react-tooltip",
-    "cmdk",
-    "tailwind-variants",
-    "tailwindcss-animate",
-
-    // ---- packages/ui ----------------------------------------------------
-    // Run as a shell command by scripts/build-css.mjs
-    // (`npx @tailwindcss/cli -i … -o …`), which is how the theme is compiled.
-    "@tailwindcss/cli",
-
-    // ---- packages/telemetry ---------------------------------------------
-    // Its tsup config sets `noExternal: [/(.*)/]`, so every dependency is
-    // inlined into the published bundle. env-paths gets there through `conf`,
-    // which uses it to pick the OS-appropriate config directory.
-    "env-paths",
-
-    // ---- packages/plugin-page-builder -----------------------------------
-    // A peerDependency mirrored into devDependencies so the peer resolves
-    // for this package's own build and type-check.
-    "@tanstack/react-query",
-
-    // ---- e2e ------------------------------------------------------------
-    // No e2e source imports these. They are declared so that turbo's
-    // `dependsOn: ["^build"]` builds them before Playwright boots the
-    // playground, which does use them. Without the declaration the suite
-    // starts against a stale or missing dist.
-    "@nextlyhq/adapter-drizzle",
-    "@nextlyhq/adapter-sqlite",
-    "@nextlyhq/plugin-form-builder",
-    "@nextlyhq/plugin-page-builder",
-  ],
+  // NO `ignoreDependencies` HERE, deliberately. It matches by exact package
+  // NAME across the whole analysis and suppresses the unlisted-dependency
+  // finding as well as the unused one, so naming `cmdk` to excuse admin also
+  // excuses a future package that imports `cmdk` without declaring it — which
+  // is the missing-manifest case this gate exists to catch. Measured on fallow
+  // 3.15.0: nothing narrows it. A per-package `.fallowrc.jsonc` is not read
+  // during a root run, and an `overrides` entry scoped to
+  // `packages/admin/package.json` (or `packages/admin/**`) leaves the finding
+  // in place, because overrides re-severity rules over SOURCE files and a
+  // manifest finding is not one of those.
+  //
+  // The attribution does the job instead, and does it better. Both the local
+  // gate and the workflow run new-only against a base, so a dependency finding
+  // that predates the change is reported as inherited and does not block;
+  // a genuinely new one is not excused by a name and does block. Verified: with
+  // no suppressions at all the audit reports 40 findings and still exits 0,
+  // every one attributed to the base rather than to the change.
+  //
+  // Why those findings exist, so the next reader does not go looking for a bug:
+  //
+  //   packages/admin — the Radix, lexical, cmdk, tailwind-variants and
+  //     tailwindcss-animate entries are never imported by admin/src. They
+  //     arrive through @nextlyhq/ui and are inlined by the NO_EXTERNAL_DEPS
+  //     list in packages/admin/tsup.config.ts, so a consumer installs
+  //     @nextlyhq/admin rather than two dozen UI libraries. Remove one and the
+  //     bundle loses the component that needed it.
+  //   packages/ui — @tailwindcss/cli is run as a shell command by
+  //     scripts/build-css.mjs, which is how the theme is compiled.
+  //   packages/telemetry — its tsup config sets noExternal: [/(.*)/], so every
+  //     dependency is inlined. env-paths arrives through `conf`, which uses it
+  //     to pick the OS-appropriate config directory.
+  //   packages/plugin-page-builder — @tanstack/react-query is a peerDependency
+  //     mirrored into devDependencies so the peer resolves for this package's
+  //     own build and type-check.
+  //   e2e — the adapter and plugin entries are declared so turbo's
+  //     `dependsOn: ["^build"]` builds them before Playwright boots the
+  //     playground, which does use them. Without the declaration the suite
+  //     starts against a stale or missing dist.
 }
