@@ -25,7 +25,7 @@ import type {
   EmailProviderRecord,
 } from "@admin/services/emailProviderApi";
 
-import { SettingsRow } from "../SettingsRow";
+import { SettingsRowGroup } from "../SettingsRowGroup";
 import { SettingsSection } from "../SettingsSection";
 
 import { configFieldPath, ProviderConfigFields } from "./ProviderConfigFields";
@@ -588,14 +588,21 @@ export function EmailProviderForm({
 
             {/* Not a FieldShell candidate: ProviderTypePicker is a row of
                 independently-focusable cards (like a RadioGroup), not one
-                control an id can attach to. Left as its original SettingsRow
-                so the label still reads over the picker. */}
+                control an id can attach to.
+
+                It is a SettingsRowGroup rather than a SettingsRow for that same
+                reason. SettingsRow emits a `<label for>` aimed at a single
+                control resolved through useFormField, and no element here ever
+                carries that id, so the label pointed at nothing — measured live
+                on this page in both themes. `role="group"` with aria-labelledby
+                names the whole picker, which is the relationship these cards
+                actually have to their heading. */}
             <FormField
               control={form.control}
               name="type"
               render={({ field }) => (
                 <FormItem className="m-0">
-                  <SettingsRow
+                  <SettingsRowGroup
                     label="Provider Type"
                     description="Select the provider type to match your configuration."
                   >
@@ -614,7 +621,7 @@ export function EmailProviderForm({
                       }}
                     />
                     <FormMessage className="mt-1.5" />
-                  </SettingsRow>
+                  </SettingsRowGroup>
                 </FormItem>
               )}
             />

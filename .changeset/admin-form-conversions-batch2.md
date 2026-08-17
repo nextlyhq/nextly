@@ -42,10 +42,15 @@ Timezone/Date Format/Time Format, and each provider config field's `select`
 kind) now wires its `SelectTrigger` through `FieldShell`'s render-function
 `children`, the same pattern the form builder's conversion established.
 
-Left hand-rolled, each with its own comment: composite pickers with no single
-focusable control to attach an id to (`ProviderTypePicker`, `FieldTypePicker`,
-the webhook event-type checkbox group, the webhook custom-headers row, the
-sign-in-method `RadioGroup`); horizontal label-left/switch-right settings rows
+Composite controls with no single focusable element to attach an id to are
+named as GROUPS instead, via `SettingsRowGroup`: `ProviderTypePicker`, the
+webhook event-type checkbox group and the webhook custom-headers row each get
+`role="group"` with `aria-labelledby` rather than a `<label for>` aimed at a
+control that never carries the id. Measured in a browser before and after: all
+three pointed at nothing in both light and dark themes.
+
+Left hand-rolled, each with its own comment: `FieldTypePicker` and the
+sign-in-method `RadioGroup`; horizontal label-left/switch-right settings rows
 (`UserFieldForm`'s "Allow multiple selections", "Required" and "Active");
 read-only value rows with no control at all (`EditApiKeyForm`'s Key
 Properties); and one page grid needing an asymmetric row/column gap `Grid`'s
