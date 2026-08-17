@@ -26,10 +26,8 @@ import type { IdentifierCaseRules } from "../../schema/utils/resolve-catalog-nam
 import {
   buildDataMigrationSteps,
   settleLedgersStep,
-  settleRegistryDefinitionsStep,
   FIELD_GROUP_STORAGE_VOCABULARY,
   LEGACY_STORAGE_VOCABULARY,
-  type RegistryTableResolver,
 } from "./data-steps";
 import { invertManifest, type ManifestEntry } from "./manifest";
 import type { MigrationStep } from "./runner";
@@ -137,16 +135,6 @@ export interface BuildPlanArgs {
    * the entries alone cannot name every table that holds instances.
    */
   ownedDataTables: readonly string[];
-  /**
-   * Which registry table the settlement check should address, asked when it
-   * runs rather than now.
-   *
-   * The plan is assembled before any rename executes, so a name decided here
-   * would be the one an upward run is about to move away from. Supplied
-   * alongside the observer because both are questions only the caller's
-   * database handle can answer.
-   */
-  resolveRegistryTable: RegistryTableResolver;
 }
 
 /**
@@ -165,7 +153,6 @@ export function buildMigrationPlan(args: BuildPlanArgs): MigrationStep[] {
     meta,
     migrationId,
     ownedDataTables,
-    resolveRegistryTable,
   } = args;
 
   const renameSteps = (plan: readonly ManifestEntry[]): MigrationStep[] =>
@@ -190,25 +177,14 @@ export function buildMigrationPlan(args: BuildPlanArgs): MigrationStep[] {
   // appended. A rollback earns the same protection, and nothing has to reason
   // about a plan whose shape depends on its direction.
   //
-  // Two steps rather than one because the runner retries per step: a registry
-  // row needing a second attempt would otherwise re-walk both ledgers with it.
-  //
-  // 🔴 Ledgers first, registries last, and the order is not arbitrary. Whichever
-  // check is not last carries an exposure window as long as everything that
-  // follows it, so the question is which surface should wait behind which. The
-  // ledger walk grows with a site's history and is batched for that reason,
-  // while the registry set is bounded by how many collections, singles and field
-  // groups a project declares. Putting the bounded step last leaves the ledgers
-  // waiting behind something small; reversing it would leave the registries
-  // waiting behind a full walk of every version and event a site has ever
-  // recorded.
+  // One step, because the ledgers are the only surface this migration rewrites
+  // inside a row. Stored field definitions are not rewritten at all — their
+  // vocabulary is read through `STORAGE_FORMAT` by code that accepts no other
+  // spelling, so moving it would leave a database the runtime cannot read.
   const settle = (
     from: typeof LEGACY_STORAGE_VOCABULARY,
     to: typeof LEGACY_STORAGE_VOCABULARY
-  ): MigrationStep[] => [
-    settleLedgersStep({ meta, migrationId, from, to }),
-    settleRegistryDefinitionsStep({ from, to, resolveRegistryTable }),
-  ];
+  ): MigrationStep[] => [settleLedgersStep({ meta, migrationId, from, to })];
 
   const dataSteps = (
     from: typeof LEGACY_STORAGE_VOCABULARY,
