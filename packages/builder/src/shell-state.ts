@@ -95,9 +95,15 @@ export const MIN_CANVAS_WIDTH = 480;
  */
 export const MIN_SHELL_WIDTH = 1280;
 
-/** Whether the viewport can carry the full shell. */
-export function fitsFullShell(viewportWidth: number): boolean {
-  return viewportWidth >= MIN_SHELL_WIDTH;
+/**
+ * Whether a box of this width can carry the full shell.
+ *
+ * The parameter is the width of the space the shell was GIVEN, not the
+ * window's. The shell sizes to its container, so the two differ whenever it is
+ * embedded — a narrow column on a wide display being the case that matters.
+ */
+export function fitsFullShell(width: number): boolean {
+  return width >= MIN_SHELL_WIDTH;
 }
 
 /**

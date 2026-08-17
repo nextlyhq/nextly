@@ -7,6 +7,7 @@
  * dataProvider. A manual URL + alt (accessibility) remain available as a fallback.
  */
 import { MediaPickerDialog, type Media } from "@nextlyhq/admin";
+import { useShellIsActive } from "@nextlyhq/builder/shell";
 import { Button, Input } from "@nextlyhq/ui";
 import { useState } from "react";
 
@@ -26,6 +27,22 @@ const str = (v: unknown): string => (typeof v === "string" ? v : "");
 export function MediaControl({ value, onChange, label }: ControlProps) {
   const v = (value ?? {}) as MediaValue;
   const [open, setOpen] = useState(false);
+  /*
+   * The picker renders through a portal, so the shell cannot contain it.
+   *
+   * When the viewport is too narrow the shell hides and inerts the inspector
+   * while deliberately keeping it MOUNTED, which preserves half-finished work.
+   * Both of those reach the subtree only; this dialog's content is portalled to
+   * `document.body`, outside it, so it stayed visible and clickable on top of
+   * the "needs a wider screen" notice.
+   *
+   * DERIVED rather than closed by an effect. An effect would write `open`
+   * false, which discards the author's intent: widening the window again
+   * should bring back the picker they had opened, exactly as it brings back
+   * everything else the shell kept mounted. Deriving also means there is no
+   * second source of truth to fall out of step with the shell.
+   */
+  const shellIsActive = useShellIsActive();
 
   const onSelect = (media: Media[]) => {
     const m = media[0];
@@ -81,7 +98,7 @@ export function MediaControl({ value, onChange, label }: ControlProps) {
       />
       <MediaPickerDialog
         mode="single"
-        open={open}
+        open={open && shellIsActive}
         onOpenChange={setOpen}
         onSelect={onSelect}
         accept="image/*"

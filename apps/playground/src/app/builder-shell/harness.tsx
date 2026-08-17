@@ -26,9 +26,27 @@ import "@nextlyhq/builder/styles.css";
  * Slot contents are deliberately inert. Anything interactive here would be
  * testing the harness rather than the shell.
  */
-export function BuilderShellHarness() {
+export function BuilderShellHarness({
+  containerWidth,
+}: {
+  /**
+   * Constrain the shell's container without touching the window.
+   *
+   * Omitted, the shell fills the viewport as before. Supplied, it gets a box
+   * narrower than the window — the arrangement that separates measuring the
+   * container from measuring the viewport, which no viewport-sized harness
+   * can distinguish.
+   */
+  containerWidth?: number;
+}) {
   return (
-    <div style={{ height: "100vh" }}>
+    <div
+      data-testid="shell-container"
+      style={{
+        height: "100vh",
+        width: containerWidth === undefined ? undefined : containerWidth,
+      }}
+    >
       <BuilderShell
         onExit={() => {
           // Recorded in the DOM rather than navigating: the assertion is that

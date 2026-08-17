@@ -229,6 +229,75 @@ test.describe("a viewport below the supported width", () => {
   });
 });
 
+test.describe("a narrow CONTAINER inside a wide window", () => {
+  // The window is comfortably above the threshold throughout this block. Every
+  // assertion below is about the shell's own box, which is the quantity it
+  // sizes to (`h-full w-full`, no viewport units anywhere).
+  test.use({ viewport: { width: 1600, height: 900 } });
+
+  test("shows the notice when its column is too narrow to hold the layout", async ({
+    page,
+  }) => {
+    // The defect this replaced: `matchMedia` reported the WINDOW, so an editor
+    // embedded in a narrow admin column on a wide screen was told it fitted and
+    // compressed the rail, panel and canvas past their minimums. The window
+    // here is 1600 and the container is below the threshold, so a viewport
+    // measurement and a container measurement give opposite answers — which is
+    // what makes this the separating case rather than a second narrow test.
+    await page.goto(`/builder-shell?container=${MIN_SHELL_WIDTH - 100}`);
+
+    await expect(page.getByText(/needs a wider screen/i)).toBeVisible();
+    await expect(page.getByRole("region", { name: "Canvas" })).toHaveCount(0);
+  });
+
+  test("renders the full layout when its column is wide enough", async ({
+    page,
+  }) => {
+    // The positive control. Without it, a shell that showed the notice
+    // unconditionally — or one whose measurement never resolved — would satisfy
+    // the assertion above perfectly.
+    await page.goto(`/builder-shell?container=${MIN_SHELL_WIDTH + 200}`);
+
+    await expect(page.getByRole("region", { name: "Canvas" })).toBeVisible();
+    await expect(page.getByText(/needs a wider screen/i)).toHaveCount(0);
+  });
+
+  test("recovers when the container grows back", async ({ page }) => {
+    // THE DEADLOCK, and the reason the observer follows the VISIBLE root.
+    //
+    // The editor stays mounted behind the notice so unsaved slot state
+    // survives, and its wrapper is `display: contents` when visible and
+    // `hidden` when narrow. Observing THAT element reports width 0 while the
+    // notice is up, so `0 >= MIN_SHELL_WIDTH` stays false and the shell can
+    // never measure its way back — narrowing once would disable the editor for
+    // the rest of the session.
+    //
+    // This has to run in a browser. The unit suite's ResizeObserver is a fake
+    // that reports the width the test sets regardless of which element is
+    // observed, so it answers identically for the hidden wrapper and the
+    // visible root — verified by writing the deadlock deliberately, which left
+    // the unit file green.
+    await page.goto(`/builder-shell?container=${MIN_SHELL_WIDTH - 100}`);
+    await expect(page.getByText(/needs a wider screen/i)).toBeVisible();
+
+    // Grow the CONTAINER, not the window: the window never changed.
+    //
+    // Grown to JUST above the threshold rather than comfortably past it. The
+    // narrow notice carries padding the shell root does not, so a measurement
+    // read from the CONTENT box reports this container narrower than it is
+    // while the notice is up, and recovery into that band never happens. A
+    // target of `+200` clears the threshold with or without the padding
+    // subtracted, so it cannot tell the two implementations apart — which is
+    // exactly what an earlier version of this test failed to do.
+    await page.getByTestId("shell-container").evaluate((node, width) => {
+      node.style.width = `${width}px`;
+    }, MIN_SHELL_WIDTH + 20);
+
+    await expect(page.getByRole("region", { name: "Canvas" })).toBeVisible();
+    await expect(page.getByText(/needs a wider screen/i)).toHaveCount(0);
+  });
+});
+
 test.describe("the readiness diagnostic itself", () => {
   test.use({ viewport: { width: 1440, height: 900 } });
 
