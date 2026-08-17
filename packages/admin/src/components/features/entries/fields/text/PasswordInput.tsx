@@ -23,6 +23,8 @@ import {
 
 import { cn } from "@admin/lib/utils";
 
+import { useFieldElementId } from "../field-id-scope";
+
 // ============================================================
 // Types
 // ============================================================
@@ -148,6 +150,12 @@ export function PasswordInput<TFieldValues extends FieldValues = FieldValues>({
       ? "" // Functions are evaluated at form level, not here
       : (field.defaultValue as string) || "";
 
+  // Scoped, so a second rendering of the same document on one page cannot
+
+  // duplicate this id and steal the first rendering's label.
+
+  const elementId = useFieldElementId(name);
+
   const {
     field: { value, onChange, onBlur, ref },
     fieldState: { invalid },
@@ -161,7 +169,7 @@ export function PasswordInput<TFieldValues extends FieldValues = FieldValues>({
     <div className="relative">
       <Input
         ref={ref}
-        id={name}
+        id={elementId}
         type={showPassword ? "text" : "password"}
         value={value ?? ""}
         onChange={onChange}

@@ -26,6 +26,8 @@ import {
 import { X } from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
 
+import { useFieldElementId } from "../field-id-scope";
+
 // ============================================================
 // Types
 // ============================================================
@@ -140,6 +142,12 @@ export function SelectInput<TFieldValues extends FieldValues = FieldValues>({
     return (value as string) || "";
   };
 
+  // Scoped, so a second rendering of the same document on one page cannot
+
+  // duplicate this id and steal the first rendering's label.
+
+  const elementId = useFieldElementId(name);
+
   const {
     field: { value, onChange },
     fieldState: { invalid },
@@ -172,7 +180,7 @@ export function SelectInput<TFieldValues extends FieldValues = FieldValues>({
 
   const trigger = (
     <SelectTrigger
-      id={name}
+      id={elementId}
       aria-invalid={invalid || undefined}
       className={cn(
         readOnly && "bg-primary/5 cursor-not-allowed",

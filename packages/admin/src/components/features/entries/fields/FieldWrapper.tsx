@@ -21,6 +21,8 @@ import { cn } from "@admin/lib/utils";
 
 import { useEntryLocale } from "../EntryLocaleContext";
 
+import { useFieldElementId } from "./field-id-scope";
+
 // ============================================================
 // Types
 // ============================================================
@@ -204,7 +206,9 @@ export function FieldWrapper({
   const generatedId = useId();
   // Use type guard to safely access name property (not all fields have it, e.g., TabsFieldConfig)
   const fieldName = "name" in field ? (field.name as string) : undefined;
-  const fieldId = fieldPath || fieldName || generatedId;
+  // Scoped for the same reason the controls are: two renderings of one
+  // document on a page would otherwise aim both labels at the first one.
+  const fieldId = useFieldElementId(fieldPath || fieldName || generatedId);
   const errorId = `${fieldId}-error`;
   const descriptionId = `${fieldId}-description`;
   // Names the group when the field has no single control to point a label at.

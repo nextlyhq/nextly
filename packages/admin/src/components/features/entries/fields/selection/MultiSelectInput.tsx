@@ -30,6 +30,8 @@ import {
 import { X } from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
 
+import { useFieldElementId } from "../field-id-scope";
+
 // ============================================================
 // Types
 // ============================================================
@@ -59,6 +61,10 @@ export function MultiSelectInput<
   readOnly = false,
   className,
 }: MultiSelectInputProps<TFieldValues>) {
+  // Scoped, so a second rendering of the same document on one page cannot
+  // duplicate this id and steal the first rendering's label.
+  const elementId = useFieldElementId(name);
+
   const {
     field: { value, onChange },
     fieldState: { invalid },
@@ -134,7 +140,7 @@ export function MultiSelectInput<
           value=""
           onValueChange={addValue}
         >
-          <SelectTrigger id={name} aria-invalid={invalid || undefined}>
+          <SelectTrigger id={elementId} aria-invalid={invalid || undefined}>
             <SelectValue placeholder={placeholder} />
           </SelectTrigger>
           <SelectContent>

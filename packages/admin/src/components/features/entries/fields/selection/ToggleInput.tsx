@@ -17,6 +17,8 @@ import {
   type Path,
 } from "react-hook-form";
 
+import { useFieldElementId } from "../field-id-scope";
+
 // ============================================================
 // Types
 // ============================================================
@@ -118,6 +120,12 @@ export function ToggleInput<TFieldValues extends FieldValues = FieldValues>({
     return field.defaultValue ?? false;
   };
 
+  // Scoped, so a second rendering of the same document on one page cannot
+
+  // duplicate this id and steal the first rendering's label.
+
+  const elementId = useFieldElementId(name);
+
   const {
     field: { value, onChange },
   } = useController({
@@ -128,7 +136,7 @@ export function ToggleInput<TFieldValues extends FieldValues = FieldValues>({
 
   return (
     <Switch
-      id={name}
+      id={elementId}
       checked={!!value}
       onCheckedChange={onChange}
       disabled={disabled || readOnly}
