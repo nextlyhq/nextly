@@ -57,6 +57,8 @@ describe("core block registration", () => {
     // forever, so the list itself is pinned.
     expect(coreBlocks.length).toBeGreaterThanOrEqual(3);
     expect(coreBlocks.map(block => block.name).sort()).toEqual([
+      "core/accordion",
+      "core/accordion-item",
       "core/box",
       "core/button",
       "core/card",

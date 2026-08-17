@@ -86,6 +86,8 @@ const ALLOWED: ReadonlyMap<string, ReadonlySet<string>> = new Map();
 const EXPECTED_BLOCKS = [
   "core/box",
   "core/button",
+  "core/accordion",
+  "core/accordion-item",
   "core/card",
   "core/collection-loop",
   "core/column",

@@ -303,6 +303,8 @@ describe("the blocks entry", () => {
       "HEADING_LEVELS",
       "IMAGE_LOADING",
       "LIST_KINDS",
+      "accordion",
+      "accordionItem",
       "box",
       "button",
       "card",
