@@ -23,13 +23,13 @@ import {
 import { resolveCollectionPlacement } from "@admin/lib/plugins/collection-placement";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 import { resolvePluginIcon } from "@admin/lib/plugins/resolve-plugin-icon";
-import { isUnder } from "@admin/lib/routing";
 import { cn } from "@admin/lib/utils";
 import type { ApiCollection } from "@admin/types/entities";
 
 import { hasPluginsSection } from "./lib/has-plugins-section";
 import { isSubSidebarCategory, isSubSidebarOpen } from "./lib/has-sub-sidebar";
 import { resolveItemHref as resolveItemHrefHelper } from "./lib/resolve-item-href";
+import { resolveActiveSection } from "./lib/resolve-section";
 import { subSidebarBorderClass } from "./lib/sub-sidebar-classes";
 import type { MainMenuCategory, MainMenuItem } from "./sidebar-types";
 import { getFilteredMenuItems } from "./sidebar-types";
@@ -296,108 +296,25 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
     ]
   );
 
-  const activeCategory = useMemo(() => {
-    // 0. Check standalone plugin collection routes first
-    for (const sp of visibleStandalonePlugins) {
-      const slug = pluginSlug(sp.name);
-      const standaloneId = `standalone-${slug}` as MainMenuCategory;
-      const collectionSlugs = sp.collections ?? [];
-      if (
-        collectionSlugs.some(cs =>
-          pathname.includes(`/admin/collections/${cs}`)
-        )
-      ) {
-        return standaloneId;
-      }
-    }
-
-    // 1. Check if current path is a plugin collection placed in users/settings
-    if (collectionsData?.items && pathname.includes("/admin/collections/")) {
-      const pluginCollections = collectionsData.items.filter(
-        c => c.admin?.isPlugin
-      );
-      for (const c of pluginCollections) {
-        if (!pathname.includes(`/admin/collections/${c.name}`)) continue;
-        const placement = getCollectionPlacement(c);
-        // "users" now lives inside the Settings sub-sidebar, so it highlights
-        // the Settings icon rather than the removed Users icon.
-        if (placement === "users") return "settings";
-        if (placement === "settings") return "settings";
-        if (placement === "collections") return "collections";
-        if (placement === "singles") return "singles";
-      }
-    }
-
-    // 2. Check for plugins — skip plugin collections placed in other sections
-    const isPluginPath = (data: typeof collectionsData) => {
-      if (!data?.items) return false;
-      const pluginCollections = data.items.filter(c => c.admin?.isPlugin);
-      return pluginCollections.some(c => {
-        if (!pathname.includes(`/admin/collections/${c.name}`)) return false;
-        const placement = getCollectionPlacement(c);
-        if (placement && placement !== "plugins") return false;
-        return true;
-      });
-    };
-
-    // The route constants rather than their spellings. The plugin directory
-    // sits at its own top level so no plugin slug can shadow it, which means
-    // the Plugins category is not one URL prefix and a literal would silently
-    // stop covering it the next time either route moves.
-    if (
-      isUnder(pathname, ROUTES.PLUGINS) ||
-      isUnder(pathname, ROUTES.PLUGIN_BROWSE) ||
-      pathname.includes("/admin/forms") ||
-      isPluginPath(collectionsData)
-    ) {
-      return "plugins";
-    }
-
-    // 3. Standard paths
-    if (pathname === ROUTES.DASHBOARD) return "dashboard";
-
-    const fromParam = route?.searchParams?.from;
-    if (fromParam === "builders") return "builders";
-    if (fromParam === "collections") return "collections";
-    if (fromParam === "singles") return "singles";
-
-    // Match that prefix first so the Builders secondary panel wins on
-    // schema-management pages. Content URLs (/admin/collections/[slug]
-    // entries, /admin/singles/[slug] single document) match next and
-    // route to the per-kind content panel — Q5 of the design locks
-    // this: secondary Builders sidebar is hidden on content pages.
-    if (pathname.includes("/admin/builder/")) {
-      if (showBuilder) return "builders";
-      // Defensive fallback if `showBuilder` is false (admin meta
-      // override) but a Builder URL is reached anyway (deep link).
-      // Surface the matching per-kind panel so the user has somewhere
-      // to go instead of an empty sidebar.
-      if (pathname.includes("/admin/builder/collections")) return "collections";
-      if (pathname.includes("/admin/builder/singles")) return "singles";
-      if (pathname.includes("/admin/builder/field-groups"))
-        return "collections";
-    }
-    if (pathname.includes("/admin/collections/")) return "collections";
-    if (pathname.includes("/admin/singles/")) return "singles";
-    if (pathname.includes("/admin/media")) return "media";
-    // User management routes live under Settings now, so they highlight the
-    // Settings icon (previously the standalone Users icon, id "manage").
-    if (
-      pathname.includes("/admin/users") ||
-      pathname.includes("/admin/security/roles")
-    )
-      return "settings";
-    if (pathname.includes("/admin/settings")) return "settings";
-
-    return "dashboard";
-  }, [
-    pathname,
-    collectionsData,
-    getCollectionPlacement,
-    visibleStandalonePlugins,
-    route,
-    showBuilder,
-  ]);
+  const activeCategory = useMemo(
+    () =>
+      resolveActiveSection({
+        pathname,
+        from: route?.searchParams?.from,
+        collections: collectionsData?.items,
+        getCollectionPlacement,
+        standalonePlugins: visibleStandalonePlugins,
+        showBuilder,
+      }),
+    [
+      pathname,
+      collectionsData,
+      getCollectionPlacement,
+      visibleStandalonePlugins,
+      route,
+      showBuilder,
+    ]
+  );
 
   const [selectedMain, setSelectedMain] =
     useState<MainMenuCategory>(activeCategory);
