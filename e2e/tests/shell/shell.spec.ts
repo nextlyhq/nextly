@@ -219,7 +219,7 @@ test.describe("a viewport below the supported width", () => {
     const shell = createShellDriver(page);
     await page.goto("/builder-shell");
 
-    await expect(page.getByText(/needs a wider screen/i)).toBeVisible();
+    await expect(page.getByText(/needs more width/i)).toBeVisible();
     await expect(page.getByRole("region", { name: "Canvas" })).toHaveCount(0);
     // The way out has to survive every degraded state.
     await expect(
@@ -246,7 +246,7 @@ test.describe("a narrow CONTAINER inside a wide window", () => {
     // what makes this the separating case rather than a second narrow test.
     await page.goto(`/builder-shell?container=${MIN_SHELL_WIDTH - 100}`);
 
-    await expect(page.getByText(/needs a wider screen/i)).toBeVisible();
+    await expect(page.getByText(/needs more width/i)).toBeVisible();
     await expect(page.getByRole("region", { name: "Canvas" })).toHaveCount(0);
   });
 
@@ -259,26 +259,23 @@ test.describe("a narrow CONTAINER inside a wide window", () => {
     await page.goto(`/builder-shell?container=${MIN_SHELL_WIDTH + 200}`);
 
     await expect(page.getByRole("region", { name: "Canvas" })).toBeVisible();
-    await expect(page.getByText(/needs a wider screen/i)).toHaveCount(0);
+    await expect(page.getByText(/needs more width/i)).toHaveCount(0);
   });
 
   test("recovers when the container grows back", async ({ page }) => {
-    // THE DEADLOCK, and the reason the observer follows the VISIBLE root.
+    // The decision has to be REVERSIBLE, which is what the always-rendered
+    // measuring wrapper buys. Anything measured only in one state reports
+    // nothing useful in the other: the editor's subtree is `display: contents`
+    // when visible and `hidden` when narrow, so a shell that measured it would
+    // read 0 for the whole narrow state and never rise above the threshold
+    // again.
     //
-    // The editor stays mounted behind the notice so unsaved slot state
-    // survives, and its wrapper is `display: contents` when visible and
-    // `hidden` when narrow. Observing THAT element reports width 0 while the
-    // notice is up, so `0 >= MIN_SHELL_WIDTH` stays false and the shell can
-    // never measure its way back — narrowing once would disable the editor for
-    // the rest of the session.
-    //
-    // This has to run in a browser. The unit suite's ResizeObserver is a fake
-    // that reports the width the test sets regardless of which element is
-    // observed, so it answers identically for the hidden wrapper and the
-    // visible root — verified by writing the deadlock deliberately, which left
-    // the unit file green.
+    // It has to run in a BROWSER. The unit suite's `ResizeObserver` is a fake
+    // reporting the width the test sets, so it cannot distinguish one element's
+    // box from another's; which element carries the observer, and whether that
+    // element has a box at all, are only decidable where layout is real.
     await page.goto(`/builder-shell?container=${MIN_SHELL_WIDTH - 100}`);
-    await expect(page.getByText(/needs a wider screen/i)).toBeVisible();
+    await expect(page.getByText(/needs more width/i)).toBeVisible();
 
     // Grow the CONTAINER, not the window: the window never changed.
     //
@@ -294,7 +291,7 @@ test.describe("a narrow CONTAINER inside a wide window", () => {
     }, MIN_SHELL_WIDTH + 20);
 
     await expect(page.getByRole("region", { name: "Canvas" })).toBeVisible();
-    await expect(page.getByText(/needs a wider screen/i)).toHaveCount(0);
+    await expect(page.getByText(/needs more width/i)).toHaveCount(0);
   });
 });
 
