@@ -247,39 +247,17 @@ describe("the content route's draft decision", () => {
     ]);
   });
 
-  it("fills in the site's default locale when the route states none", async () => {
-    // `locale` is documented as omitted for the default language, and the read
-    // resolves that default internally — so a context repeating the omission
-    // describes a page as having no language while it is served in one. The
-    // preview token names the RESOLVED default, so the omission refuses every
-    // default-language preview.
+  it("infers no locale from the site's configuration, even when one is registered", async () => {
+    // A registered default is deliberately NOT consulted. Reading it here would
+    // answer differently on the first request of a cold process, because a
+    // reader may defer booting until its first query — so a preview would be
+    // authorized intermittently. The route reports what it was told and
+    // nothing else.
     const { reader } = stubReader(null);
     const seen: ResolvedContext[] = [];
     container.register("config", () => ({
       localization: { defaultLocale: "en" },
     }));
-
-    await createContentRoute({
-      collections: ["pages"],
-      nextly: reader,
-      render: (entry: ContentEntry) => entry,
-      buildMetadata: (entry: ContentEntry) => ({ title: String(entry.id) }),
-      draft: context => {
-        seen.push(context);
-        return false;
-      },
-    }).generateMetadata(params);
-
-    expect(seen).toEqual([{ collection: "pages", slug: "a", locale: "en" }]);
-  });
-
-  it("states no locale when the site configures no localization", async () => {
-    // The one case with no language to name. Kept separate from the default
-    // above, because collapsing the two is what made a localized default look
-    // like an unlocalized site.
-    const { reader } = stubReader(null);
-    const seen: ResolvedContext[] = [];
-    container.register("config", () => ({}));
 
     await createContentRoute({
       collections: ["pages"],
