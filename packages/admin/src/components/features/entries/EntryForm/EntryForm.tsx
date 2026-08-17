@@ -16,11 +16,12 @@
  */
 
 import { resolveLocalizedFieldNames } from "nextly/config";
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 
 import { historyEnabledFrom } from "@admin/components/features/versions/history-enabled";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useGeneralSettings } from "@admin/hooks/queries/useGeneralSettings";
+import { useAutosaveRecovery } from "@admin/hooks/useAutosaveRecovery";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
 import {
   autosaveScopeFor,
@@ -38,6 +39,7 @@ import { cn } from "@admin/lib/utils";
 
 import { EntryLocaleProvider } from "../EntryLocaleContext";
 
+import { AutosaveRecoveryBanner } from "./AutosaveRecoveryBanner";
 import {
   effectiveEntryStatus,
   isSlugPerLocale,
@@ -375,6 +377,22 @@ export function EntryForm({
     () => autosaveScopeFor("collection", collection.name, savedEntryId),
     [savedEntryId, collection.name]
   );
+  // The other half of recording: offer the work back when the editor opens.
+  const recovery = useAutosaveRecovery({
+    scope: autosaveScope,
+    documentUpdatedAt: entry?.updatedAt ?? null,
+  });
+  const restoreRecovery = useCallback(() => {
+    if (!recovery.offer) return;
+    // `reset` with `keepDefaultValues` so the form goes DIRTY: the recovered
+    // values are not what the server holds, and treating them as the new
+    // baseline would let the reader navigate away believing they were stored.
+    form.reset(recovery.offer.snapshot as Record<string, unknown>, {
+      keepDefaultValues: true,
+    });
+    recovery.dismiss();
+  }, [recovery, form]);
+
   const autosave = useDocumentAutosave({
     scope: autosaveScope,
     form,
@@ -550,6 +568,15 @@ export function EntryForm({
                   isRailCollapsed={railCollapsed}
                   onToggleRail={mode === "edit" ? toggleRail : undefined}
                 />
+                {/* Above the fields and below the header: the reader sees
+                    the document it refers to without the offer covering it. */}
+                {recovery.offer ? (
+                  <AutosaveRecoveryBanner
+                    savedAt={recovery.offer.savedAt}
+                    onRestore={restoreRecovery}
+                    onDismiss={recovery.dismiss}
+                  />
+                ) : null}
                 <EntryMetaStrip
                   slugField={slugField}
                   hasStatus={hasStatus}
