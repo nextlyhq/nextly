@@ -18,7 +18,7 @@ vi.mock("@admin/services/versionApi", () => ({
   versionApi: { saveAutosave: saveSpy },
 }));
 
-import { useDocumentAutosave } from "../useDocumentAutosave";
+import { autosaveScopeFor, useDocumentAutosave } from "../useDocumentAutosave";
 
 const SCOPE = { kind: "collection" as const, slug: "posts", entryId: "e1" };
 const DEBOUNCE = 2000;
@@ -209,5 +209,45 @@ describe("useDocumentAutosave", () => {
     // Still dirty, still editable: a failed recording changes nothing about
     // the form it was taken from.
     expect(result.current.isDirty).toBe(true);
+  });
+});
+
+/**
+ * The rule that decides whether recording happens at all, kept out of the
+ * editors so it is answered once and can be asserted directly.
+ *
+ * A rendered editor cannot cover this cheaply, and leaving it inline meant the
+ * guard could be removed with no test moving.
+ */
+describe("autosaveScopeFor", () => {
+  it("addresses a saved collection entry by its id", () => {
+    expect(autosaveScopeFor("collection", "posts", "e1")).toEqual({
+      kind: "collection",
+      slug: "posts",
+      entryId: "e1",
+    });
+  });
+
+  it("addresses a saved Single by its document id", () => {
+    expect(autosaveScopeFor("single", "settings", "s1")).toEqual({
+      kind: "single",
+      slug: "settings",
+      documentId: "s1",
+    });
+  });
+
+  /**
+   * The guard. An entry that has never been saved has no id, and the endpoint
+   * addresses a document that exists -- so recording must be OFF rather than
+   * aimed at an empty or invented id, which would address a route that cannot
+   * resolve.
+   */
+  it("refuses to address a document that has never been saved", () => {
+    expect(autosaveScopeFor("collection", "posts", "")).toBeNull();
+    expect(autosaveScopeFor("single", "settings", "")).toBeNull();
+  });
+
+  it("refuses to address a document with no slug", () => {
+    expect(autosaveScopeFor("collection", "", "e1")).toBeNull();
   });
 });

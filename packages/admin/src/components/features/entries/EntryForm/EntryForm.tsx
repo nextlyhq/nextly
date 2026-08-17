@@ -22,7 +22,10 @@ import { historyEnabledFrom } from "@admin/components/features/versions/history-
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useGeneralSettings } from "@admin/hooks/queries/useGeneralSettings";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
-import { useDocumentAutosave } from "@admin/hooks/useDocumentAutosave";
+import {
+  autosaveScopeFor,
+  useDocumentAutosave,
+} from "@admin/hooks/useDocumentAutosave";
 import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { usePreviewLink } from "@admin/hooks/usePreviewLink";
@@ -369,14 +372,7 @@ export function EntryForm({
   // for the endpoint to address, and `null` turns recording off rather than
   // inventing one.
   const autosaveScope = useMemo(
-    () =>
-      savedEntryId === ""
-        ? null
-        : {
-            kind: "collection" as const,
-            slug: collection.name,
-            entryId: savedEntryId,
-          },
+    () => autosaveScopeFor("collection", collection.name, savedEntryId),
     [savedEntryId, collection.name]
   );
   const autosave = useDocumentAutosave({
