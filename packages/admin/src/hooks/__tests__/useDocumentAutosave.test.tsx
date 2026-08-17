@@ -245,6 +245,11 @@ describe("autosaveScopeFor", () => {
   it("refuses to address a document that has never been saved", () => {
     expect(autosaveScopeFor("collection", "posts", "")).toBeNull();
     expect(autosaveScopeFor("single", "settings", "")).toBeNull();
+    // The absent forms too, so a caller holding an optional id can pass it
+    // straight through. Requiring a string here only moved the decision into a
+    // `?? ""` at each call site, where the helper's own tests cannot see it.
+    expect(autosaveScopeFor("single", "settings", undefined)).toBeNull();
+    expect(autosaveScopeFor("collection", "posts", null)).toBeNull();
   });
 
   it("refuses to address a document with no slug", () => {
