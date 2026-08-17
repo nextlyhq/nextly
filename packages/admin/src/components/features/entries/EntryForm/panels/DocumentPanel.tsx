@@ -8,8 +8,6 @@ import { useAdminDateFormatter } from "@admin/hooks/useAdminDateFormatter";
 import { cn } from "@admin/lib/utils";
 
 import { CopyFromLanguageMenu } from "../../CopyFromLanguageMenu";
-import { useEntryLocale } from "../../EntryLocaleContext";
-import { LanguageStatusPills } from "../../LanguageStatusPills";
 import { PublishAllLanguagesButton } from "../../PublishAllLanguagesButton";
 import type { EntryData, EntryFormMode } from "../useEntryForm";
 
@@ -132,19 +130,18 @@ function TranslationsRow({
   translations?: Record<string, { translated: boolean; status?: string }>;
   hasStatus?: boolean;
 }) {
-  const { locale, onLocaleChange } = useEntryLocale();
   if (!translations) return null;
   return (
     <div className="mt-4 pt-4 border-t border-border">
       <p className="text-xs font-bold tracking-[0.1em] uppercase text-muted-foreground mb-2">
         Languages
       </p>
-      <LanguageStatusPills
-        translations={translations}
-        activeLocale={locale}
-        onSelect={onLocaleChange}
-      />
-      <div className="mt-3 flex flex-wrap gap-2">
+      {/* The per-language pills moved to the entry header, beside the language
+          switcher, where they sit with the completeness bar as one instrument.
+          They were describing the same fact the switcher describes, two panels
+          apart. What stays here are the ACTIONS on other languages, which are
+          document management rather than status. */}
+      <div className="flex flex-wrap gap-2">
         <CopyFromLanguageMenu />
         <PublishAllLanguagesButton hasStatus={hasStatus} />
       </div>
