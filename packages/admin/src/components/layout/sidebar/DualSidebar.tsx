@@ -30,6 +30,7 @@ import type { ApiCollection } from "@admin/types/entities";
 import { hasPluginsSection } from "./lib/has-plugins-section";
 import { isSubSidebarCategory, isSubSidebarOpen } from "./lib/has-sub-sidebar";
 import { resolveItemHref as resolveItemHrefHelper } from "./lib/resolve-item-href";
+import { subSidebarBorderClass } from "./lib/sub-sidebar-classes";
 import type { MainMenuCategory, MainMenuItem } from "./sidebar-types";
 import { getFilteredMenuItems } from "./sidebar-types";
 import { SubSidebarContent } from "./SubSidebarContent";
@@ -502,7 +503,8 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
           className="mb-8 flex items-center justify-center h-10 w-10 group"
         >
           <ThemeAwareLogo
-            className="w-6 h-6 object-contain"
+            boxed
+            className="w-8 h-8 object-contain"
             alt={branding.logoText ?? "Logo"}
           />
         </Link>
@@ -576,8 +578,9 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
         className={cn(
           "flex flex-col bg-background overflow-hidden shrink-0",
           isMobile
-            ? "relative flex  border-l border-border"
-            : "border-r border-border fixed inset-y-0 left-[72px] z-45 lg:static lg:flex", // Absolute on tablet, static on desktop
+            ? "relative flex"
+            : "fixed inset-y-0 left-[72px] z-45 lg:static lg:flex", // Absolute on tablet, static on desktop
+          subSidebarBorderClass({ isMobile, hasSubSidebar }),
           hasSubSidebar
             ? "w-64 opacity-100 translate-x-0"
             : "w-0 opacity-0 -translate-x-full pointer-events-none lg:w-0 lg:-translate-x-0",
