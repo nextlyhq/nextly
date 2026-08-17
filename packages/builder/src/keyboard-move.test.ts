@@ -1,7 +1,11 @@
 import { moveNode, type BlockNode } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
-import { keyboardMovePosition, type MoveDirection } from "./keyboard-move";
+import {
+  keyboardMovePosition,
+  type MoveDirection,
+  type MoveEffect,
+} from "./keyboard-move";
 
 /** A leaf block. `version` and `props` are required by the node shape. */
 function leaf(id: string): BlockNode {
@@ -49,9 +53,9 @@ function afterMove(
   id: string,
   direction: MoveDirection
 ): string {
-  const to = keyboardMovePosition(nodes, id, direction);
-  if (to === null) return shape(nodes);
-  return shape(moveNode(nodes, id, to));
+  const move = keyboardMovePosition(nodes, id, direction);
+  if (move === null) return shape(nodes);
+  return shape(moveNode(nodes, id, move.to));
 }
 
 describe("up and down reorder among siblings", () => {
@@ -174,7 +178,7 @@ describe("every press is undone by the opposite press", () => {
       out,
       "the fixture must be able to make the first move"
     ).not.toBeNull();
-    const moved = out === null ? nodes : moveNode(nodes, id, out);
+    const moved = out === null ? nodes : moveNode(nodes, id, out.to);
     expect(
       shape(moved),
       "the first move must actually change the document, or the round trip is vacuous"
@@ -182,7 +186,7 @@ describe("every press is undone by the opposite press", () => {
 
     const home = keyboardMovePosition(moved, id, back);
     expect(home, "the block must be able to come back").not.toBeNull();
-    const returned = home === null ? moved : moveNode(moved, id, home);
+    const returned = home === null ? moved : moveNode(moved, id, home.to);
 
     expect(shape(returned)).toBe(before);
   });
@@ -209,14 +213,71 @@ describe("the one asymmetry, asserted rather than left to be discovered", () => 
 
     const out = keyboardMovePosition(nodes, "x", "outdent");
     expect(out).not.toBeNull();
-    const moved = out === null ? nodes : moveNode(nodes, "x", out);
+    const moved = out === null ? nodes : moveNode(nodes, "x", out.to);
     expect(shape(moved)).toBe("a box(y) x");
 
     const back = keyboardMovePosition(moved, "x", "indent");
     expect(back).not.toBeNull();
-    const returned = back === null ? moved : moveNode(moved, "x", back);
+    const returned = back === null ? moved : moveNode(moved, "x", back.to);
 
     // Back inside the container, at the END rather than at index 0.
     expect(shape(returned)).toBe("a box(y x)");
+  });
+});
+
+describe("what the move reports beyond where it lands", () => {
+  /**
+   * A keyboard author cannot see the result, so "moved down" and "moved into
+   * Group" have to be announced differently — and the wiring can only say which
+   * happened if this function tells it. Re-deriving it there by comparing
+   * parents before and after would be a second implementation of a decision
+   * already made here.
+   */
+  it.each<[MoveDirection, string, MoveEffect]>([
+    ["down", "x", "reorder"],
+    ["up", "y", "reorder"],
+    ["outdent", "x", "outdent"],
+  ])("reports %s of a nested block as %s", (direction, id, effect) => {
+    const nodes = [leaf("a"), box("box", [leaf("x"), leaf("y")])];
+    expect(keyboardMovePosition(nodes, id, direction)?.effect).toBe(effect);
+  });
+
+  it("reports an indent as indent", () => {
+    expect(
+      keyboardMovePosition([box("box", [leaf("x")]), leaf("b")], "b", "indent")
+        ?.effect
+    ).toBe("indent");
+  });
+});
+
+describe("the slot a departing block leaves behind", () => {
+  /**
+   * A keyboard author moves ONE block at a time, so emptying a container is the
+   * common case rather than the rare one — and the page-builder validator
+   * rejects a slot left behind empty and undeclared.
+   */
+  it("names the vacated slot when outdenting out of a container", () => {
+    const nodes = [leaf("a"), box("box", [leaf("x")])];
+    expect(
+      keyboardMovePosition(nodes, "x", "outdent")?.dropSlotIfEmpty
+    ).toEqual({ parentId: "box", slot: "default" });
+  });
+
+  it("names nothing when reordering, because nothing is vacated", () => {
+    // Asserted rather than assumed: naming a slot the block has NOT left is
+    // refused by the store, so a blanket value here would turn every reorder
+    // inside a container into an error.
+    const nodes = [box("box", [leaf("x"), leaf("y")])];
+    expect(
+      keyboardMovePosition(nodes, "x", "down")?.dropSlotIfEmpty
+    ).toBeUndefined();
+  });
+
+  it("names nothing when the block was at the top level", () => {
+    // Top level is not a slot, so there is nothing to clean up.
+    expect(
+      keyboardMovePosition([box("box", [leaf("x")]), leaf("b")], "b", "indent")
+        ?.dropSlotIfEmpty
+    ).toBeUndefined();
   });
 });

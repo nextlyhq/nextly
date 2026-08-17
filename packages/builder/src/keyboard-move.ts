@@ -63,7 +63,7 @@
  */
 import { locateNode, type BlockNode } from "@nextlyhq/blocks-engine";
 
-import type { OpPosition } from "./ops";
+import type { OpPosition, SlotAddress } from "./ops";
 
 /**
  * What the author asked for.
@@ -76,6 +76,48 @@ export type MoveDirection = "up" | "down" | "indent" | "outdent";
 
 /** The default slot a block enters when it is indented into a container. */
 const DEFAULT_SLOT = "default";
+
+/**
+ * What a move does, beyond where it lands.
+ *
+ * A bare position cannot say whether the block stayed among its siblings or
+ * changed parent, and the difference is the whole thing a keyboard author cannot
+ * see. Someone driving the editor through a screen reader needs "moved down" and
+ * "moved into Group" announced differently, and the focus draw needs to know the
+ * block left its container. Deriving it in the wiring by comparing parents
+ * before and after would be a second implementation of a decision this function
+ * has already made.
+ */
+export type MoveEffect = "reorder" | "indent" | "outdent";
+
+/** Where a block goes, what that does, and what it leaves behind. */
+export interface KeyboardMove {
+  /** The position, in the shape the op store's `move` consumes. */
+  readonly to: OpPosition;
+  readonly effect: MoveEffect;
+  /**
+   * The slot the block is leaving, when leaving it may empty it.
+   *
+   * Supplied for the depth axis only, because `up` and `down` land the block in
+   * the container it started in and vacate nothing. Without it, moving the last
+   * child out of a container leaves an empty slot the page-builder validator
+   * rejects — and a keyboard author meets that far sooner than a pointer one,
+   * because they move a single block at a time.
+   *
+   * A request rather than a command: the store drops the slot only if it is
+   * actually empty afterwards, so a slot something else has filled stays.
+   */
+  readonly dropSlotIfEmpty?: SlotAddress;
+}
+
+/** The slot a node is vacating, when it sits in one. */
+function vacating(
+  parent: BlockNode | undefined,
+  slot: string | undefined
+): SlotAddress | undefined {
+  if (parent === undefined || slot === undefined) return undefined;
+  return { parentId: parent.id, slot };
+}
 
 /**
  * The list a located node actually sits in.
@@ -139,7 +181,7 @@ export function keyboardMovePosition(
   nodes: BlockNode[],
   selectedId: string,
   direction: MoveDirection
-): OpPosition | null {
+): KeyboardMove | null {
   const here = locateNode(nodes, selectedId);
   if (here === undefined) return null;
 
@@ -151,7 +193,9 @@ export function keyboardMovePosition(
     // Refused at the ends rather than escaping the container. Escaping is the
     // other axis, and doing it here is what cost the inverse.
     if (target < 0 || target >= siblings.length) return null;
-    return positionIn(here.parent, here.slot, target);
+    const to = positionIn(here.parent, here.slot, target);
+    // Reordering lands in the container it started in, so nothing is vacated.
+    return to === null ? null : { to, effect: "reorder" };
   }
 
   if (direction === "outdent") {
@@ -164,7 +208,13 @@ export function keyboardMovePosition(
     // AFTER the parent, so that indenting back in returns the block to where it
     // started. Removing it from inside the parent does not move the parent, so
     // this index needs no correction.
-    return positionIn(outer.parent, outer.slot, outer.index + 1);
+    const to = positionIn(outer.parent, outer.slot, outer.index + 1);
+    if (to === null) return null;
+    return {
+      to,
+      effect: "outdent",
+      dropSlotIfEmpty: vacating(here.parent, here.slot),
+    };
   }
 
   // Indent: become the last child of the sibling immediately above.
@@ -179,8 +229,12 @@ export function keyboardMovePosition(
   // cannot see.
   const into = above.slots?.[DEFAULT_SLOT];
   return {
-    parentId: above.id,
-    slot: DEFAULT_SLOT,
-    index: into?.length ?? 0,
+    to: {
+      parentId: above.id,
+      slot: DEFAULT_SLOT,
+      index: into?.length ?? 0,
+    },
+    effect: "indent",
+    dropSlotIfEmpty: vacating(here.parent, here.slot),
   };
 }
