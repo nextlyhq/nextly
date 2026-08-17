@@ -30,16 +30,13 @@ function renderList(props: Partial<Parameters<typeof ListView<Row>>[0]> = {}) {
 
 describe("ListView toolbar", () => {
   /**
-   * An empty flex row still contributes its gap to the column above the table.
-   * That stray space is the shape of the inconsistency this component removes,
-   * so "draws nothing" has to be a tested property rather than an accident.
-   */
-  /**
+   * An empty flex row still contributes its gap to the column above the table,
+   * so "draws nothing" is a property rather than an accident.
+   *
    * Asserted on the toolbar ELEMENT, not on the controls inside it. An empty
    * toolbar row and an absent one contain the same nothing, so a test looking
-   * for the search field or the buttons passes in both cases — it was written
-   * that way first, and a control that forced the row to render did not fail
-   * it.
+   * for the search field or the buttons passes in both cases — this one was
+   * written that way first, and forcing the row to render did not fail it.
    */
   it("draws no toolbar row when there is nothing to put in it", () => {
     const { container } = renderList();
