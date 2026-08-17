@@ -30,6 +30,7 @@ import {
   registerKnownPlugin,
 } from "@nextlyhq/plugin-sdk/admin";
 
+import { BlocksField } from "./BlocksField";
 import { BlocksSummary } from "./BlocksSummary";
 
 /**
@@ -41,9 +42,20 @@ import { BlocksSummary } from "./BlocksSummary";
  * so the entry cannot import the constant without dragging React into the
  * isomorphic bundle. A mismatch is silent: the field renders empty.
  */
+const BLOCKS_FIELD_PATH = "@nextlyhq/plugin-page-builder/admin#BlocksField";
+
+/**
+ * Still registered under its own specifier.
+ *
+ * `BlocksField` composes it, so the field no longer resolves to it — but the
+ * summary is a usable control in its own right for a host that wants the
+ * account of a document without the way in to change it, and unregistering a
+ * published specifier would break any such host silently.
+ */
 const BLOCKS_SUMMARY_PATH = "@nextlyhq/plugin-page-builder/admin#BlocksSummary";
 
 const COMPONENTS = {
+  [BLOCKS_FIELD_PATH]: BlocksField,
   [BLOCKS_SUMMARY_PATH]: BlocksSummary,
 };
 
@@ -56,5 +68,6 @@ registerKnownPlugin("@nextlyhq/plugin-page-builder", () => {
   return Promise.resolve();
 });
 
-export { BlocksSummary };
+export { BlocksField, BlocksSummary };
+export type { BlocksFieldProps } from "./BlocksField";
 export type { BlocksSummaryProps } from "./BlocksSummary";
