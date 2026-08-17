@@ -56,8 +56,19 @@ export type {
 } from "./fields/blocks-options";
 export { blocks, isBlocksField } from "./fields/blocksHelper";
 export { pagesCollection } from "./collections/pages";
-export { editorChoiceFields } from "./collections/editorChoice";
-export type { EditorChoiceOptions } from "./collections/editorChoice";
+/*
+ * `editorChoiceFields` is gone, along with the per-entry editor switch.
+ *
+ * It spread a stored `editorMode` select beside a blocks field and a rich-text
+ * one. Removed rather than deprecated because what it produced was a COLUMN:
+ * leaving it exported would keep new collections writing a UI preference into
+ * content, and the whole point of retiring it is that the field decides.
+ *
+ * A collection that used it keeps both underlying fields until its owner
+ * removes them — this stops NEW ones being created, and deletes no data.
+ * Replace the spread with `blocks({ name: "content" })` for a page-built entry,
+ * or `richText({ name: "body" })` for a written one.
+ */
 
 /**
  * Contributing blocks: the registry a plugin hands its blocks to.

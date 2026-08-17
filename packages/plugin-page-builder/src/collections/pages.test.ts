@@ -74,3 +74,37 @@ describe("pages custom CSS permission", () => {
     );
   });
 });
+
+/**
+ * How an entry is edited is decided by the FIELD, not per entry.
+ *
+ * Asserted on the collection rather than through the admin, because what this
+ * guards is structural: the retired switch stored a UI preference as a column
+ * and left a second content field beside it. Both are visible here, and neither
+ * is something an admin-rendering test would have reported.
+ */
+describe("pages is built from blocks", () => {
+  const fieldsOf = () =>
+    pagesCollection().fields as { name?: string; type?: string }[];
+
+  it("carries a blocks field for the page body", () => {
+    // The positive control for the two absences below: each of them is
+    // satisfied by a collection with no fields at all, and this is the
+    // assertion that separates those cases.
+    const content = fieldsOf().find(f => f.name === "content");
+    expect(content?.type).toBe("blocks");
+  });
+
+  it("stores no editor-mode preference", () => {
+    // `editorMode` was a real column, so it travelled in API responses and
+    // exports and could be written by anything holding the entry.
+    expect(fieldsOf().map(f => f.name)).not.toContain("editorMode");
+  });
+
+  it("offers no second content field to diverge from the blocks one", () => {
+    // Both arms of the retired choice persisted at once — what hid one was
+    // `admin.condition`, which reaches the admin form and nothing else — so an
+    // entry could hold a block document AND rich text with one of them unread.
+    expect(fieldsOf().map(f => f.name)).not.toContain("body");
+  });
+});
