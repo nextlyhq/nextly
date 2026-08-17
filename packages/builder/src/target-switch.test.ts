@@ -56,16 +56,21 @@ describe("a pointer jittering at a seam", () => {
    * target, however many times the collision engine changes its mind.
    */
   it("never switches, however long the jitter goes on", () => {
-    const settled = drag([["a", { x: 100, y: 100 }]]);
-
-    const jitter: (readonly [TargetId, Point])[] = [];
+    const jitter: (readonly [TargetId, Point])[] = [["a", { x: 100, y: 100 }]];
     for (let i = 0; i < 40; i += 1) {
       // 2px apart, which is what a resting hand produces, and the candidate
       // alternates with it exactly as a boundary makes it.
       jitter.push([i % 2 === 0 ? "b" : "a", { x: 100, y: 100 + (i % 2) * 2 }]);
     }
 
-    expect(drag(jitter, settled).committed).toBe("a");
+    // The RUN of committed targets, not the final one, and the difference is the
+    // whole test. An earlier version asserted `committed === "a"` at the end and
+    // passed with the threshold REMOVED ENTIRELY, because a canvas switching on
+    // every single move still lands on "a" whenever the jitter happens to end
+    // there. It could not fail for its own reason. Flicker is a property of the
+    // sequence, so the sequence is what has to be asserted: one commit, at the
+    // start, and nothing after it.
+    expect(committedRun(jitter)).toEqual(["a"]);
   });
 
   /**
