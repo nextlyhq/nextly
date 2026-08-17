@@ -97,6 +97,33 @@ function basePath(scope: VersionScope): string {
     : `/collections/${scope.slug}/entries/${scope.entryId}/versions`;
 }
 
+/**
+ * What recording a recovery point reports back.
+ *
+ * `updatedAt` is when the server stored it, not when the editor sent it, so a
+ * "saved at" reading cannot drift with an unsynchronised browser clock.
+ * Serialised as an ISO string over the wire; the caller parses it if it needs a
+ * `Date`.
+ */
+export interface AutosaveWriteResponse {
+  updatedAt: string;
+  locale: string | null;
+}
+
+/**
+ * A stored recovery point as the reading author sees it.
+ *
+ * Deliberately narrower than the stored row. A recovery point is offered back
+ * to its own author to restore, so the fields that describe a version's place
+ * in history (its number, its label, its lineage) have no meaning here: an
+ * autosave carries none of them.
+ */
+export interface AutosaveDetail {
+  snapshot: unknown;
+  updatedAt: string;
+  locale: string | null;
+}
+
 /** What a restore reports back. */
 export interface RestoreVersionResponse {
   message: string;
@@ -188,6 +215,40 @@ export const versionApi = {
     protectedApi.delete<DiscardWorkingDraftResponse>(
       `${basePath(scope)}/working-draft`
     ),
+
+  /**
+   * Record the editor's current values as this author's recovery point.
+   *
+   * PUT rather than POST because the row is rolling: one per document and
+   * author, rewritten in place. Sending the same snapshot twice must leave one
+   * recovery point, which is what makes an unacknowledged retry safe.
+   *
+   * The snapshot is the editor's live values, so it can contain fields the
+   * document itself does not yet have. The server strips write-only values
+   * before storing and redacts on read; neither is the client's job.
+   */
+  saveAutosave: (
+    scope: VersionScope,
+    snapshot: unknown,
+    locale?: string | null
+  ): Promise<AutosaveWriteResponse> =>
+    protectedApi.put<AutosaveWriteResponse>(`${basePath(scope)}/autosave`, {
+      snapshot,
+      // Sent even when null. Null and absent mean the same thing here (this
+      // document has no locale), unlike on a listing where absent means every
+      // locale, so being explicit costs nothing and reads unambiguously.
+      locale: locale ?? null,
+    }),
+
+  /**
+   * This author's own recovery point, or `null` when they have none.
+   *
+   * Scoped to the caller: it never returns another author's snapshot, so a
+   * document being edited by two people yields each of them their own. The
+   * response is private to the session and must not be cached across users.
+   */
+  getAutosave: (scope: VersionScope): Promise<AutosaveDetail | null> =>
+    protectedApi.get<AutosaveDetail | null>(`${basePath(scope)}/autosave`),
 
   /**
    * Compare two versions. A read of history, gated and field-redacted exactly

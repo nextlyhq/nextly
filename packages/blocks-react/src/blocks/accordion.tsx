@@ -28,27 +28,32 @@
  * node like any other. A value hardcoded in the render function could not be
  * overridden at all.
  *
- * **No default border, and no default background.** `defaultSiteTokens()` names
- * `color.text`, `color.background`, `color.primary`, `font.body`,
- * `content.width` and `space.4`, and there is no surface colour and no border
- * colour among them.
+ * **No default border, and no default background.** The older page-builder drew
+ * its dividers with `var(--nx-color-border)`, which is the ADMIN token
+ * namespace — so that declaration validates, compiles, ships, and then resolves
+ * to nothing on the visitor's page while looking correct inside an admin
+ * preview. **Three blocks reached for that namespace independently**, which
+ * makes it design pressure rather than three mistakes: when the correct
+ * mechanism is unreachable, the thing that LOOKS like it works gets reached for.
  *
- * **It GUARANTEES none of them, which is a stronger statement than the missing
- * two.** `compileSiteSheet` — the only thing that turns a token set into CSS —
- * has zero consumers outside `blocks-engine`, and `--site-` appears in no source
- * file outside the engine (positive control: `--nx-` appears in 103). So the set
- * is a default nobody applies, and a `{ $token }` reference compiles to a
- * `var()` with nothing behind it. This block shipped that way and its sections
- * rendered touching; the value below is a length for that reason.
+ * This docblock used to continue "…this renderer emits `--site-*`", and to say
+ * `defaultSiteTokens()` "guarantees" a named set. **Both were false and the
+ * second is the load-bearing one: this renderer emits NOTHING.**
+ * `compileSiteSheet` — the only thing that turns a token set into CSS — has zero
+ * consumers outside `blocks-engine`, and `--site-` appears in no source file
+ * outside the engine (positive control: `--nx-` appears in over a hundred). So
+ * the default token set is a default nobody applies, and a `{ $token }` here
+ * would dangle for the same reason `--nx-*` does — not a different namespace,
+ * the same emptiness.
  *
- * The older page-builder drew its dividers with `var(--nx-color-border)`, the
- * ADMIN token namespace, which this renderer does not emit — so that declaration
- * validates, compiles, ships, and resolves to nothing on the visitor's page
- * while looking correct inside an admin preview. **Three blocks reached for it
- * independently**, which makes it design pressure rather than three mistakes:
- * when the correct mechanism is unreachable, the thing that looks like it works
- * gets reached for. Separation between sections is therefore a plain length, and
- * the divider is left to the author until tokens are emitted at all.
+ * That is not hypothetical here: this block shipped with `{ $token: "space.4" }`
+ * and its sections rendered touching, because an unresolved `var()` makes the
+ * declaration invalid at computed-value time and `gap` falls back to `normal` —
+ * zero for a grid.
+ *
+ * Separation between sections is therefore a LENGTH, which needs no stylesheet
+ * to resolve, and the divider is left to the author until the site stylesheet
+ * is wired and a surface token can carry it.
  *
  * @module blocks/library/accordion
  */

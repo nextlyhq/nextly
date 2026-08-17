@@ -16,6 +16,10 @@ import {
   AlertDescription,
   Button,
   Checkbox,
+  FieldShell,
+  FormActions,
+  FormLayout,
+  Grid,
   Input,
   Switch,
 } from "@nextlyhq/ui";
@@ -23,17 +27,11 @@ import type React from "react";
 import { Controller, useFieldArray, useForm } from "react-hook-form";
 
 import {
-  SettingsRow,
+  SettingsRowGroup,
   SettingsSection,
 } from "@admin/components/features/settings";
 import { Info, Loader2, Plus, Trash2 } from "@admin/components/icons";
-import {
-  Form,
-  FormControl,
-  FormField,
-  FormItem,
-  FormMessage,
-} from "@admin/components/ui/form";
+import { Form, FormField } from "@admin/components/ui/form";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
 import {
@@ -100,266 +98,267 @@ export const WebhookForm: React.FC<WebhookFormProps> = ({
 
   return (
     <Form {...form}>
-      <form
-        onSubmit={e => {
-          void form.handleSubmit(handleSubmit)(e);
-        }}
-        className="space-y-6"
-      >
-        <SettingsSection label="Endpoint">
-          <FormField
-            control={form.control}
-            name="name"
-            render={({ field }) => (
-              <FormItem>
-                <SettingsRow
+      <FormLayout>
+        <form
+          onSubmit={e => {
+            void form.handleSubmit(handleSubmit)(e);
+          }}
+          className="space-y-6"
+        >
+          <SettingsSection label="Endpoint">
+            <FormField
+              control={form.control}
+              name="name"
+              render={({ field, fieldState }) => (
+                <FieldShell
                   label="Name"
                   description="A label to identify this endpoint."
+                  error={fieldState.error?.message}
                 >
-                  <FormControl>
-                    <Input
-                      placeholder="e.g. Orders sync"
-                      autoFocus
-                      disabled={isPending}
-                      {...field}
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </SettingsRow>
-              </FormItem>
-            )}
-          />
+                  <Input
+                    placeholder="e.g. Orders sync"
+                    autoFocus
+                    disabled={isPending}
+                    {...field}
+                  />
+                </FieldShell>
+              )}
+            />
 
-          <FormField
-            control={form.control}
-            name="url"
-            render={({ field }) => (
-              <FormItem>
-                <SettingsRow
+            <FormField
+              control={form.control}
+              name="url"
+              render={({ field, fieldState }) => (
+                <FieldShell
                   label="Payload URL"
                   description="The HTTPS endpoint that receives signed events."
+                  error={fieldState.error?.message}
                 >
-                  <FormControl>
-                    <Input
-                      placeholder="https://example.com/webhooks"
-                      inputMode="url"
-                      disabled={isPending}
-                      {...field}
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </SettingsRow>
-              </FormItem>
-            )}
-          />
+                  <Input
+                    placeholder="https://example.com/webhooks"
+                    inputMode="url"
+                    disabled={isPending}
+                    {...field}
+                  />
+                </FieldShell>
+              )}
+            />
 
-          <FormField
-            control={form.control}
-            name="enabled"
-            render={({ field }) => (
-              <FormItem>
-                <SettingsRow
+            <FormField
+              control={form.control}
+              name="enabled"
+              render={({ field, fieldState }) => (
+                <FieldShell
                   label="Enabled"
                   description="Disabled endpoints receive no deliveries."
+                  error={fieldState.error?.message}
                 >
-                  <FormControl>
-                    <Switch
-                      checked={field.value}
-                      onCheckedChange={field.onChange}
-                      disabled={isPending}
-                    />
-                  </FormControl>
-                  <FormMessage />
-                </SettingsRow>
-              </FormItem>
-            )}
-          />
-        </SettingsSection>
-
-        <SettingsSection label="Events">
-          <SettingsRow
-            label="Subscription"
-            description="Choose which events are delivered to this endpoint."
-          >
-            <div className="space-y-3">
-              <label className="flex items-center gap-2 text-sm font-medium text-foreground">
-                <Controller
-                  control={form.control}
-                  name="allEvents"
-                  render={({ field }) => (
-                    <Switch
-                      checked={field.value}
-                      onCheckedChange={value => {
-                        field.onChange(value);
-                        // The wildcard must be used alone; clear specifics.
-                        if (value)
-                          form.setValue("eventTypes", [], {
-                            shouldValidate: true,
-                          });
-                      }}
-                      disabled={isPending}
-                    />
-                  )}
-                />
-                All events (current and future)
-              </label>
-
-              {!allEvents && (
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  {WEBHOOK_EVENT_TYPES.map(type => (
-                    <label
-                      key={type}
-                      className="flex items-center gap-2 text-sm text-foreground"
-                    >
-                      <Checkbox
-                        checked={selectedTypes.includes(type)}
-                        onCheckedChange={() => toggleEventType(type)}
-                        disabled={isPending}
-                      />
-                      <code className="font-mono text-xs">{type}</code>
-                    </label>
-                  ))}
-                </div>
+                  <Switch
+                    checked={field.value}
+                    onCheckedChange={field.onChange}
+                    disabled={isPending}
+                  />
+                </FieldShell>
               )}
+            />
+          </SettingsSection>
 
-              {eventError && (
-                <p className="text-sm text-destructive-500">{eventError}</p>
-              )}
-            </div>
-          </SettingsRow>
-        </SettingsSection>
-
-        <SettingsSection label="Custom headers">
-          <SettingsRow
-            label="Headers"
-            description="Optional static headers sent with every delivery."
-          >
-            <div className="space-y-3">
-              {hasExistingHeaders && (
-                <Alert variant="info" role="status">
-                  <Info className="h-4 w-4" />
-                  <AlertDescription>
-                    Currently sending {existingHeaderNames?.length} header
-                    {existingHeaderNames?.length === 1 ? "" : "s"} (values
-                    hidden): {existingHeaderNames?.join(", ")}. Leave this
-                    section empty to keep them, add headers to replace the whole
-                    set, or remove them all below.
-                  </AlertDescription>
-                </Alert>
-              )}
-
-              {hasExistingHeaders && (
-                <label className="flex items-center gap-2 text-sm text-foreground">
+          <SettingsSection label="Events">
+            {/* Not a FieldShell (or SettingsRow) candidate: a switch and a
+                conditional grid of checkboxes are several independently-
+                focusable controls, not one a `label for` can name. Grouped
+                with `role="group"`/`aria-labelledby` instead. */}
+            <SettingsRowGroup
+              label="Subscription"
+              description="Choose which events are delivered to this endpoint."
+            >
+              <div className="space-y-3">
+                <label className="flex items-center gap-2 text-sm font-medium text-foreground">
                   <Controller
                     control={form.control}
-                    name="clearExistingHeaders"
+                    name="allEvents"
                     render={({ field }) => (
                       <Switch
                         checked={field.value}
                         onCheckedChange={value => {
                           field.onChange(value);
-                          // Drop any entered rows so "remove all" can't leave
-                          // stale replacement headers behind.
-                          if (value) form.setValue("headers", []);
+                          // The wildcard must be used alone; clear specifics.
+                          if (value)
+                            form.setValue("eventTypes", [], {
+                              shouldValidate: true,
+                            });
                         }}
                         disabled={isPending}
                       />
                     )}
                   />
-                  Remove all current headers
+                  All events (current and future)
                 </label>
-              )}
 
-              {!clearExistingHeaders &&
-                headers.fields.map((row, index) => (
-                  <div key={row.id} className="flex items-start gap-2">
-                    <FormField
+                {!allEvents && (
+                  <Grid cols={2} gap={2} responsive>
+                    {WEBHOOK_EVENT_TYPES.map(type => (
+                      <label
+                        key={type}
+                        className="flex items-center gap-2 text-sm text-foreground"
+                      >
+                        <Checkbox
+                          checked={selectedTypes.includes(type)}
+                          onCheckedChange={() => toggleEventType(type)}
+                          disabled={isPending}
+                        />
+                        <code className="font-mono text-xs">{type}</code>
+                      </label>
+                    ))}
+                  </Grid>
+                )}
+
+                {eventError && (
+                  <p className="text-sm text-destructive-500">{eventError}</p>
+                )}
+              </div>
+            </SettingsRowGroup>
+          </SettingsSection>
+
+          <SettingsSection label="Custom headers">
+            {/* Not a FieldShell (or SettingsRow) candidate: an alert, a
+                clear-all toggle, a dynamic list of name/value pairs and an
+                add/remove control are several independently-focusable
+                controls, not one a `label for` can name. Grouped with
+                `role="group"`/`aria-labelledby` instead. */}
+            <SettingsRowGroup
+              label="Headers"
+              description="Optional static headers sent with every delivery."
+            >
+              <div className="space-y-3">
+                {hasExistingHeaders && (
+                  <Alert variant="info" role="status">
+                    <Info className="h-4 w-4" />
+                    <AlertDescription>
+                      Currently sending {existingHeaderNames?.length} header
+                      {existingHeaderNames?.length === 1 ? "" : "s"} (values
+                      hidden): {existingHeaderNames?.join(", ")}. Leave this
+                      section empty to keep them, add headers to replace the
+                      whole set, or remove them all below.
+                    </AlertDescription>
+                  </Alert>
+                )}
+
+                {hasExistingHeaders && (
+                  <label className="flex items-center gap-2 text-sm text-foreground">
+                    <Controller
                       control={form.control}
-                      name={`headers.${index}.name`}
+                      name="clearExistingHeaders"
                       render={({ field }) => (
-                        <FormItem className="flex-1">
-                          <FormControl>
+                        <Switch
+                          checked={field.value}
+                          onCheckedChange={value => {
+                            field.onChange(value);
+                            // Drop any entered rows so "remove all" can't leave
+                            // stale replacement headers behind.
+                            if (value) form.setValue("headers", []);
+                          }}
+                          disabled={isPending}
+                        />
+                      )}
+                    />
+                    Remove all current headers
+                  </label>
+                )}
+
+                {!clearExistingHeaders &&
+                  headers.fields.map((row, index) => (
+                    <div key={row.id} className="flex items-start gap-2">
+                      <FormField
+                        control={form.control}
+                        name={`headers.${index}.name`}
+                        render={({ field, fieldState }) => (
+                          <FieldShell
+                            error={fieldState.error?.message}
+                            className="flex-1"
+                            width="fill"
+                          >
                             <Input
                               placeholder="Header name"
                               disabled={isPending}
                               {...field}
                             />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                    <FormField
-                      control={form.control}
-                      name={`headers.${index}.value`}
-                      render={({ field }) => (
-                        <FormItem className="flex-1">
-                          <FormControl>
+                          </FieldShell>
+                        )}
+                      />
+                      <FormField
+                        control={form.control}
+                        name={`headers.${index}.value`}
+                        render={({ field, fieldState }) => (
+                          <FieldShell
+                            error={fieldState.error?.message}
+                            className="flex-1"
+                            width="fill"
+                          >
                             <Input
                               placeholder="Value"
                               disabled={isPending}
                               {...field}
                             />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="icon-sm"
-                      onClick={() => headers.remove(index)}
-                      disabled={isPending}
-                      aria-label="Remove header"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
-                ))}
+                          </FieldShell>
+                        )}
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon-sm"
+                        onClick={() => headers.remove(index)}
+                        disabled={isPending}
+                        aria-label="Remove header"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  ))}
 
-              {headersError && !clearExistingHeaders && (
-                <p className="text-sm text-destructive-500">{headersError}</p>
-              )}
+                {headersError && !clearExistingHeaders && (
+                  <p className="text-sm text-destructive-500">{headersError}</p>
+                )}
 
-              {clearExistingHeaders ? (
-                <p className="text-sm text-muted-foreground">
-                  All current headers will be removed on save.
-                </p>
+                {clearExistingHeaders ? (
+                  <p className="text-sm text-muted-foreground">
+                    All current headers will be removed on save.
+                  </p>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => headers.append({ name: "", value: "" })}
+                    disabled={isPending}
+                  >
+                    <Plus className="h-4 w-4" />
+                    Add header
+                  </Button>
+                )}
+              </div>
+            </SettingsRowGroup>
+          </SettingsSection>
+
+          <FormActions dirty={form.formState.isDirty}>
+            <Link href={ROUTES.SETTINGS_WEBHOOKS}>
+              <Button type="button" variant="outline" disabled={isPending}>
+                Cancel
+              </Button>
+            </Link>
+            <Button type="submit" disabled={isPending}>
+              {isPending ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  {pendingLabel}
+                </>
               ) : (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => headers.append({ name: "", value: "" })}
-                  disabled={isPending}
-                >
-                  <Plus className="h-4 w-4" />
-                  Add header
-                </Button>
+                submitLabel
               )}
-            </div>
-          </SettingsRow>
-        </SettingsSection>
-
-        <div className="flex justify-end gap-3">
-          <Link href={ROUTES.SETTINGS_WEBHOOKS}>
-            <Button type="button" variant="outline" disabled={isPending}>
-              Cancel
             </Button>
-          </Link>
-          <Button type="submit" disabled={isPending}>
-            {isPending ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" />
-                {pendingLabel}
-              </>
-            ) : (
-              submitLabel
-            )}
-          </Button>
-        </div>
-      </form>
+          </FormActions>
+        </form>
+      </FormLayout>
     </Form>
   );
 };

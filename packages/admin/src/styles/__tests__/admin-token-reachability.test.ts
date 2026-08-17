@@ -18,7 +18,8 @@
  *
  * **Scope is the admin's whole rendering surface, not one stylesheet.** A token
  * reaches the screen from a `.css` file, from `style={{ ... }}` in a component,
- * from a `bg-[var(--nx-...)]` arbitrary value, or from a `packages/ui` component
+ * from a CSS-variable arbitrary-value utility (a `bg-` utility driven by a
+ * `--nx-*` custom property), or from a `packages/ui` component
  * rendered inside the admin shell. Scanning only the admin stylesheet checks the
  * place the last defect happened to live rather than the places tokens are used;
  * widening it from that stylesheet to both packages took the count of distinct
