@@ -55,7 +55,6 @@ function planSteps(direction: "up" | "down") {
     observer,
     meta,
     migrationId: "run-1",
-    resolveRegistryTable: async () => "dynamic_field_groups",
   });
 }
 
@@ -89,8 +88,6 @@ describe("assembling the steps one run executes", () => {
   it("runs every data step and every rename exactly once", () => {
     const ids = plan("up");
     expect(ids).toEqual([
-      "data:registry-definitions",
-      "data:schema-event-scope",
       "data:nextly_versions.snapshot",
       "data:nextly_events.payload",
       "table:comp_hero->fg_hero",
@@ -98,7 +95,6 @@ describe("assembling the steps one run executes", () => {
       "registry:dynamic_components->dynamic_field_groups",
       // Last, so a write landing during the renames above is still caught.
       "data:settle-ledgers",
-      "data:settle-registry-definitions",
     ]);
   });
 
@@ -116,7 +112,7 @@ describe("assembling the steps one run executes", () => {
     // The settle steps are appended to BOTH plans and are not mirrored work:
     // they are the same checks asked at the end of whichever direction ran. The
     // reversal property describes the work, so it is asserted over the work.
-    const SETTLE = ["data:settle-ledgers", "data:settle-registry-definitions"];
+    const SETTLE = ["data:settle-ledgers"];
     const work = (ids: string[]): string[] =>
       ids.filter(id => !SETTLE.includes(id));
     expect(work(down).map(kind)).toEqual([...work(up).map(kind)].reverse());
@@ -132,11 +128,8 @@ describe("assembling the steps one run executes", () => {
       "table:fg_hero->comp_hero",
       "data:nextly_events.payload",
       "data:nextly_versions.snapshot",
-      "data:schema-event-scope",
-      "data:registry-definitions",
-      // Appended to both directions, so they close the rollback too.
+      // Appended to both directions, so it closes the rollback too.
       "data:settle-ledgers",
-      "data:settle-registry-definitions",
     ]);
   });
 
@@ -267,7 +260,7 @@ describe("which steps a marker remembers", () => {
   // looked like before the interruption.
   it("declines to record the settlement checks", () => {
     const settle = settleSteps();
-    expect(settle).toHaveLength(2);
+    expect(settle).toHaveLength(1);
     expect(settle.every(step => step.recordsProgress === false)).toBe(true);
   });
 

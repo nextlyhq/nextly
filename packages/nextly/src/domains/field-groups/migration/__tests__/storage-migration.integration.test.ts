@@ -65,7 +65,6 @@ import {
   LEGACY_STORAGE_VOCABULARY,
   assertLedgersSettled,
   settleLedgersStep,
-  settleRegistryDefinitionsStep,
 } from "../data-steps";
 import { MIGRATION_TARGET } from "../manifest";
 import { runFieldGroupMigration } from "../run";
@@ -120,10 +119,14 @@ const DIALECTS: {
  *
  * Assembled from the same Drizzle objects the core schema is built from rather
  * than hand-written, so the fixture cannot disagree with the thing under test.
- * The set is not arbitrary: the data steps rewrite stored field definitions in
- * all three dynamic registries, rescope `nextly_schema_events`, and walk the
- * `nextly_versions` and `nextly_events` ledgers — a fixture missing any of them
- * fails resolving a table rather than testing a migration.
+ * The set is not arbitrary: a run renames storage recorded across all three
+ * dynamic registries and walks the `nextly_versions` and `nextly_events`
+ * ledgers — a fixture missing any of them fails resolving a table rather than
+ * testing a migration.
+ *
+ * `nextly_schema_events` is here because the suite asserts what the run leaves
+ * ALONE as well as what it moves: a run must not rescope those events, since
+ * the journal matches them against the legacy spelling on read.
  */
 function systemTablesFor(dialect: SupportedDialect): Record<string, unknown> {
   const registries =
@@ -192,28 +195,26 @@ function insertRow(
 }
 
 /**
- * Update through the adapter's typed CRUD, narrowed for the same reason.
+ * Read through the adapter's typed CRUD, narrowed for the same reason.
  *
  * A registry's `fields` column is `jsonb` on Postgres, `json` on MySQL and
  * text-with-a-json-mode on SQLite. Going through the adapter is what makes one
- * call correct on all three, where a hand-written statement would need three
- * spellings and would encode the document differently from the code under test.
+ * call correct on all three, and it decodes the document exactly as the code
+ * under test does rather than handing back a dialect's raw representation.
  */
-function updateRow(
+function selectRows(
   adapter: unknown,
   table: string,
-  values: Record<string, unknown>,
   where: unknown
-): Promise<unknown> {
+): Promise<Record<string, unknown>[]> {
   return (
     adapter as {
-      update(
+      select(
         t: string,
-        v: Record<string, unknown>,
-        w: unknown
-      ): Promise<unknown>;
+        options: { where: unknown }
+      ): Promise<Record<string, unknown>[]>;
     }
-  ).update(table, values, where);
+  ).select(table, { where });
 }
 
 /** The kinds of core operation that name a given table, for an exact assertion. */
@@ -488,34 +489,6 @@ for (const entry of DIALECTS) {
             from: LEGACY_STORAGE_VOCABULARY,
             to: FIELD_GROUP_STORAGE_VOCABULARY,
           })
-      );
-    }
-
-    /**
-     * The registry settlement step, built the way the plan builds it.
-     *
-     * The resolver is the production one rather than a fixed name, so these
-     * cases exercise the resolution itself: the step has to find the registry
-     * the run just renamed, from the catalog, with no help from the fixture.
-     */
-    function registrySettleStep() {
-      return settleRegistryDefinitionsStep({
-        from: LEGACY_STORAGE_VOCABULARY,
-        to: FIELD_GROUP_STORAGE_VOCABULARY,
-        resolveRegistryTable: () =>
-          resolveRegistryNameFromCatalog(adapter as never),
-      });
-    }
-
-    /** Whether the registries hold nothing left to rewrite. */
-    async function registrySettled(): Promise<boolean> {
-      return withMigrationSession(
-        {
-          adapter: adapter as never,
-          dialect: entry.dialect as MigrationDialect,
-          label: "registry-settlement-probe",
-        },
-        session => registrySettleStep().verify(session)
       );
     }
 
@@ -844,56 +817,29 @@ for (const entry of DIALECTS) {
     });
 
     /**
-     * 🔴 The other way a verifier reports residue, and the reason both are asked.
-     *
-     * The ledger walks THROW when they find an unrewritten row; the schema-event
-     * scan RETURNS FALSE. A settlement loop that only lets throws through accepts
-     * every surface whose verifier reports by returning — so this plants a stale
-     * scope on the returning one, where the previous case plants a row on a
-     * throwing one.
-     */
-    it("sees a stale schema-event scope left behind", async () => {
-      await migrate("up");
-      await expect(settlementResidue()).resolves.toBeUndefined();
-
-      await insertRow(adapter, "nextly_schema_events", {
-        id: randomUUID(),
-        eventType: "core_apply",
-        source: "cli-migrate",
-        scopeKind: STORAGE_FORMAT.schemaEventScope,
-        status: "applied",
-      });
-
-      await expect(settlementResidue()).rejects.toMatchObject({
-        logContext: {
-          reason: "settlement verification reported an unrewritten surface",
-          steps: "data:schema-event-scope",
-        },
-      });
-    });
-
-    /**
      * 🔴 The property the post-hoc assertion did not have: a retry converges.
      *
      * The settle step re-runs the ledger rewrites before it checks them, so a
-     * straggler committed after its original step is simply rewritten. Asserted
-     * by planting one BEFORE the run reaches its final step is impossible to
-     * time reliably, so it is planted after a completed run and the migration is
-     * re-driven — which is exactly what an operator does after a refusal, and
-     * the case the previous design could never clear.
+     * straggler committed after its original step is simply rewritten. Planting
+     * one before the run reaches its final step cannot be timed reliably, so it
+     * is planted after a completed run and the step is re-driven — which is
+     * exactly what an operator does after a refusal, and the case the previous
+     * design could never clear.
      */
     it("rewrites a straggler rather than refusing forever", async () => {
       await migrate("up");
 
-      await insertRow(adapter, "nextly_schema_events", {
+      await insertRow(adapter, "nextly_versions", {
         id: randomUUID(),
-        eventType: "core_apply",
-        source: "cli-migrate",
-        scopeKind: STORAGE_FORMAT.schemaEventScope,
-        status: "applied",
+        scopeKind: "collection",
+        scopeSlug: "articles",
+        entryId: randomUUID(),
+        status: "published",
+        isAutosave: false,
+        snapshot: { [STORAGE_FORMAT.wireTypeKey]: "hero" },
       });
       await expect(settlementResidue()).rejects.toMatchObject({
-        logContext: { steps: "data:schema-event-scope" },
+        logContext: { reason: "row rewrite did not reach every row" },
       });
 
       // The step's own run, which is what a retry executes.
@@ -916,62 +862,51 @@ for (const entry of DIALECTS) {
     });
 
     /**
-     * 🔴 The surface the ledger check cannot reach, and the reason this step
-     * resolves a name rather than being handed one.
+     * 🔴 The regression this whole module was reshaped around.
      *
-     * Going up, the registry has been RENAMED by the time settlement runs, so
-     * the name the plan was assembled with does not exist any more. A definition
-     * written back to the legacy vocabulary after its data step verified sits in
-     * a table only the resolved name can address — and against a real server,
-     * addressing it by the other one does not report residue, it fails outright.
-     * That is the failure the first attempt at this check shipped with, and only
-     * a real database on the real ordering exposes it.
-     */
-    it("sees a legacy definition left in the renamed registry", async () => {
-      await migrate("up");
-      // The control, and it is not optional: the assertion below passes against
-      // a check that reports every registry as unsettled.
-      await expect(registrySettled()).resolves.toBe(true);
-
-      // Exactly what a registry write landing during the renames leaves behind:
-      // one group's definitions back in the vocabulary the run moved away from.
-      await updateRow(
-        adapter,
-        MIGRATION_TARGET.registryTable,
-        { fields: outerFields },
-        { and: [{ column: "slug", op: "=", value: outerSlug }] }
-      );
-
-      await expect(registrySettled()).resolves.toBe(false);
-    });
-
-    /**
-     * The same convergence property the ledger step has, on this surface.
+     * A stored field definition's `type` is read through `STORAGE_FORMAT` by
+     * code that accepts no other spelling, so a migration that moved it would
+     * leave definitions the runtime cannot read — boot validation rejects every
+     * field-group field and the application exits. The data survives and the
+     * migration reports success, which is why nothing points back at it.
      *
-     * The step re-runs the registry rewrite before it checks it, so a straggler
-     * is rewritten rather than refused forever. This is what an operator's
-     * re-run does, and what a post-hoc assertion could never offer.
+     * Asserted against a real database rather than a fake one because the
+     * rewrite that caused it went through the same typed CRUD this fixture
+     * uses, and a unit double cannot show that the column was left alone in the
+     * three dialects' JSON encodings.
      */
-    it("rewrites a straggling definition rather than refusing forever", async () => {
+    it("leaves stored field definitions in the legacy vocabulary", async () => {
+      const registryRow = async (): Promise<Record<string, unknown>> => {
+        const table = await resolveRegistryNameFromCatalog(adapter as never);
+        const rows = await selectRows(adapter, table, {
+          and: [{ column: "slug", op: "=", value: outerSlug }],
+        });
+        const row = rows[0];
+        if (row === undefined)
+          throw new Error(`no registry row for ${outerSlug}`);
+        return row;
+      };
+
+      // The control: the definition carries the legacy spelling BEFORE the run,
+      // so the assertion afterwards is about the migration rather than about a
+      // fixture that never had it.
+      expect(JSON.stringify((await registryRow()).fields)).toContain(
+        `"${STORAGE_FORMAT.fieldType}"`
+      );
+
       await migrate("up");
-      await updateRow(
-        adapter,
-        MIGRATION_TARGET.registryTable,
-        { fields: outerFields },
-        { and: [{ column: "slug", op: "=", value: outerSlug }] }
-      );
-      await expect(registrySettled()).resolves.toBe(false);
 
-      await withMigrationSession(
-        {
-          adapter: adapter as never,
-          dialect: entry.dialect as MigrationDialect,
-          label: "registry-settle-retry",
-        },
-        session => registrySettleStep().run(session)
+      const after = await registryRow();
+      expect(JSON.stringify(after.fields)).toContain(
+        `"${STORAGE_FORMAT.fieldType}"`
       );
-
-      await expect(registrySettled()).resolves.toBe(true);
+      expect(JSON.stringify(after.fields)).not.toContain(
+        `"${MIGRATION_TARGET.fieldType}"`
+      );
+      // The registry's own provenance column is left alone for the same reason:
+      // nothing compares it on read, and the code sync rewrites it on the next
+      // boot, so moving it is churn a settlement check then has to chase.
+      expect(String(after.configPath)).toContain(STORAGE_FORMAT.configPathDir);
     });
 
     it("reports a second run as already migrated", async () => {
