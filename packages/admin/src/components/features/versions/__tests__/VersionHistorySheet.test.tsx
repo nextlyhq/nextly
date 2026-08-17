@@ -382,7 +382,14 @@ describe("VersionHistorySheet", () => {
 
     const setViewing = vi.fn();
     render(
-      <DocumentHistoryContext.Provider value={{ viewing: null, setViewing }}>
+      <DocumentHistoryContext.Provider
+        value={{
+          viewing: null,
+          setViewing,
+          restore: null,
+          setRestore: vi.fn(),
+        }}
+      >
         <VersionHistorySheet open onOpenChange={vi.fn()} scope={scope} />
       </DocumentHistoryContext.Provider>
     );
@@ -635,5 +642,73 @@ describe("VersionHistorySheet — renaming", () => {
     expect(
       screen.getAllByRole("button", { name: /name version/i }).length
     ).toBeGreaterThan(0);
+  });
+});
+
+describe("VersionHistorySheet — what it publishes to the document", () => {
+  function renderWithDocument(canRestore = true) {
+    const setViewing = vi.fn();
+    const setRestore = vi.fn();
+    render(
+      <DocumentHistoryContext.Provider
+        value={{ viewing: null, setViewing, restore: null, setRestore }}
+      >
+        <VersionHistorySheet
+          open
+          onOpenChange={vi.fn()}
+          scope={scope}
+          canRestore={canRestore}
+        />
+      </DocumentHistoryContext.Provider>
+    );
+    return { setViewing, setRestore };
+  }
+
+  beforeEach(() => {
+    useVersionsMock.mockReturnValue(
+      listState({
+        data: { pages: [{ items: [version(3)], meta: { hasNext: false } }] },
+      })
+    );
+    useVersionMock.mockReturnValue(
+      detailState({ data: { snapshot: { title: "Old" }, locale: null } })
+    );
+  });
+
+  it("offers restoring to the document only when the caller may write", async () => {
+    const { setRestore } = renderWithDocument(false);
+    await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
+
+    await waitFor(() =>
+      expect(setRestore).toHaveBeenCalledWith(
+        expect.objectContaining({ canRestore: false })
+      )
+    );
+  });
+
+  it("returns to the live document THROUGH the panel, clearing its own row", async () => {
+    const { setRestore } = renderWithDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
+
+    await waitFor(() => expect(setRestore).toHaveBeenCalled());
+    const published = setRestore.mock.calls.at(-1)?.[0] as {
+      returnToCurrent: () => void;
+    };
+
+    // The banner cannot clear this panel's selection itself, so it asks. Going
+    // back must leave no row marked active for a version off screen.
+    expect(screen.getByRole("button", { name: /Version 3/ })).toHaveAttribute(
+      "aria-current",
+      "true"
+    );
+    // ONLY the published callback — clicking "Back to history" as well would
+    // clear the selection by itself and the assertion would pass whether or not
+    // `returnToCurrent` does anything.
+    published.returnToCurrent();
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: /Version 3/ })
+      ).not.toHaveAttribute("aria-current", "true")
+    );
   });
 });

@@ -12,6 +12,7 @@ import { isFieldLocalized, type FieldConfig } from "nextly/config";
 import { useEffect, useRef, useState } from "react";
 import { useFormContext } from "react-hook-form";
 
+import { useDocumentHistory } from "@admin/components/features/versions/document-history-context";
 import { VersionHistorySheet } from "@admin/components/features/versions/VersionHistorySheet";
 import {
   Code,
@@ -277,6 +278,10 @@ export function EntrySystemHeader({
   const [unpublishOpen, setUnpublishOpen] = useState(false);
   const [discardDraftOpen, setDiscardDraftOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  // True while the document area is showing a past version rather than the
+  // live document.
+  const { viewing: viewingVersion } = useDocumentHistory();
+  const isReadingHistory = viewingVersion !== null;
 
   // Both collections and singles authorize a document write as `update-{slug}`.
   const canUpdateDocument = useCan(`update-${collectionSlug}`);
@@ -310,7 +315,10 @@ export function EntrySystemHeader({
     (titleField as { label?: string } | undefined)?.label ?? "Title";
 
   const { ref: rhfRef, ...rhfRegister } = form.register(titleName, {
-    required: !lockIdentity && titleRequired ? "Title is required" : false,
+    required:
+      !lockIdentity && !isReadingHistory && titleRequired
+        ? "Title is required"
+        : false,
   });
 
   // the title input bypasses FieldWrapper, so apply the same per-field RTL rule here —
@@ -378,7 +386,11 @@ export function EntrySystemHeader({
           placeholder="Untitled"
           aria-label={titleLabel}
           disabled={isSubmitting}
-          readOnly={lockIdentity}
+          // The title is part of the document, so reading a past version locks
+          // it with everything else. Left editable it would mutate the LIVE
+          // document while the banner says the page cannot be edited — and go
+          // to autosave as unsaved work nobody typed on purpose.
+          readOnly={lockIdentity || isReadingHistory}
           // RTL for a translatable title edited in an RTL language.
           {...(titleRtl ? { dir: "rtl" as const } : {})}
           className={cn(
@@ -484,7 +496,12 @@ export function EntrySystemHeader({
                 localeCount: counts.total,
               })}
         />
-        {hasStatus && isPublishedEdit ? (
+        {/* No save affordances while a past version is on screen. They act on
+            the live document, which is not what is being read — an editor
+            offered "Save" over a historical page has been invited to make a
+            decision about something they cannot see. Restoring is offered
+            instead, from the banner over the version itself. */}
+        {isReadingHistory ? null : hasStatus && isPublishedEdit ? (
           <>
             <Button
               type="button"
