@@ -102,3 +102,57 @@ describe("resolveVisibleMenuItems", () => {
     ).toEqual([]);
   });
 });
+
+describe("resolveVisibleMenuItems — section attribution", () => {
+  const always = () => true;
+
+  const plugins = [
+    {
+      name: "@acme/reports",
+      collections: [],
+      placement: "settings",
+      menu: [
+        { label: "Reports", to: "/r" },
+        { label: "Elsewhere", to: "/e", section: "media" as const },
+      ],
+    },
+    {
+      name: "@acme/plain",
+      collections: [],
+      menu: [{ label: "Plain", to: "/p" }],
+    },
+  ] as unknown as PluginMetadata[];
+
+  it("lists an item under the section its plugin was placed in", () => {
+    // The defect this covers: the field was declarable and nothing read it,
+    // so every item appeared under Plugins whatever it said.
+    expect(
+      resolveVisibleMenuItems(plugins, always, "settings").map(i => i.label)
+    ).toEqual(["Reports"]);
+  });
+
+  it("lets an item OVERRIDE its plugin's placement", () => {
+    expect(
+      resolveVisibleMenuItems(plugins, always, "media").map(i => i.label)
+    ).toEqual(["Elsewhere"]);
+  });
+
+  it("keeps an item whose plugin declared nothing under Plugins", () => {
+    expect(
+      resolveVisibleMenuItems(plugins, always, "plugins").map(i => i.label)
+    ).toEqual(["Plain"]);
+  });
+
+  it("does not list a placed item under Plugins as well", () => {
+    // Appearing in both places is the failure a partition must not have.
+    const underPlugins = resolveVisibleMenuItems(plugins, always, "plugins");
+    expect(underPlugins.map(i => i.label)).not.toContain("Reports");
+    expect(underPlugins.map(i => i.label)).not.toContain("Elsewhere");
+  });
+
+  it("returns every item when no section is named", () => {
+    // Asserts the population the partition is drawn from, so a filter that
+    // dropped everything could not pass the per-section cases vacuously.
+    expect(resolveVisibleMenuItems(plugins, always)).toHaveLength(3);
+  });
+});
