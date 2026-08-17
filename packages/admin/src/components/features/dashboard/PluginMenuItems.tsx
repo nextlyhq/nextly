@@ -17,6 +17,7 @@ import {
   SidebarMenuSubItem,
 } from "@admin/components/layout/sidebar";
 import { Link } from "@admin/components/ui/link";
+import type { ActiveNavSection } from "@admin/constants/nav-sections";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { resolveVisibleMenuItems } from "@admin/lib/plugins/menu";
@@ -34,6 +35,12 @@ function iconFor(name?: string): React.ElementType {
 
 interface PluginMenuItemsProps {
   isActive: (href?: string) => boolean;
+  /**
+   * Which sidebar group is rendering. Items are attributed to a group through
+   * the plugin deferral chain, so a plugin that placed itself elsewhere has
+   * its items listed there rather than under Plugins.
+   */
+  section: ActiveNavSection;
 }
 
 /**
@@ -42,10 +49,14 @@ interface PluginMenuItemsProps {
  * (super-admin-aware, closed-until-loaded — the `useCan` semantics, D36) and
  * ordered/nested by `resolveVisibleMenuItems`.
  */
-export function PluginMenuItems({ isActive }: PluginMenuItemsProps) {
+export function PluginMenuItems({ isActive, section }: PluginMenuItemsProps) {
   const branding = useBranding();
   const { hasPermission } = useCurrentUserPermissions();
-  const items = resolveVisibleMenuItems(branding?.plugins, hasPermission);
+  const items = resolveVisibleMenuItems(
+    branding?.plugins,
+    hasPermission,
+    section
+  );
 
   if (items.length === 0) return null;
 

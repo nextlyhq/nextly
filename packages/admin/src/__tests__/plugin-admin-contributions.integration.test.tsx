@@ -68,7 +68,7 @@ describe("plugin admin contributions (live render, B4)", () => {
 
     renderWithProviders(
       <SidebarProvider>
-        <PluginMenuItems isActive={() => false} />
+        <PluginMenuItems isActive={() => false} section="plugins" />
       </SidebarProvider>
     );
 

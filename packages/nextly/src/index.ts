@@ -448,6 +448,7 @@ export {
   type PluginAdminWidget,
   type PluginCollectionView,
   type PluginMenuItem,
+  type PluginNavSection,
 } from "./plugins";
 
 // Value exports for the email provider contract. A plugin calls

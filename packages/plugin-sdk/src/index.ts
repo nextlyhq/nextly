@@ -171,6 +171,7 @@ export type {
   JsonValue,
   PluginAdminContributions,
   PluginAdminPage,
+  PluginNavSection,
   PluginAdminWidget,
   PluginCollectionView,
   PluginMenuItem,
