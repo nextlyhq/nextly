@@ -59,11 +59,13 @@ describe("core block registration", () => {
     expect(coreBlocks.map(block => block.name).sort()).toEqual([
       "core/box",
       "core/button",
+      "core/card",
       "core/collection-loop",
       "core/column",
       "core/columns",
       "core/divider",
       "core/embed",
+      "core/form",
       "core/heading",
       "core/image",
       "core/list",

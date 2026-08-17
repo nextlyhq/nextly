@@ -86,11 +86,13 @@ const ALLOWED: ReadonlyMap<string, ReadonlySet<string>> = new Map();
 const EXPECTED_BLOCKS = [
   "core/box",
   "core/button",
+  "core/card",
   "core/collection-loop",
   "core/column",
   "core/columns",
   "core/divider",
   "core/embed",
+  "core/form",
   "core/heading",
   "core/image",
   "core/list",
