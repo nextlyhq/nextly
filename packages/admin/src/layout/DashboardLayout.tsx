@@ -16,6 +16,10 @@ import { ThemeAwareLogo } from "@admin/components/shared/ThemeAwareLogo";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useRouter } from "@admin/hooks/useRouter";
 
+import {
+  ChromeSuppressionProvider,
+  useSuppressedChrome,
+} from "../components/layout/ChromeSuppression";
 import { DashboardHeader } from "../components/layout/header";
 import { SidebarProvider } from "../components/layout/sidebar";
 import { DualSidebar } from "../components/layout/sidebar/DualSidebar";
@@ -36,8 +40,30 @@ interface DashboardLayoutProps {
  * - **Desktop (≥ 1024px)**: Dual sidebar layout
  * - **Mobile (< 768px)**: Mobile header with a Sheet-based drawer
  */
+/**
+ * The provider sits ABOVE the chrome and above `children`, because the surfaces
+ * that ask for chrome to be hidden are rendered as `children` and React state
+ * has to be lifted past both to be read by the one and written by the other.
+ */
 export function DashboardLayout({ children }: DashboardLayoutProps) {
+  return (
+    <ChromeSuppressionProvider>
+      <DashboardChrome>{children}</DashboardChrome>
+    </ChromeSuppressionProvider>
+  );
+}
+
+function DashboardChrome({ children }: DashboardLayoutProps) {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const hidden = useSuppressedChrome();
+  /*
+   * The rail and the panel live in one component, so "hide the rail" is asked of
+   * `DualSidebar` while "hide the whole sidebar column" is decided here. Hiding
+   * the column only when BOTH are suppressed keeps a request for one of them
+   * from silently taking the other.
+   */
+  const hideSidebarColumn =
+    hidden.has("primaryRail") && hidden.has("subSidebar");
   const { pathname } = useRouter();
   const branding = useBranding();
 
@@ -79,9 +105,11 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
           </div>
 
           <div className="flex flex-1 min-h-0 overflow-hidden">
-            <div className="hidden lg:flex h-full overflow-hidden shrink-0">
-              <DualSidebar />
-            </div>
+            {!hideSidebarColumn && (
+              <div className="hidden lg:flex h-full overflow-hidden shrink-0">
+                <DualSidebar />
+              </div>
+            )}
 
             <Sheet open={isMobileMenuOpen} onOpenChange={setIsMobileMenuOpen}>
               <SheetContent
@@ -99,7 +127,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
 
             {/* Main Content */}
             <div className="flex-1 min-w-0 flex flex-col min-h-0 overflow-hidden relative">
-              <DashboardHeader />
+              {!hidden.has("header") && <DashboardHeader />}
               {/* Named container so content responds to the panel width
                   (viewport minus sidebar), not the viewport. */}
               <main className="@container/content flex-1 overflow-y-auto bg-transparent">
