@@ -13,6 +13,7 @@
 "use client";
 import {
   FieldOptionsEditor,
+  ValidationNumberField,
   withOptionIds,
   type FieldOptionsEditorProps,
 } from "@nextlyhq/plugin-sdk/admin";
@@ -488,90 +489,38 @@ function ValidationTab({
       {/* Text/Textarea length validation */}
       {(field.type === "text" || field.type === "textarea") && (
         <div className="grid grid-cols-2 gap-4">
-          <div className="space-y-2">
-            <FormLabelWithTooltip
-              label="Min Length"
-              htmlFor="min-len"
-              description="Minimum characters required."
-            />
-            <Input
-              id="min-len"
-              type="number"
-              min={0}
-              value={(field as TextFormField).validation?.minLength ?? ""}
-              onChange={e =>
-                updateValidation(
-                  "minLength",
-                  e.target.value ? parseInt(e.target.value) : undefined
-                )
-              }
-              className="bg-transparent"
-            />
-          </div>
-          <div className="space-y-2">
-            <FormLabelWithTooltip
-              label="Max Length"
-              htmlFor="max-len"
-              description="Maximum characters allowed."
-            />
-            <Input
-              id="max-len"
-              type="number"
-              min={0}
-              value={(field as TextFormField).validation?.maxLength ?? ""}
-              onChange={e =>
-                updateValidation(
-                  "maxLength",
-                  e.target.value ? parseInt(e.target.value) : undefined
-                )
-              }
-              className="bg-transparent"
-            />
-          </div>
+          <ValidationNumberField
+            label="Min Length"
+            description="Minimum characters required."
+            counts
+            value={field.validation?.minLength}
+            onChange={n => updateValidation("minLength", n)}
+          />
+          <ValidationNumberField
+            label="Max Length"
+            description="Maximum characters allowed."
+            counts
+            value={field.validation?.maxLength}
+            onChange={n => updateValidation("maxLength", n)}
+          />
         </div>
       )}
 
       {/* Number min/max validation */}
       {field.type === "number" && (
         <div className="grid grid-cols-2 gap-4">
-          <div className="space-y-2">
-            <FormLabelWithTooltip
-              label="Min Value"
-              htmlFor="min-val"
-              description="Minimum numerical value."
-            />
-            <Input
-              id="min-val"
-              type="number"
-              value={field.validation?.min ?? ""}
-              onChange={e =>
-                updateValidation(
-                  "min",
-                  e.target.value ? parseFloat(e.target.value) : undefined
-                )
-              }
-              className="bg-transparent"
-            />
-          </div>
-          <div className="space-y-2">
-            <FormLabelWithTooltip
-              label="Max Value"
-              htmlFor="max-val"
-              description="Maximum numerical value."
-            />
-            <Input
-              id="max-val"
-              type="number"
-              value={field.validation?.max ?? ""}
-              onChange={e =>
-                updateValidation(
-                  "max",
-                  e.target.value ? parseFloat(e.target.value) : undefined
-                )
-              }
-              className="bg-transparent"
-            />
-          </div>
+          <ValidationNumberField
+            label="Min Value"
+            description="Minimum numerical value."
+            value={field.validation?.min}
+            onChange={n => updateValidation("min", n)}
+          />
+          <ValidationNumberField
+            label="Max Value"
+            description="Maximum numerical value."
+            value={field.validation?.max}
+            onChange={n => updateValidation("max", n)}
+          />
         </div>
       )}
 

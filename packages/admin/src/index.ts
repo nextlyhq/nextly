@@ -166,6 +166,7 @@ export {
   ConditionRow,
   operatorsForType,
   operatorTakesValue,
+  ValidationNumberField,
 } from "./components/field-ui";
 export type {
   FieldTypePickerProps,
@@ -179,6 +180,7 @@ export type {
   ConditionSource,
   ConditionSourceOption,
   ConditionValue,
+  ValidationNumberFieldProps,
 } from "./components/field-ui";
 
 // Error Fallback Components

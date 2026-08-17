@@ -53,3 +53,10 @@ export type {
   ConditionSourceOption,
   ConditionValue,
 } from "./ConditionRow";
+
+// One numeric validation bound: label, control, optional help text. Owns the
+// empty-means-unset coercion, the whole/non-negative constraint for bounds that
+// count things, and its own id — the three details the surfaces that drew this
+// control independently disagreed about.
+export { ValidationNumberField } from "./ValidationNumberField";
+export type { ValidationNumberFieldProps } from "./ValidationNumberField";
