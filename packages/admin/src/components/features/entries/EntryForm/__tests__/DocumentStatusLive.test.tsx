@@ -38,19 +38,21 @@ describe("DocumentStatusLive — settled autosave states are announced", () => {
         isDirty={false}
       />
     );
-    expect(region()).toHaveTextContent("Saved");
+    expect(region()).toHaveTextContent("Your work is stored");
   });
 
   it("announces Unsaved changes when dirty after a save", () => {
     render(
       <DocumentStatusLive autosaveEnabled lastSavedAt={SAVED_AT} isDirty />
     );
-    expect(region()).toHaveTextContent("Unsaved changes");
+    expect(region()).toHaveTextContent(
+      "You have edits that are not yet stored"
+    );
   });
 
   it("announces Not saved when dirty with no recovery point yet", () => {
     render(<DocumentStatusLive autosaveEnabled lastSavedAt={null} isDirty />);
-    expect(region()).toHaveTextContent("Not saved");
+    expect(region()).toHaveTextContent("Your work is not yet stored");
   });
 });
 
@@ -78,7 +80,7 @@ describe("DocumentStatusLive — the transient state is deliberately silent", ()
         isDirty={false}
       />
     );
-    expect(region()).toHaveTextContent("Saved");
+    expect(region()).toHaveTextContent("Your work is stored");
 
     rerender(
       <DocumentStatusLive
@@ -90,7 +92,7 @@ describe("DocumentStatusLive — the transient state is deliberately silent", ()
     );
     // Clearing a live region is voiced as an interruption by some readers, so
     // the last settled message stays put while the transient state passes.
-    expect(region()).toHaveTextContent("Saved");
+    expect(region()).toHaveTextContent("Your work is stored");
   });
 });
 
@@ -129,7 +131,7 @@ describe("DocumentStatusLive — translation progress", () => {
       />
     );
     const el = region();
-    expect(el).toHaveTextContent("Saved");
+    expect(el).toHaveTextContent("Your work is stored");
     expect(el).toHaveTextContent("2 of 4 languages translated");
   });
 });

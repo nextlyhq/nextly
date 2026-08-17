@@ -39,6 +39,13 @@ export interface DocumentStatusLiveProps {
  * The settled description of where the document stands, or `null` while it is
  * in a state not worth interrupting the reader for.
  *
+ * The wording is a full sentence rather than the terse chip beside it
+ * ("Saved", "Not saved"). A live-region announcement arrives with no visual
+ * context — nothing tells the listener that the word belongs to a save
+ * indicator — so it has to carry its own subject. Keeping the two wordings
+ * distinct also stops the same text existing twice in the accessibility tree,
+ * once on the visible chip and once here.
+ *
  * "Saving…" deliberately returns `null`. Autosave debounces, so announcing the
  * transient state speaks over the reader every few seconds WHILE THEY TYPE,
  * which is worse than silence — the useful information is where it came to
@@ -50,8 +57,11 @@ function settledStatus(
   lastSavedAt: Date | null
 ): string | null {
   if (isSaving) return null;
-  if (isDirty) return lastSavedAt ? "Unsaved changes" : "Not saved";
-  return lastSavedAt ? "Saved" : null;
+  if (isDirty)
+    return lastSavedAt
+      ? "You have edits that are not yet stored"
+      : "Your work is not yet stored";
+  return lastSavedAt ? "Your work is stored" : null;
 }
 
 /**
