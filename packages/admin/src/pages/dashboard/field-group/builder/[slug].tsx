@@ -19,7 +19,13 @@
 import { DndContext, type DragEndEvent } from "@dnd-kit/core";
 import { arrayMove } from "@dnd-kit/sortable";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Button, Skeleton } from "@nextlyhq/ui";
+import {
+  Alert,
+  AlertDescription,
+  AlertTitle,
+  Button,
+  Skeleton,
+} from "@nextlyhq/ui";
 import type React from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { z } from "zod";
@@ -37,7 +43,7 @@ import {
   type BuilderSettingsValues,
 } from "@admin/components/features/schema-builder";
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
-import { RefreshCw } from "@admin/components/icons";
+import { AlertTriangle, RefreshCw } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { toast } from "@admin/components/ui";
@@ -522,28 +528,44 @@ export default function FieldGroupBuilderEditPage({
             edits normally, and only the SAVE is refused. An affordance living only on the list
             would let an operator do the work, lose it to a refusal, and then navigate away to
             find the repair. */}
+        {/* The shared Alert rather than a hand-rolled tinted box. The box drew
+            its edge with a 40%-alpha destructive border, which composites to
+            1.69:1 over this surface against the 3:1 that WCAG 1.4.11 asks of a
+            component boundary; the alert's destructive variant uses
+            full-strength scale tokens and a solid left accent instead. It also
+            supplies role="alert", which the box had no equivalent of:
+            `needsRepair` is derived from fetched data, so this refusal appears
+            AFTER the page settles and was previously announced to nobody.
+
+            The old class is described here rather than written out. Both the
+            contrast suite and Tailwind's scanner read this file as text, so
+            quoting the utility would re-introduce it — failing the suite from a
+            comment, and emitting the class into the build. */}
         {needsRepair && (
-          <div className="mb-4 rounded-lg border border-destructive/40 bg-destructive/5 p-4">
-            <h2 className="text-sm font-medium text-destructive">
-              Saving is blocked until this definition is repaired
-            </h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              This field group&apos;s tables changed and the record describing
-              them did not, so schema edits are refused. Repairing rewrites the
-              record to describe the tables — it moves no data and creates no
-              columns.
-            </p>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="mt-3"
-              onClick={() => setReconcileOpen(true)}
-            >
-              <RefreshCw className="mr-2 h-4 w-4" />
-              Review the repair
-            </Button>
-          </div>
+          <Alert variant="destructive" className="mb-4">
+            <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
+            <div className="min-w-0">
+              <AlertTitle>
+                Saving is blocked until this definition is repaired
+              </AlertTitle>
+              <AlertDescription className="mt-1">
+                This field group&apos;s tables changed and the record describing
+                them did not, so schema edits are refused. Repairing rewrites
+                the record to describe the tables — it moves no data and creates
+                no columns.
+              </AlertDescription>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="mt-3"
+                onClick={() => setReconcileOpen(true)}
+              >
+                <RefreshCw className="mr-2 h-4 w-4" />
+                Review the repair
+              </Button>
+            </div>
+          </Alert>
         )}
         <DndContext
           sensors={builder.sensors}

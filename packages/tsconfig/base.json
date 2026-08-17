@@ -5,7 +5,19 @@
     "declarationMap": true,
     "esModuleInterop": true,
     "incremental": true,
-    "tsBuildInfoFile": "./.tsbuildinfo",
+    // `${configDir}` resolves to the directory of the config that EXTENDS this
+    // one, not to this file's own directory. A plain relative path here does
+    // the latter, which pointed every package in the workspace at
+    // `packages/tsconfig/.tsbuildinfo` — one shared file that each `tsc` run
+    // overwrote in turn, so incremental state was always another package's and
+    // parallel runs raced to write it. It also sat outside every package's own
+    // directory, so turbo's package-scoped `outputs` never matched and 21
+    // packages logged `no output files found` on every run.
+    //
+    // Removing the option instead is not an alternative: tsup's dts step drives
+    // tsc through flags rather than a config file, where `--incremental`
+    // without an explicit `--tsBuildInfoFile` is TS5074 and fails the build.
+    "tsBuildInfoFile": "${configDir}/.tsbuildinfo",
     "isolatedModules": true,
     "lib": ["es2022", "DOM", "DOM.Iterable"],
     "module": "NodeNext",
