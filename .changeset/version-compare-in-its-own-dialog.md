@@ -4,6 +4,7 @@
 "@nextlyhq/admin": patch
 "@nextlyhq/admin-css": patch
 "@nextlyhq/blocks-engine": patch
+"@nextlyhq/blocks-react": patch
 "@nextlyhq/ui": patch
 "@nextlyhq/adapter-drizzle": patch
 "@nextlyhq/adapter-postgres": patch
@@ -20,6 +21,8 @@
 "@nextlyhq/prettier-config": patch
 "@nextlyhq/telemetry": patch
 "@nextlyhq/tsconfig": patch
+"@nextlyhq/builder": patch
+"@nextlyhq/module-specifiers": patch
 ---
 
 Comparing two versions now opens a dialog sized for a comparison instead of a third mode inside
