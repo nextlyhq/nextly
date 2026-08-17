@@ -1,40 +1,19 @@
+import type { ActiveNavSection } from "@admin/constants/nav-sections";
 import { ROUTES } from "@admin/constants/routes";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 import { isUnder } from "@admin/lib/routing";
-import type { ApiCollection } from "@admin/types/entities";
-
-import type { MainMenuCategory } from "../sidebar-types";
+import type { RouteSectionContext } from "@admin/types/route-section";
 
 /**
- * The subset of a standalone plugin's metadata that section resolution reads.
- *
- * Narrower than `PluginMetadata` so callers can supply a literal in a test
- * without constructing fields this decision never consults.
+ * Re-exported so the sidebar's callers have one import site for the decision
+ * and its inputs. The definitions live in `types/route-section` because the
+ * ROUTE registry names them too, and a registry importing a sidebar
+ * component's types would invert the dependency.
  */
-export interface StandalonePluginSummary {
-  name: string;
-  collections?: string[];
-}
-
-/**
- * Everything the active-section decision depends on.
- *
- * Placement arrives as a FUNCTION rather than as resolved values because the
- * caller memoises it over plugin metadata, and re-deriving it here would be a
- * second implementation of a question that already has one.
- */
-export interface ActiveSectionContext {
-  pathname: string;
-  /**
-   * The `from` search param. Typed as the router reports it: a repeated param
-   * parses to an array, which matches no section and therefore falls through.
-   */
-  from?: string | string[];
-  collections: ApiCollection[] | undefined;
-  getCollectionPlacement: (collection: ApiCollection) => string | undefined;
-  standalonePlugins: readonly StandalonePluginSummary[];
-  showBuilder: boolean;
-}
+export type {
+  RouteSectionContext as ActiveSectionContext,
+  StandalonePluginSummary,
+} from "@admin/types/route-section";
 
 /**
  * Which primary-rail category is active for the current location.
@@ -46,8 +25,8 @@ export interface ActiveSectionContext {
  * and hide the section its plugin actually chose.
  */
 export function resolveActiveSection(
-  ctx: ActiveSectionContext
-): MainMenuCategory {
+  ctx: RouteSectionContext
+): ActiveNavSection {
   const {
     pathname,
     from,
@@ -61,7 +40,7 @@ export function resolveActiveSection(
   // outranks every shared section below.
   for (const plugin of standalonePlugins) {
     const slug = pluginSlug(plugin.name);
-    const standaloneId = `standalone-${slug}` as MainMenuCategory;
+    const standaloneId: ActiveNavSection = `standalone-${slug}`;
     const collectionSlugs = plugin.collections ?? [];
     if (
       collectionSlugs.some(name =>
