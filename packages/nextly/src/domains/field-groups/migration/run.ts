@@ -31,10 +31,7 @@ import {
   resolveCatalogName,
   type IdentifierCaseRules,
 } from "../../schema/utils/resolve-catalog-name";
-import {
-  forgetFieldGroupStorageNames,
-  resolveRegistryNameFromCatalog,
-} from "../storage/resolve-storage-names";
+import { forgetFieldGroupStorageNames } from "../storage/resolve-storage-names";
 
 import { resolveStorageVerdict } from "./guard";
 import {
@@ -787,10 +784,6 @@ export async function runFieldGroupMigration(
           meta,
           migrationId,
           ownedDataTables: owned,
-          // Deliberately the un-memoized resolver. Its memoized sibling would
-          // answer with a name read before this run moved storage, which is the
-          // one answer a check running after the renames must not be given.
-          resolveRegistryTable: () => resolveRegistryNameFromCatalog(adapter),
         });
 
         // The settlement checks are gates rather than recorded work, so a marker

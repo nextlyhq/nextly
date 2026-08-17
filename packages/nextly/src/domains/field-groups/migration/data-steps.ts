@@ -26,123 +26,75 @@
  * @module domains/field-groups/migration/data-steps
  */
 
-import type {
-  TransactionContext,
-  WhereClause,
-} from "@nextlyhq/adapter-drizzle/types";
-
 import { NextlyError } from "../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { MetaService } from "../../meta/services/meta-service";
-import { isFieldGroupRegistry } from "../storage/resolve-storage-names";
 
 import { MIGRATION_TARGET } from "./manifest";
-import { rewriteConfigPath } from "./rewrite-config-path";
 import { rewriteContentKey } from "./rewrite-content-key";
 import {
-  rewriteFieldDefinitions,
-  type FieldGroupVocabulary,
-} from "./rewrite-field-definitions";
-import {
-  documentDiffers,
   findUnrewrittenRow,
-  readProperty,
-  readRowId,
   rewriteRowsInBatches,
-  whereRowId,
-  type Narrowed,
   type RowRewriteTarget,
 } from "./rewrite-rows";
 import type { MigrationStep } from "./runner";
 import type { MigrationSession } from "./session";
 
 /**
- * Every spelling of the field-group concept that is stored inside a row.
+ * Every spelling of the field-group concept this migration is ALLOWED to move.
  *
  * One object rather than loose arguments so a direction is a single value: a
  * rollback passes the same pair the other way round, and no caller can swap one
  * half of a vocabulary while leaving the rest.
+ *
+ * 🔴 **Membership is a claim that the running code can still read the value
+ * after it moves.** A migration that writes a spelling no reader accepts does
+ * not degrade — the data is intact and unreadable, which presents as the
+ * application failing rather than as a storage problem, so nothing points at
+ * the migration that caused it.
+ *
+ * Two mechanisms make a moved spelling readable, and they cover different kinds
+ * of name:
+ *
+ * - a **catalog object** — a table or a column — is resolved by probing the
+ *   live catalog, which is what `storage/resolve-storage-names.ts` does. Those
+ *   names are moved by `steps.ts` and never appear here.
+ * - a **token inside stored JSON** cannot be probed, because there is nothing to
+ *   introspect. It is readable after moving only if some accessor tries both
+ *   spellings, which is what `storage/field-group-type-key.ts` does for the one
+ *   member below.
+ *
+ * So a token belongs here only once its dual read exists. `wireTypeKey` is the
+ * only in-JSON spelling that qualifies today.
+ *
+ * The field-group vocabulary carries four more in-JSON spellings — a stored
+ * field definition's `type` and its reference keys, a registry row's
+ * `config_path` directory, and a schema event's scope. `MIGRATION_TARGET`
+ * declares where each is going and this migration deliberately does not take
+ * them there: every one is read through `STORAGE_FORMAT` alone, by eighteen
+ * product files in the case of `type`. **Adding one here without first writing
+ * its accessor is what stops the application booting.**
  */
 export interface FieldGroupStorageVocabulary {
-  /** Leading directory segment of a registry row's `config_path`. */
-  readonly configPathDir: string;
-  /** How a stored field definition spells a field-group field. */
-  readonly fields: FieldGroupVocabulary;
-  /** The key a dynamic-zone instance announces its type under, once it is JSON. */
+  /**
+   * The key a dynamic-zone instance announces its type under, once it is JSON.
+   *
+   * Readable after it moves because `readFieldGroupType` tries both spellings,
+   * current first — which is also what makes a half-rewritten database safe
+   * rather than merely survivable.
+   */
   readonly wireTypeKey: string;
-  /** The `scope_kind` a schema event carries when it concerns a field group. */
-  readonly schemaEventScope: string;
 }
 
 /** What deployed databases spell today. */
 export const LEGACY_STORAGE_VOCABULARY: FieldGroupStorageVocabulary = {
-  configPathDir: STORAGE_FORMAT.configPathDir,
-  fields: {
-    fieldType: STORAGE_FORMAT.fieldType,
-    refKeys: STORAGE_FORMAT.refKeys,
-  },
   wireTypeKey: STORAGE_FORMAT.wireTypeKey,
-  schemaEventScope: STORAGE_FORMAT.schemaEventScope,
 };
 
-/**
- * What they spell afterwards.
- *
- * `refKeys` carries no legacy spelling, which is what retires that key rather
- * than renaming it: rows holding it are normalised onto the canonical one, and
- * a rollback has none to put back because nothing ever wrote it.
- */
+/** What they spell afterwards. */
 export const FIELD_GROUP_STORAGE_VOCABULARY: FieldGroupStorageVocabulary = {
-  configPathDir: MIGRATION_TARGET.configPathDir,
-  fields: {
-    fieldType: MIGRATION_TARGET.fieldType,
-    refKeys: MIGRATION_TARGET.refKeys,
-  },
   wireTypeKey: MIGRATION_TARGET.wireTypeKey,
-  schemaEventScope: MIGRATION_TARGET.schemaEventScope,
 };
-
-/**
- * Registry tables holding stored field definitions, for one registry spelling.
- *
- * Spelled here rather than taken from `STORAGE_FORMAT`, because only one of them
- * names the field-group concept. The other two are collection and single
- * storage, and they hold field-group *references* inside their own definitions —
- * which is exactly why they have to be rewritten too, and why they do not move
- * when the concept is renamed.
- *
- * The field-group registry arrives as an argument because this rewrite is asked
- * twice per run, against two different physical tables: as a data step while the
- * legacy name is live, and again at settlement, by which point going up the
- * migrated name is the one that exists.
- */
-function definitionTables(registryTable: string): readonly string[] {
-  return ["dynamic_collections", "dynamic_singles", registryTable];
-}
-
-/**
- * How the settlement check learns which registry table to address.
- *
- * A function rather than a name because the plan is assembled before any rename
- * executes and this check runs after them: a name captured at build time going
- * up would be the one the run just moved away from. Supplied by the caller for
- * the same reason `StorageObserver` is — the plan describes work, and the caller
- * owns the database handle that answers questions about it.
- */
-export type RegistryTableResolver = () => Promise<string>;
-
-/** The columns one registry row needs written back. */
-type Patch = Record<string, unknown>;
-
-/** Property holding a registry row's stored field definitions. */
-const FIELDS_PROPERTY = "fields";
-
-/** Property holding a registry row's source-file path. */
-const CONFIG_PATH_PROPERTY = "configPath";
-
-/** The schema-event ledger, and the property naming what an event was about. */
-const SCHEMA_EVENTS_TABLE = "nextly_schema_events";
-const SCOPE_KIND_PROPERTY = "scopeKind";
 
 /**
  * Ledgers carrying the wire key inside a stored document.
@@ -161,12 +113,13 @@ const CONTENT_TARGETS: readonly RowRewriteTarget[] = [
  * Ask the ledger surfaces whether they are still rewritten, and refuse if not.
  *
  * The body of {@link settleLedgersStep}'s verify, exposed so a caller can ask
- * the same question without running a migration. Both ways a verifier reports
- * residue are honoured, because the two shapes are not interchangeable: the
- * ledger walks THROW, naming the offending row, while the schema-event scan
- * RETURNS FALSE. `MigrationStep.verify` is declared to answer a boolean, so the
- * answer is what decides — a loop that only lets throws through accepts every
- * surface whose verifier reports by returning.
+ * the same question without running a migration.
+ *
+ * Both ways a verifier can report residue are honoured, because a step is free
+ * to choose either: a ledger walk THROWS, naming the offending row, while
+ * `MigrationStep.verify` is declared to answer a boolean. Reading only the
+ * throws would accept every surface that reports by returning — so the returned
+ * answer is what decides, and the throw is allowed to pass through.
  *
  * @throws a step's own refusal where it raises one, and otherwise a refusal
  * naming the steps that answered false.
@@ -179,7 +132,7 @@ export async function assertLedgersSettled(args: {
   to: FieldGroupStorageVocabulary;
 }): Promise<void> {
   const unsettled: string[] = [];
-  for (const step of ledgerSteps(args)) {
+  for (const step of buildDataMigrationSteps(args)) {
     if (!(await step.verify(args.session))) unsettled.push(step.id);
   }
   if (unsettled.length > 0) {
@@ -222,7 +175,7 @@ export function settleLedgersStep(args: {
   from: FieldGroupStorageVocabulary;
   to: FieldGroupStorageVocabulary;
 }): MigrationStep {
-  const ledgers = ledgerSteps(args);
+  const ledgers = buildDataMigrationSteps(args);
   return {
     id: "data:settle-ledgers",
     // A gate: re-entered by every invocation rather than recorded. A recorded
@@ -242,75 +195,17 @@ export function settleLedgersStep(args: {
 }
 
 /**
- * The other last step of a plan: re-rewrite the registries, then re-check them.
- *
- * The companion to {@link settleLedgersStep}, kept separate rather than folded
- * into it. The runner retries a step that does not verify, so one combined step
- * would re-walk both ledgers every time a single registry row needed rewriting —
- * redoing the expensive half to fix the cheap one. A refusal also names the step
- * it came from, and two ids say which surface is unsettled where one would not.
- *
- * 🔴 The registry it addresses is resolved from the **catalog** rather than
- * fixed when the plan was built. Going up this runs after the renames, so the
- * name the plan started with is the one storage has just moved away from; going
- * down it runs after the data steps have restored it. Reading the catalog is
- * what makes one step correct in both directions, and it is the same rule the
- * read path follows — resolve against what is observably there, never against
- * what a marker claims.
- *
- * The read itself stays inside the ORM. Both spellings of the registry are
- * registered as schema objects, so a resolved name is all typed CRUD needs, and
- * the JSON column's three dialect encodings stay the ORM's problem rather than
- * becoming this module's.
- */
-export function settleRegistryDefinitionsStep(args: {
-  from: FieldGroupStorageVocabulary;
-  to: FieldGroupStorageVocabulary;
-  resolveRegistryTable: RegistryTableResolver;
-}): MigrationStep {
-  const { from, to, resolveRegistryTable } = args;
-  // Resolved on every call rather than once per step object. Caching across
-  // `run` and `verify` is correct only while no rename separates them, which is
-  // a property of today's plan and not of the contract; one catalog read on an
-  // operation that runs once per database is not worth pinning that to.
-  const against = async (): Promise<MigrationStep> =>
-    registryDefinitionsStep(from, to, await resolveRegistryTable());
-
-  return {
-    id: "data:settle-registry-definitions",
-    // A gate, for the same reason as its ledger counterpart.
-    recordsProgress: false,
-    async run(session) {
-      await (await against()).run(session);
-    },
-    async verify(session) {
-      return (await against()).verify(session);
-    },
-  };
-}
-
-/** The steps whose surfaces the renames never touch. */
-function ledgerSteps(args: {
-  meta: MetaService;
-  migrationId: string;
-  from: FieldGroupStorageVocabulary;
-  to: FieldGroupStorageVocabulary;
-}): MigrationStep[] {
-  const { meta, migrationId, from, to } = args;
-  return [
-    schemaEventScopeStep(from, to),
-    ...CONTENT_TARGETS.map(target =>
-      contentStep({ meta, migrationId, target, from, to })
-    ),
-  ];
-}
-
-/**
  * Build the steps that rewrite stored vocabulary, in canonical order.
  *
  * Direction is which vocabulary is passed as which argument. A rollback is this
  * call with the two exchanged, and the resulting steps reversed along with the
  * rest of the plan.
+ *
+ * Every step here addresses a ledger, and that is now a property of the list
+ * rather than a subset of it: the only spelling this migration moves inside a
+ * row is the wire key, which lives in stored documents that no rename touches.
+ * The settlement gate therefore re-runs this same list instead of selecting
+ * from it — two builders agreeing on the same question is what drifts.
  */
 export function buildDataMigrationSteps(args: {
   meta: MetaService;
@@ -320,203 +215,9 @@ export function buildDataMigrationSteps(args: {
 }): MigrationStep[] {
   const { meta, migrationId, from, to } = args;
 
-  return [
-    // The legacy name, unconditionally. These steps execute only while it is
-    // the live one: before the renames going up, and after they are undone
-    // going down. Resolving here would be asking a question whose answer is
-    // already fixed by where the step sits.
-    registryDefinitionsStep(from, to, STORAGE_FORMAT.registryTable),
-    schemaEventScopeStep(from, to),
-    ...CONTENT_TARGETS.map(target =>
-      contentStep({ meta, migrationId, target, from, to })
-    ),
-  ];
-}
-
-/**
- * Rewrite the vocabulary stored in registry rows.
- *
- * One step over all three registries, in one transaction, deliberately not
- * batched. The runtime builds its schema from these rows, so a half-rewritten
- * set is not partial progress — it is a database whose entities disagree about
- * what a field group is. The set is bounded by how many collections, singles and
- * field groups a project declares, which is the one thing here that does not
- * grow with use.
- *
- * `config_path` travels with it because it is a second spelling on the same rows
- * of the same registry: splitting them would mean reading those rows twice to
- * write two columns that are only ever wrong together.
- */
-function registryDefinitionsStep(
-  from: FieldGroupStorageVocabulary,
-  to: FieldGroupStorageVocabulary,
-  registryTable: string
-): MigrationStep {
-  const tables = definitionTables(registryTable);
-  return {
-    id: "data:registry-definitions",
-    async run(session) {
-      const outcome = await session.inTransaction(async ctx => {
-        // Every patch is computed before any of them is issued. A refusal
-        // leaves the transaction as a value rather than as an exception, and a
-        // value returned from the callback COMMITS. Staging first is what keeps
-        // that from committing the rows already rewritten and leaving exactly
-        // the mixed-vocabulary registry set this step exists to prevent.
-        const staged: { table: string; id: string; patch: Patch }[] = [];
-        for (const table of tables) {
-          for (const row of await readRegistryRows(ctx, table)) {
-            const patch = registryPatch(row, table, from, to);
-            if (!patch.ok) return patch;
-            if (patch.value === null) continue;
-            const id = readRowId(row, table);
-            if (!id.ok) return id;
-            staged.push({ table, id: id.value, patch: patch.value });
-          }
-        }
-        for (const write of staged) {
-          await ctx.update(write.table, write.patch, whereRowId(write.id));
-        }
-        return { ok: true as const };
-      });
-      if (!outcome.ok) throw outcome.refusal;
-    },
-    async verify(session) {
-      const outcome = await session.inTransaction(async ctx => {
-        for (const table of tables) {
-          for (const row of await readRegistryRows(ctx, table)) {
-            const patch = registryPatch(row, table, from, to);
-            if (!patch.ok) return patch;
-            if (patch.value !== null) return { ok: true as const, done: false };
-          }
-        }
-        return { ok: true as const, done: true };
-      });
-      if (!outcome.ok) throw outcome.refusal;
-      return outcome.done;
-    },
-  };
-}
-
-/**
- * Read one registry's rows, projecting only what is rewritten here.
- *
- * `config_path` is projected for every registry even though only the field-group
- * one names the field-group directory. All three declare the column, and asking
- * for it uniformly is what lets `registryPatch` decide by table rather than by
- * which columns happen to have arrived.
- *
- * Locked, for the same reason the ledger walk locks: a plain `SELECT` takes no
- * lock on Postgres or MySQL, and the update writes the whole `fields` document
- * back, so a schema save committing in between would be overwritten rather than
- * merged — a silently lost schema change.
- */
-async function readRegistryRows(
-  ctx: TransactionContext,
-  table: string
-): Promise<Record<string, unknown>[]> {
-  return ctx.select<Record<string, unknown>>(table, {
-    columns: ["id", FIELDS_PROPERTY, CONFIG_PATH_PROPERTY],
-    forUpdate: true,
-  });
-}
-
-/**
- * What one registry row must be updated to, or `null` when it is already right.
- *
- * The same function decides what `run` writes and what `verify` looks for, so
- * the two cannot disagree about whether a row still needs work — a step that
- * ran and then failed its own postcondition is what two implementations of this
- * question would eventually produce.
- */
-function registryPatch(
-  row: Record<string, unknown>,
-  table: string,
-  from: FieldGroupStorageVocabulary,
-  to: FieldGroupStorageVocabulary
-): Narrowed<Patch | null> {
-  const patch: Patch = {};
-
-  const fields = readProperty(row, { table, property: FIELDS_PROPERTY });
-  if (!fields.ok) return fields;
-  const rewrittenFields = rewriteFieldDefinitions(
-    fields.value,
-    from.fields,
-    to.fields
+  return CONTENT_TARGETS.map(target =>
+    contentStep({ meta, migrationId, target, from, to })
   );
-  if (documentDiffers(fields.value, rewrittenFields)) {
-    patch[FIELDS_PROPERTY] = rewrittenFields;
-  }
-
-  // Only the field-group registry records a path under the renamed directory.
-  // A collection's `config_path` names `collections/`, and rewriting it would be
-  // renaming a directory this migration has nothing to do with.
-  //
-  // Asked under BOTH spellings rather than compared against the legacy one. The
-  // settlement check addresses this registry by whichever name the catalog
-  // holds, so a comparison against a single name would quietly stop examining
-  // `config_path` the moment the rename had happened — the one moment the check
-  // exists for.
-  if (isFieldGroupRegistry(table)) {
-    const configPath = readProperty(row, {
-      table,
-      property: CONFIG_PATH_PROPERTY,
-    });
-    if (!configPath.ok) return configPath;
-    const rewrittenPath = rewriteConfigPath(
-      configPath.value,
-      from.configPathDir,
-      to.configPathDir
-    );
-    if (documentDiffers(configPath.value, rewrittenPath)) {
-      patch[CONFIG_PATH_PROPERTY] = rewrittenPath;
-    }
-  }
-
-  return { ok: true, value: Object.keys(patch).length === 0 ? null : patch };
-}
-
-/**
- * Rewrite the scope a schema event records.
- *
- * The one value in this migration that is a whole column rather than something
- * inside a document, so it is a single conditional update rather than a
- * read-modify-write. Exact equality, not a pattern: the column also holds
- * `collection`, `single`, `core` and `global`, and only one of those is the word
- * being renamed.
- */
-function schemaEventScopeStep(
-  from: FieldGroupStorageVocabulary,
-  to: FieldGroupStorageVocabulary
-): MigrationStep {
-  const stale: WhereClause = {
-    and: [
-      { column: SCOPE_KIND_PROPERTY, op: "=", value: from.schemaEventScope },
-    ],
-  };
-
-  return {
-    id: "data:schema-event-scope",
-    async run(session) {
-      await session.inTransaction(async ctx => {
-        await ctx.update(
-          SCHEMA_EVENTS_TABLE,
-          { [SCOPE_KIND_PROPERTY]: to.schemaEventScope },
-          stale
-        );
-      });
-    },
-    async verify(session) {
-      return session.inTransaction(async ctx => {
-        // Asks for one row rather than a count: the question is whether any
-        // remain, and a single row answers it without reading the ledger.
-        const remaining = await ctx.select<Record<string, unknown>>(
-          SCHEMA_EVENTS_TABLE,
-          { columns: ["id"], where: stale, limit: 1 }
-        );
-        return remaining.length === 0;
-      });
-    },
-  };
 }
 
 /**
