@@ -56,15 +56,27 @@ describe("the site stylesheet", () => {
     expect(out).toContain("--site-content-width");
   });
 
-  it("emits NOTHING when the host asks for no site sheet", () => {
-    // The behaviour every existing consumer had before this prop existed, and
-    // the reason it is opt-in: emitting token definitions unasked changes what
-    // a stored `{ $token }` resolves to, and a page whose appearance depends on
-    // one of those dangling is a page that moves.
+  it("emits the DEFAULT set even when the host says nothing", () => {
+    // Changed deliberately: this asserted the opposite while the prop was
+    // opt-in. The asymmetry it protected cost more than it saved — a block
+    // could not reference a token at all, because a default reading
+    // `color.surface` resolved on a Nextly route and resolved to nothing here.
+    // `core/card` shipped with no background because of it.
     const out = html();
 
-    expect(out).not.toContain("--site-");
-    expect(out).not.toContain("data-nx-site-sheet");
+    expect(out).toContain("data-nx-site-sheet");
+    expect(out).toContain("--site-color-surface");
+  });
+
+  it("lets a host opt OUT explicitly, with false", () => {
+    // The escape hatch, and it must be reachable or "default on" becomes
+    // "mandatory". `false` rather than an empty token list, because
+    // `resolveSiteTokens` LAYERS: an empty override means "no overrides" and
+    // still yields every default. This test is what found that the opt-out did
+    // not exist at all.
+    const out = html(false);
+
+    expect(out).not.toContain("--site-color-surface");
   });
 
   it("lets a site override a default by NAME while the others survive", () => {
