@@ -11,7 +11,7 @@ import {
   DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
 } from "@nextlyhq/blocks-engine";
-import type { BlockDocument } from "@nextlyhq/blocks-engine";
+import type { BlockDocument, SiteSheetInput } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -1768,5 +1768,104 @@ describe("createBlocksPage", () => {
     });
 
     expect(props.styles).toEqual(styles);
+  });
+});
+
+/**
+ * A route's site-sheet input, narrowed.
+ *
+ * `PageRendererProps.siteStyles` is `SiteSheetInput | false`, because a
+ * standalone host may refuse the sheet outright. A ROUTE never does — so this
+ * narrows by ASSERTING that rather than by casting, which keeps "a route does
+ * not disable the site sheet" a checked claim instead of a silenced one.
+ */
+function siteOf(props: PageRendererProps): SiteSheetInput | undefined {
+  const site = props.siteStyles;
+  expect(site, "a route must never disable the site sheet").not.toBe(false);
+  return site === false ? undefined : site;
+}
+
+describe("createBlocksPage and the site stylesheet", () => {
+  const BREAKPOINTS = {
+    viewport: [{ id: "base", label: "Desktop" }],
+    container: [],
+  };
+
+  it("supplies a site sheet BY DEFAULT, unlike the bare renderer", async () => {
+    // A route is where "it should already work" is the right answer: without a
+    // site sheet every `{ $token }` resolves to nothing, which is the defect
+    // this closes. `PageRenderer` stays opt-in because a standalone consumer
+    // owns its own `<head>`; a Nextly route owns neither.
+    const props = await render({
+      collections: ["pages"],
+      field: "content",
+      nextly: reader({ slug: "about", content: document }),
+      styleContext: { breakpoints: BREAKPOINTS },
+    });
+
+    expect(props.siteStyles).toBeDefined();
+    expect(siteOf(props)?.breakpoints).toEqual(BREAKPOINTS);
+  });
+
+  it("reuses the breakpoints the site already stated", async () => {
+    // Two answers to "what are this site's breakpoints" is how the shared sheet
+    // and the page sheet come to disagree about which at-rules a tier compiles
+    // under — and the disagreement is invisible, because each sheet is
+    // internally consistent on its own.
+    const props = await render({
+      collections: ["pages"],
+      field: "content",
+      nextly: reader({ slug: "about", content: document }),
+      styleContext: { breakpoints: BREAKPOINTS },
+    });
+
+    expect(siteOf(props)?.breakpoints).toBe(props.styleContext?.breakpoints);
+  });
+
+  it("lets the route state its own breakpoints instead", async () => {
+    const own = {
+      viewport: [{ id: "base", label: "Wide" }],
+      container: [],
+    };
+    const props = await render({
+      collections: ["pages"],
+      field: "content",
+      nextly: reader({ slug: "about", content: document }),
+      styleContext: { breakpoints: BREAKPOINTS },
+      siteStyles: { breakpoints: own },
+    });
+
+    expect(siteOf(props)?.breakpoints).toEqual(own);
+  });
+
+  it("carries the site's own tokens through to the sheet", async () => {
+    const props = await render({
+      collections: ["pages"],
+      field: "content",
+      nextly: reader({ slug: "about", content: document }),
+      styleContext: { breakpoints: BREAKPOINTS },
+      siteStyles: {
+        tokens: {
+          tokens: [
+            { name: "color.primary", kind: "color", values: { light: "#abc" } },
+          ],
+        },
+      },
+    });
+
+    expect(siteOf(props)?.tokens?.tokens[0]?.name).toBe("color.primary");
+  });
+
+  it("emits NO site sheet when the site states no breakpoints anywhere", async () => {
+    // A sheet compiled against breakpoints nobody chose would put the
+    // block-default tier under at-rules the page sheet does not use. Refusing is
+    // the answer that cannot silently disagree.
+    const props = await render({
+      collections: ["pages"],
+      field: "content",
+      nextly: reader({ slug: "about", content: document }),
+    });
+
+    expect(props.siteStyles).toBeUndefined();
   });
 });

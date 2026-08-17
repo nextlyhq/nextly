@@ -105,11 +105,31 @@ const MAX_FIELDS = 100;
 /**
  * The grid that stacks the labels and controls.
  *
- * `gap` takes a `{ $token }` rather than a length because `space.4` is in the
- * guaranteed default token set, and `container.tsx` is explicit that spacing
- * comes from the document or from a token and never from a block file. Where no
- * token is guaranteed — corner radius, a surface colour — a block has to either
- * use a literal or leave the property alone; here one exists, so it is used.
+ * **`gap` is a LENGTH rather than a `{ $token }`, and the reason is a defect
+ * this block shipped with.** It first read `{ $token: "space.4" }`, on the
+ * argument that `container.tsx` wants spacing from a token and that `space.4`
+ * is in `defaultSiteTokens()`. Both halves are true and the conclusion was
+ * still wrong: a token reference compiles to `var(--site-space-4)`, and
+ * **nothing in this repository ever emits that variable.**
+ *
+ * Measured, three ways that agree: `compileSiteSheet` — the only thing that
+ * writes token CSS — has ZERO consumers outside `blocks-engine`;
+ * `emitTokenBlocks` is called only by that function, its own tests and a
+ * benchmark; and the string `--site-` appears in no source file outside the
+ * engine at all (positive control: `--nx-` appears in four). So
+ * `defaultSiteTokens()` guarantees nothing today — it is a default nobody
+ * applies.
+ *
+ * An undefined custom property makes the declaration invalid at computed-value
+ * time, so `gap` fell back to `normal`, which for a grid is zero. The form
+ * rendered with its fields touching, and every check passed: the property is in
+ * `STYLE_CATALOG`, the declaration reached the compiled stylesheet, and the
+ * test asserted exactly that. **Whether the `var()` RESOLVES is a third
+ * question, and nothing asks it.**
+ *
+ * A length is correct until the site stylesheet is wired into the render path.
+ * `1rem` because that is what `space.4` itself declares, so the value does not
+ * change when this becomes a token again.
  *
  * Both `display` and `gap` are in `STYLE_CATALOG`. A property that is not is
  * dropped by the compiler rather than passed through, so the test asserts the
@@ -120,7 +140,7 @@ export const FORM_BASE_STYLES = {
   base: {
     base: {
       display: "grid",
-      gap: { $token: "space.4" },
+      gap: "1rem",
     },
   },
 } as const;

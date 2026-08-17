@@ -86,6 +86,8 @@ const clientEntries = [
   "src/config.ts",
   "src/next.ts",
   "src/field-group-type.ts",
+  // Types only, consumed by the admin's reconcile surface. Contributes no runtime code.
+  "src/field-group-reconcile.ts",
   // Pure serializable data, consumed by the admin's field pickers and by plugins.
   "src/collections/fields/catalog.ts",
 ];

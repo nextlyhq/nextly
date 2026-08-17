@@ -496,6 +496,44 @@ or plant a sentinel in the region a truncated read would miss and require it
 back. Each of those names something the read must contain. A count names
 nothing, and `> 0` names less.
 
+**The population may not have ARRIVED yet, which the count form cannot express.**
+Everything above assumes the read is finished and the question is how much it
+covered. When the answer is asynchronous there is a third state, and it looks
+exactly like a clean verdict: `result === null` is both "there is nothing" and
+"nothing has come back". Measured here, in one day, in three unrelated places:
+
+- a hook test asserted "no recovery offer" after waiting only for the REQUEST,
+  and passed with the rule under test DELETED — the read had not returned, and
+  the window it passed in exists for a few milliseconds on every run;
+- a component test asserted an indicator was absent, and passed against a parent
+  that rendered NOTHING AT ALL;
+- a merge gate read a CI job as not-failing while it sat queued, which is the
+  same statement about a job that had not started.
+
+`total > 0` does not reach any of these, because the population is not small —
+it is not yet knowable. What does reach it is making ARRIVAL observable inside
+the assertion: expose an explicit `isResolved` beside the result and wait for
+the ANSWER rather than for the call, require a control the render always
+produces before asserting a sibling is absent, and assert `success` per job
+rather than the absence of `failure`. In each case the fix adds a value that
+distinguishes "asked and got nothing" from "have not asked yet", and in each
+case that value turned out to be worth exposing to real callers too: a consumer
+needs the same distinction to avoid rendering nothing and then flashing.
+
+**A control in a NEIGHBOURING test is a real control and a fragile one.** Where
+a negative assertion is only meaningful because some positive case elsewhere in
+the file proves the matcher resolves, the guarantee is by adjacency rather than
+by construction: rewrite or delete those positives — a routine act, done by
+someone who never read this — and the negatives go on passing while meaning
+nothing, silently. Prefer a control INSIDE the assertion that needs it. Where
+that is genuinely impractical, say in the negative which test carries its
+control, so the dependency is declared rather than inferred.
+
+**None of the three was found by reading the code.** Each was found by breaking
+something and watching what failed, and in two of them the break changed no test
+result at all, which was itself the finding. A break-verify that moves nothing
+is not a clean bill; it means the property has no coverage yet.
+
 The tell is a sentence where the evidence names one thing and the conclusion
 names a family: a queue, a marker, a control — against load, a merge, a set of
 findings. When you notice it, do not look for a better number first. Name the

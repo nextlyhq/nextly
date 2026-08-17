@@ -1,12 +1,33 @@
 /**
  * "." entry — isomorphic, React-free public API.
  *
- * Exposes the core contracts + open registries (`defineBlock`, `defaultBlockRegistry`,
- * control registry, tree/validate/migrate/style/bindings) and the `pageBuilder()` plugin
- * factory. The React editor lives on `./admin`; the renderer on `./render`.
+ * The plugin is a REGISTRATION surface: it declares the `blocks` field, the
+ * pages collection, the permissions and the registry a plugin hands its blocks
+ * to. It renders nothing and defines no document model of its own.
+ *
+ * Both of those used to live here. The package carried a complete parallel
+ * implementation — its own `BlockDocument` and `BlockNode`, its own style
+ * compiler, its own block library and its own editor — beside the ones in
+ * `@nextlyhq/blocks-engine`, `@nextlyhq/blocks-react` and `@nextlyhq/builder`.
+ * The two did not merely duplicate each other; they disagreed about what values
+ * MEAN. A page's nodes sat under a synthetic root here and in a flat array
+ * there, a design token was keyed `token` here and `$token` there, per-node
+ * visibility was a flat breakpoint map here and a nested one there, and a
+ * binding was a different contract entirely. Each of those crossed a boundary
+ * without a type error and changed what rendered.
+ *
+ * Keeping both was not a cost paid once. It meant every document question had
+ * two answers that had to be kept in agreement by hand, and the disagreements
+ * only ever surfaced as a page that looked wrong — never as something that
+ * failed to compile.
+ *
+ * So the document model, the style compiler, the block library and the editor
+ * are the engine's, the renderer's and the builder's respectively, and this
+ * package registers them. The editor is `@nextlyhq/builder`; blocks render
+ * through `@nextlyhq/blocks-react`.
  */
-export * from "./core";
 export { pageBuilder } from "./plugin";
+export type { PageBuilderOptions } from "./plugin";
 
 // The blocks field type and the document it stores. `BlockDocument` is
 // re-exported here because generated types name it: an app depends on this
@@ -34,26 +55,9 @@ export type {
   BlocksFieldConfig,
 } from "./fields/blocks-options";
 export { blocks, isBlocksField } from "./fields/blocksHelper";
-export type { PageBuilderOptions } from "./plugin";
-export { pagesCollection, EDIT_VIEW_PATH } from "./collections/pages";
-export {
-  pageBuilderField,
-  FIELD_COMPONENT_PATH,
-} from "./collections/pageBuilderField";
-export type { PageBuilderFieldOptions } from "./collections/pageBuilderField";
+export { pagesCollection } from "./collections/pages";
 export { editorChoiceFields } from "./collections/editorChoice";
 export type { EditorChoiceOptions } from "./collections/editorChoice";
-export {
-  pageBuilderFields,
-  withPageBuilder,
-  PAGE_BUILDER_FIELD_TYPE,
-  PAGE_BUILDER_CONTENT_FIELD,
-  PAGE_BUILDER_TYPE,
-} from "./collections/pageBuilderEntry";
-export type {
-  PageBuilderAdminConfig,
-  EditorMode,
-} from "./collections/pageBuilderEntry";
 
 /**
  * Contributing blocks: the registry a plugin hands its blocks to.
@@ -68,13 +72,10 @@ export {
   PAGE_BUILDER_PLUGIN,
 } from "./blocks/registration-service";
 export type { BlockRegistrationService } from "./blocks/registration-service";
-// `defineBlock` and `BlockDefinition` are NOT re-exported here. The package
-// root already exports both from `./core`, where `defineBlock` registers into
-// `defaultBlockRegistry` and `BlockDefinition` is the PoC's own shape. An
-// explicit re-export would shadow the star export, so a consumer importing
-// `defineBlock` from the root would silently get the engine's helper — which
-// only returns its argument — and stop registering its blocks.
-//
-// Block authors take both from `@nextlyhq/plugin-sdk/blocks`, where the name
-// is unclaimed and the export is covered by the SDK's stability ledger.
+// `defineBlock` and `BlockDefinition` are still not re-exported from this root,
+// and the reason has changed rather than gone away. There is no longer a rival
+// `defineBlock` here to shadow; instead the name belongs to the engine, and a
+// second route to it from a plugin package is a second thing to keep stable.
+// Block authors take both from `@nextlyhq/plugin-sdk/blocks`, where the export
+// is covered by the SDK's stability ledger.
 export type { AnyBlockDefinition } from "@nextlyhq/blocks-engine";

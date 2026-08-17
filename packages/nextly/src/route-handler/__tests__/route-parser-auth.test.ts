@@ -35,6 +35,10 @@ describe("component route auth tier", () => {
       "previewComponentSchemaChanges",
       "applyComponentSchemaChanges",
       "reconcileComponent",
+      // Writes nothing, and still belongs in this list: it reports live column shapes and the
+      // drift against the stored definition, so it must be no more reachable than the repair it
+      // describes. Its verb is GET, which is exactly why leaving it out would be easy.
+      "previewComponentReconcile",
     ]) {
       expect(isPublicEndpoint("field-groups", method)).toBe(false);
       expect(requiresAuthOnly("field-groups", method)).toBe(false);

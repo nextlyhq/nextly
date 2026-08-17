@@ -4,6 +4,13 @@ import { type LeftPanel } from "@nextlyhq/builder";
 // The shell comes from its own entry: that is the one carrying `"use client"`,
 // which is why the root barrel can stay callable from a Server Component.
 import { BuilderShell } from "@nextlyhq/builder/shell";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@nextlyhq/ui";
 // The design system's sheet FIRST, then the editor's, which supplements it.
 // `@nextlyhq/builder/styles.css` deliberately ships neither the `--nx-*` tokens
 // nor the base reset, because the host already loads a sheet that owns both and
@@ -56,7 +63,37 @@ export function BuilderShellHarness({
         }}
         topBar={<span data-testid="top-bar-slot">Top bar slot</span>}
         breadcrumb={<span data-testid="breadcrumb-slot">Breadcrumb slot</span>}
-        inspector={<div data-testid="inspector-slot">Inspector slot</div>}
+        inspector={
+          <div data-testid="inspector-slot">
+            Inspector slot
+            {/*
+             * The ONE interactive thing in this harness, and it earns the
+             * exception the module docblock makes for inert slots.
+             *
+             * Where a portalled overlay LANDS is not decidable without one: it
+             * leaves the DOM position it was opened from, so the question is
+             * which container receives it and whether that container is inside
+             * the subtree the shell hides. A marker cannot answer that, and
+             * jsdom cannot either, since it computes no styles and would report
+             * a clipped dropdown and a visible one identically.
+             *
+             * Deliberately at the BOTTOM of the inspector: the inspector
+             * scrolls, so an overlay opened here is where clipping shows. One
+             * opened mid-panel looks correct whether or not the container
+             * escaped the scroll box.
+             */}
+            <div style={{ height: "150vh" }} aria-hidden />
+            <Select>
+              <SelectTrigger data-testid="overlay-trigger">
+                <SelectValue placeholder="Pick one" />
+              </SelectTrigger>
+              <SelectContent data-testid="overlay-content">
+                <SelectItem value="a">First</SelectItem>
+                <SelectItem value="b">Second</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        }
         renderPanel={(panel: LeftPanel) => (
           <div data-testid="panel-slot" data-panel={panel}>
             {panel} slot

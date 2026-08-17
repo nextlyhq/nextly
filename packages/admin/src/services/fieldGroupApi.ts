@@ -8,6 +8,10 @@
  */
 
 import type { ListResponse, TableParams } from "@nextlyhq/ui";
+import type {
+  ReconcileFieldGroupPreview,
+  ReconcileFieldGroupResult,
+} from "nextly/field-group-reconcile";
 
 import type { ApiFieldGroup } from "@admin/types/entities";
 
@@ -235,5 +239,36 @@ export const fieldGroupApi = {
       newSchemaVersion: result.newSchemaVersion,
       toastSummary: result.toastSummary,
     };
+  },
+
+  /**
+   * What repairing this field group's stored definition WOULD change.
+   *
+   * A GET on the same path the repair posts to: the verb is what separates asking from doing, and
+   * this half writes nothing. Safe to call on any field group, including a healthy one.
+   */
+  previewReconcile: async (
+    fieldGroupSlug: string
+  ): Promise<ReconcileFieldGroupPreview> => {
+    return protectedApi.get<ReconcileFieldGroupPreview>(
+      `/field-groups/schema/${fieldGroupSlug}/reconcile`
+    );
+  },
+
+  /**
+   * Repair the stored definition to describe the live tables.
+   *
+   * `expectedSchemaVersion` is the version the preview reported, and passing it is what makes the
+   * approval specific: the server refuses rather than repairing if the row has moved since, so a
+   * stale tab can never apply a plan its operator never read.
+   */
+  reconcile: async (
+    fieldGroupSlug: string,
+    expectedSchemaVersion: number
+  ): Promise<MutationResponse<ReconcileFieldGroupResult>> => {
+    return protectedApi.post<MutationResponse<ReconcileFieldGroupResult>>(
+      `/field-groups/schema/${fieldGroupSlug}/reconcile`,
+      { expectedSchemaVersion }
+    );
   },
 } as const;

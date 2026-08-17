@@ -7,6 +7,11 @@ import { defineSingle, text, textarea, fieldGroup } from "nextly/config";
 
 export const SiteSettings = defineSingle({
   slug: "site-settings",
+  // Drafts and autosave, ON, so the dev harness exercises recovery points for a
+  // Single as well as for a collection entry. Without an explicit `versions`
+  // the entity resolves as unversioned and the policy gate refuses every
+  // autosave write, which is why the Single path had never run.
+  versions: { drafts: true },
   label: { singular: "Site Settings" },
   // Localized: translatable fields store per language in `single_site-settings_locales`.
   localized: true,

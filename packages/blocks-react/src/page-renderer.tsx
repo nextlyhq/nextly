@@ -1,8 +1,11 @@
 import {
+  compileSiteSheet,
   DOCUMENT_FORMAT_VERSION,
   PAGE_ROOT_CLASS,
+  resolveSiteTokens,
   type BlockDocument,
   type DocumentLimits,
+  type SiteSheetInput,
   type StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
 import type { ReactElement, ReactNode } from "react";
@@ -53,6 +56,48 @@ export interface PageRendererProps {
    * write path. Ignored when `styles` is supplied.
    */
   styleContext?: StyleCompileContext;
+  /**
+   * The site's design tokens, fonts and named classes, compiled into the sheet
+   * every page shares and emitted BEFORE the page's own.
+   *
+   * **Order is the cascade and is not negotiable.** `compileSiteSheet` emits
+   * font faces, then tokens, then block-type defaults, then named classes; the
+   * page sheet is appended after, which is what lets a node's own value beat a
+   * class and a class beat a block default. Emitting these in the other order
+   * would invert every one of those.
+   *
+   * **Its tokens LAYER over the defaults rather than replacing them**, through
+   * `resolveSiteTokens`. A site that supplied one brand colour and thereby lost
+   * `content.width` and `space.4` would break every block reading those, and
+   * break it silently: an unresolved custom property invalidates the
+   * declaration rather than reporting anything.
+   *
+   * **Omitting it still emits the DEFAULT token set.** This was opt-in when the
+   * prop was introduced, on the argument that a standalone consumer owns its own
+   * `<head>`. That argument does not survive contact with what the asymmetry
+   * cost: a block could not reference a token at all, because a default reading
+   * `color.surface` would resolve on a Nextly route and silently resolve to
+   * nothing here. So `core/card` shipped with no background and no border, and
+   * `badge` was unbuildable — and the pressure that produced six blocks reaching
+   * for the admin `--nx-*` namespace stayed exactly where it was.
+   *
+   * What a host receives unasked is a block of `--site-*` custom-property
+   * DEFINITIONS. They are additive and namespaced, and the engine reserves that
+   * prefix — `safeTokenPrefix` refuses `--nx-` and `--tw-` precisely so a site
+   * cannot restyle surfaces it does not own — so they cannot collide with a
+   * host's own variables. A host that wants its own set supplies one; a host
+   * that wants NONE passes `siteStyles={false}` — an explicit refusal rather
+   * than an empty token list, because `resolveSiteTokens` LAYERS, so an empty
+   * override means "no overrides" and still yields every default. A test found
+   * that: the opt-out did not exist until it was given its own value.
+   *
+   * A sheet needs a breakpoint set to compile the block-default tier under, and
+   * it is taken from the RECONCILED compile context rather than from
+   * `styleContext` alone — a consumer rendering a stored artifact supplies no
+   * context of its own and would otherwise get no sheet, which is the ordinary
+   * production path.
+   */
+  siteStyles?: SiteSheetInput | false;
   /** Shown in place of an asynchronous block until its output arrives. */
   blockFallback?: ReactNode;
   /**
@@ -77,6 +122,15 @@ export interface PageRendererProps {
    * omitting this does not deny remote fetches.
    */
   hostPolicy?: BlockHostPolicy;
+  /**
+   * Emit `data-nx-node="<node id>"` on each block's root element.
+   *
+   * OFF by default: a published page should not carry editor concerns. An editor
+   * turns it on to get a stable address per node — and it is the ONLY per-node
+   * hook that reaches the DOM independently of styling, because a node with no
+   * compiled styles receives only the block-TYPE class.
+   */
+  nodeAttribute?: boolean;
 }
 
 /**
@@ -128,6 +182,8 @@ export function PageRenderer({
   blocks,
   styles,
   styleContext,
+  siteStyles,
+  nodeAttribute,
   blockFallback,
   limits,
   hostPolicy,
@@ -349,8 +405,58 @@ export function PageRenderer({
   );
   const rootClassName = scope ? `${PAGE_ROOT_CLASS} ${scope}` : PAGE_ROOT_CLASS;
 
+  // Tokens LAYERED over the defaults, never replacing them: a site supplying
+  // one brand colour must not thereby lose `content.width` and `space.4`, and
+  // losing them is silent because an unresolved custom property invalidates the
+  // declaration rather than reporting anything. `resolveSiteTokens` is the one
+  // answer to "what tokens does this site have" — asked here and by anything
+  // that edits them, so the two cannot drift.
+  //
+  // Resolved even when the host names no tokens of its own, which is what makes
+  // the default set reach a page at all. Until this existed nothing called
+  // `compileSiteSheet`, so `defaultSiteTokens()` was a default nobody applied
+  // and every `{ $token }` compiled to a `var()` with nothing behind it.
+  // Derived ONCE, and from the RECONCILED context rather than from the caller's
+  // `styleContext`: a consumer rendering a stored artifact supplies no context
+  // of its own, and taking the raw prop would leave the ordinary production path
+  // with no sheet. Two answers to "what are this site's breakpoints" is also how
+  // the shared sheet and the page sheet come to disagree about which at-rules a
+  // tier is emitted under, invisibly, since each sheet is consistent on its own.
+  const siteInput = siteStyles === false ? undefined : siteStyles;
+  const siteBreakpoints =
+    siteStyles === false
+      ? undefined
+      : (siteInput?.breakpoints ?? compileContext?.breakpoints);
+  // A sheet by DEFAULT. Without one a block cannot reference a token at all —
+  // a default reading `color.surface` would resolve on a route and resolve to
+  // nothing here — which is why `core/card` shipped with no background.
+  // Withheld only when no breakpoints are known, because a sheet compiled
+  // against breakpoints nobody chose would put the block-default tier under
+  // at-rules the page sheet does not use.
+  const siteSheet =
+    siteBreakpoints === undefined
+      ? undefined
+      : compileSiteSheet({
+          ...siteInput,
+          breakpoints: siteBreakpoints,
+          tokens: resolveSiteTokens(siteInput?.tokens),
+        });
+
   return (
     <div className={rootClassName}>
+      {siteSheet?.css ? (
+        // FIRST, because order is the cascade: the site sheet carries font
+        // faces, tokens and block-type defaults, and the page's own sheet is
+        // appended after so a node's value beats a class and a class beats a
+        // block default. Emitted with its content hash, which is what lets a
+        // host recognise the same bytes across pages and serve them once.
+        <style
+          data-nx-site-sheet={siteSheet.contentHash}
+          dangerouslySetInnerHTML={{
+            __html: styleTextForInjection(siteSheet.css),
+          }}
+        />
+      ) : null}
       {css ? (
         // Injected as raw text rather than as a child, because React escapes a
         // text child and a stylesheet cannot survive that: `&` and `>` are
@@ -367,6 +473,7 @@ export function PageRenderer({
         classes={classes}
         fallback={blockFallback}
         {...(hostPolicy === undefined ? {} : { hostPolicy })}
+        {...(nodeAttribute === undefined ? {} : { nodeAttribute })}
       />
     </div>
   );

@@ -245,6 +245,7 @@ export {
   DARK_MODE_ATTRIBUTE,
   TOKEN_MODES,
   defaultSiteTokens,
+  resolveSiteTokens,
   emitFontFaces,
   emitTokenBlocks,
   isTokenName,

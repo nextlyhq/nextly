@@ -16,12 +16,17 @@
  */
 
 import { resolveLocalizedFieldNames } from "nextly/config";
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 
 import { historyEnabledFrom } from "@admin/components/features/versions/history-enabled";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useGeneralSettings } from "@admin/hooks/queries/useGeneralSettings";
+import { useAutosaveRecovery } from "@admin/hooks/useAutosaveRecovery";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
+import {
+  autosaveScopeFor,
+  useDocumentAutosave,
+} from "@admin/hooks/useDocumentAutosave";
 import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { usePreviewLink } from "@admin/hooks/usePreviewLink";
@@ -34,6 +39,7 @@ import { cn } from "@admin/lib/utils";
 
 import { EntryLocaleProvider } from "../EntryLocaleContext";
 
+import { AutosaveRecoveryBanner } from "./AutosaveRecoveryBanner";
 import {
   effectiveEntryStatus,
   isSlugPerLocale,
@@ -362,6 +368,39 @@ export function EntryForm({
   // reachable, since the control that would call it is not rendered.
   const { data: generalSettings } = useGeneralSettings();
   const savedEntryId = entry?.id === undefined ? "" : String(entry.id);
+
+  // Recovery points for this author, recorded while they type. Addressed only
+  // once the entry has an id: a document that has never been saved has nothing
+  // for the endpoint to address, and `null` turns recording off rather than
+  // inventing one.
+  const autosaveScope = useMemo(
+    () => autosaveScopeFor("collection", collection.name, savedEntryId),
+    [savedEntryId, collection.name]
+  );
+  // The other half of recording: offer the work back when the editor opens.
+  const recovery = useAutosaveRecovery({
+    scope: autosaveScope,
+  });
+  const restoreRecovery = useCallback(() => {
+    if (!recovery.offer) return;
+    // `reset` with `keepDefaultValues` so the form goes DIRTY: the recovered
+    // values are not what the server holds, and treating them as the new
+    // baseline would let the reader navigate away believing they were stored.
+    form.reset(recovery.offer.snapshot as Record<string, unknown>, {
+      keepDefaultValues: true,
+    });
+    recovery.dismiss();
+  }, [recovery, form]);
+
+  const autosave = useDocumentAutosave({
+    scope: autosaveScope,
+    form,
+    locale: locale ?? null,
+    // Held off while a real save is in flight. The document is about to change
+    // underneath the snapshot, so a recovery point written now would describe a
+    // state that never existed.
+    enabled: !isSubmitting,
+  });
   const linkLocale = previewLinkLocale({
     localized: collection.localized === true,
     locale,
@@ -476,6 +515,9 @@ export function EntryForm({
                   draftsEnabled={collection.draftsEnabled === true}
                   isSubmitting={isSubmitting}
                   isDirty={isDirty}
+                  autosaveEnabled={autosaveScope !== null}
+                  autosaveStatus={autosave.status}
+                  autosaveLastSavedAt={autosave.lastSavedAt}
                   entry={entry}
                   collectionSlug={collection.name}
                   historyFields={getCollectionFields(collection)}
@@ -525,6 +567,15 @@ export function EntryForm({
                   isRailCollapsed={railCollapsed}
                   onToggleRail={mode === "edit" ? toggleRail : undefined}
                 />
+                {/* Above the fields and below the header: the reader sees
+                    the document it refers to without the offer covering it. */}
+                {recovery.offer ? (
+                  <AutosaveRecoveryBanner
+                    savedAt={recovery.offer.savedAt}
+                    onRestore={restoreRecovery}
+                    onDismiss={recovery.dismiss}
+                  />
+                ) : null}
                 <EntryMetaStrip
                   slugField={slugField}
                   hasStatus={hasStatus}

@@ -1,40 +1,49 @@
+"use client";
+
 /**
- * "./admin" entry — registers the plugin's React admin components (D19/D60). Importing
- * this module (via the host's generated import map, or eagerly) makes the string-path
- * components resolvable by the admin shell.
+ * "./admin" entry — REGISTERS the plugin's React admin components, and exports
+ * them.
+ *
+ * The registration is the load-bearing half. A field names its control by
+ * SPECIFIER (`BLOCKS_FIELD_COMPONENT`), and the admin resolves that string
+ * through the component registry — so an entry that exports a component without
+ * registering it leaves every blocks field rendering an empty group with its
+ * label and nothing inside. Nothing type-checks the link, because the link is a
+ * string.
+ *
+ * One component, where there were five. The other four were the previous
+ * editor: an edit view, a field wrapper and two schema/entry toggles, all
+ * rendering a canvas and inspector this package implemented itself. Editing now
+ * belongs to `@nextlyhq/builder` and blocks draw through
+ * `@nextlyhq/blocks-react`, so the plugin contributes the FIELD and not the
+ * editor behind it.
+ *
+ * `BlocksSummary` stays because it is the blocks field's own admin surface
+ * rather than part of that editor: it reads the stored document through the
+ * entry form's control and describes it, importing nothing from this package.
+ *
+ * @module @nextlyhq/plugin-page-builder/admin
  */
+
 import {
   registerComponents,
   registerKnownPlugin,
 } from "@nextlyhq/plugin-sdk/admin";
 
 import { BlocksSummary } from "./BlocksSummary";
-import { registerDefaultControls } from "./controls/registerDefaultControls";
-import { PageBuilderEditView } from "./PageBuilderEditView";
-import { PageBuilderField } from "./PageBuilderField";
-import { PageBuilderModeToggle } from "./PageBuilderModeToggle";
-import { PageBuilderToggle } from "./PageBuilderToggle";
 
-// Register the built-in inspector controls into the (open) control registry on load.
-registerDefaultControls();
-
-const EDIT_VIEW_PATH =
-  "@nextlyhq/plugin-page-builder/admin#PageBuilderEditView";
-// Must match FIELD_COMPONENT_PATH exported from the "." entry (pageBuilderField).
-const FIELD_PATH = "@nextlyhq/plugin-page-builder/admin#PageBuilderField";
-// Schema-builder slot component (contributes.admin.schemaBuilderSlot).
-const TOGGLE_PATH = "@nextlyhq/plugin-page-builder/admin#PageBuilderToggle";
-// Entry-form toolbar slot component (contributes.admin.entryFormToolbarSlot).
-const MODE_TOGGLE_PATH =
-  "@nextlyhq/plugin-page-builder/admin#PageBuilderModeToggle";
-// The blocks field's editor-form control. Must match BLOCKS_FIELD_COMPONENT
-// exported from the "." entry (blocksField).
+/**
+ * The blocks field's editor-form control.
+ *
+ * Must match `BLOCKS_FIELD_COMPONENT` exported from the "." entry. The two are
+ * separate declarations of one string because the field is declared in a
+ * Node-safe module and the component only exists behind this client boundary —
+ * so the entry cannot import the constant without dragging React into the
+ * isomorphic bundle. A mismatch is silent: the field renders empty.
+ */
 const BLOCKS_SUMMARY_PATH = "@nextlyhq/plugin-page-builder/admin#BlocksSummary";
+
 const COMPONENTS = {
-  [EDIT_VIEW_PATH]: PageBuilderEditView,
-  [FIELD_PATH]: PageBuilderField,
-  [TOGGLE_PATH]: PageBuilderToggle,
-  [MODE_TOGGLE_PATH]: PageBuilderModeToggle,
   [BLOCKS_SUMMARY_PATH]: BlocksSummary,
 };
 
@@ -47,9 +56,5 @@ registerKnownPlugin("@nextlyhq/plugin-page-builder", () => {
   return Promise.resolve();
 });
 
-export { PageBuilderEditView };
-export { PageBuilderField };
-export { PageBuilderToggle };
-export { PageBuilderModeToggle };
 export { BlocksSummary };
-export type { CustomEditViewProps } from "./types";
+export type { BlocksSummaryProps } from "./BlocksSummary";

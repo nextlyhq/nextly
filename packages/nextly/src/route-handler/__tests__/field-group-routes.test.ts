@@ -36,6 +36,28 @@ describe("field group REST routes", () => {
     expect(apply.service).toBe("field-groups");
   });
 
+  it("separates the reconcile preview from the repair by VERB, on one path", () => {
+    // The two share a path and differ only in method, so the risk is one branch swallowing the
+    // other: a GET falling through to the repair would apply a change nobody asked for, and a POST
+    // caught by the preview would report a repair it never performed. Both directions are pinned
+    // here because each reads as working from the other's side.
+    const preview = parseRestRoute(
+      ["field-groups", "schema", "seo", "reconcile"],
+      "GET"
+    );
+    expect(preview.service).toBe("field-groups");
+    expect(preview.method).toBe("previewComponentReconcile");
+    expect(preview.routeParams?.slug).toBe("seo");
+
+    const apply = parseRestRoute(
+      ["field-groups", "schema", "seo", "reconcile"],
+      "POST"
+    );
+    expect(apply.service).toBe("field-groups");
+    expect(apply.method).toBe("reconcileComponent");
+    expect(apply.routeParams?.slug).toBe("seo");
+  });
+
   it("no longer answers on the pre-rename segment", () => {
     // Removed rather than aliased, so it must resolve to nothing at all — not
     // merely to something other than `field-groups`, which would still pass if

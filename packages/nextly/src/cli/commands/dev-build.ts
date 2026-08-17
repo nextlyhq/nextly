@@ -24,6 +24,7 @@ import {
   settleI18nTransition,
   type I18nTransitionKind,
 } from "../../domains/i18n/migration/transition-state";
+import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
 // Resolve the versioning config so `db:sync` persists it (parity with boot/HMR).
 import { resolveVersionsConfig } from "../../domains/versions/resolve-config";
 import {
@@ -742,7 +743,46 @@ async function detectRemovedComponents(
  * Delete orphaned components: remove registry entry and drop data table.
  * Uses raw delete to avoid re-fetch issues with getComponent/updateComponent.
  */
-async function handleRemovedComponents(
+/**
+ * Exported for its own test.
+ *
+ * The guard below is an ORDERING property — the exclusion is taken before the first drop — and the
+ * only way to observe an ordering is to invoke the thing that does it. Reaching this through
+ * `syncComponents` would mean standing up a config, a registry and a scan whose failure modes are
+ * unrelated to what is being asserted, so the test would be answering a broader question than the
+ * one it claims.
+ */
+export async function handleRemovedComponents(
+  removed: OrphanRecord[],
+  adapter: DrizzleAdapter,
+  logger: CommandContext["logger"]
+): Promise<void> {
+  // 🔴 The whole pass, not each component, and not nothing.
+  //
+  // This path does its own schema work rather than calling a service, so the exclusion belongs at
+  // the one depth where the table drop and the registry delete meet — the same reasoning that put
+  // it on the field group apply handler.
+  //
+  // It spans the LOOP because `removed` carries table names read before any of this ran. A storage
+  // migration renaming `comp_<slug>` to `fg_<slug>` between two iterations would leave the later
+  // drops addressing names that no longer exist — silently, since they are `DROP TABLE IF EXISTS` —
+  // and the field group would survive as an orphaned table nothing scans for again.
+  //
+  // `issuesDdl: true` because this genuinely drops tables: a first-ever migration must not be able
+  // to create the lock, claim it, and start renaming while this pass is already deleting.
+  //
+  // The boundary this does NOT close: `removed` was computed by a scan that ran before the lock was
+  // taken, so a migration completing between that scan and this call remains possible. Holding from
+  // the scan means moving the exclusion up into the caller, which is convergence work rather than
+  // this guard.
+  await withSchemaChangeExcluded(
+    { adapter, logger, label: "delete orphaned field groups", issuesDdl: true },
+    () => deleteOrphanedComponents(removed, adapter, logger)
+  );
+}
+
+/** The teardown itself, split out so the exclusion above reads as one decision. */
+async function deleteOrphanedComponents(
   removed: OrphanRecord[],
   adapter: DrizzleAdapter,
   logger: CommandContext["logger"]

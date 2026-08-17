@@ -30,31 +30,19 @@
  * author adds padding to the card when there is no image, or to a box inside it
  * when there is, and both stay available. A default would remove the second.
  *
- * **No default background or border, because no token can express one.**
- * `defaultSiteTokens()` guarantees `color.text`, `color.background`,
- * `color.primary`, `font.body`, `content.width` and `space.4` — there is no
- * surface colour and no border colour among them. A `{ $token }` reference to a
- * name a site never defines compiles to a `var()` with nothing behind it, and a
- * hardcoded hex is wrong in whichever of light and dark it was not chosen for.
+ * **It carries a background and a border, and it did not until today.** This
+ * docblock argued at length that it could not: `defaultSiteTokens()` named no
+ * surface colour, `compileSiteSheet` had no consumers so no token resolved at
+ * all, and a hardcoded hex is wrong in whichever of light and dark it was not
+ * chosen for. Every clause was true and the conclusion has been overtaken —
+ * `color.surface` and `color.border` are in the guaranteed set, and both render
+ * paths emit the sheet that defines them.
  *
- * The obvious way around that is to DERIVE a surface from the two colours that
- * are guaranteed, which is what the older page-builder blocks do:
- * `color-mix(in srgb, var(--nx-color-primary) 12%, var(--nx-color-background))`.
- * It is refused here, and the reason is worth stating because the catalog does
- * NOT refuse it — that value validates and compiles through verbatim.
- *
- * `--nx-*` is the ADMIN's token namespace. This renderer emits none of it: the
- * engine writes site tokens as `--site-*`, which is what `{ $token }` compiles
- * to, and a hand-written `var(--site-…)` is refused in turn. So a `color-mix`
- * over `--nx-*` would pass validation, reach the stylesheet, and resolve to
- * nothing on a published page, while looking correct in an admin preview that
- * happens to define those variables. A default that is right only where the
- * admin's stylesheet is loaded is worse than no default, because the failure
- * appears on the visitor's page and nowhere a person is looking.
- *
- * So the two properties that would make a card look like a card on a plain page
- * are left to the author until a surface token exists to carry them, and the
- * defaults here are the ones that are correct under every theme.
+ * Kept as a record rather than deleted, because the SHAPE recurs: the reason a
+ * default was declined was never the block's own, and a reader finding only
+ * "carries a background" would not know the correct mechanism had been missing
+ * rather than the design undecided. Six blocks across three lanes reached for
+ * the admin `--nx-*` namespace while it was.
  *
  * @module blocks/library/card
  */
@@ -85,6 +73,24 @@ export const CARD_BASE_STYLES = {
     base: {
       borderRadius: "12px",
       overflow: "hidden",
+      // The two properties this block declined until the tokens existed. Both
+      // are `{ $token }` rather than literals BECAUSE they are colours: a
+      // literal is wrong in whichever of light and dark it was not chosen for,
+      // which is the whole reason a token set exists. Spacing could take a
+      // literal safely; a surface cannot.
+      backgroundColor: { $token: "color.surface" },
+      border: {
+        // A hairline on all four sides, written per LOGICAL side so it follows
+        // writing direction rather than assuming left-to-right.
+        width: {
+          blockStart: "1px",
+          blockEnd: "1px",
+          inlineStart: "1px",
+          inlineEnd: "1px",
+        },
+        style: "solid",
+        color: { $token: "color.border" },
+      },
     },
   },
 } as const;

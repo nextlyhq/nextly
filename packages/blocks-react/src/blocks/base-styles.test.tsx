@@ -23,7 +23,11 @@
  *    still be dropped for a VALUE the grammar refuses, which the first question
  *    cannot see.
  */
-import { blockTypeClassName, getStyleProperty } from "@nextlyhq/blocks-engine";
+import {
+  blockTypeClassName,
+  defaultSiteTokens,
+  getStyleProperty,
+} from "@nextlyhq/blocks-engine";
 import type {
   AnyBlockDefinition,
   BlockDocument,
@@ -175,10 +179,12 @@ describe("every default the core library declares", () => {
     // so a filter that matched nothing would run zero cases and the file would
     // pass having inspected nothing at all.
     expect(DECLARING.map(block => block.name).sort()).toEqual([
+      "core/accordion",
       "core/card",
       "core/column",
       "core/columns",
       "core/form",
+      "core/gallery",
     ]);
   });
 
@@ -241,4 +247,86 @@ describe("every default the core library declares", () => {
       ).toEqual([]);
     }
   );
+});
+
+/**
+ * Every token reference a `NodeStyles` makes, at any depth.
+ *
+ * Walked to the leaf rather than read one level down: a token may sit inside an
+ * object-shaped declaration — a per-corner radius, a per-side border colour —
+ * and a check that only inspected top-level values would report those clean.
+ */
+function tokenNamesIn(value: unknown): string[] {
+  if (typeof value !== "object" || value === null) return [];
+  const record = value as Record<string, unknown>;
+  if (typeof record.$token === "string") return [record.$token];
+  return Object.values(record).flatMap(tokenNamesIn);
+}
+
+describe("a token a default depends on must be one the site set defines", () => {
+  /**
+   * **This REPLACES a ratchet that forbade tokens outright**, and the swap is the
+   * point rather than a relaxation.
+   *
+   * That ratchet existed because nothing emitted token CSS: `compileSiteSheet`
+   * had no consumers, so `{ $token }` compiled to a `var()` with nothing behind
+   * it and three shipped blocks rendered with their children touching. Its
+   * stated expiry was "when the site stylesheet is wired into the render path",
+   * and both render paths now emit it — a route by default and `PageRenderer` by
+   * default. So it is deleted by the change that met its condition, exactly as
+   * written, rather than weakened or exempted per block.
+   *
+   * What replaces it is the question that actually matters now. A token is only
+   * as good as its DEFINITION: a default naming `color.nonesuch` compiles to a
+   * `var()` that dangles for the same reason the old defect did, and neither the
+   * catalog check nor the compiled-CSS check above can see it — the property is
+   * legitimate and the declaration reaches the stylesheet carrying a `var()`
+   * nobody defined.
+   */
+  it.each(DECLARING.map(block => [block.name, block] as const))(
+    "%s names only tokens the guaranteed set defines",
+    (name, block) => {
+      const guaranteed = new Set(defaultSiteTokens().map(token => token.name));
+      const named = tokenNamesIn(block.baseStyles);
+
+      // A block naming no token passes vacuously, which is correct — but the
+      // population is asserted below so this file cannot pass having inspected
+      // nothing.
+      const undefinedTokens = named.filter(token => !guaranteed.has(token));
+
+      expect(
+        undefinedTokens,
+        `${name} depends on ${undefinedTokens.join(", ")}, which no guaranteed ` +
+          `token defines. The reference compiles to a var() with nothing behind ` +
+          `it, so the property silently falls back to its initial value — the ` +
+          `same failure as the tokens nothing emitted, one level in.`
+      ).toEqual([]);
+    }
+  );
+
+  it("inspects at least one block that DOES depend on a token", () => {
+    // The population control. Every case above passes by finding nothing, so a
+    // library that stopped using tokens entirely — or a walker that returned
+    // nothing — would leave the whole describe green while checking no token at
+    // all. `core/card` is the reason this check exists.
+    const withTokens = DECLARING.filter(
+      block => tokenNamesIn(block.baseStyles).length > 0
+    ).map(block => block.name);
+
+    expect(withTokens).toContain("core/card");
+  });
+
+  it("detects a token reference at any depth, including inside an object", () => {
+    // The walker's own control, and the nested form is the one that matters:
+    // `core/card`'s border colour sits INSIDE an object-shaped declaration, so a
+    // shallow reader would report it clean.
+    expect(
+      tokenNamesIn({ base: { base: { gap: { $token: "space.4" } } } })
+    ).toEqual(["space.4"]);
+    expect(
+      tokenNamesIn({
+        base: { base: { border: { color: { $token: "color.border" } } } },
+      })
+    ).toEqual(["color.border"]);
+  });
 });

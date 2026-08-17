@@ -6,13 +6,14 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { getSpy, delSpy } = vi.hoisted(() => ({
+const { getSpy, delSpy, putSpy } = vi.hoisted(() => ({
   getSpy: vi.fn(),
   delSpy: vi.fn(),
+  putSpy: vi.fn(),
 }));
 
 vi.mock("@admin/lib/api/protectedApi", () => ({
-  protectedApi: { get: getSpy, delete: delSpy },
+  protectedApi: { get: getSpy, delete: delSpy, put: putSpy },
 }));
 
 import { versionApi } from "../versionApi";
@@ -102,5 +103,82 @@ describe("versionApi.discardWorkingDraft", () => {
     expect(delSpy).toHaveBeenCalledWith(
       "/collections/posts/entries/e1/versions/working-draft"
     );
+  });
+});
+
+/**
+ * The rolling recovery point. Its URL is a named sub-resource rather than a
+ * version number, and its verb is PUT rather than POST, because the row is
+ * rewritten in place: sending the same snapshot twice must leave one recovery
+ * point rather than two.
+ */
+describe("versionApi autosave", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    putSpy.mockResolvedValue({ updatedAt: "2026-08-17T07:00:00.000Z" });
+    getSpy.mockResolvedValue(null);
+  });
+
+  it("writes a collection entry's recovery point with PUT", async () => {
+    await versionApi.saveAutosave(collection, { title: "draft" }, "en");
+
+    // The verb is asserted by WHICH spy was called: a POST would leave the
+    // server's PUT-only route unmatched, and the request would 404 rather than
+    // failing anywhere a type could catch.
+    expect(putSpy).toHaveBeenCalledTimes(1);
+    // The BODY IS THE SNAPSHOT, not an envelope containing one, and the locale
+    // rides in the query string. This pins the SERVER's contract: the
+    // dispatcher stores the body itself, so an envelope here would be stored as
+    // the snapshot and every field would sit one level too deep.
+    expect(putSpy).toHaveBeenCalledWith(
+      "/collections/posts/entries/e1/versions/autosave?locale=en",
+      { title: "draft" }
+    );
+  });
+
+  it("addresses a Single's recovery point without an entry id", async () => {
+    await versionApi.saveAutosave(single, { siteName: "x" });
+
+    expect(putSpy).toHaveBeenCalledWith("/singles/settings/versions/autosave", {
+      siteName: "x",
+    });
+  });
+
+  /**
+   * An unlocalized document sends an explicit null rather than omitting the
+   * key. Absent and null mean the same thing to this endpoint, and sending the
+   * key keeps the body one shape for every document.
+   */
+  /**
+   * An unlocalized document sends no locale at all rather than an empty one.
+   * The server reads it from the request params, so an empty value would be a
+   * locale named "" rather than the absence of one.
+   */
+  it("omits the locale entirely when the document has none", async () => {
+    await versionApi.saveAutosave(collection, { title: "draft" });
+
+    expect(putSpy).toHaveBeenCalledWith(
+      "/collections/posts/entries/e1/versions/autosave",
+      { title: "draft" }
+    );
+  });
+
+  it("reads the caller's own recovery point from the same path", async () => {
+    await versionApi.getAutosave(collection);
+
+    expect(getSpy).toHaveBeenCalledWith(
+      "/collections/posts/entries/e1/versions/autosave"
+    );
+  });
+
+  /**
+   * Having no recovery point is an ordinary answer, not a failure. The read
+   * must surface it as null so a caller can tell "nothing stored" apart from a
+   * request that did not complete.
+   */
+  it("returns null when the author has no recovery point", async () => {
+    getSpy.mockResolvedValue(null);
+
+    await expect(versionApi.getAutosave(single)).resolves.toBeNull();
   });
 });

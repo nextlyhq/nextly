@@ -28,6 +28,7 @@ import { useEffect, useMemo, useCallback, useRef } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
+import { AutosaveRecoveryBanner } from "@admin/components/features/entries/EntryForm/AutosaveRecoveryBanner";
 import { EntryFormContent } from "@admin/components/features/entries/EntryForm/EntryFormContent";
 import { EntryFormProvider } from "@admin/components/features/entries/EntryForm/EntryFormProvider";
 import { EntryFormSidebar } from "@admin/components/features/entries/EntryForm/EntryFormSidebar";
@@ -47,7 +48,12 @@ import {
 } from "@admin/components/features/entries/EntryLocaleContext";
 import { historyEnabledFrom } from "@admin/components/features/versions/history-enabled";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
+import { useAutosaveRecovery } from "@admin/hooks/useAutosaveRecovery";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
+import {
+  autosaveScopeFor,
+  useDocumentAutosave,
+} from "@admin/hooks/useDocumentAutosave";
 import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import {
@@ -567,6 +573,35 @@ export function SingleForm({
     onLocaleChange,
   };
 
+  // Recovery points for this author, the same mechanism the entry editor uses.
+  // A Single always exists once its schema does, so unlike an entry there is no
+  // pre-creation state -- but the address still comes from the stored document,
+  // so a schema whose row has not been materialised yet records nothing rather
+  // than addressing a document that is not there.
+  const autosaveScope = useMemo(
+    () => autosaveScopeFor("single", schema.slug, document?.id),
+    [schema.slug, document?.id]
+  );
+  const autosave = useDocumentAutosave({
+    scope: autosaveScope,
+    form,
+    locale: locale ?? null,
+    enabled: !isSubmitting,
+  });
+  const recovery = useAutosaveRecovery({
+    scope: autosaveScope,
+  });
+  const restoreRecovery = useCallback(() => {
+    if (!recovery.offer) return;
+    // `keepDefaultValues` so the form goes DIRTY: the recovered values are not
+    // what the server holds, and treating them as the new baseline would let
+    // the reader navigate away believing they were stored.
+    form.reset(recovery.offer.snapshot as Record<string, unknown>, {
+      keepDefaultValues: true,
+    });
+    recovery.dismiss();
+  }, [recovery, form]);
+
   return (
     <EntryLocaleProvider value={localeCtx}>
       <div className={cn("space-y-0", className)}>
@@ -585,6 +620,9 @@ export function SingleForm({
                 strip in another -mx-8 was double-negative and pushed them
                 past the page edges. */}
               <EntrySystemHeader
+                autosaveEnabled={autosaveScope !== null}
+                autosaveStatus={autosave.status}
+                autosaveLastSavedAt={autosave.lastSavedAt}
                 mode="edit"
                 titleField={titleField}
                 historyFields={schema.fields}
@@ -637,6 +675,19 @@ export function SingleForm({
                 isRailCollapsed={railCollapsed}
                 lockSlug
               />
+
+              {/* Inside the main column, below the header, matching the entry
+                  editor. Placed above the flex row it sat UNDER the sticky
+                  header, which intercepted pointer events: the offer was
+                  visible and its buttons were not clickable. */}
+              {recovery.offer ? (
+                <AutosaveRecoveryBanner
+                  savedAt={recovery.offer.savedAt}
+                  onRestore={restoreRecovery}
+                  onDismiss={recovery.dismiss}
+                  className="mx-6 mt-3"
+                />
+              ) : null}
 
               {mainFields.length > 0 && (
                 <div className="@4xl/content:p-8 pt-6">

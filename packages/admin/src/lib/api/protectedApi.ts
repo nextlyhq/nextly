@@ -12,6 +12,19 @@ export const protectedApi = {
       },
       true
     ),
+  // PUT, for a write whose result depends only on the body and not on how many
+  // times it is sent. The rolling autosave row is the case that needed it: the
+  // same snapshot sent twice must leave one recovery point, not two.
+  put: <T>(path: string, body: unknown, options = {}) =>
+    fetcher<T>(
+      path,
+      {
+        ...options,
+        method: "PUT",
+        body: JSON.stringify(body),
+      },
+      true
+    ),
   patch: <T>(path: string, body: unknown, options = {}) =>
     fetcher<T>(
       path,

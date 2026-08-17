@@ -635,7 +635,6 @@ export const COMPONENTS_METHODS: Record<
           // flag. The write is non-fatal (the DDL already succeeded), but track
           // whether it landed so the response never reports a version the DB did not
           // persist.
-          let versionPersisted = true;
           try {
             await adapter.update(
               // The registry this database holds. The failure is otherwise silent
@@ -654,12 +653,48 @@ export const COMPONENTS_METHODS: Record<
               { and: [{ column: "slug", op: "=", value: slug }] }
             );
           } catch (err) {
-            versionPersisted = false;
-            const msg = err instanceof Error ? err.message : String(err);
-            console.warn(
-              `[applyComponentSchemaChanges] Post-apply metadata write failed for '${slug}': ${msg}. ` +
-                `schema_version was not advanced; the save is reported at the current version so a retry re-attempts the bump.`
+            // 🔴 The DDL has ALREADY COMMITTED. Reporting success here is worse than the failure
+            // itself: the tables hold the new shape, the row still describes the old one, and the
+            // version is deliberately not advanced — so an editor loaded before this save still
+            // PASSES the optimistic-lock check and plans its next transition from a shape the
+            // database no longer has. That is the retry `assertNotDiverged` exists to refuse,
+            // arriving through the one door that had no guard.
+            //
+            // Recorded through the shared decision so this path and the metadata service answer
+            // the same state identically. It returns only when the row turns out to already carry
+            // this edit — the write landed and the raise was in reading it back, which MySQL
+            // produces routinely because its update is an UPDATE followed by a SELECT. Every other
+            // outcome throws, which is the point: nobody is told the schema was applied.
+            const { recordStrandedTransition } = await import(
+              "../../domains/field-groups/services/record-stranded-transition"
             );
+            const expectedHash = calculateSchemaHash(fields as FieldConfig[]);
+            await recordStrandedTransition({
+              registry: svc.registry,
+              logger: getLoggerFromDI() ?? DISCARDED_LOG,
+              slug,
+              expectedSchemaVersion: currentVersion,
+              tableName,
+              wasLocalized: isLocalized,
+              cause: err,
+              // This edit is carried by the row only if BOTH the shape it wrote and the version it
+              // wrote are there. The hash alone would accept a row another writer had advanced
+              // past to the same field set, and the version alone would accept any later write.
+              readBackSettled: async () => {
+                try {
+                  const current = await svc.registry.getComponent(slug);
+                  if (current.schemaHash !== expectedHash) return null;
+                  if (current.schemaVersion !== newSchemaVersion) return null;
+                  if ((current.localized === true) !== isLocalized) return null;
+                  return current;
+                } catch {
+                  // A re-read that fails is the likely case when the database is why the write
+                  // raised, and doubt must resolve to "not settled" — treating an unreadable row
+                  // as written would swallow the divergence this path exists to surface.
+                  return null;
+                }
+              },
+            });
           }
 
           // Post-apply: refresh in-memory runtime schema so CRUD paths reflect
@@ -677,13 +712,52 @@ export const COMPONENTS_METHODS: Record<
             isLocalized
           );
 
+          // Reached only when the registry write landed, or when it raised and the row was found
+          // to carry this edit anyway. Either way the version reported is the one now stored, so
+          // there is no longer a branch that reports a version the database did not persist.
           return respondAction(`Schema applied for component '${slug}'`, {
-            newSchemaVersion: versionPersisted
-              ? newSchemaVersion
-              : currentVersion,
+            newSchemaVersion,
           });
         }
       );
+    },
+  },
+
+  // What reconciling a field group WOULD change, computed without changing anything.
+  //
+  // 🔴 Deliberately OUTSIDE `withSchemaChangeExcluded`, unlike the repair below. Two reasons, and
+  // the first is the decisive one: the exclusion is entered with `issuesDdl: true`, so asking it
+  // CREATES a lock table on a database that has never run a storage migration — a preview that
+  // writes to the database to tell you what a write would do. The storage migration's own dry run
+  // takes no lock for exactly this reason, so a preview stays usable with a read-only credential.
+  //
+  // The looser guarantee that buys is the right one for what this answers. A plan read outside the
+  // exclusion can be stale by the time it is approved, and nothing here relies on it not being:
+  // the repair re-plans under the exclusion and refuses unless the row still carries the version
+  // this preview reported. So a stale preview cannot become a wrong write — it becomes a refusal.
+  previewComponentReconcile: {
+    execute: async (svc, p) => {
+      const slug = requireParam(p, "slug", "Component slug");
+
+      const adapter = getAdapterFromDI();
+      if (!adapter) {
+        throw NextlyError.internal({
+          logContext: { reason: "reconcile-preview-requires-adapter", slug },
+        });
+      }
+
+      const { previewFieldGroupReconcile } = await import(
+        "../../domains/field-groups/services/field-group-reconcile-service"
+      );
+      const preview = await previewFieldGroupReconcile({
+        registry: svc.registry,
+        adapter,
+        slug,
+      });
+
+      // A read, so the document envelope rather than the mutation one: nothing was changed and
+      // there is no message to report about a change that did not happen.
+      return respondDoc(preview);
     },
   },
 
@@ -694,8 +768,28 @@ export const COMPONENTS_METHODS: Record<
   // `diverged` — a recording write that failed after its DDL committed leaves a divergence with no
   // mark, and the operation is idempotent on a healthy group.
   reconcileComponent: {
-    execute: async (svc, p) => {
+    execute: async (svc, p, body) => {
       const slug = requireParam(p, "slug", "Component slug");
+
+      // The version a preview reported, when this call is approving one. Absent for a caller that
+      // never previewed, which keeps repairing against whatever it reads.
+      const b = body as { expectedSchemaVersion?: number } | undefined;
+      const expectedSchemaVersion = b?.expectedSchemaVersion;
+      if (
+        expectedSchemaVersion !== undefined &&
+        !Number.isInteger(expectedSchemaVersion)
+      ) {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "expectedSchemaVersion",
+              code: "INVALID_VALUE",
+              message: "Must be the whole number a preview reported.",
+            },
+          ],
+          logContext: { slug, received: typeof expectedSchemaVersion },
+        });
+      }
 
       const adapter = getAdapterFromDI();
       if (!adapter) {
@@ -742,6 +836,12 @@ export const COMPONENTS_METHODS: Record<
             adapter,
             logger,
             slug,
+            // Spread so an absent value stays absent: passing `undefined` explicitly would be
+            // indistinguishable from "no preview to honour" only by luck of how the callee reads
+            // it, and this way the two cases differ in the object itself.
+            ...(expectedSchemaVersion !== undefined
+              ? { expectedSchemaVersion }
+              : {}),
           });
 
           // The canonical mutation envelope: this method can rewrite the registry row, so its

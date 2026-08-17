@@ -784,6 +784,11 @@ async function resolveAuthorization(
     const FIELD_GROUP_ACTION_OVERRIDES: Readonly<Record<string, string>> = {
       applyComponentSchemaChanges: "update",
       reconcileComponent: "update",
+      // The one entry here that makes the requirement STRICTER than its verb rather than merely
+      // correcting it: a GET would otherwise resolve to `read`. The repair plan exposes live
+      // column shapes and the drift against the stored definition, so it takes the permission the
+      // repair takes — a principal who may only read definitions must not enumerate that.
+      previewComponentReconcile: "update",
     };
     const action =
       FIELD_GROUP_ACTION_OVERRIDES[method] ?? getActionFromMethod(httpMethod);

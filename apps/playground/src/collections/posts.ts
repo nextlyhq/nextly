@@ -1,4 +1,4 @@
-import { blocks, pageBuilderField } from "@nextlyhq/plugin-page-builder";
+import { blocks } from "@nextlyhq/plugin-page-builder";
 import {
   defineCollection,
   text,
@@ -48,11 +48,6 @@ export const Posts = defineCollection({
       name: "content",
       admin: { condition: { field: "editorMode", equals: "standard" } },
     }),
-    // Visual page builder — shown only in "page-builder" mode.
-    pageBuilderField("layout", {
-      label: "Visual Layout",
-      condition: { field: "editorMode", equals: "page-builder" },
-    }),
     // A contributed field type declared code-first. `blocks` lives in the
     // page-builder plugin, so this is also the harness's proof that a plugin
     // type is authorable from a real app: the field configs are typed against
@@ -80,6 +75,14 @@ export const Posts = defineCollection({
   // buttons in the entry editor and Bulk Publish / Unpublish actions in
   // the entry-table bulk-action bar.
   status: true,
+  // Drafts and autosave, ON, so the dev harness exercises the working-draft
+  // split and the recovery-point path rather than only the simple lifecycle.
+  //
+  // `status: true` alone resolves to `{ drafts: false }`, which disables
+  // autosave at the policy gate -- so without this the editor records nothing
+  // and the endpoint answers forbidden. No collection here or in any template
+  // set it, which is why nothing had ever exercised that path.
+  versions: { drafts: true },
   admin: {
     useAsTitle: "title",
   },

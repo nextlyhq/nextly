@@ -14,7 +14,6 @@ import {
   registerCoreBlocks,
   registerDeclaredBlocks,
 } from "./blocks/registration-service";
-import { PAGE_BUILDER_FIELD_TYPE } from "./collections/pageBuilderEntry";
 import { pagesCollection } from "./collections/pages";
 import type { RemotePattern } from "./core/url-policy";
 import { BLOCKS_FIELD_TYPE } from "./fields/blocksField";
@@ -154,7 +153,13 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) =>
         [BLOCK_SERVICE]: () => createBlockRegistrationService(),
       },
       collections: [pagesCollection()],
-      fieldTypes: [PAGE_BUILDER_FIELD_TYPE, BLOCKS_FIELD_TYPE],
+      // One field type, where there were two. The other named the previous
+      // editor's document — a shape this package defined itself, stored under a
+      // synthetic root, and validated with its own rules. A site that declared
+      // it got a field the engine could not read and the current renderer could
+      // not draw, so the two field types were not alternatives but rival
+      // formats, and only this one is a format anything else understands.
+      fieldTypes: [BLOCKS_FIELD_TYPE],
       // No `publish` permission. One was declared here and nothing ever read
       // it: publishing a page is a status change on the entry, which
       // `update-pages` already covers, and no code path asked whether the user
@@ -194,14 +199,20 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) =>
         menu: [
           { label: "Pages", to: "/admin/collections/pages", icon: "Layout" },
         ],
-        // Schema-builder "Use Page Builder" toggle, rendered generically by the
-        // admin above the field list in the collection/single builders.
-        schemaBuilderSlot:
-          "@nextlyhq/plugin-page-builder/admin#PageBuilderToggle",
-        // Per-entry Normal / Page Builder toggle, rendered in the entry/single
-        // form header toolbar (drives the hidden editor-mode field).
-        entryFormToolbarSlot:
-          "@nextlyhq/plugin-page-builder/admin#PageBuilderModeToggle",
+        // No `schemaBuilderSlot` and no `entryFormToolbarSlot`.
+        //
+        // Both named components this package no longer ships: a schema-builder
+        // toggle for turning a collection into a page-builder one, and a
+        // per-entry Normal / Page Builder switch. They belonged to an editor
+        // that stored its own document format, so the choice they offered was
+        // between two storage shapes rather than between two ways of editing
+        // one.
+        //
+        // A slot is registered by SPECIFIER, so nothing type-checks the name:
+        // pointing at a component that is not exported resolves to nothing at
+        // render time, in the admin, at the moment an author opens the form.
+        // Declaring them is therefore worse than omitting them — the admin
+        // reserves the slot either way and only the populated case works.
       },
     },
   });

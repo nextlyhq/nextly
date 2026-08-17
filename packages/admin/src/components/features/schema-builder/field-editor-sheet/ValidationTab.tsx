@@ -1,17 +1,20 @@
-// Why: validation rules vary by field type. Text-style fields (text /
-// textarea / richText / email / password / code) get length and pattern.
-// Numeric/date types get min/max. Repeating containers (textarea /
-// richText / repeater) get minRows/maxRows. The custom error message
-// applies to every type and is now labelled to make clear it's the
-// regex-pattern fail message.
+// Which rules a field type accepts is decided by `FIELD_TYPE_VALIDATION_RULES`
+// in core, not by lists kept here. A list of type names cannot see a type it
+// was not written to know about, so a plugin-contributed type used to fall
+// through every branch and be offered nothing; it now inherits the rules of the
+// built-in type its declared storage primitive behaves as.
 //
-// PR E1 changes (feedback Section 4):
-// - Min and Max share a 50/50 row.
-// - Min length and Max length share a 50/50 row.
-// - Min rows and Max rows share a 50/50 row, rendered BEFORE Pattern.
-// - Custom error message helper text clarifies it's the Pattern fail
-//   message.
+// Rendering order is this file's own concern: rules are drawn in the order
+// below rather than the order core happens to list them, so the layout stays
+// stable as the vocabulary grows.
 import { Input, Label } from "@nextlyhq/ui";
+import type { FieldValidationRule } from "nextly/field-catalog";
+import { validationRulesForFieldType } from "nextly/field-catalog";
+import { useId } from "react";
+
+import { ValidationNumberField } from "@admin/components/field-ui";
+import { useBranding } from "@admin/context/providers/BrandingProvider";
+import { pluginFieldTypeStorage } from "@admin/lib/builder/plugin-field-type-entries";
 
 import type { BuilderField } from "../types";
 
@@ -21,161 +24,143 @@ type Props = {
   onChange: (next: BuilderField) => void;
 };
 
-const TEXT_TYPES = new Set([
-  "text",
-  "textarea",
-  "richText",
-  "email",
-  "password",
-  "code",
-]);
-const NUMERIC_TYPES = new Set(["number", "date"]);
-const REPEATING_TYPES = new Set(["textarea", "richText", "repeater"]);
+/**
+ * How each numeric rule presents and what values it admits.
+ *
+ * Whether a bound COUNTS things decides what it admits: a length or a row count
+ * is a whole number of zero or more, while a bound on a value may legitimately
+ * be fractional or negative. The kit control turns that one flag into the input
+ * constraints, so every surface applies the same answer.
+ */
+const NUMERIC_RULES = {
+  minLength: { label: "Min length", counts: true },
+  maxLength: { label: "Max length", counts: true },
+  minRows: { label: "Min rows", counts: true },
+  maxRows: { label: "Max rows", counts: true },
+  min: { label: "Min", counts: false },
+  max: { label: "Max", counts: false },
+} as const satisfies Partial<
+  Record<FieldValidationRule, { label: string; counts: boolean }>
+>;
+
+type NumericRule = keyof typeof NUMERIC_RULES;
+
+/** Numeric rules drawn side by side, in the order they are presented. */
+const NUMERIC_PAIRS: readonly (readonly [NumericRule, NumericRule])[] = [
+  ["minLength", "maxLength"],
+  ["minRows", "maxRows"],
+  ["min", "max"],
+];
 
 export function ValidationTab({ field, readOnly = false, onChange }: Props) {
+  const branding = useBranding();
   const v = field.validation ?? {};
   const setV = (next: Partial<NonNullable<BuilderField["validation"]>>) =>
     onChange({ ...field, validation: { ...v, ...next } });
 
-  const isText = TEXT_TYPES.has(field.type);
-  const isNum = NUMERIC_TYPES.has(field.type);
-  const isRepeating = REPEATING_TYPES.has(field.type);
+  // `required` is offered by its own control outside this tab, so it is read
+  // out of the list rather than drawn twice.
+  const allowed = new Set<FieldValidationRule>(
+    validationRulesForFieldType(
+      field.type,
+      pluginFieldTypeStorage(branding.plugins, field.type)
+    )
+  );
 
   return (
     <div className="space-y-4">
-      {isText && (
-        <>
-          {/* Why: Min / Max length 50/50 row per feedback Section 4. */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <NumberRow
-              label="Min length"
-              value={v.minLength}
-              disabled={readOnly}
-              onChange={n => setV({ minLength: n })}
-            />
-            <NumberRow
-              label="Max length"
-              value={v.maxLength}
-              disabled={readOnly}
-              onChange={n => setV({ maxLength: n })}
-            />
-          </div>
-
-          {/* Why: Min rows / Max rows BEFORE Pattern for repeating
-              text types (textarea / richText) per feedback. */}
-          {isRepeating && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <NumberRow
-                label="Min rows"
-                value={v.minRows}
+      {NUMERIC_PAIRS.filter(
+        ([lo, hi]) => allowed.has(lo) || allowed.has(hi)
+      ).map(([lo, hi]) => (
+        <div key={lo} className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {[lo, hi]
+            .filter(rule => allowed.has(rule))
+            .map(rule => (
+              <ValidationNumberField
+                key={rule}
+                label={NUMERIC_RULES[rule].label}
+                counts={NUMERIC_RULES[rule].counts}
+                value={v[rule]}
                 disabled={readOnly}
-                onChange={n => setV({ minRows: n })}
+                onChange={(n: number | undefined) => setV({ [rule]: n })}
               />
-              <NumberRow
-                label="Max rows"
-                value={v.maxRows}
-                disabled={readOnly}
-                onChange={n => setV({ maxRows: n })}
-              />
-            </div>
-          )}
-
-          <div className="space-y-1">
-            <Label htmlFor="pattern">Pattern</Label>
-            <Input
-              id="pattern"
-              placeholder="^[a-z0-9-]+$"
-              value={v.pattern ?? ""}
-              disabled={readOnly}
-              onChange={e => setV({ pattern: e.target.value })}
-            />
-            <p className="text-xs text-muted-foreground">
-              Regex the value must match.
-            </p>
-          </div>
-        </>
-      )}
-
-      {isNum && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <NumberRow
-            label="Min"
-            value={v.min}
-            disabled={readOnly}
-            onChange={n => setV({ min: n })}
-          />
-          <NumberRow
-            label="Max"
-            value={v.max}
-            disabled={readOnly}
-            onChange={n => setV({ max: n })}
-          />
+            ))}
         </div>
-      )}
+      ))}
 
-      {/* Why: repeater also gets Min/Max rows but it's NOT a text type,
-          so render the rows here (text-type rows render above, before
-          Pattern). */}
-      {isRepeating && !isText && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <NumberRow
-            label="Min rows"
-            value={v.minRows}
-            disabled={readOnly}
-            onChange={n => setV({ minRows: n })}
-          />
-          <NumberRow
-            label="Max rows"
-            value={v.maxRows}
-            disabled={readOnly}
-            onChange={n => setV({ maxRows: n })}
-          />
-        </div>
-      )}
-
-      <div className="space-y-1">
-        <Label htmlFor="custom-msg">Custom error message</Label>
-        <Input
-          id="custom-msg"
-          value={v.message ?? ""}
+      {allowed.has("pattern") && (
+        <PatternRow
+          value={v.pattern}
           disabled={readOnly}
-          onChange={e => setV({ message: e.target.value })}
+          onChange={pattern => setV({ pattern })}
         />
-        <p className="text-xs text-muted-foreground">
-          Shown when the value fails the Pattern above. Falls back to a default
-          message if blank.
-        </p>
-      </div>
+      )}
+
+      {allowed.has("message") && (
+        <MessageRow
+          value={v.message}
+          disabled={readOnly}
+          describesPattern={allowed.has("pattern")}
+          onChange={message => setV({ message })}
+        />
+      )}
     </div>
   );
 }
 
-function NumberRow({
-  label,
+function PatternRow({
   value,
   disabled,
   onChange,
 }: {
-  label: string;
-  value: number | undefined;
+  value: string | undefined;
   disabled?: boolean;
-  onChange: (n: number | undefined) => void;
+  onChange: (v: string) => void;
 }) {
-  // Stable id per row so <Label htmlFor> wires to the correct input across
-  // re-renders without colliding with sibling rows.
-  const id = label.toLowerCase().replace(/\s+/g, "-");
+  const id = useId();
   return (
     <div className="space-y-1">
-      <Label htmlFor={id}>{label}</Label>
+      <Label htmlFor={id}>Pattern</Label>
       <Input
         id={id}
-        type="number"
+        placeholder="^[a-z0-9-]+$"
         value={value ?? ""}
         disabled={disabled}
-        onChange={e =>
-          onChange(e.target.value === "" ? undefined : Number(e.target.value))
-        }
+        onChange={e => onChange(e.target.value)}
       />
+      <p className="text-xs text-muted-foreground">
+        Regex the value must match.
+      </p>
+    </div>
+  );
+}
+
+function MessageRow({
+  value,
+  disabled,
+  describesPattern,
+  onChange,
+}: {
+  value: string | undefined;
+  disabled?: boolean;
+  describesPattern: boolean;
+  onChange: (v: string) => void;
+}) {
+  const id = useId();
+  return (
+    <div className="space-y-1">
+      <Label htmlFor={id}>Custom error message</Label>
+      <Input
+        id={id}
+        value={value ?? ""}
+        disabled={disabled}
+        onChange={e => onChange(e.target.value)}
+      />
+      <p className="text-xs text-muted-foreground">
+        {describesPattern
+          ? "Shown when the value fails the Pattern above. Falls back to a default message if blank."
+          : "Shown when the value fails validation. Falls back to a default message if blank."}
+      </p>
     </div>
   );
 }

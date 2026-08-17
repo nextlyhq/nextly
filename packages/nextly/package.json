@@ -39,6 +39,10 @@
       "types": "./dist/field-group-type.d.ts",
       "import": "./dist/field-group-type.mjs"
     },
+    "./field-group-reconcile": {
+      "types": "./dist/field-group-reconcile.d.ts",
+      "import": "./dist/field-group-reconcile.mjs"
+    },
     "./field-catalog": {
       "types": "./dist/field-catalog.d.ts",
       "import": "./dist/collections/fields/catalog.mjs"

@@ -24,6 +24,8 @@
  * @module blocks
  */
 
+import { accordion } from "./accordion";
+import { accordionItem } from "./accordion-item";
 import { box } from "./box";
 import { button } from "./button";
 import { card } from "./card";
@@ -33,6 +35,7 @@ import { columns } from "./columns";
 import { divider } from "./divider";
 import { embed } from "./embed";
 import { form } from "./form";
+import { gallery } from "./gallery";
 import { heading } from "./heading";
 import { image } from "./image";
 import { list } from "./list";
@@ -41,6 +44,11 @@ import { quote } from "./quote";
 import { section } from "./section";
 import { spacer } from "./spacer";
 
+// `ACCORDION_BLOCK` / `ACCORDION_ITEM_BLOCK` are deliberately NOT re-exported,
+// for the reason recorded below for the columns pair: they exist so the two
+// halves of the nesting rule name each other without a repeated string literal.
+export { accordion } from "./accordion";
+export { accordionItem, type AccordionItemProps } from "./accordion-item";
 export { box } from "./box";
 export { button, BUTTON_TYPES, type ButtonProps } from "./button";
 // `CARD_BLOCK` is deliberately NOT re-exported, for the reason recorded below
@@ -66,6 +74,10 @@ export {
   type FormMethod,
   type FormProps,
 } from "./form";
+// `GALLERY_BLOCK` / `GALLERY_ITEM_BLOCK` are deliberately NOT re-exported, for
+// the reason recorded on the columns pair: they exist so this block names its
+// own type and its allowed child once.
+export { gallery } from "./gallery";
 export {
   heading,
   HEADING_LEVELS,
@@ -104,6 +116,10 @@ export const coreBlocks = [
   columns,
   column,
   card,
+  // Parent before child, for the reason recorded on the columns pair: a
+  // resolver built by iterating this list should meet the group first.
+  accordion,
+  accordionItem,
   spacer,
   // Typography
   heading,
@@ -113,6 +129,8 @@ export const coreBlocks = [
   image,
   button,
   form,
+  // Registered after `image`, the only block its slot allows.
+  gallery,
   // Structure
   divider,
   quote,

@@ -27,13 +27,16 @@ import {
   Trash2,
 } from "@admin/components/icons";
 import { useCan } from "@admin/hooks/useCan";
+import type { AutosaveStatus } from "@admin/hooks/useDocumentAutosave";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { cn } from "@admin/lib/utils";
 
 import { useEntryLocale } from "../EntryLocaleContext";
 import { LanguageSwitcher } from "../LanguageSwitcher";
 
+import { AutoSaveIndicator } from "./AutoSaveIndicator";
 import { DiscardDraftConfirmDialog } from "./DiscardDraftConfirmDialog";
+import { DocumentStatusLive } from "./DocumentStatusLive";
 import { effectiveEntryStatus } from "./entry-address";
 import { PreviewActions } from "./PreviewActions";
 import { ShowJSONDialog } from "./ShowJSONDialog";
@@ -68,6 +71,15 @@ export interface EntrySystemHeaderProps {
   isInvalid?: boolean;
   /** Whether the form has unsaved changes. Toggles Discard menu item. */
   isDirty?: boolean;
+  /**
+   * Whether recording is possible for this document at all. False for an entry
+   * that has never been saved, which has no id for the endpoint to address.
+   */
+  autosaveEnabled?: boolean;
+  /** Recording state of this author's recovery point. */
+  autosaveStatus?: AutosaveStatus;
+  /** When the server last stored a recovery point, by the server's clock. */
+  autosaveLastSavedAt?: Date | null;
   /** Form id for the single submit button when drafts are off. */
   formId?: string;
   /** Entry data; needed for Show JSON dialog (entry id) and Duplicate (id). */
@@ -209,6 +221,9 @@ export function EntrySystemHeader({
   isSubmitting = false,
   isInvalid = false,
   isDirty = false,
+  autosaveEnabled = false,
+  autosaveStatus = "idle",
+  autosaveLastSavedAt = null,
   formId = "entry-form",
   entry,
   collectionSlug,
@@ -404,6 +419,37 @@ export function EntrySystemHeader({
           {...(onCopyLink === undefined ? {} : { onCopyLink })}
           isCopyingLink={isCopyingLink}
           disabled={isSubmitting}
+        />
+        {/* Sits with the actions rather than beside the title: it reports on
+            the same work the save buttons act on, and reads as status for that
+            cluster.
+
+            The condition is only whether recording is POSSIBLE, never whether
+            there is anything to show. `AutoSaveIndicator` already returns null
+            when it has no state to report, and restating that here suppressed
+            its "Not saved" state for the whole debounce window: on the first
+            edit to a saved entry the status is still idle and no recovery point
+            exists yet, which is exactly when the reader most wants to be told
+            their change is not stored. */}
+        {autosaveEnabled ? (
+          <AutoSaveIndicator
+            lastSavedAt={autosaveLastSavedAt}
+            isSaving={autosaveStatus === "saving"}
+            isDirty={isDirty}
+          />
+        ) : null}
+        {/* The spoken half of the same information. `AutoSaveIndicator` reports
+            visually only — it carries no live region — so an author using a
+            screen reader was never told whether their work had been stored.
+            This is rendered unconditionally rather than beside the indicator's
+            own condition, because a live region has to be PRESENT BEFORE the
+            text it will announce changes: mounting a region and populating it
+            in the same commit is not reliably announced. */}
+        <DocumentStatusLive
+          autosaveEnabled={autosaveEnabled}
+          isSaving={autosaveStatus === "saving"}
+          isDirty={isDirty}
+          lastSavedAt={autosaveLastSavedAt}
         />
         {hasStatus && isPublishedEdit ? (
           <>

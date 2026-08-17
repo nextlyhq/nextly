@@ -853,19 +853,43 @@ export async function registerServices(
         );
         const reg = new FieldGroupRegistryService(adapter, resolvedLogger);
         const compSchema = new FieldGroupSchemaService(dialect);
-        await materializeKind(
-          "fieldGroup",
-          "component",
-          compChanged,
-          builderEntities.components,
-          (slug, fields) => reg.updateComponent(slug, { fields: fields }),
-          async (tableName, fields) =>
-            compSchema.generateRuntimeSchema(tableName, fields, {
-              typeColumn:
-                (await resolveTypeColumns(adapter, [tableName])).get(
-                  tableName
-                ) ?? STORAGE_FORMAT.columns.type,
-            })
+        const { withSchemaChangeExcluded } = await import(
+          "../domains/schema/services/schema-change-exclusion"
+        );
+        // 🔴 A storage migration held out for the whole materialisation, not for each write.
+        //
+        // This is the code-first sync: it reaches the registry directly rather than through the
+        // metadata service, so there is no service depth for it to inherit the exclusion from, and
+        // the pass itself is the depth where its reads and its writes meet. Taking it per component
+        // would leave a migration free to rename the registry between two of them, so the second
+        // half of one sync would describe storage the first half no longer names.
+        //
+        // `issuesDdl: false`: this writes definition rows and generates runtime schema in memory —
+        // it creates and alters nothing. A path that only writes a row must not create the lock
+        // table, because creating a table is DDL and a deployment whose role holds DML but not DDL
+        // would start failing a boot that used to succeed.
+        await withSchemaChangeExcluded(
+          {
+            adapter,
+            logger: resolvedLogger,
+            label: "materialise code-first field groups",
+            issuesDdl: false,
+          },
+          () =>
+            materializeKind(
+              "fieldGroup",
+              "component",
+              compChanged,
+              builderEntities.components,
+              (slug, fields) => reg.updateComponent(slug, { fields: fields }),
+              async (tableName, fields) =>
+                compSchema.generateRuntimeSchema(tableName, fields, {
+                  typeColumn:
+                    (await resolveTypeColumns(adapter, [tableName])).get(
+                      tableName
+                    ) ?? STORAGE_FORMAT.columns.type,
+                })
+            )
         );
       }
     }

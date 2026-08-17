@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  PortalProvider,
   ResizableHandle,
   ResizablePanel,
   ResizablePanelGroup,
@@ -969,6 +970,14 @@ export function BuilderShell({ store, ...props }: BuilderShellProps) {
   const resolvedStore = store ?? fallbackStore.current;
   const [preferences, update, loadCount] = usePreferences(resolvedStore);
   const [measureShell, shellFits] = useFitsFullShell();
+  /*
+   * Where overlays inside this shell portal to. State rather than a ref,
+   * because `PortalProvider` has to RE-RENDER once the node exists; a ref
+   * mutation would leave the provider holding `null` for the life of the mount.
+   */
+  const [overlayHost, setOverlayHost] = React.useState<HTMLDivElement | null>(
+    null
+  );
 
   return (
     <ShortcutProvider>
@@ -1077,23 +1086,63 @@ export function BuilderShell({ store, ...props }: BuilderShellProps) {
             className={shellFits ? "contents" : undefined}
           >
             {/* Published as context as well as applied as attributes, because `hidden` and `inert`
-              only reach what renders INSIDE this wrapper. Slot content that portals to the body
-              escapes both, and needs to be told rather than contained. */}
+              only reach what renders INSIDE this wrapper. Slot content that reads this answers for
+              itself; content that PORTALS is contained by `overlayHost` below instead. */}
             <ShellActiveContext.Provider value={shellFits}>
-              <ShellRegions
-                {...props}
-                preferences={preferences}
-                update={update}
-                active={shellFits}
-                loadCount={loadCount}
-                /*
-                 * The caller's `className` stops here: the measuring wrapper
-                 * above carries it. Passing it on would apply the host's grid
-                 * area, height or border a second time, on a box nested inside
-                 * the one already carrying it.
-                 */
-                className={undefined}
+              {/*
+               * Overlays portal to a host INSIDE the inert wrapper, so `hidden`
+               * and `inert` reach them.
+               *
+               * A portalled dropdown is not a descendant of the region that
+               * opened it, so neither attribute could ever reach it: an open
+               * `Select` stayed visible and clickable on top of the notice
+               * saying the editor was unavailable. Redirecting the portal is a
+               * boundary rather than a rule each control has to remember, which
+               * matters because the set of portalling components is open ended
+               * and the next one added would not know to check.
+               *
+               * WHERE it sits is the whole design, and two placements are wrong
+               * for different reasons. Inside a region clips it: the panel, the
+               * canvas and the inspector are each `overflow-auto`, so a dropdown
+               * opened near a panel edge would be cut off — a silent visual
+               * failure, worse than the interactive one being fixed. Inside the
+               * shell ROOT is also wrong, because that root is
+               * `overflow-hidden`. Here it is a sibling of the shell root:
+               * within the element carrying `hidden`/`inert`, and outside every
+               * box that clips.
+               *
+               * Taken out of flow so it can never affect the layout it sits
+               * beside. It stays a DOM descendant of the inert wrapper, which is
+               * what `inert` follows, and nothing here creates a containing
+               * block, so the fixed-position content each overlay renders is
+               * still positioned against the viewport.
+               */}
+              <div
+                ref={setOverlayHost}
+                data-slot="builder-overlay-host"
+                style={{ position: "absolute", width: 0, height: 0 }}
               />
+              {/*
+               * `null` until the host mounts, which `usePortalContainer` reads
+               * as "use the default". That is one commit of the old behaviour
+               * rather than a crash, and no overlay can be open that early.
+               */}
+              <PortalProvider container={overlayHost}>
+                <ShellRegions
+                  {...props}
+                  preferences={preferences}
+                  update={update}
+                  active={shellFits}
+                  loadCount={loadCount}
+                  /*
+                   * The caller's `className` stops here: the measuring wrapper
+                   * above carries it. Passing it on would apply the host's grid
+                   * area, height or border a second time, on a box nested inside
+                   * the one already carrying it.
+                   */
+                  className={undefined}
+                />
+              </PortalProvider>
             </ShellActiveContext.Provider>
           </div>
         </div>
