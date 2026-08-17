@@ -134,11 +134,18 @@ function AbsentSide() {
  * folded state and goes screen-reader-only once the column headings above sit
  * over the columns instead — assistive technology needs the label either way,
  * since neither position nor a rule is perceivable to it.
+ *
+ * `status` is taken rather than a pre-decided pair of sides, so which side the
+ * field never reached is answered HERE and only here. A caller that renders its
+ * own sides cannot then forget the rule: an added field's rendering of its
+ * before side is not consulted at all.
  */
 function SplitPair({
+  status,
   before,
   after,
 }: {
+  status: DiffStatus;
   before: React.ReactNode;
   after: React.ReactNode;
 }) {
@@ -148,13 +155,13 @@ function SplitPair({
         <p className="mb-1 text-xs font-medium text-muted-foreground @2xl/diff:sr-only">
           Before
         </p>
-        {before}
+        {status === "added" ? <AbsentSide /> : before}
       </div>
       <div className="min-w-0">
         <p className="mb-1 text-xs font-medium text-muted-foreground @2xl/diff:sr-only">
           After
         </p>
-        {after}
+        {status === "removed" ? <AbsentSide /> : after}
       </div>
     </div>
   );
@@ -186,8 +193,9 @@ function BeforeAfter({
   }
   return (
     <SplitPair
-      before={status === "added" ? <AbsentSide /> : renderValue(before)}
-      after={status === "removed" ? <AbsentSide /> : renderValue(after)}
+      status={status}
+      before={renderValue(before)}
+      after={renderValue(after)}
     />
   );
 }
@@ -233,10 +241,16 @@ export function FieldDiffNode({ node }: { node: FieldDiff }) {
           </FieldRow>
         );
       }
+      // An added or removed text field has no runs at all on the side it never
+      // reached, so its sides are handed over unconditionally and `SplitPair`
+      // substitutes the absence marker. Rendering the empty list here would
+      // paint a blank paragraph, which reads as a field that existed and held
+      // nothing.
       const sides = splitTextSegments(node.segments);
       return (
         <FieldRow label={node.label} status={node.status}>
           <SplitPair
+            status={node.status}
             before={<TextRuns segments={sides.before} />}
             after={<TextRuns segments={sides.after} />}
           />

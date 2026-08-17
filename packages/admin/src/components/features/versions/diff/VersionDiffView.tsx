@@ -62,16 +62,23 @@ export function VersionDiffView({ scope, from, to }: VersionDiffViewProps) {
     // of different widths, and only its own box knows whether two columns fit.
     <div className="@container/diff flex min-h-0 flex-1 flex-col">
       <div className="flex items-center justify-between gap-2 px-4 py-3 border-b border-border">
-        {/* Which pair is on screen. Hidden once the column headings below are
-            showing, since those name the same two versions over the values they
-            belong to, which says it better. */}
-        <p className="text-sm text-muted-foreground @2xl/diff:hidden">
-          Comparing version{" "}
-          <span className="font-medium text-foreground">{from}</span> &rarr;{" "}
-          <span className="font-medium text-foreground">{to}</span>
+        {/* What is on screen, in words. The pair is named only while the column
+            headings below are hidden, since those say it better by sitting over
+            the values; what the filter is doing is said at every width, because
+            a pressed button state alone does not tell a reader whether the
+            fields they cannot see are unchanged or filtered out. */}
+        <p className="text-sm text-muted-foreground">
+          <span className="@2xl/diff:hidden">
+            Comparing version{" "}
+            <span className="font-medium text-foreground">{from}</span> &rarr;{" "}
+            <span className="font-medium text-foreground">{to}</span>.{" "}
+          </span>
+          {modifiedOnly
+            ? "Showing only fields that changed."
+            : "Showing every field."}
         </p>
         <Button
-          className="ml-auto"
+          className="ml-auto shrink-0"
           variant={modifiedOnly ? "default" : "outline"}
           size="sm"
           aria-pressed={modifiedOnly}

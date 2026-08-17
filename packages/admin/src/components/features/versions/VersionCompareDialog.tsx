@@ -52,11 +52,15 @@ export function VersionCompareDialog({
 
           The cap is the width two comfortable columns of field values need,
           bounded by the viewport so an ultrawide screen does not stretch a
-          reading measure across the whole display. Height is fixed rather than
-          content-driven: the body scrolls, so a hundred-field document and a
-          two-field one open the same shape and the column headings stay put. */}
+          reading measure across the whole display.
+
+          Height follows the content between a floor and a cap. A fixed height
+          would open the same tall box for a two-field diff as for a
+          hundred-field one, leaving most of the screen blank; the floor keeps a
+          one-field comparison from opening as a sliver, and past the cap the
+          body scrolls under headings that stay put. */}
       <DialogContent
-        className="flex h-[85vh] max-h-[85vh] w-full max-w-[min(72rem,calc(100vw-4rem))] flex-col gap-0 overflow-hidden p-0"
+        className="flex max-h-[85vh] min-h-[20rem] w-full max-w-[min(72rem,calc(100vw-4rem))] flex-col gap-0 overflow-hidden p-0"
         // The panel that opened this stays mounted behind it, so a pointer
         // press landing outside must not also reach that panel's dismiss
         // handling and close both at once.
