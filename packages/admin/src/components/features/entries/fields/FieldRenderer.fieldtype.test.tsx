@@ -16,6 +16,13 @@ import {
   registerComponent,
 } from "@admin/lib/plugins/component-registry";
 
+/**
+ * Whether the plugin list has answered. Mutable so one test can put the
+ * renderer in the moment BEFORE it arrives, which is the state every
+ * plugin-typed field passes through on load.
+ */
+let pluginsPending = false;
+
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => ({
     plugins: [
@@ -26,11 +33,17 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
       },
     ],
   }),
+  useBrandingStatus: () => ({
+    isPending: pluginsPending,
+    isUnavailable: false,
+    isBrandingUnavailable: false,
+  }),
 }));
 
 afterEach(() => {
   clearRegistry();
   vi.restoreAllMocks();
+  pluginsPending = false;
 });
 
 function Form({ children }: { children: ReactNode }) {
@@ -56,6 +69,34 @@ describe("FieldRenderer custom field types (C7/D16)", () => {
     render(
       <Form>
         <FieldRenderer field={field("totally-unknown")} />
+      </Form>
+    );
+    expect(screen.getByText(/unknown field type/i)).toBeInTheDocument();
+  });
+
+  it("does not call a type unknown while the plugin list is still loading", () => {
+    // The list lives in the session-gated half of admin-meta, so it is absent
+    // for a moment on every load — and a plugin-typed field decides what to
+    // render during exactly that moment. Reporting "unknown" there states a
+    // conclusion the data does not support, and it is wrong for every
+    // correctly-configured plugin field on the page.
+    pluginsPending = true;
+    render(
+      <Form>
+        <FieldRenderer field={field("blocks")} />
+      </Form>
+    );
+    expect(screen.queryByText(/unknown field type/i)).not.toBeInTheDocument();
+  });
+
+  it("still reports an unknown type once the list has ARRIVED without it", () => {
+    // The control for the assertion above: it passes on absence, so without
+    // this the same green would follow from a renderer that never reports an
+    // unknown type at all.
+    pluginsPending = false;
+    render(
+      <Form>
+        <FieldRenderer field={field("blocks")} />
       </Form>
     );
     expect(screen.getByText(/unknown field type/i)).toBeInTheDocument();
