@@ -478,6 +478,108 @@ export const FIELD_TYPE_BINDING_KIND: Readonly<
 };
 
 /**
+ * The validation rules a field can carry, named as `FieldValidation` spells
+ * them. `FieldValidation` permits every member on every field, because it is
+ * one record shared by all types; which of them MEAN anything for a given type
+ * is the separate question this vocabulary exists to answer.
+ */
+export type FieldValidationRule =
+  | "required"
+  | "pattern"
+  | "message"
+  | "minLength"
+  | "maxLength"
+  | "min"
+  | "max"
+  | "minRows"
+  | "maxRows";
+
+/**
+ * Which validation rules are meaningful for each field type.
+ *
+ * A length bound says nothing about a checkbox and a numeric bound says nothing
+ * about a string, so an editor that offers every rule everywhere invites values
+ * that nothing will ever read. `Record<FieldType, …>` makes the map exhaustive
+ * by construction: a new member of the union does not compile until it states
+ * its rules, which is the property that keeps this from drifting behind the
+ * types the way a hand-kept list does.
+ *
+ * `required` is meaningful for every type and is listed for every type, because
+ * this map describes the field rather than any one editor's layout. A surface
+ * that presents requiredness through its own control renders the rest of the
+ * list and skips this member.
+ */
+export const FIELD_TYPE_VALIDATION_RULES: Readonly<
+  Record<FieldType, readonly FieldValidationRule[]>
+> = {
+  text: ["required", "minLength", "maxLength", "pattern", "message"],
+  // Multi-line text is bounded by characters like other text, and by rows as a
+  // repeating container.
+  textarea: [
+    "required",
+    "minLength",
+    "maxLength",
+    "pattern",
+    "minRows",
+    "maxRows",
+    "message",
+  ],
+  richText: [
+    "required",
+    "minLength",
+    "maxLength",
+    "pattern",
+    "minRows",
+    "maxRows",
+    "message",
+  ],
+  email: ["required", "minLength", "maxLength", "pattern", "message"],
+  password: ["required", "minLength", "maxLength", "pattern", "message"],
+  code: ["required", "minLength", "maxLength", "pattern", "message"],
+  number: ["required", "min", "max", "message"],
+  // A date is ordered, so it bounds by value rather than by length.
+  date: ["required", "min", "max", "message"],
+  checkbox: ["required", "message"],
+  select: ["required", "message"],
+  radio: ["required", "message"],
+  upload: ["required", "message"],
+  relationship: ["required", "message"],
+  // A repeater holds rows and nothing else measurable at this level; the fields
+  // inside it carry their own rules.
+  repeater: ["required", "minRows", "maxRows", "message"],
+  group: ["required", "message"],
+  json: ["required", "message"],
+  component: ["required", "message"],
+  chips: ["required", "message"],
+};
+
+/**
+ * The rules meaningful for a field, including one contributed by a plugin.
+ *
+ * A plugin type is not a member of `FieldType`, so it cannot key the map. It
+ * declares the primitive it persists as, and `STORAGE_PRIMITIVE_AS_FIELD_TYPE`
+ * already names the built-in type that primitive behaves as — so a plugin type
+ * inherits that type's rules rather than needing its own entry, and a plugin
+ * shipped after this code was written is covered without editing anything here.
+ */
+export function validationRulesForFieldType(
+  type: string,
+  pluginStorage?: FieldStoragePrimitive
+): readonly FieldValidationRule[] {
+  if (type in FIELD_TYPE_VALIDATION_RULES) {
+    return FIELD_TYPE_VALIDATION_RULES[type as FieldType];
+  }
+  if (pluginStorage) {
+    return FIELD_TYPE_VALIDATION_RULES[
+      STORAGE_PRIMITIVE_AS_FIELD_TYPE[pluginStorage]
+    ];
+  }
+  // An unknown type with no declared primitive: offer only what is true of
+  // every field, rather than guessing at a vocabulary it may not honour.
+  return ["required", "message"];
+}
+
+/**
  * The value kinds each block-prop type accepts from a binding. This map IS the
  * bindability rule: a prop's binding affordance is derived from its declared
  * TYPE and never from a per-block opt-in, so a new block gets binding support
