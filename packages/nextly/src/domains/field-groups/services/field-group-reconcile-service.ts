@@ -34,6 +34,8 @@ import {
   planFieldGroupReconcile,
   type ExpectedColumnDefault,
   type ReconcileAdoption,
+  type ReconcileBlocker,
+  type ReconcilePlan,
   type ReconcileRemoval,
   type ReconcileRepair,
   type ReconcileTable,
@@ -66,6 +68,54 @@ export interface ReconcileFieldGroupResult {
   runtimeRefreshed: boolean;
   /** Why the refresh did not happen; present only when `runtimeRefreshed` is false. */
   runtimeRefreshReason?: string;
+}
+
+/**
+ * What a reconcile WOULD do, computed without writing anything.
+ *
+ * The repair rewrites a definition in ways re-running cannot undo — a field whose column vanished
+ * loses its authored label, validation and options, and an adopted column is recorded under a
+ * logical type that was GUESSED from a physical one. An operator asked to approve that has to be
+ * able to read it first, so the plan is offered before the write rather than reported after it.
+ *
+ * `blockers` is the reason this is a result rather than a thrown refusal. The repair throws on a
+ * drift it must not decide, and a thrown error carries no structured payload to the browser — its
+ * `logContext` is stripped from the response — so the only channel that can name each blocker
+ * individually is a successful one.
+ */
+export interface ReconcileFieldGroupPreview {
+  slug: string;
+  /** Re-derived from which table holds the columns, exactly as the repair would derive it. */
+  localized: boolean;
+  removed: ReconcileRemoval[];
+  repaired: ReconcileRepair[];
+  adopted: ReconcileAdoption[];
+  /** Non-empty means the repair would REFUSE. Nothing here is applicable until each is resolved. */
+  blockers: ReconcileBlocker[];
+  /**
+   * True when the definition already describes the tables.
+   *
+   * This is NOT the same as "applying does nothing" — read `wouldWrite` for that. A group whose
+   * every field matches can still carry a stale failure mark, and clearing that is a write.
+   */
+  unchanged: boolean;
+  /** Whether applying would write at all, decided by the same expression the repair uses. */
+  wouldWrite: boolean;
+  /**
+   * The stale status applying would clear, when one stands over healthy tables.
+   *
+   * Present so the surface can say WHY applying still does something on a group it just described
+   * as unchanged, rather than showing an empty change list beside an enabled button.
+   */
+  staleStatus?: string;
+  /**
+   * The version this plan was computed against.
+   *
+   * Sent back on the apply so the operator cannot approve one plan and have another execute: the
+   * repair refuses when the row has moved since. Without it the apply re-plans against whatever
+   * the row says by then, which may be a different repair than the one that was shown.
+   */
+  schemaVersion: number;
 }
 
 /**
@@ -175,7 +225,50 @@ async function expectedColumnDefaultResolver(
 }
 
 /**
- * Reconcile one field group's registry row against its live tables.
+ * A status that MEANS unhealthy, so a reconcile that finds the tables fine still has work to do.
+ *
+ * `failed` counts alongside `diverged`, and it is the commoner way in: a create whose table landed
+ * and whose verification query failed records `failed` over a table that may already match the
+ * definition exactly. Listing the statuses that mean unhealthy, rather than testing for one of
+ * them, is what keeps a status added later from silently becoming permanent.
+ */
+const UNHEALTHY_STATUSES = new Set(["diverged", "failed"]);
+
+/** What the preview and the repair both need before either can decide anything. */
+interface ReconcileAssessment {
+  existing: Awaited<ReturnType<FieldGroupRegistryService["getComponent"]>>;
+  plan: ReconcilePlan<FieldDefinition>;
+  typeColumn: string;
+  dialect: SupportedDialect;
+  /** A standing failure mark over tables the plan found healthy — stale, and itself a repair. */
+  markerStandsWrongly: boolean;
+  /**
+   * Whether applying would write at all.
+   *
+   * 🔴 Computed HERE so the preview and the repair cannot disagree about it. `plan.unchanged`
+   * alone answers a narrower question — whether the DEFINITION describes the tables — and a group
+   * whose definition matches while its status still reads `diverged` needs a write that
+   * `plan.unchanged` does not predict. A preview deriving "nothing will happen" from the plan
+   * would report exactly that, and then the apply would bump the version.
+   */
+  wouldWrite: boolean;
+}
+
+/** The inputs that decide a plan. The repair takes more; none of the extra changes the plan. */
+interface ReconcileAssessmentArgs {
+  registry: FieldGroupRegistryService;
+  adapter: DrizzleAdapter;
+  slug: string;
+  fromCode?: boolean;
+}
+
+/**
+ * Read the row and the tables, and plan the repair — without writing.
+ *
+ * 🔴 The preview and the repair share THIS function rather than each computing a plan of their
+ * own. A preview's entire value is that it describes what the apply will do, and two
+ * implementations of one question agree on the day they are written and drift silently afterwards.
+ * Deriving both from one call makes a disagreement unrepresentable rather than merely unlikely.
  *
  * Preconditions, in order and before anything is decided:
  * - the group must exist (`getComponent` raises NOT_FOUND itself);
@@ -185,26 +278,14 @@ async function expectedColumnDefaultResolver(
  * - the MAIN table must exist. A vanished table is not a definition drift: the honest repair for
  *   it is deleting the group, which is a different, destructive decision this operation must not
  *   make on the operator's behalf.
+ *
+ * All three are refused for the PREVIEW too, deliberately. A preview that answered where the apply
+ * would refuse would be inviting the operator to approve an operation that cannot run.
  */
-export async function reconcileFieldGroup(args: {
-  registry: FieldGroupRegistryService;
-  adapter: DrizzleAdapter;
-  logger: Logger;
-  slug: string;
-  /**
-   * The code sync is asking, so a LOCKED group may be repaired.
-   *
-   * Never settable from the HTTP surface: the dispatcher does not pass it. It exists so the caller
-   * that owns a code-managed definition can clear a marker that would otherwise leave the group
-   * unreachable from both directions — a locked row marked `diverged` is refused by
-   * `assertNotDiverged` on the sync path and by the lock check here.
-   *
-   * Wired: `syncCodeFirstComponents` passes it when it finds a `diverged` code-managed row, so
-   * that state clears on the next sync rather than needing a hand-edited database.
-   */
-  fromCode?: boolean;
-}): Promise<ReconcileFieldGroupResult> {
-  const { registry, adapter, logger, slug } = args;
+async function assessFieldGroupReconcile(
+  args: ReconcileAssessmentArgs
+): Promise<ReconcileAssessment> {
+  const { registry, adapter, slug } = args;
 
   const existing = await registry.getComponent(slug);
 
@@ -252,8 +333,9 @@ export async function reconcileFieldGroup(args: {
   // 🔴 Probed BEFORE the write, mirroring the transition path's contract: the discriminator column
   // is a fact about the table the storage migration may have moved, and asking after the registry
   // write would leave a repair recorded while the runtime refresh below cannot describe the table.
-  const { resolveComponentTypeColumn, registerComponentRuntimeSchema } =
-    await import("./field-group-table-provisioning");
+  const { resolveComponentTypeColumn } = await import(
+    "./field-group-table-provisioning"
+  );
   const typeColumn = await resolveComponentTypeColumn(
     adapter,
     existing.tableName
@@ -272,6 +354,118 @@ export async function reconcileFieldGroup(args: {
     expectedColumnDefault: await expectedColumnDefaultResolver(dialect),
     structuralColumnDefaults: await structuralColumnDefaults(dialect),
   });
+
+  const markerStandsWrongly = UNHEALTHY_STATUSES.has(
+    existing.migrationStatus ?? ""
+  );
+
+  return {
+    existing,
+    plan,
+    typeColumn,
+    dialect,
+    markerStandsWrongly,
+    wouldWrite: !(plan.unchanged && !markerStandsWrongly),
+  };
+}
+
+/**
+ * What reconciling this field group WOULD do, without doing any of it.
+ *
+ * Reports blockers rather than throwing on them: a refusal thrown from the repair carries its
+ * blockers in `logContext`, which never reaches the caller, so the operator is told only that
+ * something is ambiguous. Here each one is named, and the caller can explain them individually.
+ *
+ * Writes nothing and registers nothing, so it is safe to run on any group at any time.
+ */
+export async function previewFieldGroupReconcile(
+  args: ReconcileAssessmentArgs
+): Promise<ReconcileFieldGroupPreview> {
+  const { existing, plan, markerStandsWrongly, wouldWrite } =
+    await assessFieldGroupReconcile(args);
+
+  return {
+    slug: args.slug,
+    localized: plan.localized,
+    removed: plan.removed,
+    repaired: plan.repaired,
+    adopted: plan.adopted,
+    blockers: plan.blockers,
+    unchanged: plan.unchanged,
+    wouldWrite,
+    ...(markerStandsWrongly && existing.migrationStatus
+      ? { staleStatus: existing.migrationStatus }
+      : {}),
+    schemaVersion: existing.schemaVersion,
+  };
+}
+
+/**
+ * Reconcile one field group's registry row against its live tables.
+ *
+ * Preconditions are `assessFieldGroupReconcile`'s, which this shares with the preview.
+ */
+export async function reconcileFieldGroup(args: {
+  registry: FieldGroupRegistryService;
+  adapter: DrizzleAdapter;
+  logger: Logger;
+  slug: string;
+  /**
+   * The code sync is asking, so a LOCKED group may be repaired.
+   *
+   * Never settable from the HTTP surface: the dispatcher does not pass it. It exists so the caller
+   * that owns a code-managed definition can clear a marker that would otherwise leave the group
+   * unreachable from both directions — a locked row marked `diverged` is refused by
+   * `assertNotDiverged` on the sync path and by the lock check here.
+   *
+   * Wired: `syncCodeFirstComponents` passes it when it finds a `diverged` code-managed row, so
+   * that state clears on the next sync rather than needing a hand-edited database.
+   */
+  fromCode?: boolean;
+  /**
+   * The version a PREVIEW was computed against, when this apply is approving one.
+   *
+   * 🔴 Without it an approved plan and the executed plan are different questions. The operator
+   * reads a preview describing two removals, the row moves, they confirm, and this function
+   * re-plans against the newer row and may remove five — having been told about two. Supplying it
+   * makes the repair refuse instead, so an approval can only ever apply to the state it was shown.
+   *
+   * Omitted by a caller with no preview to honour (the code sync), which keeps repairing against
+   * whatever it reads.
+   */
+  expectedSchemaVersion?: number;
+}): Promise<ReconcileFieldGroupResult> {
+  const { registry, adapter, logger, slug } = args;
+
+  const { existing, plan, typeColumn, dialect, wouldWrite } =
+    await assessFieldGroupReconcile(args);
+
+  // Imported here rather than in the assessment: only the repair points the running process at a
+  // new shape. A preview that pulled this in would be loading the code that performs the change it
+  // exists to avoid performing.
+  const { registerComponentRuntimeSchema } = await import(
+    "./field-group-table-provisioning"
+  );
+
+  // 🔴 Refused BEFORE the repair is described or attempted, so an operator approving a preview can
+  // never apply a different plan than the one they read. The conditional write below would also
+  // reject this, but only after the whole repair had been planned against a row the operator never
+  // saw — and its message names a race rather than a stale approval.
+  if (
+    args.expectedSchemaVersion !== undefined &&
+    args.expectedSchemaVersion !== existing.schemaVersion
+  ) {
+    throw NextlyError.conflict({
+      reason: "state",
+      message: `"${slug}" changed after the repair was previewed, so the preview no longer describes it. Nothing was written. Preview it again and review the new plan before applying.`,
+      logContext: {
+        reason: "reconcile-preview-stale",
+        slug,
+        expectedSchemaVersion: args.expectedSchemaVersion,
+        actualSchemaVersion: existing.schemaVersion,
+      },
+    });
+  }
 
   // 🔴 REFUSE before writing anything when the tables hold a state the planner can see but must
   // not decide — a column on both tables, a column whose physical type no longer matches its
@@ -307,20 +501,10 @@ export async function reconcileFieldGroup(args: {
 
   // A standing failure mark is itself part of what this operation repairs: once the definition
   // describes the tables, leaving the mark would keep refusing schema edits on a group that is
-  // now fine — the plan can be unchanged while the STATUS is still the thing that is wrong.
-  //
-  // `failed` counts for the same reason `diverged` does, and it is the commoner way in: a create
-  // whose table landed and whose verification query failed records `failed` over a table that may
-  // already match the definition exactly. Introspection has just proved whether it does, so the
-  // status is stale in precisely the way this operation exists to clear. Listing the statuses that
-  // MEAN unhealthy, rather than testing for one of them, is what keeps a status added later from
-  // silently becoming permanent.
-  const UNHEALTHY_STATUSES = new Set(["diverged", "failed"]);
-  const markerStandsWrongly = UNHEALTHY_STATUSES.has(
-    existing.migrationStatus ?? ""
-  );
-
-  if (plan.unchanged && !markerStandsWrongly) {
+  // now fine — the plan can be unchanged while the STATUS is still the thing that is wrong. That
+  // is why the decision is `wouldWrite` rather than `plan.unchanged`, and why it is computed in
+  // the assessment: the preview reports the same value, so it can never promise a quiet apply.
+  if (!wouldWrite) {
     // Nothing to WRITE — and writing anyway would bump the version and invalidate every open
     // editor for a repair that repaired nothing.
     //

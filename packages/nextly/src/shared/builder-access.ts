@@ -100,6 +100,10 @@ const BUILDER_METHODS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
       // the builder cannot run, the repair it feeds cannot either — and leaving it out would let
       // a direct call rewrite schema on a deployment whose builder is disabled.
       "reconcileComponent",
+      // Its preview belongs with it for the reason the other previews do: it exists to feed the
+      // builder's own repair dialog, and answering it where the repair cannot run would describe a
+      // change the caller has no way to make.
+      "previewComponentReconcile",
     ]),
   ],
 ]);

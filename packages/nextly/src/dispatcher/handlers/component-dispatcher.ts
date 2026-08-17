@@ -687,6 +687,44 @@ export const COMPONENTS_METHODS: Record<
     },
   },
 
+  // What reconciling a field group WOULD change, computed without changing anything.
+  //
+  // 🔴 Deliberately OUTSIDE `withSchemaChangeExcluded`, unlike the repair below. Two reasons, and
+  // the first is the decisive one: the exclusion is entered with `issuesDdl: true`, so asking it
+  // CREATES a lock table on a database that has never run a storage migration — a preview that
+  // writes to the database to tell you what a write would do. The storage migration's own dry run
+  // takes no lock for exactly this reason, so a preview stays usable with a read-only credential.
+  //
+  // The looser guarantee that buys is the right one for what this answers. A plan read outside the
+  // exclusion can be stale by the time it is approved, and nothing here relies on it not being:
+  // the repair re-plans under the exclusion and refuses unless the row still carries the version
+  // this preview reported. So a stale preview cannot become a wrong write — it becomes a refusal.
+  previewComponentReconcile: {
+    execute: async (svc, p) => {
+      const slug = requireParam(p, "slug", "Component slug");
+
+      const adapter = getAdapterFromDI();
+      if (!adapter) {
+        throw NextlyError.internal({
+          logContext: { reason: "reconcile-preview-requires-adapter", slug },
+        });
+      }
+
+      const { previewFieldGroupReconcile } = await import(
+        "../../domains/field-groups/services/field-group-reconcile-service"
+      );
+      const preview = await previewFieldGroupReconcile({
+        registry: svc.registry,
+        adapter,
+        slug,
+      });
+
+      // A read, so the document envelope rather than the mutation one: nothing was changed and
+      // there is no message to report about a change that did not happen.
+      return respondDoc(preview);
+    },
+  },
+
   // Repair a field group's stored definition to describe its live tables.
   //
   // The exit from `diverged`, so `assertNotDiverged` is deliberately NOT called: this is the one
@@ -694,8 +732,28 @@ export const COMPONENTS_METHODS: Record<
   // `diverged` — a recording write that failed after its DDL committed leaves a divergence with no
   // mark, and the operation is idempotent on a healthy group.
   reconcileComponent: {
-    execute: async (svc, p) => {
+    execute: async (svc, p, body) => {
       const slug = requireParam(p, "slug", "Component slug");
+
+      // The version a preview reported, when this call is approving one. Absent for a caller that
+      // never previewed, which keeps repairing against whatever it reads.
+      const b = body as { expectedSchemaVersion?: number } | undefined;
+      const expectedSchemaVersion = b?.expectedSchemaVersion;
+      if (
+        expectedSchemaVersion !== undefined &&
+        !Number.isInteger(expectedSchemaVersion)
+      ) {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "expectedSchemaVersion",
+              code: "INVALID_VALUE",
+              message: "Must be the whole number a preview reported.",
+            },
+          ],
+          logContext: { slug, received: typeof expectedSchemaVersion },
+        });
+      }
 
       const adapter = getAdapterFromDI();
       if (!adapter) {
@@ -742,6 +800,12 @@ export const COMPONENTS_METHODS: Record<
             adapter,
             logger,
             slug,
+            // Spread so an absent value stays absent: passing `undefined` explicitly would be
+            // indistinguishable from "no preview to honour" only by luck of how the callee reads
+            // it, and this way the two cases differ in the object itself.
+            ...(expectedSchemaVersion !== undefined
+              ? { expectedSchemaVersion }
+              : {}),
           });
 
           // The canonical mutation envelope: this method can rewrite the registry row, so its

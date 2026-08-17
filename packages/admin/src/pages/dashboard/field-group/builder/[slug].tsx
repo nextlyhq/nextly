@@ -19,11 +19,12 @@
 import { DndContext, type DragEndEvent } from "@dnd-kit/core";
 import { arrayMove } from "@dnd-kit/sortable";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Skeleton } from "@nextlyhq/ui";
+import { Button, Skeleton } from "@nextlyhq/ui";
 import type React from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { z } from "zod";
 
+import { ReconcileFieldGroupDialog } from "@admin/components/features/field-groups/ReconcileFieldGroupDialog";
 import {
   BuilderFieldList,
   BuilderReadOnlyNotice,
@@ -36,6 +37,7 @@ import {
   type BuilderSettingsValues,
 } from "@admin/components/features/schema-builder";
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
+import { RefreshCw } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { toast } from "@admin/components/ui";
@@ -113,6 +115,7 @@ export default function FieldGroupBuilderEditPage({
     useState<BuilderSettingsValues | null>(null);
   const [active, setActive] = useState<ActiveOverlay>({ kind: "none" });
   const [isInitialized, setIsInitialized] = useState(false);
+  const [reconcileOpen, setReconcileOpen] = useState(false);
   const [originalFields, setOriginalFields] = useState<
     readonly BuilderField[] | null
   >(null);
@@ -167,6 +170,17 @@ export default function FieldGroupBuilderEditPage({
   }, [fieldGroup, builder, isInitialized]);
 
   const isLocked = fieldGroup?.locked === true;
+
+  /**
+   * Whether this field group's record needs repairing before it will accept a save.
+   *
+   * `diverged` refuses schema edits outright; `failed` stands over tables that may already match.
+   * The same operation clears both, so one list covers them. Server-side is where this is
+   * enforced — this only decides whether the page explains it up front.
+   */
+  const needsRepair =
+    fieldGroup?.migrationStatus === "diverged" ||
+    fieldGroup?.migrationStatus === "failed";
 
   const settingsDirty = useMemo(() => {
     if (!originalSettings || !settings) return false;
@@ -504,6 +518,33 @@ export default function FieldGroupBuilderEditPage({
             configPath={fieldGroup?.configPath}
           />
         )}
+        {/* 🔴 This page is where the refusal actually happens: a diverged field group loads and
+            edits normally, and only the SAVE is refused. An affordance living only on the list
+            would let an operator do the work, lose it to a refusal, and then navigate away to
+            find the repair. */}
+        {needsRepair && (
+          <div className="mb-4 rounded-lg border border-destructive/40 bg-destructive/5 p-4">
+            <h2 className="text-sm font-medium text-destructive">
+              Saving is blocked until this definition is repaired
+            </h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              This field group&apos;s tables changed and the record describing
+              them did not, so schema edits are refused. Repairing rewrites the
+              record to describe the tables — it moves no data and creates no
+              columns.
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="mt-3"
+              onClick={() => setReconcileOpen(true)}
+            >
+              <RefreshCw className="mr-2 h-4 w-4" />
+              Review the repair
+            </Button>
+          </div>
+        )}
         <DndContext
           sensors={builder.sensors}
           onDragStart={builder.handleDragStart}
@@ -530,6 +571,15 @@ export default function FieldGroupBuilderEditPage({
           />
         </DndContext>
       </PageContainer>
+
+      {slug && (
+        <ReconcileFieldGroupDialog
+          open={reconcileOpen}
+          onOpenChange={setReconcileOpen}
+          fieldGroupSlug={slug}
+          fieldGroupLabel={settings?.singularName || slug}
+        />
+      )}
 
       {active.kind === "settings" && (
         <BuilderSettingsModal

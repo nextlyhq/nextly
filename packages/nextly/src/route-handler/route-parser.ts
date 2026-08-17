@@ -1410,6 +1410,28 @@ function parseComponentRoutes(
     };
   }
 
+  // GET /api/field-groups/schema/[slug]/reconcile → what that repair WOULD change, changing
+  // nothing. The same path as the repair below, separated by verb: GET asks, POST does.
+  //
+  // Classified as `update` rather than the `read` its verb implies, and the override in
+  // `routeHandler` is what enforces that. The plan names live columns and the drift between them
+  // and the stored definition, which is not something a principal who may only read definitions
+  // should be able to enumerate — and nobody who cannot perform the repair needs to preview it.
+  if (
+    id === "schema" &&
+    subresource &&
+    subId === "reconcile" &&
+    httpMethod === "GET"
+  ) {
+    routeParams.slug = subresource;
+    return {
+      service: "field-groups",
+      operation: "single",
+      method: "previewComponentReconcile",
+      routeParams,
+    };
+  }
+
   // POST /api/field-groups/schema/[slug]/reconcile → repair the stored definition to describe the
   // live tables. Classified as `update`: it writes the registry row, so it takes the same
   // authorization as the other definition writes — a reader must not be able to rewrite a

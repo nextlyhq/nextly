@@ -15,10 +15,11 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@nextlyhq/ui";
-import { Eye, Pencil, Trash2, Filter } from "lucide-react";
+import { Eye, Pencil, Trash2, Filter, RefreshCw } from "lucide-react";
 import { useState, useEffect, useMemo, useCallback } from "react";
 
 import { BulkActionBar } from "@admin/components/features/entries/EntryList/BulkActionBar";
+import { ReconcileFieldGroupDialog } from "@admin/components/features/field-groups/ReconcileFieldGroupDialog";
 import * as Icons from "@admin/components/icons";
 import { Lock } from "@admin/components/icons";
 import { BulkDeleteDialog } from "@admin/components/shared/bulk-action-dialogs";
@@ -82,6 +83,15 @@ const MIGRATION_BADGES: Record<FieldGroupMigrationStatus, MigrationBadge> = {
   failed: { variant: "destructive", label: "Failed" },
   diverged: { variant: "destructive", label: "Diverged" },
 };
+
+/**
+ * Statuses a definition repair is the answer to.
+ *
+ * `diverged` refuses every schema edit until it is cleared; `failed` does not refuse anything but
+ * stands over tables that may already match, so it is stale in the same way. Both are cleared by
+ * the same operation, which is why one list covers them.
+ */
+const REPAIRABLE_STATUSES = new Set<string>(["diverged", "failed"]);
 
 function getMigrationBadge(status?: FieldGroupMigrationStatus): MigrationBadge {
   // 🔴 An exhaustive Record rather than a switch with a `default`, and that is the control.
@@ -150,6 +160,11 @@ export default function FieldGroupTable() {
     slug: string;
     label: string;
   } | null>(null);
+  // The field group whose repair plan is open, or null. Holding the row rather than a boolean lets
+  // the dialog title name the group the operator picked.
+  const [reconcileTarget, setReconcileTarget] = useState<ApiFieldGroup | null>(
+    null
+  );
   const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false);
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
 
@@ -446,6 +461,19 @@ export default function FieldGroupTable() {
         ),
         onSelect: () => handleEdit(fieldGroup),
       },
+      // Offered only where a repair is the answer to something. The preview itself is safe on any
+      // field group, so this list decides DISCOVERABILITY, not permission — the server still
+      // decides whether the operation may run, and says so in the dialog when it may not.
+      ...(REPAIRABLE_STATUSES.has(fieldGroup.migrationStatus ?? "")
+        ? [
+            {
+              id: "reconcile",
+              label: "Repair definition",
+              icon: <RefreshCw className="h-4 w-4" />,
+              onSelect: () => setReconcileTarget(fieldGroup),
+            } satisfies RowAction<ApiFieldGroup>,
+          ]
+        : []),
       {
         id: "delete",
         label: "Delete",
@@ -662,6 +690,19 @@ export default function FieldGroupTable() {
           />
         </>
       )}
+
+      {/* Mounted only while a target is held, so each opening fetches a fresh plan rather than
+          reusing the one belonging to whichever group was picked last. */}
+      {reconcileTarget ? (
+        <ReconcileFieldGroupDialog
+          open
+          onOpenChange={next => {
+            if (!next) setReconcileTarget(null);
+          }}
+          fieldGroupSlug={reconcileTarget.slug}
+          fieldGroupLabel={reconcileTarget.label}
+        />
+      ) : null}
 
       <BulkDeleteDialog
         open={deleteDialogOpen}
