@@ -36,7 +36,10 @@ import type { Command } from "commander";
 
 // Type-only, so it is erased at runtime and does not pull the migration engine into the boot
 // graph the way the value import inside the action deliberately avoids.
+import { getDialectTables } from "../../database/index";
+import { SchemaRegistry } from "../../database/schema-registry";
 import type { MigrationOutcome } from "../../domains/field-groups/migration/run";
+import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
 import { describeError } from "../../errors/index";
 import { createContext, type CommandContext } from "../program";
 import { validateDatabaseEnv, withAdapter } from "../utils/adapter";
@@ -81,12 +84,29 @@ export async function runMigrateFieldGroups(
 
   await withAdapter(
     async adapter => {
+      // 🔴 The engine reaches system tables through the adapter's table resolver, and a CLI process
+      // has no boot to install one — so without this the run fails at the first registry read with
+      // "not found in schema registry", which reads as a corrupt database rather than a missing
+      // wiring step. A preview does not reveal this: it stops before the writes that resolve tables.
+      //
+      // BOTH spellings of the field-group registry are registered, because this command is the one
+      // operation that runs while that name is changing: resolving only the name the database
+      // started with leaves it with no handle the moment the rename lands.
+      const drizzleAdapter = adapter as unknown as DrizzleAdapter;
+      const { dialect } = drizzleAdapter.getCapabilities();
+      const schemaRegistry = new SchemaRegistry(dialect);
+      schemaRegistry.registerStaticSchemas({
+        ...getDialectTables(dialect),
+        ...getFieldGroupRegistryAliases(dialect),
+      });
+      drizzleAdapter.setTableResolver(schemaRegistry);
+
       const { runFieldGroupMigration } = await import(
         "../../domains/field-groups/migration/run"
       );
 
       const outcome = await runFieldGroupMigration({
-        adapter: adapter as unknown as DrizzleAdapter,
+        adapter: drizzleAdapter,
         logger: {
           info: (msg: string) => logger.debug(msg),
           warn: (msg: string) => logger.warn(msg),

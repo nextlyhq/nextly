@@ -20,12 +20,17 @@ vi.mock("../../../domains/field-groups/migration/run", () => ({
   runFieldGroupMigration,
 }));
 
+const setTableResolver = vi.fn();
+
 vi.mock("../../utils/adapter", () => ({
   validateDatabaseEnv: () => ({ valid: true, errors: [] }),
   withAdapter: async (
     work: (adapter: unknown) => Promise<void>
   ): Promise<void> => {
-    await work({ getCapabilities: () => ({ dialect: "postgresql" }) });
+    await work({
+      getCapabilities: () => ({ dialect: "postgresql" }),
+      setTableResolver,
+    });
   },
 }));
 
@@ -61,6 +66,7 @@ const DRY_RUN_OUTCOME = {
 beforeEach(() => {
   printed.length = 0;
   runFieldGroupMigration.mockReset();
+  setTableResolver.mockReset();
   runFieldGroupMigration.mockResolvedValue(DRY_RUN_OUTCOME);
 });
 
@@ -105,6 +111,26 @@ describe("migrate:field-groups — what it asks the engine for", () => {
       dryRun: false,
       backupConfirmed: false,
     });
+  });
+
+  it("installs a table resolver before the engine runs", async () => {
+    // 🔴 A CLI process has no boot, so nothing installs the adapter's table resolver. Without it
+    // the engine fails at its first registry read with "not found in schema registry", which reads
+    // as a corrupt database rather than a missing wiring step.
+    //
+    // The PREVIEW does not reveal this — it stops before the writes that resolve tables — so a
+    // command verified only by previewing looks correct and fails on the first real run, on every
+    // database. That is exactly what happened before this assertion existed.
+    await runMigrateFieldGroups(
+      { apply: true, backupConfirmed: true },
+      context
+    );
+
+    expect(setTableResolver).toHaveBeenCalledTimes(1);
+    // Installed BEFORE the engine is asked to do anything, not after.
+    expect(setTableResolver.mock.invocationCallOrder[0]).toBeLessThan(
+      runFieldGroupMigration.mock.invocationCallOrder[0]!
+    );
   });
 
   it("rolls back only when --down is given", async () => {
