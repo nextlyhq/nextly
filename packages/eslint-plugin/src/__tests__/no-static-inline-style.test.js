@@ -11,6 +11,10 @@ ruleTester.run("no-static-inline-style", rule, {
     `const a = ({x}) => <div style={{ top: x }} />;`,
     // Mixed: one dynamic value means the object as a whole had to be a style.
     `const a = ({x}) => <div style={{ padding: 24, top: x }} />;`,
+    // A COMPUTED key styles whichever property the variable holds, so the
+    // declaration is runtime-dependent even though the value is a constant.
+    `const a = ({cssProperty}) => <div style={{ [cssProperty]: 8 }} />;`,
+    `const a = ({k}) => <div style={{ padding: 24, [k]: 8 }} />;`,
     // Not an object literal, so there is nothing to convert.
     `const a = ({s}) => <div style={s} />;`,
     // A spread carries values this rule cannot see.

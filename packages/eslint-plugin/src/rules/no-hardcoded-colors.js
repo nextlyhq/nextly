@@ -44,7 +44,7 @@ export default {
      */
     function display(text) {
       return (
-        /#[0-9a-fA-F]{3,8}\b|\b(?:rgb|rgba|hsl|hsla)\([^)]*\)?/.exec(
+        /#[0-9a-fA-F]{3,8}\b|\b(?:rgb|rgba|hsl|hsla|oklch|oklab)\([^)]*\)?/.exec(
           text
         )?.[0] ?? text.trim()
       );

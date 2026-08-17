@@ -21,6 +21,10 @@ ruleTester.run("no-hardcoded-colors", rule, {
     `const a = "#fff8";`,
     `const a = "#ffff";`,
     `const a = "#0008";`,
+    // Token indirection is the correct form and must stay clean even though
+    // the token it resolves to is itself an OKLCH colour.
+    `const a = "oklch(from var(--nx-primary) l c h)";`,
+    `const a = "var(--nx-primary)";`,
     // A data URI's payload is content, not styling.
     `const a = "url(data:image/svg+xml;base64,PHN2ZyBmaWxsPScjZmYwMDAwJy8+)";`,
     // A hex that is not a colour at all.
@@ -35,6 +39,16 @@ ruleTester.run("no-hardcoded-colors", rule, {
     },
     {
       code: `const a = { color: "#1a2b3c" };`,
+      errors: 1,
+    },
+    {
+      // Tokens are OKLCH, so a literal in the same colour space is the modern
+      // spelling of the defect this rule exists for.
+      code: `const a = "oklch(0.6 0.2 30)";`,
+      errors: 1,
+    },
+    {
+      code: `const a = "oklab(0.6 0.1 -0.1)";`,
       errors: 1,
     },
     {

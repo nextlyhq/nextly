@@ -107,6 +107,20 @@ export const HUE_REPLACEMENT = {
 export const EXEMPTION_MARKER = "design-lint-ok";
 
 /**
+ * Whether text carries the exemption directive AND a reason.
+ *
+ * Matched as a standalone directive followed by `:` and something, rather than
+ * by substring. A substring accepts the bare marker — which silences a rule
+ * while recording nothing — and accepts incidental text such as
+ * `not-design-lint-ok`, where the surrounding words may be arguing the
+ * opposite. Recording WHY is the entire reason to exempt in place rather than
+ * disable the rule, so a directive without a reason suppresses nothing.
+ */
+export function hasExemptionDirective(text) {
+  return new RegExp(`(?:^|[\\s*/])${EXEMPTION_MARKER}\\s*:\\s*\\S`).test(text);
+}
+
+/**
  * Build the palette-utility pattern.
  *
  * A FACTORY rather than a shared constant because a `g`-flagged regex carries
@@ -148,7 +162,7 @@ export function createPaletteClassPattern({ global = false } = {}) {
  */
 export function createColorLiteralPattern({ global = false } = {}) {
   return new RegExp(
-    `#[0-9a-fA-F]{3,8}\\b|\\b(?:rgb|rgba|hsl|hsla)\\(\\s*[0-9.]`,
+    `#[0-9a-fA-F]{3,8}\\b|\\b(?:rgb|rgba|hsl|hsla)\\(\\s*[0-9.]|\\b(?:oklch|oklab)\\(\\s*[0-9.]`,
     global ? "g" : ""
   );
 }
