@@ -31,11 +31,6 @@
       "import": "./dist/admin/index.js",
       "default": "./dist/admin/index.js"
     },
-    "./render": {
-      "types": "./dist/render/index.d.ts",
-      "import": "./dist/render/index.js",
-      "default": "./dist/render/index.js"
-    },
     "./styles/editor.css": "./dist/styles/editor.css"
   },
   "files": [

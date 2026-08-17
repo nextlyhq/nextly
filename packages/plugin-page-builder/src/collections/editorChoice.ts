@@ -1,6 +1,6 @@
 import { option, richText, select } from "nextly/config";
 
-import { pageBuilderField } from "./pageBuilderField";
+import { blocks } from "../fields/blocksHelper";
 
 /**
  * A drop-in "choose your editor" field set (Elementor/WordPress-style). Spread it into
@@ -46,9 +46,20 @@ export function editorChoiceFields(opts: EditorChoiceOptions = {}) {
       ],
       admin: { description: "Choose how to edit this entry." },
     }),
-    pageBuilderField(builderField, {
+    // The `blocks` field, where this used to spread the previous editor's own
+    // field. Both stored "the page", but not the same page: that one wrote a
+    // document this package defined and validated itself, and this one writes
+    // the engine's — the format the renderer draws and the op layer edits. The
+    // choice this helper offers is between a visual page and rich text, so the
+    // visual half has to be the format everything else can read.
+    blocks({
+      name: builderField,
       label: "Page Builder",
-      condition: { field: "editorMode", equals: "builder" },
+      // Under `admin`, where the rich-text arm below already puts it. The
+      // removed field took a bare `condition`; this one follows the ordinary
+      // field shape, so both arms of the choice are now conditioned the same
+      // way rather than each in its own dialect.
+      admin: { condition: { field: "editorMode", equals: "builder" } },
     }),
     richText({
       name: normalField,
