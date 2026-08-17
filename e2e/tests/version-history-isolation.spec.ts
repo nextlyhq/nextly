@@ -23,19 +23,14 @@ import { test, expect, type Page } from "@playwright/test";
 import { gotoAdmin } from "./support/admin";
 
 /**
- * The two Excerpt fields are told apart by WHERE they are, not by their order
- * in the document. The history panel is portalled, so its position in the DOM
- * is an implementation detail of the portal rather than anything this spec
- * should depend on — and `.first()` silently picks the wrong one the day that
- * changes.
+ * The document's Excerpt field, whichever version the document is showing.
+ *
+ * Reading a version REPLACES the document rather than opening beside it, so
+ * there is only ever one of these — and which values it holds is exactly the
+ * question these tests ask.
  */
-const liveExcerpt = (page: Page) =>
+const documentExcerpt = (page: Page) =>
   page.locator("main").getByRole("textbox", { name: "Excerpt", exact: true });
-
-const historyExcerpt = (page: Page) =>
-  page
-    .getByRole("dialog")
-    .getByRole("textbox", { name: "Excerpt", exact: true });
 
 /** The autosave write: a PUT to a named sub-resource of the entry. */
 const AUTOSAVE_WRITE =
@@ -65,7 +60,7 @@ async function postWithHistory(
   // holds it. Filling it only after creation would leave the oldest version
   // blank, and the assertions below would then be comparing against an empty
   // field — which passes for the wrong reason if the panel renders nothing.
-  await liveExcerpt(page).fill(first);
+  await documentExcerpt(page).fill(first);
   await page.getByRole("button", { name: /save draft/i }).click();
 
   // Saving a NEW entry returns to the LIST rather than staying in the editor.
@@ -81,12 +76,12 @@ async function postWithHistory(
   // so a spec that fills it there waits on something the form never renders.
   // Excerpt is a plain field of the entry and is what the sibling autosave spec
   // exercises for the same reason.
-  await expect(liveExcerpt(page)).toHaveValue(first, { timeout: 30_000 });
+  await expect(documentExcerpt(page)).toHaveValue(first, { timeout: 30_000 });
 
   // A second save, so there is a version that is NOT what is live.
-  await liveExcerpt(page).fill(current);
+  await documentExcerpt(page).fill(current);
   await page.getByRole("button", { name: /save draft/i }).click();
-  await expect(liveExcerpt(page)).toHaveValue(current, { timeout: 30_000 });
+  await expect(documentExcerpt(page)).toHaveValue(current, { timeout: 30_000 });
 
   return { first, current };
 }
@@ -100,7 +95,9 @@ async function openOldestVersion(page: Page): Promise<void> {
   // The list is newest first, so the last row is the earliest version — the one
   // that differs from what is live, which is what makes the assertions bite.
   await rows.last().click();
-  await expect(page.getByText(/Viewing version/)).toBeVisible({
+  // The banner lives in the DOCUMENT now, not in the panel: choosing a version
+  // replaces the page rather than previewing beside it.
+  await expect(page.getByText(/reading a past version/i)).toBeVisible({
     timeout: 30_000,
   });
 }
@@ -128,7 +125,7 @@ test.describe("reading history does not write", () => {
     // by a panel that rendered nothing at all, so the historical value has to
     // be on screen before the absence means anything.
     await expect(
-      historyExcerpt(page),
+      documentExcerpt(page),
       "the past version's own value must be rendered before absence proves anything"
     ).toHaveValue(first, { timeout: 15_000 });
 
@@ -138,31 +135,33 @@ test.describe("reading history does not write", () => {
     ).toBeNull();
   });
 
-  test("leaves the live document untouched, and saves the live values", async ({
+  test("returns the live values untouched, and saves them", async ({
     page,
   }) => {
     const { first, current } = await postWithHistory(page);
 
     await openOldestVersion(page);
 
-    // The panel is non-modal, so the live editor is still on screen behind it.
-    // Its own field must still hold what is live — if the snapshot had been
-    // loaded into the live form, this would read the historical title.
+    // The document is showing the past.
+    await expect(documentExcerpt(page)).toHaveValue(first, { timeout: 15_000 });
+
+    // Returning must restore what is LIVE, unchanged. Had the snapshot been
+    // loaded into the live form rather than rendered against one of its own,
+    // the editor would come back holding the historical text — and a save from
+    // there would persist the past as new writing.
+    await page.getByRole("button", { name: /back to current/i }).click();
     await expect(
-      liveExcerpt(page),
-      "opening history must not load the snapshot into the live form"
+      documentExcerpt(page),
+      "returning from history must restore the live values untouched"
     ).toHaveValue(current, { timeout: 15_000 });
 
-    // And the live save must still submit live values. A component that
-    // resolved to the history form would write the past here, silently.
+    // And a save afterwards persists those live values across a reload.
     await page.getByRole("button", { name: /save draft/i }).click();
     await page.reload();
     await expect(page.locator("main")).toBeVisible({ timeout: 30_000 });
-
     await expect(
-      liveExcerpt(page),
-      "saving with history open must persist the live values, not the historical ones"
+      documentExcerpt(page),
+      "reading history must leave nothing historical in the saved document"
     ).toHaveValue(current, { timeout: 30_000 });
-    await expect(liveExcerpt(page)).not.toHaveValue(first);
   });
 });

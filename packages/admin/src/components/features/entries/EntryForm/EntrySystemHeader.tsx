@@ -758,7 +758,6 @@ export function EntrySystemHeader({
                   entryId: String(entry.id),
                 }
           }
-          fields={historyFields}
           // Authoritative localized signal for the panel's locale filter.
           entityLocalized={localized}
           // Restore reuses the ordinary edit permission, so a caller who may

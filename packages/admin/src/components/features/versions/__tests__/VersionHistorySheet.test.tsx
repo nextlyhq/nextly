@@ -54,6 +54,7 @@ vi.mock("@admin/hooks/queries/useVersions", () => ({
   useSetVersionLabel: (...a: unknown[]) => setLabelMock(...a),
 }));
 
+import { DocumentHistoryContext } from "../document-history-context";
 import { VersionHistorySheet } from "../VersionHistorySheet";
 
 const scope = { kind: "collection" as const, slug: "posts", entryId: "e1" };
@@ -97,12 +98,7 @@ function version(versionNo: number) {
 
 function renderSheet() {
   return render(
-    <VersionHistorySheet
-      open
-      onOpenChange={vi.fn()}
-      scope={scope}
-      fields={fields}
-    />
+    <VersionHistorySheet open onOpenChange={vi.fn()} scope={scope} />
   );
 }
 
@@ -150,8 +146,10 @@ describe("VersionHistorySheet", () => {
   it("says a document with no history has none, rather than erroring", () => {
     renderSheet();
 
+    // A heading, not a paragraph: it is the only content in an empty panel, so
+    // it has to be something assistive technology can land on.
     expect(
-      screen.getByText(/No versions recorded for this document yet/)
+      screen.getByRole("heading", { name: /No versions yet/ })
     ).toBeInTheDocument();
   });
 
@@ -166,7 +164,9 @@ describe("VersionHistorySheet", () => {
     expect(
       screen.getByRole("button", { name: /Try again/ })
     ).toBeInTheDocument();
-    expect(screen.queryByText(/No versions recorded/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: /No versions yet/ })
+    ).toBeNull();
   });
 
   it("offers a retry when a background refresh fails after history has loaded", async () => {
@@ -318,12 +318,7 @@ describe("VersionHistorySheet", () => {
     render(
       <>
         <input aria-label="Title" defaultValue="the live document" />
-        <VersionHistorySheet
-          open
-          onOpenChange={vi.fn()}
-          scope={scope}
-          fields={fields}
-        />
+        <VersionHistorySheet open onOpenChange={vi.fn()} scope={scope} />
       </>
     );
 
@@ -375,23 +370,35 @@ describe("VersionHistorySheet", () => {
     ).toBeInTheDocument();
   });
 
-  it("opens a version and states plainly that it is not live", async () => {
+  it("hands the chosen version to the document rather than previewing it", async () => {
     useVersionsMock.mockReturnValue(
       listState({
         data: { pages: [{ items: [version(3)], meta: { hasNext: false } }] },
       })
     );
     useVersionMock.mockReturnValue(
-      detailState({ data: { snapshot: { title: "Old title" } } })
+      detailState({ data: { snapshot: { title: "Old title" }, locale: null } })
     );
 
-    renderSheet();
+    const setViewing = vi.fn();
+    render(
+      <DocumentHistoryContext.Provider value={{ viewing: null, setViewing }}>
+        <VersionHistorySheet open onOpenChange={vi.fn()} scope={scope} />
+      </DocumentHistoryContext.Provider>
+    );
     await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
 
-    expect(screen.getByText(/Viewing version 3/)).toBeInTheDocument();
-    // The snapshot is drawn by the editor's own field components, so its values
-    // are display values on read-only inputs rather than text nodes.
-    expect(screen.getByLabelText(/Title/)).toHaveValue("Old title");
+    // The panel no longer draws the version: a 480px column cannot show a page
+    // as it read, so the document does it and the panel stays a timeline.
+    await waitFor(() =>
+      expect(setViewing).toHaveBeenCalledWith(
+        expect.objectContaining({
+          versionNo: 3,
+          snapshot: { title: "Old title" },
+        })
+      )
+    );
+    expect(screen.queryByText(/Viewing version/)).toBeNull();
   });
 
   it("returns to the list from a preview", async () => {
@@ -423,12 +430,7 @@ describe("VersionHistorySheet", () => {
     useVersionMock.mockReturnValue(detailState({ data: { snapshot: {} } }));
 
     const { unmount } = render(
-      <VersionHistorySheet
-        open
-        onOpenChange={vi.fn()}
-        scope={scope}
-        fields={fields}
-      />
+      <VersionHistorySheet open onOpenChange={vi.fn()} scope={scope} />
     );
     await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
     expect(
@@ -441,7 +443,6 @@ describe("VersionHistorySheet", () => {
         open
         onOpenChange={vi.fn()}
         scope={scope}
-        fields={fields}
         canRestore
       />
     );
@@ -465,7 +466,6 @@ describe("VersionHistorySheet", () => {
         open
         onOpenChange={vi.fn()}
         scope={scope}
-        fields={fields}
         canRestore
       />
     );
@@ -500,7 +500,6 @@ describe("VersionHistorySheet", () => {
         open
         onOpenChange={vi.fn()}
         scope={scope}
-        fields={fields}
         canRestore
       />
     );
@@ -526,7 +525,6 @@ describe("VersionHistorySheet", () => {
         open
         onOpenChange={vi.fn()}
         scope={scope}
-        fields={fields}
         canRestore
       />
     );
@@ -542,7 +540,6 @@ describe("VersionHistorySheet", () => {
         open
         onOpenChange={vi.fn()}
         scope={scope}
-        fields={fields}
         canRestore
       />
     );
@@ -569,7 +566,6 @@ describe("VersionHistorySheet", () => {
         open
         onOpenChange={vi.fn()}
         scope={scope}
-        fields={fields}
         canRestore
         liveStatus="published"
       />
@@ -585,12 +581,7 @@ describe("VersionHistorySheet", () => {
 
   it("does not query while closed", () => {
     render(
-      <VersionHistorySheet
-        open={false}
-        onOpenChange={vi.fn()}
-        scope={scope}
-        fields={fields}
-      />
+      <VersionHistorySheet open={false} onOpenChange={vi.fn()} scope={scope} />
     );
 
     // Mounted but idle: the panel exists in the header regardless of state, so
@@ -622,7 +613,6 @@ describe("VersionHistorySheet — renaming", () => {
         open
         onOpenChange={vi.fn()}
         scope={scope}
-        fields={fields}
         canRestore={false}
       />
     );
@@ -638,7 +628,6 @@ describe("VersionHistorySheet — renaming", () => {
         open
         onOpenChange={vi.fn()}
         scope={scope}
-        fields={fields}
         canRestore
       />
     );
