@@ -1,8 +1,11 @@
 import {
+  compileSiteSheet,
   DOCUMENT_FORMAT_VERSION,
   PAGE_ROOT_CLASS,
+  resolveSiteTokens,
   type BlockDocument,
   type DocumentLimits,
+  type SiteSheetInput,
   type StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
 import type { ReactElement, ReactNode } from "react";
@@ -53,6 +56,30 @@ export interface PageRendererProps {
    * write path. Ignored when `styles` is supplied.
    */
   styleContext?: StyleCompileContext;
+  /**
+   * The site's design tokens, fonts and named classes, compiled into the sheet
+   * every page shares and emitted BEFORE the page's own.
+   *
+   * **Order is the cascade and is not negotiable.** `compileSiteSheet` emits
+   * font faces, then tokens, then block-type defaults, then named classes; the
+   * page sheet is appended after, which is what lets a node's own value beat a
+   * class and a class beat a block default. Emitting these in the other order
+   * would invert every one of those.
+   *
+   * **Its tokens LAYER over the defaults rather than replacing them**, through
+   * `resolveSiteTokens`. A site that supplied one brand colour and thereby lost
+   * `content.width` and `space.4` would break every block reading those, and
+   * break it silently: an unresolved custom property invalidates the
+   * declaration rather than reporting anything.
+   *
+   * Omitted means no site sheet is emitted at all, which is the behaviour every
+   * existing consumer had before this prop existed. That is deliberate rather
+   * than lazy — a renderer that started emitting token definitions on its own
+   * would change what stored `{ $token }` references resolve to, and a page
+   * whose current appearance depends on one of those dangling is a page that
+   * moves. The host decides when to take that step.
+   */
+  siteStyles?: SiteSheetInput;
   /** Shown in place of an asynchronous block until its output arrives. */
   blockFallback?: ReactNode;
   /**
@@ -128,6 +155,7 @@ export function PageRenderer({
   blocks,
   styles,
   styleContext,
+  siteStyles,
   blockFallback,
   limits,
   hostPolicy,
@@ -349,8 +377,40 @@ export function PageRenderer({
   );
   const rootClassName = scope ? `${PAGE_ROOT_CLASS} ${scope}` : PAGE_ROOT_CLASS;
 
+  // Tokens LAYERED over the defaults, never replacing them: a site supplying
+  // one brand colour must not thereby lose `content.width` and `space.4`, and
+  // losing them is silent because an unresolved custom property invalidates the
+  // declaration rather than reporting anything. `resolveSiteTokens` is the one
+  // answer to "what tokens does this site have" — asked here and by anything
+  // that edits them, so the two cannot drift.
+  //
+  // Resolved even when the host names no tokens of its own, which is what makes
+  // the default set reach a page at all. Until this existed nothing called
+  // `compileSiteSheet`, so `defaultSiteTokens()` was a default nobody applied
+  // and every `{ $token }` compiled to a `var()` with nothing behind it.
+  const siteSheet =
+    siteStyles === undefined
+      ? undefined
+      : compileSiteSheet({
+          ...siteStyles,
+          tokens: resolveSiteTokens(siteStyles.tokens),
+        });
+
   return (
     <div className={rootClassName}>
+      {siteSheet?.css ? (
+        // FIRST, because order is the cascade: the site sheet carries font
+        // faces, tokens and block-type defaults, and the page's own sheet is
+        // appended after so a node's value beats a class and a class beats a
+        // block default. Emitted with its content hash, which is what lets a
+        // host recognise the same bytes across pages and serve them once.
+        <style
+          data-nx-site-sheet={siteSheet.contentHash}
+          dangerouslySetInnerHTML={{
+            __html: styleTextForInjection(siteSheet.css),
+          }}
+        />
+      ) : null}
       {css ? (
         // Injected as raw text rather than as a child, because React escapes a
         // text child and a stylesheet cannot survive that: `&` and `>` are
