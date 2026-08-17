@@ -123,7 +123,15 @@ const tabsListVariants = cva(
   // `gap-1` and `p-0` are invariant across the variants, so they belong here —
   // repeating them in each arm gives any future adjustment two sites to change
   // and one to forget.
-  "inline-flex items-center justify-center gap-1 rounded-none p-0 text-muted-foreground",
+  //
+  // `border-b` is the rail the triggers sit on, and it is load-bearing rather
+  // than decoration. Each trigger draws a 2px bottom border and pulls itself up
+  // by `-mb-0.5` so that border lands ON this one: with no rail here, the pull
+  // put a 2px line onto whatever followed the strip in the document, and above
+  // a rounded panel that is the corner curve — a straight bar crossing an 8px
+  // arc. The rail also gives an inactive tab somewhere to be inactive, which is
+  // what makes the active one read as selected rather than as the only tab.
+  "inline-flex items-center justify-center gap-1 rounded-none border-b border-border p-0 text-muted-foreground",
   {
     variants: { variant: TABS_LIST_VARIANTS },
     defaultVariants: { variant: "default" },

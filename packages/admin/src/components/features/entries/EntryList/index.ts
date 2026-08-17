@@ -39,12 +39,6 @@ export {
   type EntryTableActionsProps,
 } from "./EntryTableActions";
 
-// Toolbar
-export {
-  EntryTableToolbar,
-  type EntryTableToolbarProps,
-} from "./EntryTableToolbar";
-
 // Bulk actions
 export { BulkActionBar, type BulkActionBarProps } from "./BulkActionBar";
 

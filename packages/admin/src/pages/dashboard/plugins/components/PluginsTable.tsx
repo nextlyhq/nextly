@@ -1,23 +1,11 @@
 "use client";
 
-import {
-  Badge,
-  Button,
-  DropdownMenu,
-  DropdownMenuCheckboxItem,
-  DropdownMenuContent,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@nextlyhq/ui";
+import { Badge, Button } from "@nextlyhq/ui";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { Columns } from "@admin/components/icons";
 import { PluginIcon } from "@admin/components/shared/plugin-icon";
-import { SearchBar } from "@admin/components/shared/search-bar";
-import { DataTableView } from "@admin/components/ui/table/data-table";
 import type { NextlyColumn } from "@admin/components/ui/table/data-table";
-import { ListShell } from "@admin/components/ui/table/list-shell";
+import { ListView } from "@admin/components/ui/table/list-view";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { UI } from "@admin/constants/ui";
 import {
@@ -238,88 +226,58 @@ export default function PluginsTable() {
   if (pluginsUnavailable) return <InstalledPluginsUnavailable />;
 
   return (
-    <ListShell
-      toolbar={
-        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <SearchBar
-            value={search}
-            onChange={setSearch}
-            placeholder="Search plugins..."
-            className="w-full md:max-w-sm"
-          />
-          <div className="flex items-center gap-2">
-            <div
-              className="flex items-center gap-1"
-              role="group"
-              aria-label="Filter plugins by status"
+    <ListView<PluginWithId>
+      search={{
+        value: search,
+        onChange: setSearch,
+        placeholder: "Search plugins...",
+      }}
+      inlineFilters={
+        <div
+          className="flex items-center gap-1"
+          role="group"
+          aria-label="Filter plugins by status"
+        >
+          {(["all", "enabled", "disabled"] as StatusFilter[]).map(f => (
+            <Button
+              key={f}
+              variant={statusFilter === f ? "default" : "outline"}
+              size="md"
+              onClick={() => setStatusFilter(f)}
+              className="capitalize"
             >
-              {(["all", "enabled", "disabled"] as StatusFilter[]).map(f => (
-                <Button
-                  key={f}
-                  variant={statusFilter === f ? "default" : "outline"}
-                  size="md"
-                  onClick={() => setStatusFilter(f)}
-                  className="capitalize"
-                >
-                  {f}
-                </Button>
-              ))}
-            </div>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="md"
-                  className="border-border bg-background text-foreground hover:bg-accent/10"
-                >
-                  <Columns className="h-4 w-4" />
-                  Columns
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-48">
-                <DropdownMenuLabel>Toggle columns</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                {toggleableColumns.map(col => (
-                  <DropdownMenuCheckboxItem
-                    key={col.name}
-                    checked={!hiddenColumns.has(col.name)}
-                    onCheckedChange={() => toggleColumn(col.name)}
-                  >
-                    {typeof col.header === "string" ? col.header : col.name}
-                  </DropdownMenuCheckboxItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
+              {f}
+            </Button>
+          ))}
         </div>
       }
-    >
-      <DataTableView<PluginWithId>
-        columns={columns}
-        rows={paginatedPlugins}
-        rowHref={plugin =>
-          buildRoute(ROUTES.PLUGIN_DETAIL, { slug: plugin.id })
-        }
-        registryKey="plugins"
-        ariaLabel="Installed plugins table"
-        pagination={
-          totalCount > 0
-            ? {
-                currentPage: page,
-                totalPages: Math.ceil(totalCount / pageSize),
-                pageSize,
-                onPageChange: setPage,
-                onPageSizeChange: setPageSize,
-                totalItems: totalCount,
-              }
-            : undefined
-        }
-        emptyMessage={
-          debouncedSearch || statusFilter !== "all"
-            ? "No plugins match the current filters."
-            : "No plugins installed. Add plugins to your Nextly config to extend functionality."
-        }
-      />
-    </ListShell>
+      columnsControl={{
+        columns: toggleableColumns,
+        isColumnVisible: name => !hiddenColumns.has(name),
+        onToggleColumn: toggleColumn,
+      }}
+      columns={columns}
+      rows={paginatedPlugins}
+      rowHref={plugin => buildRoute(ROUTES.PLUGIN_DETAIL, { slug: plugin.id })}
+      registryKey="plugins"
+      ariaLabel="Installed plugins table"
+      pagination={
+        totalCount > 0
+          ? {
+              currentPage: page,
+              totalPages: Math.ceil(totalCount / pageSize),
+              pageSize,
+              onPageChange: setPage,
+              onPageSizeChange: setPageSize,
+              totalItems: totalCount,
+            }
+          : undefined
+      }
+      emptyMessage={
+        debouncedSearch || statusFilter !== "all"
+          ? "No plugins match the current filters."
+          : "No plugins installed. Add plugins to your Nextly config to extend functionality."
+      }
+    />
   );
 }

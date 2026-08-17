@@ -6,30 +6,21 @@ import {
   AvatarFallback,
   AvatarImage,
   Badge,
-  Button,
-  DropdownMenu,
-  DropdownMenuCheckboxItem,
-  DropdownMenuContent,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
   Skeleton,
 } from "@nextlyhq/ui";
-import { Columns, Edit, Trash2 } from "lucide-react";
+import { Edit, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { BulkActionBar } from "@admin/components/features/entries/EntryList/BulkActionBar";
 import { UserDeleteDialog } from "@admin/components/features/user-dialog";
 import { BulkDeleteDialog } from "@admin/components/shared/bulk-action-dialogs";
-import { SearchBar } from "@admin/components/shared/search-bar";
 import { toast } from "@admin/components/ui";
-import { DataTableView } from "@admin/components/ui/table/data-table";
 import type {
   DataTableSelection,
   NextlyColumn,
   RowAction,
 } from "@admin/components/ui/table/data-table";
-import { ListShell } from "@admin/components/ui/table/list-shell";
+import { ListView } from "@admin/components/ui/table/list-view";
 import { PAGINATION } from "@admin/constants/pagination";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useUserFields } from "@admin/hooks/queries/useUserFields";
@@ -124,8 +115,8 @@ const ALWAYS_VISIBLE = new Set(["name"]);
  * Lists users with search, server-side pagination, dynamic custom-field columns,
  * column visibility, whole-row navigation to the edit page, per-row actions, and
  * bulk delete. Data + mutations run through TanStack Query so the list stays in
- * sync after edits and deletes; rendering is delegated to the unified
- * DataTableView.
+ * sync after edits and deletes; the toolbar, selection bar and table come from
+ * the shared ListView.
  */
 export default function UserTable() {
   const { page, pageSize, setPage, setPageSize, resetPage } = usePagination();
@@ -422,109 +413,80 @@ export default function UserTable() {
 
   return (
     <>
-      <ListShell
-        toolbar={
-          <>
-            {selectedCount > 0 && (
-              <BulkActionBar
-                selectedCount={selectedCount}
-                collection={undefined}
-                onDelete={handleBulkDelete}
-                onClear={clearSelection}
-                itemLabel="user"
-              />
-            )}
-
-            {/* Search + column visibility */}
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-              <SearchBar
-                value={search}
-                onChange={setSearch}
-                placeholder="Search users by name or email"
-                isLoading={isFetching}
-                className="max-w-sm flex-1"
-              />
-
-              <div className="flex items-center gap-2">
-                {showLoadingSkeleton ? (
-                  <Skeleton className="h-9 w-25" />
-                ) : (
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        variant="outline"
-                        size="md"
-                        className="border-border bg-background text-foreground hover:bg-accent/10"
-                      >
-                        <Columns className="h-4 w-4" />
-                        Columns
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="w-48">
-                      <DropdownMenuLabel>Toggle columns</DropdownMenuLabel>
-                      <DropdownMenuSeparator />
-                      {toggleableColumns.map(col => (
-                        <DropdownMenuCheckboxItem
-                          key={col.name}
-                          checked={!hiddenColumns.has(col.name)}
-                          onCheckedChange={() => toggleColumn(col.name)}
-                        >
-                          {typeof col.header === "string"
-                            ? col.header
-                            : col.name}
-                        </DropdownMenuCheckboxItem>
-                      ))}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                )}
-              </div>
-            </div>
-          </>
+      {/* The failure is a table state rather than a separate Alert, so the
+          list reports one the way every other list does. With no rows to
+          show, `DataTableView` returns the message alone and draws no card
+          around it, which is why nothing here needs to suppress the empty
+          state or lay the error out. */}
+      <ListView<UserApiResponse>
+        search={{
+          value: search,
+          onChange: setSearch,
+          placeholder: "Search users by name or email",
+          isLoading: isFetching,
+        }}
+        bulkBar={
+          selectedCount > 0 ? (
+            <BulkActionBar
+              selectedCount={selectedCount}
+              collection={undefined}
+              onDelete={handleBulkDelete}
+              onClear={clearSelection}
+              itemLabel="user"
+            />
+          ) : undefined
         }
-      >
-        {/* The failure is a table state rather than a separate Alert, so the
-            list reports one the way every other list does. With no rows to
-            show, `DataTableView` returns the message alone and draws no card
-            around it, which is why nothing here needs to suppress the empty
-            state or lay the error out. */}
-        <DataTableView<UserApiResponse>
-          columns={columns}
-          rows={filteredData}
-          loading={showLoadingSkeleton}
-          rowHref={user => buildRoute(ROUTES.USERS_EDIT, { id: user.id })}
-          primaryColumn="name"
-          selection={selection}
-          rowActions={rowActions}
-          registryKey="users"
-          ariaLabel="Users table"
-          pagination={
-            data && data.meta.totalPages > 0
-              ? {
-                  currentPage: page,
-                  totalPages: data.meta.totalPages,
-                  totalItems: data.meta.total,
-                  pageSize,
-                  pageSizeOptions: PAGINATION.TABLE_PAGE_SIZE_OPTIONS,
-                  onPageChange: setPage,
-                  onPageSizeChange: setPageSize,
-                  isLoading,
-                }
-              : undefined
-          }
-          error={
-            isError
-              ? error instanceof Error
-                ? error.message
-                : "Failed to load users. Please try again."
-              : null
-          }
-          emptyMessage={
-            search || roleFilter !== "all"
-              ? "No users found. Try adjusting your search or filters."
-              : "No users available."
-          }
-        />
-      </ListShell>
+        // While the list is still loading there is nothing to toggle, so the
+        // control is withheld and its footprint held by a skeleton rather
+        // than by a menu that would open onto an empty list.
+        columnsControl={
+          showLoadingSkeleton
+            ? undefined
+            : {
+                columns: toggleableColumns,
+                isColumnVisible: name => !hiddenColumns.has(name),
+                onToggleColumn: toggleColumn,
+              }
+        }
+        toolbarActions={
+          showLoadingSkeleton ? <Skeleton className="h-9 w-25" /> : undefined
+        }
+        columns={columns}
+        rows={filteredData}
+        loading={showLoadingSkeleton}
+        rowHref={user => buildRoute(ROUTES.USERS_EDIT, { id: user.id })}
+        primaryColumn="name"
+        selection={selection}
+        rowActions={rowActions}
+        registryKey="users"
+        ariaLabel="Users table"
+        pagination={
+          data && data.meta.totalPages > 0
+            ? {
+                currentPage: page,
+                totalPages: data.meta.totalPages,
+                totalItems: data.meta.total,
+                pageSize,
+                pageSizeOptions: PAGINATION.TABLE_PAGE_SIZE_OPTIONS,
+                onPageChange: setPage,
+                onPageSizeChange: setPageSize,
+                isLoading,
+              }
+            : undefined
+        }
+        error={
+          isError
+            ? error instanceof Error
+              ? error.message
+              : "Failed to load users. Please try again."
+            : null
+        }
+        emptyMessage={
+          search || roleFilter !== "all"
+            ? "No users found. Try adjusting your search or filters."
+            : "No users available."
+        }
+      />
 
       <UserDeleteDialog
         open={deleteDialogOpen}
