@@ -294,7 +294,7 @@ export function JsonInput<TFieldValues extends FieldValues = FieldValues>({
           readOnly={readOnly}
           placeholder={field.admin?.placeholder ?? "{\n  \n}"}
           aria-invalid={invalid || parseError !== null || undefined}
-          aria-describedby={parseError ? `${name}-error` : undefined}
+          aria-describedby={parseError ? `${elementId}-error` : undefined}
           className={cn(
             "font-mono text-sm resize-y",
             "min-h-[100px]",
