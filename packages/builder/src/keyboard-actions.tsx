@@ -17,12 +17,14 @@
  * DOM. What is only true here is which keys ask for it, when they are allowed
  * to, and that the answer reaches the one place a document changes.
  *
- * @module keyboard-moves
+ * @module keyboard-actions
  */
 
+import { getBlock } from "@nextlyhq/blocks-engine";
 import { useShortcuts } from "@nextlyhq/ui";
 import * as React from "react";
 
+import { blockDeletion } from "./delete-block";
 import type { EditorState } from "./editor-state";
 import {
   keyboardMovePosition,
@@ -88,7 +90,39 @@ const EFFECT_ANNOUNCEMENT: Readonly<Record<MoveEffect, string>> = {
   outdent: "Block moved out of its container",
 };
 
-export interface BlockKeyboardMovesOptions {
+/**
+ * How a deletion is announced.
+ *
+ * Names what went AND how to get it back. A screen-reader user cannot see an
+ * undo control, so for them the announcement is the only place the recovery
+ * path exists — and a container takes its children with it, which is invisible
+ * from the block they had selected: a collapsed section looks exactly like an
+ * empty one.
+ *
+ * The count is stated rather than prompted for. A confirmation on every delete
+ * is friction people learn to click through, so it stops being a decision and
+ * becomes a keystroke — protecting nobody while costing everybody. That trade
+ * only holds because undo is reachable, which is why these ship together.
+ */
+function deletionAnnouncement(type: string, descendants: number): string {
+  // The block's own label, falling back to its type. An author who inserted
+  // "Divider" from the palette should hear "Divider deleted", not
+  // "core/divider deleted" — the identifier is what the registry calls it, and
+  // the label is what they were shown. Resolved here rather than carried on the
+  // deletion, because the deletion is a document fact and the wording is a
+  // presentation one.
+  const name = getBlock(type)?.editor?.label ?? type;
+  const what =
+    descendants === 0
+      ? `${name} deleted`
+      : `${name} deleted, with ${descendants} ${descendants === 1 ? "block" : "blocks"} inside`;
+  return `${what}. Undo with ${UNDO_KEYS_SPOKEN}.`;
+}
+
+/** How the undo shortcut is READ ALOUD, which is not how it is parsed. */
+const UNDO_KEYS_SPOKEN = "Control or Command Z";
+
+export interface BlockKeyboardActionsOptions {
   /**
    * The editor whose document these move blocks in.
    *
@@ -114,10 +148,10 @@ export interface BlockKeyboardMovesOptions {
  * returned handlers would invite a second caller to wire them to different keys
  * — which is how one gesture ends up with two answers.
  */
-export function useBlockKeyboardMoves({
+export function useBlockKeyboardActions({
   editor,
   enabled = true,
-}: BlockKeyboardMovesOptions): string {
+}: BlockKeyboardActionsOptions): string {
   // The message a live region reads out. Held as state rather than written to
   // the DOM directly so React owns the node — a region mutated behind React's
   // back is reverted by the next render, silently and only sometimes.
@@ -140,6 +174,28 @@ export function useBlockKeyboardMoves({
   // the document from that render.
   const latest = React.useRef(editor);
   latest.current = editor;
+
+  const deleteSelected = React.useCallback(() => {
+    const editorNow = latest.current;
+    const deletion = blockDeletion(editorNow.document, editorNow.selectedId);
+    // `null` means there is nothing to delete — no selection, or an id the
+    // document no longer holds after an undo. Nothing is applied and nothing is
+    // said, because there is no event to report.
+    if (deletion === null) return;
+
+    const applied = editorNow.apply({
+      kind: "remove",
+      id: deletion.id,
+      dropSlotIfEmpty: deletion.dropSlotIfEmpty,
+    });
+    if (applied === null) return;
+
+    // Selection moved only after the store accepted the removal. Moving it
+    // first would leave the author pointed at a neighbour while the block they
+    // asked to delete is still there.
+    editorNow.select(deletion.nextSelection);
+    announce(deletionAnnouncement(deletion.type, deletion.descendantCount));
+  }, [announce]);
 
   const bindings = React.useMemo(
     () =>
@@ -196,7 +252,71 @@ export function useBlockKeyboardMoves({
     [announce]
   );
 
-  useShortcuts(bindings, { name: "builder-block-moves", enabled });
+  const editing = React.useMemo(
+    () => [
+      {
+        // Both keys. Delete is the explicit one; Backspace is what most people
+        // reach for, and binding only one leaves half the authors pressing a
+        // key that does nothing.
+        keys: "Delete",
+        description: "Delete the selected block",
+        when: () => latest.current.selectedId !== null,
+        // Not while typing, and for a sharper reason than the moves: alt+Arrow
+        // in a field is caret movement, but Backspace is the most destructive
+        // key a text field has. A binding that fired there would eat the
+        // author's characters instead of their block.
+        whenTyping: false,
+        run: () => deleteSelected(),
+      },
+      {
+        keys: "Backspace",
+        description: "Delete the selected block",
+        when: () => latest.current.selectedId !== null,
+        whenTyping: false,
+        run: () => deleteSelected(),
+      },
+      {
+        keys: "mod+z",
+        description: "Undo the last change",
+        // No selection required: undo acts on the document's history, not on
+        // whatever happens to be selected — and the commonest thing to undo is
+        // a deletion, which leaves a different block selected than the one the
+        // edit touched.
+        when: () => latest.current.canUndo,
+        run: () => {
+          latest.current.undo();
+          announce("Undone");
+        },
+      },
+      {
+        // Both spellings: `mod+shift+z` is the convention on macOS and in most
+        // editors, `mod+y` is the Windows one. Neither is wrong and authors
+        // arrive with whichever they learned.
+        keys: "mod+shift+z",
+        description: "Redo the last undone change",
+        when: () => latest.current.canRedo,
+        run: () => {
+          latest.current.redo();
+          announce("Redone");
+        },
+      },
+      {
+        keys: "mod+y",
+        description: "Redo the last undone change",
+        when: () => latest.current.canRedo,
+        run: () => {
+          latest.current.redo();
+          announce("Redone");
+        },
+      },
+    ],
+    [announce, deleteSelected]
+  );
+
+  useShortcuts([...bindings, ...editing], {
+    name: "builder-block-actions",
+    enabled,
+  });
 
   return announcement;
 }
@@ -212,11 +332,11 @@ export function useBlockKeyboardMoves({
  * Renders nothing. It is a place to run a hook, which is the same shape the
  * command palette already uses for its modal key hold.
  */
-export function BlockKeyboardMoves({
+export function BlockKeyboardActions({
   editor,
   enabled,
-}: BlockKeyboardMovesOptions): React.JSX.Element {
-  const announcement = useBlockKeyboardMoves({ editor, enabled });
+}: BlockKeyboardActionsOptions): React.JSX.Element {
+  const announcement = useBlockKeyboardActions({ editor, enabled });
 
   // `polite`, not `assertive`: a move is the author's own action and its result
   // can wait for a pause. Assertive interrupts whatever is being read, which for
