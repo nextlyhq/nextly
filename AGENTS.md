@@ -332,7 +332,20 @@ This gate reads the DIFF, and is deliberately not the same check as CI. `.github
 
 What CI ENFORCES is narrower than what it reports, and the difference is a property of the tool rather than a policy choice. Of its three analyses only dead code can gate: `fallow dupes` exits 0 whatever it finds — 846 clone groups and `--fail-on-issues` both — and its JSON carries no new-versus-inherited flag to count instead, while `fallow health` matches its baseline per file and category, which does not survive the two sides being different trees. Duplication and complexity are therefore reported and not enforced. Treat a green check as "this change added no dead code", not as "this change added nothing".
 
-The gate needs `jq` on PATH. Without it `fallow-gate.sh` prints one line to stderr and exits 0 — so a machine missing `jq` has the gate installed and auditing nothing.
+`.claude/hooks/fallow-gate.sh` is VENDORED rather than left as `fallow hooks
+install` writes it. The generated script parses JSON with `jq` and compares
+versions with `sort -V`, and neither is safe to assume here: `jq` is not a
+dependency of this repository, and BSD `sort` has no `-V`, so on macOS the
+version check aborts the hook under `set -euo pipefail`. Both are done with
+node in the vendored copy, which every contributor already has — the engines
+field requires it and nothing in this repository runs without it. So the gate
+needs no tool a contributor does not already have installed.
+
+That has a maintenance cost worth knowing: re-running `fallow hooks install
+--target agent` OVERWRITES the file and silently puts both back. Re-apply the
+vendored version if that happens. The workflows under `.github/` still use
+`jq` freely — GitHub's runners ship it, and that is not a contributor's
+machine.
 
 `FALLOW_AUDIT_BASE` is pinned to `origin/main` in `.claude/settings.json`. Left unset, the audit takes its base from the merge-base with the branch's UPSTREAM, which is the remote tracking branch — stale on any branch whose local commits are not pushed, and after a rebase that means the diff carries every commit `main` gained since. Measured here: 319 changed files and a `fail` verdict on a branch whose actual diff was nine commits. Every pull request in this repo targets `main`, so naming it removes the guesswork.
 
