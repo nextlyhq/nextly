@@ -67,13 +67,28 @@ describe("core/gallery", () => {
     expect(JSON.stringify(GALLERY_BASE_STYLES)).not.toContain("aspectRatio");
   });
 
-  it("uses only guaranteed tokens, so it resolves under every theme", () => {
-    // `defaultSiteTokens()` guarantees space.4 but no surface or border colour,
-    // and the older page-builder's grids reached for `--nx-*` — the ADMIN
-    // namespace, which this renderer never emits.
+  it("spaces its tiles with a value that actually resolves", () => {
+    // This test used to require `space.4` and was named "uses only guaranteed
+    // tokens, so it resolves under every theme". The `--nx-` half was right and
+    // is kept; the token half asserted a premise that does not hold.
+    //
+    // `defaultSiteTokens()` guarantees NOTHING today: `compileSiteSheet` — the
+    // only thing that turns a token set into CSS — has zero consumers outside
+    // `blocks-engine`, and `--site-` appears in no source file outside the
+    // engine (positive control: `--nx-` appears in four). So a `{ $token }`
+    // compiled to `var(--site-space-4)`, nothing defined it, the declaration
+    // was invalid at computed-value time, and `gap` fell back to `normal` —
+    // zero for a grid. The tiles touched.
+    //
+    // The ratchet that catches this class for every block lives in
+    // `base-styles.test.tsx`; this asserts the value this block settled on.
     const declared = JSON.stringify(GALLERY_BASE_STYLES);
 
-    expect(declared).toContain("space.4");
+    expect(declared).toContain("1rem");
+    expect(declared).not.toContain("$token");
+    // The ADMIN namespace, which this renderer never emits — so a rule using it
+    // resolves to nothing on a published page while looking right in an admin
+    // preview. Three separate blocks reached for it independently.
     expect(declared).not.toContain("--nx-");
   });
 });

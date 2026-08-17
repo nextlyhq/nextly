@@ -244,3 +244,72 @@ describe("every default the core library declares", () => {
     }
   );
 });
+
+/**
+ * Every token reference a `NodeStyles` makes, at any depth.
+ *
+ * Walked to the leaf rather than read one level down: a token may sit inside an
+ * object-shaped declaration — a per-corner radius, a per-side border colour —
+ * and a check that only inspected top-level values would report those clean.
+ */
+function tokenNamesIn(value: unknown): string[] {
+  if (typeof value !== "object" || value === null) return [];
+  const record = value as Record<string, unknown>;
+  if (typeof record.$token === "string") return [record.$token];
+  return Object.values(record).flatMap(tokenNamesIn);
+}
+
+describe("a default may not depend on a design token yet", () => {
+  /**
+   * **A token reference compiles to a `var()` that NOTHING DEFINES.**
+   *
+   * `compileSiteSheet` is the only thing that turns a token set into CSS, and it
+   * has zero consumers outside `blocks-engine` — so `--site-*` is emitted by no
+   * product path, and `defaultSiteTokens()` is a default nobody applies. An
+   * undefined custom property makes the whole declaration invalid at
+   * computed-value time, so the property falls back to its initial value.
+   *
+   * `core/form` shipped that way: `gap: { $token: "space.4" }` became
+   * `gap: var(--site-space-4)`, which resolved to nothing, so a grid whose
+   * fields were supposed to be spaced rendered with them touching.
+   *
+   * **Neither check above can see it.** The property is in the catalog, and the
+   * declaration DOES reach the compiled stylesheet — it is the `var()` inside
+   * the value that dangles. Whether a reference resolves is a third question,
+   * and this is the one that asks it.
+   *
+   * **This is a ratchet with an expiry.** When the site stylesheet is wired into
+   * the render path, tokens become the RIGHT way to express a default and this
+   * case should be deleted in the change that wires it — not weakened, and not
+   * exempted per block.
+   */
+  it.each(DECLARING.map(block => [block.name, block] as const))(
+    "%s uses no token reference",
+    (name, block) => {
+      expect(
+        tokenNamesIn(block.baseStyles),
+        `${name} declares a { $token } default. Nothing emits token CSS yet ` +
+          `(compileSiteSheet has no consumers outside blocks-engine), so the ` +
+          `reference compiles to a var() with nothing behind it and the ` +
+          `property silently falls back to its initial value. Use a literal ` +
+          `until the site stylesheet is wired, then delete this case.`
+      ).toEqual([]);
+    }
+  );
+
+  it("detects a token reference at any depth, including inside an object", () => {
+    // The positive control. Every assertion above passes by finding NOTHING, so
+    // a walker that returned nothing under all circumstances would leave the
+    // whole case green — and the nested form is the one a shallow reader misses.
+    expect(
+      tokenNamesIn({ base: { base: { gap: { $token: "space.4" } } } })
+    ).toEqual(["space.4"]);
+    expect(
+      tokenNamesIn({
+        base: {
+          base: { borderRadius: { startStart: { $token: "radius.sm" } } },
+        },
+      })
+    ).toEqual(["radius.sm"]);
+  });
+});

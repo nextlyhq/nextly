@@ -81,13 +81,22 @@ describe("the accordion pair", () => {
   });
 
   it("separates sections with spacing, never a hardcoded divider colour", () => {
-    // `defaultSiteTokens()` guarantees no border colour, and the older block
-    // drew its dividers with `var(--nx-color-border)` — the ADMIN namespace,
-    // which this renderer never emits, so that rule resolves to nothing on a
-    // published page while looking right in an admin preview.
+    // The divider reasoning below is unchanged and was right. What changed is
+    // the SPACING: this required `space.4`, and a token resolves to nothing.
+    //
+    // `defaultSiteTokens()` guarantees nothing today — `compileSiteSheet` has
+    // zero consumers outside `blocks-engine` and `--site-` appears in no source
+    // file outside it, so `gap: { $token: "space.4" }` compiled to
+    // `var(--site-space-4)`, nothing defined it, and the gap fell back to
+    // `normal`: zero for a grid. The sections touched, which is precisely the
+    // separation this test exists to guarantee.
     const declared = JSON.stringify(ACCORDION_BASE_STYLES);
 
-    expect(declared).toContain("space.4");
+    expect(declared).toContain("1rem");
+    expect(declared).not.toContain("$token");
+    // The older block drew its dividers with `var(--nx-color-border)` — the
+    // ADMIN namespace, which this renderer never emits, so that rule resolves
+    // to nothing on a published page while looking right in an admin preview.
     expect(declared).not.toContain("--nx-");
     expect(declared).not.toContain("border");
   });

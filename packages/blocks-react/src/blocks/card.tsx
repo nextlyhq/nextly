@@ -30,12 +30,20 @@
  * author adds padding to the card when there is no image, or to a box inside it
  * when there is, and both stay available. A default would remove the second.
  *
- * **No default background or border, because no token can express one.**
- * `defaultSiteTokens()` guarantees `color.text`, `color.background`,
- * `color.primary`, `font.body`, `content.width` and `space.4` — there is no
- * surface colour and no border colour among them. A `{ $token }` reference to a
- * name a site never defines compiles to a `var()` with nothing behind it, and a
- * hardcoded hex is wrong in whichever of light and dark it was not chosen for.
+ * **No default background or border, and the reason is stronger than first
+ * recorded.** This docblock used to say `defaultSiteTokens()` "guarantees"
+ * `color.text`, `color.background`, `color.primary`, `font.body`,
+ * `content.width` and `space.4`, and that a surface colour was merely absent
+ * from that set. **It guarantees none of them.** `compileSiteSheet` — the only
+ * thing that turns a token set into CSS — has ZERO consumers outside
+ * `blocks-engine`, and the string `--site-` appears in no source file outside
+ * the engine (positive control: `--nx-` appears in four). The default token set
+ * is a default nobody applies.
+ *
+ * So a `{ $token }` reference here would compile to a `var()` with nothing
+ * behind it — not because the name is unlisted, but because **no token name
+ * resolves at all yet.** A hardcoded hex is wrong in whichever of light and
+ * dark it was not chosen for.
  *
  * The obvious way around that is to DERIVE a surface from the two colours that
  * are guaranteed, which is what the older page-builder blocks do:

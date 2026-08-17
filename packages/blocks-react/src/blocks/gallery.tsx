@@ -78,7 +78,11 @@ export const GALLERY_BASE_STYLES = {
     base: {
       display: "grid",
       gridTemplateColumns: "repeat(auto-fit, minmax(min(180px, 100%), 1fr))",
-      gap: { $token: "space.4" },
+      // A LENGTH, not a token: nothing emits token CSS yet, so a `{ $token }`
+      // reference compiles to a `var()` with nothing behind it and the gap
+      // silently falls back to `normal`, which for a grid is zero. `1rem` is
+      // what `space.4` itself declares, so the value survives the change back.
+      gap: "1rem",
     },
   },
 } as const;
