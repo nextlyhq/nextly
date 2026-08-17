@@ -456,6 +456,38 @@ test("scenario 4b: a 2px jitter at a zone edge keeps the indicator stable", asyn
 });
 
 /**
+ * How long a keyboard move may take to reach the tree, in milliseconds.
+ *
+ * A ceiling the wait stops early on, not a delay anyone pays: a canvas that reorders
+ * returns as soon as it has, and only a canvas that never does spends the allowance.
+ */
+const KEYBOARD_MOVE_SETTLE_MS = 2_000;
+
+/**
+ * The tree once it has stopped being the one the gesture started from, or the
+ * unchanged tree if it never moves.
+ *
+ * Returns a SHAPE either way rather than throwing, because "it did not move" is the
+ * result the caller is measuring rather than an error — the assertion about whether
+ * that is acceptable belongs to the caller, and a helper that threw would make the
+ * absence of a move indistinguishable from a broken harness.
+ */
+async function settledTreeShape(
+  driver: CanvasDriver,
+  before: readonly string[]
+): Promise<string[]> {
+  const deadline = Date.now() + KEYBOARD_MOVE_SETTLE_MS;
+  let latest = await driver.readTreeShape();
+  while (
+    Date.now() < deadline &&
+    JSON.stringify(latest) === JSON.stringify(before)
+  ) {
+    latest = await driver.readTreeShape();
+  }
+  return latest;
+}
+
+/**
  * Marked failing, not passing, because it CANNOT fail here.
  *
  * Probed directly: a block takes focus (`document.activeElement` is the right
@@ -476,7 +508,15 @@ test("scenario 5: a keyboard move actually moves a block", async ({
 
   const before = await driver.readTreeShape();
   await driver.keyboardInsert("down");
-  const moved = await driver.readTreeShape();
+  // WAITED for, not read once. A reorder lands on a React commit after the drop
+  // resolves, so a read taken in the same tick sees the tree the gesture started
+  // from — which reports a working keyboard move as an absent one, and would go on
+  // doing so after the capability arrived. Elsewhere in this suite `readTreeShape`
+  // is polled after an asynchronous mutation for exactly this reason.
+  //
+  // The wait ends early the moment the tree differs, so a canvas that reorders pays
+  // nothing; only the canvas that never does spends the allowance.
+  const moved = await settledTreeShape(driver, before);
 
   test.info().annotations.push({
     type: "keyboard-shape",
