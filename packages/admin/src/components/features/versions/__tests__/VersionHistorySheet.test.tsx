@@ -106,6 +106,21 @@ function renderSheet() {
   );
 }
 
+/**
+ * Whether an element is reachable to assistive technology: present, and with no
+ * ancestor withdrawing it from the accessibility tree. A modal surface marks
+ * everything outside itself this way, so this is the property that separates a
+ * panel the document sits beside from one the document hides behind.
+ */
+function reachable(element: Element | null): boolean {
+  if (!element) return false;
+  for (let node: Element | null = element; node; node = node.parentElement) {
+    if (node.getAttribute("aria-hidden") === "true") return false;
+    if (node.hasAttribute("inert")) return false;
+  }
+  return true;
+}
+
 describe("VersionHistorySheet", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -291,6 +306,33 @@ describe("VersionHistorySheet", () => {
     expect(compareDialogMock).toHaveBeenCalledWith(
       expect.objectContaining({ from: 2, to: 3 })
     );
+  });
+
+  it("leaves the document reachable while its history is open", () => {
+    useVersionsMock.mockReturnValue(
+      listState({
+        data: { pages: [{ items: [version(1)], meta: { hasNext: false } }] },
+      })
+    );
+
+    render(
+      <>
+        <input aria-label="Title" defaultValue="the live document" />
+        <VersionHistorySheet
+          open
+          onOpenChange={vi.fn()}
+          scope={scope}
+          fields={fields}
+        />
+      </>
+    );
+
+    // The panel and the document are both on screen, which is the point: an
+    // editor reads a version against what is live. A modal surface withdraws
+    // everything outside itself from the accessibility tree, so the document
+    // being present is not enough — it has to still be reachable.
+    expect(screen.getByText("Version 1")).toBeInTheDocument();
+    expect(reachable(screen.getByLabelText("Title"))).toBe(true);
   });
 
   it("mounts no compare dialog until one is asked for", () => {
