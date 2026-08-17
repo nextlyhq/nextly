@@ -645,29 +645,24 @@ export class SingleRegistryService extends BaseRegistryService<
     }
 
     try {
-      // BEFORE the registry row, so a failure here is retryable. Reversed, a
-      // failed cleanup would leave the Single gone and its recovery points
-      // behind, and the retry would stop at `getSingle` with not-found -- so
-      // nothing could ever remove them. This order can only leave a surviving
-      // Single whose recovery points were dropped, which costs an author one
-      // unsaved draft rather than orphaning rows permanently.
-      //
-      // Recovery points are excluded from history listings, version reads and
-      // retention pruning alike, so nothing else in the system would ever
-      // collect them.
+      // Recovery points go with the Single, in the SAME transaction as the
+      // registry row. Ordering alone cannot get this right: sweeping first and
+      // then failing to delete destroys unsaved work belonging to a Single
+      // that still exists, while sweeping afterwards can leave rows nothing
+      // else collects -- they are excluded from history listings, version
+      // reads and retention pruning alike. Atomicity avoids both, and it is
+      // available here because this service talks to the adapter directly.
       //
       // Durable history and working drafts are deliberately NOT touched. What
       // a deletion owes a document's recorded past is a wider question, and
       // answering it as a side effect here would decide it by accident.
-      await new VersionsRepository(this.adapter).deleteAutosavesForEntity(
-        "single",
-        slug
-      );
-
-      const count = await this.adapter.delete(
-        this.registryTableName,
-        this.whereEq("slug", slug)
-      );
+      const count = await this.adapter.transaction(async tx => {
+        await new VersionsRepository(tx).deleteAutosavesForEntity(
+          "single",
+          slug
+        );
+        return tx.delete(this.registryTableName, this.whereEq("slug", slug));
+      });
 
       if (count === 0) {
         // §13.8: generic "Not found." — slug in logContext only.
