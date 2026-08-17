@@ -4,6 +4,7 @@
 "@nextlyhq/admin": patch
 "@nextlyhq/admin-css": patch
 "@nextlyhq/blocks-engine": patch
+"@nextlyhq/blocks-react": patch
 "@nextlyhq/ui": patch
 "@nextlyhq/adapter-drizzle": patch
 "@nextlyhq/adapter-postgres": patch
@@ -20,6 +21,8 @@
 "@nextlyhq/prettier-config": patch
 "@nextlyhq/telemetry": patch
 "@nextlyhq/tsconfig": patch
+"@nextlyhq/builder": patch
+"@nextlyhq/module-specifiers": patch
 ---
 
 An added or removed text field showed a blank space on the version it never reached, instead of
