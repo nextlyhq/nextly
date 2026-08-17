@@ -1,7 +1,13 @@
 import { lazy } from "react";
 
 import { type PublicRoutePath, ROUTES } from "../constants/routes";
+import {
+  builderSection,
+  collectionContentSection,
+  overridableBy,
+} from "../lib/navigation/section-resolvers";
 import type { PageProps } from "../lib/routing";
+import type { RouteSection } from "../types/route-section";
 
 import AcceptInvitePage from "./(auth)/accept-invite";
 import ForgotPasswordPage from "./(auth)/forgot-password";
@@ -79,9 +85,8 @@ const SingleBuilderEditPage = lazy(
   () => import("./dashboard/singles/builder/[slug]")
 );
 
-export interface RouteConfig {
+interface RouteConfigBase {
   component: React.ComponentType<PageProps>;
-  type: "public" | "private";
   /**
    * Permission required to access this route. A single slug, or a list treated
    * as any-of (holding any one grants access — models an umbrella permission).
@@ -95,6 +100,21 @@ export interface RouteConfig {
    */
   requiresBuilder?: boolean;
 }
+
+/**
+ * A route, and everything decided about it at declaration time.
+ *
+ * Split on `type` so the two states carry different obligations. A private
+ * route MUST name the rail section it belongs to: the sidebar reads that
+ * declaration rather than matching the URL, so a route added without one is a
+ * compile error instead of a page that silently highlights Dashboard. A public
+ * route renders outside the dashboard shell and has no rail at all, so naming a
+ * section there would be meaningless — the union makes both unrepresentable
+ * rather than relying on anyone to remember.
+ */
+export type RouteConfig =
+  | (RouteConfigBase & { type: "public" })
+  | (RouteConfigBase & { type: "private"; section: RouteSection });
 
 /**
  * The page that answers each public route.
@@ -131,23 +151,30 @@ export const routeConfig: Record<string, RouteConfig> = {
   ...publicRouteConfig,
 
   // Dashboard route (homepage)
-  [ROUTES.DASHBOARD]: { component: DashboardPage, type: "private" },
+  [ROUTES.DASHBOARD]: {
+    component: DashboardPage,
+    type: "private",
+    section: "dashboard",
+  },
 
   // Users routes
   [ROUTES.USERS]: {
     component: DashboardUsersPage,
     type: "private",
     requiredPermission: "read-users",
+    section: overridableBy("settings"),
   },
   [ROUTES.USERS_CREATE]: {
     component: CreateUserPage,
     type: "private",
     requiredPermission: "create-users",
+    section: overridableBy("settings"),
   },
   [ROUTES.USERS_EDIT]: {
     component: EditUserPage,
     type: "private",
     requiredPermission: "update-users",
+    section: overridableBy("settings"),
   },
 
   // Media routes
@@ -155,6 +182,7 @@ export const routeConfig: Record<string, RouteConfig> = {
     component: MediaLibraryPage,
     type: "private",
     requiredPermission: "read-media",
+    section: overridableBy("media"),
   },
 
   // ============================================================
@@ -165,16 +193,19 @@ export const routeConfig: Record<string, RouteConfig> = {
     component: CollectionsPage,
     type: "private",
     requiresBuilder: true,
+    section: builderSection("collections"),
   },
   [ROUTES.BUILDER_COLLECTIONS_NEW]: {
     component: CollectionBuilderPage,
     type: "private",
     requiresBuilder: true,
+    section: builderSection("collections"),
   },
   [ROUTES.BUILDER_COLLECTIONS_EDIT]: {
     component: CollectionBuilderEditPage,
     type: "private",
     requiresBuilder: true,
+    section: builderSection("collections"),
   },
 
   // ============================================================
@@ -191,14 +222,17 @@ export const routeConfig: Record<string, RouteConfig> = {
   [ROUTES.COLLECTIONS]: {
     component: CollectionsLandingRedirect,
     type: "private",
+    section: collectionContentSection,
   },
   [ROUTES.SINGLES]: {
     component: SinglesLandingRedirect,
     type: "private",
+    section: overridableBy("singles"),
   },
   [ROUTES.FIELD_GROUPS]: {
     component: FieldGroupsLandingRedirect,
     type: "private",
+    section: overridableBy("collections"),
   },
 
   // Collection entries routes (dynamic collections).
@@ -207,18 +241,22 @@ export const routeConfig: Record<string, RouteConfig> = {
   [ROUTES.COLLECTION_ENTRIES]: {
     component: CollectionEntriesPage,
     type: "private",
+    section: collectionContentSection,
   },
   [ROUTES.COLLECTION_ENTRY_CREATE]: {
     component: CreateEntryPage,
     type: "private",
+    section: collectionContentSection,
   },
   [ROUTES.COLLECTION_ENTRY_API]: {
     component: APIPlaygroundPage,
     type: "private",
+    section: collectionContentSection,
   },
   [ROUTES.COLLECTION_ENTRY_EDIT]: {
     component: EditEntryPage,
     type: "private",
+    section: collectionContentSection,
   },
 
   // Security & Roles routes
@@ -226,16 +264,19 @@ export const routeConfig: Record<string, RouteConfig> = {
     component: RolesPage,
     type: "private",
     requiredPermission: "read-roles",
+    section: overridableBy("settings"),
   },
   [ROUTES.SECURITY_ROLES_CREATE]: {
     component: RolesCreatePage,
     type: "private",
     requiredPermission: "create-roles",
+    section: overridableBy("settings"),
   },
   [ROUTES.SECURITY_ROLES_EDIT]: {
     component: RolesEditPage,
     type: "private",
     requiredPermission: "update-roles",
+    section: overridableBy("settings"),
   },
 
   // ============================================================
@@ -247,24 +288,32 @@ export const routeConfig: Record<string, RouteConfig> = {
     component: SinglesPage,
     type: "private",
     requiresBuilder: true,
+    section: builderSection("singles"),
   },
   [ROUTES.BUILDER_SINGLES_NEW]: {
     component: SingleBuilderPage,
     type: "private",
     requiresBuilder: true,
+    section: builderSection("singles"),
   },
   [ROUTES.BUILDER_SINGLES_EDIT]: {
     component: SingleBuilderEditPage,
     type: "private",
     requiresBuilder: true,
+    section: builderSection("singles"),
   },
   // Single CONTENT routes — permission is per-slug (checked server-side).
   // IMPORTANT: literal segments like /api must be registered before the wildcard [slug].
   [ROUTES.SINGLE_API]: {
     component: SingleAPIPlaygroundPage,
     type: "private",
+    section: overridableBy("singles"),
   },
-  [ROUTES.SINGLE_EDIT]: { component: SingleEditPage, type: "private" },
+  [ROUTES.SINGLE_EDIT]: {
+    component: SingleEditPage,
+    type: "private",
+    section: overridableBy("singles"),
+  },
 
   // ============================================================
   // Builder: field groups (schema management).
@@ -274,16 +323,19 @@ export const routeConfig: Record<string, RouteConfig> = {
     component: FieldGroupsPage,
     type: "private",
     requiresBuilder: true,
+    section: builderSection("collections"),
   },
   [ROUTES.BUILDER_FIELD_GROUPS_NEW]: {
     component: FieldGroupBuilderPage,
     type: "private",
     requiresBuilder: true,
+    section: builderSection("collections"),
   },
   [ROUTES.BUILDER_FIELD_GROUPS_EDIT]: {
     component: FieldGroupBuilderEditPage,
     type: "private",
     requiresBuilder: true,
+    section: builderSection("collections"),
   },
 
   // Settings routes
@@ -291,56 +343,67 @@ export const routeConfig: Record<string, RouteConfig> = {
     component: SettingsPage,
     type: "private",
     requiredPermission: "manage-settings",
+    section: overridableBy("settings"),
   },
   [ROUTES.SETTINGS_EMAIL_PROVIDERS]: {
     component: EmailProvidersPage,
     type: "private",
     requiredPermission: "manage-email-providers",
+    section: overridableBy("settings"),
   },
   [ROUTES.SETTINGS_EMAIL_PROVIDERS_CREATE]: {
     component: CreateEmailProviderPage,
     type: "private",
     requiredPermission: "manage-email-providers",
+    section: overridableBy("settings"),
   },
   [ROUTES.SETTINGS_EMAIL_PROVIDERS_EDIT]: {
     component: EditEmailProviderPage,
     type: "private",
     requiredPermission: "manage-email-providers",
+    section: overridableBy("settings"),
   },
   [ROUTES.SETTINGS_EMAIL_TEMPLATES]: {
     component: EmailTemplatesPage,
     type: "private",
     requiredPermission: "manage-email-templates",
+    section: overridableBy("settings"),
   },
   [ROUTES.SETTINGS_EMAIL_TEMPLATES_CREATE]: {
     component: CreateEmailTemplatePage,
     type: "private",
     requiredPermission: "manage-email-templates",
+    section: overridableBy("settings"),
   },
   [ROUTES.SETTINGS_EMAIL_TEMPLATES_EDIT]: {
     component: EditEmailTemplatePage,
     type: "private",
     requiredPermission: "manage-email-templates",
+    section: overridableBy("settings"),
   },
   [ROUTES.SETTINGS_PERMISSIONS]: {
     component: SettingsPermissionsPage,
     type: "private",
     requiredPermission: "manage-permissions",
+    section: overridableBy("settings"),
   },
   [ROUTES.SETTINGS_API_KEYS]: {
     component: ApiKeysPage,
     type: "private",
     requiredPermission: "update-api-keys",
+    section: overridableBy("settings"),
   },
   [ROUTES.SETTINGS_API_KEYS_CREATE]: {
     component: CreateApiKeyPage,
     type: "private",
     requiredPermission: "create-api-keys",
+    section: overridableBy("settings"),
   },
   [ROUTES.SETTINGS_API_KEYS_EDIT]: {
     component: EditApiKeyPage,
     type: "private",
     requiredPermission: "update-api-keys",
+    section: overridableBy("settings"),
   },
 
   // Webhooks settings. `update-webhooks` is the backend's management umbrella
@@ -350,16 +413,19 @@ export const routeConfig: Record<string, RouteConfig> = {
     component: WebhooksPage,
     type: "private",
     requiredPermission: ["read-webhooks", "update-webhooks", "create-webhooks"],
+    section: overridableBy("settings"),
   },
   [ROUTES.SETTINGS_WEBHOOKS_CREATE]: {
     component: CreateWebhookPage,
     type: "private",
     requiredPermission: ["create-webhooks", "update-webhooks"],
+    section: overridableBy("settings"),
   },
   [ROUTES.SETTINGS_WEBHOOKS_EDIT]: {
     component: EditWebhookPage,
     type: "private",
     requiredPermission: "update-webhooks",
+    section: overridableBy("settings"),
   },
   // Delivery log routes are read surfaces, so a plain reader may open them; the
   // redeliver and drain actions inside are separately gated on update-webhooks.
@@ -367,11 +433,13 @@ export const routeConfig: Record<string, RouteConfig> = {
     component: WebhookDeliveriesPage,
     type: "private",
     requiredPermission: ["read-webhooks", "update-webhooks"],
+    section: overridableBy("settings"),
   },
   [ROUTES.SETTINGS_WEBHOOKS_DELIVERY_DETAIL]: {
     component: WebhookDeliveryDetailPage,
     type: "private",
     requiredPermission: ["read-webhooks", "update-webhooks"],
+    section: overridableBy("settings"),
   },
 
   // Image sizes settings
@@ -379,16 +447,19 @@ export const routeConfig: Record<string, RouteConfig> = {
     component: ImageSizesSettingsPage,
     type: "private",
     requiredPermission: "manage-settings",
+    section: overridableBy("settings"),
   },
   [ROUTES.SETTINGS_IMAGE_SIZES_CREATE]: {
     component: CreateImageSizePage,
     type: "private",
     requiredPermission: "manage-settings",
+    section: overridableBy("settings"),
   },
   [ROUTES.SETTINGS_IMAGE_SIZES_EDIT]: {
     component: EditImageSizePage,
     type: "private",
     requiredPermission: "manage-settings",
+    section: overridableBy("settings"),
   },
 
   // Plugin routes
@@ -396,6 +467,7 @@ export const routeConfig: Record<string, RouteConfig> = {
     component: PluginsOverviewPage,
     type: "private",
     requiredPermission: "manage-settings",
+    section: "plugins",
   },
   // Registered outside `/admin/plugins/`, so no ordering rule holds this in
   // place: the directory and a plugin's detail page cannot match the same
@@ -404,32 +476,38 @@ export const routeConfig: Record<string, RouteConfig> = {
     component: PluginBrowsePage,
     type: "private",
     requiredPermission: "manage-settings",
+    section: "plugins",
   },
   [ROUTES.PLUGIN_DETAIL]: {
     component: PluginDetailPage,
     type: "private",
     requiredPermission: "manage-settings",
+    section: "plugins",
   },
   [ROUTES.PLUGIN_SETTINGS]: {
     component: PluginSettingsPage,
     type: "private",
     requiredPermission: "manage-settings",
+    section: "plugins",
   },
 
   [ROUTES.USERS_FIELDS]: {
     component: UserFieldsPage,
     type: "private",
     requiredPermission: "manage-settings",
+    section: overridableBy("settings"),
   },
   [ROUTES.USERS_FIELDS_CREATE]: {
     component: CreateUserFieldPage,
     type: "private",
     requiredPermission: "manage-settings",
+    section: overridableBy("settings"),
   },
   [ROUTES.USERS_FIELDS_EDIT]: {
     component: EditUserFieldPage,
     type: "private",
     requiredPermission: "manage-settings",
+    section: overridableBy("settings"),
   },
 };
 

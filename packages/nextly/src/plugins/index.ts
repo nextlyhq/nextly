@@ -61,6 +61,7 @@ export type {
   PluginAdminWidget,
   PluginCollectionView,
   PluginMenuItem,
+  PluginNavSection,
 } from "./admin-contributions";
 
 // Plugin HTTP routes — `contributes.routes` surface.

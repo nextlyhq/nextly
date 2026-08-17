@@ -7,17 +7,16 @@ import {
   ShieldAlert,
   FileText,
 } from "@admin/components/icons";
+import type { ActiveNavSection } from "@admin/constants/nav-sections";
 import { ROUTES } from "@admin/constants/routes";
 
-export type MainMenuCategory =
-  | "dashboard"
-  | "collections"
-  | "singles"
-  | "media"
-  | "plugins"
-  | "settings"
-  | "builders"
-  | `standalone-${string}`;
+/**
+ * A rail entry that can be active.
+ *
+ * An alias of the canonical type rather than a restatement of it, so the
+ * sidebar and the route registry cannot come to disagree about the vocabulary.
+ */
+export type MainMenuCategory = ActiveNavSection;
 
 export interface MainMenuItem {
   id: MainMenuCategory;

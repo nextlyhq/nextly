@@ -85,6 +85,10 @@ describe("usePluginPageRegistration", () => {
         path: "/reports",
         component: "@acme/x/admin#Reports",
         requiredPermission: undefined,
+        // Resolved at registration, where the plugin's slug is known. This
+        // fixture declares no section and its plugin no placement, so the
+        // page lands under Plugins.
+        section: "plugins",
       },
     ]);
     expect(locationChangeCount(spy)).toBe(1);
