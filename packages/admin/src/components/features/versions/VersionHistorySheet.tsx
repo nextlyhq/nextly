@@ -5,6 +5,12 @@
  * looking at one thing — this document's history — and nesting dialogs would
  * trap focus twice for what is conceptually a step, not a new context.
  *
+ * Comparing is the exception, and for a reason about geometry rather than about
+ * navigation. A comparison is two columns of field values; this panel is 480px
+ * wide, which cannot hold two, so hosting it here forced the diff to stack.
+ * `VersionCompareDialog` gives it a surface sized for the job, mounted from
+ * here on the same terms as the restore and rename dialogs.
+ *
  * @module components/features/versions/VersionHistorySheet
  */
 
@@ -32,8 +38,8 @@ import {
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import type { VersionScope } from "@admin/services/versionApi";
 
-import { VersionDiffView } from "./diff/VersionDiffView";
 import { RestoreConfirmDialog } from "./RestoreConfirmDialog";
+import { VersionCompareDialog } from "./VersionCompareDialog";
 import { VersionLabelDialog } from "./VersionLabelDialog";
 import { VersionLocaleFilter } from "./VersionLocaleFilter";
 import { VersionPreview } from "./VersionPreview";
@@ -99,7 +105,9 @@ export function VersionHistorySheet({
 }: VersionHistorySheetProps) {
   const [selected, setSelected] = useState<number | null>(null);
   // The version pair being compared (older -> newer), or null when not
-  // comparing. Compare is a third mode of the panel alongside list and preview.
+  // comparing. Comparing opens a dialog over this panel rather than replacing
+  // its body, so the panel stays in whichever of its two states it was in and
+  // is there again on dismiss.
   const [comparing, setComparing] = useState<{
     from: number;
     to: number;
@@ -350,17 +358,13 @@ export function VersionHistorySheet({
         <SheetHeader className="p-4 border-b border-border">
           <div className="flex items-center justify-between gap-2">
             <SheetTitle>
-              {comparing !== null
-                ? `Compare ${comparing.from} → ${comparing.to}`
-                : selected === null
-                  ? "Version history"
-                  : `Version ${selected}`}
+              {selected === null ? "Version history" : `Version ${selected}`}
             </SheetTitle>
-            {/* Locale filter, only while browsing the list (a chosen version or
-                a compare pair is already locale-fixed) and only for a document
-                whose own history carries locales — so it never appears on a
-                non-localized document in an otherwise localized app. */}
-            {comparing === null && selected === null && isLocalizedDocument && (
+            {/* Locale filter, only while browsing the list (a chosen version is
+                already locale-fixed) and only for a document whose own history
+                carries locales — so it never appears on a non-localized
+                document in an otherwise localized app. */}
+            {selected === null && isLocalizedDocument && (
               <VersionLocaleFilter
                 value={localeFilter}
                 onChange={locale => {
@@ -383,10 +387,9 @@ export function VersionHistorySheet({
             freshness gate hides "Compare with current" and disables "Load more"
             until a refetch succeeds — which, without this, only a reopen or
             another window focus could trigger. This keeps the gate but gives the
-            recovery a visible control. Suppressed in compare mode (the pair is
-            already chosen, so head staleness no longer affects what is shown) and
-            when there are no rows (the full-panel load error covers that). */}
-        {isRefetchError && comparing === null && versions.length > 0 ? (
+            recovery a visible control. Suppressed when there are no rows, since
+            the full-panel load error covers that. */}
+        {isRefetchError && versions.length > 0 ? (
           <div className="px-4 pt-4">
             <Alert variant="warning" role="status">
               <div className="flex flex-1 flex-wrap items-center justify-between gap-3">
@@ -409,17 +412,7 @@ export function VersionHistorySheet({
         ) : null}
 
         <div className="flex-1 overflow-y-auto">
-          {comparing !== null ? (
-            // Keyed by the pair so a different comparison always mounts fresh,
-            // and `keepPreviousData` can never carry one pair's fields into
-            // another while the new diff loads.
-            <VersionDiffView
-              key={`${comparing.from}-${comparing.to}`}
-              scope={scope}
-              from={comparing.from}
-              to={comparing.to}
-            />
-          ) : selected !== null ? (
+          {selected !== null ? (
             <VersionPreview
               versionNo={selected}
               fields={fields}
@@ -495,16 +488,7 @@ export function VersionHistorySheet({
         </div>
 
         <div className="p-4 border-t border-border flex flex-wrap items-center gap-2">
-          {comparing !== null ? (
-            // Compare returns to the version that was on screen, not the list.
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setComparing(null)}
-            >
-              Back
-            </Button>
-          ) : selected !== null ? (
+          {selected !== null ? (
             <>
               <Button
                 variant="outline"
@@ -577,6 +561,23 @@ export function VersionHistorySheet({
           isPublished={liveStatus === "published"}
           isRestoring={restore.isPending}
           onConfirm={() => restore.mutate(selected)}
+        />
+      ) : null}
+
+      {/* Mounted on the same terms as the restore dialog. Its own body is far
+          wider than this panel, which is the whole reason a comparison is not a
+          mode of the panel. */}
+      {comparing !== null ? (
+        <VersionCompareDialog
+          open
+          onOpenChange={open => {
+            // Dismissing returns to the version that was on screen, not the
+            // list: the panel behind was never navigated away from.
+            if (!open) setComparing(null);
+          }}
+          scope={scope}
+          from={comparing.from}
+          to={comparing.to}
         />
       ) : null}
 
