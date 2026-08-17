@@ -5,6 +5,7 @@ import { PluginPageHost } from "@admin/components/shared/plugin-page-host";
 
 import { ROUTES } from "../constants/routes";
 import registry, { routeConfig } from "../pages/registry";
+import type { RouteSection } from "../types/route-section";
 
 import { matchPluginPage } from "./plugins/plugin-route-registry";
 
@@ -42,6 +43,12 @@ export interface RouteResult {
   requiresBuilder?: boolean;
   /** Set when the route resolves to a plugin-contributed page (D21). */
   pluginComponentPath?: string;
+  /**
+   * The rail section this route declared, carried through so the sidebar reads
+   * a declaration instead of matching the pathname. Absent only when no route
+   * matched, which is a genuine 404 rather than a route without a section.
+   */
+  section?: RouteSection;
 }
 
 type Params = Record<string, string | string[]>;
@@ -114,6 +121,7 @@ function matchDynamicRoute(pathname: string): {
   routeType?: "public" | "private";
   requiredPermission?: string | string[];
   requiresBuilder?: boolean;
+  section?: RouteSection;
   pattern: string;
 } | null {
   for (const [pattern, Component] of Object.entries(registry)) {
@@ -140,6 +148,7 @@ function matchDynamicRoute(pathname: string): {
         routeType: config?.type,
         requiredPermission: config?.requiredPermission,
         requiresBuilder: config?.requiresBuilder,
+        section: config?.type === "private" ? config.section : undefined,
         pattern,
       };
     }
@@ -188,6 +197,7 @@ export function resolveRoute(pathname: string, rawSearch: string): RouteResult {
       routeType: config?.type,
       requiredPermission: config?.requiredPermission,
       requiresBuilder: config?.requiresBuilder,
+      section: config?.type === "private" ? config.section : undefined,
     };
   }
 
@@ -207,6 +217,7 @@ export function resolveRoute(pathname: string, rawSearch: string): RouteResult {
       routeType: "private",
       requiredPermission: pluginPage.requiredPermission,
       pluginComponentPath: pluginPage.component,
+      section: pluginPage.section ?? "plugins",
     };
   }
 
@@ -224,6 +235,7 @@ export function resolveRoute(pathname: string, rawSearch: string): RouteResult {
       routeType: dynamic.routeType,
       requiredPermission: dynamicPermission ?? dynamic.requiredPermission,
       requiresBuilder: dynamic.requiresBuilder,
+      section: dynamic.section,
     };
   }
 

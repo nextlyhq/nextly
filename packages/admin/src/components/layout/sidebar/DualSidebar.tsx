@@ -305,7 +305,7 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
         getCollectionPlacement,
         standalonePlugins: visibleStandalonePlugins,
         showBuilder,
-      }),
+      }) ?? "dashboard",
     [
       pathname,
       collectionsData,

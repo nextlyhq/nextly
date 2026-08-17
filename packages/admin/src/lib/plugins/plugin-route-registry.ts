@@ -13,6 +13,8 @@
  * @module lib/plugins/plugin-route-registry
  */
 
+import type { NavSection } from "@admin/constants/nav-sections";
+
 export interface RegisteredPluginPage {
   /** Full namespaced admin path: `/admin/plugins/<slug>/<path>`. */
   fullPath: string;
@@ -20,6 +22,12 @@ export interface RegisteredPluginPage {
   component: string;
   /** Permission required to view this page (route-level RBAC, D36). */
   requiredPermission?: string;
+  /**
+   * The rail section to select while this page is open, as declared by the
+   * contributing plugin. Absent means the plugin expressed no preference and
+   * the page belongs under Plugins.
+   */
+  section?: NavSection;
 }
 
 const registry = new Map<string, RegisteredPluginPage>();
@@ -36,19 +44,26 @@ export function registerPluginPage(args: {
   path: string;
   component: string;
   requiredPermission?: string;
+  section?: NavSection;
 }): void {
   const fullPath = pluginPagePath(args.slug, args.path);
   registry.set(fullPath, {
     fullPath,
     component: args.component,
     requiredPermission: args.requiredPermission,
+    section: args.section,
   });
 }
 
 /** Register all pages for a plugin slug. */
 export function registerPluginPages(
   slug: string,
-  pages: Array<{ path: string; component: string; requiredPermission?: string }>
+  pages: Array<{
+    path: string;
+    component: string;
+    requiredPermission?: string;
+    section?: NavSection;
+  }>
 ): void {
   for (const page of pages) {
     registerPluginPage({ slug, ...page });

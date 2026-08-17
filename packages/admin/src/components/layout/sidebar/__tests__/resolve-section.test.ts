@@ -127,7 +127,6 @@ describe("resolveActiveSection", () => {
       [ROUTES.PLUGINS, "the installed list"],
       [`${ROUTES.PLUGINS}/some-plugin`, "a plugin detail page"],
       [ROUTES.PLUGIN_BROWSE, "the directory at its own top level"],
-      ["/admin/forms", "the forms surface"],
     ])("%s resolves to Plugins (%s)", pathname => {
       expect(resolveActiveSection(context({ pathname }))).toBe("plugins");
     });
@@ -197,20 +196,22 @@ describe("resolveActiveSection", () => {
     });
   });
 
-  describe("an unmapped route", () => {
+  describe("a path no route serves", () => {
     /**
-     * Pins the CURRENT behaviour so a later change to it is visible as a
-     * deliberate edit to this expectation rather than as a silent difference.
-     * A route nobody classified answers Dashboard, which is indistinguishable
-     * from a route that genuinely is Dashboard.
+     * The distinction this whole mechanism exists for. A path nothing serves
+     * now resolves to `undefined` — "no route matched" — instead of silently
+     * answering Dashboard, which was indistinguishable from a route that
+     * genuinely is Dashboard.
+     *
+     * A route that matched can no longer reach here at all: the route type
+     * makes a private route without a section a compile error, so "matched but
+     * unclassified" is unrepresentable rather than merely untested.
      */
-    it("silently answers Dashboard", () => {
-      expect(
-        resolveActiveSection(context({ pathname: "/admin/plugin-directory-x" }))
-      ).toBe("dashboard");
-      expect(
-        resolveActiveSection(context({ pathname: "/admin/some-new-surface" }))
-      ).toBe("dashboard");
+    it.each([
+      ["/admin/some-new-surface", "a surface nobody has added yet"],
+      ["/admin/forms", "a path that no route has ever served"],
+    ])("%s resolves to undefined, not Dashboard (%s)", pathname => {
+      expect(resolveActiveSection(context({ pathname }))).toBeUndefined();
     });
   });
 });
