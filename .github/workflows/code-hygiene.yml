@@ -14,20 +14,24 @@ name: Code hygiene
 # severity-aware pass/warn/fail. The attribution is the tool's own, so a rename
 # does not read as a new finding the way baseline-identity matching does.
 #
-# WHOLE-REPO is advisory and cannot block. It exists for the one class the gate
-# structurally cannot see: a change deleting the last call to an exported helper
-# orphans that export in a file the diff never opened. Reading the whole
-# repository finds it, and also finds every piece of inherited debt, which is
-# why it reports rather than enforces. Of the three analyses only dead code
-# could gate anyway: `fallow dupes` exits 0 whatever it finds, and `fallow
-# health` matches its baseline per file and category, which does not survive
-# the two sides being different trees.
+# WHOLE-REPO catches the one class the gate structurally cannot see: a change
+# deleting the last call to an exported helper orphans that export in a file the
+# diff never opened. Its DEAD CODE half gates, against a baseline of the
+# branch's base, so only what the change adds can fail it.
+#
+# Duplication and complexity in that job report and do not gate, and the reason
+# is the tool rather than a policy choice. `fallow dupes` exits 0 whatever it
+# finds -- 846 clone groups and `--fail-on-issues` both -- and its JSON carries
+# no new-versus-inherited flag to count instead. `fallow health` matches its
+# baseline per file and category, which does not survive the two sides being
+# different trees: a branch touching neither still reported ~50 findings in
+# `admin` and `plugin-form-builder`. Gating on either would be theatre.
 #
 # `templates/` is left out of both. Those four are fragments with no
 # package.json of their own, composed into a project by create-nextly-app at
 # scaffold time, so read in place every specifier in them is unresolvable.
 #
-# Separate from ci.yml because the advisory job needs full history and a second
+# Separate from ci.yml because the whole-repo job needs full history and a second
 # working tree, and ci.yml checks out with `fetch-depth: 2`.
 #
 # pull_request only. A push to main has no base to compare against.
@@ -124,14 +128,9 @@ jobs:
           fi
 
   whole-repo:
-    name: Whole repository (advisory)
+    name: Whole repository
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # Advisory by construction: this job reports and never decides. The class it
-    # covers is worth surfacing on every pull request, and it carries enough
-    # inherited noise that putting it in front of a merge would teach people to
-    # wave it through, which is worse than not gating on it at all.
-    continue-on-error: true
 
     steps:
       - name: Checkout
@@ -204,36 +203,44 @@ jobs:
         id: analyse
         run: |
           set +e
+          failed=""
           crashed=""
           for analysis in dead-code dupes health; do
             pnpm exec fallow "$analysis" \
               --baseline "/tmp/base-$analysis.json" \
               --format json > "/tmp/head-$analysis.json" 2> "/tmp/err-$analysis.txt"
             code=$?
-            # 1 is "found something", which is this job's normal output. Above
-            # that is fallow failing to run: a bad config, a parse error, a
-            # missing baseline. Reporting that as findings would send the author
-            # hunting for code that is not the problem.
-            if [ "$code" -gt 1 ]; then
-              crashed="$crashed $analysis($code)"
-              cat "/tmp/err-$analysis.txt" >&2
-            fi
+            case "$code" in
+              0) ;;
+              # 1 is "found something", and only dead code turns that into a
+              # verdict. Every finding reaching here is absent from the base
+              # baseline, so an unchanged tree records nothing.
+              1) [ "$analysis" = "dead-code" ] && failed="$failed $analysis" ;;
+              # Anything else is fallow failing to run: a bad config, a parse
+              # error, a missing baseline. Reporting that as findings would send
+              # the author hunting for code that is not the problem, so it is
+              # surfaced separately and its stderr is not swallowed.
+              *) crashed="$crashed $analysis($code)"; cat "/tmp/err-$analysis.txt" >&2 ;;
+            esac
           done
+          echo "failed=$failed" >> "$GITHUB_OUTPUT"
           echo "crashed=$crashed" >> "$GITHUB_OUTPUT"
 
-      # The job summary is this job's only output. Annotations and a sticky
-      # comment both belong to the gate above, and duplicating them here would
-      # put two verdicts on the same lines, one of which cannot block, leaving
-      # the author to work out which was which.
+      # The job summary is where this job says what it found. The sticky comment
+      # and the inline annotations belong to the job above: a whole-repo finding
+      # usually lands on a line the pull request never touched, where GitHub does
+      # not render an annotation in the diff anyway, and a second comment would
+      # leave the author working out which verdict was which. The summary lists
+      # locations, and the gate below points at it.
       - name: Write the job summary
         if: always() && steps.analyse.conclusion != 'skipped'
         run: |
           {
-            echo "## Whole-repository scan (advisory)"
+            echo "## Whole-repository scan"
             echo
             echo "Compared against a baseline of this branch's base, so only what"
-            echo "the change adds is listed. Nothing here blocks a merge — the"
-            echo "enforced check is the \`Changed files\` job."
+            echo "the change adds is listed. Dead code here FAILS this job;"
+            echo "duplication and complexity are reported and do not gate."
             echo
           } >> "$GITHUB_STEP_SUMMARY"
           for analysis in dead-code dupes health; do
@@ -241,11 +248,17 @@ jobs:
               --format github-summary >> "$GITHUB_STEP_SUMMARY"
           done
 
-      # Reported even though the job cannot fail the workflow. A tooling failure
-      # that leaves the summary empty is indistinguishable from a clean scan, and
-      # silence is the one outcome this job must not produce.
-      - name: Report a tooling failure
-        if: always() && steps.analyse.outputs.crashed != ''
+      # A tooling failure is reported before a findings failure and separately
+      # from it, because the two send the author to different places and a run
+      # that crashed leaves a summary indistinguishable from a clean scan.
+      - name: Gate
+        if: >-
+          always() && (steps.analyse.outputs.failed != ''
+          || steps.analyse.outputs.crashed != '')
         run: |
-          echo "::error::fallow failed to run:${{ steps.analyse.outputs.crashed }}. That is a tooling failure rather than a finding in the change — its stderr is in the analysis step above."
+          if [ -n "${{ steps.analyse.outputs.crashed }}" ]; then
+            echo "::error::fallow failed to run:${{ steps.analyse.outputs.crashed }}. That is a tooling failure rather than a finding in the change — its stderr is in the analysis step above."
+            exit 1
+          fi
+          echo "::error::fallow reported dead code this change introduced:${{ steps.analyse.outputs.failed }}. The job summary lists it. This is the check the changed-files gate cannot make, so look for an export whose last caller the change removed, in a file it never opened."
           exit 1
