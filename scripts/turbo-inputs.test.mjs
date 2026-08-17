@@ -123,7 +123,29 @@ describe("turbo hashes every TypeScript module it type-checks", () => {
     const underTests = trackedTypeScript(e2e.directory).filter(file =>
       file.startsWith("tests/")
     );
-    expect(underTests.length).toBeGreaterThan(25);
+
+    // MEMBERSHIP, not a count. A threshold here is a snapshot of how many specs
+    // happened to exist when it was written, so it goes stale on any unrelated
+    // change to the suite: retiring the canvas suite alongside the canvas it
+    // drove removed ten modules and turned this red, with nothing wrong. A
+    // number cannot tell a legitimate deletion from a broken listing, and
+    // re-tuning it each time teaches the next reader to re-tune rather than
+    // look.
+    //
+    // Naming modules that must be present answers what the threshold was really
+    // reaching for -- that the listing resolved to the right directory and read
+    // something real -- and it fails only when one of these actually goes.
+    expect(underTests).toContain("tests/admin-smoke.spec.ts");
+    expect(underTests).toContain("tests/permissions-matrix.spec.ts");
+    // A third name, in a third AREA. Two files in ONE directory survive a size
+    // change but not that directory being retired -- which is exactly what
+    // happened here. Spanning three areas means no single retirement can empty
+    // the list.
+    expect(underTests).toContain("tests/support/admin.ts");
+    // A floor as well, low enough to survive ordinary churn: it catches a
+    // listing that collapsed to just the named files without pretending to
+    // measure coverage.
+    expect(underTests.length).toBeGreaterThan(10);
   });
 
   it.each(tasks.map(task => [task.package, task]))(
