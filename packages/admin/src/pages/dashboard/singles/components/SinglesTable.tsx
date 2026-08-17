@@ -4,17 +4,14 @@ import {
   Alert,
   Badge,
   Button,
-  DropdownMenu,
   DropdownMenuCheckboxItem,
-  DropdownMenuContent,
   DropdownMenuLabel,
   DropdownMenuSeparator,
-  DropdownMenuTrigger,
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@nextlyhq/ui";
-import { Eye, Pencil, Trash2, FileEdit, Filter } from "lucide-react";
+import { Eye, FileEdit, Pencil, Plus, Trash2 } from "lucide-react";
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 
 import { BulkActionBar } from "@admin/components/features/entries/EntryList/BulkActionBar";
@@ -29,12 +26,13 @@ import {
 import { BulkDeleteDialog } from "@admin/components/shared/bulk-action-dialogs";
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { toast } from "@admin/components/ui";
-import { DataTableView } from "@admin/components/ui/table/data-table";
+import { Link } from "@admin/components/ui/link";
 import type {
   DataTableSelection,
   NextlyColumn,
   RowAction,
 } from "@admin/components/ui/table/data-table";
+import { ListView } from "@admin/components/ui/table/list-view";
 import { PAGINATION } from "@admin/constants/pagination";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { UI } from "@admin/constants/ui";
@@ -54,7 +52,6 @@ import type {
   SingleMigrationStatus,
 } from "@admin/types/entities";
 
-import { SinglesEmptyState } from "./SinglesEmptyState";
 import { SinglesTableSkeleton } from "./SinglesTableSkeleton";
 
 /** Source badge label + icon. */
@@ -464,172 +461,143 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
       </div>
     );
   }
-
-  const isEmpty = filteredData.length === 0;
-  const isSearching = search.trim() !== "";
   const isFiltering = sourceFilter !== "all" || migrationFilter !== "all";
 
   return (
-    <div className="space-y-4">
-      {selectedCount > 0 && (
-        <BulkActionBar
-          selectedCount={selectedCount}
-          collection={undefined}
-          onDelete={handleBulkDelete}
-          onClear={clearSelection}
-          itemLabel="single"
-        />
-      )}
-
-      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        <SearchBar
-          value={search}
-          onChange={setSearch}
-          placeholder="Search Singles..."
-          isLoading={isLoading}
-          className="w-full md:max-w-sm"
-        />
-
-        <div className="flex w-full items-center justify-between gap-2 sm:justify-end md:w-auto">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="outline"
-                size="md"
-                className="relative border-border bg-background text-foreground hover:bg-accent/10"
-              >
-                <Filter className="h-4 w-4" />
-                Filter
-                {isFiltering && (
-                  // Notification dot: a fixed circle, not a --radius step.
-                  <span className="absolute -right-1 -top-1 flex h-3 w-3 rounded-full bg-primary" />
-                )}
+    <>
+      <ListView<ApiSingle>
+        search={{
+          value: search,
+          onChange: setSearch,
+          placeholder: "Search singles...",
+          isLoading: isFetching,
+        }}
+        hasActiveFilters={isFiltering}
+        filters={
+          <>
+            <DropdownMenuLabel>Filter by</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuCheckboxItem
+              checked={sourceFilter === "all"}
+              onCheckedChange={() => handleSourceFilterChange("all")}
+            >
+              All Sources
+            </DropdownMenuCheckboxItem>
+            <DropdownMenuCheckboxItem
+              checked={sourceFilter === "code"}
+              onCheckedChange={() => handleSourceFilterChange("code")}
+            >
+              Code
+            </DropdownMenuCheckboxItem>
+            <DropdownMenuCheckboxItem
+              checked={sourceFilter === "ui"}
+              onCheckedChange={() => handleSourceFilterChange("ui")}
+            >
+              UI
+            </DropdownMenuCheckboxItem>
+            <DropdownMenuCheckboxItem
+              checked={sourceFilter === "built-in"}
+              onCheckedChange={() => handleSourceFilterChange("built-in")}
+            >
+              Built-in
+            </DropdownMenuCheckboxItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuCheckboxItem
+              checked={migrationFilter === "all"}
+              onCheckedChange={() => handleMigrationFilterChange("all")}
+            >
+              All Status
+            </DropdownMenuCheckboxItem>
+            <DropdownMenuCheckboxItem
+              checked={migrationFilter === "synced"}
+              onCheckedChange={() => handleMigrationFilterChange("synced")}
+            >
+              Synced
+            </DropdownMenuCheckboxItem>
+            <DropdownMenuCheckboxItem
+              checked={migrationFilter === "pending"}
+              onCheckedChange={() => handleMigrationFilterChange("pending")}
+            >
+              Pending
+            </DropdownMenuCheckboxItem>
+            <DropdownMenuCheckboxItem
+              checked={migrationFilter === "generated"}
+              onCheckedChange={() => handleMigrationFilterChange("generated")}
+            >
+              Generated
+            </DropdownMenuCheckboxItem>
+            <DropdownMenuCheckboxItem
+              checked={migrationFilter === "applied"}
+              onCheckedChange={() => handleMigrationFilterChange("applied")}
+            >
+              Applied
+            </DropdownMenuCheckboxItem>
+          </>
+        }
+        columnsControl={{
+          columns: toggleableColumns,
+          isColumnVisible: name => !hiddenColumns.has(name),
+          onToggleColumn: toggleColumn,
+        }}
+        bulkBar={
+          selectedCount > 0 ? (
+            <BulkActionBar
+              selectedCount={selectedCount}
+              collection={undefined}
+              onDelete={handleBulkDelete}
+              onClear={clearSelection}
+              itemLabel="single"
+            />
+          ) : undefined
+        }
+        empty={{
+          icon: <FileText className="h-5 w-5" aria-hidden="true" />,
+          title: "No Singles yet",
+          description:
+            "Get started by creating your first Single to manage site-wide settings like headers, footers, and navigation.",
+          action: (
+            <Link href={ROUTES.BUILDER_SINGLES_NEW}>
+              <Button size="md">
+                <Plus className="h-4 w-4" />
+                Create Single
               </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
-              <DropdownMenuLabel>Filter by</DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <DropdownMenuCheckboxItem
-                checked={sourceFilter === "all"}
-                onCheckedChange={() => handleSourceFilterChange("all")}
-              >
-                All Sources
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={sourceFilter === "code"}
-                onCheckedChange={() => handleSourceFilterChange("code")}
-              >
-                Code
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={sourceFilter === "ui"}
-                onCheckedChange={() => handleSourceFilterChange("ui")}
-              >
-                UI
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={sourceFilter === "built-in"}
-                onCheckedChange={() => handleSourceFilterChange("built-in")}
-              >
-                Built-in
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuCheckboxItem
-                checked={migrationFilter === "all"}
-                onCheckedChange={() => handleMigrationFilterChange("all")}
-              >
-                All Status
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={migrationFilter === "synced"}
-                onCheckedChange={() => handleMigrationFilterChange("synced")}
-              >
-                Synced
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={migrationFilter === "pending"}
-                onCheckedChange={() => handleMigrationFilterChange("pending")}
-              >
-                Pending
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={migrationFilter === "generated"}
-                onCheckedChange={() => handleMigrationFilterChange("generated")}
-              >
-                Generated
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={migrationFilter === "applied"}
-                onCheckedChange={() => handleMigrationFilterChange("applied")}
-              >
-                Applied
-              </DropdownMenuCheckboxItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="outline"
-                size="md"
-                className="border-border bg-background text-foreground hover:bg-accent/10"
-              >
-                <Icons.Columns className="h-4 w-4" />
-                Columns
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
-              <DropdownMenuLabel>Toggle columns</DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              {toggleableColumns.map(col => (
-                <DropdownMenuCheckboxItem
-                  key={col.name}
-                  checked={!hiddenColumns.has(col.name)}
-                  onCheckedChange={() => toggleColumn(col.name)}
-                >
-                  {typeof col.header === "string" ? col.header : col.name}
-                </DropdownMenuCheckboxItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-      </div>
-
-      {isEmpty ? (
-        <SinglesEmptyState isSearching={isSearching || isFiltering} />
-      ) : (
-        <>
-          <DataTableView<ApiSingle>
-            columns={columns}
-            rows={filteredData}
-            onRowClick={single => handleEdit(single)}
-            primaryColumn="label"
-            selection={selection}
-            rowActions={rowActions}
-            registryKey="singles"
-            ariaLabel="Singles table"
-            emptyMessage="No Singles found. Try adjusting your search or filters."
-            // The table owns the pager, so it is placed for whichever view is
-            // showing. Same `data` gate as the field group
-            // list, and for the same reason: the rows are filtered client-side
-            // after fetching, so only the server's meta says a response landed.
-            pagination={
-              data
-                ? {
-                    currentPage: page,
-                    totalPages:
-                      data.meta.totalPages > 0 ? data.meta.totalPages : 1,
-                    pageSize,
-                    pageSizeOptions: PAGINATION.TABLE_PAGE_SIZE_OPTIONS,
-                    onPageChange: setPage,
-                    onPageSizeChange: setPageSize,
-                    isLoading,
-                    totalItems: data.meta.total,
-                  }
-                : undefined
-            }
-          />
-        </>
-      )}
+            </Link>
+          ),
+        }}
+        emptyFiltered={{
+          icon: <FileText className="h-5 w-5" aria-hidden="true" />,
+          title: "No Singles found",
+          description:
+            "No Singles match your search. Try adjusting your search terms or filters.",
+        }}
+        columns={columns}
+        rows={filteredData}
+        onRowClick={single => handleEdit(single)}
+        primaryColumn="label"
+        selection={selection}
+        rowActions={rowActions}
+        registryKey="singles"
+        ariaLabel="Singles table"
+        emptyMessage="No Singles found. Try adjusting your search or filters."
+        // The table owns the pager, so it is placed for whichever view is
+        // showing. Same `data` gate as the field group
+        // list, and for the same reason: the rows are filtered client-side
+        // after fetching, so only the server's meta says a response landed.
+        pagination={
+          data
+            ? {
+                currentPage: page,
+                totalPages: data.meta.totalPages > 0 ? data.meta.totalPages : 1,
+                pageSize,
+                pageSizeOptions: PAGINATION.TABLE_PAGE_SIZE_OPTIONS,
+                onPageChange: setPage,
+                onPageSizeChange: setPageSize,
+                isLoading,
+                totalItems: data.meta.total,
+              }
+            : undefined
+        }
+      />
 
       <BulkDeleteDialog
         open={deleteDialogOpen}
@@ -662,6 +630,6 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
         onConfirm={handleConfirmBulkDelete}
         isLoading={isBulkDeleting}
       />
-    </div>
+    </>
   );
 }

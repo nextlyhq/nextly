@@ -180,6 +180,18 @@ describe("ListView empty states", () => {
   });
 });
 
+describe("ListView empty-state accessibility", () => {
+  /**
+   * When a list is empty this is the only content on the screen, so its title
+   * has to be a heading rather than a styled paragraph — otherwise assistive
+   * technology is handed a page with nothing to land on.
+   */
+  it("gives the empty state a real heading", () => {
+    renderList({ rows: [], empty: { title: "No users yet" } });
+    expect(screen.getByRole("heading", { name: "No users yet" })).toBeTruthy();
+  });
+});
+
 describe("ListView slots", () => {
   /**
    * `beforeList` sits above the toolbar and `beforeTable` below it. That is the
