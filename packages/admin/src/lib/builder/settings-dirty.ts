@@ -21,6 +21,10 @@ const COMPARED_KEYS = [
   "versionsMaxPerDoc",
   "revalidate",
   "webhooks",
+  // Create-only, and compared anyway. It is absent from both sides in edit
+  // mode, so it compares equal and changes nothing there — while excluding it
+  // would mean answering this guard with a special case rather than a value.
+  "startingFieldType",
 ] as const;
 
 type ComparedKey = (typeof COMPARED_KEYS)[number];

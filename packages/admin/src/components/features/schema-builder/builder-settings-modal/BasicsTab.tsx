@@ -9,8 +9,14 @@
 // because the slug-case decision is genuinely kind-specific.
 import { Input, Label, Textarea } from "@nextlyhq/ui";
 
+import { usePluginFieldTypeEntries } from "@admin/components/field-ui";
 import { toKebabName, toSnakeName } from "@admin/lib/builder";
 import { pluralizeName } from "@admin/lib/builder/pluralize-helper";
+import {
+  hasStartingFieldChoice,
+  startingFieldChoices,
+} from "@admin/lib/builder/starting-field";
+import { cn } from "@admin/lib/utils";
 
 import type { BasicsField, BuilderKind } from "../builder-config";
 import type { BuilderSettingsValues } from "../BuilderSettingsModal";
@@ -168,6 +174,88 @@ export function BasicsTab({ fields, kind, values, onChange }: Props) {
           />
         </div>
       )}
+
+      {fields.includes("startingField") && (
+        <StartingFieldChoice
+          value={values.startingFieldType}
+          onChange={next => set("startingFieldType", next)}
+        />
+      )}
     </div>
+  );
+}
+
+/**
+ * How this entity is edited, asked while it is being created.
+ *
+ * Renders nothing when no plugin contributes a field type for this surface: the
+ * remaining option is the default, and a control offering one answer asks a
+ * question that has already been settled.
+ *
+ * Radio rather than a select. The options differ in what they DO rather than in
+ * a value being picked from a list, each carries a sentence explaining it, and
+ * both need to be readable at once for the choice to be an informed one — a
+ * select hides every option but the chosen one behind a click.
+ */
+function StartingFieldChoice({
+  value,
+  onChange,
+}: {
+  value: string | undefined;
+  onChange: (next: string | undefined) => void;
+}) {
+  const pluginEntries = usePluginFieldTypeEntries("entries");
+  const choices = startingFieldChoices(pluginEntries);
+  if (!hasStartingFieldChoice(choices)) return null;
+
+  return (
+    <fieldset className="space-y-1">
+      <legend className="text-sm font-medium leading-none">
+        How is this edited?
+      </legend>
+      <p className="text-sm text-muted-foreground">
+        You can change this later by adding or removing fields.
+      </p>
+      <div className="grid gap-2 pt-1">
+        {choices.map(choice => {
+          const id = `starting-field-${choice.type ?? "none"}`;
+          const checked = (value ?? null) === choice.type;
+          return (
+            <label
+              key={id}
+              htmlFor={id}
+              className={cn(
+                "flex cursor-pointer items-start gap-3 rounded-md border p-3 transition-colors",
+                checked
+                  ? "border-primary bg-accent"
+                  : "border-border hover:bg-accent/50"
+              )}
+            >
+              <input
+                type="radio"
+                id={id}
+                name="starting-field"
+                className="mt-1 accent-[color:var(--nx-primary)]"
+                checked={checked}
+                // `undefined` rather than null: the value is optional on the
+                // form shape, and writing null would send a key the create
+                // payload has no meaning for.
+                onChange={() => onChange(choice.type ?? undefined)}
+              />
+              <span className="space-y-0.5">
+                <span className="block text-sm font-medium text-foreground">
+                  {choice.label}
+                </span>
+                {choice.hint !== "" && (
+                  <span className="block text-sm text-muted-foreground">
+                    {choice.hint}
+                  </span>
+                )}
+              </span>
+            </label>
+          );
+        })}
+      </div>
+    </fieldset>
   );
 }

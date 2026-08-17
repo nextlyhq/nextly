@@ -8,7 +8,14 @@ import type { BuilderConfig } from "@admin/components/features/schema-builder/bu
 
 export const COLLECTION_BUILDER_CONFIG: BuilderConfig = {
   kind: "collection",
-  basicsFields: ["singularName", "pluralName", "slug", "description", "icon"],
+  basicsFields: [
+    "singularName",
+    "pluralName",
+    "slug",
+    "description",
+    "icon",
+    "startingField",
+  ],
   advancedFields: [
     "status",
     "i18n",

@@ -44,6 +44,7 @@ describe("settingsAreDirty", () => {
     versionsMaxPerDoc: { ...base, versionsMaxPerDoc: 10 },
     revalidate: { ...base, revalidate: false },
     webhooks: { ...base, webhooks: false },
+    startingFieldType: { ...base, startingFieldType: "blocks" },
   };
 
   for (const [key, next] of Object.entries(changed)) {

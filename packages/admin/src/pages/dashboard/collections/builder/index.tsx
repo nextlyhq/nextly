@@ -24,6 +24,7 @@ import { toast } from "@admin/components/ui";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useCreateCollection } from "@admin/hooks/queries";
 import { toSnakeName } from "@admin/lib/builder";
+import { startingFields } from "@admin/lib/builder/starting-field";
 import { collectionToManifestEntity } from "@admin/lib/builder/to-manifest-entity";
 import { navigateTo } from "@admin/lib/navigation";
 import { schemaFileApi } from "@admin/services/schemaFileApi";
@@ -74,10 +75,14 @@ export default function CollectionBuilderPage(): React.ReactElement | null {
         // Why: useAsTitle + timestamps removed in PR B. Backend defaults
         // (timestamps always on, useAsTitle = system title) take over.
         // Code-first config can still override either.
-        // Empty user-fields list: the API auto-injects system columns
-        // (id, title, slug, timestamps, status if enabled). The user
-        // adds custom fields on the next page.
-        fields: [],
+        //
+        // Usually empty — the API auto-injects the system columns (id, title,
+        // slug, timestamps, status if enabled) and the user adds the rest on
+        // the next page. It carries one field when the author answered the
+        // starting-field question, which exists so a capability like the page
+        // builder is offered while the collection is being shaped rather than
+        // having to be recognised by name in a picker afterwards.
+        fields: startingFields(values.startingFieldType ?? null),
       },
       {
         onSuccess: () => {

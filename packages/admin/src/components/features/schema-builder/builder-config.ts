@@ -11,7 +11,13 @@ export type BasicsField =
   | "pluralName"
   | "slug"
   | "description"
-  | "icon";
+  | "icon"
+  /**
+   * Which field a NEW entity starts with. Renders only in create mode, and only
+   * when a plugin contributes something to choose between — a control with one
+   * answer is worse than no control.
+   */
+  | "startingField";
 
 // tab. Server-side `admin.group` / `admin.order` still work for code-first
 // users; only the in-builder UI affordance is gone.
