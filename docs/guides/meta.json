@@ -3,6 +3,7 @@
   "pages": [
     "deployment",
     "production-migrations",
+    "field-group-storage-migration",
     "authentication",
     "media-storage",
     "email",
