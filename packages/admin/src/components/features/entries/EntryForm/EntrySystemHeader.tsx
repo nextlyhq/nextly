@@ -27,12 +27,14 @@ import {
   Trash2,
 } from "@admin/components/icons";
 import { useCan } from "@admin/hooks/useCan";
+import type { AutosaveStatus } from "@admin/hooks/useDocumentAutosave";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { cn } from "@admin/lib/utils";
 
 import { useEntryLocale } from "../EntryLocaleContext";
 import { LanguageSwitcher } from "../LanguageSwitcher";
 
+import { AutoSaveIndicator } from "./AutoSaveIndicator";
 import { DiscardDraftConfirmDialog } from "./DiscardDraftConfirmDialog";
 import { effectiveEntryStatus } from "./entry-address";
 import { PreviewActions } from "./PreviewActions";
@@ -68,6 +70,10 @@ export interface EntrySystemHeaderProps {
   isInvalid?: boolean;
   /** Whether the form has unsaved changes. Toggles Discard menu item. */
   isDirty?: boolean;
+  /** Recording state of this author's recovery point. */
+  autosaveStatus?: AutosaveStatus;
+  /** When the server last stored a recovery point, by the server's clock. */
+  autosaveLastSavedAt?: Date | null;
   /** Form id for the single submit button when drafts are off. */
   formId?: string;
   /** Entry data; needed for Show JSON dialog (entry id) and Duplicate (id). */
@@ -209,6 +215,8 @@ export function EntrySystemHeader({
   isSubmitting = false,
   isInvalid = false,
   isDirty = false,
+  autosaveStatus = "idle",
+  autosaveLastSavedAt = null,
   formId = "entry-form",
   entry,
   collectionSlug,
@@ -405,6 +413,17 @@ export function EntrySystemHeader({
           isCopyingLink={isCopyingLink}
           disabled={isSubmitting}
         />
+        {/* Sits with the actions rather than beside the title: it reports on
+            the same work the save buttons act on, and reads as status for that
+            cluster. Rendered only where recording can happen, so an unsaved new
+            entry shows nothing rather than a permanently idle indicator. */}
+        {autosaveStatus !== "idle" || autosaveLastSavedAt ? (
+          <AutoSaveIndicator
+            lastSavedAt={autosaveLastSavedAt}
+            isSaving={autosaveStatus === "saving"}
+            isDirty={isDirty}
+          />
+        ) : null}
         {hasStatus && isPublishedEdit ? (
           <>
             <Button

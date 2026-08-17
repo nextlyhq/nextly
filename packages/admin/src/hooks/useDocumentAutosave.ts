@@ -25,6 +25,31 @@ import { versionApi, type VersionScope } from "@admin/services/versionApi";
 /** How long to wait after the last keystroke before recording. */
 const DEFAULT_DEBOUNCE_MS = 2000;
 
+/**
+ * The document to record against, or `null` when there is not one yet.
+ *
+ * Extracted as a function rather than written inline at each editor because it
+ * encodes a rule that is easy to lose in a ternary: a document with no id has
+ * nothing for the endpoint to address, and passing an empty or placeholder id
+ * would address a document that does not exist. Both editors ask the same
+ * question, and answering it twice is how the two drift apart.
+ *
+ * @param kind - which document family this editor edits
+ * @param slug - the collection or Single slug
+ * @param documentId - the SAVED id, empty while the document has never been saved
+ * @returns an addressable scope, or `null` when recording must stay off
+ */
+export function autosaveScopeFor(
+  kind: "collection" | "single",
+  slug: string,
+  documentId: string
+): VersionScope | null {
+  if (documentId === "" || slug === "") return null;
+  return kind === "single"
+    ? { kind: "single", slug, documentId }
+    : { kind: "collection", slug, entryId: documentId };
+}
+
 export type AutosaveStatus = "idle" | "saving" | "saved" | "error";
 
 export interface UseDocumentAutosaveOptions {

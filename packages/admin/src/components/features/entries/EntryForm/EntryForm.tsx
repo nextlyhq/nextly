@@ -22,6 +22,10 @@ import { historyEnabledFrom } from "@admin/components/features/versions/history-
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useGeneralSettings } from "@admin/hooks/queries/useGeneralSettings";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
+import {
+  autosaveScopeFor,
+  useDocumentAutosave,
+} from "@admin/hooks/useDocumentAutosave";
 import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { usePreviewLink } from "@admin/hooks/usePreviewLink";
@@ -362,6 +366,24 @@ export function EntryForm({
   // reachable, since the control that would call it is not rendered.
   const { data: generalSettings } = useGeneralSettings();
   const savedEntryId = entry?.id === undefined ? "" : String(entry.id);
+
+  // Recovery points for this author, recorded while they type. Addressed only
+  // once the entry has an id: a document that has never been saved has nothing
+  // for the endpoint to address, and `null` turns recording off rather than
+  // inventing one.
+  const autosaveScope = useMemo(
+    () => autosaveScopeFor("collection", collection.name, savedEntryId),
+    [savedEntryId, collection.name]
+  );
+  const autosave = useDocumentAutosave({
+    scope: autosaveScope,
+    form,
+    locale: locale ?? null,
+    // Held off while a real save is in flight. The document is about to change
+    // underneath the snapshot, so a recovery point written now would describe a
+    // state that never existed.
+    enabled: !isSubmitting,
+  });
   const linkLocale = previewLinkLocale({
     localized: collection.localized === true,
     locale,
@@ -476,6 +498,8 @@ export function EntryForm({
                   draftsEnabled={collection.draftsEnabled === true}
                   isSubmitting={isSubmitting}
                   isDirty={isDirty}
+                  autosaveStatus={autosave.status}
+                  autosaveLastSavedAt={autosave.lastSavedAt}
                   entry={entry}
                   collectionSlug={collection.name}
                   historyFields={getCollectionFields(collection)}
