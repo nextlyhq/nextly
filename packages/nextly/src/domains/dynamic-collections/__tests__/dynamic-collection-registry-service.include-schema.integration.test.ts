@@ -36,43 +36,6 @@ const FIELDS_JSON = JSON.stringify([
   { name: "body", type: "richtext", label: "Body" },
 ]);
 
-/**
- * Every column the narrow projection carries: the table's, less `fields`.
- *
- * The list is exhaustive on purpose. `ListCollectionsResponse<false>` is
- * `Omit<CollectionMetadata, "fields">`, so a column the query forgets to name
- * still type-checks at every call site and simply arrives `undefined` — the
- * failure a reader of `status` or `versions` sees is a missing value, never a
- * missing property. Asserting only a subset reproduces exactly that blind
- * spot, so the list has to name every column the projection carries.
- */
-const PROJECTED_COLUMNS = [
-  "id",
-  "slug",
-  "tableName",
-  "description",
-  "labels",
-  "timestamps",
-  "status",
-  "localized",
-  "versions",
-  "revalidate",
-  "webhooks",
-  "admin",
-  "hooks",
-  "source",
-  "locked",
-  "configPath",
-  "schemaHash",
-  "schemaVersion",
-  "migrationStatus",
-  "lastMigrationId",
-  "accessRules",
-  "createdBy",
-  "createdAt",
-  "updatedAt",
-] as const;
-
 describe("DynamicCollectionRegistryService.listCollections — includeSchema projection", () => {
   let sqlite: Database.Database;
   let registry: DynamicCollectionRegistryService;
@@ -103,13 +66,14 @@ describe("DynamicCollectionRegistryService.listCollections — includeSchema pro
           status, localized, source, locked, schema_hash, schema_version,
           migration_status, created_at, updated_at)
        VALUES (@id, @slug, @tableName, @description, @labels, @fields, 1,
-          0, 0, 'ui', 0, @schemaHash, 1,
+          @status, @localized, 'ui', 0, @schemaHash, 1,
           'pending', @createdAt, @updatedAt)`
     );
     const seed = (
       slug: string,
       schemaHash: string,
-      createdAt: number
+      createdAt: number,
+      flags: { status: number; localized: number }
     ): void => {
       insert.run({
         id: `id-${slug}`,
@@ -121,11 +85,17 @@ describe("DynamicCollectionRegistryService.listCollections — includeSchema pro
         schemaHash,
         createdAt,
         updatedAt: createdAt,
+        ...flags,
       });
     };
-    seed("zebra", "h1", baseTime);
-    seed("alpha", "h2", baseTime + 100);
-    seed("mango", "h3", baseTime + 200);
+    // The flags vary deliberately. `normalizeCollectionBooleans` rewrites
+    // `status` and `localized` on every row it returns, so a projection that
+    // never selected them still hands back `false` rather than nothing — and
+    // an assertion that only asks whether the property EXISTS cannot tell the
+    // two apart. It takes a row whose stored value is true to separate them.
+    seed("zebra", "h1", baseTime, { status: 1, localized: 1 });
+    seed("alpha", "h2", baseTime + 100, { status: 0, localized: 1 });
+    seed("mango", "h3", baseTime + 200, { status: 1, localized: 0 });
 
     const db = drizzle({ client: sqlite });
     // `satisfies` rather than a cast: the two methods the registry reaches for
@@ -179,12 +149,31 @@ describe("DynamicCollectionRegistryService.listCollections — includeSchema pro
     }
   });
 
-  it("keeps every non-schema column in the narrow projection", async () => {
-    const result = await registry.listCollections({ includeSchema: false });
-    const row = result.collections[0] as unknown as Record<string, unknown>;
+  it("carries every non-schema column at the value the row holds", async () => {
+    const narrow = await registry.listCollections({ includeSchema: false });
+    const wide = await registry.listCollections({ includeSchema: true });
 
-    for (const column of PROJECTED_COLUMNS) {
-      expect(row).toHaveProperty(column);
+    // Compared against the WIDE shape rather than against a list of column
+    // names. A list is a second copy of the schema and drifts; the wide shape
+    // is `select()` over the same table, so it grows a new column on its own
+    // and this comparison starts demanding it of the narrow shape the same day.
+    //
+    // It compares VALUES because presence does not separate the cases here.
+    // `normalizeCollectionBooleans` writes `status` and `localized` onto every
+    // row on the way out, so those two properties exist whether or not the
+    // query selected them — a projection that dropped both would satisfy an
+    // existence check while serving `false` for every collection.
+    expect(narrow.collections).toHaveLength(wide.collections.length);
+    expect(narrow.collections.length).toBeGreaterThan(0);
+
+    for (const [index, narrowRow] of (
+      narrow.collections as unknown as Record<string, unknown>[]
+    ).entries()) {
+      const { fields, ...withoutSchema } = wide.collections[
+        index
+      ] as unknown as Record<string, unknown>;
+      expect(fields).toBeDefined();
+      expect(narrowRow).toEqual(withoutSchema);
     }
   });
 

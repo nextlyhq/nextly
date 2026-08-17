@@ -22,7 +22,7 @@ name: Code hygiene
 # and a bare whole-repo run reports every one of them on every pull request. So
 # the base commit is analysed too and the head compared against it: only what
 # the change ADDS can fail, and only what it adds is annotated. Nothing here is
-# `continue-on-error`; a red run means this pull request introduced something.
+# `continue-on-error`; a red run means the change introduced something.
 #
 # Three analyses rather than one, because a single `fallow --baseline` applies
 # its baseline to dead code alone and the combined run then fails on inherited
@@ -33,8 +33,8 @@ name: Code hygiene
 # baseline is a second copy of a fact the repository already holds, and it goes
 # stale silently — every pull request after a merge would measure against
 # whatever main looked like when someone last remembered to refresh it.
-# Deriving them from the pull request's own base costs one extra install and
-# three short scans, and cannot be wrong.
+# Deriving them from the base commit costs one extra install and three
+# short scans, and cannot be wrong.
 #
 # Separate from ci.yml because of that: it needs full history and a second
 # working tree, and ci.yml checks out with `fetch-depth: 2`.
