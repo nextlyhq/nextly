@@ -72,14 +72,32 @@ export interface PageRendererProps {
    * break it silently: an unresolved custom property invalidates the
    * declaration rather than reporting anything.
    *
-   * Omitted means no site sheet is emitted at all, which is the behaviour every
-   * existing consumer had before this prop existed. That is deliberate rather
-   * than lazy — a renderer that started emitting token definitions on its own
-   * would change what stored `{ $token }` references resolve to, and a page
-   * whose current appearance depends on one of those dangling is a page that
-   * moves. The host decides when to take that step.
+   * **Omitting it still emits the DEFAULT token set.** This was opt-in when the
+   * prop was introduced, on the argument that a standalone consumer owns its own
+   * `<head>`. That argument does not survive contact with what the asymmetry
+   * cost: a block could not reference a token at all, because a default reading
+   * `color.surface` would resolve on a Nextly route and silently resolve to
+   * nothing here. So `core/card` shipped with no background and no border, and
+   * `badge` was unbuildable — and the pressure that produced six blocks reaching
+   * for the admin `--nx-*` namespace stayed exactly where it was.
+   *
+   * What a host receives unasked is a block of `--site-*` custom-property
+   * DEFINITIONS. They are additive and namespaced, and the engine reserves that
+   * prefix — `safeTokenPrefix` refuses `--nx-` and `--tw-` precisely so a site
+   * cannot restyle surfaces it does not own — so they cannot collide with a
+   * host's own variables. A host that wants its own set supplies one; a host
+   * that wants NONE passes `siteStyles={false}` — an explicit refusal rather
+   * than an empty token list, because `resolveSiteTokens` LAYERS, so an empty
+   * override means "no overrides" and still yields every default. A test found
+   * that: the opt-out did not exist until it was given its own value.
+   *
+   * A sheet needs a breakpoint set to compile the block-default tier under, and
+   * it is taken from the RECONCILED compile context rather than from
+   * `styleContext` alone — a consumer rendering a stored artifact supplies no
+   * context of its own and would otherwise get no sheet, which is the ordinary
+   * production path.
    */
-  siteStyles?: SiteSheetInput;
+  siteStyles?: SiteSheetInput | false;
   /** Shown in place of an asynchronous block until its output arrives. */
   blockFallback?: ReactNode;
   /**
@@ -388,12 +406,30 @@ export function PageRenderer({
   // the default set reach a page at all. Until this existed nothing called
   // `compileSiteSheet`, so `defaultSiteTokens()` was a default nobody applied
   // and every `{ $token }` compiled to a `var()` with nothing behind it.
+  // Derived ONCE, and from the RECONCILED context rather than from the caller's
+  // `styleContext`: a consumer rendering a stored artifact supplies no context
+  // of its own, and taking the raw prop would leave the ordinary production path
+  // with no sheet. Two answers to "what are this site's breakpoints" is also how
+  // the shared sheet and the page sheet come to disagree about which at-rules a
+  // tier is emitted under, invisibly, since each sheet is consistent on its own.
+  const siteInput = siteStyles === false ? undefined : siteStyles;
+  const siteBreakpoints =
+    siteStyles === false
+      ? undefined
+      : (siteInput?.breakpoints ?? compileContext?.breakpoints);
+  // A sheet by DEFAULT. Without one a block cannot reference a token at all —
+  // a default reading `color.surface` would resolve on a route and resolve to
+  // nothing here — which is why `core/card` shipped with no background.
+  // Withheld only when no breakpoints are known, because a sheet compiled
+  // against breakpoints nobody chose would put the block-default tier under
+  // at-rules the page sheet does not use.
   const siteSheet =
-    siteStyles === undefined
+    siteBreakpoints === undefined
       ? undefined
       : compileSiteSheet({
-          ...siteStyles,
-          tokens: resolveSiteTokens(siteStyles.tokens),
+          ...siteInput,
+          breakpoints: siteBreakpoints,
+          tokens: resolveSiteTokens(siteInput?.tokens),
         });
 
   return (
