@@ -50,6 +50,7 @@
   },
   "devDependencies": {
     "@nextlyhq/admin": "workspace:*",
+    "@nextlyhq/eslint-config": "workspace:*",
     "@nextlyhq/plugin-sdk": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
     "@nextlyhq/ui": "workspace:*",

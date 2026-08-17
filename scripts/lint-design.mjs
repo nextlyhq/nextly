@@ -30,12 +30,13 @@
  * silencing the whole check. Run with `pnpm lint:design`.
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 
 import {
   createColorLiteralPattern,
   createPaletteClassPattern,
   createTokenWrapPattern,
+  hasExemptionDirective,
   paletteAdvice,
   stripExemptColorPieces,
 } from "@nextlyhq/eslint-plugin/vocabulary";
@@ -104,8 +105,17 @@ function isCommentLine(line) {
 }
 
 const listFiles = roots =>
-  execSync(
-    `find ${roots.join(" ")} -type f \\( -name "*.css" -o -name "*.tsx" -o -name "*.ts" \\)`,
+  // `execFileSync` with an argument array rather than a shell string: a root is
+  // a path from the filesystem, and one containing a space or a shell
+  // metacharacter would otherwise change the command instead of being one
+  // argument to it.
+  execFileSync(
+    "find",
+    [
+      ...roots,
+      "-type", "f",
+      "(", "-name", "*.css", "-o", "-name", "*.tsx", "-o", "-name", "*.ts", ")",
+    ],
     { encoding: "utf8" }
   )
     .trim()
@@ -115,12 +125,22 @@ const listFiles = roots =>
 /** A color-literal line is exempt when nothing but mode-invariant black/white/transparent
  *  (or an allowed construct) remains after stripping the permitted pieces. */
 function colorLiteralIsExempt(line, file) {
-  if (line.includes("design-lint-ok")) return true;
+  if (hasExemptionDirective(line)) return true;
   if (FILE_ALLOWLIST.some((f) => file.endsWith(f))) return true;
   // The Tailwind palette scale (`--color-blue-500: #3b82f6`) is the literal
   // source of truth in theme.css; only these `--color-*` scale definitions are
   // allowed to hardcode. Semantic tokens and shadows must still derive from them.
   if (/--color-[a-z]+-\d+\s*:/.test(line)) return true;
+  // A custom-property DECLARATION in the theme source is the definition every
+  // other file refers to through `var()`, so it is the one place a colour is
+  // written down rather than referenced. Scoped to that file: the same line
+  // anywhere else is a second definition of a colour the tokens already carry.
+  if (
+    file.endsWith("ui/src/styles/theme.css") &&
+    /^\s*--[\w-]+\s*:/.test(line)
+  ) {
+    return true;
+  }
   // The mode-invariant strip is shared with the published ESLint rules, so the
   // two guards cannot disagree about which literals are legitimate.
   return !COLOR_LITERAL_RE.test(stripExemptColorPieces(line));
@@ -192,7 +212,7 @@ for (const file of files) {
     //    line used to be) and styles nothing, so whole-comment lines are skipped.
     if (!isThemeSource && !isCommentLine(line)) {
       const paletteMatch = PALETTE_CLASS_RE.exec(line);
-      if (paletteMatch && !line.includes("design-lint-ok")) {
+      if (paletteMatch && !hasExemptionDirective(line)) {
         violations.push(
           `${at}  palette class \`${paletteMatch[1]}\` — ${paletteAdvice(paletteMatch[1])}: ${line.trim()}`
         );

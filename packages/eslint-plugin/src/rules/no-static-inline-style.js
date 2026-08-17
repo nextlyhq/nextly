@@ -64,9 +64,15 @@ export default {
         // An empty object styles nothing, so there is no class to prefer.
         if (expression.properties.length === 0) return;
 
+        // A COMPUTED key makes the declaration runtime-dependent even when its
+        // value is a constant: `{ [cssProperty]: 8 }` styles whichever property
+        // the variable holds, so no class can express it. The separating
+        // property is the key, not the value.
         const everyValueIsConstant = expression.properties.every(
           property =>
-            property.type === "Property" && isStaticValue(property.value)
+            property.type === "Property" &&
+            !property.computed &&
+            isStaticValue(property.value)
         );
         if (!everyValueIsConstant) return;
         if (isExempt(sourceCode, node)) return;
