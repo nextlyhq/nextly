@@ -28,16 +28,27 @@
  * node like any other. A value hardcoded in the render function could not be
  * overridden at all.
  *
- * **No default border, and no default background.** `defaultSiteTokens()`
- * guarantees `color.text`, `color.background`, `color.primary`, `font.body`,
- * `content.width` and `space.4` — there is no surface colour and no border
- * colour among them. The older page-builder drew its dividers with
- * `var(--nx-color-border)`, which is the ADMIN token namespace: this renderer
- * emits `--site-*`, so that declaration validates, compiles, ships, and then
- * resolves to nothing on the visitor's page while looking correct inside an
- * admin preview. Separation between sections is therefore spacing, which every
- * theme can express, and the divider is left to the author until a surface
- * token exists to carry it.
+ * **No default border, and no default background.** `defaultSiteTokens()` names
+ * `color.text`, `color.background`, `color.primary`, `font.body`,
+ * `content.width` and `space.4`, and there is no surface colour and no border
+ * colour among them.
+ *
+ * **It GUARANTEES none of them, which is a stronger statement than the missing
+ * two.** `compileSiteSheet` — the only thing that turns a token set into CSS —
+ * has zero consumers outside `blocks-engine`, and `--site-` appears in no source
+ * file outside the engine (positive control: `--nx-` appears in 103). So the set
+ * is a default nobody applies, and a `{ $token }` reference compiles to a
+ * `var()` with nothing behind it. This block shipped that way and its sections
+ * rendered touching; the value below is a length for that reason.
+ *
+ * The older page-builder drew its dividers with `var(--nx-color-border)`, the
+ * ADMIN token namespace, which this renderer does not emit — so that declaration
+ * validates, compiles, ships, and resolves to nothing on the visitor's page
+ * while looking correct inside an admin preview. **Three blocks reached for it
+ * independently**, which makes it design pressure rather than three mistakes:
+ * when the correct mechanism is unreachable, the thing that looks like it works
+ * gets reached for. Separation between sections is therefore a plain length, and
+ * the divider is left to the author until tokens are emitted at all.
  *
  * @module blocks/library/accordion
  */
@@ -61,9 +72,9 @@ export { ACCORDION_BLOCK, ACCORDION_ITEM_BLOCK } from "./accordion-item";
  * are absent), so a flex layout here would leave the sections unable to express
  * how they take space; a grid puts that on the track list, which the group owns.
  *
- * `space.4` is one of the six tokens `defaultSiteTokens()` guarantees, so this
- * default resolves under every theme rather than only where a site happens to
- * define a spacing scale.
+ * The gap is a LENGTH rather than `{ $token: "space.4" }`, and `1rem` is what
+ * `space.4` itself declares — so the value survives the change back once
+ * `compileSiteSheet` is wired into the render path and tokens resolve.
  */
 export const ACCORDION_BASE_STYLES = {
   base: {
