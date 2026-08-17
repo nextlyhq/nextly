@@ -24,6 +24,8 @@
  * @module blocks
  */
 
+import { accordion } from "./accordion";
+import { accordionItem } from "./accordion-item";
 import { box } from "./box";
 import { button } from "./button";
 import { card } from "./card";
@@ -41,6 +43,11 @@ import { quote } from "./quote";
 import { section } from "./section";
 import { spacer } from "./spacer";
 
+// `ACCORDION_BLOCK` / `ACCORDION_ITEM_BLOCK` are deliberately NOT re-exported,
+// for the reason recorded below for the columns pair: they exist so the two
+// halves of the nesting rule name each other without a repeated string literal.
+export { accordion } from "./accordion";
+export { accordionItem, type AccordionItemProps } from "./accordion-item";
 export { box } from "./box";
 export { button, BUTTON_TYPES, type ButtonProps } from "./button";
 // `CARD_BLOCK` is deliberately NOT re-exported, for the reason recorded below
@@ -104,6 +111,10 @@ export const coreBlocks = [
   columns,
   column,
   card,
+  // Parent before child, for the reason recorded on the columns pair: a
+  // resolver built by iterating this list should meet the group first.
+  accordion,
+  accordionItem,
   spacer,
   // Typography
   heading,

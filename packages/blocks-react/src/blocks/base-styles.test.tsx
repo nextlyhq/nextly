@@ -175,6 +175,7 @@ describe("every default the core library declares", () => {
     // so a filter that matched nothing would run zero cases and the file would
     // pass having inspected nothing at all.
     expect(DECLARING.map(block => block.name).sort()).toEqual([
+      "core/accordion",
       "core/card",
       "core/column",
       "core/columns",
