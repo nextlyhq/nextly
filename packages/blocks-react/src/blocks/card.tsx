@@ -36,6 +36,22 @@
  * surface colour and no border colour among them. A `{ $token }` reference to a
  * name a site never defines compiles to a `var()` with nothing behind it, and a
  * hardcoded hex is wrong in whichever of light and dark it was not chosen for.
+ *
+ * The obvious way around that is to DERIVE a surface from the two colours that
+ * are guaranteed, which is what the older page-builder blocks do:
+ * `color-mix(in srgb, var(--nx-color-primary) 12%, var(--nx-color-background))`.
+ * It is refused here, and the reason is worth stating because the catalog does
+ * NOT refuse it — that value validates and compiles through verbatim.
+ *
+ * `--nx-*` is the ADMIN's token namespace. This renderer emits none of it: the
+ * engine writes site tokens as `--site-*`, which is what `{ $token }` compiles
+ * to, and a hand-written `var(--site-…)` is refused in turn. So a `color-mix`
+ * over `--nx-*` would pass validation, reach the stylesheet, and resolve to
+ * nothing on a published page, while looking correct in an admin preview that
+ * happens to define those variables. A default that is right only where the
+ * admin's stylesheet is loaded is worse than no default, because the failure
+ * appears on the visitor's page and nowhere a person is looking.
+ *
  * So the two properties that would make a card look like a card on a plain page
  * are left to the author until a surface token exists to carry them, and the
  * defaults here are the ones that are correct under every theme.
