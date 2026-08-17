@@ -503,7 +503,8 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
           className="mb-8 flex items-center justify-center h-10 w-10 group"
         >
           <ThemeAwareLogo
-            className="w-6 h-6 object-contain"
+            boxed
+            className="w-8 h-8 object-contain"
             alt={branding.logoText ?? "Logo"}
           />
         </Link>
