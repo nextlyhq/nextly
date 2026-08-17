@@ -26,6 +26,8 @@ import {
   walkNodes,
 } from "@nextlyhq/blocks-engine";
 
+import { siteBreakpoints } from "../site-style";
+
 import type { DocumentKind } from "./blocks-options";
 
 /**
@@ -50,12 +52,18 @@ export interface BlocksValidationOptions {
 
 /**
  * Breakpoints are site-level data owned by the page-builder plugin, and the
- * engine never reads storage, so core validates against an empty set. A
- * document referencing a breakpoint id therefore warns rather than errors
- * until the plugin supplies the real set — which is the arrangement that keeps
- * the engine storage-agnostic.
+ * engine never reads storage, so core validates against whatever set it is
+ * handed. A document referencing a breakpoint id therefore warns rather than
+ * errors until the plugin supplies the real set — which is the arrangement that
+ * keeps the engine storage-agnostic.
+ *
+ * Read from `site-style` rather than declared here, because the editor canvas
+ * compiles its stylesheet against the same set. Two declarations agree while
+ * both are empty and diverge the day one gains a breakpoint, leaving the canvas
+ * drawing a layout this validator rejects — each side internally consistent, so
+ * neither looks wrong.
  */
-const NO_BREAKPOINTS: BreakpointSet = { viewport: [], container: [] };
+const NO_BREAKPOINTS: BreakpointSet = siteBreakpoints();
 
 /** What a field accepts when it says nothing: its own entry's page content. */
 const DEFAULT_KINDS: readonly DocumentKind[] = ["page"];

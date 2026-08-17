@@ -30,9 +30,12 @@ import { validateBlocksValue } from "./blocks-validator";
 /** The field type id. Was a built-in token; now this plugin's to own. */
 export const BLOCKS_TYPE = "blocks";
 
-/** The read-only summary the entry form renders for a blocks field. */
+/**
+ * The control the entry form renders for a blocks field: a summary of the
+ * stored document, and the way in to the editor that changes it.
+ */
 export const BLOCKS_FIELD_COMPONENT =
-  "@nextlyhq/plugin-page-builder/admin#BlocksSummary";
+  "@nextlyhq/plugin-page-builder/admin#BlocksField";
 
 /** The policy a field declares, in the loosest shape worth reading. */
 function policyOf(field: PluginFieldInstance): BlocksFieldOptions {
