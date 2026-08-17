@@ -389,7 +389,9 @@ describe("VersionHistorySheet", () => {
     await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
 
     expect(screen.getByText(/Viewing version 3/)).toBeInTheDocument();
-    expect(screen.getByText("Old title")).toBeInTheDocument();
+    // The snapshot is drawn by the editor's own field components, so its values
+    // are display values on read-only inputs rather than text nodes.
+    expect(screen.getByLabelText(/Title/)).toHaveValue("Old title");
   });
 
   it("returns to the list from a preview", async () => {

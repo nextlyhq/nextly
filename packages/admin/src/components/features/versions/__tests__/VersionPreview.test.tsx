@@ -1,7 +1,9 @@
 /**
- * A preview shows what a document held at an earlier point. The states that
- * matter are the ones that could mislead: a field that was blank then, and a
- * snapshot that failed to load.
+ * A preview shows what a document held at an earlier point, drawn by the
+ * editor's own field components. The states that matter are the ones that
+ * could mislead: a field that was blank then, a snapshot that failed to load,
+ * and — since these are the real inputs — any suggestion that the past can be
+ * edited from here.
  */
 import userEvent from "@testing-library/user-event";
 import type { FieldConfig } from "nextly/config";
@@ -26,8 +28,30 @@ describe("VersionPreview", () => {
       />
     );
 
-    expect(screen.getByText("Hello")).toBeInTheDocument();
-    expect(screen.getByText("World")).toBeInTheDocument();
+    // Values sit in the editor's own inputs now, so they are display values
+    // rather than text nodes. Queried by the label a reader sees, so a field
+    // that lost its labelling would fail here too.
+    expect(screen.getByLabelText(/Title/)).toHaveValue("Hello");
+    expect(screen.getByLabelText(/Subtitle/)).toHaveValue("World");
+  });
+
+  it("renders the past read-only, with no way to edit it", () => {
+    render(
+      <VersionPreview
+        versionNo={3}
+        fields={fields}
+        snapshot={{ title: "Hello", subtitle: "World" }}
+      />
+    );
+
+    // The whole point of drawing a version in the editor's components is that
+    // it must not become a way to edit the past.
+    for (const label of [/Title/, /Subtitle/]) {
+      expect(screen.getByLabelText(label)).toHaveAttribute("readonly");
+    }
+    // And nothing in here may offer to write: this subtree renders under its
+    // own form context, so a save affordance would act on the snapshot.
+    expect(screen.queryByRole("button", { name: /save|publish/i })).toBeNull();
   });
 
   it("says plainly which version is on screen and that it is not live", () => {
@@ -48,8 +72,8 @@ describe("VersionPreview", () => {
       />
     );
 
-    expect(screen.getByText("Subtitle")).toBeInTheDocument();
-    expect(screen.getByText("Not set")).toBeInTheDocument();
+    expect(screen.getByLabelText(/Subtitle/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Subtitle/)).toHaveValue("");
   });
 
   it("tolerates a snapshot that is not an object", () => {
@@ -57,7 +81,10 @@ describe("VersionPreview", () => {
       <VersionPreview versionNo={3} fields={fields} snapshot={"corrupt"} />
     );
 
-    expect(screen.getAllByText("Not set")).toHaveLength(2);
+    // Not a crash and not a claim: every field reads as holding nothing, which
+    // is the truthful rendering of a snapshot that carries no values.
+    expect(screen.getByLabelText(/Title/)).toHaveValue("");
+    expect(screen.getByLabelText(/Subtitle/)).toHaveValue("");
   });
 
   it("announces loading without claiming the document is empty", () => {
@@ -119,8 +146,10 @@ describe("VersionPreview", () => {
       />
     );
 
-    expect(screen.getByText("City")).toBeInTheDocument();
-    expect(screen.getByText("Lisbon")).toBeInTheDocument();
+    // The editor's own layout handling flattens a nameless group, so this is
+    // no longer a case the preview treats specially — it is covered here
+    // because dropping it would silently hide every field inside.
+    expect(screen.getByLabelText(/City/)).toHaveValue("Lisbon");
   });
 
   it("reports a failed load instead of rendering an empty document", () => {

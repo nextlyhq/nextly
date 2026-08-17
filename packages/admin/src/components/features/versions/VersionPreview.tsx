@@ -10,7 +10,6 @@
 
 import type { FieldConfig } from "nextly/config";
 
-import { FieldValueDisplay } from "@admin/components/features/versions/value-display/FieldValueDisplay";
 import {
   Alert,
   AlertDescription,
@@ -18,6 +17,8 @@ import {
   Button,
   Skeleton,
 } from "@admin/components/ui";
+
+import { VersionSnapshotForm } from "./VersionSnapshotForm";
 
 export interface VersionPreviewProps {
   versionNo: number;
@@ -77,11 +78,6 @@ export function VersionPreview({
     );
   }
 
-  const values =
-    typeof snapshot === "object" && snapshot !== null
-      ? (snapshot as Record<string, unknown>)
-      : {};
-
   return (
     <div className="flex flex-col">
       <div className="px-4 py-2 bg-primary/5 border-b border-border flex flex-wrap items-center gap-2">
@@ -99,41 +95,18 @@ export function VersionPreview({
         )}
       </div>
 
-      <div className="p-4 flex flex-col gap-4">
+      <div className="p-4">
         {fields.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             This document has no fields to show.
           </p>
         ) : (
-          fields.map((field, i) => {
-            if (field.name) {
-              return (
-                <FieldValueDisplay
-                  key={field.name}
-                  field={field}
-                  value={values[field.name]}
-                />
-              );
-            }
-
-            // A presentational group has no name and stores its children at
-            // this level, so it is rendered against the same object rather than
-            // dropped along with everything inside it.
-            const children = (field as { fields?: FieldConfig[] }).fields;
-            if (field.type === "group" && Array.isArray(children)) {
-              return children.map(child =>
-                child.name ? (
-                  <FieldValueDisplay
-                    key={child.name}
-                    field={child}
-                    value={values[child.name]}
-                  />
-                ) : null
-              );
-            }
-
-            return <span key={`unnamed-${i}`} />;
-          })
+          // Drawn by the editor's own components rather than a viewer of its
+          // own. Layout fields, nameless groups and every type's presentation
+          // then come from one place, so a version reads the way the document
+          // reads — and a new field type is supported here the day it renders
+          // in the editor, with nothing to keep in step.
+          <VersionSnapshotForm fields={fields} snapshot={snapshot} />
         )}
       </div>
     </div>
