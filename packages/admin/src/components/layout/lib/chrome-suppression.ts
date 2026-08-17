@@ -9,7 +9,17 @@ export type AdminChromeLayer =
   | "primaryRail"
   | "subSidebar"
   | "documentSidebar"
-  | "header";
+  | "header"
+  /**
+   * The page frame a route renders inside: the container's padding and the
+   * breadcrumb row above it.
+   *
+   * Separate from the three sidebars because it is the innermost layer and the
+   * only one a surface can be inside — suppressing the others leaves a canvas
+   * that still stops 32px short of every edge, which reads as a mistake rather
+   * than as a margin.
+   */
+  | "pageFrame";
 
 /**
  * One surface's request, held for as long as that surface is mounted.

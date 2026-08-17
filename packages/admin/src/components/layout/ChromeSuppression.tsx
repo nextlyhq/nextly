@@ -98,8 +98,23 @@ export function useSuppressAdminChrome(options: {
   // natural way to call this — does not re-register on every render.
   const key = options.layers.join(",");
 
-  React.useEffect(() => {
+  useRegistrationEffect(() => {
     const layers = key === "" ? [] : (key.split(",") as AdminChromeLayer[]);
     return register({ layers, canExit });
   }, [key, canExit, register]);
 }
+
+/**
+ * A LAYOUT effect on the client, because the chrome this releases is on screen
+ * until the request lands.
+ *
+ * Registering in a passive effect means the first paint shows the full admin
+ * frame — both sidebars, the header, the page padding — which is then removed on
+ * the following frame. The editor is the widest thing in the admin, so that is a
+ * whole-layout reflow visible as a flash on every open.
+ *
+ * Falls back to a passive effect where there is no DOM. A layout effect during a
+ * server render warns and cannot run, and nothing has painted there anyway.
+ */
+const useRegistrationEffect =
+  typeof window === "undefined" ? React.useEffect : React.useLayoutEffect;

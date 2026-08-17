@@ -115,7 +115,13 @@ export function EditorSurface({ onExit, surface }: EditorSurfaceProps = {}) {
    * and a request that describes the surface honestly outlives this mount.
    */
   useSuppressAdminChrome({
-    layers: ["primaryRail", "subSidebar", "documentSidebar", "header"],
+    layers: [
+      "primaryRail",
+      "subSidebar",
+      "documentSidebar",
+      "header",
+      "pageFrame",
+    ],
     canExit: exitWithGuard !== undefined,
   });
   /**

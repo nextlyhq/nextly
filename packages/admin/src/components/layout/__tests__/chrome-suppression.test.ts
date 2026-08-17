@@ -6,7 +6,13 @@ import {
 } from "../lib/chrome-suppression";
 
 const immersive: ChromeSuppressionRequest = {
-  layers: ["primaryRail", "subSidebar", "documentSidebar", "header"],
+  layers: [
+    "primaryRail",
+    "subSidebar",
+    "documentSidebar",
+    "header",
+    "pageFrame",
+  ],
   canExit: true,
 };
 
@@ -22,9 +28,21 @@ describe("resolveSuppressedChrome", () => {
     expect([...hidden].sort()).toEqual([
       "documentSidebar",
       "header",
+      "pageFrame",
       "primaryRail",
       "subSidebar",
     ]);
+  });
+
+  it("grants the page frame to a surface with no way back", () => {
+    // The floor covers the navigation rail ONLY. An embedded mount still gets
+    // its padding dropped — it is inside a form that provides the way out, so
+    // withholding the frame would leave it boxed for no safety benefit.
+    const hidden = resolveSuppressedChrome([
+      { layers: ["pageFrame", "primaryRail"], canExit: false },
+    ]);
+    expect(hidden.has("pageFrame")).toBe(true);
+    expect(hidden.has("primaryRail")).toBe(false);
   });
 
   it("withholds the primary rail from a requester with no way back", () => {
@@ -64,8 +82,12 @@ describe("resolveSuppressedChrome", () => {
     // unmounting does. Asserted because a resolver that memoised into a
     // module-level set would pass every test above and never restore chrome.
     const mounted = new Set<ChromeSuppressionRequest>([immersive]);
-    expect(resolveSuppressedChrome(mounted).size).toBe(4);
+    // Asserted by membership rather than by a count, which goes stale the moment
+    // a layer is added and then reads as a real failure.
+    expect([...resolveSuppressedChrome(mounted)].sort()).toEqual(
+      [...immersive.layers].sort()
+    );
     mounted.delete(immersive);
-    expect(resolveSuppressedChrome(mounted).size).toBe(0);
+    expect([...resolveSuppressedChrome(mounted)]).toEqual([]);
   });
 });
