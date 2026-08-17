@@ -1,12 +1,12 @@
 "use client";
 
 import {
-  Alert,
   Badge,
   Button,
   DropdownMenuCheckboxItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  Skeleton,
   Tooltip,
   TooltipContent,
   TooltipTrigger,
@@ -24,7 +24,6 @@ import {
   type LucideIcon,
 } from "@admin/components/icons";
 import { BulkDeleteDialog } from "@admin/components/shared/bulk-action-dialogs";
-import { SearchBar } from "@admin/components/shared/search-bar";
 import { toast } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
 import type {
@@ -427,40 +426,14 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
     [handleEdit, handleViewDocument, handleDelete]
   );
 
-  if (isError) {
-    return (
-      <div className="space-y-4">
-        <SearchBar
-          value={search}
-          onChange={setSearch}
-          placeholder="Search Singles..."
-          isLoading={false}
-          className="max-w-sm flex-1"
-        />
-        <Alert variant="destructive">
-          {error instanceof Error
-            ? error.message
-            : "Failed to load Singles. Please try again."}
-        </Alert>
-      </div>
-    );
-  }
-
-  if ((isLoading || isFetching) && (!data || data.items.length === 0)) {
-    return (
-      <div className="space-y-4">
-        <span className="sr-only">Loading Singles...</span>
-        <SearchBar
-          value={search}
-          onChange={setSearch}
-          placeholder="Search Singles..."
-          isLoading={true}
-          className="max-w-sm flex-1"
-        />
-        <SinglesTableSkeleton />
-      </div>
-    );
-  }
+  /*
+   * Loading and failure are TABLE states rather than replacements for the page.
+   * Rendering either one in place of the whole surface takes the search field
+   * away from the reader who just typed in it, and hands back a different one
+   * at a different width when the response lands.
+   */
+  const showLoadingSkeleton =
+    (isLoading || isFetching) && (!data || data.items.length === 0);
   const isFiltering = sourceFilter !== "all" || migrationFilter !== "all";
 
   return (
@@ -473,72 +446,102 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
           isLoading: isFetching,
         }}
         hasActiveFilters={isFiltering}
-        filters={
+        loading={showLoadingSkeleton}
+        skeleton={
           <>
-            <DropdownMenuLabel>Filter by</DropdownMenuLabel>
-            <DropdownMenuSeparator />
-            <DropdownMenuCheckboxItem
-              checked={sourceFilter === "all"}
-              onCheckedChange={() => handleSourceFilterChange("all")}
-            >
-              All Sources
-            </DropdownMenuCheckboxItem>
-            <DropdownMenuCheckboxItem
-              checked={sourceFilter === "code"}
-              onCheckedChange={() => handleSourceFilterChange("code")}
-            >
-              Code
-            </DropdownMenuCheckboxItem>
-            <DropdownMenuCheckboxItem
-              checked={sourceFilter === "ui"}
-              onCheckedChange={() => handleSourceFilterChange("ui")}
-            >
-              UI
-            </DropdownMenuCheckboxItem>
-            <DropdownMenuCheckboxItem
-              checked={sourceFilter === "built-in"}
-              onCheckedChange={() => handleSourceFilterChange("built-in")}
-            >
-              Built-in
-            </DropdownMenuCheckboxItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuCheckboxItem
-              checked={migrationFilter === "all"}
-              onCheckedChange={() => handleMigrationFilterChange("all")}
-            >
-              All Status
-            </DropdownMenuCheckboxItem>
-            <DropdownMenuCheckboxItem
-              checked={migrationFilter === "synced"}
-              onCheckedChange={() => handleMigrationFilterChange("synced")}
-            >
-              Synced
-            </DropdownMenuCheckboxItem>
-            <DropdownMenuCheckboxItem
-              checked={migrationFilter === "pending"}
-              onCheckedChange={() => handleMigrationFilterChange("pending")}
-            >
-              Pending
-            </DropdownMenuCheckboxItem>
-            <DropdownMenuCheckboxItem
-              checked={migrationFilter === "generated"}
-              onCheckedChange={() => handleMigrationFilterChange("generated")}
-            >
-              Generated
-            </DropdownMenuCheckboxItem>
-            <DropdownMenuCheckboxItem
-              checked={migrationFilter === "applied"}
-              onCheckedChange={() => handleMigrationFilterChange("applied")}
-            >
-              Applied
-            </DropdownMenuCheckboxItem>
+            <span className="sr-only">Loading Singles...</span>
+            <SinglesTableSkeleton />
           </>
         }
-        columnsControl={{
-          columns: toggleableColumns,
-          isColumnVisible: name => !hiddenColumns.has(name),
-          onToggleColumn: toggleColumn,
-        }}
+        error={
+          isError
+            ? error instanceof Error
+              ? error.message
+              : "Failed to load Singles. Please try again."
+            : null
+        }
+        // Withheld while the first response is outstanding: a filter menu built
+        // from data nobody has yet would open onto nothing.
+        filters={
+          showLoadingSkeleton ? undefined : (
+            <>
+              <DropdownMenuLabel>Filter by</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuCheckboxItem
+                checked={sourceFilter === "all"}
+                onCheckedChange={() => handleSourceFilterChange("all")}
+              >
+                All Sources
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={sourceFilter === "code"}
+                onCheckedChange={() => handleSourceFilterChange("code")}
+              >
+                Code
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={sourceFilter === "ui"}
+                onCheckedChange={() => handleSourceFilterChange("ui")}
+              >
+                UI
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={sourceFilter === "built-in"}
+                onCheckedChange={() => handleSourceFilterChange("built-in")}
+              >
+                Built-in
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuCheckboxItem
+                checked={migrationFilter === "all"}
+                onCheckedChange={() => handleMigrationFilterChange("all")}
+              >
+                All Status
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={migrationFilter === "synced"}
+                onCheckedChange={() => handleMigrationFilterChange("synced")}
+              >
+                Synced
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={migrationFilter === "pending"}
+                onCheckedChange={() => handleMigrationFilterChange("pending")}
+              >
+                Pending
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={migrationFilter === "generated"}
+                onCheckedChange={() => handleMigrationFilterChange("generated")}
+              >
+                Generated
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={migrationFilter === "applied"}
+                onCheckedChange={() => handleMigrationFilterChange("applied")}
+              >
+                Applied
+              </DropdownMenuCheckboxItem>
+            </>
+          )
+        }
+        columnsControl={
+          showLoadingSkeleton
+            ? undefined
+            : {
+                columns: toggleableColumns,
+                isColumnVisible: name => !hiddenColumns.has(name),
+                onToggleColumn: toggleColumn,
+              }
+        }
+        toolbarActions={
+          showLoadingSkeleton ? (
+            <>
+              <Skeleton className="h-9 w-20" />
+              <Skeleton className="h-9 w-24" />
+            </>
+          ) : undefined
+        }
         bulkBar={
           selectedCount > 0 ? (
             <BulkActionBar

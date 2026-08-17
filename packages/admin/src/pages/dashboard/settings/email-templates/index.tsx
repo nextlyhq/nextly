@@ -1,9 +1,6 @@
 "use client";
 
 import {
-  Alert,
-  AlertDescription,
-  AlertTitle,
   Badge,
   Button,
   Dialog,
@@ -19,7 +16,6 @@ import { useState, useCallback, useEffect, useMemo } from "react";
 
 import { SettingsLayout } from "@admin/components/features/settings";
 import {
-  AlertTriangle,
   Copy,
   Edit,
   Eye,
@@ -30,7 +26,6 @@ import {
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
-import { SearchBar } from "@admin/components/shared/search-bar";
 import { toast } from "@admin/components/ui";
 import type {
   NextlyColumn,
@@ -442,28 +437,6 @@ function EmailTemplateTable() {
     [handleEdit, handlePreview, handleDuplicate, handleDelete]
   );
 
-  if (isError) {
-    return (
-      <div className="space-y-4">
-        <SearchBar
-          value={search}
-          onChange={setSearch}
-          placeholder="Search templates by name, slug, or subject..."
-          isLoading={false}
-          className="w-full max-w-md"
-        />
-        <Alert variant="destructive">
-          <AlertTriangle className="h-4 w-4" />
-          <AlertTitle>Error</AlertTitle>
-          <AlertDescription>
-            {error?.message ||
-              "Failed to load email templates. Please try again."}
-          </AlertDescription>
-        </Alert>
-      </div>
-    );
-  }
-
   return (
     <>
       <ListView<EmailTemplateRecord>
@@ -473,6 +446,14 @@ function EmailTemplateTable() {
           placeholder: "Search templates by name, slug, or subject...",
           isLoading,
         }}
+        // Loading and failure are TABLE states, so the toolbar stays mounted and
+        // the reader keeps the search field they just typed in.
+        error={
+          isError
+            ? (error?.message ??
+              "Failed to load email templates. Please try again.")
+            : null
+        }
         columnsControl={{
           columns: toggleableColumns,
           isColumnVisible: name => !hiddenColumns.has(name),
