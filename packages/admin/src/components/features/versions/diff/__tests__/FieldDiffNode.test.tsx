@@ -206,6 +206,46 @@ describe("FieldDiffNode", () => {
     expect(screen.getByText("Added")).toBeInTheDocument();
   });
 
+  it("says an added TEXT field was not present, rather than painting a blank", () => {
+    const node: FieldDiff = {
+      kind: "text",
+      name: "body",
+      label: "Body",
+      type: "textarea",
+      status: "added",
+      segments: [{ op: 1, text: "written from scratch" }],
+    };
+    render(<FieldDiffNode node={node} />);
+
+    // Splitting leaves the older side with no runs at all, and an empty
+    // paragraph reads as a field that existed and held nothing.
+    expect(
+      within(column("Before")).getByText("Not present")
+    ).toBeInTheDocument();
+    expect(
+      within(column("After")).getByText("written from scratch")
+    ).toBeInTheDocument();
+  });
+
+  it("says a removed TEXT field is not present on the newer side", () => {
+    const node: FieldDiff = {
+      kind: "text",
+      name: "body",
+      label: "Body",
+      type: "textarea",
+      status: "removed",
+      segments: [{ op: -1, text: "deleted wholesale" }],
+    };
+    render(<FieldDiffNode node={node} />);
+
+    expect(
+      within(column("Before")).getByText("deleted wholesale")
+    ).toBeInTheDocument();
+    expect(
+      within(column("After")).getByText("Not present")
+    ).toBeInTheDocument();
+  });
+
   it("says a removed field is not present on the newer side", () => {
     const node: FieldDiff = {
       kind: "value",
