@@ -1272,6 +1272,9 @@ importers:
       '@nextlyhq/admin':
         specifier: workspace:*
         version: link:../admin
+      '@nextlyhq/eslint-config':
+        specifier: workspace:*
+        version: link:../eslint-config
       '@nextlyhq/plugin-sdk':
         specifier: workspace:*
         version: link:../plugin-sdk
