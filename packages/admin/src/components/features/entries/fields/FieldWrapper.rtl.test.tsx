@@ -102,13 +102,29 @@ describe("FieldWrapper shared-across-languages affordance", () => {
   // on the old short text would make the two NEGATIVE assertions pass for the
   // wrong reason, since an exact query for "Shared" no longer matches the
   // element that is now rendered either.
-  it("marks a shared field in a multilingual collection", () => {
-    renderField(numberField, { collectionLocalized: true });
+  it("marks a shared field while editing a non-default language", () => {
+    renderField(numberField, {
+      collectionLocalized: true,
+      isNonDefaultLocale: true,
+    });
     expect(screen.getByText("Shared across languages")).toBeInTheDocument();
   });
 
+  it("stays quiet on the DEFAULT language, where every field behaves normally", () => {
+    // The consequence the badge warns about — edits reaching other languages —
+    // only exists once another language is the one being edited, so the badge
+    // on the ordinary editing path was noise.
+    renderField(numberField, { collectionLocalized: true });
+    expect(
+      screen.queryByText("Shared across languages")
+    ).not.toBeInTheDocument();
+  });
+
   it("does NOT mark a translatable field", () => {
-    renderField(textField, { collectionLocalized: true });
+    renderField(textField, {
+      collectionLocalized: true,
+      isNonDefaultLocale: true,
+    });
     expect(
       screen.queryByText("Shared across languages")
     ).not.toBeInTheDocument();

@@ -320,10 +320,20 @@ export default function EditEntryPage({
             No entry ID was specified in the URL.
           </AlertDescription>
         </Alert>
-        <div className="mt-6">
+        <div className="mt-6 flex items-center gap-2">
           <Link href={buildRoute(ROUTES.COLLECTION_ENTRIES, { slug })}>
             <Button variant="outline">← Back to {slug}</Button>
           </Link>
+          {/* A failed load while a non-default language is active is usually a
+              failure of THAT fetch, and the default language is still likely to
+              load — so offer the way back to it instead of stranding the
+              editor with only an exit. Resetting the locale re-keys the query,
+              which is the retry. */}
+          {locale !== undefined && (
+            <Button variant="outline" onClick={() => setLocale(undefined)}>
+              Back to the default language
+            </Button>
+          )}
         </div>
       </PageContainer>
     );

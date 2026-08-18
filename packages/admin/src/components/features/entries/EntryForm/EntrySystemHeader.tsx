@@ -33,8 +33,9 @@ import { useLocalization } from "@admin/hooks/useLocalization";
 import { cn } from "@admin/lib/utils";
 
 import { useEntryLocale } from "../EntryLocaleContext";
-import { LanguageSwitcher } from "../LanguageSwitcher";
-import { TranslationStatus, translationCounts } from "../TranslationStatus";
+import { LanguageControl } from "../LanguageControl";
+import { LanguagesMenu } from "../LanguagesMenu";
+import { translationCounts } from "../TranslationStatus";
 
 import { AutoSaveIndicator } from "./AutoSaveIndicator";
 import { DiscardDraftConfirmDialog } from "./DiscardDraftConfirmDialog";
@@ -261,7 +262,13 @@ export function EntrySystemHeader({
   const entryLocale = useEntryLocale();
   // The default language is edited with `locale === undefined`, and its status
   // can live on the companion, so resolve it to read the right lifecycle.
-  const { defaultLocale, locales } = useLocalization();
+  const {
+    enabled: localizationEnabled,
+    defaultLocale,
+    locales,
+    getLocale,
+  } = useLocalization();
+  const defaultLocaleLabel = getLocale(defaultLocale)?.label ?? defaultLocale;
   // Present only when the entry was fetched with `?translation-status=1` on a
   // localized collection; undefined otherwise, which both consumers below
   // treat as "nothing to report" rather than as zero progress.
@@ -373,73 +380,55 @@ export function EntrySystemHeader({
       : ((entry?.slug as string | undefined) ?? null);
 
   return (
-    <div className="px-6 py-3 border-b border-border flex items-center gap-3 sticky top-0 z-30 bg-background">
-      {/* Title input — borderless, 19px, autofocus on create */}
-      <div className="flex-1 min-w-0">
-        <input
-          {...rhfRegister}
-          ref={el => {
-            rhfRef(el);
-            inputRef.current = el;
-          }}
-          type="text"
-          placeholder="Untitled"
-          aria-label={titleLabel}
-          disabled={isSubmitting}
-          // The title is part of the document, so reading a past version locks
-          // it with everything else. Left editable it would mutate the LIVE
-          // document while the banner says the page cannot be edited — and go
-          // to autosave as unsaved work nobody typed on purpose.
-          readOnly={lockIdentity || isReadingHistory}
-          // RTL for a translatable title edited in an RTL language.
-          {...(titleRtl ? { dir: "rtl" as const } : {})}
-          className={cn(
-            "w-full text-xl font-semibold tracking-tight text-foreground",
-            "bg-transparent outline-none placeholder:text-muted-foreground",
-            isSubmitting && "opacity-60 cursor-not-allowed",
-            lockIdentity && "cursor-default text-foreground/80"
-          )}
-        />
-      </div>
+    <div className="sticky top-0 z-30 bg-background border-b border-border">
+      <div className="px-6 py-3 flex items-center gap-3">
+        {/* Title input — borderless, 19px, autofocus on create */}
+        <div className="flex-1 min-w-0">
+          <input
+            {...rhfRegister}
+            ref={el => {
+              rhfRef(el);
+              inputRef.current = el;
+            }}
+            type="text"
+            placeholder="Untitled"
+            aria-label={titleLabel}
+            disabled={isSubmitting}
+            // The title is part of the document, so reading a past version locks
+            // it with everything else. Left editable it would mutate the LIVE
+            // document while the banner says the page cannot be edited — and go
+            // to autosave as unsaved work nobody typed on purpose.
+            readOnly={lockIdentity || isReadingHistory}
+            // RTL for a translatable title edited in an RTL language.
+            {...(titleRtl ? { dir: "rtl" as const } : {})}
+            className={cn(
+              "w-full text-xl font-semibold tracking-tight text-foreground",
+              "bg-transparent outline-none placeholder:text-muted-foreground",
+              isSubmitting && "opacity-60 cursor-not-allowed",
+              lockIdentity && "cursor-default text-foreground/80"
+            )}
+          />
+        </div>
 
-      {/* Action cluster — right-aligned */}
-      <div className="flex items-center gap-1.5 shrink-0">
-        {toolbarSlot}
-        {/* A document only has history once it has been saved, and rendering a
+        {/* Action cluster — right-aligned */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          {toolbarSlot}
+          {/* A document only has history once it has been saved, and rendering a
             snapshot needs the schema, so both are required to offer this. */}
-        {showEditMenuItems && historyFields && historyEnabled !== false ? (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="px-2"
-            aria-label="Version history"
-            title="Version history"
-            onClick={() => setHistoryOpen(true)}
-          >
-            <History className="h-4 w-4" />
-          </Button>
-        ) : null}
-        {/* i18n M7: content-language switcher. Renders only when a change handler is wired AND
-            localization is configured (the component self-hides otherwise). */}
-        {onLocaleChange && (
-          <LanguageSwitcher value={locale} onChange={onLocaleChange} />
-        )}
-        {/* Beside the switcher rather than in the document rail: the switcher
-            answers "which language am I editing" and this answers "what state
-            is every other language in", which is the same question continued.
-            Splitting them across two panels made the reader assemble one fact
-            from two places. Self-hides when localization is off. */}
-        <TranslationStatus
-          {...(entryTranslations === undefined
-            ? {}
-            : { translations: entryTranslations })}
-          {...(locale === undefined ? {} : { activeLocale: locale })}
-          {...(onLocaleChange === undefined
-            ? {}
-            : { onSelect: onLocaleChange })}
-        />
-        {/* Directly left of the submit cluster, which is where an author looks
+          {showEditMenuItems && historyFields && historyEnabled !== false ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="px-2"
+              aria-label="Version history"
+              title="Version history"
+              onClick={() => setHistoryOpen(true)}
+            >
+              <History className="h-4 w-4" />
+            </Button>
+          ) : null}
+          {/* Directly left of the submit cluster, which is where an author looks
             for it: checking how something reads is part of deciding to publish
             it, not a document-management action like Duplicate or Delete. The
             `sm` size is the band's, so it lines up with Save beside it rather
@@ -449,17 +438,17 @@ export function EntrySystemHeader({
             minting a link and opening a preview both act on what is already
             saved, so a submit in flight is a race with them and not merely a
             busy form. */}
-        <PreviewActions
-          size="sm"
-          isPreviewAvailable={isPreviewAvailable}
-          {...(onPreview === undefined ? {} : { onPreview })}
-          {...(previewLabel === undefined ? {} : { previewLabel })}
-          isLinkAvailable={isLinkAvailable}
-          {...(onCopyLink === undefined ? {} : { onCopyLink })}
-          isCopyingLink={isCopyingLink}
-          disabled={isSubmitting}
-        />
-        {/* Sits with the actions rather than beside the title: it reports on
+          <PreviewActions
+            size="sm"
+            isPreviewAvailable={isPreviewAvailable}
+            {...(onPreview === undefined ? {} : { onPreview })}
+            {...(previewLabel === undefined ? {} : { previewLabel })}
+            isLinkAvailable={isLinkAvailable}
+            {...(onCopyLink === undefined ? {} : { onCopyLink })}
+            isCopyingLink={isCopyingLink}
+            disabled={isSubmitting}
+          />
+          {/* Sits with the actions rather than beside the title: it reports on
             the same work the save buttons act on, and reads as status for that
             cluster.
 
@@ -470,251 +459,304 @@ export function EntrySystemHeader({
             edit to a saved entry the status is still idle and no recovery point
             exists yet, which is exactly when the reader most wants to be told
             their change is not stored. */}
-        {autosaveEnabled ? (
-          <AutoSaveIndicator
-            lastSavedAt={autosaveLastSavedAt}
-            isSaving={autosaveStatus === "saving"}
-            isDirty={isDirty}
-          />
-        ) : null}
-        {/* The spoken half of the same information. `AutoSaveIndicator` reports
+          {autosaveEnabled ? (
+            <AutoSaveIndicator
+              lastSavedAt={autosaveLastSavedAt}
+              isSaving={autosaveStatus === "saving"}
+              isDirty={isDirty}
+            />
+          ) : null}
+          {/* The spoken half of the same information. `AutoSaveIndicator` reports
             visually only — it carries no live region — so an author using a
             screen reader was never told whether their work had been stored.
             This is rendered unconditionally rather than beside the indicator's
             own condition, because a live region has to be PRESENT BEFORE the
             text it will announce changes: mounting a region and populating it
             in the same commit is not reliably announced. */}
-        <DocumentStatusLive
-          autosaveEnabled={autosaveEnabled}
-          isSaving={autosaveStatus === "saving"}
-          isDirty={isDirty}
-          lastSavedAt={autosaveLastSavedAt}
-          {...(entryTranslations === undefined
-            ? {}
-            : {
-                translatedCount: counts.translated,
-                localeCount: counts.total,
-              })}
-        />
-        {/* No save affordances while a past version is on screen. They act on
+          <DocumentStatusLive
+            autosaveEnabled={autosaveEnabled}
+            isSaving={autosaveStatus === "saving"}
+            isDirty={isDirty}
+            lastSavedAt={autosaveLastSavedAt}
+            {...(entryTranslations === undefined
+              ? {}
+              : {
+                  translatedCount: counts.translated,
+                  localeCount: counts.total,
+                })}
+          />
+          {/* No save affordances while a past version is on screen. They act on
             the live document, which is not what is being read — an editor
             offered "Save" over a historical page has been invited to make a
             decision about something they cannot see. Restoring is offered
             instead, from the banner over the version itself. */}
-        {isReadingHistory ? null : hasStatus && isPublishedEdit ? (
-          <>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={isSubmitting || isInvalid || !isDirty}
-              // On a drafts-enabled collection a save on a published entry
-              // stores a working draft (live untouched); otherwise it re-asserts
-              // published, keeping the lifecycle unchanged.
-              onClick={draftsEnabled ? onSaveWorkingDraft : onSaveChanges}
-              data-status={
-                draftsEnabled ? "save-working-draft" : "save-changes"
-              }
-            >
-              {isSubmitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-              {draftsEnabled ? "Save" : "Save changes"}
-            </Button>
-            {/* Promote the pending working draft to live. Shown only when one
-                exists — a fully-published entry has nothing to promote. */}
-            {hasWorkingDraft && canPublishDocument && (
+          {isReadingHistory ? null : hasStatus && isPublishedEdit ? (
+            <>
               <Button
                 type="button"
+                variant="outline"
+                size="sm"
+                disabled={isSubmitting || isInvalid || !isDirty}
+                // On a drafts-enabled collection a save on a published entry
+                // stores a working draft (live untouched); otherwise it re-asserts
+                // published, keeping the lifecycle unchanged.
+                onClick={draftsEnabled ? onSaveWorkingDraft : onSaveChanges}
+                data-status={
+                  draftsEnabled ? "save-working-draft" : "save-changes"
+                }
+              >
+                {isSubmitting && (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                )}
+                {draftsEnabled ? "Save" : "Save changes"}
+              </Button>
+              {/* Promote the pending working draft to live. Shown only when one
+                exists — a fully-published entry has nothing to promote. */}
+              {hasWorkingDraft && canPublishDocument && (
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={isSubmitting || isInvalid}
+                  onClick={onPublish}
+                  data-status="published"
+                >
+                  {isSubmitting ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Globe className="h-3.5 w-3.5" />
+                  )}
+                  Publish
+                </Button>
+              )}
+              {canUnpublishDocument && (
+                <Button
+                  type="button"
+                  // Keep Publish the sole primary action when a draft is pending;
+                  // otherwise Unpublish stays the primary (published-only) action.
+                  variant={hasWorkingDraft ? "outline" : "default"}
+                  size="sm"
+                  disabled={isSubmitting}
+                  onClick={() => setUnpublishOpen(true)}
+                  data-status="unpublish"
+                >
+                  <EyeOff className="h-3.5 w-3.5" />
+                  Unpublish
+                </Button>
+              )}
+            </>
+          ) : hasStatus ? (
+            <>
+              <Button
+                type="button"
+                variant="outline"
                 size="sm"
                 disabled={isSubmitting || isInvalid}
-                onClick={onPublish}
-                data-status="published"
+                onClick={onSaveDraft}
+                data-status="draft"
               >
-                {isSubmitting ? (
+                {isSubmitting && (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Globe className="h-3.5 w-3.5" />
                 )}
-                Publish
+                Save Draft
               </Button>
-            )}
-            {canUnpublishDocument && (
-              <Button
-                type="button"
-                // Keep Publish the sole primary action when a draft is pending;
-                // otherwise Unpublish stays the primary (published-only) action.
-                variant={hasWorkingDraft ? "outline" : "default"}
-                size="sm"
-                disabled={isSubmitting}
-                onClick={() => setUnpublishOpen(true)}
-                data-status="unpublish"
-              >
-                <EyeOff className="h-3.5 w-3.5" />
-                Unpublish
-              </Button>
-            )}
-          </>
-        ) : hasStatus ? (
-          <>
+              {canPublishDocument && (
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={isSubmitting || isInvalid}
+                  onClick={onPublish}
+                  data-status="published"
+                >
+                  {isSubmitting ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Globe className="h-3.5 w-3.5" />
+                  )}
+                  Publish
+                </Button>
+              )}
+            </>
+          ) : (
             <Button
-              type="button"
-              variant="outline"
+              type="submit"
+              form={formId}
               size="sm"
               disabled={isSubmitting || isInvalid}
-              onClick={onSaveDraft}
-              data-status="draft"
             >
-              {isSubmitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-              Save Draft
-            </Button>
-            {canPublishDocument && (
-              <Button
-                type="button"
-                size="sm"
-                disabled={isSubmitting || isInvalid}
-                onClick={onPublish}
-                data-status="published"
-              >
-                {isSubmitting ? (
+              {isSubmitting ? (
+                <>
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Globe className="h-3.5 w-3.5" />
-                )}
-                Publish
-              </Button>
-            )}
-          </>
-        ) : (
-          <Button
-            type="submit"
-            form={formId}
-            size="sm"
-            disabled={isSubmitting || isInvalid}
-          >
-            {isSubmitting ? (
-              <>
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                Saving…
-              </>
-            ) : mode === "create" ? (
-              "Create"
-            ) : (
-              "Save"
-            )}
-          </Button>
-        )}
+                  Saving…
+                </>
+              ) : mode === "create" ? (
+                "Create"
+              ) : (
+                "Save"
+              )}
+            </Button>
+          )}
 
-        {/* Single consolidated More menu — hidden entirely in create mode.
+          {/* Single consolidated More menu — hidden entirely in create mode.
             Why: in create mode the entry doesn't exist server-side yet, so
             Duplicate / Show JSON / View API / Delete have nothing to act on,
             and Discard changes is redundant with navigating away. Once the
             entry is persisted (mode === "edit"), the full action set
             appears. Resolves item 11 of 07-admin-bugs-feedback (PR-8). */}
-        {showEditMenuItems && (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
+          {showEditMenuItems && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="px-2"
+                  aria-label="More actions"
+                >
+                  <MoreHorizontal className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {showDiscardDraft && (
+                  <DropdownMenuItem
+                    onClick={() => setDiscardDraftOpen(true)}
+                    disabled={isSubmitting}
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" />
+                    Discard draft
+                  </DropdownMenuItem>
+                )}
+                {isDirty && onCancel && (
+                  <DropdownMenuItem onClick={onCancel} disabled={isSubmitting}>
+                    <RotateCcw className="h-3.5 w-3.5" />
+                    Discard changes
+                  </DropdownMenuItem>
+                )}
+                {onDuplicate && (
+                  <>
+                    {(showDiscardDraft || (isDirty && onCancel)) && (
+                      <DropdownMenuSeparator />
+                    )}
+                    <DropdownMenuItem
+                      onClick={onDuplicate}
+                      disabled={isSubmitting}
+                    >
+                      <Copy className="h-3.5 w-3.5" />
+                      Duplicate
+                    </DropdownMenuItem>
+                  </>
+                )}
+                {showJson && (
+                  <ShowJSONDialog
+                    scope={scope}
+                    collectionSlug={collectionSlug}
+                    /* Why: collection scope needs the entry id to build
+                     /api/collections/{slug}/entries/{id}; single scope is
+                     keyed only by slug so entryId is unused. The outer
+                     showEditMenuItems gate guarantees entry?.id exists
+                     for the collection branch. */
+                    entryId={scope === "single" ? undefined : entry.id}
+                    trigger={
+                      <DropdownMenuItem onSelect={e => e.preventDefault()}>
+                        <Code className="h-3.5 w-3.5" />
+                        Show JSON
+                      </DropdownMenuItem>
+                    }
+                  />
+                )}
+                {onViewApi && (
+                  <DropdownMenuItem onClick={onViewApi}>
+                    <Code className="h-3.5 w-3.5" />
+                    View API response
+                  </DropdownMenuItem>
+                )}
+                {onDelete && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onClick={onDelete}
+                      disabled={isSubmitting}
+                      className="text-destructive focus:text-destructive"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      Delete
+                    </DropdownMenuItem>
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+
+          {/* Rail toggle — far right, separated by a thin divider */}
+          {onToggleRail && (
+            <>
+              <span className="w-px h-5 bg-border mx-1" />
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
                 className="px-2"
-                aria-label="More actions"
+                onClick={onToggleRail}
+                aria-label={isRailCollapsed ? "Show rail" : "Hide rail"}
+                aria-pressed={isRailCollapsed}
               >
-                <MoreHorizontal className="h-4 w-4" />
+                {isRailCollapsed ? (
+                  <PanelRightClose className="h-4 w-4" />
+                ) : (
+                  <PanelRight className="h-4 w-4" />
+                )}
               </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              {showDiscardDraft && (
-                <DropdownMenuItem
-                  onClick={() => setDiscardDraftOpen(true)}
-                  disabled={isSubmitting}
-                >
-                  <RotateCcw className="h-3.5 w-3.5" />
-                  Discard draft
-                </DropdownMenuItem>
-              )}
-              {isDirty && onCancel && (
-                <DropdownMenuItem onClick={onCancel} disabled={isSubmitting}>
-                  <RotateCcw className="h-3.5 w-3.5" />
-                  Discard changes
-                </DropdownMenuItem>
-              )}
-              {onDuplicate && (
-                <>
-                  {(showDiscardDraft || (isDirty && onCancel)) && (
-                    <DropdownMenuSeparator />
-                  )}
-                  <DropdownMenuItem
-                    onClick={onDuplicate}
-                    disabled={isSubmitting}
-                  >
-                    <Copy className="h-3.5 w-3.5" />
-                    Duplicate
-                  </DropdownMenuItem>
-                </>
-              )}
-              {showJson && (
-                <ShowJSONDialog
-                  scope={scope}
-                  collectionSlug={collectionSlug}
-                  /* Why: collection scope needs the entry id to build
-                     /api/collections/{slug}/entries/{id}; single scope is
-                     keyed only by slug so entryId is unused. The outer
-                     showEditMenuItems gate guarantees entry?.id exists
-                     for the collection branch. */
-                  entryId={scope === "single" ? undefined : entry.id}
-                  trigger={
-                    <DropdownMenuItem onSelect={e => e.preventDefault()}>
-                      <Code className="h-3.5 w-3.5" />
-                      Show JSON
-                    </DropdownMenuItem>
-                  }
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* The language row. Its own row rather than the action cluster: sharing
+          one flex row starved the title input to zero width in a localized
+          collection, since the cluster is shrink-0 and the strip is the widest
+          thing in it. Rendered only when localization applies, so
+          non-localized editors keep a single-row header.
+
+          While a past version is on screen, switching language or running a
+          language action would act on the live document under a banner saying
+          the page cannot be edited — so both are withheld, and only there. */}
+      {localizationEnabled && (mode === "create" || onLocaleChange) && (
+        <div className="px-6 py-2 border-t border-border flex items-center gap-3 flex-wrap">
+          {mode === "create" ? (
+            <span className="text-xs text-muted-foreground inline-flex items-center gap-1.5">
+              <Globe className="h-3.5 w-3.5" aria-hidden="true" />
+              Creating in {defaultLocaleLabel} — other languages can be added
+              after the first save
+            </span>
+          ) : (
+            <>
+              {onLocaleChange && (
+                <LanguageControl
+                  {...(entryTranslations === undefined
+                    ? {}
+                    : { translations: entryTranslations })}
+                  {...(locale === undefined ? {} : { activeLocale: locale })}
+                  onSelect={onLocaleChange}
+                  disabled={isReadingHistory}
                 />
               )}
-              {onViewApi && (
-                <DropdownMenuItem onClick={onViewApi}>
-                  <Code className="h-3.5 w-3.5" />
-                  View API response
-                </DropdownMenuItem>
+              {counts.total > 0 && counts.translated < counts.total && (
+                <span className="text-xs text-muted-foreground whitespace-nowrap tabular-nums">
+                  {counts.total - counts.translated}{" "}
+                  {counts.total - counts.translated === 1
+                    ? "language"
+                    : "languages"}{" "}
+                  untranslated
+                </span>
               )}
-              {onDelete && (
-                <>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    onClick={onDelete}
-                    disabled={isSubmitting}
-                    className="text-destructive focus:text-destructive"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                    Delete
-                  </DropdownMenuItem>
-                </>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
-
-        {/* Rail toggle — far right, separated by a thin divider */}
-        {onToggleRail && (
-          <>
-            <span className="w-px h-5 bg-border mx-1" />
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="px-2"
-              onClick={onToggleRail}
-              aria-label={isRailCollapsed ? "Show rail" : "Hide rail"}
-              aria-pressed={isRailCollapsed}
-            >
-              {isRailCollapsed ? (
-                <PanelRightClose className="h-4 w-4" />
-              ) : (
-                <PanelRight className="h-4 w-4" />
-              )}
-            </Button>
-          </>
-        )}
-      </div>
+            </>
+          )}
+          <span className="flex-1" />
+          <LanguagesMenu
+            hasStatus={hasStatus}
+            actionsDisabled={isReadingHistory || mode === "create"}
+          />
+        </div>
+      )}
 
       {/* Why: render the confirm modal at the component root so it's
           mounted regardless of which button matrix branch fired. The
