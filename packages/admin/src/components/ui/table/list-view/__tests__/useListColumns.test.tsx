@@ -27,6 +27,32 @@ describe("useListColumns", () => {
     }
   });
 
+  /**
+   * A column the control was never given is not a column the control hides.
+   *
+   * Every list surface keeps its primary identifying column out of the
+   * toggleable set — a reader must not be able to hide the one cell that says
+   * which row this is — and then asks this control about EVERY column when it
+   * computes `hidden`. Answering "not visible" for a column outside its remit
+   * hides the row's name on every one of those lists, which is what took the
+   * admin-smoke roles assertion down.
+   */
+  it("reports a column it does not manage as visible", () => {
+    const { result } = renderHook(() =>
+      useListColumns({ storageKey: "widgets", columns: COLUMNS })
+    );
+    expect(result.current.isColumnVisible("roleName")).toBe(true);
+  });
+
+  it("keeps reporting an unmanaged column visible after a toggle", () => {
+    const { result } = renderHook(() =>
+      useListColumns({ storageKey: "widgets", columns: COLUMNS })
+    );
+    act(() => result.current.onToggleColumn("email"));
+    expect(result.current.isColumnVisible("email")).toBe(false);
+    expect(result.current.isColumnVisible("roleName")).toBe(true);
+  });
+
   it("hides a column when it is toggled", () => {
     const { result } = renderHook(() =>
       useListColumns({ storageKey: "widgets", columns: COLUMNS })
