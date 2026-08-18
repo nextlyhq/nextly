@@ -29,6 +29,7 @@ import { VersionSnapshotForm } from "@admin/components/features/versions/Version
 import { Alert, AlertDescription, Skeleton } from "@admin/components/ui";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useGeneralSettings } from "@admin/hooks/queries/useGeneralSettings";
+import { usePublishAllLocales } from "@admin/hooks/queries/usePublishAllLocales";
 import { useAutosaveRecovery } from "@admin/hooks/useAutosaveRecovery";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
 import {
@@ -258,6 +259,14 @@ export function EntryForm({
     defaultLocale,
     enabled: localizationEnabled,
   } = useLocalization();
+  // The entry's own publish-every-language mutation, handed to the shared
+  // availability rule through the locale context. Called unconditionally with
+  // the resolved slug; the seam below is what decides whether the action is
+  // offered, so a create form supplies none and nothing renders.
+  const publishAllEntryLocales = usePublishAllLocales({
+    collectionSlug: collection.slug ?? collection.name,
+  });
+
   const localeCtx = useMemo(() => {
     const collectionLocalized = collection.localized === true;
     const collectionSlug = collection.slug ?? collection.name;
@@ -287,6 +296,16 @@ export function EntryForm({
       // and singles alike — a single has no collection slug or entry id and
       // could otherwise never offer the action at all.
       fetchSourceValues: collectionSourceFetcher(collectionSlug, entryId),
+      // Publish-every-language rides the same kind of seam, and its ABSENCE is
+      // what keeps the action off a create form: there is no saved entry to
+      // publish until one exists.
+      publishAllLanguages: entryId
+        ? {
+            slug: collectionSlug,
+            publish: () => publishAllEntryLocales.mutate(entryId),
+            pending: publishAllEntryLocales.isPending,
+          }
+        : undefined,
     };
   }, [
     locale,
@@ -298,6 +317,7 @@ export function EntryForm({
     seedFromLocale,
     onSeedHandled,
     entry?.id,
+    publishAllEntryLocales,
   ]);
 
   // Get all fields. Title and slug are extracted as system fields rendered in
