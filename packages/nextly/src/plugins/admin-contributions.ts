@@ -72,6 +72,27 @@ export interface PluginHeaderContributions {
  * `requiredPermission` (client-gated via `useCan`); a `visible(ctx)` callback is
  * intentionally NOT supported because menus are serialized to the client.
  */
+/**
+ * @experimental Where a plugin's admin surfaces appear in the sidebar.
+ *
+ * A closed vocabulary rather than a free string, so a typo is a compile error
+ * instead of a page that quietly appears nowhere. `"standalone"` gives the
+ * plugin its own top-level entry, drawn with the icon it declares in
+ * `contributes.admin.appearance`.
+ *
+ * Omitting it is the common case and is not the same as choosing a default:
+ * an absent value defers to the plugin's own `placement`, so a plugin that has
+ * already said where it lives does not repeat itself per page.
+ */
+export type PluginNavSection =
+  | "dashboard"
+  | "collections"
+  | "singles"
+  | "media"
+  | "plugins"
+  | "settings"
+  | "standalone";
+
 export interface PluginMenuItem {
   /** Display label. */
   label: string;
@@ -83,6 +104,11 @@ export interface PluginMenuItem {
   order?: number;
   /** Hide the item unless the current user holds this permission (client-gated, D36). */
   requiredPermission?: PermissionSlug;
+  /**
+   * @experimental Which sidebar section lists this item. Defers to the
+   * plugin's own `placement` when omitted.
+   */
+  section?: PluginNavSection;
   /** One nested level of sub-items. */
   children?: PluginMenuItem[];
 }
@@ -98,6 +124,15 @@ export interface PluginAdminPage {
   component: ComponentPath;
   /** Required permission to view the page (route-level RBAC, D36). */
   requiredPermission?: PermissionSlug;
+  /**
+   * @experimental Which sidebar section is selected while this page is open.
+   * Defers to the plugin's own `placement` when omitted.
+   *
+   * The page's URL is namespaced under the plugin, so without this the rail
+   * could only ever say "Plugins" — a plugin that lives under Settings would
+   * have its collections there and its pages elsewhere.
+   */
+  section?: PluginNavSection;
 }
 
 /**

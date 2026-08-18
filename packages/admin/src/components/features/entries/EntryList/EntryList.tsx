@@ -17,6 +17,7 @@ import { useState, useCallback, useMemo, useRef } from "react";
 import { Code, Plus } from "@admin/components/icons";
 import { Breadcrumbs } from "@admin/components/shared";
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
+import { useListColumns } from "@admin/components/ui/table/list-view";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import {
   useEntries,
@@ -24,7 +25,6 @@ import {
   useBulkUpdateEntries,
 } from "@admin/hooks/queries";
 import { useCollection } from "@admin/hooks/queries/useCollections";
-import { useColumnVisibility } from "@admin/hooks/useColumnVisibility";
 import { useEntryListShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { usePluginAutoRegistration } from "@admin/hooks/usePluginAutoRegistration";
@@ -370,14 +370,15 @@ export function EntryList({ collectionSlug }: EntryListProps) {
     [collectionForColumns]
   );
 
-  // Use column visibility hook with localStorage persistence
-  const {
-    columnVisibility,
-    onColumnVisibilityChange,
-    resetToDefault: resetColumnVisibility,
-  } = useColumnVisibility({
-    collectionSlug,
-    availableColumns,
+  /*
+   * The same control every other admin list uses, so "which columns has this
+   * reader hidden" has one answer and one place it is stored. This surface read
+   * the underlying hook directly, which left the entry list with its own
+   * spelling of a question the shared one already answers.
+   */
+  const columnsControl = useListColumns<Record<string, unknown>>({
+    storageKey: collectionSlug,
+    columns: availableColumns.map(name => ({ name, header: name })),
     defaultVisible: defaultVisibleColumns,
   });
 
@@ -691,9 +692,7 @@ export function EntryList({ collectionSlug }: EntryListProps) {
           onCreatedToChange={handleCreatedToChange}
           onUpdatedFromChange={handleUpdatedFromChange}
           onUpdatedToChange={handleUpdatedToChange}
-          columnVisibility={columnVisibility}
-          onColumnVisibilityChange={onColumnVisibilityChange}
-          onResetColumnVisibility={resetColumnVisibility}
+          columnsControl={columnsControl}
         />
       )}
 

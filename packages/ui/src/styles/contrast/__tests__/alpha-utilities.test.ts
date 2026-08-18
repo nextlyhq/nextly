@@ -35,7 +35,6 @@ const scale = parseThemeScale(css);
  * border. Each is a deliberate 1.4.11-style exception, not readable content.
  */
 const ALLOWED_DECORATIVE = new Set<string>([
-  "text-primary/30", // aria-hidden empty-state illustration icons
   "text-primary/20", // hover-reveal ghost buttons and sparkline decoration
   "text-primary/40", // loading spinner; meaning carried by motion + adjacent text
   "text-muted/10", // chart ring-track backing

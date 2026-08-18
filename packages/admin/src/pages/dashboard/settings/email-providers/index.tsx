@@ -12,12 +12,6 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DropdownMenu,
-  DropdownMenuCheckboxItem,
-  DropdownMenuContent,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
   Input,
   Select,
   SelectContent,
@@ -28,13 +22,11 @@ import {
 } from "@nextlyhq/ui";
 import React, { useState, useCallback, useMemo } from "react";
 
-import { SettingsTableToolbar } from "@admin/components/features/settings";
 import { emailCatalogState } from "@admin/components/features/settings/EmailProviderForm";
 import { clearSelectionValue } from "@admin/components/features/settings/EmailProviderForm/ProviderConfigFields";
 import { SettingsLayout } from "@admin/components/features/settings/SettingsLayout";
 import {
   AlertTriangle,
-  Columns,
   Edit,
   Loader2,
   Plus,
@@ -45,14 +37,13 @@ import {
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
-import { SearchBar } from "@admin/components/shared/search-bar";
 import { toast } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
-import { DataTableView } from "@admin/components/ui/table/data-table";
 import type {
   NextlyColumn,
   RowAction,
 } from "@admin/components/ui/table/data-table";
+import { ListView, useListColumns } from "@admin/components/ui/table/list-view";
 import { PAGINATION } from "@admin/constants/pagination";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import {
@@ -318,16 +309,6 @@ function EmailProviderTable() {
   // clearing the filter. The sentinel below exists only for the Select, which
   // cannot hold an empty value, and never reaches the request.
   const [type, setType] = useState<string | undefined>(undefined);
-  const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
-
-  const toggleColumn = useCallback((key: string) => {
-    setHiddenColumns(prev => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  }, []);
 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [providerToDelete, setProviderToDelete] = useState<{
@@ -591,15 +572,24 @@ function EmailProviderTable() {
     [descriptorsByType]
   );
 
-  const columns = useMemo(
-    () =>
-      allColumns.map(col => ({ ...col, hidden: hiddenColumns.has(col.name) })),
-    [allColumns, hiddenColumns]
-  );
-
   const toggleableColumns = useMemo(
     () => allColumns.filter(col => !ALWAYS_VISIBLE.has(col.name)),
     [allColumns]
+  );
+
+  /* The reader's column choice outlives the tab it was made in. */
+  const columnsControl = useListColumns({
+    storageKey: "email-providers",
+    columns: toggleableColumns,
+  });
+
+  const columns = useMemo(
+    () =>
+      allColumns.map(col => ({
+        ...col,
+        hidden: !columnsControl.isColumnVisible(col.name),
+      })),
+    [allColumns, columnsControl]
   );
 
   const rowActions = useCallback(
@@ -660,196 +650,154 @@ function EmailProviderTable() {
     ]
   );
 
-  if (isError) {
-    return (
-      <div className="space-y-4">
-        <SearchBar
-          value={search}
-          onChange={setSearch}
-          placeholder="Search providers by name..."
-          isLoading={false}
-          className="w-full max-w-md"
-        />
-        <Alert variant="destructive">
-          <AlertTriangle className="h-4 w-4" />
-          <AlertTitle>Error</AlertTitle>
-          <AlertDescription>
-            {error instanceof Error
-              ? error.message
-              : "Failed to load email providers. Please try again."}
-          </AlertDescription>
-        </Alert>
-      </div>
-    );
-  }
-
   const totalItems = data?.meta.total ?? 0;
 
   return (
-    <div className="space-y-4">
-      {/* The catalog is what names each type and what the type filter is built
-          from, so its absence is visible all over this page while its cause is
-          not. Shown beside the table rather than in place of it: the providers
-          themselves loaded, and deleting an unwanted one still works. */}
-      {catalog === "unavailable" && (
-        <Alert variant="destructive">
-          <AlertTriangle className="h-4 w-4" />
-          <AlertTitle>Provider catalog unavailable</AlertTitle>
-          <AlertDescription className="flex flex-wrap items-center gap-3">
-            <span>
-              Provider types could not be loaded, so this page cannot tell which
-              of these are still installed. Each row falls back to its stored
-              type, and the type filter has nothing to offer.
-            </span>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                void refetchCatalog();
-              }}
-              disabled={isCatalogFetching}
-            >
-              {isCatalogFetching ? "Retrying..." : "Retry"}
-            </Button>
-          </AlertDescription>
-        </Alert>
-      )}
-      {/* A refresh that did not land, over descriptors already in hand. The
-          sentence above would be untrue here in every particular: the rows are
-          named from the cache, the filter is built from it, and nothing has
-          been withheld. Said without the destructive styling, because the page
-          is working and this is the one thing that is not. */}
-      {catalog === "stale" && (
-        <Alert>
-          <AlertDescription className="flex flex-wrap items-center gap-3">
-            <span>
-              Provider types could not be refreshed, so this page is using the
-              list it loaded with. A type installed or removed since then may
-              not be reflected.
-            </span>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                void refetchCatalog();
-              }}
-              disabled={isCatalogFetching}
-            >
-              {isCatalogFetching ? "Retrying..." : "Retry"}
-            </Button>
-          </AlertDescription>
-        </Alert>
-      )}
-      <SettingsTableToolbar
-        search={
-          <SearchBar
-            value={search}
-            onChange={setSearch}
-            placeholder="Search providers by name..."
-            isLoading={isLoading}
-            className="w-full"
-          />
-        }
-        filters={
-          <Select
-            value={type ?? allTypesValue}
-            onValueChange={handleTypeChange}
-          >
-            <SelectTrigger className="w-[130px] bg-background text-foreground hover:bg-accent/10">
-              <SelectValue placeholder="All Types" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={allTypesValue}>All Types</SelectItem>
-              {/* One entry per registered provider, so the filter can reach a
-                  contributed provider that is genuinely in the table. */}
-              {descriptors.map(descriptor => (
-                <SelectItem key={descriptor.type} value={descriptor.type}>
-                  {descriptor.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        }
-        columns={
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="md" className="bg-background">
-                <Columns className="h-4 w-4" />
-                Columns
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
-              <DropdownMenuLabel>Toggle columns</DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              {toggleableColumns.map(col => (
-                <DropdownMenuCheckboxItem
-                  key={col.name}
-                  checked={!hiddenColumns.has(col.name)}
-                  onCheckedChange={() => toggleColumn(col.name)}
-                >
-                  {typeof col.header === "string" ? col.header : col.name}
-                </DropdownMenuCheckboxItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        }
-      />
-
-      {isLoading && !data ? (
+    <ListView<EmailProviderRecord>
+      search={{
+        value: search,
+        onChange: setSearch,
+        placeholder: "Search providers by name...",
+        isLoading,
+      }}
+      // A visible control rather than the filter dropdown: the current type is
+      // what a reader checks before trusting the list, so hiding it behind a
+      // click costs more than the row space it saves.
+      inlineFilters={
+        <Select value={type ?? allTypesValue} onValueChange={handleTypeChange}>
+          <SelectTrigger className="w-[130px] bg-background text-foreground hover:bg-accent/10">
+            <SelectValue placeholder="All Types" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={allTypesValue}>All Types</SelectItem>
+            {/* One entry per registered provider, so the filter can reach a
+                    contributed provider that is genuinely in the table. */}
+            {descriptors.map(descriptor => (
+              <SelectItem key={descriptor.type} value={descriptor.type}>
+                {descriptor.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      }
+      columnsControl={columnsControl}
+      // Loading and failure are TABLE states, so the toolbar stays mounted and
+      // the reader keeps the search field they just typed in.
+      loading={isLoading && !data}
+      skeleton={
         <div className="rounded-lg border border-border bg-card p-4">
           <Skeleton className="h-50 w-full rounded-lg" />
         </div>
-      ) : (
-        <>
-          <DataTableView<EmailProviderRecord>
-            columns={columns}
-            rows={data?.data ?? []}
-            loading={isLoading}
-            onRowClick={provider => handleEdit(provider)}
-            primaryColumn="name"
-            rowActions={rowActions}
-            registryKey="email-providers"
-            ariaLabel="Email providers table"
-            emptyMessage="No email providers configured. Add a provider to start sending emails."
-            // The table owns the pager, so it is placed for whichever view is
-            // showing. The gate hides it only when a response reports no pages
-            // at all -- an empty list. A single-page list still shows it,
-            // deliberately: the page-size selector lives there, and it is the
-            // control that gets a longer list onto one screen.
-            pagination={
-              data && data.meta.totalPages > 0
-                ? {
-                    currentPage: page,
-                    totalPages: data.meta.totalPages,
-                    pageSize,
-                    pageSizeOptions: PAGINATION.TABLE_PAGE_SIZE_OPTIONS,
-                    onPageChange: setPage,
-                    onPageSizeChange: setPageSize,
-                    isLoading,
-                    totalItems,
-                  }
-                : undefined
+      }
+      error={
+        isError
+          ? error instanceof Error
+            ? error.message
+            : "Failed to load email providers. Please try again."
+          : null
+      }
+      slots={{
+        beforeList: (
+          <>
+            {catalog === "unavailable" && (
+              <Alert variant="destructive">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertTitle>Provider catalog unavailable</AlertTitle>
+                <AlertDescription className="flex flex-wrap items-center gap-3">
+                  <span>
+                    Provider types could not be loaded, so this page cannot tell
+                    which of these are still installed. Each row falls back to
+                    its stored type, and the type filter has nothing to offer.
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      void refetchCatalog();
+                    }}
+                    disabled={isCatalogFetching}
+                  >
+                    {isCatalogFetching ? "Retrying..." : "Retry"}
+                  </Button>
+                </AlertDescription>
+              </Alert>
+            )}
+            {/* A refresh that did not land, over descriptors already in hand. The
+              sentence above would be untrue here in every particular: the rows are
+              named from the cache, the filter is built from it, and nothing has
+              been withheld. Said without the destructive styling, because the page
+              is working and this is the one thing that is not. */}
+            {catalog === "stale" && (
+              <Alert>
+                <AlertDescription className="flex flex-wrap items-center gap-3">
+                  <span>
+                    Provider types could not be refreshed, so this page is using
+                    the list it loaded with. A type installed or removed since
+                    then may not be reflected.
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      void refetchCatalog();
+                    }}
+                    disabled={isCatalogFetching}
+                  >
+                    {isCatalogFetching ? "Retrying..." : "Retry"}
+                  </Button>
+                </AlertDescription>
+              </Alert>
+            )}
+          </>
+        ),
+        afterList: (
+          <>
+            <ProviderDeleteDialog
+              open={deleteDialogOpen}
+              onOpenChange={setDeleteDialogOpen}
+              provider={providerToDelete}
+              onConfirm={handleConfirmDelete}
+              isLoading={isDeleting}
+            />
+
+            <ProviderTestDialog
+              open={testDialogOpen}
+              onOpenChange={setTestDialogOpen}
+              provider={providerToTest}
+              onConfirm={handleConfirmTest}
+              isLoading={isTesting}
+            />
+          </>
+        ),
+      }}
+      columns={columns}
+      rows={data?.data ?? []}
+      onRowClick={provider => handleEdit(provider)}
+      primaryColumn="name"
+      rowActions={rowActions}
+      registryKey="email-providers"
+      ariaLabel="Email providers table"
+      emptyMessage="No email providers configured. Add a provider to start sending emails."
+      // The table owns the pager, so it is placed for whichever view is
+      // showing. The gate hides it only when a response reports no pages
+      // at all -- an empty list. A single-page list still shows it,
+      // deliberately: the page-size selector lives there, and it is the
+      // control that gets a longer list onto one screen.
+      pagination={
+        data && data.meta.totalPages > 0
+          ? {
+              currentPage: page,
+              totalPages: data.meta.totalPages,
+              pageSize,
+              pageSizeOptions: PAGINATION.TABLE_PAGE_SIZE_OPTIONS,
+              onPageChange: setPage,
+              onPageSizeChange: setPageSize,
+              isLoading,
+              totalItems,
             }
-          />
-        </>
-      )}
-
-      <ProviderDeleteDialog
-        open={deleteDialogOpen}
-        onOpenChange={setDeleteDialogOpen}
-        provider={providerToDelete}
-        onConfirm={handleConfirmDelete}
-        isLoading={isDeleting}
-      />
-
-      <ProviderTestDialog
-        open={testDialogOpen}
-        onOpenChange={setTestDialogOpen}
-        provider={providerToTest}
-        onConfirm={handleConfirmTest}
-        isLoading={isTesting}
-      />
-    </div>
+          : undefined
+      }
+    />
   );
 }
 

@@ -1,11 +1,11 @@
 "use client";
 
 import { Badge, Button } from "@nextlyhq/ui";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { PluginIcon } from "@admin/components/shared/plugin-icon";
 import type { NextlyColumn } from "@admin/components/ui/table/data-table";
-import { ListView } from "@admin/components/ui/table/list-view";
+import { ListView, useListColumns } from "@admin/components/ui/table/list-view";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { UI } from "@admin/constants/ui";
 import {
@@ -86,7 +86,6 @@ export default function PluginsTable() {
     initialPageSize: 25,
   });
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-  const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
 
   // Reset to the first page when the search term or status filter changes so
   // the slice does not fall out of range against the newly filtered list.
@@ -128,15 +127,6 @@ export default function PluginsTable() {
     const start = page * pageSize;
     return filteredPlugins.slice(start, start + pageSize);
   }, [filteredPlugins, page, pageSize]);
-
-  const toggleColumn = useCallback((key: string) => {
-    setHiddenColumns(prev => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  }, []);
 
   const allColumns = useMemo<NextlyColumn<PluginWithId>[]>(() => {
     return [
@@ -208,15 +198,24 @@ export default function PluginsTable() {
     ];
   }, []);
 
-  const columns = useMemo(
-    () =>
-      allColumns.map(col => ({ ...col, hidden: hiddenColumns.has(col.name) })),
-    [allColumns, hiddenColumns]
-  );
-
   const toggleableColumns = useMemo(
     () => allColumns.filter(col => !ALWAYS_VISIBLE.has(col.name)),
     [allColumns]
+  );
+
+  /* The reader's column choice outlives the tab it was made in. */
+  const columnsControl = useListColumns({
+    storageKey: "plugins",
+    columns: toggleableColumns,
+  });
+
+  const columns = useMemo(
+    () =>
+      allColumns.map(col => ({
+        ...col,
+        hidden: !columnsControl.isColumnVisible(col.name),
+      })),
+    [allColumns, columnsControl]
   );
 
   // Before the table, because its empty state is a STATEMENT: "no plugins
@@ -251,11 +250,7 @@ export default function PluginsTable() {
           ))}
         </div>
       }
-      columnsControl={{
-        columns: toggleableColumns,
-        isColumnVisible: name => !hiddenColumns.has(name),
-        onToggleColumn: toggleColumn,
-      }}
+      columnsControl={columnsControl}
       columns={columns}
       rows={paginatedPlugins}
       rowHref={plugin => buildRoute(ROUTES.PLUGIN_DETAIL, { slug: plugin.id })}

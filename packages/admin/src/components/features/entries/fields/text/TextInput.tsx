@@ -25,6 +25,8 @@ import {
 
 import { cn } from "@admin/lib/utils";
 
+import { useFieldElementId } from "../field-id-scope";
+
 // Helper to get validation value from flat or nested format (for dynamic collections)
 function getValidationValue<T>(
   field: Record<string, unknown>,
@@ -150,6 +152,12 @@ export function TextInput<TFieldValues extends FieldValues = FieldValues>({
       ? "" // Functions are evaluated at form level, not here
       : (field.defaultValue as string) || "";
 
+  // Scoped, so a second rendering of the same document on one page cannot
+
+  // duplicate this id and steal the first rendering's label.
+
+  const elementId = useFieldElementId(name);
+
   const {
     field: { value, onChange, onBlur, ref },
     fieldState: { invalid },
@@ -180,7 +188,7 @@ export function TextInput<TFieldValues extends FieldValues = FieldValues>({
   return (
     <Input
       ref={ref}
-      id={name}
+      id={elementId}
       type="text"
       value={value ?? ""}
       onChange={onChange}

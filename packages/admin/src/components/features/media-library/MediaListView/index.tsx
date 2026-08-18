@@ -146,8 +146,7 @@ export function MediaListView({
                   <img
                     src={item.thumbnailUrl ?? item.url}
                     alt={item.altText || item.originalFilename}
-                    className="block max-h-full max-w-full"
-                    style={{ objectFit: "contain" }}
+                    className="block max-h-full max-w-full object-contain"
                     loading="lazy"
                   />
                 ) : (

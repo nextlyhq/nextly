@@ -82,6 +82,34 @@ import type {
 } from "@admin/services/emailTemplateApi";
 import type { Media } from "@admin/types/media";
 
+/**
+ * The preview iframe's own palette.
+ *
+ * An email is rendered by mail clients, which do not resolve CSS custom
+ * properties, so a preview that reads the admin's tokens would show the author
+ * something their recipients will never see. These are the email's colours, not
+ * the admin's, which is why they are literal — and why they are named here once
+ * rather than spelled out at each interpolation.
+ *
+ * design-lint-ok: an email cannot resolve `var(--nx-*)`; see above.
+ */
+const PREVIEW_PALETTE = {
+  dark: {
+    text: "#e5e7eb",
+    background: "#0b0b0f",
+    page: "#0b0b0f",
+  },
+  light: {
+    text: "#111827",
+    background: "#ffffff",
+    page: "#f3f4f6",
+  },
+  /** Placeholder copy shown when there is nothing to preview. */
+  muted: "#9ca3af",
+  /** The sample body injected into a layout row's `{{content}}` slot. */
+  sample: "#71717a",
+} as const;
+
 // CodeMirror reaches for browser globals on import, so it loads on demand
 // rather than during SSR.
 const CodeMirrorEditor = lazy(() =>
@@ -459,12 +487,16 @@ function PreviewPane({
     const dark = theme === "dark";
     if (format === "text") {
       return `<!doctype html><html><body style="margin:0;padding:16px;font-family:ui-monospace,monospace;font-size:13px;white-space:pre-wrap;color:${
-        dark ? "#e5e7eb" : "#111827"
+        dark ? PREVIEW_PALETTE.dark.text : PREVIEW_PALETTE.light.text
       };background:${
-        dark ? "#0b0b0f" : "#ffffff"
+        dark
+          ? PREVIEW_PALETTE.dark.background
+          : PREVIEW_PALETTE.light.background
       }">${escapeHtmlValue(text || "(no plain-text content)")}</body></html>`;
     }
-    const pageBg = dark ? "#0b0b0f" : "#f3f4f6";
+    const pageBg = dark
+      ? PREVIEW_PALETTE.dark.page
+      : PREVIEW_PALETTE.light.page;
     // A <meta color-scheme> can't drive `@media (prefers-color-scheme: dark)`
     // (that follows the OS), so rewrite the email's own dark-mode query to
     // force it on/off deterministically with the toggle. Emails without a
@@ -480,7 +512,7 @@ function PreviewPane({
       dark ? "dark" : "light"
     }"><style>html,body{margin:0}body{background:${pageBg};padding:16px}</style></head><body>${
       themedHtml ||
-      "<p style='font-family:sans-serif;color:#9ca3af'>Nothing to preview yet.</p>"
+      `<p style='font-family:sans-serif;color:${PREVIEW_PALETTE.muted}'>Nothing to preview yet.</p>`
     }</body></html>`;
   }, [html, text, theme, format]);
 
@@ -1496,8 +1528,7 @@ export function EmailTemplateForm({
       const [before, after] = splitLayout(htmlContent ?? "");
       const head = interpolate(before, sampleData, false);
       const tail = interpolate(after, sampleData, false);
-      const sampleBody =
-        '<p style="color:#71717a;font-style:italic;">Your email content appears here.</p>';
+      const sampleBody = `<p style="color:${PREVIEW_PALETTE.sample};font-style:italic;">Your email content appears here.</p>`;
       return `${head}${sampleBody}${tail}`;
     }
 

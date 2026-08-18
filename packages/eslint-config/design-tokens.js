@@ -22,6 +22,12 @@ export function designTokensConfig(files) {
     {
       name: "@nextlyhq/design-tokens",
       files,
+      // Tests are excluded, matching `scripts/lint-design.mjs`, which has
+      // filtered them since it was written. A fixture writing `color: red` is
+      // modelling arbitrary user data, not styling a surface that ships — and
+      // the two guards enforce one contract, so they must agree on which files
+      // it governs as well as on what it means.
+      ignores: ["**/*.test.*", "**/*.spec.*", "**/__tests__/**", "**/*.d.ts"],
       plugins: { "@nextlyhq": nextlyPlugin },
       rules: {
         "@nextlyhq/no-palette-classes": "error",

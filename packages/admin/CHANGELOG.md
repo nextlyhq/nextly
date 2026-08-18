@@ -1,5 +1,907 @@
 # @nextlyhq/admin
 
+## 0.0.2-alpha.59
+
+### Patch Changes
+
+- [#957](https://github.com/nextlyhq/nextly/pull/957) [`bf1477a`](https://github.com/nextlyhq/nextly/commit/bf1477aa82fdcca011b955a8764d1a2848e7e04b) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - An added or removed text field showed a blank space on the version it never reached, instead of
+  saying it was not present there. Splitting an inline text diff leaves one side with no runs at
+  all, and an empty paragraph reads as a field that existed and held nothing. Which side a field
+  never reached is now decided in one place for every kind of field, so a renderer cannot answer it
+  differently.
+
+- [#907](https://github.com/nextlyhq/nextly/pull/907) [`1cb27c2`](https://github.com/nextlyhq/nextly/commit/1cb27c201fef195bd470c3d7bd54d4621dfb6610) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - fix(admin): show the recovery-point indicator before the first recording
+
+  The entry header hid the indicator until a recording had happened, so the first
+  edit to a saved entry showed nothing for the whole debounce window, which is
+  exactly when a reader most needs telling their change is not stored yet.
+
+  The header now asks only whether recording is possible at all. AutoSaveIndicator
+  already returns nothing when it has no state to report, so the header restating
+  that was a duplicate that could disagree with it.
+
+  The indicator copy also described a local draft, which it no longer is.
+
+- [#912](https://github.com/nextlyhq/nextly/pull/912) [`70ab60f`](https://github.com/nextlyhq/nextly/commit/70ab60f8dfac2bb5b231f04c217ba555ef1596ac) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - feat(admin): offer recovered work back when an editor opens
+
+  Recording without offering is a loop that never closes: the work was stored and
+  nobody was ever told it existed. The entry editor now reads the calling author
+  own recovery point on open and offers it back.
+
+  A non-blocking strip above the fields rather than a modal. A modal suited the
+  older local draft, which was almost always your own work from a tab that had
+  just crashed. A server recovery point is a wider set, including work from
+  another device or from days ago, so demanding an answer before the document can
+  be read turns a rescue into an obstacle.
+
+  An offer is withheld when the document was saved after the recovery point, and
+  made anyway when the document timestamp is unknown: a spurious offer costs one
+  dismissal, while a suppressed one loses work recorded specifically so it could
+  not be lost.
+
+- [#900](https://github.com/nextlyhq/nextly/pull/900) [`01b32a2`](https://github.com/nextlyhq/nextly/commit/01b32a21c45c52e9cdd90c5464cbf86743a3c2ff) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - feat(admin): add the autosave transport to versionApi
+
+  The autosave endpoints had no client. protectedApi carried no PUT verb at all,
+  so the write endpoint was unreachable from the admin regardless of which caller
+  wanted it.
+
+  Adds the verb, and the two calls that use it: recording the values currently in
+  the editor as the calling author's recovery point, and reading that back.
+  PUT rather than POST because the row is rolling, one per document and author
+  rewritten in place, so sending the same snapshot twice leaves one recovery
+  point and an unacknowledged retry is safe.
+
+- [#906](https://github.com/nextlyhq/nextly/pull/906) [`8efeff5`](https://github.com/nextlyhq/nextly/commit/8efeff5b4d6c83936629a8594ef493cc4450cff5) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - feat(admin): record recovery points from the entry editor
+
+  Mounts the autosave hook in the entry editor and shows its state in the header
+  action cluster, which is what makes server-side recovery points reachable for
+  the first time: the endpoints, the transport and the hook all existed with
+  nothing calling them.
+
+  Recording engages only once an entry has an id, since the endpoint addresses a
+  document that exists, and pauses while a real save is in flight so a snapshot
+  cannot describe a state that never existed.
+
+- [#931](https://github.com/nextlyhq/nextly/pull/931) [`8ff3ed3`](https://github.com/nextlyhq/nextly/commit/8ff3ed33e40a9f6b238eecea889249f6086f9cd0) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The page editor now takes the whole window. The admin's sidebars, header and page frame step aside while an immersive surface is mounted, and restore themselves when you leave it.
+
+- [#902](https://github.com/nextlyhq/nextly/pull/902) [`67926e3`](https://github.com/nextlyhq/nextly/commit/67926e3f70c5c17f40c2b424fe20fec4b1e6c727) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - feat(admin): record the editor values as a server-side recovery point
+
+  A debounced hook that writes the values currently in the form to the calling
+  author rolling recovery point, and reports the status back.
+
+  It is not a save. The dirty flag is left exactly as the form set it, so the
+  unsaved-changes guard goes on firing, and the values are read with getValues
+  rather than through handleSubmit, which validates and refuses on failure and
+  would therefore record nothing for the half-finished input most worth keeping.
+
+  Recording is triggered by the dirty flag rather than by the update type, which
+  react-hook-form leaves undefined for any change that does not come from a
+  registered input own DOM handler.
+
+- [#898](https://github.com/nextlyhq/nextly/pull/898) [`9ea28f1`](https://github.com/nextlyhq/nextly/commit/9ea28f10c0b49f3161e4ad7f4acf394aa09b3fdd) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - fix(admin): put seven more admin form pages on the shared layout
+
+  The API key, role, settings, webhook and user-field forms now consume
+  `FormLayout`, `FormActions`, `FieldShell` and `Grid` from `@nextlyhq/ui`
+  instead of hand-rolled page padding, a fixed action row, `SettingsRow`'s
+  horizontal label-left/control-right grid, and viewport-breakpoint grids.
+
+  Converted: `CreateApiKeyForm`, `EditApiKeyForm`, `RoleForm` (with
+  `RoleBasicInfo`), `ImageSizeForm`, `EmailProviderForm` (with
+  `ProviderConfigFields`), the general settings page, `WebhookForm`,
+  `UserFieldForm`, and the Full Name/Email/Password fields in
+  `UserFormFields`. Every compound `Select` field among them (API key Token
+  Duration/Type/Role, Image Size Resize Mode/Format, general settings
+  Timezone/Date Format/Time Format, and each provider config field's `select`
+  kind) now wires its `SelectTrigger` through `FieldShell`'s render-function
+  `children`, the same pattern the form builder's conversion established.
+
+  Composite controls with no single focusable element to attach an id to are
+  named as GROUPS instead, via `SettingsRowGroup`: `ProviderTypePicker`, the
+  webhook event-type checkbox group and the webhook custom-headers row each get
+  `role="group"` with `aria-labelledby` rather than a `<label for>` aimed at a
+  control that never carries the id. Measured in a browser before and after: all
+  three pointed at nothing in both light and dark themes.
+
+  Left hand-rolled, each with its own comment: `FieldTypePicker` and the
+  sign-in-method `RadioGroup`; horizontal label-left/switch-right settings rows
+  (`UserFieldForm`'s "Allow multiple selections", "Required" and "Active");
+  read-only value rows with no control at all (`EditApiKeyForm`'s Key
+  Properties); and one page grid needing an asymmetric row/column gap `Grid`'s
+  `gap` prop cannot express (`UserFormFields`'s two-column split).
+
+  `RoleBasicInfo.test.tsx` — failing on `main` before this change, asserting
+  placeholders, descriptions and a system-role message the component has never
+  rendered — is repaired to match what the component actually renders.
+
+- [#872](https://github.com/nextlyhq/nextly/pull/872) [`1dd9b90`](https://github.com/nextlyhq/nextly/commit/1dd9b90cfe67c220ddf12495d6d6126b4bd76f45) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - feat(ui): add a shared admin form layout layer
+
+  A shared form layout layer for the admin: a named field-width vocabulary for
+  consistently sized controls, section chrome composed from the existing card,
+  a single page-level action bar, and an opt-in responsive mode on the existing
+  grid.
+
+  `FieldShell` associates its label with whichever id actually ends up on the
+  control (a caller's own id or a generated one, never an explicitly-`undefined`
+  one), composes `aria-describedby` with whatever the control already carries
+  rather than replacing it, and forces `aria-invalid` when `error` is rendered
+  even if the control claims otherwise. It owns this prop merge itself with
+  `cloneElement` instead of Radix `Slot`, warns in development rather than
+  silently disconnecting when handed a `Fragment`, and narrows `children` to a
+  single element to match what it can actually slot in. `FormSection` names its
+  region with `aria-labelledby`. `Grid`'s `responsive` mode now splits
+  `className`/`style`/`ref` (parent-layout concerns) from `cols`/`gap` (internal
+  layout) between its wrapper and inner grid; non-responsive mode is unchanged.
+
+- [#909](https://github.com/nextlyhq/nextly/pull/909) [`69f3a61`](https://github.com/nextlyhq/nextly/commit/69f3a6141aeb610844216346790b4e6b25b9cf9e) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Tidy up the admin sidebar.
+
+  The Settings panel now lists system configuration before user administration,
+  and its groups are declared as data, so a group's heading appears only when it
+  actually has something under it.
+
+  On the dashboard, the collapsed secondary panel no longer draws a stray second
+  line beside the icon rail, and no longer nudges the page a pixel to the right.
+
+  The built-in Nextly mark sits on a rounded tile in the sidebar and takes its
+  colours from the theme in both light and dark mode. A logo you have configured
+  yourself is left exactly as you uploaded it.
+
+- [#929](https://github.com/nextlyhq/nextly/pull/929) [`7fa0cc2`](https://github.com/nextlyhq/nextly/commit/7fa0cc27abfab02cf2e960f616848106f4b99b8c) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - fix(admin): send the autosave snapshot as the request body
+
+  Restoring a recovery point put nothing back in the form.
+
+  The autosave endpoint treats the request BODY as the snapshot and reads the
+  locale from the request params. The client wrapped the values in an envelope
+  instead, so that envelope was stored as the snapshot and every field ended up
+  one level too deep; a restore then wrote an object with no field names the form
+  recognised. The locale it carried in the body was never read.
+
+  Also enables drafts and autosave on the playground posts collection. No
+  collection there or in any template enabled it, so the policy gate refused every
+  write and nothing had ever exercised the path.
+
+- [#919](https://github.com/nextlyhq/nextly/pull/919) [`5c0a5ff`](https://github.com/nextlyhq/nextly/commit/5c0a5ffcd6b3d4498b2b443608df1854ba50ceac) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - fix(admin): let the autosave scope helper accept an absent document id
+
+  The helper required a string, so every call site supplied its own empty-string
+  fallback. That put one rule in two places: the helper, which its tests reach,
+  and a fallback at each caller, which they do not.
+
+  Accepting null and undefined removes the fallback rather than testing it, so
+  there is no longer a per-caller decision to get wrong.
+
+- [#938](https://github.com/nextlyhq/nextly/pull/938) [`2585aab`](https://github.com/nextlyhq/nextly/commit/2585aabea3bdd27a9ba7be33fe6730a35a448c09) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - fix: supersede the autosave recovery point on a real save
+
+  Saving now deletes the saving author recovery point, on both the collection and
+  Single write paths, inside the write transaction.
+
+  This removes a comparison that could not be made correctly. Deciding whether to
+  offer recovered work compared a version timestamp against a document timestamp,
+  and those live in different tables that do not share a clock: one records UTC
+  and the other local time carrying a Z. The comparison was wrong by the server
+  offset and silently withheld every offer on a Single. A row that exists only
+  while there is unsaved work needs no comparison.
+
+  Scoped to the saving author, so another editor unsaved work survives. Inside the
+  transaction, so a failed save leaves the recovery point rather than destroying
+  the only copy of work it did not store.
+
+  Also moves the Single recovery banner into the main column: above the flex row
+  it sat under the sticky header, which intercepted pointer events, so the offer
+  was visible and its buttons were not clickable.
+
+- [#943](https://github.com/nextlyhq/nextly/pull/943) [`f19b259`](https://github.com/nextlyhq/nextly/commit/f19b259f08e3feafe59864571a39e9e65e3c5db9) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The block editor opens full screen from a blocks field, covering the entry form, with a labelled way back to it.
+
+- [#910](https://github.com/nextlyhq/nextly/pull/910) [`53c9909`](https://github.com/nextlyhq/nextly/commit/53c9909839bb16e4af86f3a94e36de1682346186) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Saving a field group in the Schema Builder no longer reports success when the change was only half made.
+
+  The save changes the database tables first and then records what it did. If that recording step failed, the failure was written to the server console and the response still said the schema had been applied. The tables held the new shape, the stored definition still described the old one, and nothing marked the field group as needing repair.
+
+  That was worse than it sounds, because the version number was deliberately left where it was. An editor already open would therefore pass its staleness check and plan its next change from a shape the database no longer had — the exact retry the `diverged` state exists to refuse, arriving through the one path that never marked it.
+
+  A failed recording is now recorded. The field group is marked `diverged`, and the response says which of three things actually happened, because the operator's next step differs for each: the failure was marked, so reconcile and do not retry; the record turned out to have moved on, so reload before doing anything, since the change was probably saved and the field group may also have been deleted; or nothing could be recorded at all, so the server log is the only trace.
+
+  One case that used to be reported as a failure now correctly reports success. MySQL has no `RETURNING`, so a write is an update followed by a read, and a read that fails after the update has already committed used to be treated as though nothing was written. The save now re-reads the row and reports success when it already carries the change.
+
+- [#961](https://github.com/nextlyhq/nextly/pull/961) [`2638c5f`](https://github.com/nextlyhq/nextly/commit/2638c5f5ecf431d1d10745cb4e6d660cf2f60f5a) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Creating a collection or single now asks how it is edited, so enabling the page builder no longer means finding the right field type in a picker afterwards.
+
+- [#941](https://github.com/nextlyhq/nextly/pull/941) [`68a2903`](https://github.com/nextlyhq/nextly/commit/68a2903c47c8037dfcbe722a9e233869b9bee61d) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Add the builder's editor state: one place a document changes, with undo built from the op layer's own inverses rather than from document snapshots.
+
+- [#940](https://github.com/nextlyhq/nextly/pull/940) [`27b8b45`](https://github.com/nextlyhq/nextly/commit/27b8b455f0327aaa74389d37ff023bd7d16db5bd) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - feat(builder): move a block with the keyboard, on two axes
+
+  Dragging was the only way to reorder a block, so the editor could not be used by
+  anyone who does not use a pointer.
+
+  `keyboardMovePosition` answers where the selected block goes for four intents,
+  split across two axes so that each has an inverse: `up` / `down` reorder among
+  siblings and never change the parent, `indent` / `outdent` change the parent and
+  never reorder anything that stays put. Every press is undone by the opposite
+  press, which is what lets someone driving the editor without sight of the result
+  recover from a mistaken key.
+
+  It reports what the move DOES as well as where it lands, so the wiring can
+  announce "moved down" and "moved into Group" differently without re-deriving the
+  difference by comparing parents. Moves that change parent also name the slot they
+  vacate, because a keyboard author moves one block at a time and emptying a
+  container is the common case rather than the rare one.
+
+  One asymmetry is deliberate and pinned by a test: `indent` appends, so outdenting
+  a block that was not its container's last child and indenting it back returns it
+  at the end. Recovering the original index would mean carrying state across
+  presses.
+
+  Not yet exported from any entry point: it has no consumer until the canvas wires
+  it up.
+
+- [#926](https://github.com/nextlyhq/nextly/pull/926) [`c17e9f6`](https://github.com/nextlyhq/nextly/commit/c17e9f6717750c8c31adf968a2be8b67b448bf25) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - feat(builder): hold a drop target until the pointer has travelled a threshold
+
+  A pointer resting near the boundary between two drop targets jitters by a pixel
+  or two and the target underneath it alternates, which shows as a flickering
+  insertion indicator and as a block landing where the author did not aim.
+
+  `nextTargetSwitchState` makes a rival target hold while the pointer travels a set
+  distance before it replaces the committed one. It reads two points and a number
+  and no geometry at all, so a 1px divider, an author-set 0px spacer, a 900px hero,
+  a vertical stack and a grid all behave identically — a minimum-size rule cannot
+  say that, because a spacer's height has no lower bound and any pixel floor makes
+  some authored block impossible to drop beside.
+
+  The threshold is measured from where the candidate first differed from the
+  committed target, not from where the last switch happened. The latter is
+  satisfied by construction before the pointer reaches any seam, so it would be met
+  exactly where it is not needed and never where it is.
+
+  Not yet exported from any entry point: it has no consumer until a canvas wires it
+  up, and an unused public export is a surface with no caller to keep it honest.
+
+- [#933](https://github.com/nextlyhq/nextly/pull/933) [`aef5d90`](https://github.com/nextlyhq/nextly/commit/aef5d909feff93e773dd03cc4133b51b1ad1bd41) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - feat(blocks-react): core/card adopts the surface and border tokens
+
+  `core/card` declined a background and a border for as long as no design token
+  resolved. Both `color.surface` and `color.border` are now in the guaranteed set
+  and both render paths emit the sheet that defines them, so the block carries
+  them — as `{ $token }` references rather than literals, because a literal colour
+  is wrong in whichever of light and dark it was not chosen for, which is the whole
+  reason a token set exists. The border is written per LOGICAL side, so a
+  right-to-left page borders the side an author means.
+
+  This also DELETES the ratchet that forbade `{ $token }` in `baseStyles`, which is
+  the swap it was written for: its stated expiry was "when the site stylesheet is
+  wired into the render path", and both paths now emit it. It is replaced by the
+  question that matters now — a default may only name a token the guaranteed set
+  DEFINES, because a reference to an undefined name dangles for exactly the reason
+  the old defect did, and neither the catalog check nor the compiled-CSS check can
+  see it.
+
+- [#878](https://github.com/nextlyhq/nextly/pull/878) [`a458074`](https://github.com/nextlyhq/nextly/commit/a45807451d1572cdb44ebfbd9421af49909cc036) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A page can now be laid out in columns. `core/columns` and `core/column` ship as container presets: the row restricts its slot to columns, and a column declares the row as its only parent, so each column keeps an identity that can be selected, styled and dropped into. The row layout is an overridable default style rather than a rule in the renderer.
+
+- [#875](https://github.com/nextlyhq/nextly/pull/875) [`f6497c7`](https://github.com/nextlyhq/nextly/commit/f6497c788a29c36b72a05574b6afa0c348b658f2) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Preview links can be wired to a content route in one call, granting exactly the one unpublished entry the link was minted for rather than every unpublished entry on the site.
+
+- [#921](https://github.com/nextlyhq/nextly/pull/921) [`e3bafe8`](https://github.com/nextlyhq/nextly/commit/e3bafe82889959fe90ba8bd8b40d721eeaa66d31) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Two paths that change field-group storage now hold a storage migration out while they run.
+
+  A field-group storage migration renames the registry table and every field group's data table. Two paths could previously run at the same time as one: the code-first sync that materialises field groups defined in your config at boot and on hot reload, and the `db:sync` pass that deletes field groups no longer present in code.
+
+  The deletion pass was the more consequential of the two. It reads the table names first and then drops them one at a time, so a migration renaming those tables partway through left the remaining drops addressing names that no longer existed. Because those statements are `DROP TABLE IF EXISTS`, that failed silently: the field group survived as a table nothing scanned for again. The exclusion is now held across the whole pass rather than per field group, so the names it read stay valid until it finishes.
+
+  The code-first sync writes definition rows only and creates no tables, so it holds the migration out without being able to create the lock itself — a deployment whose database role has permission to write rows but not to create tables keeps booting exactly as before.
+
+  Neither path changes what it does when no migration is running.
+
+- [#890](https://github.com/nextlyhq/nextly/pull/890) [`cfabd89`](https://github.com/nextlyhq/nextly/commit/cfabd89a0fcf4a4a746da88666c744f9c71c54fc) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Adds `core/accordion` and `core/accordion-item` to the block library. A section holds ordinary blocks rather than a string of Markdown, so an image or a button can live inside one, and the disclosure itself is a native `<details>` — no client JavaScript.
+
+- [#969](https://github.com/nextlyhq/nextly/pull/969) [`e50fcbf`](https://github.com/nextlyhq/nextly/commit/e50fcbf7dc74a87305dc94c1c53d1fdd2671bc3d) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The block palette now reads as names rather than identifiers. Core blocks declare a label, a category and search keywords, so the inserter groups them under Layout, Content, Media and Interactive instead of a single "other" heading, and a search for "picture" finds the image block.
+
+- [#888](https://github.com/nextlyhq/nextly/pull/888) [`ac1d8e1`](https://github.com/nextlyhq/nextly/commit/ac1d8e1e0c1cc60064ec39d401badc7251672593) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - feat(blocks-react): add core/card and core/form to the block library
+
+  Two blocks the derived block list marks as needed by every site inventoried,
+  including a client project.
+
+  `core/card` is a preset over the shared container implementation, differing
+  from a box only in what it starts as: rounded and clipping. The clip is the
+  substance rather than the rounding, because a border radius paints the box and
+  does not constrain its descendants, so a card that rounds without clipping
+  renders a child image's square corners over its own curve. It carries no
+  default padding, because padding on the card makes a full-bleed image
+  impossible; and no default background or border, because the guaranteed token
+  set has no surface or border colour and a hardcoded one is wrong in whichever
+  of light and dark it was not chosen for.
+
+  `core/form` renders plain HTML and ships no client JavaScript — the
+  form-builder plugin remains the one that stores submissions, and contributes no
+  block of its own, so the two do not compete. Its whole layout is one grid on
+  the root, so every label and control is a direct child rather than nested;
+  labels associate by `htmlFor` and an id derived from the node's id, so two
+  forms on one page cannot mint the same id and re-point one form's label at
+  another's field. The `action` is read through the same URL guard the other
+  blocks use, so a stored scheme that executes rather than navigates is refused.
+
+  `base-styles.test.tsx` is derived from `coreBlocks` rather than listing blocks
+  by hand: it asserts that every property a block declares in `baseStyles` is
+  known to `STYLE_CATALOG` and reaches the compiled stylesheet under that block's
+  own selector. Those are separate questions — a catalog property is still
+  dropped when its value does not match the grammar the catalog declares for it —
+  and the pair covers the failure that shipped in `core/columns`, whose first
+  version declared a flex item property the catalog does not carry and which the
+  compiler dropped silently while an object assertion stayed green.
+
+- [#893](https://github.com/nextlyhq/nextly/pull/893) [`0277719`](https://github.com/nextlyhq/nextly/commit/0277719b340ccc05f57c97eab4129bae100a58f3) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Adds `core/gallery`, a reflowing grid of pictures restricted to `core/image` so every item carries alt text and an intrinsic size. It sizes to its container rather than to a viewport breakpoint, so it reflows correctly inside a column or a card.
+
+- [#847](https://github.com/nextlyhq/nextly/pull/847) [`4e4272a`](https://github.com/nextlyhq/nextly/commit/4e4272abe35d656e4081e05fa80302040f65bd81) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The page-builder canvas now tells an author WHY a drop was refused instead of silently doing nothing. Drop planning returns a discriminated outcome — action, refused with a reason, unchanged, or unresolved — and the drag overlay shows the reason while the drag is still in the air.
+
+- [#870](https://github.com/nextlyhq/nextly/pull/870) [`566b592`](https://github.com/nextlyhq/nextly/commit/566b592a74cd2a8ccbece30b629b8512fa5c3fcc) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The editor now asks the block engine whether a block may nest under a container, rather than
+  deciding it a second time. One rule, three callers: the drag, the keyboard insert, and the
+  engine's own validation of a stored document.
+
+- [#865](https://github.com/nextlyhq/nextly/pull/865) [`7acb441`](https://github.com/nextlyhq/nextly/commit/7acb44182c3886cc99714b49cd33759eb35d4a48) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The page-builder editor adopts the builder shell for its chrome.
+
+  The editor hand-rolled a three-pane layout, a toolbar and a breakpoint switcher. The shell supplies all of that as slots, so the editor passes its canvas, inspector, block library and device switcher into it rather than laying them out. The drag provider and its overlay are untouched: the shell owns no drag machinery and never looks inside the canvas slot.
+
+  The shell no longer renders the document primary landmark. Its canvas region was a main element, and every mount sits inside a host that already has one, so a second gave assistive technology two competing primary landmarks. It is a named region now, which is also the more accurate description of an editor embedded in a page that owns its own primary content.
+
+  Leaving the editor is optional. A host with nowhere to return to, such as the editor embedded as a field inside an entry form, gets no exit affordance at all rather than one that does nothing.
+
+- [#953](https://github.com/nextlyhq/nextly/pull/953) [`50d1d73`](https://github.com/nextlyhq/nextly/commit/50d1d7368f902ae3eab6e14d0716197c91963e76) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The email template editor no longer draws on top of the live preview on narrower screens.
+
+- [#946](https://github.com/nextlyhq/nextly/pull/946) [`fac7f05`](https://github.com/nextlyhq/nextly/commit/fac7f05c6e7f52ffba0c32d516ac17e97b62c069) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Enforce a slot's allow-list. A container declaring which blocks its slot holds is now checked on validation, where only the child half of the nesting rule was checked before. `canNestInSlot` is exported alongside `canNest` and `canBeRoot`, so an editor deciding what to offer or whether to accept a drop can ask both halves of the rule instead of computing one of them itself.
+
+- [#866](https://github.com/nextlyhq/nextly/pull/866) [`412518f`](https://github.com/nextlyhq/nextly/commit/412518f3f23c1199ab887dcf486f6823005e96f6) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Block documents are now checked against where each block says it belongs: a block that declares the containers it may sit inside is reported when it sits anywhere else, including at the top level of a document. Validation also no longer skips its per-value checks on a document whose stored form merely differs from the document in memory, so problems in those documents are reported instead of silently passing.
+
+- [#873](https://github.com/nextlyhq/nextly/pull/873) [`e045e5c`](https://github.com/nextlyhq/nextly/commit/e045e5cfcaa8ee12f60a70bc02c77eab5da81f4b) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Store a rolling autosave recovery point per document and author, authorized as an update of the document, with password fields stripped before the snapshot is persisted and the rows removed when the document is deleted.
+
+- [#927](https://github.com/nextlyhq/nextly/pull/927) [`33c0cd6`](https://github.com/nextlyhq/nextly/commit/33c0cd696c07dfd6a789ece5a499c1306403f49d) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - feat(admin): announce document status in one polite region
+
+  The entry editor reported whether an author's work was stored visually only.
+  `AutoSaveIndicator` cycles through "Saving…", "Saved", "Unsaved changes" and
+  "Not saved", and the header carried no live region at all — so the control
+  whose whole purpose is reassuring someone their work is safe did that for
+  sighted users only.
+
+  The header now has a single `role="status"` / `aria-live="polite"` region
+  covering document status. One region rather than one per concern: two live
+  regions in the same header interrupt each other, and a reader cannot tell which
+  announcement belongs to what they just did.
+
+  Two deliberate choices. The transient "saving" state is silent, because autosave
+  debounces and announcing it speaks over the reader every few seconds while they
+  type — what matters is where the state came to rest. And the spoken wording is a
+  full sentence ("Your work is stored") rather than the chip's terse label, since
+  an announcement arrives with no visual context to tell the listener what the
+  word refers to.
+
+  The region also accepts translation progress, so a multilingual entry can report
+  both kinds of document state through the same channel.
+
+- [#950](https://github.com/nextlyhq/nextly/pull/950) [`9d5111d`](https://github.com/nextlyhq/nextly/commit/9d5111dbcef507d98b3f81b3adadc19b5f37210c) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - feat(admin): show translation progress as one instrument
+
+  The entry editor described the same fact in three places: a language switcher
+  in the header, per-language status pills in the document rail, and a
+  completeness badge in the list. An author had to assemble "where am I, what
+  state is everywhere else, and how far along is this document" from three
+  fragments two panels apart.
+
+  The pills now sit beside the switcher with a completeness bar and a written
+  count, as one strip. The document rail keeps the ACTIONS on other languages
+  (copy from another language, publish all) — those are document management
+  rather than status.
+
+  The count is derived once by `translationCounts` and read by both the bar and
+  the header's spoken status region, so the two cannot drift. A language present
+  in the entry's translation map but no longer configured is ignored rather than
+  counted, which previously made "5 of 4" reachable.
+
+- [#970](https://github.com/nextlyhq/nextly/pull/970) [`87c544d`](https://github.com/nextlyhq/nextly/commit/87c544d6904f0f7f66f4287199f70e276ee34266) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Add `@nextlyhq/eslint-plugin`: design-token lint rules that plugin authors can run in their own projects.
+
+  Nextly's admin is themeable because its surfaces read design tokens, and a surface that reaches past them keeps its light-mode appearance in dark mode. That contract was only enforced inside this repository, so the first-party plugins followed it and plugins built by anyone else had nothing checking them.
+
+  The new package ships three rules — `no-palette-classes`, `no-hardcoded-colors` and `no-static-inline-style` — with a `recommended` config bundled in. Install it and extend `nextly.configs.recommended` to get the same checks the admin holds itself to, in your editor and in your CI. A genuine exception is marked in place with a `design-lint-ok: <reason>` comment rather than by disabling a rule.
+
+  The repository's own design guard now derives which trees it scans instead of listing them, so a plugin package added later is covered automatically, and it reports what it read so a run that scanned nothing can no longer be mistaken for a clean one. The plugin template's settings page is rebuilt on design tokens, matching the guidance its own comment gives.
+
+- [#880](https://github.com/nextlyhq/nextly/pull/880) [`37fa697`](https://github.com/nextlyhq/nextly/commit/37fa6970659ac2db1355d7176706b3ae6f906985) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Field-group repair for a code-managed group now writes its fix instead of being refused for the lock the caller was already cleared past.
+
+- [#863](https://github.com/nextlyhq/nextly/pull/863) [`51acbc2`](https://github.com/nextlyhq/nextly/commit/51acbc205506c96cfed799162a440b660037dd0b) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Field groups can now be repaired after a failed schema change: a new reconcile operation (POST /api/field-groups/schema/[slug]/reconcile) rewrites the stored definition to describe the live tables, reporting removed, repaired and adopted fields by name. The divergence marker is now version-conditional, so a healthy field group can no longer be marked diverged after transient read failures.
+
+- [#960](https://github.com/nextlyhq/nextly/pull/960) [`a217a11`](https://github.com/nextlyhq/nextly/commit/a217a11baa95de76eb3fe05f48b0a3cf02454e58) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - fix(admin): announce the field-group repair notice and clear its contrast failure
+
+  The field-group builder drew its save-blocked notice as a hand-rolled tinted
+  box: a 40%-alpha destructive border that composites to 1.69:1 over the page
+  surface, against the 3:1 WCAG 1.4.11 asks of a component boundary. That single
+  call site was the sole reason `packages/ui`'s contrast suite shipped red, so
+  every lane touching `ui` inherited a failing test that was not theirs.
+
+  It is now the shared `Alert`, whose destructive variant carries full-strength
+  scale tokens and a solid left accent. The notice also gains `role="alert"`:
+  `needsRepair` is derived from fetched data, so the refusal appears after the
+  page settles and was previously announced to nobody.
+
+- [#904](https://github.com/nextlyhq/nextly/pull/904) [`7a37c01`](https://github.com/nextlyhq/nextly/commit/7a37c01c22222e23f5b4741cb2ce2e4e6a5d0c21) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A field group whose stored definition no longer describes its tables can now be repaired from the admin, and the repair is shown before it runs.
+
+  A field group is marked `diverged` when its tables changed and the record describing them did not, and it refuses every schema edit until that record is repaired. The repair existed but nothing could reach it. The Schema Builder now explains the block where it happens — on the field group being edited, which is where saving is refused — and the field group list offers the same repair on any row marked `diverged` or `failed`.
+
+  The repair is previewed first. Reviewing it lists what would change by name rather than by count: fields whose columns are gone, attributes being brought back in line, and columns nobody declared, which are adopted under a type guessed from the physical column and are the ones worth correcting afterwards. Where the definition cannot be repaired without guessing — a column present on both tables, a physical type that no longer matches — each reason is reported individually and nothing is written. Approving a repair sends the version it was read against, so a plan reviewed in one tab can never be applied to a field group another tab has changed since. Previewing writes nothing and takes no lock, so it is safe to run at any time.
+
+  The same operation is available as `GET` and `POST` on `/api/field-groups/schema/[slug]/reconcile` for callers driving it directly, and the result types are exported from `nextly/field-group-reconcile` for anyone rendering them.
+
+  Note for anyone managing roles: saving in the Schema Builder requires `update-settings`. A role holding `create-settings` without it can open the builder and cannot save, which surfaces as saving being broken for one person rather than as a permission.
+
+- [#882](https://github.com/nextlyhq/nextly/pull/882) [`6963637`](https://github.com/nextlyhq/nextly/commit/69636376c9170e7f63260a95ce6c774d399117d7) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Field-group repair now refuses a table whose primary key is not exactly the expected one, and one whose system columns have lost their database defaults.
+
+- [#923](https://github.com/nextlyhq/nextly/pull/923) [`486696c`](https://github.com/nextlyhq/nextly/commit/486696c2d4e3f866d6bb9c138bfd584983de6509) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Field types now say which validation rules apply to them, in one place.
+
+  The schema builder used to decide which rules to offer from lists of built-in
+  type names it kept itself. A plugin-contributed field type is in none of those
+  lists, so it was offered no validation rules at all. A plugin type now inherits
+  the rules of the built-in type its declared storage behaves as, so a field type
+  shipped by a plugin gets length or numeric rules without anyone editing the
+  admin.
+
+  Length and row counts are now whole numbers of zero or more, so a minimum
+  length of -5 or 2.7 can no longer be saved. Each control also gets a unique id,
+  so two field editors open at once no longer share one, which previously left a
+  label pointing at the wrong input.
+
+- [#939](https://github.com/nextlyhq/nextly/pull/939) [`296a050`](https://github.com/nextlyhq/nextly/commit/296a050d104b99c4146bb35e3465440b81e33b4a) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Fix the page-builder plugin's admin registration. The blocks field named a component the admin could not resolve, so it rendered as an empty group, and three slot specifiers still pointed at components the plugin no longer ships.
+
+- [#896](https://github.com/nextlyhq/nextly/pull/896) [`a5d1c1f`](https://github.com/nextlyhq/nextly/commit/a5d1c1f8f124e535b734ce640c019cfdf6702016) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - fix(blocks-react): stop three blocks depending on token CSS nothing emits
+
+  `core/form`, `core/accordion` and `core/gallery` each declared
+  `gap: { $token: "space.4" }`. A token reference compiles to
+  `var(--site-space-4)`, and nothing in this repository ever emits that variable,
+  so the declaration was invalid at computed-value time and `gap` fell back to
+  `normal` — zero for a grid. Three blocks rendered with their children touching.
+
+  Measured three ways that agree: `compileSiteSheet`, the only thing that turns a
+  token set into CSS, has zero consumers outside `blocks-engine`;
+  `emitTokenBlocks` is called only by that function, its own tests and a
+  benchmark; and the string `--site-` appears in no source file outside the engine
+  at all, against a positive control of `--nx-` appearing in four. So
+  `defaultSiteTokens()` guarantees nothing today — it is a default nobody applies.
+
+  Every existing check passed while this was broken: the property is in
+  `STYLE_CATALOG`, and the declaration did reach the compiled stylesheet. Whether
+  the `var()` inside the value RESOLVES is a third question, and nothing asked it.
+
+  The blocks now use the length `space.4` itself declares, so the value does not
+  change when this becomes a token again. `base-styles.test.tsx` gains the check
+  that asks the third question, walking to the leaf so a token nested inside an
+  object-shaped declaration is caught too, with a positive control for both
+  shapes. It is a ratchet with an expiry: when the site stylesheet is wired into
+  the render path it should be deleted by the change that wires it, rather than
+  weakened or exempted per block.
+
+- [#879](https://github.com/nextlyhq/nextly/pull/879) [`06ae4f4`](https://github.com/nextlyhq/nextly/commit/06ae4f4c7a989de9500ca8b0023ae00e58e2ff13) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Put the form builder's Create/Edit view on the shared form-layout components
+  (`FormLayout`, `FormActions`, `FieldShell`, `Grid`) from `@nextlyhq/ui`.
+
+  The view no longer hand-rolls its own card, page padding or a negative-margin
+  hack to escape that padding; `FormLayout` owns the measure. The submit and
+  cancel actions moved into one `FormActions` bar at the end of the page, fed the
+  form state's existing dirty flag instead of a second, separately-rendered
+  unsaved-changes indicator. The Settings and Notifications tabs no longer cap
+  their own width, so they fill the page measure instead of sitting narrower
+  than it. The Notifications sheet's two-column rows moved off a viewport
+  breakpoint onto `Grid`'s container-query mode, since the admin content region
+  is narrower than the window whenever both sidebars are open.
+
+  Simple single-element fields (plain text/email inputs) now render through
+  `FieldShell` for their label, description and error wiring.
+
+  `FieldShell`'s `children` now also accepts a function —
+  `(field: FieldShellRenderProps) => ReactNode`, `FieldShellRenderProps` newly
+  exported — receiving the `{ id, describedBy, invalid }` it computes so a
+  caller can apply that wiring to a nested element instead of relying on a
+  single top-level `cloneElement`. This is what a compound Radix control needs:
+  `Select`'s root destructures a fixed prop list and never forwards the rest,
+  so an id cloned onto it never reaches the real, focusable `SelectTrigger` two
+  levels down — silently, with no error and no warning. Both call paths derive
+  their id/`aria-describedby`/`aria-invalid` from one shared computation, so
+  they cannot drift into disagreeing about the same field. In development,
+  `FieldShell` now also checks after mount whether the id it computed landed on
+  any element in the document at all, and warns once, by field name, if it did
+  not — the general form of the defect a compound control's dropped id was a
+  specific case of. Every `Select`-driven field in the form builder's Create/
+  Edit view and its Notifications sheet (Status, Email provider, Email
+  template, Send-to type, Recipient address in field mode, Reply-To mode,
+  Reply-To visitor-field in field mode, and the send-condition Field and
+  Comparison pickers) now goes through `FieldShell` using this render-function
+  form, wiring their `SelectTrigger` correctly for the first time. `RadioGroup`,
+  `AddressChipList` and the horizontal label-left/control-right rows
+  (`SettingRow`, the Enabled toggle) stay hand-rolled for their own, unrelated
+  reasons, each documented at its own call site.
+
+- [#917](https://github.com/nextlyhq/nextly/pull/917) [`9d3b241`](https://github.com/nextlyhq/nextly/commit/9d3b241694672f8996690bb0115115ddb846fecc) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - fix(admin): describe a field only when a description renders
+
+  `FormControl` named the description element in `aria-describedby`
+  unconditionally, while `FormDescription` renders nothing when it has no
+  children. Every field without a description therefore pointed assistive
+  technology at an element that was never on the page: the admin has 76
+  `FormControl` usages against 3 `FormDescription`, and 13 of the 14 files using
+  `FormControl` contain no description at all.
+
+  `FormDescription` now registers its presence on the field context and
+  `FormControl` composes `aria-describedby` from the elements that actually
+  render. Measured in a browser across eight admin form routes in both themes:
+  five dangling references before, zero after.
+
+- [#967](https://github.com/nextlyhq/nextly/pull/967) [`7dc4c4d`](https://github.com/nextlyhq/nextly/commit/7dc4c4d87c42f9f47d720ec6de95dc336cceeb11) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Opening a document's version history no longer takes the document away. The panel was built on a
+  modal surface, so it dimmed the page behind a scrim, trapped focus inside itself and withdrew
+  everything else from the accessibility tree — leaving the one thing an editor needs beside a
+  version, the document itself, unreachable and unscrollable. It is now a non-modal panel: the page
+  stays lit, scrollable and focusable while history is open, and the panel closes from its own
+  controls or Escape rather than from any click into the page.
+
+  The Sheet primitive gains the same capability for every caller. Its root already accepted Radix's
+  modal flag; the scrim is now derived from that one value rather than decided separately by the
+  content, so a non-modal sheet cannot paint a scrim over a page it deliberately left interactive.
+  Existing sheets are unchanged, because modal remains the default.
+
+- [#874](https://github.com/nextlyhq/nextly/pull/874) [`09e8a8c`](https://github.com/nextlyhq/nextly/commit/09e8a8c4325eec4a27a49be2ed442dd1243f88e6) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Scaffolding into a project whose instruction files include one another through
+  symlinks no longer writes a pointer that loops.
+
+  A relative include resolves from the directory it was written in, so one file
+  reached through two aliases in different directories points at two different
+  targets. The scaffolder now identifies a visited file by that pair rather than by
+  the file alone, so an alias whose includes lead somewhere new is followed instead
+  of skipped.
+
+- [#977](https://github.com/nextlyhq/nextly/pull/977) [`fa0db5e`](https://github.com/nextlyhq/nextly/commit/fa0db5eb51c477fc2b73cd6bcf04252bd774736e) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The selected block can be moved with the keyboard: alt+arrow up and down reorder it, alt+arrow left and right move it out of and into a container. Dragging is not the only way to reorder a page, which WCAG 2.2 requires of any function operated by a drag.
+
+- [#979](https://github.com/nextlyhq/nextly/pull/979) [`d16b42c`](https://github.com/nextlyhq/nextly/commit/d16b42cae03c18417bad7728fc49ab31ba3abbbd) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Hiding a column in an admin list now sticks. The control has always been there, but only the
+  collection-entries list remembered what you chose — everywhere else, narrowing a wide table
+  lasted until you closed the tab. Roles remembers now, and the rest follow the same route.
+
+- [#975](https://github.com/nextlyhq/nextly/pull/975) [`02a4df8`](https://github.com/nextlyhq/nextly/commit/02a4df814dbbd1ef84308e25244537095da696ea) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Every admin list now shares one layout. Loading and failure are part of it: a list that is still
+  loading, or that failed to load, keeps its search field and controls in place instead of
+  replacing the whole page with a message. The search box no longer disappears from under you the
+  moment you type, and the page no longer jumps when results arrive.
+
+  Email providers keeps its type filter visible in the toolbar rather than behind a dropdown, so
+  you can see what the list is filtered to without opening anything.
+
+- [#972](https://github.com/nextlyhq/nextly/pull/972) [`1b369d1`](https://github.com/nextlyhq/nextly/commit/1b369d1a60ee2174fe94c7c984394de988d3bfd7) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Collections, field groups and Singles use the shared list layout, so search, filters, the column
+  control and the spacing above the table match every other list in the admin.
+
+  Their empty states are part of that now. Each page carried its own, and each drew the same
+  distinction by hand — one message when the list is genuinely empty, with a button to create the
+  first record, and a different one when a search or filter simply matched nothing. That rule now
+  lives in one place, so no list can drift into offering "create your first" to someone whose
+  search just came up short. The empty state also reads as a heading to a screen reader, which it
+  did not before.
+
+  When a collections or field-groups list fails to load, the page now reports it the way every
+  other list reports a failure, instead of showing a separate warning above a table that is still
+  drawn.
+
+- [#968](https://github.com/nextlyhq/nextly/pull/968) [`135137e`](https://github.com/nextlyhq/nextly/commit/135137e476f4f8cc3f21f5c6c9a7f742130ed3c8) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Two more admin lists — API keys and image sizes — use the shared list layout, so their search
+  field, column control and spacing match the rest of the admin instead of each carrying their own.
+  The image-sizes note about config-defined sizes now sits with the list it describes.
+
+- [#959](https://github.com/nextlyhq/nextly/pull/959) [`4524623`](https://github.com/nextlyhq/nextly/commit/452462393dd6f1145f80c4d89e5b64f2c4f8e69a) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Admin lists now share one layout above the table. Search, filters, the columns control, the
+  selection bar and the empty state came from four different arrangements depending on which page
+  you were on, so the gap above the table and the width of the search field changed as you moved
+  around the admin. They now come from one place.
+
+  The columns control is part of that shared layout rather than living on a single page, so it is
+  available to every list that wants it instead of only to collection entries.
+
+  An empty list now says something different when a search or filter is applied: it tells you the
+  query matched nothing, rather than inviting you to create your first record when the records are
+  only filtered out.
+
+  Tabs draw the rail their indicator was designed to sit on. Each tab drew a 2px underline and
+  pulled itself up onto a line the tab strip was not drawing, so that underline landed on whatever
+  followed the tabs — including, above a rounded panel, its corner.
+
+- [#949](https://github.com/nextlyhq/nextly/pull/949) [`9142a57`](https://github.com/nextlyhq/nextly/commit/9142a576b9cacfb615566304b857bb8f74e5e834) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Field-group storage migration no longer rewrites the vocabulary stored inside field definitions. It renamed a stored field's `type` to a spelling no runtime code reads, so a migrated database held definitions the application refused at boot. Table, column and registry renames are unchanged, and a database migrated by an earlier build is repaired by rolling back and re-running.
+
+- [#928](https://github.com/nextlyhq/nextly/pull/928) [`651f952`](https://github.com/nextlyhq/nextly/commit/651f9527be72e3738ab44816258d1e5c65b5fd07) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - `nextly migrate:field-groups` renames field-group storage to its current names, and previews by default.
+
+  Field groups were called components once, and the old vocabulary is still in the database: the registry table, each field group's data table, and the column naming which field group a stored row belongs to. Nextly reads whichever generation a database holds, so nothing forces this — a site that never runs it keeps working. This is the command for tidying it up, one site at a time.
+
+  Running it with no flags writes nothing and prints the plan. Applying is `--apply`, which requires `--backup-confirmed` alongside it, and `--down` rolls a completed migration back. A preview takes no lock and issues no DDL, so it can be run with a read-only credential.
+
+  The preview reports three things separately, because they answer different questions: every storage object that would be renamed, listed by name rather than counted; whether the plan was checked against your database or merely proposed, since another run writing at the same time makes the list an upper bound; and what could be seen of the migration lock, where "nothing is running" and "the lock could not be read" are reported as the different answers they are.
+
+  A new guide, Field group storage migration, covers the per-site runbook, how to read the preview, and rollback.
+
+- [#937](https://github.com/nextlyhq/nextly/pull/937) [`bf4bc63`](https://github.com/nextlyhq/nextly/commit/bf4bc63ed868f3abecf14eae10525ea61a52cd55) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - `nextly migrate:field-groups --apply` could not complete.
+
+  The command installed no table resolver, so the migration failed at its first system-table read with "Table \"dynamic_collections\" not found in schema registry" — on every database. Previewing was unaffected, which is why it was not caught: a preview stops before the writes that resolve tables, so the command previewed correctly and then failed on the first real run.
+
+  Both spellings of the field-group registry are now registered, because this is the one operation that runs while that name is changing.
+
+- [#924](https://github.com/nextlyhq/nextly/pull/924) [`8e4f633`](https://github.com/nextlyhq/nextly/commit/8e4f6335f49f192f72144d36082c5739e990df25) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - feat(blocks-react): give the editor a per-node DOM address
+
+  `PageRenderer` gains `nodeAttribute`, OFF by default. Turned on, each block's
+  root carries `data-nx-node="<node id>"` — the only per-node hook that reaches the
+  DOM independently of styling.
+
+  The scoped class cannot serve: `classNameFor` returns the block-TYPE class alone
+  for a node with no compiled styles, so hit-testing on the class cannot address an
+  unstyled node and would resolve to the wrong instance. Most nodes on a real page
+  are unstyled.
+
+  The attribute is applied ABOVE `withNodeAttributes`' early return rather than
+  joined to its allowlist loop, because that return fires for any node with no
+  `cssId` and no `attributes` — nearly every node — so an address on the loop would
+  have landed on almost nothing while a fixture setting either field passed.
+
+  Off by default because a published page should not carry editor concerns, which
+  is why Gutenberg's `data-block` is editor-only. Opt-in is also reversible;
+  always-on would be a breaking change to remove.
+
+  `NODE_ID_ATTRIBUTE` is published so an editor never hard-codes the spelling.
+
+- [#952](https://github.com/nextlyhq/nextly/pull/952) [`b7fa15a`](https://github.com/nextlyhq/nextly/commit/b7fa15a17657903e040a42a5400632dfbee57e7f) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Pages are built from blocks. The per-entry choice between the page builder and a rich-text editor is retired, so how an entry is edited is decided by its fields rather than stored on each entry.
+
+- [#960](https://github.com/nextlyhq/nextly/pull/960) [`92c88a0`](https://github.com/nextlyhq/nextly/commit/92c88a0685a72e2c0364576afc747433e2bd2c74) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - fix(tsconfig): give each package its own incremental build info
+
+  `tsBuildInfoFile` was declared as a plain relative path in the shared base
+  config, and a relative path there resolves against the file that declares it —
+  not against the config extending it. Every package in the workspace therefore
+  wrote its TypeScript incremental state to one shared file inside
+  `packages/tsconfig`, each `tsc` run overwriting the last, so the state a package
+  read back always described a different program. Turbo runs these in parallel,
+  so they also raced to write it.
+
+  The same path put the file outside every package's own directory, so turbo's
+  package-scoped `outputs` matched nothing and 21 packages logged
+  `no output files found for task <pkg>#check-types` on every run.
+
+  `${configDir}` resolves to the directory of the extending config, which is what
+  was meant. Removing the option instead is not available: tsup's dts step drives
+  tsc through flags rather than a config file, where `--incremental` without an
+  explicit `--tsBuildInfoFile` is TS5074 and fails the build.
+
+- [#944](https://github.com/nextlyhq/nextly/pull/944) [`76a87de`](https://github.com/nextlyhq/nextly/commit/76a87de75fa6acab7606b3225abb6da43a590e57) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A field provided by a plugin no longer flashes "Unknown field type" while the admin is still loading which plugins are installed.
+
+- [#855](https://github.com/nextlyhq/nextly/pull/855) [`dcfe35d`](https://github.com/nextlyhq/nextly/commit/dcfe35dac4e86734eb4605a3895a6ffcd08fe8ef) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Resolve an entry preview URL in one place, on the server.
+
+  A collection declares its preview two ways and they are disjoint: code-first writes a function of the entry, a UI-created collection writes a template string. Both are now answered by one resolver, so the admin asks where an entry previews instead of deciding for itself.
+
+  Resolving on the server is what makes the preview button reachable for editors and authors. The site URL sits behind a settings permission neither role holds, so a browser-side answer was unavailable to exactly the people who share previews.
+
+- [#971](https://github.com/nextlyhq/nextly/pull/971) [`b867052`](https://github.com/nextlyhq/nextly/commit/b867052dea9e00b84fcfc161f736e8d017f350c5) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A read-only rich-text field no longer shows a row of dead formatting buttons. The toolbar was
+  rendered and greyed rather than omitted, so every read-only rich-text field carried a band of
+  controls that could not be used, and assistive technology found a toolbar with a dozen unusable
+  buttons in it. The other structured inputs already drop their controls when the field cannot be
+  edited; this one now matches them.
+
+- [#886](https://github.com/nextlyhq/nextly/pull/886) [`58a7707`](https://github.com/nextlyhq/nextly/commit/58a77077950cdb9599d5020f109740f96abb97fe) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A table rebuilt from a live PostgreSQL snapshot keeps its declared column widths instead of widening them to unbounded.
+
+- [#934](https://github.com/nextlyhq/nextly/pull/934) [`416bf6d`](https://github.com/nextlyhq/nextly/commit/416bf6d23699417f9f94c389fc562597ec8a659b) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Remove the page builder's parallel document model, renderer and editor. Documents are the engine's `BlockDocument`, blocks render through `@nextlyhq/blocks-react`, and the plugin registers the `blocks` field rather than implementing an editor of its own. The `./render` entry is gone; `./admin` now exports only the blocks field's summary component.
+
+- [#885](https://github.com/nextlyhq/nextly/pull/885) [`1b9e433`](https://github.com/nextlyhq/nextly/commit/1b9e433287a366c89d3a44df3e4ba0bcd3328dca) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A content route now tells its `draft` decision which locale it reads in, and `previewDraftGate` compares the token against that locale rather than one configured separately. A preview link scoped to one translation is no longer accepted for another.
+
+- [#908](https://github.com/nextlyhq/nextly/pull/908) [`033235a`](https://github.com/nextlyhq/nextly/commit/033235a7cf762426ed3ea389a4586d2aff58c7fa) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - feat(blocks-react): a route emits the site stylesheet by default
+
+  `createBlocksPage` gains `siteStyles` and supplies a sheet by DEFAULT, unlike the
+  bare `PageRenderer`. Without one, every `{ $token }` resolves to nothing — and a
+  framework route is exactly where "it should already work" is the right answer.
+  `PageRenderer` stays opt-in because a standalone consumer owns its own `<head>`
+  and may already emit a token sheet; a Nextly route owns neither.
+
+  Default-on was licensed by measurement rather than assumed safe: no block
+  declares a token (enforced by a ratchet over every `baseStyles`) and no seeded or
+  fixture document references one, so nothing's appearance can change by the
+  definitions arriving.
+
+  `breakpoints` falls back to `styleContext`'s, derived once — two answers to "what
+  are this site's breakpoints" is how the shared sheet and the page sheet come to
+  disagree about which at-rules a tier compiles under, invisibly, because each
+  sheet is internally consistent on its own.
+
+  The root entry now re-exports `SiteSheetInput` and its transitive closure
+  (`SiteTokenSet`, `SiteToken`, `TokenKind`, `FontFaceDef`, `FontSource`,
+  `DarkModeStrategy`), so a consumer can construct a site's design system rather
+  than merely name the prop.
+
+- [#976](https://github.com/nextlyhq/nextly/pull/976) [`942d5d1`](https://github.com/nextlyhq/nextly/commit/942d5d1b47bf14ce6a22761d6176fadf0739d06a) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Routes now declare which sidebar section they belong to, and plugins can choose where their own pages and menu items appear.
+
+  The admin sidebar previously decided which navigation icon was active by matching the URL against a list of paths, falling back to Dashboard when none matched. A route missing from that list did not fail — it quietly highlighted Dashboard, which looks identical to a page that really is Dashboard. That is how a top-level admin route shipped highlighting the wrong entry, unnoticed.
+
+  Each route now states its own section, and the type system requires it: a new admin route that does not say where it belongs fails to build instead of appearing in the wrong place.
+
+  For plugin authors, admin pages and menu items accept an optional `section`, so a plugin is no longer confined to the Plugins area. Omitting it defers to the plugin's own placement, so a plugin that already declares where it lives does not repeat itself for every page, and `"standalone"` reuses the top-level entry and icon such a plugin already gets for its collections.
+
+- [#793](https://github.com/nextlyhq/nextly/pull/793) [`bb98ed8`](https://github.com/nextlyhq/nextly/commit/bb98ed825029344476407d13cdec0f0b3feb83a1) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Scaffolded projects now ship an `AGENTS.md` agent guide and a `CLAUDE.md` that
+  points at it, following the pattern the monorepo uses for itself.
+
+  The guide is written for a coding agent picking the project up cold: where the
+  config and collections live, which commands exist, and the things that surprise
+  people — that `find()` is loosely typed until `types:generate` runs, that users
+  are read through their own namespace rather than as a collection, and that a
+  migration you generate is a single file in this project's own dialect, while a
+  suffixed set beside it means that migration was shipped rather than generated.
+
+  The generated content sits inside a managed block, so a future regeneration can
+  replace it without touching notes written above or below it.
+
+- [#954](https://github.com/nextlyhq/nextly/pull/954) [`17c9613`](https://github.com/nextlyhq/nextly/commit/17c961329ca69fec6237cdd0630c53bef3eecc2d) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - When a schema change is blocked by a stale migration lock, the error now names the command that clears it instead of advising a retry that cannot succeed.
+
+- [#883](https://github.com/nextlyhq/nextly/pull/883) [`565f81a`](https://github.com/nextlyhq/nextly/commit/565f81ad2904963c51a19c6d5b8f4b7cbec87492) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Schema snapshots now record a column's declared size or precision, so field-group repair can tell a resized column from an unchanged one on PostgreSQL.
+
+- [#955](https://github.com/nextlyhq/nextly/pull/955) [`50f1f43`](https://github.com/nextlyhq/nextly/commit/50f1f4348e75188ddf7dc134a448c363e74ba504) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - fix(admin): name the settings secret field and verify label landing
+
+  `SettingsRow` emits a `<label for>` for every row, while whether anything claims
+  that id depends entirely on what the caller passes as children. The email
+  provider's secret field wrapped its control in a positioning `<div>` inside
+  `FormControl`, which is a Radix `Slot` and clones onto its single child — so the
+  id, `aria-describedby` and `aria-invalid` all landed on the div. A label cannot
+  name a div, so the API key and SMTP password fields had no accessible name and
+  their validation errors were never announced, while the id still resolved.
+
+  `FormControl` now sits on the input itself, and a development-time check reports
+  both ways a label can fail to reach a control: an id nothing carries, and an id
+  carried by an element a label cannot name. The mechanism is shared with the
+  entry-form fields, which previously carried a presence-only copy that could not
+  see the second case.
+
+- [#892](https://github.com/nextlyhq/nextly/pull/892) [`f41d727`](https://github.com/nextlyhq/nextly/commit/f41d727897b6a8557da35f86b39b0f61e4e66866) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Dropdowns and pickers opened inside the page editor no longer stay on screen when the editor hides itself. If the editor did not have enough width it would show a notice explaining that, while an open dropdown floated on top of the notice and could still be clicked.
+
+- [#884](https://github.com/nextlyhq/nextly/pull/884) [`fde0372`](https://github.com/nextlyhq/nextly/commit/fde03721180cc972195bc8ff460426c8fd91e97a) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The page editor now decides whether it fits by measuring the space it was actually given, rather than the size of the browser window. Embedded as a field inside a form on a wide screen, it used to conclude it had room and squeeze the rail, panel and canvas below the widths they need; it now says it needs more width in that case, and goes back to the full layout as soon as the space grows again.
+
+  The media picker also no longer floats over that message. It opens in a layer outside the editor, so hiding the editor left an open picker visible and clickable on top of the notice saying the editor was unavailable.
+
+- [#887](https://github.com/nextlyhq/nextly/pull/887) [`f5a5c9c`](https://github.com/nextlyhq/nextly/commit/f5a5c9cfd1fd97d04c5cca62a5a81d82315df2a6) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The page editor now says it needs more width, rather than a wider screen, when it cannot fit. It measures the space it was given, so an editor placed in a narrow column on a large display was telling authors their screen was too small, which was both untrue and impossible to act on.
+
+- [#918](https://github.com/nextlyhq/nextly/pull/918) [`8f9f7cb`](https://github.com/nextlyhq/nextly/commit/8f9f7cb9d05b41222576d66730b8dd0872871a6a) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - feat(admin): record and recover autosaved work in Singles
+
+  Singles get the same recovery points the entry editor already had: recorded
+  while the author types, offered back on open, and reported in the header beside
+  the save action.
+
+  Autosave was previously present in one editor and silently absent in the other,
+  which is a worse state than either extreme because nothing tells the author
+  which one they are in.
+
+- [#916](https://github.com/nextlyhq/nextly/pull/916) [`0ba8307`](https://github.com/nextlyhq/nextly/commit/0ba83079d661cd35ab85642b5374be5ab15fbc8f) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - feat(blocks-react): emit the design-token sheet by default from PageRenderer too
+
+  `PageRenderer` was opt-in while a Nextly route emitted by default, and the
+  asymmetry cost more than it saved: a block could not reference a token at all,
+  because a default reading `color.surface` resolved on a route and silently
+  resolved to nothing in a standalone render. `core/card` shipped with no
+  background and no border for that reason, and the pressure that produced six
+  blocks reaching for the admin `--nx-*` namespace stayed exactly where it was.
+
+  Both paths now emit, and a host opts out with `siteStyles={false}` — an explicit
+  refusal rather than an empty token list, because `resolveSiteTokens` LAYERS, so
+  an empty override means "no overrides" and still yields every default. A test is
+  what found that the opt-out did not exist at all.
+
+  Breakpoints come from the RECONCILED compile context rather than the caller's
+  `styleContext`, so a consumer rendering a stored artifact — the ordinary
+  production path — gets a sheet instead of nothing.
+
+- [#903](https://github.com/nextlyhq/nextly/pull/903) [`cc50a87`](https://github.com/nextlyhq/nextly/commit/cc50a871ff0398698fe828667229346861bcb33d) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - feat(blocks-react): emit the site stylesheet, so design tokens resolve at all
+
+  `PageRenderer` gains an opt-in `siteStyles` prop that compiles the shared sheet
+  and emits it BEFORE the page's own, and `blocks-engine` gains
+  `resolveSiteTokens`, which layers a site's own tokens over the defaults by name.
+
+  Until now nothing in the repository called `compileSiteSheet`. The token
+  pipeline was built, tested and unreachable: `defaultSiteTokens()` was a default
+  nobody applied, and every `{ $token }` compiled to a `var()` with nothing behind
+  it. Three shipped blocks were broken by that and nothing reported it, because an
+  unresolved custom property makes the declaration invalid at computed-value time
+  and the property silently falls back to its initial value.
+
+  Order is the cascade: font faces, tokens and block-type defaults first, the
+  page's own sheet after, which is what lets a node's own value beat a class and a
+  class beat a block default.
+
+  Layering rather than replacing means a site supplying one brand colour does not
+  thereby lose `content.width` and `space.4`. This is the arrangement Gutenberg's
+  `theme.json` reaches — core defaults, then the theme's file, then the user's
+  saved styles — and a stored per-site override layers the same way, so the third
+  tier needs no new mechanism.
+
+  Opt-in rather than automatic: emitting token definitions unasked changes what a
+  stored token reference resolves to, and a page whose current appearance depends
+  on one dangling is a page that moves.
+
+- [#911](https://github.com/nextlyhq/nextly/pull/911) [`2d7cebd`](https://github.com/nextlyhq/nextly/commit/2d7cebdf5fab4f7c7d26cb739e72606ea90963de) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - feat(blocks-engine): add color.surface, color.border and color.muted to the guaranteed token set
+
+  The guaranteed set had no surface colour and no border colour, and their absence
+  made four blocks compromise: `core/card` shipped with no background and no
+  border, `badge` was unbuildable because a tinted background IS the block, the
+  accordion had no divider and the table no border colour.
+
+  It also created a defect class. Because nothing in the set could express a
+  surface, six blocks across three lanes independently reached for `--nx-*` — the
+  ADMIN namespace, which no published page emits, so those rules validated,
+  compiled, shipped and resolved to nothing. That is design pressure rather than
+  six mistakes: when the correct mechanism is missing, whatever resembles it gets
+  used.
+
+  All three define both light and dark values, and a test now requires that of
+  every colour token rather than only the new ones — a colour defined only for
+  light silently keeps its light value on a dark page. `color.muted` was chosen to
+  clear WCAG AA against `color.background` in both modes rather than by eye,
+  because a muted token that fails contrast is worse than none: it reads as
+  sanctioned.
+
+  One border colour rather than a subtle/strong scale. A scale is much harder to
+  remove from a guaranteed set than to add to one, and no block has asked for the
+  distinction; a site wanting more defines its own, and `resolveSiteTokens` layers
+  additions by name.
+
+- [#962](https://github.com/nextlyhq/nextly/pull/962) [`b4a0e9c`](https://github.com/nextlyhq/nextly/commit/b4a0e9c40c8f74362224803a7d8eaf8db4733905) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Vertical tabs draw their selection line down the side of the list rather than across the bottom
+  of it. The component has always documented a vertical arrangement, but the rail beneath the tab
+  strip and the marker on the selected tab were both fixed to the bottom edge, so a vertical list
+  got a horizontal line underneath it and its selected tab was marked on the wrong side. Both now
+  follow the same edge, so they cannot end up on different axes.
+
+- [#930](https://github.com/nextlyhq/nextly/pull/930) [`b20b41e`](https://github.com/nextlyhq/nextly/commit/b20b41e6c5bdab57b1081e7e9380d28bfa890e6b) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - The schema builder and the form builder now draw validation bounds with the
+  same control.
+
+  Both drew their own before, and they disagreed about what a bound accepts: one
+  allowed a minimum length of -5 or 2.7, the other did not. Lengths and row
+  counts are now whole numbers of zero or more everywhere, while a bound on a
+  value stays free to be negative or fractional.
+
+  Clearing a bound now means "no bound" rather than zero, in both builders, and
+  each control carries its own identifier so two editors open at once no longer
+  share one.
+
+  Plugin authors can use the same control: `ValidationNumberField` is available
+  from `@nextlyhq/plugin-sdk/admin`.
+
+- [#956](https://github.com/nextlyhq/nextly/pull/956) [`ec90b04`](https://github.com/nextlyhq/nextly/commit/ec90b04eb763793702ddd1afa82e08c78c65ba5d) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Comparing two versions now opens a dialog sized for a comparison instead of a third mode inside
+  the 480px history panel. A diff is a two-column reading by nature, and that panel could not hold
+  two columns, so the comparison was written to stack; each field now states its before and after
+  side by side under headings naming the two versions, and folds back into a stack only where the
+  surface is genuinely too narrow for two. A field that exists on one side only says so on the
+  other, rather than leaving a blank that reads the same as an empty value. The history panel keeps
+  its list and preview and no longer swaps its body out to compare.
+
+- [#974](https://github.com/nextlyhq/nextly/pull/974) [`4891d3f`](https://github.com/nextlyhq/nextly/commit/4891d3fae8ca1ce9a75ef3e44e38357b4f967888) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - A past version now reads the way the document reads. Previewing one used to go through a viewer
+  written only for version history, which had its own idea of how each field type looked and knew
+  nothing about tabs, rows or collapsible sections — so a version was legible but never quite the
+  page it came from. It is drawn by the editor's own field components now, read-only, which means
+  layout survives, every field type presents exactly as it does when editing, and a field type added
+  in future is supported in history the day it renders in the editor.
+
+  The snapshot is rendered against its own form rather than loaded into the live one. Nothing an
+  editor has typed is disturbed by opening a version, and no historical value can reach a save or an
+  autosave, because those values never enter the form that either of them reads.
+
+- [#978](https://github.com/nextlyhq/nextly/pull/978) [`4fb19fe`](https://github.com/nextlyhq/nextly/commit/4fb19feb500e33941ab32fd0f7e4ae2cb29b36a0) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Two defects in how a past version renders, both found in review.
+
+  Selecting a second version while the panel stayed open left the previous version's values on screen
+  under the new version's heading. The form read its values once when it mounted, and the panel does
+  not remount it between selections; it now follows a changed snapshot itself, so the correct
+  behaviour belongs to the component rather than to every caller remembering to remount it.
+
+  Structured fields could render empty for a version that plainly held something. A snapshot is
+  captured from the persisted row, so a JSON-backed field arrives as text on SQLite and as an object
+  on Postgres and MySQL, and a boolean arrives in any of four spellings. Those values are now read
+  into runtime shapes before the editor sees them, through the same coercion the diff and the value
+  kit already use.
+
+- [#894](https://github.com/nextlyhq/nextly/pull/894) [`05fa889`](https://github.com/nextlyhq/nextly/commit/05fa88981d5df7dcb5cb6a77dee4046f4d5039e5) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - feat(nextly): add a concurrency token to the autosave compare-and-set
+
+  The rolling autosave row is rewritten in place, guarded by a compare-and-set so
+  that two tabs belonging to one author cannot overwrite each other. That guard
+  compared `updated_at` against the value the write had observed, and the stored
+  resolution of a timestamp differs per dialect: SQLite keeps whole epoch seconds
+  and MySQL milliseconds. Two rewrites close enough together serialize
+  identically, so the second writer observes exactly what the first wrote, its
+  predicate matches, and it overwrites newer work believing the row untouched.
+
+  `nextly_versions` gains a monotonic `revision` counter. The compare-and-set
+  reads it, applies only while the row still holds it, and writes its successor.
+  A counter has no resolution to exhaust, so the guard holds however close
+  together two writes fall.
+
+  The column is additive and carries a default, so `nextly migrate` adds it to
+  databases that already exist rather than refusing the migration.
+
+- [#973](https://github.com/nextlyhq/nextly/pull/973) [`0d974f7`](https://github.com/nextlyhq/nextly/commit/0d974f738a633ea7280726bffb5b4ee3ad04cdd0) Thanks [@mobeenabdullah](https://github.com/mobeenabdullah)! - Fix two defects in `@nextlyhq/eslint-plugin`'s colour vocabulary.
+
+  `no-palette-classes` missed a fixed palette colour placed behind an arbitrary Tailwind variant — `data-[state=open]:bg-red-500`, `supports-[display:grid]:bg-red-500` and the bracket-led `[&>*]:bg-red-500` all reported clean, so a colour that ignores dark mode and retheming passed lint.
+
+  `no-hardcoded-colors` rejected the four-digit spelling of the mode-invariant colours it documents as legitimate: `#0000` and `#fff8` were reported as hardcoded, because alpha was only offered on the six-digit forms.
+
+- Updated dependencies [[`bf1477a`](https://github.com/nextlyhq/nextly/commit/bf1477aa82fdcca011b955a8764d1a2848e7e04b), [`1cb27c2`](https://github.com/nextlyhq/nextly/commit/1cb27c201fef195bd470c3d7bd54d4621dfb6610), [`70ab60f`](https://github.com/nextlyhq/nextly/commit/70ab60f8dfac2bb5b231f04c217ba555ef1596ac), [`01b32a2`](https://github.com/nextlyhq/nextly/commit/01b32a21c45c52e9cdd90c5464cbf86743a3c2ff), [`8efeff5`](https://github.com/nextlyhq/nextly/commit/8efeff5b4d6c83936629a8594ef493cc4450cff5), [`8ff3ed3`](https://github.com/nextlyhq/nextly/commit/8ff3ed33e40a9f6b238eecea889249f6086f9cd0), [`67926e3`](https://github.com/nextlyhq/nextly/commit/67926e3f70c5c17f40c2b424fe20fec4b1e6c727), [`9ea28f1`](https://github.com/nextlyhq/nextly/commit/9ea28f10c0b49f3161e4ad7f4acf394aa09b3fdd), [`1dd9b90`](https://github.com/nextlyhq/nextly/commit/1dd9b90cfe67c220ddf12495d6d6126b4bd76f45), [`69f3a61`](https://github.com/nextlyhq/nextly/commit/69f3a6141aeb610844216346790b4e6b25b9cf9e), [`7fa0cc2`](https://github.com/nextlyhq/nextly/commit/7fa0cc27abfab02cf2e960f616848106f4b99b8c), [`5c0a5ff`](https://github.com/nextlyhq/nextly/commit/5c0a5ffcd6b3d4498b2b443608df1854ba50ceac), [`2585aab`](https://github.com/nextlyhq/nextly/commit/2585aabea3bdd27a9ba7be33fe6730a35a448c09), [`f19b259`](https://github.com/nextlyhq/nextly/commit/f19b259f08e3feafe59864571a39e9e65e3c5db9), [`53c9909`](https://github.com/nextlyhq/nextly/commit/53c9909839bb16e4af86f3a94e36de1682346186), [`2638c5f`](https://github.com/nextlyhq/nextly/commit/2638c5f5ecf431d1d10745cb4e6d660cf2f60f5a), [`68a2903`](https://github.com/nextlyhq/nextly/commit/68a2903c47c8037dfcbe722a9e233869b9bee61d), [`27b8b45`](https://github.com/nextlyhq/nextly/commit/27b8b455f0327aaa74389d37ff023bd7d16db5bd), [`c17e9f6`](https://github.com/nextlyhq/nextly/commit/c17e9f6717750c8c31adf968a2be8b67b448bf25), [`aef5d90`](https://github.com/nextlyhq/nextly/commit/aef5d909feff93e773dd03cc4133b51b1ad1bd41), [`a458074`](https://github.com/nextlyhq/nextly/commit/a45807451d1572cdb44ebfbd9421af49909cc036), [`f6497c7`](https://github.com/nextlyhq/nextly/commit/f6497c788a29c36b72a05574b6afa0c348b658f2), [`e3bafe8`](https://github.com/nextlyhq/nextly/commit/e3bafe82889959fe90ba8bd8b40d721eeaa66d31), [`cfabd89`](https://github.com/nextlyhq/nextly/commit/cfabd89a0fcf4a4a746da88666c744f9c71c54fc), [`e50fcbf`](https://github.com/nextlyhq/nextly/commit/e50fcbf7dc74a87305dc94c1c53d1fdd2671bc3d), [`ac1d8e1`](https://github.com/nextlyhq/nextly/commit/ac1d8e1e0c1cc60064ec39d401badc7251672593), [`0277719`](https://github.com/nextlyhq/nextly/commit/0277719b340ccc05f57c97eab4129bae100a58f3), [`4e4272a`](https://github.com/nextlyhq/nextly/commit/4e4272abe35d656e4081e05fa80302040f65bd81), [`566b592`](https://github.com/nextlyhq/nextly/commit/566b592a74cd2a8ccbece30b629b8512fa5c3fcc), [`7acb441`](https://github.com/nextlyhq/nextly/commit/7acb44182c3886cc99714b49cd33759eb35d4a48), [`50d1d73`](https://github.com/nextlyhq/nextly/commit/50d1d7368f902ae3eab6e14d0716197c91963e76), [`fac7f05`](https://github.com/nextlyhq/nextly/commit/fac7f05c6e7f52ffba0c32d516ac17e97b62c069), [`412518f`](https://github.com/nextlyhq/nextly/commit/412518f3f23c1199ab887dcf486f6823005e96f6), [`e045e5c`](https://github.com/nextlyhq/nextly/commit/e045e5cfcaa8ee12f60a70bc02c77eab5da81f4b), [`33c0cd6`](https://github.com/nextlyhq/nextly/commit/33c0cd696c07dfd6a789ece5a499c1306403f49d), [`9d5111d`](https://github.com/nextlyhq/nextly/commit/9d5111dbcef507d98b3f81b3adadc19b5f37210c), [`87c544d`](https://github.com/nextlyhq/nextly/commit/87c544d6904f0f7f66f4287199f70e276ee34266), [`37fa697`](https://github.com/nextlyhq/nextly/commit/37fa6970659ac2db1355d7176706b3ae6f906985), [`51acbc2`](https://github.com/nextlyhq/nextly/commit/51acbc205506c96cfed799162a440b660037dd0b), [`a217a11`](https://github.com/nextlyhq/nextly/commit/a217a11baa95de76eb3fe05f48b0a3cf02454e58), [`7a37c01`](https://github.com/nextlyhq/nextly/commit/7a37c01c22222e23f5b4741cb2ce2e4e6a5d0c21), [`6963637`](https://github.com/nextlyhq/nextly/commit/69636376c9170e7f63260a95ce6c774d399117d7), [`486696c`](https://github.com/nextlyhq/nextly/commit/486696c2d4e3f866d6bb9c138bfd584983de6509), [`296a050`](https://github.com/nextlyhq/nextly/commit/296a050d104b99c4146bb35e3465440b81e33b4a), [`a5d1c1f`](https://github.com/nextlyhq/nextly/commit/a5d1c1f8f124e535b734ce640c019cfdf6702016), [`06ae4f4`](https://github.com/nextlyhq/nextly/commit/06ae4f4c7a989de9500ca8b0023ae00e58e2ff13), [`9d3b241`](https://github.com/nextlyhq/nextly/commit/9d3b241694672f8996690bb0115115ddb846fecc), [`7dc4c4d`](https://github.com/nextlyhq/nextly/commit/7dc4c4d87c42f9f47d720ec6de95dc336cceeb11), [`09e8a8c`](https://github.com/nextlyhq/nextly/commit/09e8a8c4325eec4a27a49be2ed442dd1243f88e6), [`fa0db5e`](https://github.com/nextlyhq/nextly/commit/fa0db5eb51c477fc2b73cd6bcf04252bd774736e), [`d16b42c`](https://github.com/nextlyhq/nextly/commit/d16b42cae03c18417bad7728fc49ab31ba3abbbd), [`02a4df8`](https://github.com/nextlyhq/nextly/commit/02a4df814dbbd1ef84308e25244537095da696ea), [`1b369d1`](https://github.com/nextlyhq/nextly/commit/1b369d1a60ee2174fe94c7c984394de988d3bfd7), [`135137e`](https://github.com/nextlyhq/nextly/commit/135137e476f4f8cc3f21f5c6c9a7f742130ed3c8), [`4524623`](https://github.com/nextlyhq/nextly/commit/452462393dd6f1145f80c4d89e5b64f2c4f8e69a), [`9142a57`](https://github.com/nextlyhq/nextly/commit/9142a576b9cacfb615566304b857bb8f74e5e834), [`651f952`](https://github.com/nextlyhq/nextly/commit/651f9527be72e3738ab44816258d1e5c65b5fd07), [`bf4bc63`](https://github.com/nextlyhq/nextly/commit/bf4bc63ed868f3abecf14eae10525ea61a52cd55), [`8e4f633`](https://github.com/nextlyhq/nextly/commit/8e4f6335f49f192f72144d36082c5739e990df25), [`b7fa15a`](https://github.com/nextlyhq/nextly/commit/b7fa15a17657903e040a42a5400632dfbee57e7f), [`92c88a0`](https://github.com/nextlyhq/nextly/commit/92c88a0685a72e2c0364576afc747433e2bd2c74), [`76a87de`](https://github.com/nextlyhq/nextly/commit/76a87de75fa6acab7606b3225abb6da43a590e57), [`dcfe35d`](https://github.com/nextlyhq/nextly/commit/dcfe35dac4e86734eb4605a3895a6ffcd08fe8ef), [`b867052`](https://github.com/nextlyhq/nextly/commit/b867052dea9e00b84fcfc161f736e8d017f350c5), [`58a7707`](https://github.com/nextlyhq/nextly/commit/58a77077950cdb9599d5020f109740f96abb97fe), [`416bf6d`](https://github.com/nextlyhq/nextly/commit/416bf6d23699417f9f94c389fc562597ec8a659b), [`1b9e433`](https://github.com/nextlyhq/nextly/commit/1b9e433287a366c89d3a44df3e4ba0bcd3328dca), [`033235a`](https://github.com/nextlyhq/nextly/commit/033235a7cf762426ed3ea389a4586d2aff58c7fa), [`942d5d1`](https://github.com/nextlyhq/nextly/commit/942d5d1b47bf14ce6a22761d6176fadf0739d06a), [`bb98ed8`](https://github.com/nextlyhq/nextly/commit/bb98ed825029344476407d13cdec0f0b3feb83a1), [`17c9613`](https://github.com/nextlyhq/nextly/commit/17c961329ca69fec6237cdd0630c53bef3eecc2d), [`565f81a`](https://github.com/nextlyhq/nextly/commit/565f81ad2904963c51a19c6d5b8f4b7cbec87492), [`50f1f43`](https://github.com/nextlyhq/nextly/commit/50f1f4348e75188ddf7dc134a448c363e74ba504), [`f41d727`](https://github.com/nextlyhq/nextly/commit/f41d727897b6a8557da35f86b39b0f61e4e66866), [`fde0372`](https://github.com/nextlyhq/nextly/commit/fde03721180cc972195bc8ff460426c8fd91e97a), [`f5a5c9c`](https://github.com/nextlyhq/nextly/commit/f5a5c9cfd1fd97d04c5cca62a5a81d82315df2a6), [`8f9f7cb`](https://github.com/nextlyhq/nextly/commit/8f9f7cb9d05b41222576d66730b8dd0872871a6a), [`0ba8307`](https://github.com/nextlyhq/nextly/commit/0ba83079d661cd35ab85642b5374be5ab15fbc8f), [`cc50a87`](https://github.com/nextlyhq/nextly/commit/cc50a871ff0398698fe828667229346861bcb33d), [`2d7cebd`](https://github.com/nextlyhq/nextly/commit/2d7cebdf5fab4f7c7d26cb739e72606ea90963de), [`b4a0e9c`](https://github.com/nextlyhq/nextly/commit/b4a0e9c40c8f74362224803a7d8eaf8db4733905), [`b20b41e`](https://github.com/nextlyhq/nextly/commit/b20b41e6c5bdab57b1081e7e9380d28bfa890e6b), [`ec90b04`](https://github.com/nextlyhq/nextly/commit/ec90b04eb763793702ddd1afa82e08c78c65ba5d), [`4891d3f`](https://github.com/nextlyhq/nextly/commit/4891d3fae8ca1ce9a75ef3e44e38357b4f967888), [`4fb19fe`](https://github.com/nextlyhq/nextly/commit/4fb19feb500e33941ab32fd0f7e4ae2cb29b36a0), [`05fa889`](https://github.com/nextlyhq/nextly/commit/05fa88981d5df7dcb5cb6a77dee4046f4d5039e5), [`0d974f7`](https://github.com/nextlyhq/nextly/commit/0d974f738a633ea7280726bffb5b4ee3ad04cdd0)]:
+  - nextly@0.0.2-alpha.59
+  - @nextlyhq/ui@0.0.2-alpha.59
+
 ## 0.0.2-alpha.58
 
 ### Patch Changes

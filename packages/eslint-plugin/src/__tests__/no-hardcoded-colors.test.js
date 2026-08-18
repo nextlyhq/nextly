@@ -27,12 +27,66 @@ ruleTester.run("no-hardcoded-colors", rule, {
     `const a = "var(--nx-primary)";`,
     // A data URI's payload is content, not styling.
     `const a = "url(data:image/svg+xml;base64,PHN2ZyBmaWxsPScjZmYwMDAwJy8+)";`,
+    // A colour NAME is an ordinary word too, so it is only a violation in a
+    // position that makes it a colour. None of these is one.
+    `const a = "the red team won";`,
+    `const a = { fruit: "plum", wood: "teal" };`,
+    `const a = "scarlet: red";`,
+    `const a = { label: "Tomato", description: "a salmon dish" };`,
+    // A colour-valued property pointing at a token is the correct form.
+    `const a = { backgroundColor: "var(--nx-primary)" };`,
+    `const a = { color: "inherit" };`,
+    // Mode-invariant names stay exempt, as their hex spellings are.
+    `const a = { backgroundColor: "white" };`,
+    `const a = { color: "black" };`,
+    `const a = { backgroundColor: "transparent" };`,
     // A hex that is not a colour at all.
     `const a = "commit 1f4b";`,
     `// design-lint-ok: mirrors a third-party embed's fixed palette
        const a = "#ff0000";`,
+    // A directive annotates the CONSTRUCT it precedes, so a named palette does
+    // not need the reason repeated on every line inside it.
+    `// design-lint-ok: an email client cannot resolve custom properties
+     const palette = {
+       text: "#e5e7eb",
+       background: "#0b0b0f",
+       muted: "#9ca3af",
+     };`,
+    // A trailing directive on the violation's own line.
+    `const a = "#ff0000"; // design-lint-ok: matches an external embed`,
   ],
   invalid: [
+    {
+      // The defect that motivated this: a fixed colour on a drop indicator,
+      // invisible to a rule that already caught hex, rgb() and oklch().
+      code: `const a = { backgroundColor: "deepskyblue" };`,
+      errors: [{ messageId: "namedColor", data: { literal: "deepskyblue" } }],
+    },
+    {
+      code: `const a = <div style={{ color: "tomato" }} />;`,
+      errors: [{ messageId: "namedColor" }],
+    },
+    {
+      // Kebab-case, inside a CSS string rather than a style object.
+      code: `const a = "<p style='color: crimson'>hi</p>";`,
+      errors: [{ messageId: "namedColor" }],
+    },
+    {
+      code: "const a = `.warn { background-color: gold; }`;",
+      errors: [{ messageId: "namedColor" }],
+    },
+    {
+      // An SVG presentation attribute takes a colour too.
+      code: `const a = { fill: "rebeccapurple" };`,
+      errors: [{ messageId: "namedColor" }],
+    },
+    {
+      // The reach is BOUNDED: a directive above a function does not exempt
+      // everything inside it, which would be a blanket disable by another name.
+      code: `// design-lint-ok: blanket attempt
+             function paint() { return "#ff0000"; }`,
+      errors: 1,
+    },
     {
       code: `const a = "#ff0000";`,
       errors: [{ messageId: "hardcodedColor", data: { literal: "#ff0000" } }],

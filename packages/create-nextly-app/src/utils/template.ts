@@ -1298,6 +1298,11 @@ async function generatePluginPackageJson(
     nextly: range("nextly"),
     "@nextlyhq/admin": range("@nextlyhq/admin"),
     "@nextlyhq/plugin-sdk": range("@nextlyhq/plugin-sdk"),
+    // The UI kit is supplied by the host admin at run time, so a plugin must
+    // declare it rather than carry a copy. As a devDependency alone, tsup
+    // treats it as bundleable and inlines the whole kit into the published
+    // plugin — first-party plugins declare it as a peer for this reason.
+    "@nextlyhq/ui": range("@nextlyhq/ui"),
     react: PINNED_VERSIONS.react,
     "react-dom": PINNED_VERSIONS["react-dom"],
   };

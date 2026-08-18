@@ -1,6 +1,8 @@
+import { designTokensConfig } from "@nextlyhq/eslint-config/design-tokens";
 import { config } from "@nextlyhq/eslint-config/react-internal";
 
 export default [
+  ...designTokensConfig(["src/**/*.{ts,tsx}"]),
   ...config,
   {
     ignores: [

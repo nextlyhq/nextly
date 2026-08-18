@@ -177,8 +177,7 @@ function VideoComponent({
       <figure className="my-4 relative group">
         <div
           // Square corners: embedded media renders full-bleed in the document flow.
-          className="relative w-full overflow-hidden rounded-none"
-          style={{ paddingBottom: "56.25%" }}
+          className="relative aspect-video w-full overflow-hidden rounded-none"
         >
           <iframe
             src={embedUrl}

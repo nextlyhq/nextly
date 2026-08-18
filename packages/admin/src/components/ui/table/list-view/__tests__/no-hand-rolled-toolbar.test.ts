@@ -28,17 +28,12 @@ const SRC = resolve(dirname(fileURLToPath(import.meta.url)), "../../../../..");
  * adding a surface fails and so does leaving a converted one behind. It may
  * only ever shrink, and it is empty when the migration is done.
  */
-const NOT_YET_CONVERTED = [
-  "pages/dashboard/collection/components/CollectionTable.tsx",
-  "pages/dashboard/field-group/components/FieldGroupTable.tsx",
-  // Its LIST is converted; an error branch still renders a search field of its
-  // own, at a fifth width. That branch shows search beside an alert and no
-  // table at all, so converting it is a question about how a failed list
-  // reports itself rather than about the toolbar.
-  "pages/dashboard/settings/email-providers/index.tsx",
-  "pages/dashboard/settings/email-templates/index.tsx",
-  "pages/dashboard/singles/components/SinglesTable.tsx",
-];
+/**
+ * Empty, and it must stay that way. Every admin list now hands its search to
+ * `ListView`; the migration this list tracked is finished, so any entry added
+ * here from now on is a NEW hand-rolled toolbar rather than an unconverted one.
+ */
+const NOT_YET_CONVERTED: string[] = [];
 
 /** Renders a table, so it is a list surface and the rule applies. */
 const RENDERS_TABLE = /<(DataTableView|ListView)[\s<>]/;

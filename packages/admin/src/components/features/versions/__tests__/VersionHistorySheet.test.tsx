@@ -54,6 +54,7 @@ vi.mock("@admin/hooks/queries/useVersions", () => ({
   useSetVersionLabel: (...a: unknown[]) => setLabelMock(...a),
 }));
 
+import { DocumentHistoryContext } from "../document-history-context";
 import { VersionHistorySheet } from "../VersionHistorySheet";
 
 const scope = { kind: "collection" as const, slug: "posts", entryId: "e1" };
@@ -97,12 +98,7 @@ function version(versionNo: number) {
 
 function renderSheet() {
   return render(
-    <VersionHistorySheet
-      open
-      onOpenChange={vi.fn()}
-      scope={scope}
-      fields={fields}
-    />
+    <VersionHistorySheet open onOpenChange={vi.fn()} scope={scope} />
   );
 }
 
@@ -119,6 +115,38 @@ function reachable(element: Element | null): boolean {
     if (node.hasAttribute("inert")) return false;
   }
   return true;
+}
+
+/**
+ * Renders the panel with a document context and returns a reader for what it
+ * publishes. The restore TRIGGER lives in the banner now, so a test that wants
+ * to exercise restoring asks the panel for it rather than clicking a control
+ * this component no longer renders.
+ */
+function renderPublishing(props: Record<string, unknown> = {}) {
+  const setRestore = vi.fn();
+  const setViewing = vi.fn();
+  render(
+    <DocumentHistoryContext.Provider
+      value={{ viewing: null, setViewing, restore: null, setRestore }}
+    >
+      <VersionHistorySheet
+        open
+        onOpenChange={vi.fn()}
+        scope={scope}
+        {...props}
+      />
+    </DocumentHistoryContext.Provider>
+  );
+  const published = () =>
+    setRestore.mock.calls.at(-1)?.[0] as
+      | {
+          canRestore: boolean;
+          request: () => void;
+          returnToCurrent: () => void;
+        }
+      | undefined;
+  return { setRestore, setViewing, published };
 }
 
 describe("VersionHistorySheet", () => {
@@ -150,8 +178,10 @@ describe("VersionHistorySheet", () => {
   it("says a document with no history has none, rather than erroring", () => {
     renderSheet();
 
+    // A heading, not a paragraph: it is the only content in an empty panel, so
+    // it has to be something assistive technology can land on.
     expect(
-      screen.getByText(/No versions recorded for this document yet/)
+      screen.getByRole("heading", { name: /No versions yet/ })
     ).toBeInTheDocument();
   });
 
@@ -166,7 +196,9 @@ describe("VersionHistorySheet", () => {
     expect(
       screen.getByRole("button", { name: /Try again/ })
     ).toBeInTheDocument();
-    expect(screen.queryByText(/No versions recorded/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: /No versions yet/ })
+    ).toBeNull();
   });
 
   it("offers a retry when a background refresh fails after history has loaded", async () => {
@@ -318,12 +350,7 @@ describe("VersionHistorySheet", () => {
     render(
       <>
         <input aria-label="Title" defaultValue="the live document" />
-        <VersionHistorySheet
-          open
-          onOpenChange={vi.fn()}
-          scope={scope}
-          fields={fields}
-        />
+        <VersionHistorySheet open onOpenChange={vi.fn()} scope={scope} />
       </>
     );
 
@@ -375,21 +402,42 @@ describe("VersionHistorySheet", () => {
     ).toBeInTheDocument();
   });
 
-  it("opens a version and states plainly that it is not live", async () => {
+  it("hands the chosen version to the document rather than previewing it", async () => {
     useVersionsMock.mockReturnValue(
       listState({
         data: { pages: [{ items: [version(3)], meta: { hasNext: false } }] },
       })
     );
     useVersionMock.mockReturnValue(
-      detailState({ data: { snapshot: { title: "Old title" } } })
+      detailState({ data: { snapshot: { title: "Old title" }, locale: null } })
     );
 
-    renderSheet();
+    const setViewing = vi.fn();
+    render(
+      <DocumentHistoryContext.Provider
+        value={{
+          viewing: null,
+          setViewing,
+          restore: null,
+          setRestore: vi.fn(),
+        }}
+      >
+        <VersionHistorySheet open onOpenChange={vi.fn()} scope={scope} />
+      </DocumentHistoryContext.Provider>
+    );
     await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
 
-    expect(screen.getByText(/Viewing version 3/)).toBeInTheDocument();
-    expect(screen.getByText("Old title")).toBeInTheDocument();
+    // The panel no longer draws the version: a 480px column cannot show a page
+    // as it read, so the document does it and the panel stays a timeline.
+    await waitFor(() =>
+      expect(setViewing).toHaveBeenCalledWith(
+        expect.objectContaining({
+          versionNo: 3,
+          snapshot: { title: "Old title" },
+        })
+      )
+    );
+    expect(screen.queryByText(/Viewing version/)).toBeNull();
   });
 
   it("returns to the list from a preview", async () => {
@@ -412,7 +460,7 @@ describe("VersionHistorySheet", () => {
     ).toBeInTheDocument();
   });
 
-  it("offers restore only to a caller who may write the document", async () => {
+  it("publishes whether the caller may restore, rather than rendering a button", async () => {
     useVersionsMock.mockReturnValue(
       listState({
         data: { pages: [{ items: [version(3)], meta: { hasNext: false } }] },
@@ -420,37 +468,19 @@ describe("VersionHistorySheet", () => {
     );
     useVersionMock.mockReturnValue(detailState({ data: { snapshot: {} } }));
 
-    const { unmount } = render(
-      <VersionHistorySheet
-        open
-        onOpenChange={vi.fn()}
-        scope={scope}
-        fields={fields}
-      />
-    );
+    const { published } = renderPublishing({ canRestore: true });
     await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
+
+    // The control is in the banner over the version; this panel supplies the
+    // permission and the trigger.
+    await waitFor(() => expect(published()?.canRestore).toBe(true));
     expect(
       screen.queryByRole("button", { name: /Restore this version/ })
-    ).not.toBeInTheDocument();
-    unmount();
-
-    render(
-      <VersionHistorySheet
-        open
-        onOpenChange={vi.fn()}
-        scope={scope}
-        fields={fields}
-        canRestore
-      />
-    );
-    await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
-    expect(
-      screen.getByRole("button", { name: /Restore this version/ })
-    ).toBeInTheDocument();
+    ).toBeNull();
   });
 
-  it("confirms before restoring rather than writing on the first click", async () => {
-    // Restore writes the live document, so a single misclick must not do it.
+  it("confirms before restoring rather than writing on the first request", async () => {
+    // Restore writes the live document, so triggering it must not do it.
     useVersionsMock.mockReturnValue(
       listState({
         data: { pages: [{ items: [version(3)], meta: { hasNext: false } }] },
@@ -458,23 +488,14 @@ describe("VersionHistorySheet", () => {
     );
     useVersionMock.mockReturnValue(detailState({ data: { snapshot: {} } }));
 
-    render(
-      <VersionHistorySheet
-        open
-        onOpenChange={vi.fn()}
-        scope={scope}
-        fields={fields}
-        canRestore
-      />
-    );
-
+    const { published } = renderPublishing({ canRestore: true });
     await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
-    await userEvent.click(
-      screen.getByRole("button", { name: /Restore this version/ })
-    );
+    await waitFor(() => expect(published()).toBeDefined());
+
+    published()!.request();
 
     expect(mutateMock).not.toHaveBeenCalled();
-    expect(screen.getByText(/Restore version 3\?/)).toBeInTheDocument();
+    expect(await screen.findByText(/Restore version 3\?/)).toBeInTheDocument();
   });
 
   it("tells the editor when a restore was refused", async () => {
@@ -498,7 +519,6 @@ describe("VersionHistorySheet", () => {
         open
         onOpenChange={vi.fn()}
         scope={scope}
-        fields={fields}
         canRestore
       />
     );
@@ -509,46 +529,9 @@ describe("VersionHistorySheet", () => {
     await waitFor(() => expect(toastErrorMock).toHaveBeenCalled());
   });
 
-  it("does not offer restore until the version is on screen", async () => {
-    // Restore is offered from the preview so the choice follows seeing what the
-    // version holds; a skeleton or an error is not that.
-    useVersionsMock.mockReturnValue(
-      listState({
-        data: { pages: [{ items: [version(3)], meta: { hasNext: false } }] },
-      })
-    );
-    useVersionMock.mockReturnValue(detailState({ isLoading: true }));
-
-    const { unmount } = render(
-      <VersionHistorySheet
-        open
-        onOpenChange={vi.fn()}
-        scope={scope}
-        fields={fields}
-        canRestore
-      />
-    );
-    await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
-    expect(
-      screen.getByRole("button", { name: /Restore this version/ })
-    ).toBeDisabled();
-    unmount();
-
-    useVersionMock.mockReturnValue(detailState({ data: { snapshot: {} } }));
-    render(
-      <VersionHistorySheet
-        open
-        onOpenChange={vi.fn()}
-        scope={scope}
-        fields={fields}
-        canRestore
-      />
-    );
-    await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
-    expect(
-      screen.getByRole("button", { name: /Restore this version/ })
-    ).toBeEnabled();
-  });
+  // Whether restore is offered before the version has finished loading is now
+  // the banner's decision (`restoreDisabled`), because the banner is where the
+  // control is. Covered by HistoricalDocumentBanner's own suite.
 
   it("warns from the live document's status, not the version's", async () => {
     // The selected version's status describes the past; whether this change is
@@ -562,33 +545,22 @@ describe("VersionHistorySheet", () => {
       detailState({ data: { snapshot: {}, status: "draft" } })
     );
 
-    render(
-      <VersionHistorySheet
-        open
-        onOpenChange={vi.fn()}
-        scope={scope}
-        fields={fields}
-        canRestore
-        liveStatus="published"
-      />
-    );
-
+    const { published } = renderPublishing({
+      canRestore: true,
+      liveStatus: "published",
+    });
     await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
-    await userEvent.click(
-      screen.getByRole("button", { name: /Restore this version/ })
-    );
+    await waitFor(() => expect(published()).toBeDefined());
+    published()!.request();
 
-    expect(screen.getByText(/the document is published/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/the document is published/)
+    ).toBeInTheDocument();
   });
 
   it("does not query while closed", () => {
     render(
-      <VersionHistorySheet
-        open={false}
-        onOpenChange={vi.fn()}
-        scope={scope}
-        fields={fields}
-      />
+      <VersionHistorySheet open={false} onOpenChange={vi.fn()} scope={scope} />
     );
 
     // Mounted but idle: the panel exists in the header regardless of state, so
@@ -620,7 +592,6 @@ describe("VersionHistorySheet — renaming", () => {
         open
         onOpenChange={vi.fn()}
         scope={scope}
-        fields={fields}
         canRestore={false}
       />
     );
@@ -636,7 +607,6 @@ describe("VersionHistorySheet — renaming", () => {
         open
         onOpenChange={vi.fn()}
         scope={scope}
-        fields={fields}
         canRestore
       />
     );
@@ -644,5 +614,73 @@ describe("VersionHistorySheet — renaming", () => {
     expect(
       screen.getAllByRole("button", { name: /name version/i }).length
     ).toBeGreaterThan(0);
+  });
+});
+
+describe("VersionHistorySheet — what it publishes to the document", () => {
+  function renderWithDocument(canRestore = true) {
+    const setViewing = vi.fn();
+    const setRestore = vi.fn();
+    render(
+      <DocumentHistoryContext.Provider
+        value={{ viewing: null, setViewing, restore: null, setRestore }}
+      >
+        <VersionHistorySheet
+          open
+          onOpenChange={vi.fn()}
+          scope={scope}
+          canRestore={canRestore}
+        />
+      </DocumentHistoryContext.Provider>
+    );
+    return { setViewing, setRestore };
+  }
+
+  beforeEach(() => {
+    useVersionsMock.mockReturnValue(
+      listState({
+        data: { pages: [{ items: [version(3)], meta: { hasNext: false } }] },
+      })
+    );
+    useVersionMock.mockReturnValue(
+      detailState({ data: { snapshot: { title: "Old" }, locale: null } })
+    );
+  });
+
+  it("offers restoring to the document only when the caller may write", async () => {
+    const { setRestore } = renderWithDocument(false);
+    await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
+
+    await waitFor(() =>
+      expect(setRestore).toHaveBeenCalledWith(
+        expect.objectContaining({ canRestore: false })
+      )
+    );
+  });
+
+  it("returns to the live document THROUGH the panel, clearing its own row", async () => {
+    const { setRestore } = renderWithDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
+
+    await waitFor(() => expect(setRestore).toHaveBeenCalled());
+    const published = setRestore.mock.calls.at(-1)?.[0] as {
+      returnToCurrent: () => void;
+    };
+
+    // The banner cannot clear this panel's selection itself, so it asks. Going
+    // back must leave no row marked active for a version off screen.
+    expect(screen.getByRole("button", { name: /Version 3/ })).toHaveAttribute(
+      "aria-current",
+      "true"
+    );
+    // ONLY the published callback — clicking "Back to history" as well would
+    // clear the selection by itself and the assertion would pass whether or not
+    // `returnToCurrent` does anything.
+    published.returnToCurrent();
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: /Version 3/ })
+      ).not.toHaveAttribute("aria-current", "true")
+    );
   });
 });

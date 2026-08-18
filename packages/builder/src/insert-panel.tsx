@@ -26,6 +26,7 @@
 
 import {
   allBlocks,
+  getBlock,
   registryNestingSource,
   type AnyBlockDefinition,
   type BlockNode,
@@ -49,6 +50,8 @@ import {
   groupByCategory,
   insertionPointFor,
   nodeForEntry,
+  type InsertionPoint,
+  type SlotSource,
   type InsertEntry,
 } from "./inserter";
 
@@ -90,10 +93,32 @@ export interface InsertPanelProps {
 }
 
 /** Sentence describing where the next insert will land. */
-function placementLabel(kind: "after-selection" | "document-end"): string {
-  return kind === "after-selection"
+function placementLabel(point: InsertionPoint, label?: string): string {
+  if (point.kind === "inside-selection") {
+    // Names the container, because "inside" is only meaningful if the author
+    // knows what it is inside OF — and this is the one placement that differs
+    // from what selecting a block usually implies.
+    return `Adds inside ${label ?? "the selected block"}`;
+  }
+  return point.kind === "after-selection"
     ? "Adds after the selected block"
     : "Adds at the end of the page";
+}
+
+/**
+ * The registry as a slot source.
+ *
+ * Reads the DEFINITION's declared slots rather than the node's, because a
+ * container inserted from the palette has no `slots` key until something is put
+ * in it — which is precisely the container that needs filling.
+ */
+function registrySlotSource(): SlotSource {
+  return {
+    slotsOf: type => {
+      const declared = getBlock(type)?.slots;
+      return declared === undefined ? undefined : Object.keys(declared);
+    },
+  };
 }
 
 export function InsertPanel({
@@ -119,7 +144,12 @@ export function InsertPanel({
   // read from, and an undo or a remote edit can move it without the selection
   // changing — a memo keyed on the selection alone would keep a position whose
   // index no longer names the same place.
-  const point = insertionPointFor(editor.document, editor.selectedId);
+  const slotSource = React.useMemo(registrySlotSource, []);
+  const point = insertionPointFor(
+    editor.document,
+    editor.selectedId,
+    slotSource
+  );
 
   // Computed on every render rather than memoised. `insertionPointFor` builds a
   // fresh target each call, so a memo keyed on it could never hit — it would
@@ -173,7 +203,14 @@ export function InsertPanel({
           placeholder="Search blocks"
         />
         <p className="nx-insert-panel__placement" aria-live="polite">
-          {placementLabel(point.kind)}
+          {placementLabel(
+            point,
+            point.kind === "inside-selection"
+              ? getBlock(
+                  point.target.at === "slot" ? point.target.parentType : ""
+                )?.editor?.label
+              : undefined
+          )}
         </p>
         <CommandList>
           <CommandEmpty>

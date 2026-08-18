@@ -19,6 +19,8 @@ import {
 
 import { cn } from "@admin/lib/utils";
 
+import { useFieldElementId } from "../field-id-scope";
+
 // ============================================================
 // Types
 // ============================================================
@@ -131,6 +133,10 @@ export function RadioInput<TFieldValues extends FieldValues = FieldValues>({
     return (field.defaultValue as string) || "";
   };
 
+  // Scoped: each option's id must stay unique across two renderings too.
+
+  const elementId = useFieldElementId(name);
+
   const {
     field: { value, onChange },
     fieldState: { invalid },
@@ -160,11 +166,11 @@ export function RadioInput<TFieldValues extends FieldValues = FieldValues>({
         <div key={option.value} className="flex items-center space-x-2">
           <RadioGroupItem
             value={option.value}
-            id={`${name}-${option.value}`}
+            id={`${elementId}-${option.value}`}
             disabled={disabled || readOnly}
           />
           <Label
-            htmlFor={`${name}-${option.value}`}
+            htmlFor={`${elementId}-${option.value}`}
             className={cn(
               "cursor-pointer",
               (disabled || readOnly) && "cursor-not-allowed opacity-60"

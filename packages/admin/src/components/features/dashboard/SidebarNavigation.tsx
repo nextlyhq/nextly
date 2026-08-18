@@ -361,6 +361,7 @@ export function SidebarNavigation({
           <SidebarGroupContent>
             <SidebarMenu>
               <DynamicCollectionNav isActive={isActive} search={search} />
+              <PluginMenuItems isActive={isActive} section="collections" />
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -377,6 +378,7 @@ export function SidebarNavigation({
           <SidebarGroupContent>
             <SidebarMenu>
               <DynamicSingleNav isActive={isActive} search={search} />
+              <PluginMenuItems isActive={isActive} section="singles" />
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -432,7 +434,7 @@ export function SidebarNavigation({
           <SidebarGroupContent>
             <SidebarMenu>
               <DynamicPluginNav isActive={isActive} search={search} />
-              <PluginMenuItems isActive={isActive} />
+              <PluginMenuItems isActive={isActive} section="plugins" />
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>

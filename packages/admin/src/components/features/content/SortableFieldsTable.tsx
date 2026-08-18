@@ -54,12 +54,11 @@ function SortableFieldRow({
     >
       <td className="px-6 py-4 whitespace-nowrap text-sm">
         <span
-          className="cursor-grab flex items-center select-none"
+          className="flex cursor-grab items-center touch-none select-none"
           {...attributes}
           {...listeners}
           tabIndex={0}
           aria-label="Drag handle"
-          style={{ touchAction: "none" }}
         >
           <svg
             width="16"

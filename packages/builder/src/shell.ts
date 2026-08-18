@@ -58,14 +58,6 @@ export { CANVAS_ROOT_CLASS, Canvas, nodeIdFromEvent } from "./canvas";
 export type { CanvasProps } from "./canvas";
 
 /**
- * The editor's document state, published beside the canvas because it is a hook
- * and therefore client-only for the same reason the shell is.
- *
- * It is the ONLY place a document changes: the canvas, the panels, a keyboard
- * handler and an agent all reach the same `apply`, so undo covers every one of
- * them rather than only the path that happened to implement it.
- */
-/**
  * The inserter, behind the same client banner as the shell it fills: it holds
  * search state and composes the command primitives, so it is interactive in its
  * own right.
@@ -80,8 +72,46 @@ export type { CanvasProps } from "./canvas";
  * is the second implementation of the nesting rule that the engine exists to
  * prevent.
  */
+/**
+ * The inspector, behind the same client banner: it holds draft field state and
+ * writes through the store.
+ *
+ * The derivations it draws from are not re-exported beside it, for the reason
+ * the inserter's are not — which props a block exposes is the editor's answer,
+ * and publishing it invites a host to build a second inspector that disagrees
+ * with this one about the merge rule for a patch.
+ */
+export { InspectorPanel } from "./inspector-panel";
+export type { InspectorPanelProps } from "./inspector-panel";
+
 export { InsertPanel } from "./insert-panel";
 export type { InsertPanelProps } from "./insert-panel";
 
+/**
+ * The editor's keyboard actions — moving, deleting, undoing — behind the same
+ * client banner.
+ *
+ * ONE component rather than a set, because they share a live region: two
+ * regions announcing the same author's actions read them twice, and a listener
+ * has no way to tell which to believe.
+ *
+ * Published as a component as well as a hook because the shell provides the
+ * shortcut context: whatever renders the shell is outside it, so only a child
+ * of the shell can register bindings.
+ */
+export {
+  BlockKeyboardActions,
+  useBlockKeyboardActions,
+} from "./keyboard-actions";
+export type { BlockKeyboardActionsOptions } from "./keyboard-actions";
+
+/**
+ * The editor's document state, published beside the canvas because it is a hook
+ * and therefore client-only for the same reason the shell is.
+ *
+ * It is the ONLY place a document changes: the canvas, the panels, a keyboard
+ * handler and an agent all reach the same `apply`, so undo covers every one of
+ * them rather than only the path that happened to implement it.
+ */
 export { MAX_HISTORY, useEditorState } from "./editor-state";
 export type { EditorState, UseEditorStateArgs } from "./editor-state";

@@ -28,6 +28,7 @@ import {
   canBeRoot,
   canNest,
   canNestInSlot,
+  findNode,
   locateNode,
   makeNode,
   type AnyBlockDefinition,
@@ -98,6 +99,23 @@ export interface InsertEntry {
   readonly props: Readonly<Record<string, unknown>>;
 }
 
+/**
+ * How a caller answers for a block's declared child regions.
+ *
+ * Deliberately NOT a registry, matching `NestingSource`: resolving a type to
+ * its definition differs per caller, and a one-method source lets each supply
+ * its own resolution while sharing the rule applied to the result.
+ *
+ * The NODE cannot answer this. A container inserted from the palette carries no
+ * `slots` key at all — `makeNode` writes one only when children are supplied —
+ * so asking the node whether it is a container answers "no" for every empty
+ * one, which is exactly the case that needs filling.
+ */
+export interface SlotSource {
+  /** The names of the child regions this block type declares, in order. */
+  slotsOf(type: string): readonly string[] | undefined;
+}
+
 /** Where an insert would land, as the nesting rule needs to see it. */
 export type InsertTarget =
   | { readonly at: "root" }
@@ -115,7 +133,7 @@ export type InsertTarget =
  * the same question a second time and could answer differently.
  */
 export interface InsertionPoint {
-  readonly kind: "after-selection" | "document-end";
+  readonly kind: "after-selection" | "document-end" | "inside-selection";
   readonly at: OpPosition;
   readonly target: InsertTarget;
 }
@@ -145,10 +163,28 @@ export function catalogFrom(
     const editor = definition.editor;
     const category = editor?.category ?? UNCATEGORISED;
     const keywords = editor?.keywords ?? [];
-    // `defaultProps` is the block's own object. Spreading here means the entry
-    // owns its copy, so the clone taken at insert time cannot reach back into
-    // the definition — and two inserts of one entry cannot share substructure.
-    const defaults = { ...(definition.defaultProps ?? {}) };
+    // The block's DEFAULTS, overlaid by its EXAMPLE.
+    //
+    // Defaults alone are what an author was getting, and they are deliberately
+    // empty: `core/heading` defaults to `text: ""`, `core/text` to `text: ""`,
+    // `core/button` to `label: ""`. Inserting those renders an empty `<h2>` —
+    // an element with no height and nothing to read — so the block was added
+    // and the page looked unchanged. An author cannot edit what they cannot
+    // find, and cannot tell it from the insert having failed.
+    //
+    // `example` is the right source and needs no new contract: the engine
+    // REQUIRES it on every definition, describing it as a worked instance, so
+    // every block already carries one and a third-party block gets this for
+    // free. Defaults stay underneath it, because an example states what is
+    // worth showing rather than every prop — `core/image` illustrates a `src`
+    // while its `loading: "lazy"` default still applies.
+    //
+    // Spread rather than referenced, so the entry owns its copy and the clone
+    // taken at insert time cannot reach back into the definition.
+    const defaults = {
+      ...(definition.defaultProps ?? {}),
+      ...(definition.example?.props ?? {}),
+    };
 
     entries.push({
       id: definition.name,
@@ -366,7 +402,8 @@ export function groupByCategory(
  */
 export function insertionPointFor(
   document: BlockDocument,
-  selectedId: string | null
+  selectedId: string | null,
+  slots?: SlotSource
 ): InsertionPoint | null {
   const end: InsertionPoint = {
     kind: "document-end",
@@ -377,6 +414,34 @@ export function insertionPointFor(
 
   const location = locateNode(document.nodes, selectedId);
   if (location === undefined) return end;
+
+  // An EMPTY container takes the block instead of standing beside it.
+  //
+  // Without this a container can be inserted and never filled: every insert
+  // lands as a sibling, so `core/columns` arrives empty and stays empty, and
+  // the seven container blocks in the library are decorative. Selecting an
+  // empty container and adding a block means putting it IN there — there is no
+  // other reading of the gesture.
+  //
+  // Only when empty, which is what keeps a sibling reachable. A container the
+  // author has already filled takes a sibling instead, and adding a third child
+  // to it is done by selecting the second and inserting after that — so both
+  // placements stay available without a second affordance to discover.
+  const selected = findNode(document.nodes, selectedId);
+  const declared =
+    selected === undefined ? undefined : slots?.slotsOf(selected.type);
+  const firstSlot = declared?.[0];
+  if (
+    selected !== undefined &&
+    firstSlot !== undefined &&
+    (selected.slots?.[firstSlot]?.length ?? 0) === 0
+  ) {
+    return {
+      kind: "inside-selection",
+      at: { parentId: selected.id, slot: firstSlot, index: 0 },
+      target: { at: "slot", parentType: selected.type, slot: firstSlot },
+    };
+  }
 
   let after: OpPosition;
   try {
