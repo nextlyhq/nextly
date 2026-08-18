@@ -263,6 +263,23 @@
 }
 
 /*
+ * The rest of a multi-block selection.
+ *
+ * Thinner rather than a different colour. Colour would have to mean something,
+ * and there is no second meaning here — every one of these blocks is selected
+ * and an action applies to all of them. What the author needs to see is which
+ * one the inspector is describing, and weight says that without implying two
+ * kinds of selected.
+ *
+ * With one block selected this rule matches nothing: a lone selection is always
+ * the primary, so nothing changes for the case the editor spends most of its
+ * time in.
+ */
+.nx-canvas [data-nx-selected=""] {
+  outline-width: 1px;
+}
+
+/*
  * A block that draws nothing still has to be selectable and visible when it is.
  * `core/spacer` is deliberate empty space and `core/divider` is a single rule,
  * so an outline is the only thing distinguishing "selected" from "not there" —

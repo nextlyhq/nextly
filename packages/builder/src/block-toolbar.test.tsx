@@ -344,6 +344,8 @@ describe("a press on the toolbar and the canvas's own click handling", () => {
     if (root === null) throw new Error("expected a canvas root");
     fireEvent.click(root);
 
-    expect(editor.select).toHaveBeenCalledWith(null);
+    // With the gesture, which the canvas now reports alongside the id: a plain
+    // click on background is a "replace" with nothing to replace it with.
+    expect(editor.select).toHaveBeenCalledWith(null, "replace");
   });
 });

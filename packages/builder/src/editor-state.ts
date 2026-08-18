@@ -31,6 +31,13 @@ import type { BlockDocument, DocumentLimits } from "@nextlyhq/blocks-engine";
 import { useCallback, useMemo, useRef, useState } from "react";
 
 import { applyOp, type BuilderOp } from "./ops";
+import {
+  EMPTY_SELECTION,
+  applySelection,
+  pruneSelection,
+  type BlockSelection,
+  type SelectionMode,
+} from "./selection";
 
 /** How deep the undo history goes before the oldest step is dropped. */
 export const MAX_HISTORY = 100;
@@ -40,8 +47,16 @@ export interface EditorState {
   document: BlockDocument;
   /** The selected node's id, or null when nothing is selected. */
   selectedId: string | null;
+  /**
+   * Everything selected, in document order, with the primary named.
+   *
+   * `selectedId` IS `selection.primary`, derived rather than stored twice: the
+   * two disagreeing would put an outline on one block and the inspector on
+   * another, and there is no render in which that is what an author meant.
+   */
+  selection: BlockSelection;
   /** Select a node, or clear the selection with null. */
-  select: (id: string | null) => void;
+  select: (id: string | null, mode?: SelectionMode) => void;
   /**
    * Apply an edit. Returns the applied op's outcome, or null when the op was
    * refused — a caller that needs to know whether its edit landed can ask,
@@ -84,7 +99,7 @@ export function useEditorState({
   limits,
 }: UseEditorStateArgs): EditorState {
   const [document, setDocument] = useState<BlockDocument>(initialDocument);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selection, setSelection] = useState<BlockSelection>(EMPTY_SELECTION);
 
   const undoStack = useRef<BuilderOp[]>([]);
   const redoStack = useRef<BuilderOp[]>([]);
@@ -142,9 +157,7 @@ export function useEditorState({
       // NEW document whether the id is still there, rather than by inspecting
       // the op — an op that removes a container removes its subtree too, and
       // the op names only the container.
-      setSelectedId(current =>
-        current !== null && !hasNode(applied.document, current) ? null : current
-      );
+      setSelection(current => pruneSelection(applied.document, current));
 
       return applied.document;
     },
@@ -171,12 +184,31 @@ export function useEditorState({
     run(op, "undo");
   }, [run]);
 
-  const select = useCallback((id: string | null) => setSelectedId(id), []);
+  /*
+   * The document is read from a REF rather than closed over.
+   *
+   * A gesture is handled by whatever handler the last render bound, and the
+   * selection rules need the document that is current when the click lands —
+   * not the one that was current when the handler was made. Closing over it
+   * would resolve a range against a stale tree, which is a wrong selection
+   * rather than a missing one.
+   */
+  const latestDocument = useRef(document);
+  latestDocument.current = document;
+
+  const select = useCallback(
+    (id: string | null, mode: SelectionMode = "replace") =>
+      setSelection(current =>
+        applySelection(latestDocument.current, current, id, mode)
+      ),
+    []
+  );
 
   return useMemo(
     () => ({
       document,
-      selectedId,
+      selectedId: selection.primary,
+      selection,
       select,
       apply,
       undo,
@@ -185,27 +217,6 @@ export function useEditorState({
       canRedo: depths.redo > 0,
       undoDepth: depths.undo,
     }),
-    [document, selectedId, select, apply, undo, redo, depths]
+    [document, selection, select, apply, undo, redo, depths]
   );
-}
-
-/**
- * Whether a node id is anywhere in the document.
- *
- * An explicit walk rather than the engine's tree helpers, because this asks the
- * cheapest possible question — presence — and stops at the first hit. The
- * helpers that find a node also compute its path and parent, which nothing here
- * reads.
- */
-function hasNode(doc: BlockDocument, id: string): boolean {
-  const stack = [...doc.nodes];
-  while (stack.length > 0) {
-    const node = stack.pop();
-    if (node === undefined) continue;
-    if (node.id === id) return true;
-    if (node.slots !== undefined) {
-      for (const children of Object.values(node.slots)) stack.push(...children);
-    }
-  }
-  return false;
 }
