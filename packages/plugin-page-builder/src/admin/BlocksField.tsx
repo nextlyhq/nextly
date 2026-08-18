@@ -76,6 +76,25 @@ export interface BlocksFieldProps<
   name: Path<TFieldValues>;
   /** React Hook Form control the entry form owns. */
   control: Control<TFieldValues>;
+  /**
+   * The document is being READ, not edited, so no way in is offered.
+   *
+   * The admin passes this to every field through one `commonProps`, and a field
+   * that ignores it does not merely look wrong: this one opened a full-screen
+   * editor bound to whichever form was nearest, which in a version-history view
+   * is the SNAPSHOT'S. Committing there writes into a past version of the
+   * document — `VersionSnapshotForm` states that as impossible in its own
+   * docblock, and nothing was enforcing it.
+   */
+  readOnly?: boolean;
+  /**
+   * The field is unavailable — no permission, or a form mid-submit.
+   *
+   * Accepted alongside `readOnly` because the admin sets the two independently,
+   * and a field honouring one of them is a field that is wrong half the time.
+   * Both mean the same thing here: there is no way in.
+   */
+  disabled?: boolean;
 }
 
 /**
@@ -139,14 +158,51 @@ export function documentFrom(value: unknown): BlockDocument {
     : emptyBlockDocument();
 }
 
+/**
+ * Whether this field may be edited at all.
+ *
+ * Exported and tested apart from the render for the same reason `documentFrom`
+ * is: this package has no DOM harness, and the rule is worth pinning on its own
+ * because getting it wrong is not cosmetic. A blocks field that ignored
+ * `readOnly` offered a full-screen editor from inside a version-history view,
+ * bound to the SNAPSHOT'S form — so committing wrote into a past version of the
+ * document.
+ *
+ * Both flags mean the same thing here. The admin sets them independently —
+ * `readOnly` for a document being read, `disabled` for no permission or a form
+ * mid-submit — and a field honouring one of them is a field that is wrong half
+ * the time.
+ */
+export function canEditBlocks(options: {
+  readOnly?: boolean;
+  disabled?: boolean;
+}): boolean {
+  return options.readOnly !== true && options.disabled !== true;
+}
+
 export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
   name,
   control,
+  readOnly = false,
+  disabled = false,
 }: BlocksFieldProps<TFieldValues>) {
   const [open, setOpen] = useState(false);
   const { field } = useController({ name, control });
 
-  return open ? (
+  const editable = canEditBlocks({ readOnly, disabled });
+
+  /*
+   * Closed if the form becomes read-only while the editor is up.
+   *
+   * Not a hypothetical: a permission can be revoked and a form can start
+   * submitting under an open editor. Rendering the summary instead of the
+   * editor from that render on is not enough on its own — the state has to go
+   * back too, or reopening later would show an editor seeded from a value the
+   * author has not seen since.
+   */
+  if (open && !editable) setOpen(false);
+
+  return open && editable ? (
     <BlocksEditor
       // Remounted per opening: the editor seeds its own history from the value
       // it opened with, and a key change is what discards a previous session's
@@ -159,15 +215,25 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
   ) : (
     <div className="flex flex-col gap-3">
       <BlocksSummary name={name} control={control} />
-      <div>
-        <button
-          type="button"
-          onClick={() => setOpen(true)}
-          className="inline-flex h-9 items-center rounded-md border border-border bg-background px-3 text-sm font-medium text-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          Edit blocks
-        </button>
-      </div>
+      {/*
+        No button at all rather than a disabled one.
+        
+        A disabled control says "you could do this, but not now", which is the
+        wrong sentence for a document that cannot be edited at all — and the
+        summary above already says what the field holds. An affordance that
+        cannot ever act here is one an author spends attention on.
+      */}
+      {editable ? (
+        <div>
+          <button
+            type="button"
+            onClick={() => setOpen(true)}
+            className="inline-flex h-9 items-center rounded-md border border-border bg-background px-3 text-sm font-medium text-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            Edit blocks
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
