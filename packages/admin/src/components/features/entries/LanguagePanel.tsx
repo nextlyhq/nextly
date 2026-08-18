@@ -186,7 +186,8 @@ export function LanguagePanel({
   className,
 }: LanguagePanelProps) {
   const { enabled, locales, defaultLocale } = useLocalization();
-  const { collectionLocalized } = useEntryLocale();
+  const { collectionLocalized, isNonDefaultLocale, onEnterTranslationMode } =
+    useEntryLocale();
   const copy = useCopyFromLanguage();
   const publish = usePublishAllLanguages(
     hasStatus === undefined ? {} : { hasStatus }
@@ -221,6 +222,25 @@ export function LanguagePanel({
           {counts.translated} of {counts.total} translated
         </span>
         <span className="flex-1" />
+        {/* Offered only while a NON-default language is being edited, because
+            that is the only time there is a translation to do: the default is
+            the language everything else is translated FROM, so pairing it with
+            itself is the one arrangement the mode cannot show. The source is the
+            default language — the overwhelmingly common pairing, and the URL
+            carries the source explicitly so a different one is addressable
+            without this control needing to grow a picker. */}
+        {onEnterTranslationMode && isNonDefaultLocale && defaultLocale && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-7 px-2 text-xs"
+            disabled={actionsDisabled}
+            onClick={() => onEnterTranslationMode(defaultLocale)}
+          >
+            Translate
+          </Button>
+        )}
         {publish.available && (
           <Button
             type="button"

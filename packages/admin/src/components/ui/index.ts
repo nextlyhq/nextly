@@ -13,6 +13,19 @@ export { Checkbox } from "@nextlyhq/ui";
 export { Label } from "@nextlyhq/ui";
 export { RadioGroup, RadioGroupItem } from "@nextlyhq/ui";
 export { Switch } from "@nextlyhq/ui";
+/**
+ * The resizable split, for translation mode's source|target panes.
+ *
+ * Marked `@experimental` in `@nextlyhq/ui` because nothing imported it — the kit
+ * graduates a surface once a consumer exists, and the admin is now that
+ * consumer. Re-exported here rather than imported directly at the call site so
+ * the admin has one place that says which kit primitives it depends on.
+ */
+export {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from "@nextlyhq/ui";
 export { Textarea } from "@nextlyhq/ui";
 export {
   Select,
