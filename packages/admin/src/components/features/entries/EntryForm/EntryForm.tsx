@@ -629,6 +629,19 @@ export function EntryForm({
                         restoreAffordance?.returnToCurrent ??
                         (() => setViewingVersion(null))
                       }
+                      // Offered only when the panel says this caller may write.
+                      onRestore={
+                        restoreAffordance?.canRestore
+                          ? restoreAffordance.request
+                          : undefined
+                      }
+                      // And only once the version is actually on screen:
+                      // restoring from a skeleton, or from a failed read, is a
+                      // decision made without having seen what is being chosen.
+                      restoreDisabled={
+                        viewingVersion.isLoading ||
+                        viewingVersion.error !== null
+                      }
                     />
                   ) : null}
                   <EntryMetaStrip

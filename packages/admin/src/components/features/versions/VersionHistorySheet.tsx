@@ -587,23 +587,13 @@ export function VersionHistorySheet({
                   Compare with current
                 </Button>
               ) : null}
-              {/* Available only once the snapshot is on screen: restoring is
-                  offered from the preview so the choice is made having seen
-                  what the version holds, which a skeleton or an error is not. */}
-              {canRestore ? (
-                <Button
-                  size="sm"
-                  onClick={() => setConfirmingRestore(true)}
-                  disabled={
-                    restore.isPending ||
-                    detail.isLoading ||
-                    Boolean(detail.error) ||
-                    detail.data === undefined
-                  }
-                >
-                  Restore this version
-                </Button>
-              ) : null}
+              {/* Restoring is offered in the BANNER over the version being
+                  read, not here. The panel only ever offered it while a
+                  version was selected, which is exactly when the banner is on
+                  screen — so a button here would be a second control with the
+                  same label, and the further one from what it acts on. This
+                  component still owns the mutation and its confirmation; the
+                  banner holds the trigger. */}
             </>
           ) : null}
           <Button
