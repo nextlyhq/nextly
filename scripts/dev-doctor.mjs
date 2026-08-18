@@ -75,6 +75,21 @@ export async function checkEnvFile(envPath) {
 // seed step. Using packages/nextly/dist as the sentinel because it is the
 // last package built in the turbo graph -- if it exists, the whole
 // dependency chain compiled.
+/**
+ * Whether the workspace has EVER been built.
+ *
+ * One sentinel, and the claim is narrowed to what one sentinel can support.
+ * This detects a workspace nobody has built; it cannot detect a `dist` that is
+ * STALE, PARTIAL, or missing in a package other than the sentinel's — and the
+ * failures that actually happen are those. `packages/builder/dist` going absent
+ * leaves this reporting ok while the admin renders blank, because the page
+ * builder's stylesheet `@import`s a file from it.
+ *
+ * `dev:app` therefore does not gate its build on this any more; it builds every
+ * time and lets turbo's hashing answer the currency question, which a directory
+ * listing cannot. This stays for `dev:doctor`, where a human is asking what is
+ * wrong and "nothing has been built" is worth saying plainly.
+ */
 export async function checkBuildArtifacts(nextlyRoot) {
   const sentinel = path.join(nextlyRoot, "packages", "nextly", "dist");
   try {
