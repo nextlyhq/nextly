@@ -2,7 +2,7 @@
 
 import { useMemo, useSyncExternalStore } from "react";
 
-import { parseSearchParams, type SearchParams } from "@admin/lib/routing";
+import { parseSearchParams, type SearchParams } from "@admin/lib/search-params";
 
 /**
  * Subscribe to the signals that change the URL without a document load:

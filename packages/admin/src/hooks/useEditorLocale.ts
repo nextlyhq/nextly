@@ -27,13 +27,10 @@
 
 import { useCallback, useState } from "react";
 
+import { LOCALE_PARAM } from "@admin/constants/search-params";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { useSearchParams } from "@admin/hooks/useSearchParams";
 import { setSearchParam } from "@admin/lib/navigation";
-import { getSearchParam } from "@admin/lib/routing";
-
-/** The query key the editor's content language is addressed by. */
-export const LOCALE_PARAM = "locale";
 
 export interface EditorLocale {
   /** Active content language. `undefined` = the app default, resolved by the backend. */
@@ -63,7 +60,11 @@ export function useEditorLocale(): EditorLocale {
   // would otherwise be sent to the API, which answers for a language the app
   // does not have — so an unknown one reads as the default rather than as an
   // error the reader cannot act on.
-  const requested = getSearchParam(searchParams, LOCALE_PARAM);
+  // Read straight off the parsed params rather than through `lib/routing`'s
+  // helper: that module imports the page registry, so reaching into it from a
+  // hook every page uses closes a cycle.
+  const raw = searchParams[LOCALE_PARAM];
+  const requested = (Array.isArray(raw) ? raw[0] : raw) ?? null;
   const locale =
     requested && locales.some(l => l.code === requested)
       ? requested

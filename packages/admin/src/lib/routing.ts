@@ -8,6 +8,7 @@ import registry, { routeConfig } from "../pages/registry";
 import type { CarriedRouteSection } from "../types/route-section";
 
 import { matchPluginPage } from "./plugins/plugin-route-registry";
+import { parseSearchParams } from "./search-params";
 
 /**
  * Whether `pathname` is `base` or sits beneath it.
@@ -52,36 +53,16 @@ export interface RouteResult {
 }
 
 type Params = Record<string, string | string[]>;
-export type SearchParams = Record<string, string | string[] | undefined>;
 
-// Parse URL search parameters
-export function parseSearchParams(search: string): SearchParams {
-  const usp = new URLSearchParams(search);
-  const out: SearchParams = {};
-  for (const key of Array.from(new Set(Array.from(usp.keys())))) {
-    const values = usp.getAll(key);
-    out[key] =
-      values.length === 0
-        ? undefined
-        : values.length === 1
-          ? values[0]
-          : values;
-  }
-  return out;
-}
-
-/**
- * Read a single search-param value, mirroring `URLSearchParams.get()`: the
- * first value when a key is repeated, and `null` when it is absent.
- */
-export function getSearchParam(
-  params: SearchParams,
-  key: string
-): string | null {
-  const value = params[key];
-  if (Array.isArray(value)) return value[0] ?? null;
-  return value ?? null;
-}
+// Query-string parsing lives in `lib/search-params`, which imports nothing:
+// this module imports the page registry, and therefore every page, so the
+// helpers were unreachable from a hook without closing a cycle. Re-exported
+// here so existing callers keep working.
+export {
+  getSearchParam,
+  parseSearchParams,
+  type SearchParams,
+} from "./search-params";
 
 // Normalize Next.js App Router patterns
 function normalizePattern(pattern: string): string {
