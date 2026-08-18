@@ -7,8 +7,7 @@ import { Check, Circle, Clock, Copy, Hash } from "@admin/components/icons";
 import { useAdminDateFormatter } from "@admin/hooks/useAdminDateFormatter";
 import { cn } from "@admin/lib/utils";
 
-import { CopyFromLanguageMenu } from "../../CopyFromLanguageMenu";
-import { PublishAllLanguagesButton } from "../../PublishAllLanguagesButton";
+import { LanguagePanel } from "../../LanguagePanel";
 import type { EntryData, EntryFormMode } from "../useEntryForm";
 
 // "heavy" polish pass on top of that — neutral monochrome lucide icons
@@ -24,6 +23,12 @@ export interface DocumentPanelProps {
   entry?: EntryData | null;
   /** Whether the collection has the Draft/Published feature enabled. */
   hasStatus: boolean;
+  /** The active editing locale, forwarded to the language panel. */
+  locale?: string;
+  /** Switch the editor to a language, forwarded to the language panel. */
+  onLocaleChange?: (locale: string) => void;
+  /** Withholds the panel's mutating actions (reading a past version). */
+  actionsDisabled?: boolean;
   /** Whether the form has unsaved local changes. When the entry is
    *  published and the form is dirty, the status pill renders as
    *  "Modified" (Strapi pattern) so the user sees both "what's live"
@@ -79,6 +84,9 @@ export function DocumentPanel({
   mode,
   entry,
   hasStatus,
+  locale,
+  onLocaleChange,
+  actionsDisabled = false,
   isDirty = false,
 }: DocumentPanelProps): React.ReactElement | null {
   const isCreate = mode === "create";
@@ -114,7 +122,13 @@ export function DocumentPanel({
         <Separator />
         <TimestampRows entry={entry} />
       </dl>
-      <TranslationsRow translations={translations} hasStatus={hasStatus} />
+      <TranslationsRow
+        translations={translations}
+        hasStatus={hasStatus}
+        {...(locale === undefined ? {} : { locale })}
+        {...(onLocaleChange === undefined ? {} : { onLocaleChange })}
+        actionsDisabled={actionsDisabled}
+      />
     </div>
   );
 }
@@ -126,25 +140,34 @@ export function DocumentPanel({
 function TranslationsRow({
   translations,
   hasStatus,
+  locale,
+  onLocaleChange,
+  actionsDisabled = false,
 }: {
   translations?: Record<string, { translated: boolean; status?: string }>;
   hasStatus?: boolean;
+  locale?: string;
+  onLocaleChange?: (locale: string) => void;
+  actionsDisabled?: boolean;
 }) {
-  if (!translations) return null;
+  // The panel self-hides when localization is off, so an absent map is not a
+  // reason to withhold it: a localized entry fetched without
+  // `?translation-status=1` still has languages to switch between and act on.
   return (
     <div className="mt-4 pt-4 border-t border-border">
-      <p className="text-xs font-bold tracking-[0.1em] uppercase text-muted-foreground mb-2">
-        Languages
-      </p>
-      {/* The per-language pills moved to the entry header, beside the language
-          switcher, where they sit with the completeness bar as one instrument.
-          They were describing the same fact the switcher describes, two panels
-          apart. What stays here are the ACTIONS on other languages, which are
-          document management rather than status. */}
-      <div className="flex flex-wrap gap-2">
-        <CopyFromLanguageMenu />
-        <PublishAllLanguagesButton hasStatus={hasStatus} />
-      </div>
+      {/* The language panel, which replaced the two loose action buttons that
+          used to sit here. They offered the actions without the state they act
+          on, so an author had to read one panel to decide and another to act.
+          The panel carries both, and the same component renders inline where
+          this rail is hidden — so neither the state nor the actions can be the
+          surface that disappears. */}
+      <LanguagePanel
+        {...(translations === undefined ? {} : { translations })}
+        {...(locale === undefined ? {} : { activeLocale: locale })}
+        {...(onLocaleChange === undefined ? {} : { onSelect: onLocaleChange })}
+        hasStatus={hasStatus}
+        actionsDisabled={actionsDisabled}
+      />
     </div>
   );
 }

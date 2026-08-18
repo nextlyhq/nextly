@@ -37,6 +37,19 @@ export interface EntryLocaleContextValue {
   entryId?: string;
   /** Names of this collection's translatable fields — the field-scoped set copy-from-language copies. */
   localizedFieldNames?: string[];
+  /**
+   * Read another language's raw values for this document, for copy-from-language.
+   *
+   * Supplied by the form rather than resolved here because entries and singles
+   * are addressed differently — an entry by collection slug and id, a single by
+   * its slug alone. Making the FETCH the seam lets one copy-from implementation
+   * serve both, instead of the action existing only where its address shape
+   * happened to be hardcoded.
+   *
+   * Absent means the surface cannot fetch a source, and copy-from does not offer
+   * itself.
+   */
+  fetchSourceValues?: (locale: string) => Promise<Record<string, unknown>>;
 }
 
 const EntryLocaleContext = createContext<EntryLocaleContextValue>({

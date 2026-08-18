@@ -47,6 +47,7 @@ import {
 import { cn } from "@admin/lib/utils";
 
 import { EntryLocaleProvider } from "../EntryLocaleContext";
+import { LanguagePanel } from "../LanguagePanel";
 
 import { AutosaveRecoveryBanner } from "./AutosaveRecoveryBanner";
 import {
@@ -242,7 +243,11 @@ export function EntryForm({
   // field can tell whether it is translatable), and whether the active language differs from
   // the app default (per-field affordances only apply while translating a non-default language).
   // All inert for LTR / non-localized editors — the plain path is unchanged.
-  const { getLocale, defaultLocale } = useLocalization();
+  const {
+    getLocale,
+    defaultLocale,
+    enabled: localizationEnabled,
+  } = useLocalization();
   const localeCtx = useMemo(() => {
     const collectionLocalized = collection.localized === true;
     return {
@@ -676,6 +681,43 @@ export function EntryForm({
                     hasPublicAddress={hasPublicAddress}
                   />
 
+                  {/* The language panel, inline. Its rail mount is
+                      `hidden @4xl/content:flex`, so this is the exact
+                      complement: shown only where the rail is not. When the
+                      rail cannot carry it at all — create mode, or the author
+                      collapsed it — the panel renders unconditionally instead,
+                      because "the actions live in the rail" is precisely the
+                      failure this stage removes. */}
+                  {localizationEnabled && (
+                    <div
+                      className={cn(
+                        "px-6 pt-4",
+                        mode === "edit" &&
+                          !railCollapsed &&
+                          "@4xl/content:hidden"
+                      )}
+                    >
+                      <LanguagePanel
+                        {...(entry?._translations === undefined
+                          ? {}
+                          : {
+                              translations: entry._translations as Record<
+                                string,
+                                { translated: boolean; status?: string }
+                              >,
+                            })}
+                        {...(locale === undefined
+                          ? {}
+                          : { activeLocale: locale })}
+                        {...(onLocaleChange === undefined
+                          ? {}
+                          : { onSelect: onLocaleChange })}
+                        hasStatus={hasStatus}
+                        actionsDisabled={viewingVersion !== null}
+                      />
+                    </div>
+                  )}
+
                   {/* Reading a past version replaces the document rather than
                     opening beside it: the question an editor is asking is how
                     this page read then, and that is answered by the page. The
@@ -745,6 +787,11 @@ export function EntryForm({
                         mode={mode}
                         entry={entry}
                         hasStatus={hasStatus}
+                        {...(locale === undefined ? {} : { locale })}
+                        {...(onLocaleChange === undefined
+                          ? {}
+                          : { onLocaleChange })}
+                        actionsDisabled={viewingVersion !== null}
                         isDirty={isDirty}
                       />
                     </div>
