@@ -44,6 +44,7 @@ import {
   BuilderShell,
   Canvas,
   InsertPanel,
+  InspectorPanel,
   useEditorState,
 } from "@nextlyhq/builder/shell";
 import { useSuppressAdminChrome } from "@nextlyhq/plugin-sdk/admin";
@@ -233,6 +234,11 @@ function BlocksEditor({
       <BuilderShell
         onExit={done}
         availablePanels={AVAILABLE_PANELS}
+        // The shell owns the region; this fills it. Rendered unconditionally
+        // rather than only when something is selected, because the panel states
+        // "select a block to edit it" — a region that appears and disappears
+        // with the selection makes the canvas resize on every click.
+        inspector={<InspectorPanel editor={editor} />}
         // Switched on the panel id rather than rendering the inserter for
         // whatever the rail reports open. The shell asks for the panel it
         // opened, and a renderer ignoring that argument would draw the inserter

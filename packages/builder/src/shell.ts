@@ -72,6 +72,18 @@ export type { CanvasProps } from "./canvas";
  * is the second implementation of the nesting rule that the engine exists to
  * prevent.
  */
+/**
+ * The inspector, behind the same client banner: it holds draft field state and
+ * writes through the store.
+ *
+ * The derivations it draws from are not re-exported beside it, for the reason
+ * the inserter's are not — which props a block exposes is the editor's answer,
+ * and publishing it invites a host to build a second inspector that disagrees
+ * with this one about the merge rule for a patch.
+ */
+export { InspectorPanel } from "./inspector-panel";
+export type { InspectorPanelProps } from "./inspector-panel";
+
 export { InsertPanel } from "./insert-panel";
 export type { InsertPanelProps } from "./insert-panel";
 
