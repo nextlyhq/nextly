@@ -18,8 +18,8 @@
  * switching; it is where the work is decided rather than where a language is
  * picked.
  *
- * Renders nothing when localization is off or fewer than two languages are
- * configured, so non-localized editors are unchanged.
+ * Renders nothing unless the app has several languages AND this document is
+ * localized, so non-localized editors are unchanged.
  *
  * @module components/features/entries/LanguagePanel
  */
@@ -30,6 +30,7 @@ import { useLocalization } from "@admin/hooks/useLocalization";
 import { cn } from "@admin/lib/utils";
 
 import { CopyFromLanguageDialog } from "./CopyFromLanguageDialog";
+import { useEntryLocale } from "./EntryLocaleContext";
 import {
   languageState,
   LANGUAGE_STATE_LABEL,
@@ -48,8 +49,11 @@ export interface LanguagePanelProps {
   translations?: Record<string, LocaleTranslationMeta>;
   /** The active editing locale (undefined = the app default). */
   activeLocale?: string;
-  /** Switch the editor to a language. */
-  onSelect?: (code: string) => void;
+  /**
+   * Switch the editor to a language. `seedFrom` rides along so the request to
+   * seed the target survives the refetch the switch triggers.
+   */
+  onSelect?: (code: string, options?: { seedFrom?: string }) => void;
   /** Whether the collection has the Draft/Published lifecycle. */
   hasStatus?: boolean;
   /**
@@ -104,7 +108,7 @@ function LanguageRow({
   state: LanguageState;
   isActive: boolean;
   canSeed: boolean;
-  onSelect?: (code: string) => void;
+  onSelect?: (code: string, options?: { seedFrom?: string }) => void;
   onSeed?: () => void;
   actionsDisabled: boolean;
 }) {
@@ -182,12 +186,19 @@ export function LanguagePanel({
   className,
 }: LanguagePanelProps) {
   const { enabled, locales, defaultLocale } = useLocalization();
+  const { collectionLocalized } = useEntryLocale();
   const copy = useCopyFromLanguage();
   const publish = usePublishAllLanguages(
     hasStatus === undefined ? {} : { hasStatus }
   );
 
-  if (!enabled || locales.length < 2) return null;
+  // Two switches, and both have to be on. `enabled` is the APP's — several
+  // languages are configured — while `collectionLocalized` is this DOCUMENT's.
+  // Reading only the first puts a language panel on a document that has no
+  // language dimension, where every row after the default reads "not
+  // translated": a claim about content that cannot exist rather than work left
+  // to do.
+  if (!enabled || !collectionLocalized || locales.length < 2) return null;
 
   const active = activeLocale ?? defaultLocale;
   const counts = translationCounts(
@@ -236,12 +247,14 @@ export function LanguagePanel({
             canSeed={copy.available}
             {...(onSelect === undefined ? {} : { onSelect })}
             onSeed={() => {
-              // The language being edited right now is the source; the row
-              // clicked is the target. Switch first — seeding without switching
-              // fills a language the author is not looking at — then ask, so the
-              // confirm step names both sides correctly once the switch lands.
-              onSelect?.(locale.code);
-              copy.requestCopy(active);
+              // The row clicked is the target and the language being edited is
+              // the source, and BOTH travel in the one switch call. Setting the
+              // source separately here does not work: the switch refetches the
+              // document and tears this panel down, so an intent recorded in it
+              // is gone before anything can act on it. Whoever owns `locale`
+              // carries the pair across, and the copy is offered on the far
+              // side once the target's editor is on screen.
+              onSelect?.(locale.code, { seedFrom: active });
             }}
             actionsDisabled={actionsDisabled}
           />

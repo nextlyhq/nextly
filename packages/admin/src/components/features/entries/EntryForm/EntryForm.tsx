@@ -109,12 +109,16 @@ export interface EntryFormProps {
    */
   readDraft?: boolean;
   /** Called when the user switches the active content language (i18n M7). */
-  onLocaleChange?: (locale: string) => void;
+  onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
   /**
    * Default-language field values (i18n M7). Provided while translating a non-default language
    * so each translatable field can show its source text inline. Keyed by field name (camelCase).
    */
   sourceValues?: Record<string, unknown>;
+  /** A seed the language switch asked for; forwarded to the copy-from action. */
+  seedFromLocale?: string;
+  /** Clears that seed once it has been offered. */
+  onSeedHandled?: () => void;
   /**
    * Embedded mode for use in modals.
    * When true:
@@ -215,6 +219,8 @@ export function EntryForm({
   locale,
   readDraft,
   onLocaleChange,
+  seedFromLocale,
+  onSeedHandled,
   sourceValues,
   embedded = false,
   className,
@@ -266,6 +272,8 @@ export function EntryForm({
         !!locale && !!defaultLocale && locale !== defaultLocale,
       sourceValues,
       onLocaleChange,
+      seedFromLocale,
+      onSeedHandled,
       collectionSlug,
       entryId,
       // The translatable-field set, for the field-scoped copy-from-language action.
@@ -286,6 +294,8 @@ export function EntryForm({
     collection,
     sourceValues,
     onLocaleChange,
+    seedFromLocale,
+    onSeedHandled,
     entry?.id,
   ]);
 

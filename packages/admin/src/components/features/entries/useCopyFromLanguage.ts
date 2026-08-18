@@ -17,7 +17,7 @@
  * @module components/features/entries/useCopyFromLanguage
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useFormContext } from "react-hook-form";
 
 import { toast } from "@admin/components/ui";
@@ -81,6 +81,8 @@ export function useCopyFromLanguage(): CopyFromLanguage {
     collectionLocalized,
     localizedFieldNames,
     fetchSourceValues,
+    seedFromLocale,
+    onSeedHandled,
   } = useEntryLocale();
   const form = useFormContext();
 
@@ -100,6 +102,22 @@ export function useCopyFromLanguage(): CopyFromLanguage {
     localizedFieldNames.length > 0 &&
     sources.length > 0 &&
     !!form;
+
+  // Pick up a seed the language switch asked for. The request is made in the
+  // OLD language's editor and has to be acted on in the new one's, and the
+  // switch tears the requesting component down in between — so the intent
+  // arrives here through the context rather than through this hook's own
+  // state, which does not survive the trip.
+  useEffect(() => {
+    if (!seedFromLocale || !available) return;
+    // A seed naming the language now being edited would copy it onto itself.
+    if (seedFromLocale === active) {
+      onSeedHandled?.();
+      return;
+    }
+    setPending(seedFromLocale);
+    onSeedHandled?.();
+  }, [seedFromLocale, available, active, onSeedHandled]);
 
   const activeLabel = getLocale(active)?.label ?? active;
   const pendingLabel = pending ? (getLocale(pending)?.label ?? pending) : "";

@@ -26,7 +26,7 @@ export interface DocumentPanelProps {
   /** The active editing locale, forwarded to the language panel. */
   locale?: string;
   /** Switch the editor to a language, forwarded to the language panel. */
-  onLocaleChange?: (locale: string) => void;
+  onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
   /** Withholds the panel's mutating actions (reading a past version). */
   actionsDisabled?: boolean;
   /** Whether the form has unsaved local changes. When the entry is
@@ -147,7 +147,7 @@ function TranslationsRow({
   translations?: Record<string, { translated: boolean; status?: string }>;
   hasStatus?: boolean;
   locale?: string;
-  onLocaleChange?: (locale: string) => void;
+  onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
   actionsDisabled?: boolean;
 }) {
   // The panel self-hides when localization is off, so an absent map is not a

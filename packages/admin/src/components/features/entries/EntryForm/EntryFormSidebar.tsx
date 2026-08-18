@@ -21,7 +21,7 @@ export interface EntryFormSidebarProps {
   /** The active editing locale, forwarded to the language panel. */
   locale?: string;
   /** Switch the editor to a language, forwarded to the language panel. */
-  onLocaleChange?: (locale: string) => void;
+  onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
   /** Withholds the language panel's mutating actions (reading a past version). */
   actionsDisabled?: boolean;
   /** Whether the form has unsaved local changes. Forwarded to DocumentPanel

@@ -50,6 +50,7 @@ import {
   EntryLocaleProvider,
   type EntryLocaleContextValue,
 } from "@admin/components/features/entries/EntryLocaleContext";
+import { LanguagePanel } from "@admin/components/features/entries/LanguagePanel";
 import { historyEnabledFrom } from "@admin/components/features/versions/history-enabled";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useAutosaveRecovery } from "@admin/hooks/useAutosaveRecovery";
@@ -135,12 +136,16 @@ export interface SingleFormProps {
    */
   locale?: string;
   /** i18n: switch the active editing language (from the in-form status pills). */
-  onLocaleChange?: (locale: string) => void;
+  onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
   /**
    * i18n: default-language field values, so a translatable field can show its source text
    * inline while translating a non-default language. Supplied by the page's source fetch.
    */
   sourceValues?: Record<string, unknown>;
+  /** A seed the language switch asked for; forwarded to the copy-from action. */
+  seedFromLocale?: string;
+  /** Clears that seed once it has been offered. */
+  onSeedHandled?: () => void;
   /** Additional CSS classes */
   className?: string;
 }
@@ -363,6 +368,8 @@ export function SingleForm({
   onViewApi,
   locale,
   onLocaleChange,
+  seedFromLocale,
+  onSeedHandled,
   sourceValues,
   className,
 }: SingleFormProps) {
@@ -545,7 +552,20 @@ export function SingleForm({
 
   // i18n: per-locale writing direction (RTL) + the app default locale, for the content-locale
   // context passed to field components and the language pills. Inert for non-localized singles.
-  const { getLocale, defaultLocale } = useLocalization();
+  const {
+    getLocale,
+    defaultLocale,
+    enabled: localizationEnabled,
+  } = useLocalization();
+
+  // The per-locale translation-status map, read once and shared by the header
+  // adapter and the language panel: two reads of the same document key would
+  // agree today and drift the moment one of them learns a new shape.
+  const singleTranslations = (
+    document as {
+      _translations?: Record<string, { translated: boolean; status?: string }>;
+    }
+  )._translations;
 
   // Adapt the SingleDocumentData shape into what EntrySystemHeader and the
   // rail panels expect (entry.id / entry.status / entry.created_at /
@@ -561,7 +581,7 @@ export function SingleForm({
     // forward the per-locale translation-status map so the rail's Document panel renders
     // the per-language pills (DocumentPanel reads `entry._translations`). Absent for non-localized
     // singles / when translation-status wasn't requested → pills render nothing.
-    _translations: (document as { _translations?: unknown })._translations,
+    _translations: singleTranslations,
   } as unknown as Parameters<typeof EntrySystemHeader>[0]["entry"];
 
   // i18n: content-locale context for field components + the rail's language panel.
@@ -583,6 +603,8 @@ export function SingleForm({
         !!locale && !!defaultLocale && locale !== defaultLocale,
       sourceValues,
       onLocaleChange,
+      seedFromLocale,
+      onSeedHandled,
       // The translatable-field set, for the field-scoped copy-from-language action.
       localizedFieldNames: localizedFieldNamesOf(
         schema.fields,
@@ -600,6 +622,8 @@ export function SingleForm({
       schema.slug,
       sourceValues,
       onLocaleChange,
+      seedFromLocale,
+      onSeedHandled,
     ]
   );
 
@@ -719,6 +743,32 @@ export function SingleForm({
                 />
               ) : null}
 
+              {/* The language panel, inline. The rail that otherwise carries it
+                  is `hidden @4xl/content:flex`, so this is the exact
+                  complement: shown only where the rail is not, and rendered
+                  unconditionally once the author collapses the rail. Without
+                  it a single loses its language workflow entirely at narrow
+                  widths, which is the failure this panel exists to remove. */}
+              {localizationEnabled && (
+                <div
+                  className={cn(
+                    "px-6 pt-4",
+                    !railCollapsed && "@4xl/content:hidden"
+                  )}
+                >
+                  <LanguagePanel
+                    {...(singleTranslations === undefined
+                      ? {}
+                      : { translations: singleTranslations })}
+                    {...(locale === undefined ? {} : { activeLocale: locale })}
+                    {...(onLocaleChange === undefined
+                      ? {}
+                      : { onSelect: onLocaleChange })}
+                    hasStatus={hasStatus}
+                  />
+                </div>
+              )}
+
               {mainFields.length > 0 && (
                 <div className="@4xl/content:p-8 pt-6">
                   <EntryFormContent
@@ -739,6 +789,10 @@ export function SingleForm({
                     entry={entryLike}
                     hasStatus={hasStatus}
                     isDirty={isDirty}
+                    {...(locale === undefined ? {} : { locale })}
+                    {...(onLocaleChange === undefined
+                      ? {}
+                      : { onLocaleChange })}
                   />
                 </div>
               </div>

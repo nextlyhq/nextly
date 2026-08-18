@@ -29,8 +29,24 @@ export interface EntryLocaleContextValue {
    * non-default language so a translatable field can show its source text inline (spec §10).
    */
   sourceValues?: Record<string, unknown>;
-  /** Switch the active editing language — lets in-form surfaces (status pills) change locale. */
-  onLocaleChange?: (code: string) => void;
+  /**
+   * Switch the active editing language — lets in-form surfaces change locale.
+   *
+   * `seedFrom` asks that, once the switch lands, the newly active language be
+   * seeded from the named one. It travels WITH the switch because a locale
+   * change refetches the document and tears the editor's subtree down: an
+   * intent recorded inside that subtree is destroyed before it can be acted
+   * on. Whoever owns `locale` owns this too, so the pair cannot be separated.
+   */
+  onLocaleChange?: (code: string, options?: { seedFrom?: string }) => void;
+  /**
+   * A seed requested by the switch that just happened: copy the active
+   * language's content from this one. Consumed once, then cleared through
+   * `onSeedHandled`.
+   */
+  seedFromLocale?: string;
+  /** Clears `seedFromLocale` so a later re-render cannot re-offer the same seed. */
+  onSeedHandled?: () => void;
   /** Collection slug — lets in-form surfaces (copy-from-language) fetch another locale's values. */
   collectionSlug?: string;
   /** The entry's id (edit mode) — the source fetch target for copy-from-language. */

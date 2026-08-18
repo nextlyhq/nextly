@@ -18,7 +18,6 @@
 
 import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
 import type React from "react";
-import { useState } from "react";
 
 import {
   SingleForm,
@@ -35,6 +34,7 @@ import {
   useSingleSchema,
   useUpdateSingleDocument,
 } from "@admin/hooks/queries/useSingles";
+import { useEditorLocale } from "@admin/hooks/useEditorLocale";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { navigateTo } from "@admin/lib/navigation";
 
@@ -161,7 +161,7 @@ export default function SingleEditPage({
   // i18n: active content language for this editor. `undefined` = the app's default locale (the
   // backend resolves it). Switching triggers a refetch (useSingleDocument is keyed by locale) and
   // routes saves to the chosen language. Inert for non-localized singles.
-  const [locale, setLocale] = useState<string | undefined>(undefined);
+  const { locale, changeLocale, seedFromLocale, clearSeed } = useEditorLocale();
   const { defaultLocale, enabled: localizationEnabled } = useLocalization();
 
   // Fetch Single schema (field definitions)
@@ -314,7 +314,9 @@ export default function SingleEditPage({
           onCancel={handleCancel}
           // i18n: active language + switcher + inline source values for translatable fields.
           locale={locale}
-          onLocaleChange={setLocale}
+          onLocaleChange={changeLocale}
+          {...(seedFromLocale === undefined ? {} : { seedFromLocale })}
+          onSeedHandled={clearSeed}
           sourceValues={isNonDefaultLocale ? sourceDoc : undefined}
           // collections, so the page route owns navigation. Breadcrumbs and
           // DocumentTabs (Edit / API) are removed; the API view is reachable

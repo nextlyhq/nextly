@@ -151,6 +151,32 @@ describe("CopyFromLanguageMenu", () => {
     expect(screen.queryByRole("menuitem", { name: "German" })).toBeNull();
   });
 
+  it("offers the copy a language switch asked for, and clears the request", async () => {
+    // The far side of the seed flow. The request is made in the OLD language's
+    // editor and arrives here, in the NEW one's, through context — because the
+    // switch unmounts the component that made it. Without this the button in
+    // the language panel switches languages and silently does nothing else.
+    useBranding.mockReturnValue({ locales: LOCALES });
+    const onSeedHandled = vi.fn();
+    render(<Harness ctx={{ ...CTX, seedFromLocale: "en", onSeedHandled }} />);
+
+    expect(
+      await screen.findByRole("button", { name: /^Copy from English$/ })
+    ).toBeInTheDocument();
+    // Cleared as soon as it is offered, so a later re-render cannot re-open it.
+    await waitFor(() => expect(onSeedHandled).toHaveBeenCalled());
+  });
+
+  it("ignores a seed naming the language already being edited", async () => {
+    // Copying a language onto itself is a no-op that still shows a confirm
+    // step, so it is dropped rather than offered.
+    useBranding.mockReturnValue({ locales: LOCALES });
+    const onSeedHandled = vi.fn();
+    render(<Harness ctx={{ ...CTX, seedFromLocale: "de", onSeedHandled }} />);
+    await waitFor(() => expect(onSeedHandled).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: /^Copy from/ })).toBeNull();
+  });
+
   it("copies the source language's localized fields into the form on confirm", async () => {
     useBranding.mockReturnValue({ locales: LOCALES });
     fetchSourceValues.mockResolvedValue({

@@ -3,7 +3,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { render, screen, within } from "@admin/__tests__/utils";
 
-import { LanguagePanel } from "../LanguagePanel";
+import {
+  EntryLocaleProvider,
+  type EntryLocaleContextValue,
+} from "../EntryLocaleContext";
+import { LanguagePanel, type LanguagePanelProps } from "../LanguagePanel";
 
 const useBranding = vi.fn();
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
@@ -58,6 +62,28 @@ const COPY_IDLE = {
 };
 const PUBLISH_IDLE = { available: true, pending: false, publishAll };
 
+/** A localized document: the app has languages AND this document uses them. */
+const LOCALIZED_CTX: EntryLocaleContextValue = {
+  rtl: false,
+  collectionLocalized: true,
+  isNonDefaultLocale: false,
+};
+
+/**
+ * The panel reads the document's OWN localization switch from context, so every
+ * render goes through a provider rather than the non-localized default.
+ */
+function renderPanel(
+  props: LanguagePanelProps = {},
+  ctx: EntryLocaleContextValue = LOCALIZED_CTX
+) {
+  return render(
+    <EntryLocaleProvider value={ctx}>
+      <LanguagePanel {...props} />
+    </EntryLocaleProvider>
+  );
+}
+
 /** The panel's rows, in render order. */
 function rows() {
   return within(
@@ -76,7 +102,20 @@ describe("LanguagePanel", () => {
 
   it("renders nothing when localization is not configured", () => {
     useBranding.mockReturnValue({ locales: undefined });
-    const { container } = render(<LanguagePanel />);
+    const { container } = renderPanel();
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("renders nothing on a document that is not localized", () => {
+    // The app having several languages is not the same question as this
+    // document having translations. Rendering here would tell the author that
+    // Spanish is "not translated" for content that has no language dimension
+    // at all — work that does not exist rather than work outstanding.
+    useBranding.mockReturnValue({ locales: LOCALES });
+    const { container } = renderPanel(
+      { translations: TRANSLATIONS },
+      { ...LOCALIZED_CTX, collectionLocalized: false }
+    );
     expect(container).toBeEmptyDOMElement();
   });
 
@@ -84,13 +123,13 @@ describe("LanguagePanel", () => {
     useBranding.mockReturnValue({
       locales: { ...LOCALES, locales: [LOCALES.locales[0]] },
     });
-    const { container } = render(<LanguagePanel />);
+    const { container } = renderPanel();
     expect(container).toBeEmptyDOMElement();
   });
 
   it("gives every configured language a row carrying its state as text", () => {
     useBranding.mockReturnValue({ locales: LOCALES });
-    render(<LanguagePanel translations={TRANSLATIONS} activeLocale="de" />);
+    renderPanel({ translations: TRANSLATIONS, activeLocale: "de" });
 
     const [en, de, ar] = rows();
     // State is words, not only a coloured dot: the dot is aria-hidden and
@@ -107,13 +146,13 @@ describe("LanguagePanel", () => {
 
   it("counts how many languages are translated", () => {
     useBranding.mockReturnValue({ locales: LOCALES });
-    render(<LanguagePanel translations={TRANSLATIONS} />);
+    renderPanel({ translations: TRANSLATIONS });
     expect(screen.getByText("2 of 3 translated")).toBeInTheDocument();
   });
 
   it("marks the language being edited instead of offering to open it", () => {
     useBranding.mockReturnValue({ locales: LOCALES });
-    render(<LanguagePanel translations={TRANSLATIONS} activeLocale="de" />);
+    renderPanel({ translations: TRANSLATIONS, activeLocale: "de" });
 
     const [, de] = rows();
     expect(de).toHaveTextContent("editing now");
@@ -124,13 +163,11 @@ describe("LanguagePanel", () => {
 
   it("offers to seed only the languages that have nothing in them", () => {
     useBranding.mockReturnValue({ locales: LOCALES });
-    render(
-      <LanguagePanel
-        translations={TRANSLATIONS}
-        activeLocale="de"
-        onSelect={vi.fn()}
-      />
-    );
+    renderPanel({
+      translations: TRANSLATIONS,
+      activeLocale: "de",
+      onSelect: vi.fn(),
+    });
 
     const [en, , ar] = rows();
     // Arabic is empty, so seeding is the useful next step.
@@ -151,13 +188,11 @@ describe("LanguagePanel", () => {
   it("withholds seeding entirely when copy-from does not apply", () => {
     useBranding.mockReturnValue({ locales: LOCALES });
     copyState.mockReturnValue({ ...COPY_IDLE, available: false });
-    render(
-      <LanguagePanel
-        translations={TRANSLATIONS}
-        activeLocale="de"
-        onSelect={vi.fn()}
-      />
-    );
+    renderPanel({
+      translations: TRANSLATIONS,
+      activeLocale: "de",
+      onSelect: vi.fn(),
+    });
     expect(
       screen.queryByRole("button", {
         name: "Start Arabic from another language",
@@ -165,50 +200,48 @@ describe("LanguagePanel", () => {
     ).toBeNull();
   });
 
-  it("seeds by switching to the target first, then copying from the language left behind", async () => {
+  it("seeds by naming the target and the source in ONE switch", async () => {
     useBranding.mockReturnValue({ locales: LOCALES });
     const onSelect = vi.fn();
-    render(
-      <LanguagePanel
-        translations={TRANSLATIONS}
-        activeLocale="de"
-        onSelect={onSelect}
-      />
-    );
+    renderPanel({
+      translations: TRANSLATIONS,
+      activeLocale: "de",
+      onSelect: onSelect,
+    });
 
     await userEvent.click(
       screen.getByRole("button", { name: "Start Arabic from another language" })
     );
 
-    // The row clicked is the TARGET, and the editor moves there — seeding a
-    // language the author is not looking at is the confusing half of this.
-    expect(onSelect).toHaveBeenCalledWith("ar");
-    // The language being edited when the button was pressed is the SOURCE.
-    expect(requestCopy).toHaveBeenCalledWith("de");
+    // ONE call carrying both halves. Asking for the switch and the source
+    // separately loses the source: the switch refetches the document and
+    // unmounts this panel, so a request made from here never survives to be
+    // acted on.
+    expect(onSelect).toHaveBeenCalledWith("ar", { seedFrom: "de" });
+    expect(requestCopy).not.toHaveBeenCalled();
   });
 
   it("treats the app default as the source when no language has been picked", async () => {
     useBranding.mockReturnValue({ locales: LOCALES });
-    render(<LanguagePanel translations={TRANSLATIONS} onSelect={vi.fn()} />);
+    const onSelect = vi.fn();
+    renderPanel({ translations: TRANSLATIONS, onSelect });
 
     await userEvent.click(
       screen.getByRole("button", { name: "Start Arabic from another language" })
     );
     // `activeLocale` undefined means the implicit default, not "no source".
-    expect(requestCopy).toHaveBeenCalledWith("en");
+    expect(onSelect).toHaveBeenCalledWith("ar", { seedFrom: "en" });
   });
 
   it("withholds every action while a past version is on screen, and keeps the states readable", () => {
     useBranding.mockReturnValue({ locales: LOCALES });
-    render(
-      <LanguagePanel
-        translations={TRANSLATIONS}
-        activeLocale="de"
-        onSelect={vi.fn()}
-        hasStatus
-        actionsDisabled
-      />
-    );
+    renderPanel({
+      translations: TRANSLATIONS,
+      activeLocale: "de",
+      onSelect: vi.fn(),
+      hasStatus: true,
+      actionsDisabled: true,
+    });
 
     expect(
       screen.getByRole("button", { name: "Start Arabic from another language" })
@@ -227,7 +260,7 @@ describe("LanguagePanel", () => {
   it("hides publish-all when the action does not apply", () => {
     useBranding.mockReturnValue({ locales: LOCALES });
     publishState.mockReturnValue({ ...PUBLISH_IDLE, available: false });
-    render(<LanguagePanel translations={TRANSLATIONS} hasStatus />);
+    renderPanel({ translations: TRANSLATIONS, hasStatus: true });
     expect(screen.queryByRole("button", { name: "Publish all" })).toBeNull();
   });
 });
