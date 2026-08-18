@@ -262,7 +262,8 @@ describe("moving through it with the keyboard", () => {
     expect(onSelectedChange).not.toHaveBeenCalled();
 
     fireEvent.keyDown(tree, { key: "Enter" });
-    expect(onSelectedChange).toHaveBeenCalledWith("header");
+    // The gesture travels with the id now; a plain Enter is a replace.
+    expect(onSelectedChange).toHaveBeenCalledWith("header", "replace");
   });
 
   it("types ahead to a row further down", () => {
@@ -412,5 +413,105 @@ describe("virtualization", () => {
     // 500 rows at 28px. A height of only the rendered window would make the scrollbar claim the
     // tree is a fraction of its real length.
     expect(screen.getByRole("tree").style.height).toBe("14000px");
+  });
+});
+
+describe("a tree holding more than one selected row", () => {
+  function multi(props: Partial<React.ComponentProps<typeof TreeView>>) {
+    return render(
+      <TreeView
+        aria-label="Blocks"
+        nodes={[
+          { id: "a", label: "A" },
+          { id: "b", label: "B" },
+          { id: "c", label: "C" },
+        ]}
+        {...props}
+      />
+    );
+  }
+
+  it("marks every selected row, not only the primary", () => {
+    const { container } = multi({ selectedId: "a", selectedIds: ["a", "c"] });
+
+    expect(
+      Array.from(container.querySelectorAll('[role="treeitem"]')).map(row => [
+        row.textContent,
+        row.getAttribute("aria-selected"),
+      ])
+    ).toEqual([
+      ["A", "true"],
+      ["B", "false"],
+      ["C", "true"],
+    ]);
+  });
+
+  it("announces itself as multi-selectable ONLY when a set is supplied", () => {
+    /*
+     * The control that matters most here. A single-select tree claiming to be
+     * multi-selectable is wrong in a way a screen-reader user ACTS on — they
+     * would look for a selection gesture the tree does not have — so it is
+     * worse than the gap it would be closing.
+     */
+    const withSet = multi({ selectedId: "a", selectedIds: ["a"] });
+    expect(
+      withSet.container
+        .querySelector('[role="tree"]')
+        ?.getAttribute("aria-multiselectable")
+    ).toBe("true");
+
+    cleanup();
+
+    const withoutSet = multi({ selectedId: "a" });
+    expect(
+      withoutSet.container
+        .querySelector('[role="tree"]')
+        ?.getAttribute("aria-multiselectable")
+    ).toBeNull();
+  });
+
+  it("selects exactly the primary when no set is supplied, which is the control", () => {
+    // Without this, "existing callers keep working" is a claim rather than a
+    // check — every other case here passes a set.
+    const { container } = multi({ selectedId: "b" });
+
+    expect(
+      Array.from(container.querySelectorAll('[role="treeitem"]')).map(row =>
+        row.getAttribute("aria-selected")
+      )
+    ).toEqual(["false", "true", "false"]);
+  });
+
+  it("reports the gesture a click's modifiers meant", () => {
+    const onSelectedChange = vi.fn();
+    const { container } = multi({ selectedId: "a", onSelectedChange });
+    const second = container.querySelectorAll('[role="treeitem"]')[1];
+    if (second === undefined) throw new Error("expected a second row");
+
+    fireEvent.click(second, { metaKey: true });
+    expect(onSelectedChange).toHaveBeenCalledWith("b", "toggle");
+
+    fireEvent.click(second, { shiftKey: true });
+    expect(onSelectedChange).toHaveBeenCalledWith("b", "extend");
+
+    fireEvent.click(second);
+    expect(onSelectedChange).toHaveBeenCalledWith("b", "replace");
+  });
+
+  it("gives the KEYBOARD the same three gestures", () => {
+    /*
+     * WCAG 2.2 SC 2.1.1. A tree that could only build a multi-row selection by
+     * clicking would make the one capability this change adds mouse-only.
+     */
+    const onSelectedChange = vi.fn();
+    const { container } = multi({ selectedId: "a", onSelectedChange });
+    const tree = container.querySelector('[role="tree"]');
+    if (tree === null) throw new Error("expected a tree");
+
+    fireEvent.keyDown(tree, { key: " ", ctrlKey: true });
+    expect(onSelectedChange).toHaveBeenCalledWith("a", "toggle");
+
+    fireEvent.keyDown(tree, { key: "Enter", shiftKey: true });
+    expect(onSelectedChange).toHaveBeenCalledWith("a", "extend");
   });
 });
