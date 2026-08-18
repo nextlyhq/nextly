@@ -378,6 +378,16 @@ export function FieldWrapper({
           {/* show the default-language source hint in the horizontal
               (checkbox) layout too — it was only rendered in the vertical layout. */}
           {sourceHint}
+
+          {/* And the source-fill action beside it, for the same reason. A
+              checkbox is not localized by default, but only `password` can
+              NEVER be — so a schema author who declares `localized: true` on one
+              gets a field that showed its source and offered no way to take it,
+              which is the layout branch disagreeing with itself rather than a
+              decision about checkboxes. */}
+          {useSourceAction && (
+            <div className="flex justify-end">{useSourceAction}</div>
+          )}
         </div>
       </div>
     );
