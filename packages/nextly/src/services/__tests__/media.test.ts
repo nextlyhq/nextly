@@ -318,7 +318,9 @@ describe("MediaService", () => {
     });
 
     it("should reject invalid image files", async () => {
-      mockIsValidImage.mockResolvedValueOnce(false);
+      // "invalid" is a POSITIVE finding that the buffer is not an image, which
+      // is the only validity result that may refuse an upload.
+      mockIsValidImage.mockResolvedValueOnce("invalid");
 
       const buffer = Buffer.from("corrupted-image");
       const result = await mediaService.uploadMedia({
@@ -333,6 +335,25 @@ describe("MediaService", () => {
       expect(result.statusCode).toBe(400);
       expect(result.message).toBe("Invalid image file");
       expect(result.data).toBeNull();
+    });
+
+    it("accepts the upload when image processing is unavailable", async () => {
+      // "unknown" means this install has no image processing, so the check
+      // never ran. Refusing on it would answer "Invalid image file" to a user
+      // whose file is fine, blaming them for a package missing from the
+      // server -- and the magic-byte gate has already accepted the upload.
+      mockIsValidImage.mockResolvedValueOnce("unknown");
+
+      const buffer = Buffer.from("a perfectly good image");
+      const result = await mediaService.uploadMedia({
+        file: buffer,
+        filename: "photo.jpg",
+        mimeType: "image/jpeg",
+        size: 1024,
+        uploadedBy: testUserId,
+      });
+
+      expect(result.message).not.toBe("Invalid image file");
     });
 
     it("should continue upload if thumbnail generation fails", async () => {

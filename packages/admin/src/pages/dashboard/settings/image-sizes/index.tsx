@@ -8,7 +8,7 @@
  * Shows regeneration status when sizes change.
  */
 
-import { Badge, Button } from "@nextlyhq/ui";
+import { Alert, AlertDescription, Badge, Button } from "@nextlyhq/ui";
 import * as React from "react";
 
 import { SettingsLayout } from "@admin/components/features/settings";
@@ -27,7 +27,9 @@ import { usePagination } from "@admin/hooks/usePagination";
 import { navigateTo } from "@admin/lib/navigation";
 import {
   deleteImageSize,
+  fetchImageProcessingAvailability,
   fetchImageSizes,
+  type ImageProcessingAvailability,
   type ImageSize,
 } from "@admin/services/imageSizesApi";
 
@@ -63,6 +65,10 @@ function ImageSizesContent({
 }) {
   const [sizes, setSizes] = React.useState<ImageSize[]>([]);
   const [isLoading, setIsLoading] = React.useState(true);
+  // Starts as available so the page never accuses the server of a missing
+  // package before it has heard back. Only a definite "no" renders the notice.
+  const [imageProcessing, setImageProcessing] =
+    React.useState<ImageProcessingAvailability>({ available: true });
   const { page, pageSize, setPage, setPageSize, resetPage } = usePagination();
 
   // Fetch sizes on mount
@@ -79,6 +85,13 @@ function ImageSizesContent({
   React.useEffect(() => {
     void loadSizes();
   }, [loadSizes]);
+
+  // Asked once on mount: whether the server can process images at all does not
+  // change while the page is open, and the answer decides whether the sizes
+  // listed below can ever be produced.
+  React.useEffect(() => {
+    void fetchImageProcessingAvailability().then(setImageProcessing);
+  }, []);
 
   // Handle delete
   const handleDelete = React.useCallback(
@@ -240,6 +253,26 @@ function ImageSizesContent({
       }}
       columnsControl={columnsControl}
       slots={{
+        // Above the toolbar rather than below the list: it explains why every
+        // size on this page is inert, so it has to be read before them.
+        beforeList: !imageProcessing.available && (
+          <Alert variant="warning" className="mb-4">
+            <AlertDescription>
+              <p>
+                This server cannot process images, so no sizes are generated.
+                Existing uploads are unaffected and new uploads still succeed,
+                they simply arrive without resized copies.
+              </p>
+              {imageProcessing.installCommand ? (
+                <pre className="mt-2 overflow-x-auto rounded-md bg-muted p-2">
+                  <code className="font-mono text-xs">
+                    {imageProcessing.installCommand}
+                  </code>
+                </pre>
+              ) : null}
+            </AlertDescription>
+          </Alert>
+        ),
         afterList: !isLoading && sizes.some(s => s.isDefault) && (
           <div className="flex items-start gap-2 text-xs text-muted-foreground px-1">
             <Info className="h-3.5 w-3.5 mt-0.5 shrink-0" />
