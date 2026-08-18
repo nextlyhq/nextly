@@ -333,6 +333,19 @@ export function EntryForm({
     [viewingVersion, restoreAffordance]
   );
 
+  // One question — is the chosen version actually on screen? — answered once,
+  // because the document body and the restore affordance must never disagree
+  // about it. A read that has not returned leaves `isLoading` false with no
+  // error and no snapshot: the query is disabled whenever the scope is not yet
+  // addressable, and a paused one reports the same. Deciding from `isLoading`
+  // alone would render an empty document as though it were the version, and
+  // offer to restore what nobody has seen.
+  const versionOnScreen =
+    viewingVersion !== null &&
+    viewingVersion.error === null &&
+    !viewingVersion.isLoading &&
+    viewingVersion.snapshot !== undefined;
+
   // Which fields a version HAD, decided by that version's own values. The
   // takeover layout is value-driven, so computing it from the live entry would
   // show today's layout over yesterday's document — omitting fields the version
@@ -638,10 +651,7 @@ export function EntryForm({
                       // And only once the version is actually on screen:
                       // restoring from a skeleton, or from a failed read, is a
                       // decision made without having seen what is being chosen.
-                      restoreDisabled={
-                        viewingVersion.isLoading ||
-                        viewingVersion.error !== null
-                      }
+                      restoreDisabled={!versionOnScreen}
                     />
                   ) : null}
                   <EntryMetaStrip
@@ -682,7 +692,7 @@ export function EntryForm({
                             This version could not be loaded.
                           </AlertDescription>
                         </Alert>
-                      ) : viewingVersion.isLoading ? (
+                      ) : !versionOnScreen ? (
                         <div className="flex flex-col gap-4" aria-busy="true">
                           <span className="sr-only" role="status">
                             Loading version {viewingVersion.versionNo}
