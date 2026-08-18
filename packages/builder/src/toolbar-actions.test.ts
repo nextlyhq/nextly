@@ -313,21 +313,49 @@ describe("toolbarActions for MORE than one block", () => {
     expect(actionOf(actions, "delete").enabled).toBe(true);
   });
 
-  it("withdraws move and select-parent, which do not", () => {
-    /*
-     * A set spread across two containers has no shared list to move within, and
-     * "the parent" of blocks with different parents is not a block. Offering
-     * either would invent an answer to a question the author did not ask.
-     */
+  it("withdraws select-parent, which has no answer for a set", () => {
+    // "The parent" of blocks with different parents is not a block, so there is
+    // nothing for this to select and it does not invent one.
     const document = documentOf([node("a"), node("b")]);
     const actions = toolbarActions(document, "a", ["a", "b"]);
 
-    for (const id of ["move-up", "move-down", "select-parent"] as const) {
-      expect(actionOf(actions, id).enabled).toBe(false);
-      expect(actionOf(actions, id).reason).toBe(
-        "Only one block at a time. 2 are selected."
-      );
-    }
+    expect(actionOf(actions, "select-parent").enabled).toBe(false);
+    expect(actionOf(actions, "select-parent").reason).toBe(
+      "Only one block at a time. 2 are selected."
+    );
+  });
+
+  it("offers move to a set that shares one container", () => {
+    // Two blocks in the same list have a shared order to step through, so one
+    // step for each is well defined. `a` is first, so only down is available.
+    const document = documentOf([node("a"), node("b"), node("c")]);
+    const actions = toolbarActions(document, "a", ["a", "b"]);
+
+    expect(actionOf(actions, "move-down").enabled).toBe(true);
+    // Dimmed WITHOUT a reason at the edge, exactly as one block at the end of
+    // its list is: a step with nowhere to go needs no explaining.
+    expect(actionOf(actions, "move-up").enabled).toBe(false);
+    expect(actionOf(actions, "move-up").reason).toBeUndefined();
+  });
+
+  it("explains a move refused because the set straddles two containers", () => {
+    // Unlike an edge, nothing on the page shows that the selection spans a
+    // boundary, so this refusal carries a reason.
+    const document = documentOf([node("a"), node("b"), node("c")]);
+    const withChild = {
+      ...document,
+      nodes: [
+        { ...document.nodes[0], slots: { children: [node("inside")] } },
+        document.nodes[1],
+      ],
+    } as typeof document;
+
+    const actions = toolbarActions(withChild, "inside", ["inside", "b"]);
+
+    expect(actionOf(actions, "move-up").enabled).toBe(false);
+    expect(actionOf(actions, "move-up").reason).toContain(
+      "different containers"
+    );
   });
 
   it("keeps the same five buttons in the same order", () => {
