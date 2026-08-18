@@ -56,6 +56,9 @@ type ApiErrorResult = {
 
 export type ApiResult<T> = ApiSuccess<T> | ApiErrorResult;
 
+/** Distinguishes "the body could not be parsed" from a body that IS `null`. */
+const PARSE_FAILED = Symbol("fetcher.parse-failed");
+
 export async function fetcher<T = unknown>(
   path: string,
   options: RequestInit = {},
@@ -118,9 +121,30 @@ export async function fetcher<T = unknown>(
     return undefined as T;
   }
 
-  const json = await res.json().catch(() => null);
+  // A sentinel rather than `null` for the parse failure, because `null` is a
+  // value the server can legitimately SEND. Catching to `null` conflated the
+  // two, and the branch below then had no way to tell "the body could not be
+  // read" from "the document is null".
+  const json = await res.json().catch(() => PARSE_FAILED);
 
-  if (!json || typeof json !== "object") {
+  if (json === PARSE_FAILED) {
+    return undefined as T;
+  }
+
+  // `null` is a DOCUMENT, not an absent body — the answer a read gives when the
+  // thing legitimately does not exist. `GET .../versions/autosave` returns
+  // exactly that, `200 application/json` with `null`, when an author has no
+  // recovery point; collapsing it to `undefined` lost the distinction and left
+  // react-query throwing "Query data cannot be undefined" on every editor load,
+  // for a query that had answered correctly.
+  if (json === null) {
+    return null as T;
+  }
+
+  // Any other non-object body — a bare string, a number — is still undefined.
+  // No endpoint in this admin answers with one, so this stays as it was rather
+  // than inventing a meaning for a shape nothing sends.
+  if (typeof json !== "object") {
     return undefined as T;
   }
 
