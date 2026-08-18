@@ -48,7 +48,6 @@ import {
   isRepeaterField,
   isGroupField,
   isJSONField,
-  isDataField,
 } from "nextly/config";
 import { z } from "zod";
 
@@ -259,14 +258,45 @@ export async function validateFieldValue(
 // ============================================================
 
 /**
- * Extract all data fields from a field array.
- * Filters to only include fields that store data.
+ * Whether a field carries a value in the FORM.
+ *
+ * Deliberately not `isDataField`. That guard answers a different question —
+ * "does core generate a database column for this type?" — by testing membership
+ * of a closed list of built-in types. The two questions had the same answer for
+ * as long as every field type was built in, and stopped having it the moment
+ * `pluginField()` allowed a type outside that union: a contributed field stores
+ * data and appears in the form, and core's list cannot name it, because not
+ * naming it is what makes it contributed.
+ *
+ * Asking the wrong one here is not a missing validator. The shape this feeds is
+ * a `z.object`, which STRIPS keys it has no entry for, and the resolver's output
+ * is what the editors submit — so a field absent from this list is absent from
+ * the request body, and its edits are silently dropped on every save.
+ *
+ * A name is the whole test, and it stays the whole test. Core's own
+ * `ALL_FIELD_TYPES` is exactly `DATA_FIELD_TYPES`, so there is no named
+ * presentational type to exclude; anything carrying a name carries a value.
+ * That is a boundary rather than a list — a type nobody has written yet passes
+ * it, which is the property a list of known types can never have.
+ */
+function carriesFormValue(field: FieldConfig): boolean {
+  const named = field as { name?: unknown };
+  return typeof named.name === "string" && named.name.length > 0;
+}
+
+/**
+ * Extract every field that carries a value, for the form's schema.
+ *
+ * An unrecognised type is kept rather than dropped: `fieldToZodSchema` already
+ * ends in `z.unknown()`, which passes a present value through untouched, so a
+ * contributed field validates as permissively as the admin can honestly manage
+ * and reaches the server intact. The server holds the authoritative rule for it.
  */
 function extractDataFields(fields: FieldConfig[]): ExtractedField[] {
   const result: ExtractedField[] = [];
 
   for (const field of fields) {
-    if (isDataField(field)) {
+    if (carriesFormValue(field)) {
       result.push(field as ExtractedField);
     }
   }
