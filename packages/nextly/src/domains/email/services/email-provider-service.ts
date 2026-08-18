@@ -37,6 +37,7 @@ import { encrypt, decrypt } from "../../../utils/encryption";
 // Pull adapter type into a normal `import type` declaration so the return
 // signature on createAdapterFromProvider satisfies consistent-type-imports.
 import { affectedRowCount } from "../../auth/services/auth-service";
+import { findConfigurationLoss } from "../configuration-loss";
 import {
   isRecognisedMessageId,
   mailboxOf,
@@ -173,6 +174,72 @@ interface ProviderTransaction {
   insert(table: EmailProvidersTable): {
     values(data: Record<string, unknown>): Promise<unknown>;
   };
+}
+
+/**
+ * Refuse a configuration that serialisation would LOSE part of.
+ *
+ * The stored configuration is its serialisation, so a value JSON can only
+ * carry as text is COERCED and accepted: a `Date` becoming an ISO string keeps
+ * the information, and that cost is deliberate. Loss is different and is
+ * refused, because it corrupts a configuration rather than restyling it.
+ *
+ * Its own function because it answers its own question. Comparing the two
+ * object graphs cannot separate loss from coercion, which is what the old
+ * guard did and why it refused the `Date`.
+ */
+function assertNothingLost(
+  type: string,
+  parsed: Record<string, unknown>,
+  stored: unknown
+): void {
+  const lost = findConfigurationLoss(parsed, stored);
+  if (lost === null) return;
+
+  throw new NextlyError({
+    code: "BUSINESS_RULE_VIOLATION",
+    publicMessage: `Email provider "${type}" parsed its configuration into a value that loses ${lost} when written as JSON, so what is read back would not be what was validated. Return only what JSON can carry from \`parseConfig\`.`,
+    logContext: {
+      reason: "email-provider-configuration-loses-data",
+      type,
+      lost,
+    },
+  });
+}
+
+/**
+ * Refuse a parser that does not return what it was given.
+ *
+ * This is what catches a parser that DERIVES -- one base64-encoding on every
+ * pass, so each read yields a different credential from the one stored and the
+ * row decays rather than merely changing type.
+ *
+ * Compared in the JSON domain and STRUCTURALLY: both sides are parsed objects
+ * rather than strings, so field ORDER is not a difference. A parser that
+ * rebuilds its output field by field is an ordinary thing to write and must
+ * not be refused for it.
+ */
+function assertParseIsAFixedPoint(
+  type: string,
+  reparsed: unknown,
+  expected: unknown
+): void {
+  let reserialised: unknown;
+  try {
+    reserialised = JSON.parse(JSON.stringify(reparsed) ?? "null");
+  } catch {
+    // A re-parse that cannot itself be serialised cannot be compared, and a
+    // value that will not survive the column is what this refuses anyway.
+    reserialised = undefined;
+  }
+
+  if (isDeepStrictEqual(reserialised, expected)) return;
+
+  throw new NextlyError({
+    code: "BUSINESS_RULE_VIOLATION",
+    publicMessage: `Email provider "${type}" cannot store this configuration, because parsing what would be saved does not return what was saved. Its \`parseConfig\` must accept its own output unchanged -- derive values in \`createAdapter\` instead.`,
+    logContext: { reason: "email-provider-parse-not-a-fixed-point", type },
+  });
 }
 
 export class EmailProviderService extends BaseService {
@@ -383,27 +450,8 @@ export class EmailProviderService extends BaseService {
       // Left as one outcome: both mean the row could not be read back.
       reparsed = undefined;
     }
-    // TWO properties, and each misses what the other catches.
-    //
-    // The parsed value must SURVIVE the round trip: a `Date`, a `Map`, an
-    // `Infinity` or a class instance is written as something else, and a
-    // pass-through parser that accepts both forms then agrees with itself
-    // while the adapter receives an ISO string where a `Date` was returned.
-    // Re-parsing alone cannot see that, because both sides of it are already
-    // past the column.
-    //
-    // And re-parsing the stored form must RETURN it, which is what catches a
-    // parser that derives rather than one that loses a type.
-    if (
-      !isDeepStrictEqual(stored, unchanged) ||
-      !isDeepStrictEqual(reparsed, unchanged)
-    ) {
-      throw new NextlyError({
-        code: "BUSINESS_RULE_VIOLATION",
-        publicMessage: `Email provider "${type}" cannot store this configuration, because parsing what would be saved does not return what was saved. Its \`parseConfig\` must accept its own output unchanged -- derive values in \`createAdapter\` instead, and return only what JSON can carry.`,
-        logContext: { reason: "email-provider-parse-not-a-fixed-point", type },
-      });
-    }
+    assertNothingLost(type, stored, roundTripped);
+    assertParseIsAFixedPoint(type, reparsed, unchanged);
 
     // The VALIDATED form, not the object it was derived from. `encryptConfiguration`
     // serialises again, and returning the original would mean the value written
