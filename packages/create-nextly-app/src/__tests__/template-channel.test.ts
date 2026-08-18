@@ -4,7 +4,10 @@
  * Content templates (blog) render CMS content through `nextly/runtime` cache
  * helpers, which ship on the active `alpha` channel; the conservative `latest`
  * tag can lag behind it during the alpha. So a blog scaffold must pin nextly +
- * @nextlyhq/* to `alpha`, while blank/plugin stay on `latest`.
+ * @nextlyhq/* to `alpha`, while blank stays on `latest`. The plugin template
+ * tracks `alpha` too, for the same reason applied to a different package:
+ * `@nextlyhq/eslint-plugin` ships the design-token rules on the active release
+ * line, and `latest` lags it.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -26,10 +29,10 @@ const LATEST = "0.0.2-alpha.37";
 const ALPHA = "0.0.2-alpha.42";
 
 describe("templateNextlyChannel", () => {
-  it("routes content templates to alpha and everything else to latest", () => {
+  it("routes templates that track the active release line to alpha", () => {
     expect(templateNextlyChannel("blog")).toBe("alpha");
     expect(templateNextlyChannel("blank")).toBe("latest");
-    expect(templateNextlyChannel("plugin")).toBe("latest");
+    expect(templateNextlyChannel("plugin")).toBe("alpha");
   });
 });
 
@@ -55,6 +58,38 @@ describe("content-template dist-tag pinning", () => {
     expect(pkg.dependencies["nextly"]).toBe(`^${ALPHA}`);
     expect(pkg.dependencies["@nextlyhq/admin"]).toBe(`^${ALPHA}`);
     expect(pkg.dependencies["@nextlyhq/adapter-drizzle"]).toBe(`^${ALPHA}`);
+  });
+
+  // The plugin scaffold takes a DIFFERENT code path from the app scaffold —
+  // `generatePluginPackageJson`, a publishable library rather than an app — so
+  // asserting `templateNextlyChannel("plugin") === "alpha"` proves only that the
+  // routing function answers correctly, not that its answer reaches the
+  // manifest. This asserts the manifest, which is the thing an author installs.
+  it("pins the plugin scaffold's manifest to the alpha channel", async () => {
+    const pkg = JSON.parse(
+      await generatePackageJson("my-plugin", pgDatabase, false, "plugin")
+    );
+    // `latest` carries @nextlyhq/eslint-plugin's 0.0.0 bootstrap placeholder,
+    // which has no `main` and no `exports`: it installs and then fails at the
+    // author's first `pnpm lint`, when eslint.config.mjs imports it.
+    expect(pkg.devDependencies["@nextlyhq/eslint-plugin"]).toBe(`^${ALPHA}`);
+    expect(pkg.devDependencies["nextly"]).toBe(`^${ALPHA}`);
+    expect(pkg.peerDependencies["nextly"]).toBe(`^${ALPHA}`);
+    expect(pkg.peerDependencies["@nextlyhq/ui"]).toBe(`^${ALPHA}`);
+  });
+
+  // `--use-yalc` empties the resolved-version map, so every range falls back to
+  // a bare dist-tag. That fallback must be the TEMPLATE's channel, not `latest`:
+  // the yalc installer links a fixed list that does not include
+  // `@nextlyhq/eslint-plugin`, so whatever the manifest names is what the author
+  // actually installs — and `latest` is the unusable 0.0.0 bootstrap package.
+  it("falls back to the template's channel, not latest, in yalc mode", async () => {
+    const pkg = JSON.parse(
+      await generatePackageJson("my-plugin", pgDatabase, true, "plugin")
+    );
+    expect(pkg.devDependencies["@nextlyhq/eslint-plugin"]).toBe("alpha");
+    expect(pkg.devDependencies["nextly"]).toBe("alpha");
+    expect(pkg.peerDependencies["nextly"]).toBe("alpha");
   });
 
   it("pins the blank scaffold's nextly to the latest channel", async () => {

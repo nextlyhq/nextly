@@ -163,7 +163,15 @@ export type NextlyDistTag = "latest" | "alpha";
  * `nextly` missing the helpers its pages import, and fail to build. Non-content
  * scaffolds (blank, plugin) stay on `latest`.
  */
-const CONTENT_TEMPLATE_TYPES: ReadonlySet<ProjectType> = new Set(["blog"]);
+const CONTENT_TEMPLATE_TYPES: ReadonlySet<ProjectType> = new Set([
+  "blog",
+  // The plugin template installs `@nextlyhq/eslint-plugin` for the design-token
+  // rules, and that package exists on `alpha` only — `latest` is the conservative
+  // tag and lags the active release line. Pinned to `latest` a plugin scaffold
+  // would resolve a version of it that predates the rules, exactly as a content
+  // scaffold would resolve a `nextly` missing the helpers its pages import.
+  "plugin",
+]);
 
 /**
  * The npm dist-tag a scaffold of `projectType` installs `nextly` + `@nextlyhq/*`
@@ -1001,6 +1009,7 @@ const NEXTLY_PACKAGES = [
   "@nextlyhq/adapter-sqlite",
   "@nextlyhq/plugin-form-builder",
   "@nextlyhq/plugin-sdk",
+  "@nextlyhq/eslint-plugin",
 ];
 
 /** Cache so we only fetch once per channel per CLI run. */
@@ -1109,7 +1118,11 @@ export async function generatePackageJson(
 ): Promise<string> {
   // Plugins are a publishable library, not an app — different package.json.
   if (projectType === "plugin") {
-    return generatePluginPackageJson(projectName, useYalc);
+    return generatePluginPackageJson(
+      projectName,
+      useYalc,
+      templateNextlyChannel(projectType)
+    );
   }
 
   // Fetch latest Next.js (and eslint-config-next) version from npm
@@ -1279,11 +1292,34 @@ async function resolvePluginNextlyRange(useYalc: boolean): Promise<string> {
  */
 async function generatePluginPackageJson(
   projectName: string,
-  useYalc: boolean
+  useYalc: boolean,
+  /**
+   * The dist-tag every `nextly` + `@nextlyhq/*` range resolves from.
+   *
+   * Passed in rather than defaulted here, because a default would be a second
+   * answer to a question {@link templateNextlyChannel} already owns, and the
+   * two would agree only until the routing changed. A plugin resolved from
+   * `latest` installs `@nextlyhq/eslint-plugin`'s 0.0.0 bootstrap placeholder,
+   * which has no `main` and no `exports` — so the scaffold succeeds and the
+   * author's first `pnpm lint` fails on the config that imports it.
+   */
+  channel: NextlyDistTag
 ): Promise<string> {
-  const versions = useYalc ? {} : await resolveNextlyVersions();
+  const versions = useYalc ? {} : await resolveNextlyVersions(channel);
   const runtimeVersions = await resolveRuntimeVersions();
-  const range = (pkg: string): string => versions[pkg] ?? "latest";
+  /*
+   * The fallback is the TEMPLATE's channel rather than `latest`.
+   *
+   * `--use-yalc` empties the version map on purpose, so every range here falls
+   * back to a bare dist-tag — and the yalc installer then links a FIXED list
+   * (`nextly`, admin, ui, the adapters, the template's plugins) that does not
+   * include `@nextlyhq/eslint-plugin`. Whatever this names for a package
+   * outside that list is what the author actually installs, and on `latest`
+   * that is the 0.0.0 bootstrap placeholder: it has no `main` and no
+   * `exports`, so the install succeeds and `pnpm lint` fails on the config
+   * that imports it.
+   */
+  const range = (pkg: string): string => versions[pkg] ?? channel;
 
   const peerDependencies: Record<string, string> = {
     nextly: range("nextly"),
@@ -1320,6 +1356,10 @@ async function generatePluginPackageJson(
     eslint: PINNED_VERSIONS.eslint,
     "@eslint/js": PINNED_VERSIONS.eslint,
     "typescript-eslint": "^8.0.0",
+    // The design-token rules the admin holds itself to. Shipped to the author
+    // rather than documented at them: a rule that runs only in Nextly's own
+    // repository governs the first-party plugins and nothing anyone else builds.
+    "@nextlyhq/eslint-plugin": range("@nextlyhq/eslint-plugin"),
   };
 
   const pkg = {
