@@ -22,6 +22,7 @@ import {
   propPatch,
   renameOp,
   SUPPORTED_PROP_TYPES,
+  lockStateOf,
 } from "./inspector";
 
 const base = {
@@ -311,5 +312,49 @@ describe("lockOp", () => {
       patch: {},
       unset: ["locked"],
     });
+  });
+});
+
+describe("lockStateOf", () => {
+  /*
+   * `mixed` is a real third state. A checkbox showing on or off for a set where
+   * only some blocks are locked tells the author something false about half of
+   * what they selected, and ARIA models exactly this as `aria-checked="mixed"`.
+   */
+  function docWith(locks: readonly boolean[]) {
+    return {
+      formatVersion: 1,
+      kind: "page",
+      nodes: locks.map((locked, i) => ({
+        id: String(i),
+        type: "acme/leaf",
+        version: 1,
+        props: {},
+        ...(locked ? { locked: true } : {}),
+      })),
+    } as never;
+  }
+
+  it("reads all-locked and all-unlocked", () => {
+    expect(lockStateOf(docWith([true, true]), ["0", "1"])).toBe("locked");
+    expect(lockStateOf(docWith([false, false]), ["0", "1"])).toBe("unlocked");
+  });
+
+  it("reads MIXED when only some are locked", () => {
+    expect(lockStateOf(docWith([true, false]), ["0", "1"])).toBe("mixed");
+  });
+
+  it("skips ids the document lost rather than counting them unlocked", () => {
+    /*
+     * An undo removing a selected block is routine. Counting the missing one as
+     * unlocked would report `mixed` for a set that is entirely locked — the
+     * author would see an indeterminate checkbox describing a state that does
+     * not exist.
+     */
+    expect(lockStateOf(docWith([true]), ["0", "gone"])).toBe("locked");
+  });
+
+  it("reads an empty set as unlocked", () => {
+    expect(lockStateOf(docWith([]), [])).toBe("unlocked");
   });
 });

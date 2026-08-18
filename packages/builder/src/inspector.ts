@@ -107,6 +107,43 @@ function optionsOf(schema: PropSchema): readonly string[] {
 }
 
 /**
+ * How a lock reads across a whole selection.
+ *
+ * `"mixed"` is a real third state, not a rounding of the other two: some
+ * selected blocks are locked and some are not, and a checkbox showing either
+ * on or off there would tell the author something false about half of what
+ * they have selected. ARIA models it as `aria-checked="mixed"`, and the first
+ * click from mixed LOCKS everything — the reading every file manager and design
+ * tool gives it, because the alternative is a first click that appears to do
+ * nothing to half the selection.
+ */
+export type LockState = "locked" | "unlocked" | "mixed";
+
+/**
+ * The lock across a set.
+ *
+ * Ids the document no longer holds are skipped rather than counted as
+ * unlocked. An undo removing a selected block is routine, and counting a
+ * missing one as unlocked would report `mixed` for a set that is entirely
+ * locked.
+ */
+export function lockStateOf(
+  document: BlockDocument,
+  ids: readonly string[]
+): LockState {
+  let locked = 0;
+  let seen = 0;
+  for (const id of ids) {
+    const node = findNode(document.nodes, id);
+    if (node === undefined) continue;
+    seen += 1;
+    if (node.locked === true) locked += 1;
+  }
+  if (seen === 0 || locked === 0) return "unlocked";
+  return locked === seen ? "locked" : "mixed";
+}
+
+/**
  * Describe the selected block for editing, or `null` when there is nothing to
  * edit.
  *
