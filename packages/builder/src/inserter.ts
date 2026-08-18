@@ -29,6 +29,7 @@ import {
   canNest,
   canNestInSlot,
   findNode,
+  getBlock,
   locateNode,
   makeNode,
   type AnyBlockDefinition,
@@ -288,10 +289,36 @@ export function entryAllowedAt(
   target: InsertTarget,
   source: NestingSource
 ): NestingVerdict {
-  if (target.at === "root") return canBeRoot(entry.blockName, source);
-  const child = canNest(entry.blockName, target.parentType, source);
+  return blockAllowedAt(entry.blockName, target, source);
+}
+
+/**
+ * Whether a block type may be placed at a target, by NAME.
+ *
+ * The same rule as {@link entryAllowedAt} and the same code, reached without a
+ * palette entry. A drag moves a node that already exists, so the only thing it
+ * has is a type name — and asking the question a second way is how the palette
+ * and the canvas come to disagree about where a block may go, with the palette
+ * offering what the drop refuses.
+ *
+ * Both halves are asked, because a placement needs both to agree and neither is
+ * derivable from the other: `parent` is the child saying where it makes sense,
+ * a slot's `allow` is the container saying what it holds.
+ *
+ * The child's half runs first so its reason survives when both would refuse.
+ * "This block belongs inside a Columns" tells an author where to go; "this
+ * region does not take that block" leaves them looking for a region, which is
+ * the less actionable of the two sentences.
+ */
+export function blockAllowedAt(
+  blockName: string,
+  target: InsertTarget,
+  source: NestingSource
+): NestingVerdict {
+  if (target.at === "root") return canBeRoot(blockName, source);
+  const child = canNest(blockName, target.parentType, source);
   if (!child.allowed) return child;
-  return canNestInSlot(entry.blockName, target.parentType, target.slot, source);
+  return canNestInSlot(blockName, target.parentType, target.slot, source);
 }
 
 /**
@@ -483,4 +510,25 @@ export function insertionPointFor(
  */
 export function nodeForEntry(entry: InsertEntry): BlockNode {
   return makeNode(entry.blockName, entry.version, structuredClone(entry.props));
+}
+
+/**
+ * The registry as a slot source.
+ *
+ * Reads the DEFINITION's declared slots rather than the node's, because a
+ * container inserted from the palette has no `slots` key until something is put
+ * in it — which is precisely the container that needs filling.
+ *
+ * Here rather than beside either caller. The palette asks it where an insert
+ * would land and the canvas asks it which regions a drag can aim at, and those
+ * two have to agree: a container the palette will fill but the drag cannot see
+ * is a block that behaves differently depending on how an author reached it.
+ */
+export function registrySlotSource(): SlotSource {
+  return {
+    slotsOf: type => {
+      const declared = getBlock(type)?.slots;
+      return declared === undefined ? undefined : Object.keys(declared);
+    },
+  };
 }

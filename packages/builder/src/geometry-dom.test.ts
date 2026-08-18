@@ -17,7 +17,11 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { frameInsetOf } from "./geometry-dom";
+import {
+  canvasContentPoint,
+  canvasContentRect,
+  frameInsetOf,
+} from "./geometry-dom";
 
 /**
  * A frame with known border and padding.
@@ -105,5 +109,88 @@ describe("frameInsetOf", () => {
 
     expect(Number.isFinite(inset.left)).toBe(true);
     expect(Number.isFinite(inset.top)).toBe(true);
+  });
+});
+
+/**
+ * An element reporting a fixed viewport rectangle.
+ *
+ * Stubbed because jsdom lays nothing out and reports every element as
+ * zero-sized, so a fixture built from real styles would measure zero against
+ * zero and pass whatever the arithmetic did.
+ */
+function box(rect: { x: number; y: number; width: number; height: number }) {
+  const element = document.createElement("div");
+  element.getBoundingClientRect = () =>
+    ({ ...rect, top: rect.y, left: rect.x }) as DOMRect;
+  return element;
+}
+
+/** A canvas root at a viewport position, optionally scrolled. */
+function canvasRoot(
+  rect: { x: number; y: number; width: number; height: number },
+  scroll: { left: number; top: number } = { left: 0, top: 0 }
+) {
+  const root = box(rect);
+  Object.defineProperty(root, "scrollLeft", { value: scroll.left });
+  Object.defineProperty(root, "scrollTop", { value: scroll.top });
+  return root;
+}
+
+describe("canvasContentRect", () => {
+  it("reports a child relative to the canvas, not to the viewport", () => {
+    // The separating property is the ROOT's own offset. A canvas at the origin
+    // makes viewport and content coordinates identical, so a fixture placing
+    // the root at 0,0 passes on an implementation that never subtracts it.
+    const root = canvasRoot({ x: 100, y: 50, width: 400, height: 800 });
+    const child = box({ x: 140, y: 150, width: 200, height: 60 });
+
+    expect(canvasContentRect(child, root)).toEqual({
+      x: 40,
+      y: 100,
+      width: 200,
+      height: 60,
+    });
+  });
+
+  it("does not move when the canvas is scrolled", () => {
+    // THE case this function exists for. `getBoundingClientRect` answers in
+    // viewport coordinates, so a scrolled canvas reports its children higher up
+    // — and a rectangle stored raw drifts by exactly the scroll, which reads as
+    // an overlay slowly going wrong rather than as a wrong measurement.
+    const unscrolled = canvasRoot({ x: 0, y: 0, width: 400, height: 800 });
+    const restingChild = box({ x: 0, y: 300, width: 400, height: 100 });
+
+    // The same page scrolled down 250: the root stays put and the child's
+    // viewport position moves up by the scroll.
+    const scrolled = canvasRoot(
+      { x: 0, y: 0, width: 400, height: 800 },
+      { left: 0, top: 250 }
+    );
+    const scrolledChild = box({ x: 0, y: 50, width: 400, height: 100 });
+
+    expect(canvasContentRect(scrolledChild, scrolled)).toEqual(
+      canvasContentRect(restingChild, unscrolled)
+    );
+  });
+});
+
+describe("canvasContentPoint", () => {
+  it("maps a pointer into the same space the rectangles are measured in", () => {
+    // Asserted AGAINST a rectangle rather than against literals. The fault this
+    // pairing prevents is the two disagreeing, and two independent assertions on
+    // two sets of numbers would both pass while they disagreed with each other.
+    const root = canvasRoot(
+      { x: 100, y: 50, width: 400, height: 800 },
+      { left: 0, top: 250 }
+    );
+    const child = box({ x: 140, y: 150, width: 200, height: 60 });
+    const rect = canvasContentRect(child, root);
+
+    // A pointer on the child's top-left corner, in viewport coordinates.
+    expect(canvasContentPoint(140, 150, root)).toEqual({
+      x: rect.x,
+      y: rect.y,
+    });
   });
 });

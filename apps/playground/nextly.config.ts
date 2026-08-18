@@ -27,6 +27,7 @@ import { formBuilderPlugin } from "@nextlyhq/plugin-form-builder";
 import { pageBuilder } from "@nextlyhq/plugin-page-builder";
 import { defineConfig } from "nextly/config";
 
+import { Authors } from "./src/collections/authors";
 import { BlockPages } from "./src/collections/block-pages";
 import { Categories } from "./src/collections/categories";
 import { Posts } from "./src/collections/posts";
@@ -78,7 +79,10 @@ export default defineConfig({
     // Untranslated fields fall back to another locale's value on read (default true).
     fallback: true,
   },
-  collections: [Posts, Categories, Tags, BlockPages],
+  // Authors is the localized collection, registered so the i18n admin surfaces
+  // (language row, copy-from, publish-all, list translation status) are
+  // exercised in development rather than existing only in code.
+  collections: [Posts, Categories, Tags, BlockPages, Authors],
   singles: [Homepage, LandingPage, SiteSettings],
   fieldGroups: [Seo],
   // Dev-harness plugins: page builder and form builder are what a contributor

@@ -29,14 +29,43 @@ export interface EntryLocaleContextValue {
    * non-default language so a translatable field can show its source text inline (spec §10).
    */
   sourceValues?: Record<string, unknown>;
-  /** Switch the active editing language — lets in-form surfaces (status pills) change locale. */
-  onLocaleChange?: (code: string) => void;
+  /**
+   * Switch the active editing language — lets in-form surfaces change locale.
+   *
+   * `seedFrom` asks that, once the switch lands, the newly active language be
+   * seeded from the named one. It travels WITH the switch because a locale
+   * change refetches the document and tears the editor's subtree down: an
+   * intent recorded inside that subtree is destroyed before it can be acted
+   * on. Whoever owns `locale` owns this too, so the pair cannot be separated.
+   */
+  onLocaleChange?: (code: string, options?: { seedFrom?: string }) => void;
+  /**
+   * A seed requested by the switch that just happened: copy the active
+   * language's content from this one. Consumed once, then cleared through
+   * `onSeedHandled`.
+   */
+  seedFromLocale?: string;
+  /** Clears `seedFromLocale` so a later re-render cannot re-offer the same seed. */
+  onSeedHandled?: () => void;
   /** Collection slug — lets in-form surfaces (copy-from-language) fetch another locale's values. */
   collectionSlug?: string;
   /** The entry's id (edit mode) — the source fetch target for copy-from-language. */
   entryId?: string;
   /** Names of this collection's translatable fields — the field-scoped set copy-from-language copies. */
   localizedFieldNames?: string[];
+  /**
+   * Read another language's raw values for this document, for copy-from-language.
+   *
+   * Supplied by the form rather than resolved here because entries and singles
+   * are addressed differently — an entry by collection slug and id, a single by
+   * its slug alone. Making the FETCH the seam lets one copy-from implementation
+   * serve both, instead of the action existing only where its address shape
+   * happened to be hardcoded.
+   *
+   * Absent means the surface cannot fetch a source, and copy-from does not offer
+   * itself.
+   */
+  fetchSourceValues?: (locale: string) => Promise<Record<string, unknown>>;
 }
 
 const EntryLocaleContext = createContext<EntryLocaleContextValue>({

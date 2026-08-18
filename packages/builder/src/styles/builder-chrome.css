@@ -361,3 +361,70 @@
 .nx-inspector__field[data-unsupported] {
   opacity: 0.7;
 }
+
+/*
+ * The canvas root is the positioning context for editor chrome drawn over the
+ * page.
+ *
+ * The drop indicator is placed in the canvas's own CONTENT coordinates — the
+ * same space its blocks were measured in — and an absolutely positioned child
+ * resolves against the nearest positioned ancestor's padding box, scroll
+ * included. So this one declaration is what makes a measured coordinate and a
+ * drawn one the same number, and without it the indicator resolves against
+ * whatever ancestor happens to be positioned and lands somewhere unrelated.
+ */
+.nx-canvas {
+  position: relative;
+  /*
+   * Fills the region rather than stopping at its content.
+   *
+   * Without this the canvas is exactly as tall as the blocks in it, so the area
+   * an author can aim at ENDS at the last block — and the position past it, the
+   * end of the page, has no pixels to point at. A pointer there is outside the
+   * canvas entirely, which correctly resolves to no drop target at all, so
+   * dragging a block to the end of a page is impossible however good the rules
+   * above it are. Measured on a three-block page: content 50px, region 700px.
+   *
+   * `min-height` rather than `height` so a page taller than the region still
+   * scrolls instead of being clipped to it.
+   */
+  min-height: 100%;
+}
+
+/*
+ * Where a dragged block will land.
+ *
+ * The same accent as the selection ring, because both answer "this is what the
+ * editor currently means" and two colours for one idea reads as two states.
+ *
+ * Sized on ONE axis only: the other comes from the target's own extent, set
+ * inline, because how far the line runs is a measurement rather than a style.
+ * A region stacking children downward gets a horizontal rule; a row gets a
+ * vertical one.
+ */
+.nx-drop-indicator {
+  position: absolute;
+  z-index: 2;
+  background: var(--nx-primary);
+  border-radius: 1px;
+  /*
+   * Never a drop target itself. The element sits under the pointer by
+   * construction — it marks where the pointer is aiming — so a hit-test that
+   * could land on it would resolve the drag to the indicator and lose the block
+   * beneath it.
+   */
+  pointer-events: none;
+}
+
+.nx-drop-indicator[data-axis="y"] {
+  height: 2px;
+  /* Centred on the line it names rather than hanging below it: the coordinate
+   * is a boundary between two blocks, and a 2px bar drawn from that coordinate
+   * downward sits inside the block after it. */
+  transform: translateY(-1px);
+}
+
+.nx-drop-indicator[data-axis="x"] {
+  width: 2px;
+  transform: translateX(-1px);
+}

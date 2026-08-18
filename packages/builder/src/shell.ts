@@ -115,3 +115,25 @@ export type { BlockKeyboardActionsOptions } from "./keyboard-actions";
  */
 export { MAX_HISTORY, useEditorState } from "./editor-state";
 export type { EditorState, UseEditorStateArgs } from "./editor-state";
+
+/**
+ * Dragging blocks on the canvas, behind the same client banner: the hook holds
+ * a gesture and the indicator draws its answer.
+ *
+ * Published together because neither is useful alone — the hook's whole output
+ * is something to draw, and the indicator has nothing to draw without it.
+ *
+ * The RULES the drag obeys are not here. Which positions exist, which the
+ * nesting rule permits and which one a pointer means are decided in
+ * `drop-targets`, and when the answer may change is decided in `target-switch`;
+ * both are plain functions over numbers and ship from the root entry, where a
+ * caller can reach them without loading React.
+ */
+export { DropIndicator, useCanvasDrag } from "./canvas-drag";
+export type {
+  CanvasDrag,
+  CanvasDragHandlers,
+  CanvasDragState,
+  DropIndicatorProps,
+  UseCanvasDragOptions,
+} from "./canvas-drag";

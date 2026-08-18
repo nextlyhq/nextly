@@ -18,6 +18,12 @@ export interface EntryFormSidebarProps {
   /** Whether this collection has Draft/Published status enabled. Drives
    *  whether the Status row renders inside DocumentPanel. */
   hasStatus?: boolean;
+  /** The active editing locale, forwarded to the language panel. */
+  locale?: string;
+  /** Switch the editor to a language, forwarded to the language panel. */
+  onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
+  /** Withholds the language panel's mutating actions (reading a past version). */
+  actionsDisabled?: boolean;
   /** Whether the form has unsaved local changes. Forwarded to DocumentPanel
    *  so it can render the "Modified" pill state on a dirty published entry. */
   isDirty?: boolean;
@@ -28,6 +34,9 @@ export function EntryFormSidebar({
   entry,
   hidden = false,
   hasStatus = false,
+  locale,
+  onLocaleChange,
+  actionsDisabled = false,
   isDirty = false,
 }: EntryFormSidebarProps) {
   if (hidden) return null;
@@ -38,6 +47,9 @@ export function EntryFormSidebar({
         mode={mode}
         entry={entry}
         hasStatus={hasStatus}
+        {...(locale === undefined ? {} : { locale })}
+        {...(onLocaleChange === undefined ? {} : { onLocaleChange })}
+        actionsDisabled={actionsDisabled}
         isDirty={isDirty}
       />
     </div>
