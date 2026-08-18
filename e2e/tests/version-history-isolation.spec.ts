@@ -145,6 +145,15 @@ test.describe("reading history does not write", () => {
     // The document is showing the past.
     await expect(documentExcerpt(page)).toHaveValue(first, { timeout: 15_000 });
 
+    // Restoring is offered from the banner, over the version being read. This
+    // is a wiring assertion and belongs here rather than in a unit test: the
+    // panel publishes the trigger and the banner consumes it, so a component
+    // test of either half passes while the two are not connected.
+    await expect(
+      page.getByRole("button", { name: /restore this version/i }),
+      "an authorised reader must be offered restore from the banner"
+    ).toBeVisible({ timeout: 15_000 });
+
     // Returning must restore what is LIVE, unchanged. Had the snapshot been
     // loaded into the live form rather than rendered against one of its own,
     // the editor would come back holding the historical text — and a save from

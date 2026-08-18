@@ -117,6 +117,38 @@ function reachable(element: Element | null): boolean {
   return true;
 }
 
+/**
+ * Renders the panel with a document context and returns a reader for what it
+ * publishes. The restore TRIGGER lives in the banner now, so a test that wants
+ * to exercise restoring asks the panel for it rather than clicking a control
+ * this component no longer renders.
+ */
+function renderPublishing(props: Record<string, unknown> = {}) {
+  const setRestore = vi.fn();
+  const setViewing = vi.fn();
+  render(
+    <DocumentHistoryContext.Provider
+      value={{ viewing: null, setViewing, restore: null, setRestore }}
+    >
+      <VersionHistorySheet
+        open
+        onOpenChange={vi.fn()}
+        scope={scope}
+        {...props}
+      />
+    </DocumentHistoryContext.Provider>
+  );
+  const published = () =>
+    setRestore.mock.calls.at(-1)?.[0] as
+      | {
+          canRestore: boolean;
+          request: () => void;
+          returnToCurrent: () => void;
+        }
+      | undefined;
+  return { setRestore, setViewing, published };
+}
+
 describe("VersionHistorySheet", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -428,7 +460,7 @@ describe("VersionHistorySheet", () => {
     ).toBeInTheDocument();
   });
 
-  it("offers restore only to a caller who may write the document", async () => {
+  it("publishes whether the caller may restore, rather than rendering a button", async () => {
     useVersionsMock.mockReturnValue(
       listState({
         data: { pages: [{ items: [version(3)], meta: { hasNext: false } }] },
@@ -436,31 +468,19 @@ describe("VersionHistorySheet", () => {
     );
     useVersionMock.mockReturnValue(detailState({ data: { snapshot: {} } }));
 
-    const { unmount } = render(
-      <VersionHistorySheet open onOpenChange={vi.fn()} scope={scope} />
-    );
+    const { published } = renderPublishing({ canRestore: true });
     await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
+
+    // The control is in the banner over the version; this panel supplies the
+    // permission and the trigger.
+    await waitFor(() => expect(published()?.canRestore).toBe(true));
     expect(
       screen.queryByRole("button", { name: /Restore this version/ })
-    ).not.toBeInTheDocument();
-    unmount();
-
-    render(
-      <VersionHistorySheet
-        open
-        onOpenChange={vi.fn()}
-        scope={scope}
-        canRestore
-      />
-    );
-    await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
-    expect(
-      screen.getByRole("button", { name: /Restore this version/ })
-    ).toBeInTheDocument();
+    ).toBeNull();
   });
 
-  it("confirms before restoring rather than writing on the first click", async () => {
-    // Restore writes the live document, so a single misclick must not do it.
+  it("confirms before restoring rather than writing on the first request", async () => {
+    // Restore writes the live document, so triggering it must not do it.
     useVersionsMock.mockReturnValue(
       listState({
         data: { pages: [{ items: [version(3)], meta: { hasNext: false } }] },
@@ -468,22 +488,14 @@ describe("VersionHistorySheet", () => {
     );
     useVersionMock.mockReturnValue(detailState({ data: { snapshot: {} } }));
 
-    render(
-      <VersionHistorySheet
-        open
-        onOpenChange={vi.fn()}
-        scope={scope}
-        canRestore
-      />
-    );
-
+    const { published } = renderPublishing({ canRestore: true });
     await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
-    await userEvent.click(
-      screen.getByRole("button", { name: /Restore this version/ })
-    );
+    await waitFor(() => expect(published()).toBeDefined());
+
+    published()!.request();
 
     expect(mutateMock).not.toHaveBeenCalled();
-    expect(screen.getByText(/Restore version 3\?/)).toBeInTheDocument();
+    expect(await screen.findByText(/Restore version 3\?/)).toBeInTheDocument();
   });
 
   it("tells the editor when a restore was refused", async () => {
@@ -517,44 +529,9 @@ describe("VersionHistorySheet", () => {
     await waitFor(() => expect(toastErrorMock).toHaveBeenCalled());
   });
 
-  it("does not offer restore until the version is on screen", async () => {
-    // Restore is offered from the preview so the choice follows seeing what the
-    // version holds; a skeleton or an error is not that.
-    useVersionsMock.mockReturnValue(
-      listState({
-        data: { pages: [{ items: [version(3)], meta: { hasNext: false } }] },
-      })
-    );
-    useVersionMock.mockReturnValue(detailState({ isLoading: true }));
-
-    const { unmount } = render(
-      <VersionHistorySheet
-        open
-        onOpenChange={vi.fn()}
-        scope={scope}
-        canRestore
-      />
-    );
-    await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
-    expect(
-      screen.getByRole("button", { name: /Restore this version/ })
-    ).toBeDisabled();
-    unmount();
-
-    useVersionMock.mockReturnValue(detailState({ data: { snapshot: {} } }));
-    render(
-      <VersionHistorySheet
-        open
-        onOpenChange={vi.fn()}
-        scope={scope}
-        canRestore
-      />
-    );
-    await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
-    expect(
-      screen.getByRole("button", { name: /Restore this version/ })
-    ).toBeEnabled();
-  });
+  // Whether restore is offered before the version has finished loading is now
+  // the banner's decision (`restoreDisabled`), because the banner is where the
+  // control is. Covered by HistoricalDocumentBanner's own suite.
 
   it("warns from the live document's status, not the version's", async () => {
     // The selected version's status describes the past; whether this change is
@@ -568,22 +545,17 @@ describe("VersionHistorySheet", () => {
       detailState({ data: { snapshot: {}, status: "draft" } })
     );
 
-    render(
-      <VersionHistorySheet
-        open
-        onOpenChange={vi.fn()}
-        scope={scope}
-        canRestore
-        liveStatus="published"
-      />
-    );
-
+    const { published } = renderPublishing({
+      canRestore: true,
+      liveStatus: "published",
+    });
     await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
-    await userEvent.click(
-      screen.getByRole("button", { name: /Restore this version/ })
-    );
+    await waitFor(() => expect(published()).toBeDefined());
+    published()!.request();
 
-    expect(screen.getByText(/the document is published/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/the document is published/)
+    ).toBeInTheDocument();
   });
 
   it("does not query while closed", () => {
