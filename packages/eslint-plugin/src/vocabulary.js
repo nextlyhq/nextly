@@ -411,6 +411,32 @@ export function createTokenWrapPattern({ global = false } = {}) {
 }
 
 /**
+ * A token with an alpha suffix stuck on the end — `var(--nx-primary)20`.
+ *
+ * The sibling of {@link createTokenWrapPattern}, and the same defect class: an
+ * idiom that was correct while colours were hex and silently produces invalid
+ * CSS once they are tokens. `#3b82f6` + `20` is a real colour with 12.5% alpha;
+ * `var(--nx-primary)` + `20` is not a colour at all, so the browser drops the
+ * declaration and the element renders with nothing where the tint belonged.
+ *
+ * Matches the literal spelling, which is what a stylesheet or a completed
+ * template string contains. The `.tsx` spelling — a template literal whose next
+ * chunk begins with the alpha digits — is decided on the AST instead, by
+ * `no-token-alpha-suffix`, because the token and the suffix are separate nodes
+ * there and no text pattern can see them as adjacent.
+ *
+ * One or two digits: CSS 8-digit hex takes a two-digit alpha and 4-digit hex
+ * takes one, so those are the only widths this idiom produces. Bounded on the
+ * right so `var(--x)2px` — a length, not an alpha — does not match.
+ */
+export function createTokenAlphaSuffixPattern({ global = false } = {}) {
+  return new RegExp(
+    `var\\(\\s*--[\\w-]+\\s*\\)[0-9a-fA-F]{1,2}(?![\\w-])`,
+    global ? "g" : ""
+  );
+}
+
+/**
  * Advice naming what to use instead, derived from the hue that was matched.
  *
  * The message carries the replacement because an error that only says "do not do
