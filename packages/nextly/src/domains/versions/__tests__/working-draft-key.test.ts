@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 
+import { nextlyVersionsMysql } from "../../../schemas/versions/mysql";
+import { nextlyVersionsPg } from "../../../schemas/versions/postgres";
+import { nextlyVersionsSqlite } from "../../../schemas/versions/sqlite";
 import type { VersionRef } from "../versions-repository";
 import { workingDraftKey } from "../working-draft-key";
 
@@ -49,5 +52,22 @@ describe("workingDraftKey", () => {
     expect(workingDraftKey(asSingle, null)).not.toBe(
       workingDraftKey(ref("posts", "e1"), null)
     );
+  });
+});
+
+describe("draft_key column", () => {
+  // Declared on every dialect, or the constraint holds on some databases and
+  // not others, which is worse than not holding at all: the same code would be
+  // correct in development and lossy in production.
+  it("is declared on all three dialects", () => {
+    expect(nextlyVersionsPg.draftKey.name).toBe("draft_key");
+    expect(nextlyVersionsMysql.draftKey.name).toBe("draft_key");
+    expect(nextlyVersionsSqlite.draftKey.name).toBe("draft_key");
+  });
+
+  it("is nullable on all three dialects", () => {
+    expect(nextlyVersionsPg.draftKey.notNull).toBe(false);
+    expect(nextlyVersionsMysql.draftKey.notNull).toBe(false);
+    expect(nextlyVersionsSqlite.draftKey.notNull).toBe(false);
   });
 });
