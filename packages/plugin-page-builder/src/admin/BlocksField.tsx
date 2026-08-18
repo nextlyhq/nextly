@@ -43,6 +43,7 @@ import { CORE_CATEGORIES, coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { registrySlotSource } from "@nextlyhq/builder";
 import {
   BlockKeyboardActions,
+  BlockToolbar,
   BuilderShell,
   Canvas,
   DropIndicator,
@@ -279,21 +280,35 @@ function BlocksEditor({
         {/*
           Inside the shell, which is what provides the shortcut context — a
           caller rendering the shell is outside it and cannot register bindings.
-          Draws nothing; it exists to run the hook where the context is.
+          It draws the live region and publishes the structural verbs to what it
+          wraps, which is how the toolbar presses exactly what the keys press.
         */}
-        <BlockKeyboardActions editor={editor} />
-        <Canvas
-          document={editor.document}
-          siteStyles={siteSheet()}
-          selectedId={editor.selectedId}
-          onSelect={editor.select}
-          dragHandlers={drag.handlers}
-          // The indicator is the only chrome drawn over the page today. It goes
-          // through the canvas rather than beside it because it is positioned in
-          // the canvas's own content coordinates, which the canvas root is what
-          // establishes.
-          overlay={<DropIndicator target={drag.target} />}
-        />
+        <BlockKeyboardActions editor={editor}>
+          <Canvas
+            document={editor.document}
+            siteStyles={siteSheet()}
+            selectedId={editor.selectedId}
+            onSelect={editor.select}
+            dragHandlers={drag.handlers}
+            // Both pieces of chrome go through the canvas rather than beside it,
+            // because both are positioned in the canvas's own content
+            // coordinates and the canvas root is what establishes them.
+            overlay={
+              <>
+                <DropIndicator target={drag.target} />
+                {/*
+                  Suppressed for the duration of a drag. The bar would otherwise
+                  sit over the canvas the author is aiming at, naming a block
+                  that is in the middle of moving.
+                */}
+                <BlockToolbar
+                  editor={editor}
+                  hidden={drag.draggingId !== null}
+                />
+              </>
+            }
+          />
+        </BlockKeyboardActions>
       </BuilderShell>
     </div>
   );

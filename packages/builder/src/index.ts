@@ -257,3 +257,22 @@ export {
   COPY_SUFFIX,
   type BlockDuplication,
 } from "./duplicate-block";
+
+/**
+ * @experimental What the floating toolbar offers, and where it sits.
+ *
+ * From this entry because both halves are plain functions. The action list is
+ * the same set of questions an agent asks before proposing a structural edit —
+ * whether this block can move, whether a lock forbids removing it — answered by
+ * the rules the editor itself uses rather than by a second reading of them.
+ */
+export {
+  TOOLBAR_GAP_PX,
+  toolbarActions,
+  toolbarPlacement,
+  toolbarShortcut,
+  type ToolbarAction,
+  type ToolbarActionId,
+  type ToolbarPlacement,
+  type ToolbarSize,
+} from "./toolbar-actions";
