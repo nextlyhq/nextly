@@ -381,9 +381,24 @@ export function EntrySystemHeader({
       : ((entry?.slug as string | undefined) ?? null);
 
   return (
-    <div className="sticky top-0 z-30 bg-background border-b border-border">
+    <div
+      className={cn(
+        TOOLBAR_CONTAINER,
+        "sticky top-0 z-30 bg-background border-b border-border"
+      )}
+    >
+      {/* The row WRAPS on a phone rather than overflowing. Even with every label
+        collapsed the cluster needs about 370px, which does not fit beside a
+        title on a 390px screen — so below that the title takes its own line and
+        the actions sit beneath it, which is what vertical space is for.
+
+        The container declaration sits on the PARENT because an element cannot
+        query its own width, and this row now responds to that width itself. */}
       <div
-        className={cn(TOOLBAR_CONTAINER, "px-6 py-3 flex items-center gap-3")}
+        className={cn(
+          "px-6 py-3 flex items-center gap-3",
+          "@max-lg/toolbar:flex-wrap @max-lg/toolbar:gap-y-2"
+        )}
       >
         {/* Title input — borderless, 19px, autofocus on create.
 
@@ -391,7 +406,7 @@ export function EntrySystemHeader({
           that never shrank, the title was whatever was left over, and at common
           window widths that was nothing. It now keeps a readable minimum and the
           actions collapse around it (see `toolbar-density`). */}
-        <div className="flex-1 min-w-[10rem]">
+        <div className="flex-1 min-w-[10rem] @max-lg/toolbar:basis-full">
           <input
             {...rhfRegister}
             ref={el => {
@@ -419,7 +434,22 @@ export function EntrySystemHeader({
         </div>
 
         {/* Action cluster — right-aligned */}
-        <div className="flex items-center gap-1.5 shrink-0">
+        {/* Wraps on a phone for the same reason the row does: with every label
+          already collapsed the controls still need more width than the screen
+          has, and a cluster that cannot wrap pushes them off the edge instead.
+
+          `basis-full` is what makes the wrap real. Sized to its content the
+          cluster is always exactly as wide as its widest possible line, so
+          `flex-wrap` alone had nothing to wrap against; taking the whole line
+          first gives it a width to break inside. Right-aligned so the wrapped
+          controls still read as one group. */}
+        <div
+          className={cn(
+            "flex items-center gap-1.5 shrink-0",
+            "@max-lg/toolbar:basis-full @max-lg/toolbar:min-w-0",
+            "@max-lg/toolbar:flex-wrap @max-lg/toolbar:justify-end @max-lg/toolbar:gap-y-2"
+          )}
+        >
           {toolbarSlot}
           {/* A document only has history once it has been saved, and rendering a
             snapshot needs the schema, so both are required to offer this. */}
