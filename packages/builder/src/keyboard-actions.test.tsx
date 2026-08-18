@@ -453,6 +453,92 @@ describe("useBlockKeyboardActions", () => {
     expect(said).toContain("Undo");
   });
 
+  it("duplicates the selected block through the store", () => {
+    // `ctrlKey`, not `metaKey`. The binding is declared as `mod`, which the
+    // shortcut manager resolves per platform — and jsdom is not macOS, so it
+    // resolves to Control here while a real browser on this machine wants
+    // Command. A test pressing Meta simply never fires the binding, and reads
+    // as the command being unwired.
+    const editor = editorSpy(pair(), "a");
+    mount(editor);
+
+    press("d", { ctrlKey: true });
+
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+    const op = editor.apply.mock.calls[0][0];
+    expect(op.kind).toBe("insert");
+    // Immediately after the original, not at the end of the page.
+    expect(op.at).toEqual({ index: 1 });
+  });
+
+  it("gives the copy a different id from the original", () => {
+    // Ids are the only thing the editor addresses by, so a copy that kept one
+    // would send every later edit to whichever node the walk found first.
+    const editor = editorSpy(pair(), "a");
+    mount(editor);
+
+    press("d", { ctrlKey: true });
+
+    expect(editor.apply.mock.calls[0][0].node.id).not.toBe("a");
+  });
+
+  it("selects the copy, not the original", () => {
+    // The copy is the block the author is now working on — they duplicated it
+    // in order to change it — and leaving the original selected would send the
+    // next edit to the wrong one of two identical blocks.
+    const editor = editorSpy(pair(), "a");
+    mount(editor);
+
+    press("d", { ctrlKey: true });
+
+    const copyId = editor.apply.mock.calls[0][0].node.id;
+    expect(editor.select).toHaveBeenCalledWith(copyId);
+  });
+
+  it("announces the duplication and the way back", () => {
+    const editor = editorSpy(pair(), "a");
+    mount(editor);
+
+    press("d", { ctrlKey: true });
+
+    const said = screen.getByRole("status").textContent ?? "";
+    expect(said).toMatch(/duplicated/i);
+    expect(said).toContain("Undo");
+  });
+
+  it("DUPLICATES a locked block rather than refusing", () => {
+    /*
+     * The engine's rule is that the command layer must not let an author move
+     * or DELETE a locked node. Duplicating does neither — the original stays
+     * exactly where it is — so refusing would read as cautious and would mean
+     * an author could not take a copy of the block they had most deliberately
+     * protected.
+     */
+    const editor = editorSpy(
+      documentOf([
+        { id: "a", type: "acme/text", version: 1, props: {}, locked: true },
+      ] as BlockDocument["nodes"]),
+      "a"
+    );
+    mount(editor);
+
+    press("d", { ctrlKey: true });
+
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(editor.apply.mock.calls[0][0].kind).toBe("insert");
+  });
+
+  it("does nothing with no selection", () => {
+    // The control for every case above: they would all pass against a binding
+    // that fired unconditionally.
+    const editor = editorSpy(pair(), null);
+    mount(editor);
+
+    press("d", { ctrlKey: true });
+
+    expect(editor.apply).not.toHaveBeenCalled();
+  });
+
   it("names a block by the name its author gave it", () => {
     // The layers panel and the breadcrumb both show the instance name, so the
     // one surface a screen-reader user HEARS must not be the only one still
