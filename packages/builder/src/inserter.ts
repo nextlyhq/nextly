@@ -241,6 +241,15 @@ export function catalogFrom(
  * override this immediately, and a copy written into the entry at build time
  * would keep the guess alongside it.
  */
+export function blockLabel(type: string): string {
+  const definition = getBlock(type);
+  // An unregistered type still has to read as something. Humanising its
+  // identity is the same fallback a registered-but-unlabelled block gets, so a
+  // block that disappears from the registry does not change what it is called
+  // in the middle of an editing session.
+  return definition === undefined ? humanise(type) : labelOf(definition);
+}
+
 function labelOf(definition: AnyBlockDefinition): string {
   const declared = definition.editor?.label;
   if (declared !== undefined && declared !== "") return declared;

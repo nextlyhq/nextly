@@ -23,6 +23,7 @@ import {
   type PropSchema,
 } from "@nextlyhq/blocks-engine";
 
+import { blockLabel } from "./inserter";
 import type { NodePatch } from "./ops";
 
 /**
@@ -131,7 +132,11 @@ export function inspectSelection(
   return {
     nodeId: node.id,
     blockName: node.type,
-    label: definition.editor?.label ?? node.type,
+    // The same name the palette offered and the layers panel shows. Reading
+    // `editor.label ?? node.type` here instead was a second rule that agreed
+    // only for blocks which declare a label: an unlabelled third-party block
+    // was "Collection loop" in the palette and `acme/collection-loop` here.
+    label: blockLabel(node.type),
     props,
   };
 }

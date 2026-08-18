@@ -383,9 +383,13 @@ describe("useBlockKeyboardActions", () => {
     press("Delete");
 
     const said = screen.getByRole("status").textContent ?? "";
-    // The type, because this fixture registers no block and so has no label.
-    // The labelled case is asserted below.
-    expect(said).toContain("acme/text deleted");
+    // The HUMANISED name, because this fixture registers no block and so has no
+    // declared label. An unlabelled block is named the same way here as in the
+    // palette and the layers panel — announcing `acme/text` while both of those
+    // read "Text" would give one block two names inside one editor, and the
+    // announcement is the only one of the three a screen-reader user hears.
+    // The declared-label case is asserted below.
+    expect(said).toContain("Text deleted");
     expect(said).toContain("Undo");
   });
 
