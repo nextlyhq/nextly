@@ -453,6 +453,55 @@ describe("useBlockKeyboardActions", () => {
     expect(said).toContain("Undo");
   });
 
+  it("names a block by the name its author gave it", () => {
+    // The layers panel and the breadcrumb both show the instance name, so the
+    // one surface a screen-reader user HEARS must not be the only one still
+    // calling the block by its type.
+    const editor = editorSpy(
+      documentOf([
+        {
+          id: "a",
+          type: "acme/text",
+          version: 1,
+          props: {},
+          name: "Hero title",
+        },
+        { id: "b", type: "acme/text", version: 1, props: {} },
+      ] as BlockDocument["nodes"]),
+      "a"
+    );
+    mount(editor);
+
+    press("Delete");
+
+    expect(screen.getByRole("status").textContent ?? "").toContain(
+      "Hero title deleted"
+    );
+  });
+
+  it("names a LOCKED block by its author's name too", () => {
+    const editor = editorSpy(
+      documentOf([
+        {
+          id: "a",
+          type: "acme/text",
+          version: 1,
+          props: {},
+          name: "Hero title",
+          locked: true,
+        },
+      ] as BlockDocument["nodes"]),
+      "a"
+    );
+    mount(editor);
+
+    press("Delete");
+
+    expect(screen.getByRole("status").textContent ?? "").toContain(
+      "Hero title is locked"
+    );
+  });
+
   it("refuses to delete a locked block, and says why", () => {
     /*
      * A lock is a POLICY refusal, so it is announced where a structural one is

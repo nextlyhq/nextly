@@ -553,3 +553,17 @@
   color: var(--nx-builder-text);
   font-weight: 500;
 }
+
+/*
+ * The block's own identity, separated from its properties by a rule.
+ *
+ * A divider rather than a heading: the section holds two fields and a heading
+ * above them would be as tall as the fields themselves. The separation matters
+ * because the two groups answer different questions — what this block IS, and
+ * what it HOLDS — and without a break they read as one list in which "Name"
+ * looks like another prop.
+ */
+.nx-inspector__identity {
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--nx-builder-border);
+}
