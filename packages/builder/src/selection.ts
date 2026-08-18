@@ -50,7 +50,7 @@ import { type BlockDocument, type BlockNode } from "@nextlyhq/blocks-engine";
 export type SelectionMode = "replace" | "toggle" | "extend";
 
 /** The selection: what is in it, and which one the surfaces answer for. */
-export interface Selection {
+export interface BlockSelection {
   /** Every selected id, in document order, outermost only. */
   readonly ids: readonly string[];
   /**
@@ -63,8 +63,36 @@ export interface Selection {
   readonly primary: string | null;
 }
 
+/** The modifier keys a pointer gesture carried. */
+export interface SelectionModifiers {
+  readonly shiftKey: boolean;
+  readonly metaKey: boolean;
+  readonly ctrlKey: boolean;
+}
+
+/**
+ * Which gesture a click's modifiers mean.
+ *
+ * **Shift outranks the toggle modifier**, because a shift+mod click is a slip
+ * rather than a third gesture, and extending is the one whose result an author
+ * can see and undo with a plain click.
+ *
+ * **Both Meta and Control toggle.** Resolving the platform would be the
+ * apparently-correct thing and is not available: the shortcut manager's
+ * `detectApplePlatform` is not on `@nextlyhq/ui`'s public entry, and spelling
+ * the platform a second time here would let this disagree with the keystrokes.
+ * Accepting either is what every web application does, and it is right rather
+ * than merely convenient — a Mac author presses Command, a Windows author
+ * presses Control, and neither ever presses the other's.
+ */
+export function selectionModeFor(modifiers: SelectionModifiers): SelectionMode {
+  if (modifiers.shiftKey) return "extend";
+  if (modifiers.metaKey || modifiers.ctrlKey) return "toggle";
+  return "replace";
+}
+
 /** Nothing selected. */
-export const EMPTY_SELECTION: Selection = { ids: [], primary: null };
+export const EMPTY_SELECTION: BlockSelection = { ids: [], primary: null };
 
 /**
  * Every id in the document, in the order a reader meets them.
@@ -226,9 +254,9 @@ function slotListsOf(document: BlockDocument, parentId: string): BlockNode[][] {
  */
 function toggled(
   document: BlockDocument,
-  current: Selection,
+  current: BlockSelection,
   targetId: string
-): Selection {
+): BlockSelection {
   const has = current.ids.includes(targetId);
   const ids = normalizeSelection(
     document,
@@ -251,9 +279,9 @@ function toggled(
  */
 function extended(
   document: BlockDocument,
-  current: Selection,
+  current: BlockSelection,
   targetId: string
-): Selection {
+): BlockSelection {
   if (current.primary === null) return replaced(targetId);
   const run = rangeBetween(document, current.primary, targetId);
   // No contiguous run reaches the target — across two slots of one parent, for
@@ -264,7 +292,7 @@ function extended(
 }
 
 /** One block, selected on its own. */
-function replaced(targetId: string): Selection {
+function replaced(targetId: string): BlockSelection {
   return { ids: [targetId], primary: targetId };
 }
 
@@ -284,7 +312,7 @@ function replaced(targetId: string): Selection {
 function withPrimary(
   ids: readonly string[],
   preferred: string | null
-): Selection {
+): BlockSelection {
   if (ids.length === 0) return EMPTY_SELECTION;
   return {
     ids,
@@ -308,10 +336,10 @@ function withPrimary(
  */
 export function applySelection(
   document: BlockDocument,
-  current: Selection,
+  current: BlockSelection,
   targetId: string | null,
   mode: SelectionMode = "replace"
-): Selection {
+): BlockSelection {
   if (targetId === null) return EMPTY_SELECTION;
   if (pathOf(document, targetId).length === 0) return current;
 
@@ -328,8 +356,8 @@ export function applySelection(
  */
 export function pruneSelection(
   document: BlockDocument,
-  selection: Selection
-): Selection {
+  selection: BlockSelection
+): BlockSelection {
   const ids = normalizeSelection(document, selection.ids);
   if (ids.length === 0) return EMPTY_SELECTION;
   const primary =

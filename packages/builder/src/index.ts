@@ -273,7 +273,7 @@ export {
   normalizeSelection,
   pruneSelection,
   rangeBetween,
-  type Selection,
+  type BlockSelection,
   type SelectionMode,
 } from "./selection";
 

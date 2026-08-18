@@ -300,6 +300,7 @@ function BlocksEditor({
             document={editor.document}
             siteStyles={siteSheet()}
             selectedId={editor.selectedId}
+            selectedIds={editor.selection.ids}
             onSelect={editor.select}
             dragHandlers={drag.handlers}
             // Both pieces of chrome go through the canvas rather than beside it,

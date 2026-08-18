@@ -257,3 +257,181 @@ describe("the selected block is marked on its own element", () => {
     ).toBe("a");
   });
 });
+
+describe("a selection with more than one block in it", () => {
+  /*
+   * Registered here as well as in the describe above, because that one scopes
+   * its registration to itself. A `beforeAll` inside a describe does not reach
+   * a sibling, and the first version of these cases rendered nothing at all —
+   * every assertion came back an empty NodeList, which reads as the canvas
+   * marking nothing rather than as an unregistered block type.
+   */
+  beforeAll(() => {
+    clearBlocks();
+    registerBlocks(
+      [
+        {
+          name: "acme/leaf",
+          version: 1,
+          description: "A block.",
+          example: { props: {} },
+          render: ({ className }: { className: string }) =>
+            createElement("div", { className }),
+        },
+      ] as never,
+      { source: "canvas-multi-test" }
+    );
+  });
+
+  afterAll(clearBlocks);
+
+  function multi(selectedIds: readonly string[], primary: string | null) {
+    return render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              { id: "a", type: "acme/leaf", version: 1, props: {} },
+              { id: "b", type: "acme/leaf", version: 1, props: {} },
+              { id: "c", type: "acme/leaf", version: 1, props: {} },
+            ],
+          } as never
+        }
+        siteStyles={{ css: "", classes: {} } as never}
+        selectedId={primary}
+        selectedIds={selectedIds}
+      />
+    );
+  }
+
+  it("marks every selected block, not only the primary", () => {
+    const { container } = multi(["a", "c"], "a");
+
+    expect(
+      Array.from(container.querySelectorAll(`[${SELECTED_ATTRIBUTE}]`)).map(e =>
+        e.getAttribute(NODE_ID_ATTRIBUTE)
+      )
+    ).toEqual(["a", "c"]);
+  });
+
+  it("names WHICH member the panels answer for", () => {
+    // Without this a multi-selection would draw three identical outlines and
+    // the author would have no way to tell which block the inspector is
+    // editing.
+    const { container } = multi(["a", "c"], "c");
+    const marked = Array.from(
+      container.querySelectorAll(`[${SELECTED_ATTRIBUTE}]`)
+    );
+
+    expect(
+      marked.map(e => [
+        e.getAttribute(NODE_ID_ATTRIBUTE),
+        e.getAttribute(SELECTED_ATTRIBUTE),
+      ])
+    ).toEqual([
+      ["a", ""],
+      ["c", "primary"],
+    ]);
+  });
+
+  it("marks nothing outside the set, which is the control", () => {
+    // Without it, "mark everything" would pass both cases above.
+    const { container } = multi(["a"], "a");
+
+    expect(container.querySelectorAll(`[${SELECTED_ATTRIBUTE}]`).length).toBe(
+      1
+    );
+  });
+
+  it("falls back to the primary alone for a caller that passes no set", () => {
+    // Every existing host. The canvas must not decide what a selection IS, so
+    // it marks exactly what it was told and no more.
+    const { container } = render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              { id: "a", type: "acme/leaf", version: 1, props: {} },
+              { id: "b", type: "acme/leaf", version: 1, props: {} },
+            ],
+          } as never
+        }
+        siteStyles={{ css: "", classes: {} } as never}
+        selectedId="b"
+      />
+    );
+
+    const marked = Array.from(
+      container.querySelectorAll(`[${SELECTED_ATTRIBUTE}]`)
+    );
+    expect(marked.map(e => e.getAttribute(NODE_ID_ATTRIBUTE))).toEqual(["b"]);
+    expect(marked[0]?.getAttribute(SELECTED_ATTRIBUTE)).toBe("primary");
+  });
+});
+
+describe("the gesture a click's modifiers meant", () => {
+  /*
+   * Registered here as well as in the describe above, because that one scopes
+   * its registration to itself. A `beforeAll` inside a describe does not reach
+   * a sibling, and the first version of these cases rendered nothing at all —
+   * every assertion came back an empty NodeList, which reads as the canvas
+   * marking nothing rather than as an unregistered block type.
+   */
+  beforeAll(() => {
+    clearBlocks();
+    registerBlocks(
+      [
+        {
+          name: "acme/leaf",
+          version: 1,
+          description: "A block.",
+          example: { props: {} },
+          render: ({ className }: { className: string }) =>
+            createElement("div", { className }),
+        },
+      ] as never,
+      { source: "canvas-multi-test" }
+    );
+  });
+
+  afterAll(clearBlocks);
+
+  function clickable(onSelect: (id: string | null, mode: string) => void) {
+    return render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
+          } as never
+        }
+        siteStyles={{ css: "", classes: {} } as never}
+        onSelect={onSelect as never}
+      />
+    );
+  }
+
+  it("reports the mode alongside the id", () => {
+    // The mode travels with the id because only the event knows it: a caller
+    // reading modifiers off a later render's event would read a different
+    // click.
+    const onSelect = vi.fn();
+    const { container } = clickable(onSelect);
+    const block = container.querySelector(`[${NODE_ID_ATTRIBUTE}]`);
+    if (block === null) throw new Error("expected a rendered block");
+
+    fireEvent.click(block, { metaKey: true });
+    expect(onSelect).toHaveBeenCalledWith("a", "toggle");
+
+    fireEvent.click(block, { shiftKey: true });
+    expect(onSelect).toHaveBeenCalledWith("a", "extend");
+
+    fireEvent.click(block);
+    expect(onSelect).toHaveBeenCalledWith("a", "replace");
+  });
+});

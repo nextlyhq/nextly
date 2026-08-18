@@ -26,7 +26,8 @@ import {
   normalizeSelection,
   pruneSelection,
   rangeBetween,
-  type Selection,
+  selectionModeFor,
+  type BlockSelection,
 } from "./selection";
 
 function node(id: string, slots?: Record<string, BlockNode[]>): BlockNode {
@@ -58,7 +59,7 @@ function tree(): BlockDocument {
   ]);
 }
 
-function selection(ids: string[], primary: string | null): Selection {
+function selection(ids: string[], primary: string | null): BlockSelection {
   return { ids, primary };
 }
 
@@ -152,6 +153,33 @@ describe("rangeBetween", () => {
 
   it("answers with nothing for an id the document lost", () => {
     expect(rangeBetween(tree(), "a", "gone")).toEqual([]);
+  });
+});
+
+describe("selectionModeFor", () => {
+  const none = { shiftKey: false, metaKey: false, ctrlKey: false };
+
+  it("reads a plain click as replace", () => {
+    expect(selectionModeFor(none)).toBe("replace");
+  });
+
+  it("reads either platform's toggle modifier", () => {
+    // Both, deliberately: a Mac author presses Command and a Windows author
+    // presses Control, and neither ever presses the other's.
+    expect(selectionModeFor({ ...none, metaKey: true })).toBe("toggle");
+    expect(selectionModeFor({ ...none, ctrlKey: true })).toBe("toggle");
+  });
+
+  it("reads shift as extend", () => {
+    expect(selectionModeFor({ ...none, shiftKey: true })).toBe("extend");
+  });
+
+  it("prefers extend when both are held", () => {
+    // A slip, not a third gesture. Extending is the one whose result is visible
+    // and undone by a plain click.
+    expect(
+      selectionModeFor({ shiftKey: true, metaKey: true, ctrlKey: true })
+    ).toBe("extend");
   });
 });
 
