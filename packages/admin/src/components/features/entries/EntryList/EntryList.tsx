@@ -25,6 +25,7 @@ import {
   useBulkUpdateEntries,
 } from "@admin/hooks/queries";
 import { useCollection } from "@admin/hooks/queries/useCollections";
+import { LOCALE_PARAM } from "@admin/hooks/useEditorLocale";
 import { useEntryListShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { usePluginAutoRegistration } from "@admin/hooks/usePluginAutoRegistration";
@@ -399,12 +400,18 @@ export function EntryList({ collectionSlug }: EntryListProps) {
   // ---------------------------------------------------------------------------
 
   const handleEdit = useCallback(
-    (entryId: string) => {
+    (entryId: string, locale?: string) => {
+      const path = buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, {
+        slug: collectionSlug,
+        id: entryId,
+      });
+      // The language rides in the URL because that is where the editor reads
+      // it. Opening a row "in Arabic" from the list is the same act as being
+      // sent a link to the Arabic copy, and both arrive the same way.
       navigateTo(
-        buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, {
-          slug: collectionSlug,
-          id: entryId,
-        })
+        locale
+          ? `${path}?${new URLSearchParams({ [LOCALE_PARAM]: locale }).toString()}`
+          : path
       );
     },
     [collectionSlug]

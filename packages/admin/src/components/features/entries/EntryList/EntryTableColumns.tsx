@@ -340,6 +340,11 @@ export function getEntryTitleField(
  * renders selection and the row-action menu itself. Column visibility is
  * applied by marking columns `hidden` from the passed visibility map.
  */
+export interface EntryColumnActions {
+  /** Open a row in a given content language. Absent leaves the marks inert. */
+  openInLocale?: (entryId: string, locale: string) => void;
+}
+
 export function buildEntryColumns(
   collection: CollectionForColumns,
   /**
@@ -348,7 +353,8 @@ export function buildEntryColumns(
    * names — a record is a second spelling of the same question, and only this
    * file knew how to read it.
    */
-  isColumnVisible?: (name: string) => boolean
+  isColumnVisible?: (name: string) => boolean,
+  actions?: EntryColumnActions
 ): NextlyColumn<Record<string, unknown>>[] {
   const isHidden = (name: string) =>
     isColumnVisible ? !isColumnVisible(name) : false;
@@ -380,6 +386,12 @@ export function buildEntryColumns(
                   | Record<string, { translated: boolean; status?: string }>
                   | undefined
               }
+              {...(actions?.openInLocale && typeof row.id === "string"
+                ? {
+                    onOpenLocale: (locale: string) =>
+                      actions.openInLocale?.(row.id as string, locale),
+                  }
+                : {})}
             />
           ),
         });
