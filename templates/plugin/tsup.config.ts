@@ -1,7 +1,8 @@
 import { defineConfig } from "tsup";
 
 // Builds the publishable plugin. `dev/` is NOT an entry — it never ships.
-// nextly / admin / react are peers, kept external.
+// nextly / admin / sdk / ui / react are peers, kept external: bundling one
+// would ship a second copy of code the host already provides.
 export default defineConfig({
   entry: ["src/index.ts", "src/admin/index.ts"],
   format: ["esm"],
@@ -13,6 +14,7 @@ export default defineConfig({
     "nextly",
     "@nextlyhq/admin",
     "@nextlyhq/plugin-sdk",
+    "@nextlyhq/ui",
     "react",
     "react-dom",
   ],
