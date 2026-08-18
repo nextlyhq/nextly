@@ -24,6 +24,7 @@ import { findNode } from "@nextlyhq/blocks-engine";
 import { useShortcuts } from "@nextlyhq/ui";
 import * as React from "react";
 
+import { CANVAS_ESCAPE_PRIORITY, escapeOutcome } from "./canvas-escape";
 import { blockDeletion } from "./delete-block";
 import { blockDuplication } from "./duplicate-block";
 import type { EditorState } from "./editor-state";
@@ -509,6 +510,53 @@ export function useBlockKeyboardActions({
     name: "builder-block-actions",
     enabled,
   });
+
+  /*
+   * Escape, claimed for the editor and registered as its OWN layer.
+   *
+   * Separate from the block actions above because it needs a precedence they
+   * must not have. The host page binds Escape to "cancel and go back", and both
+   * sets are in one stack — so without a claim here the form's binding took the
+   * key and navigated away from the entry, discarding every uncommitted block
+   * edit. Raising the whole block-actions layer instead would put Delete and
+   * `mod+d` above the command palette's modal hold, so a keystroke aimed at the
+   * palette would edit the canvas behind it.
+   *
+   * `whenTyping` is left at its default, which is TRUE for Escape. That is not
+   * incidental: standing down inside a field would drop the key straight back
+   * to the form's cancel, and the inspector is full of fields. What focus in a
+   * field changes is what the key DOES, never who consumes it — see
+   * `canvas-escape`.
+   */
+  useShortcuts(
+    [
+      {
+        keys: "Escape",
+        description: "Clear the block selection",
+        // The one case the editor declines. `when` rather than a branch in
+        // `run`, because declining has to leave the key UNCONSUMED for the
+        // dialog to receive it, and a binding that runs has already taken it.
+        when: () =>
+          escapeOutcome(
+            typeof document === "undefined" ? undefined : document
+          ) !== "defer-to-modal",
+        run: () => {
+          const editorNow = latest.current;
+          const outcome = escapeOutcome(
+            typeof document === "undefined" ? undefined : document
+          );
+          if (outcome !== "deselect") return;
+          if (editorNow.selectedId === null) return;
+          editorNow.select(null);
+        },
+      },
+    ],
+    {
+      name: "builder-canvas-escape",
+      enabled,
+      priority: CANVAS_ESCAPE_PRIORITY,
+    }
+  );
 
   const actions = React.useMemo<BlockActions>(
     () => ({

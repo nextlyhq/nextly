@@ -12,7 +12,7 @@
  * @module keyboard-actions.test
  */
 import { act, cleanup, render, screen } from "@testing-library/react";
-import { ShortcutProvider } from "@nextlyhq/ui";
+import { ShortcutProvider, useShortcuts } from "@nextlyhq/ui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -84,7 +84,21 @@ function mount(editor: EditorState) {
  * binding that DECLINED a keystroke is told apart from one that handled it and
  * did nothing. Both leave the store untouched.
  */
-function press(key: string, init: KeyboardEventInit = {}): KeyboardEvent {
+function press(
+  key: string,
+  init: KeyboardEventInit = {},
+  /**
+   * Where the keystroke starts, defaulting to the document.
+   *
+   * It matters for any binding whose behaviour depends on whether the user is
+   * TYPING: the manager reads that from the event's target, not from
+   * `document.activeElement`. A test that focuses a field and then dispatches
+   * on the document has moved the focus and told the manager nothing, so a
+   * `whenTyping` rule is exercised by neither value — which is exactly how the
+   * first version of the field case below passed against both settings.
+   */
+  target: EventTarget = window.document
+): KeyboardEvent {
   const event = new KeyboardEvent("keydown", {
     key,
     bubbles: true,
@@ -96,7 +110,7 @@ function press(key: string, init: KeyboardEventInit = {}): KeyboardEvent {
   // dispatch is outside that, so a state update the handler makes is not
   // flushed before the assertion reads the DOM.
   act(() => {
-    document.dispatchEvent(event);
+    target.dispatchEvent(event);
   });
   return event;
 }
@@ -777,5 +791,220 @@ describe("useBlockKeyboardActions", () => {
       "Paragraph deleted"
     );
     clearBlocks();
+  });
+});
+
+describe("Escape belongs to the editor, not to the page behind it", () => {
+  /*
+   * The regression this exists for: the admin binds Escape on the entry form to
+   * "cancel and go back", both sets of bindings live in ONE shortcut stack, and
+   * with nothing claiming the key here an author pressing Escape over the canvas
+   * was navigated away from the entry — discarding every block edit the builder
+   * had not yet committed, with no prompt, because the form was never told the
+   * document had changed.
+   *
+   * The harness registers a competing layer at the host's precedence and asserts
+   * it never runs. Asserting only that the selection cleared would pass against
+   * an editor that cleared it AND let the key through.
+   */
+  function mountWithHostEscape(editor: EditorState) {
+    const hostCancel = vi.fn();
+    function HostBindings(): null {
+      useShortcuts(
+        [{ keys: "Escape", description: "Cancel", run: hostCancel }],
+        {
+          name: "test-entry-form",
+        }
+      );
+      return null;
+    }
+    render(
+      <ShortcutProvider>
+        <HostBindings />
+        <BlockKeyboardActions editor={editor} />
+      </ShortcutProvider>
+    );
+    return hostCancel;
+  }
+
+  it("clears the selection and does NOT reach the page's cancel", () => {
+    const editor = editorSpy(pair(), "a");
+    const hostCancel = mountWithHostEscape(editor);
+
+    press("Escape");
+
+    expect(editor.select).toHaveBeenCalledWith(null);
+    expect(hostCancel).not.toHaveBeenCalled();
+  });
+
+  it("holds the key even with NOTHING selected", () => {
+    /*
+     * THE case, and the one a rule written around what Escape ACHIEVES would
+     * get wrong. With no selection there is nothing to clear, so an editor that
+     * only claimed the key when it had work to do would release it here — and
+     * this is exactly the state an author is in after clicking canvas
+     * background, one click away from any block.
+     */
+    const editor = editorSpy(pair(), null);
+    const hostCancel = mountWithHostEscape(editor);
+
+    press("Escape");
+
+    expect(hostCancel).not.toHaveBeenCalled();
+  });
+
+  it("wins even when the host's layer registers LAST", () => {
+    /*
+     * What makes the claim PRECEDENCE rather than luck.
+     *
+     * At equal priority the manager orders layers by depth and then by which
+     * registered later, and "later" wins. Every other case here mounts the host
+     * first, so the editor would come out on top from mount order alone — and
+     * removing the priority entirely left them all green, which is how this gap
+     * was found. Reversing the mount order takes that accident away: only the
+     * declared priority can decide it now.
+     *
+     * This is not a contrived arrangement. The shell renders its own provider,
+     * which resolves to the host's manager and INHERITS its depth rather than
+     * adding to it, so the two sets of bindings genuinely sit at one level and
+     * their order is whatever mounting happened to produce.
+     */
+    const editor = editorSpy(pair(), "a");
+    const hostCancel = vi.fn();
+    function HostBindings(): null {
+      useShortcuts(
+        [{ keys: "Escape", description: "Cancel", run: hostCancel }],
+        { name: "test-entry-form" }
+      );
+      return null;
+    }
+    render(
+      <ShortcutProvider>
+        <BlockKeyboardActions editor={editor} />
+        <HostBindings />
+      </ShortcutProvider>
+    );
+
+    press("Escape");
+
+    expect(hostCancel).not.toHaveBeenCalled();
+    expect(editor.select).toHaveBeenCalledWith(null);
+  });
+
+  it("stands down while a modal is open, which dismisses on the same key", () => {
+    // Escape means "dismiss the innermost thing". A rule that simply took the
+    // key for the canvas would strand an open palette, and the author would
+    // press Escape at a dialog and watch the page behind it change instead.
+    const editor = editorSpy(pair(), "a");
+    const dialog = window.document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("data-state", "open");
+    window.document.body.append(dialog);
+    try {
+      render(
+        <ShortcutProvider>
+          <BlockKeyboardActions editor={editor} />
+        </ShortcutProvider>
+      );
+
+      const event = press("Escape");
+
+      /*
+       * `defaultPrevented`, not "the selection did not change".
+       *
+       * The selection is unchanged either way — a rule that consumed the key
+       * and then declined to act on it leaves exactly the same store — so that
+       * assertion cannot tell deference from a handler that took the key and
+       * did nothing. Only one of those lets the dialog close, and stubbing the
+       * deference away moved no result until this asserted the consumption.
+       */
+      expect(event.defaultPrevented).toBe(false);
+      expect(editor.select).not.toHaveBeenCalled();
+    } finally {
+      dialog.remove();
+    }
+  });
+
+  it("control: it DOES consume the key with no modal open", () => {
+    // Without this, the case above passes against an editor that had stopped
+    // claiming Escape at all — which is the defect, not the fix.
+    const editor = editorSpy(pair(), "a");
+    render(
+      <ShortcutProvider>
+        <BlockKeyboardActions editor={editor} />
+      </ShortcutProvider>
+    );
+
+    expect(press("Escape").defaultPrevented).toBe(true);
+  });
+
+  it("holds the key from INSIDE a text field, where the inspector lives", () => {
+    /*
+     * The same data loss through a different door, and the one a reasonable
+     * instinct opens. Escape normally "stays out of fields" — it is how a
+     * combobox or an IME composition is dismissed — so declining it there looks
+     * like good manners. It is not: declining releases the key to the entry
+     * form's cancel, and the inspector an author types a block's name into is
+     * full of fields. So the editor consumes it wherever focus is; what focus
+     * changes is what the key DOES.
+     */
+    const editor = editorSpy(pair(), "a");
+    const hostCancel = vi.fn();
+    function HostBindings(): null {
+      useShortcuts(
+        [{ keys: "Escape", description: "Cancel", run: hostCancel }],
+        { name: "test-entry-form" }
+      );
+      return null;
+    }
+    render(
+      <ShortcutProvider>
+        <HostBindings />
+        <BlockKeyboardActions editor={editor} />
+      </ShortcutProvider>
+    );
+
+    const field = window.document.createElement("input");
+    field.type = "text";
+    window.document.body.append(field);
+    field.focus();
+    try {
+      // FROM the field, as a real keystroke arrives — see `press`.
+      const event = press("Escape", {}, field);
+
+      expect(hostCancel).not.toHaveBeenCalled();
+      expect(event.defaultPrevented).toBe(true);
+      // And it does NOT clear the selection out from under the field, which is
+      // the half that makes consuming it acceptable rather than rude.
+      expect(editor.select).not.toHaveBeenCalled();
+    } finally {
+      field.remove();
+    }
+  });
+
+  it("control: the host's Escape DOES fire without the editor mounted", () => {
+    /*
+     * Without this, both cases above would pass against a harness whose host
+     * layer never worked — which would prove nothing about the editor at all.
+     */
+    const hostCancel = vi.fn();
+    function HostOnly(): null {
+      useShortcuts(
+        [{ keys: "Escape", description: "Cancel", run: hostCancel }],
+        {
+          name: "test-entry-form",
+        }
+      );
+      return null;
+    }
+    render(
+      <ShortcutProvider>
+        <HostOnly />
+      </ShortcutProvider>
+    );
+
+    press("Escape");
+
+    expect(hostCancel).toHaveBeenCalled();
   });
 });
