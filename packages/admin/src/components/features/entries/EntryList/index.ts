@@ -23,7 +23,6 @@ export {
 
 // Column generation
 export {
-  generateEntryColumns,
   getAvailableColumns,
   getDefaultVisibleColumns,
   type CollectionForColumns,

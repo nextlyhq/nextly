@@ -22,26 +22,19 @@
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { cn } from "@admin/lib/utils";
 
-import type { LocaleTranslationMeta } from "./translation-meta";
+import {
+  LANGUAGE_STATE_LABEL,
+  languageState,
+  type LanguageState,
+  type LocaleTranslationMeta,
+} from "./translation-meta";
 
-export type LanguageState = "missing" | "draft" | "translated" | "published";
-
-/** Resolve a locale's display state from its translation meta. */
-export function languageState(
-  meta: LocaleTranslationMeta | undefined
-): LanguageState {
-  if (!meta || !meta.translated) return "missing";
-  if (meta.status === "published") return "published";
-  if (meta.status === "draft") return "draft";
-  return "translated";
-}
-
-export const LANGUAGE_STATE_LABEL: Record<LanguageState, string> = {
-  missing: "not translated",
-  draft: "draft",
-  translated: "translated",
-  published: "published",
-};
+// The vocabulary itself lives in `translation-meta`, with the rest of what can
+// be read off a `_translations` map. Re-exported here because this file was its
+// home while the control was its only reader, and several surfaces import it
+// from here.
+export { LANGUAGE_STATE_LABEL, languageState };
+export type { LanguageState };
 
 /**
  * The dot encodes state by shape first: filled (published), filled in the
