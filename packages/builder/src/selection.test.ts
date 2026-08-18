@@ -216,6 +216,25 @@ describe("applySelection", () => {
     expect(next.primary).toBe("a");
   });
 
+  it("leaves primary alone when the block toggled out was not primary", () => {
+    /*
+     * The case that separates "keep the primary" from "hand it to the first
+     * survivor". Both rules agree whenever the block removed WAS the primary,
+     * which is every other toggle case here — so only removing a non-primary
+     * can tell them apart, and a stub swapping one for the other moved no test
+     * until this existed.
+     */
+    const next = applySelection(
+      tree(),
+      selection(["a", "b", "c"], "c"),
+      "a",
+      "toggle"
+    );
+
+    expect(next.ids).toEqual(["b", "c"]);
+    expect(next.primary).toBe("c");
+  });
+
   it("toggling the last block out empties the selection", () => {
     expect(
       applySelection(tree(), selection(["a"], "a"), "a", "toggle")
