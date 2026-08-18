@@ -60,6 +60,7 @@ import type { EditorState } from "./editor-state";
 import type { Point, Rect } from "./geometry";
 import { canvasContentPoint, canvasContentRect } from "./geometry-dom";
 import type { SlotSource } from "./inserter";
+import { lockBlockingMove } from "./locking";
 import {
   nextTargetSwitchState,
   NO_TARGET,
@@ -220,7 +221,13 @@ export function useCanvasDrag({
 
       // A locked block is one the author has asked the editor not to move. The
       // press is left alone rather than swallowed, so it still selects.
-      if (node.locked === true) return;
+      //
+      // Asked through the shared rule rather than by reading the flag here: the
+      // keyboard moves and delete ask the same question, and delete's answer
+      // differs — it checks the whole subtree, because removing a container
+      // destroys what is inside it. Three inline reads of `node.locked` would
+      // agree until one of them gained that distinction.
+      if (lockBlockingMove(current.document, nodeId) !== undefined) return;
 
       const rects = snapshotRects(root);
       gesture.current = {
