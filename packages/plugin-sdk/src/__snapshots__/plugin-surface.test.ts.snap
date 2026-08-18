@@ -2,6 +2,7 @@
 
 exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`] = `
 [
+  "AdminChromeLayer (type)",
   "BulkAction (type)",
   "Card (value)",
   "CardAction (value)",
@@ -55,6 +56,8 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "StackProps (type)",
   "Stat (value)",
   "StatProps (type)",
+  "ValidationNumberField (value)",
+  "ValidationNumberFieldProps (type)",
   "operatorTakesValue (value)",
   "operatorsForType (value)",
   "registerBulkAction (value)",
@@ -67,6 +70,7 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "transformColumns (value)",
   "usePluginClientConfig (value)",
   "usePluginFieldTypeEntries (value)",
+  "useSuppressAdminChrome (value)",
   "withOptionIds (value)",
 ]
 `;
@@ -161,6 +165,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "PluginFilterRegistry (type)",
   "PluginHookRegistry (type)",
   "PluginMenuItem (type)",
+  "PluginNavSection (type)",
   "PluginPermission (type)",
   "PluginRole (type)",
   "PluginRoute (type)",
