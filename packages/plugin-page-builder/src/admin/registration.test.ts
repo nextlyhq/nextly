@@ -37,30 +37,49 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 }));
 
 describe("the admin entry's component registration", () => {
-  it("registers the exact specifier the blocks field declares", async () => {
-    // Imported for its side effect, after the mock is in place.
-    await import("./index");
+  // Both cases `await import("./index")`, so their cost is dominated by
+  // TRANSFORMING that module graph rather than by the assertions, which run in
+  // roughly 300ms locally. The graph is this package's whole client entry, and
+  // in CI it is transformed cold while parallel workers compete for the same
+  // machine — so the budget scales with the runner's load rather than with
+  // anything either test controls. Vitest's 5s default was never chosen for
+  // that shape and timed out on five separate branches in one morning. Stated
+  // explicitly, so a loaded runner reads as a loaded runner rather than as this
+  // registration breaking.
+  const IMPORT_GRAPH_BUDGET_MS = 30_000;
 
-    // The specifier, not merely "something was registered" — a map with one
-    // unrelated entry satisfies a count and leaves the field unresolvable.
-    expect(Object.keys(registered)).toContain(BLOCKS_FIELD_COMPONENT);
-    expect(registered[BLOCKS_FIELD_COMPONENT]).toBeTypeOf("function");
-  });
+  it(
+    "registers the exact specifier the blocks field declares",
+    async () => {
+      // Imported for its side effect, after the mock is in place.
+      await import("./index");
 
-  it("registers nothing it does not export, so no specifier dangles", async () => {
-    await import("./index");
-    const entry = await import("./index");
+      // The specifier, not merely "something was registered" — a map with one
+      // unrelated entry satisfies a count and leaves the field unresolvable.
+      expect(Object.keys(registered)).toContain(BLOCKS_FIELD_COMPONENT);
+      expect(registered[BLOCKS_FIELD_COMPONENT]).toBeTypeOf("function");
+    },
+    IMPORT_GRAPH_BUDGET_MS
+  );
 
-    // Every registered path must name an export of this module. A registration
-    // pointing at a component that was deleted resolves to `undefined` and
-    // renders blank, which is the same failure from the other direction.
-    for (const path of Object.keys(registered)) {
-      const name = path.split("#")[1];
-      expect(name, `${path} has no #ComponentName`).toBeTruthy();
-      expect(
-        entry,
-        `${path} names an export this module does not have`
-      ).toHaveProperty(name as string);
-    }
-  });
+  it(
+    "registers nothing it does not export, so no specifier dangles",
+    async () => {
+      await import("./index");
+      const entry = await import("./index");
+
+      // Every registered path must name an export of this module. A registration
+      // pointing at a component that was deleted resolves to `undefined` and
+      // renders blank, which is the same failure from the other direction.
+      for (const path of Object.keys(registered)) {
+        const name = path.split("#")[1];
+        expect(name, `${path} has no #ComponentName`).toBeTruthy();
+        expect(
+          entry,
+          `${path} names an export this module does not have`
+        ).toHaveProperty(name as string);
+      }
+    },
+    IMPORT_GRAPH_BUDGET_MS
+  );
 });
