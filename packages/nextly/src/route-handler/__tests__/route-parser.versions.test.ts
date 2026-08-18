@@ -460,6 +460,9 @@ describe("version routes resolve to a per-document permission", () => {
     [["singles", "settings", "versions", "3"], "PATCH"],
     [["singles", "settings", "versions", "3", "restore"], "POST"],
     [["singles", "settings", "versions", "autosave"], "PUT"],
+    // Publishing every language writes the document, so it must resolve to
+    // `update-{slug}` rather than falling through to manage-settings.
+    [["singles", "settings", "publish-all"], "POST"],
   ];
 
   it.each(COLLECTION_ROUTES)(
