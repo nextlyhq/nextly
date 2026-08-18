@@ -20,6 +20,11 @@ import { NextlyError } from "../../../../errors";
 import type { RegisteredEmailProvider } from "../../provider-definition";
 import { defineEmailProvider } from "../../provider-definition";
 
+import {
+  LOG_PROVIDER_TYPE,
+  createLogProvider,
+  shouldIncludeBody,
+} from "./log-provider";
 import { createResendProvider } from "./resend-provider";
 import { createSendLayerProvider } from "./sendlayer-provider";
 import {
@@ -251,6 +256,29 @@ export const sendLayerDefinition: RegisteredEmailProvider = defineEmailProvider(
   }
 );
 
+/**
+ * The fallback transport, registered like any other so the delivery log, the
+ * descriptor catalog and the admin need no special case for it.
+ *
+ * It takes no configuration: there is nothing to configure about writing to
+ * the log, and an empty field list is what tells the admin to render no form.
+ */
+export const logDefinition: RegisteredEmailProvider = defineEmailProvider({
+  type: LOG_PROVIDER_TYPE,
+  label: "Log (no delivery)",
+  description:
+    "Writes messages to the server log instead of sending them. Used automatically when no other provider is configured.",
+  capabilities: {
+    attachments: false,
+    replyTo: true,
+    requiresVerifiedSender: false,
+  },
+  configFields: [],
+  parseConfig: () => ({}),
+  createAdapter: () =>
+    createLogProvider({ includeBody: shouldIncludeBody(process.env.NODE_ENV) }),
+});
+
 /** Every provider seeded into a fresh registry. */
 export const BUILT_IN_EMAIL_PROVIDERS: ReadonlyArray<RegisteredEmailProvider> =
-  [smtpDefinition, resendDefinition, sendLayerDefinition];
+  [smtpDefinition, resendDefinition, sendLayerDefinition, logDefinition];

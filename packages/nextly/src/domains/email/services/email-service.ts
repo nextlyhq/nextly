@@ -51,6 +51,7 @@ import type { EmailDeliveryService } from "./email-delivery-service";
 import { getEmailProviderRegistry } from "./email-provider-registry";
 import type { EmailProviderService } from "./email-provider-service";
 import type { EmailTemplateService } from "./email-template-service";
+import { LOG_PROVIDER_TYPE } from "./providers/log-provider";
 import { mergeTemplateAttachments } from "./template-attachment-merge";
 import {
   htmlToText,
@@ -408,7 +409,7 @@ export class EmailService extends BaseService {
       from: resolvedFrom,
       providerType,
       resolvedProviderId,
-    } = await this.resolveProvider(options.providerId);
+    } = await this.resolveProviderForSend(options.providerId);
 
     // A per-template From override wins over the provider's default From.
     const from = options.from?.trim() ? options.from : resolvedFrom;
@@ -897,6 +898,42 @@ export class EmailService extends BaseService {
    * 3. Code-first config from `defineConfig({ email })`
    * 4. Error
    */
+  /**
+   * The provider a send will actually use, falling back to the log transport.
+   *
+   * Deliberately separate from `resolveProvider`. Auth calls `isConfigured()`
+   * to decide whether to return a password-reset token in the response, and
+   * `isConfigured` answers by asking `resolveProvider` whether anything is
+   * configured. Putting the fallback in that method would make the answer
+   * permanently yes and silently change the auth branch, so the fallback lives
+   * only on the path that sends.
+   */
+  private async resolveProviderForSend(providerId?: string): Promise<{
+    adapter: EmailProviderAdapter;
+    from: string;
+    providerType: string;
+    resolvedProviderId?: string;
+  }> {
+    try {
+      return await this.resolveProvider(providerId);
+    } catch (error) {
+      // A specific provider was asked for and could not be resolved: that is a
+      // real failure, not an unconfigured install, so it must not be swallowed
+      // into a log write that reports success.
+      if (providerId !== undefined) throw error;
+
+      const definition = getEmailProviderRegistry().get(LOG_PROVIDER_TYPE);
+
+      return {
+        adapter: definition.createAdapterFrom({}),
+        // Nothing configured a sender, so the address only has to be valid and
+        // obviously local. A caller-supplied `from` still wins downstream.
+        from: this.emailConfig?.from ?? "nextly@localhost",
+        providerType: LOG_PROVIDER_TYPE,
+      };
+    }
+  }
+
   private async resolveProvider(providerId?: string): Promise<{
     adapter: EmailProviderAdapter;
     from: string;
