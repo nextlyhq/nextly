@@ -58,7 +58,11 @@ export function StateDot({ state }: { state: LanguageState }) {
         state === "translated" && "bg-success-600 dark:bg-success-400",
         state === "draft" &&
           "border-[1.5px] border-foreground/70 [background:linear-gradient(90deg,currentColor_50%,transparent_50%)] text-foreground/70",
-        state === "missing" && "border-[1.5px] border-muted-foreground/60"
+        // Full strength rather than an alpha: the outline is the only thing
+        // that renders this dot, so it is a UI boundary held to 3:1. At /60 it
+        // measured 2.87:1 on the page surface; the token itself reaches 7.55:1
+        // and stays quieter than the draft dot above it.
+        state === "missing" && "border-[1.5px] border-muted-foreground"
       )}
     />
   );
