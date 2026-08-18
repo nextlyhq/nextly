@@ -37,7 +37,11 @@ import { registrySlotSource } from "./inserter";
 afterEach(() => {
   cleanup();
   clearBlocks();
+  captured = [];
 });
+
+/** Pointer ids the canvas has taken capture of, newest last. */
+let captured: number[] = [];
 
 beforeAll(() => {
   // Absent from jsdom entirely. Without them the first pointerdown throws and
@@ -46,7 +50,9 @@ beforeAll(() => {
     string,
     unknown
   >;
-  element.setPointerCapture = function setPointerCapture(): void {};
+  element.setPointerCapture = function setPointerCapture(id: number): void {
+    captured.push(id);
+  };
   element.releasePointerCapture = function releasePointerCapture(): void {};
   element.hasPointerCapture = function hasPointerCapture(): boolean {
     return true;
@@ -203,6 +209,42 @@ describe("useCanvasDrag", () => {
 
     expect(indicator(container)).toBeNull();
     expect(editorRef?.undoDepth).toBe(before);
+  });
+
+  it("does not capture the pointer for a press that stays a click", () => {
+    /*
+     * The mechanism behind a regression that made every canvas click CLEAR the
+     * selection instead of setting it.
+     *
+     * Capture retargets later pointer events to the capturing element, and the
+     * browser derives a click's target from where the press and the release
+     * landed — so capturing on `pointerdown` made every click report the canvas
+     * ROOT as its target, and the canvas read "no block above this target" as a
+     * click on the background.
+     *
+     * jsdom implements no capture retargeting and synthesises no click from a
+     * press, so the SYMPTOM cannot be reproduced here. When capture is taken is
+     * observable, and it is what the defect actually was.
+     */
+    const { container, root } = renderThree();
+
+    press(root, blockElement(container, "a"), 200, 50);
+    moveTo(root, 201, 51);
+    release(root, 201, 51);
+
+    expect(captured).toEqual([]);
+  });
+
+  it("captures the pointer once the drag activates", () => {
+    // The positive control, and the reason capture exists at all: a drag may
+    // leave the canvas and has to keep receiving moves. Without this, "never
+    // captures" would also pass on a canvas that never captures.
+    const { container, root } = renderThree();
+
+    press(root, blockElement(container, "a"), 200, 50);
+    moveTo(root, 200, 250);
+
+    expect(captured).toEqual([1]);
   });
 
   it("shows an indicator once the pointer has travelled far enough", () => {

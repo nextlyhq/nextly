@@ -234,10 +234,7 @@ export function useCanvasDrag({
         switchState: NO_TARGET,
         targets: new Map(),
       };
-      // Capture on the ROOT, so a pointer that leaves the canvas keeps
-      // delivering. Without it a drag that wanders outside simply stops
-      // reporting, and the gesture ends wherever the pointer happened to exit.
-      root.setPointerCapture(event.pointerId);
+      // NOT captured here. See the activation branch in `onPointerMove`.
     },
     []
   );
@@ -257,6 +254,25 @@ export function useCanvasDrag({
         );
         if (travelled < activationPx) return;
         drag.active = true;
+        /*
+         * Capture the pointer HERE rather than on the press, so that a press
+         * which stays a click never captures at all.
+         *
+         * Capture retargets every later pointer event to the capturing element,
+         * and the browser derives a `click`'s target from where the press and
+         * the release landed — so capturing on `pointerdown` makes every click
+         * on the canvas report the CANVAS ROOT as its target. The canvas
+         * resolves a click by walking up from the target to the nearest block,
+         * finds none above the root, and reads that as "the author clicked the
+         * background": selecting a block by clicking it cleared the selection
+         * instead.
+         *
+         * A drag needs capture because it may leave the canvas and must keep
+         * receiving moves. A click does not, and until the pointer has travelled
+         * far enough there is no way to tell which one this is — so the capture
+         * waits for the answer.
+         */
+        event.currentTarget.setPointerCapture(event.pointerId);
         // Selecting on activation rather than on press: a press that turns out
         // to be a click is handled by the canvas's own click handler, and
         // selecting here as well would run the same decision twice.
