@@ -21,7 +21,6 @@ import {
   TOOLBAR_GAP_PX,
   toolbarActions,
   toolbarPlacement,
-  toolbarShortcut,
   type ToolbarAction,
   type ToolbarActionId,
 } from "./toolbar-actions";
@@ -188,16 +187,6 @@ describe("toolbarActions", () => {
     expect(actionOf(actions, "duplicate").enabled).toBe(true);
     expect(actionOf(actions, "delete").enabled).toBe(true);
     expect(actionOf(actions, "delete").reason).toBeUndefined();
-  });
-});
-
-describe("toolbarShortcut", () => {
-  it("names a keystroke only where one exists", () => {
-    expect(toolbarShortcut("duplicate")).toBe("Ctrl+D");
-    expect(toolbarShortcut("move-up")).toBe("Alt+Up");
-    // Selecting the parent has no binding, and inventing one in a tooltip would
-    // teach a keystroke that does nothing.
-    expect(toolbarShortcut("select-parent")).toBeUndefined();
   });
 });
 

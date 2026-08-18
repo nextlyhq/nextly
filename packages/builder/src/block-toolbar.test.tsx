@@ -107,8 +107,8 @@ function editorSpy(
  * without rendered blocks tests a permanently hidden toolbar — which is how the
  * first draft of these cases came back unable to find a single button.
  */
-function mount(editor: EditorState, props: { hidden?: boolean } = {}) {
-  return render(
+function tree(editor: EditorState, props: { hidden?: boolean }) {
+  return (
     <ShortcutProvider>
       <BlockKeyboardActions editor={editor}>
         <Canvas
@@ -121,6 +121,16 @@ function mount(editor: EditorState, props: { hidden?: boolean } = {}) {
       </BlockKeyboardActions>
     </ShortcutProvider>
   );
+}
+
+function mount(editor: EditorState, props: { hidden?: boolean } = {}) {
+  const result = render(tree(editor, props));
+  return {
+    ...result,
+    /** Re-render with the selection moved, as a verb that changes it does. */
+    reselect: (id: string) =>
+      result.rerender(tree({ ...editor, selectedId: id }, props)),
+  };
 }
 
 describe("BlockToolbar", () => {
@@ -243,6 +253,46 @@ describe("BlockToolbar", () => {
     fireEvent.keyDown(screen.getByRole("toolbar"), { key: "ArrowLeft" });
     fireEvent.keyDown(screen.getByRole("toolbar"), { key: "ArrowLeft" });
     expect(document.activeElement).toBe(buttons[4]);
+  });
+
+  it("keeps the roving stop where FOCUS is when the selection moves", () => {
+    /*
+     * Duplicate and Select parent both change the selection while the author's
+     * focus is still on the button they pressed. Resetting the stop to 0 there
+     * would put the roving index and the caret on different buttons, and the
+     * next arrow press would jump backwards from where the author is looking.
+     */
+    register();
+    const editor = editorSpy(pair(), "a");
+    const { reselect } = mount(editor);
+    const buttons = screen.getAllByRole("button");
+
+    buttons[3]?.focus(); // Duplicate
+    reselect("b"); // as duplicating does: selection follows the copy
+
+    fireEvent.keyDown(screen.getByRole("toolbar"), { key: "ArrowRight" });
+
+    // Delete, the button after the focused one — not Move up, which is where a
+    // stop reset to 0 would have sent it.
+    expect(document.activeElement).toBe(buttons[4]);
+  });
+
+  it("DOES reset the stop when focus is outside the bar", () => {
+    // The control. Without it the case above passes against a bar that never
+    // reset the stop at all, which would strand it on a button belonging to a
+    // block the author has moved on from.
+    register();
+    const editor = editorSpy(pair(), "a");
+    const { reselect } = mount(editor);
+    const buttons = screen.getAllByRole("button");
+
+    buttons[3]?.focus();
+    (window.document.activeElement as HTMLElement | null)?.blur();
+    reselect("b");
+
+    fireEvent.keyDown(screen.getByRole("toolbar"), { key: "ArrowRight" });
+
+    expect(document.activeElement).toBe(buttons[1]);
   });
 
   it("refuses to render without the verbs above it", () => {
