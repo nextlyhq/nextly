@@ -259,6 +259,23 @@ export {
 } from "./duplicate-block";
 
 /**
+ * @experimental The palette's command list, as a plain function over state.
+ *
+ * From this entry because a host assembling its own palette — or an agent
+ * enumerating what the editor can do right now — needs the same list the editor
+ * offers, and availability derived from a second reading of the lock and move
+ * rules is how the two come to disagree.
+ */
+export {
+  BLOCK_GROUP,
+  EDITOR_GROUP,
+  HISTORY_GROUP,
+  builderCommands,
+  type BuilderCommandsInput,
+  type CommandVerbs,
+} from "./builder-commands";
+
+/**
  * @experimental Who owns Escape while the editor is on screen.
  *
  * From this entry because the rule is a plain function over the DOM and a

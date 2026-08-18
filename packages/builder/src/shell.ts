@@ -118,6 +118,16 @@ export type {
  * own, which is what keeps one gesture having one answer — and what lets both
  * the button and the keystroke announce into the single live region.
  */
+/**
+ * The command palette, assembled and mounted for the editor.
+ *
+ * From this entry because it is a client component and because it only works
+ * below `BlockKeyboardActions`, whose verbs it runs. A host that wants to build
+ * its own list uses `CommandPalette` with `builderCommands` instead.
+ */
+export { EditorCommandPalette } from "./editor-command-palette";
+export type { EditorCommandPaletteProps } from "./editor-command-palette";
+
 export { BlockToolbar } from "./block-toolbar";
 export type { BlockToolbarProps } from "./block-toolbar";
 
