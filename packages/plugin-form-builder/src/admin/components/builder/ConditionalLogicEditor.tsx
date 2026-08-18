@@ -388,7 +388,11 @@ export function ConditionalLogicEditor({
             </Button>
           ) : (
             // Full-strength warning border so this notice boundary is perceivable over its tinted fill.
-            <p className="mt-4 text-center text-xs text-warning font-medium bg-warning/10 p-2 rounded-none border border-warning">
+            // The 600 shade rather than the base token: the base measures 4.37:1
+            // once its own 10% fill composites over the page container, short of
+            // the 4.5:1 text needs. The 600 shade holds 5.13:1 at its worst
+            // surface in either mode.
+            <p className="mt-4 text-center text-xs text-warning-600 font-medium bg-warning/10 p-2 rounded-none border border-warning">
               Add more fields to the form to create conditions.
             </p>
           )}
