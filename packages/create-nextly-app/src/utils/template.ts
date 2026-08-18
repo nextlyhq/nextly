@@ -986,6 +986,11 @@ const PINNED_VERSIONS: Record<string, string> = {
   "@tailwindcss/postcss": "^4",
   tailwindcss: "^4",
   eslint: "^9",
+  // Compiles `nextly.config.ts` so the dev server and the CLI can read it.
+  // An optional peer of `nextly` rather than a dependency, because nothing
+  // that serves a request needs it: a production install omitting dev
+  // dependencies never downloads it.
+  esbuild: "^0.28.1",
 };
 
 /**
@@ -1196,6 +1201,10 @@ export async function generatePackageJson(
     tailwindcss: PINNED_VERSIONS.tailwindcss,
     eslint: PINNED_VERSIONS.eslint,
     "eslint-config-next": runtimeVersions["eslint-config-next"],
+    // Declared HERE rather than inherited: `nextly` takes esbuild as an
+    // optional peer, so nothing installs it on a project's behalf. Without it
+    // the dev server cannot read `nextly.config.ts`.
+    esbuild: PINNED_VERSIONS.esbuild,
   };
 
   // Read from the project that was just assembled, so the generated script can only name a

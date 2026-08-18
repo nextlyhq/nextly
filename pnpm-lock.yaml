@@ -1122,9 +1122,6 @@ importers:
       drizzle-orm:
         specifier: 1.0.0-rc.4
         version: 1.0.0-rc.4(@types/better-sqlite3@7.6.13)(@types/pg@8.15.5)(better-sqlite3@12.5.0)(effect@3.21.2)(mysql2@3.15.0)(pg@8.16.3)(zod@4.1.12)
-      esbuild:
-        specifier: '>=0.25.0'
-        version: 0.28.1
       file-type:
         specifier: ^21
         version: 21.3.4
@@ -1214,6 +1211,9 @@ importers:
       acorn-walk:
         specifier: ^8.3.4
         version: 8.3.4
+      esbuild:
+        specifier: '>=0.25.0'
+        version: 0.28.1
       eslint:
         specifier: ^9.39.1
         version: 9.39.1(jiti@2.7.0)
