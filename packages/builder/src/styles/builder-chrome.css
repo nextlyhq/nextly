@@ -658,3 +658,17 @@
 .nx-block-toolbar__button[aria-disabled="true"]:hover {
   background: none;
 }
+
+/*
+ * The inspector's checkbox row, for a control that has a label beside it rather
+ * than above it. A checkbox and its words are one target, which is why the
+ * label wraps the input instead of pointing at it.
+ */
+.nx-inspector__check {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8125rem;
+  color: var(--nx-builder-text);
+  cursor: pointer;
+}

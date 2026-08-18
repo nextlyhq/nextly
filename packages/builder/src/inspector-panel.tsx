@@ -41,11 +41,14 @@ import type { EditorState } from "./editor-state";
 import {
   inspectSelection,
   lockOp,
+  lockStateOf,
   propPatch,
   renameOp,
   type BlockIdentity,
   type EditableProp,
+  type LockState,
 } from "./inspector";
+import { selectionLock } from "./selection-ops";
 
 export interface InspectorPanelProps {
   /**
@@ -89,6 +92,29 @@ export function InspectorPanel({
     },
     [editor]
   );
+
+  /*
+   * Several blocks selected: a different panel, not a thinner one.
+   *
+   * Showing the primary's name and props while six blocks are selected would
+   * describe one block and act on one block, on a screen where the canvas shows
+   * six outlined and the toolbar's delete removes all of them. The two surfaces
+   * would be answering different questions with the same words.
+   *
+   * Per-property batch editing — one field showing "Mixed" and writing to every
+   * block — is Plan 05's batch edit and is deliberately not here. What IS here
+   * is the one property that is well defined across any set today, because it
+   * is a flag rather than a value: the lock.
+   */
+  if (editor.selection.ids.length > 1) {
+    return (
+      <ManyBlocksPanel
+        editor={editor}
+        count={editor.selection.ids.length}
+        lock={lockStateOf(editor.document, editor.selection.ids)}
+      />
+    );
+  }
 
   if (inspection === null) {
     return (
@@ -362,6 +388,68 @@ function TextishField({
           }}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * The inspector when several blocks are selected.
+ *
+ * Says how many, and offers the one control that is well defined across a set:
+ * the lock. A tri-state checkbox rather than a two-state one, because "some of
+ * these are locked" is a real state and showing it as either on or off tells
+ * the author something false about half of their selection.
+ *
+ * From `mixed`, the first press LOCKS everything. The alternative — unlocking —
+ * is a first press that appears to do nothing to the blocks that were already
+ * unlocked, and every file manager and design tool resolves it the same way.
+ */
+function ManyBlocksPanel({
+  editor,
+  count,
+  lock,
+}: {
+  editor: EditorState;
+  count: number;
+  lock: LockState;
+}): React.JSX.Element {
+  const plan = selectionLock(
+    editor.document,
+    editor.selection.ids,
+    // Mixed locks; locked unlocks; unlocked locks.
+    lock !== "locked"
+  );
+
+  return (
+    <div className="nx-inspector" data-selection="many">
+      <h2 className="nx-inspector__title">{count} blocks selected</h2>
+
+      <div className="nx-inspector__identity">
+        <label className="nx-inspector__check">
+          <input
+            type="checkbox"
+            checked={lock === "locked"}
+            // `indeterminate` is a DOM property with no HTML attribute, so it
+            // is set through a ref rather than declared. `aria-checked` carries
+            // the same fact to assistive technology, which reads the attribute
+            // and never the property.
+            ref={element => {
+              if (element !== null) element.indeterminate = lock === "mixed";
+            }}
+            aria-checked={lock === "mixed" ? "mixed" : lock === "locked"}
+            onChange={() => {
+              if (plan === null) return;
+              editor.applyAll(plan.ops);
+            }}
+          />
+          Lock these blocks
+        </label>
+      </div>
+
+      <p className="nx-inspector__note">
+        Editing properties across several blocks is not available yet. Select
+        one block to edit what it holds.
+      </p>
     </div>
   );
 }

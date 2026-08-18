@@ -202,6 +202,40 @@ describe("selectionDuplication", () => {
 });
 
 describe("selectionLock", () => {
+  it("plans only the blocks the change would ACTUALLY move", () => {
+    /*
+     * The defect a browser found and these tests did not.
+     *
+     * `applyOp` refuses an update that writes what a node already holds — "a
+     * history entry for it would undo to no visible effect" — and a group is
+     * atomic, so ONE already-locked block aborted the whole edit and locked
+     * nothing. Locking a mixed selection is the ordinary case and every one of
+     * them contains such a block.
+     *
+     * Asserted by APPLYING, not by reading the ops. The earlier version of this
+     * suite checked the array's shape, which is exactly why it passed while the
+     * editor did nothing.
+     */
+    register();
+    const document = documentOf([node("a", { locked: true }), node("b")]);
+    const plan = selectionLock(document, ["a", "b"], true);
+    if (plan === null) throw new Error("expected a plan");
+
+    let working = document;
+    for (const op of plan.ops) working = applyOp(working, op).document;
+
+    expect(working.nodes.map(n => n.locked === true)).toEqual([true, true]);
+  });
+
+  it("plans nothing when every block already holds the target state", () => {
+    // Not an empty group, which would be a no-op the store records nothing for
+    // — `null` says there is no edit, which is what a caller needs to know.
+    register();
+    const document = documentOf([node("a", { locked: true })]);
+
+    expect(selectionLock(document, ["a"], true)).toBeNull();
+  });
+
   it("locks every selected block", () => {
     register();
     const document = documentOf([node("a"), node("b")]);

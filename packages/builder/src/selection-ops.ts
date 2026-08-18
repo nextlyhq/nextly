@@ -266,8 +266,29 @@ export function selectionLock(
 ): SelectionEdit | null {
   const ids = normalizeSelection(document, selectedIds);
   if (ids.length === 0) return null;
+
+  /*
+   * Only the blocks this would actually change.
+   *
+   * `applyOp` REFUSES an update that writes what a node already holds — "a
+   * history entry for it would undo to no visible effect" — and a group is
+   * applied atomically, so a single already-locked block would abort the whole
+   * edit and lock nothing. That is not hypothetical: locking a MIXED selection
+   * is the ordinary case, and every one of them contains a block already in the
+   * target state.
+   *
+   * Filtering here rather than loosening the op layer, because that rule is
+   * right: an op that changes nothing does not belong on the undo stack. What
+   * was wrong was planning one.
+   */
+  const changing = ids.filter(id => {
+    const node = findIn(document.nodes, id);
+    return node !== undefined && (node.locked === true) !== locked;
+  });
+  if (changing.length === 0) return null;
+
   return {
-    ops: ids.map(id => lockOp(id, locked)),
+    ops: changing.map(id => lockOp(id, locked)),
     count: ids.length,
     descendants: 0,
     nextSelection: null,

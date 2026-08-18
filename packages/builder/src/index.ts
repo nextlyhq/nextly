@@ -245,6 +245,16 @@ export { blockLabel } from "./inserter";
 export { isLocked, lockBlockingDelete, lockBlockingMove } from "./locking";
 
 /**
+ * @experimental How a lock reads across a whole selection.
+ *
+ * From this entry because it is a plain function over a document, and because
+ * anything showing a lock for several blocks needs the same THREE answers the
+ * inspector uses. A surface that collapsed "some of these" into on or off would
+ * tell an author something false about half of what they selected.
+ */
+export { lockStateOf, type LockState } from "./inspector";
+
+/**
  * @experimental Duplicating a block: the copy, and where it goes.
  *
  * From this entry because it is a plain function over a document. An agent
@@ -341,6 +351,7 @@ export {
   TOOLBAR_GAP_PX,
   toolbarActions,
   toolbarPlacement,
+  unionRect,
   type ToolbarAction,
   type ToolbarActionId,
   type ToolbarPlacement,
