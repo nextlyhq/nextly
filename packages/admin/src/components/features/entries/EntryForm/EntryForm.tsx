@@ -15,7 +15,6 @@
  * @since 1.0.0
  */
 
-import { resolveLocalizedFieldNames } from "nextly/config";
 import { useCallback, useMemo, useState } from "react";
 
 import {
@@ -46,7 +45,12 @@ import {
 } from "@admin/lib/builder/takeoverLayout";
 import { cn } from "@admin/lib/utils";
 
+import {
+  collectionSourceFetcher,
+  localizedFieldNamesOf,
+} from "../entry-locale-source";
 import { EntryLocaleProvider } from "../EntryLocaleContext";
+import { LanguagePanel } from "../LanguagePanel";
 
 import { AutosaveRecoveryBanner } from "./AutosaveRecoveryBanner";
 import {
@@ -105,12 +109,16 @@ export interface EntryFormProps {
    */
   readDraft?: boolean;
   /** Called when the user switches the active content language (i18n M7). */
-  onLocaleChange?: (locale: string) => void;
+  onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
   /**
    * Default-language field values (i18n M7). Provided while translating a non-default language
    * so each translatable field can show its source text inline. Keyed by field name (camelCase).
    */
   sourceValues?: Record<string, unknown>;
+  /** A seed the language switch asked for; forwarded to the copy-from action. */
+  seedFromLocale?: string;
+  /** Clears that seed once it has been offered. */
+  onSeedHandled?: () => void;
   /**
    * Embedded mode for use in modals.
    * When true:
@@ -211,6 +219,8 @@ export function EntryForm({
   locale,
   readDraft,
   onLocaleChange,
+  seedFromLocale,
+  onSeedHandled,
   sourceValues,
   embedded = false,
   className,
@@ -242,9 +252,15 @@ export function EntryForm({
   // field can tell whether it is translatable), and whether the active language differs from
   // the app default (per-field affordances only apply while translating a non-default language).
   // All inert for LTR / non-localized editors — the plain path is unchanged.
-  const { getLocale, defaultLocale } = useLocalization();
+  const {
+    getLocale,
+    defaultLocale,
+    enabled: localizationEnabled,
+  } = useLocalization();
   const localeCtx = useMemo(() => {
     const collectionLocalized = collection.localized === true;
+    const collectionSlug = collection.slug ?? collection.name;
+    const entryId = entry?.id ?? undefined;
     return {
       locale,
       // `locale` is undefined while editing the implicit default language, so
@@ -256,17 +272,20 @@ export function EntryForm({
         !!locale && !!defaultLocale && locale !== defaultLocale,
       sourceValues,
       onLocaleChange,
-      collectionSlug: collection.slug ?? collection.name,
-      entryId: entry?.id ?? undefined,
+      seedFromLocale,
+      onSeedHandled,
+      collectionSlug,
+      entryId,
       // The translatable-field set, for the field-scoped copy-from-language action.
-      localizedFieldNames: resolveLocalizedFieldNames(
-        getCollectionFields(collection).map(f => ({
-          type: (f as { type?: string }).type ?? "",
-          name: (f as { name?: string }).name ?? "",
-          localized: (f as { localized?: boolean }).localized,
-        })),
+      localizedFieldNames: localizedFieldNamesOf(
+        getCollectionFields(collection),
         collectionLocalized
       ),
+      // Copy-from-language reads its source THROUGH this seam instead of
+      // addressing the document itself, so one implementation serves entries
+      // and singles alike — a single has no collection slug or entry id and
+      // could otherwise never offer the action at all.
+      fetchSourceValues: collectionSourceFetcher(collectionSlug, entryId),
     };
   }, [
     locale,
@@ -275,6 +294,8 @@ export function EntryForm({
     collection,
     sourceValues,
     onLocaleChange,
+    seedFromLocale,
+    onSeedHandled,
     entry?.id,
   ]);
 
@@ -676,6 +697,43 @@ export function EntryForm({
                     hasPublicAddress={hasPublicAddress}
                   />
 
+                  {/* The language panel, inline. Its rail mount is
+                      `hidden @4xl/content:flex`, so this is the exact
+                      complement: shown only where the rail is not. When the
+                      rail cannot carry it at all — create mode, or the author
+                      collapsed it — the panel renders unconditionally instead,
+                      because "the actions live in the rail" is precisely the
+                      failure this stage removes. */}
+                  {localizationEnabled && (
+                    <div
+                      className={cn(
+                        "px-6 pt-4",
+                        mode === "edit" &&
+                          !railCollapsed &&
+                          "@4xl/content:hidden"
+                      )}
+                    >
+                      <LanguagePanel
+                        {...(entry?._translations === undefined
+                          ? {}
+                          : {
+                              translations: entry._translations as Record<
+                                string,
+                                { translated: boolean; status?: string }
+                              >,
+                            })}
+                        {...(locale === undefined
+                          ? {}
+                          : { activeLocale: locale })}
+                        {...(onLocaleChange === undefined
+                          ? {}
+                          : { onSelect: onLocaleChange })}
+                        hasStatus={hasStatus}
+                        actionsDisabled={viewingVersion !== null}
+                      />
+                    </div>
+                  )}
+
                   {/* Reading a past version replaces the document rather than
                     opening beside it: the question an editor is asking is how
                     this page read then, and that is answered by the page. The
@@ -745,6 +803,11 @@ export function EntryForm({
                         mode={mode}
                         entry={entry}
                         hasStatus={hasStatus}
+                        {...(locale === undefined ? {} : { locale })}
+                        {...(onLocaleChange === undefined
+                          ? {}
+                          : { onLocaleChange })}
+                        actionsDisabled={viewingVersion !== null}
                         isDirty={isDirty}
                       />
                     </div>

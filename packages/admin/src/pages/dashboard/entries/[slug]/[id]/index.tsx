@@ -13,7 +13,7 @@
 
 import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
 import type React from "react";
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 
 import {
   EntryForm,
@@ -29,6 +29,7 @@ import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useCollectionSchema } from "@admin/hooks/queries/useCollections";
 import { useEntry } from "@admin/hooks/queries/useEntry";
+import { useEditorLocale } from "@admin/hooks/useEditorLocale";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { usePluginAutoRegistration } from "@admin/hooks/usePluginAutoRegistration";
 import { navigateTo } from "@admin/lib/navigation";
@@ -225,7 +226,8 @@ export default function EditEntryPage({
   // i18n M7: active content language for this editor. `undefined` = the app's default locale
   // (the backend resolves it). Switching triggers a refetch (useEntry is keyed by locale) and
   // routes saves to the chosen language (EntryForm → useUpdateEntry).
-  const [locale, setLocale] = useState<string | undefined>(undefined);
+  const { locale, changeLocale, resetLocale, seedFromLocale, clearSeed } =
+    useEditorLocale();
 
   // Read here rather than at the branch that uses it: this component returns
   // early for loading and error states, and a hook after those runs
@@ -330,7 +332,7 @@ export default function EditEntryPage({
               editor with only an exit. Resetting the locale re-keys the query,
               which is the retry. */}
           {locale !== undefined && (
-            <Button variant="outline" onClick={() => setLocale(undefined)}>
+            <Button variant="outline" onClick={resetLocale}>
               Back to the default language
             </Button>
           )}
@@ -504,7 +506,9 @@ export default function EditEntryPage({
           entry={entry}
           mode="edit"
           locale={locale}
-          onLocaleChange={setLocale}
+          onLocaleChange={changeLocale}
+          {...(seedFromLocale === undefined ? {} : { seedFromLocale })}
+          onSeedHandled={clearSeed}
           sourceValues={sourceEntry}
           onSuccess={handleSuccess}
           onDelete={handleDelete}

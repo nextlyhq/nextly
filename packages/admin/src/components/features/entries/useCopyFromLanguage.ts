@@ -17,12 +17,11 @@
  * @module components/features/entries/useCopyFromLanguage
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useFormContext } from "react-hook-form";
 
 import { toast } from "@admin/components/ui";
 import { useLocalization } from "@admin/hooks/useLocalization";
-import { entryApi } from "@admin/services/entryApi";
 
 import { useEntryLocale } from "./EntryLocaleContext";
 
@@ -80,9 +79,10 @@ export function useCopyFromLanguage(): CopyFromLanguage {
   const {
     locale,
     collectionLocalized,
-    collectionSlug,
-    entryId,
     localizedFieldNames,
+    fetchSourceValues,
+    seedFromLocale,
+    onSeedHandled,
   } = useEntryLocale();
   const form = useFormContext();
 
@@ -92,15 +92,32 @@ export function useCopyFromLanguage(): CopyFromLanguage {
   const active = locale ?? defaultLocale;
   const sources = locales.filter(l => l.code !== active);
 
+  // Gated on the ABILITY TO FETCH a source rather than on an entry address:
+  // a single has no collection slug or entry id and can still answer this.
   const available =
     enabled &&
     collectionLocalized &&
-    !!collectionSlug &&
-    !!entryId &&
+    !!fetchSourceValues &&
     !!localizedFieldNames &&
     localizedFieldNames.length > 0 &&
     sources.length > 0 &&
     !!form;
+
+  // Pick up a seed the language switch asked for. The request is made in the
+  // OLD language's editor and has to be acted on in the new one's, and the
+  // switch tears the requesting component down in between — so the intent
+  // arrives here through the context rather than through this hook's own
+  // state, which does not survive the trip.
+  useEffect(() => {
+    if (!seedFromLocale || !available) return;
+    // A seed naming the language now being edited would copy it onto itself.
+    if (seedFromLocale === active) {
+      onSeedHandled?.();
+      return;
+    }
+    setPending(seedFromLocale);
+    onSeedHandled?.();
+  }, [seedFromLocale, available, active, onSeedHandled]);
 
   const activeLabel = getLocale(active)?.label ?? active;
   const pendingLabel = pending ? (getLocale(pending)?.label ?? pending) : "";
@@ -109,13 +126,8 @@ export function useCopyFromLanguage(): CopyFromLanguage {
     if (!pending || !available) return;
     setBusy(true);
     try {
-      // Fetch the source language's raw values (no fallback — copy what that language actually has).
-      const source = (await entryApi.findByID(collectionSlug, entryId, {
-        locale: pending,
-        fallbackLocale: "none",
-        depth: 0,
-      })) as unknown as Record<string, unknown>;
-
+      // The form supplies the read; it knows how this document is addressed.
+      const source = await fetchSourceValues(pending);
       const patch = pickLocalizedValues(source, localizedFieldNames);
       const count = Object.keys(patch).length;
       if (count === 0) {

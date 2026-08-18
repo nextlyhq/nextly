@@ -35,7 +35,7 @@ import { cn } from "@admin/lib/utils";
 import { useEntryLocale } from "../EntryLocaleContext";
 import { LanguageControl } from "../LanguageControl";
 import { LanguagesMenu } from "../LanguagesMenu";
-import { translationCounts } from "../TranslationStatus";
+import { translationCounts } from "../translation-meta";
 
 import { AutoSaveIndicator } from "./AutoSaveIndicator";
 import { DiscardDraftConfirmDialog } from "./DiscardDraftConfirmDialog";
