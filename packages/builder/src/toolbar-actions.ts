@@ -76,28 +76,6 @@ export interface ToolbarAction {
   readonly reason?: string;
 }
 
-/** The keystroke that does the same thing, for the tooltip. */
-const SHORTCUTS: Record<ToolbarActionId, string | undefined> = {
-  "select-parent": undefined,
-  "move-up": "Alt+Up",
-  "move-down": "Alt+Down",
-  duplicate: "Ctrl+D",
-  delete: "Delete",
-};
-
-/**
- * The shortcut hint for an action, or `undefined` where there is no keystroke.
- *
- * Stated as Ctrl rather than resolved per platform. The hint is a pointer to
- * the shortcut list rather than a contract, and a hint that read "Cmd+D" on a
- * Mac would have to be produced at render time from a platform check — which is
- * a second place that decides what the key IS, and the first place is the
- * shortcut manager.
- */
-export function toolbarShortcut(id: ToolbarActionId): string | undefined {
-  return SHORTCUTS[id];
-}
-
 /**
  * What a lock refusal says.
  *

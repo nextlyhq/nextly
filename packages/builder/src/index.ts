@@ -270,7 +270,6 @@ export {
   TOOLBAR_GAP_PX,
   toolbarActions,
   toolbarPlacement,
-  toolbarShortcut,
   type ToolbarAction,
   type ToolbarActionId,
   type ToolbarPlacement,

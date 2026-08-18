@@ -60,7 +60,6 @@ import { useBlockActionsContext } from "./keyboard-actions";
 import {
   toolbarActions,
   toolbarPlacement,
-  toolbarShortcut,
   type ToolbarAction,
   type ToolbarActionId,
   type ToolbarPlacement,
@@ -141,6 +140,20 @@ export function BlockToolbar({
    */
   const [activeIndex, setActiveIndex] = React.useState(0);
   React.useEffect(() => {
+    /*
+     * Only when focus is elsewhere.
+     *
+     * Duplicate and Select parent both CHANGE the selection, and an author who
+     * pressed one of them with the keyboard still has focus on that button.
+     * Resetting the stop to 0 there would leave the roving index and the caret
+     * on different buttons, so the next arrow press would jump backwards from
+     * where the author is looking. When the bar holds focus, `onFocus` has
+     * already put the index where the caret is.
+     */
+    const element = bar.current;
+    if (element !== null && element.contains(window.document.activeElement)) {
+      return;
+    }
     setActiveIndex(0);
   }, [selectedId]);
 
@@ -296,7 +309,6 @@ export function BlockToolbar({
     >
       {actions.map((action, index) => {
         const Icon = ICONS[action.id];
-        const shortcut = toolbarShortcut(action.id);
         const describedBy =
           action.reason === undefined
             ? undefined
@@ -312,16 +324,23 @@ export function BlockToolbar({
             aria-label={action.label}
             aria-disabled={action.enabled ? undefined : true}
             aria-describedby={describedBy}
-            // The description twice over: `title` for a pointer, and a hidden
-            // span for anything that reads the accessible description. `title`
-            // alone never reaches a keyboard author, who is exactly the person
-            // the reason is for.
-            title={
-              action.reason ??
-              (shortcut === undefined
-                ? action.label
-                : `${action.label} (${shortcut})`)
-            }
+            /*
+             * The description twice over: `title` for a pointer, and a hidden
+             * span for anything that reads the accessible description. `title`
+             * alone never reaches a keyboard author, who is exactly the person
+             * the reason is for.
+             *
+             * No keystroke hint, deliberately. Every binding here is spelled
+             * `mod`, which the shortcut manager resolves to Command on Apple
+             * platforms and Control everywhere else — so any fixed string is
+             * wrong on one of them, and "Ctrl+D" on a Mac teaches a keystroke
+             * that does nothing. The manager's own `detectApplePlatform` is the
+             * one rule that answers this, and it is not on `@nextlyhq/ui`'s
+             * public entry; spelling the platform a second time here would let
+             * a tooltip disagree with the binding it describes. The hint
+             * returns when that export does.
+             */
+            title={action.reason ?? action.label}
             tabIndex={index === activeIndex ? 0 : -1}
             onFocus={() => setActiveIndex(index)}
             onClick={() => run(action)}
