@@ -130,6 +130,64 @@ function buildVariantFilename(
  * @param options - Focal point and routing options
  * @returns Map of size name → variant metadata
  */
+/**
+ * Produce and upload ONE variant, or report that there is nothing to store.
+ *
+ * Split out of the loop so each size's work reads as a single unit and the
+ * loop is left doing only iteration and error containment. `null` covers both
+ * reasons a size yields nothing: the config names no dimensions, and this
+ * install has no image processing.
+ */
+async function generateOneSize(
+  processor: ReturnType<typeof getImageProcessor>,
+  originalBuffer: Buffer,
+  originalFilename: string,
+  sizeConfig: ImageSizeConfig,
+  uploadFn: UploadFn,
+  options: GenerateImageSizesOptions
+): Promise<ImageSizeVariant | null> {
+  // A size naming neither dimension describes no resize to perform.
+  if (!sizeConfig.width && !sizeConfig.height) return null;
+
+  const resized = await processor.resizeWithFocalPoint(originalBuffer, {
+    width: sizeConfig.width ?? undefined,
+    height: sizeConfig.height ?? undefined,
+    fit: sizeConfig.fit,
+    quality: sizeConfig.quality,
+    format: sizeConfig.format,
+    focalX: options.focalX ?? undefined,
+    focalY: options.focalY ?? undefined,
+  });
+
+  // No image processing on this install, so there is no variant to store.
+  // The original is already safe; derived copies are what go missing.
+  if (!resized) return null;
+
+  const variantFilename = buildVariantFilename(
+    originalFilename,
+    sizeConfig.name,
+    resized.format
+  );
+  const mimeType = getMimeTypeForFormat(resized.format);
+
+  const uploadResult = await uploadFn(resized.buffer, {
+    filename: variantFilename,
+    mimeType,
+    folder: options.folder,
+    collection: options.collection,
+  });
+
+  return {
+    url: uploadResult.url,
+    path: uploadResult.path,
+    width: resized.width,
+    height: resized.height,
+    filesize: resized.size,
+    mimeType,
+    filename: variantFilename,
+  };
+}
+
 export async function generateImageSizes(
   originalBuffer: Buffer,
   originalFilename: string,
@@ -142,57 +200,21 @@ export async function generateImageSizes(
   const processor = getImageProcessor();
   const results: Record<string, ImageSizeVariant> = {};
 
-  // Process each size sequentially to avoid memory pressure from
-  // multiple Sharp instances processing large images simultaneously
+  // Sequential on purpose, to avoid the memory pressure of several image
+  // pipelines running over one large original at once.
   for (const sizeConfig of sizes) {
     try {
-      // Skip sizes that have no dimensions specified
-      if (!sizeConfig.width && !sizeConfig.height) continue;
-
-      // Resize with focal point awareness
-      const resized = await processor.resizeWithFocalPoint(originalBuffer, {
-        width: sizeConfig.width ?? undefined,
-        height: sizeConfig.height ?? undefined,
-        fit: sizeConfig.fit,
-        quality: sizeConfig.quality,
-        format: sizeConfig.format,
-        focalX: options.focalX ?? undefined,
-        focalY: options.focalY ?? undefined,
-      });
-
-      // No image processing on this install, so there is no variant to store.
-      // Skipping the whole set is right rather than failing the upload: image
-      // sizes are derived copies, and the original is already safe.
-      if (!resized) continue;
-
-      // Build the variant filename
-      const variantFilename = buildVariantFilename(
+      const variant = await generateOneSize(
+        processor,
+        originalBuffer,
         originalFilename,
-        sizeConfig.name,
-        resized.format
+        sizeConfig,
+        uploadFn,
+        options
       );
-      const mimeType = getMimeTypeForFormat(resized.format);
-
-      // Upload the variant to storage
-      const uploadResult = await uploadFn(resized.buffer, {
-        filename: variantFilename,
-        mimeType,
-        folder: options.folder,
-        collection: options.collection,
-      });
-
-      // Store the variant metadata
-      results[sizeConfig.name] = {
-        url: uploadResult.url,
-        path: uploadResult.path,
-        width: resized.width,
-        height: resized.height,
-        filesize: resized.size,
-        mimeType,
-        filename: variantFilename,
-      };
+      if (variant) results[sizeConfig.name] = variant;
     } catch (error) {
-      // Log but don't fail the entire upload if one size generation fails
+      // One size failing must not lose the others or the upload itself.
       console.warn(
         `[ImageSizes] Failed to generate size "${sizeConfig.name}":`,
         error instanceof Error ? error.message : error
