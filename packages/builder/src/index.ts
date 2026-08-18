@@ -243,3 +243,17 @@ export { blockLabel } from "./inserter";
  * a container is refused by a lock anywhere inside it, while moving one is not.
  */
 export { isLocked, lockBlockingDelete, lockBlockingMove } from "./locking";
+
+/**
+ * @experimental Duplicating a block: the copy, and where it goes.
+ *
+ * From this entry because it is a plain function over a document. An agent
+ * asked to "make three of these" needs the same copy the editor makes — one
+ * that re-ids the whole subtree and drops the DOM id — and a second
+ * implementation would produce a document with two nodes sharing an id.
+ */
+export {
+  blockDuplication,
+  COPY_SUFFIX,
+  type BlockDuplication,
+} from "./duplicate-block";

@@ -25,6 +25,7 @@ import { useShortcuts } from "@nextlyhq/ui";
 import * as React from "react";
 
 import { blockDeletion } from "./delete-block";
+import { blockDuplication } from "./duplicate-block";
 import type { EditorState } from "./editor-state";
 import {
   keyboardMovePosition,
@@ -239,6 +240,40 @@ export function useBlockKeyboardActions({
     );
   }, [announce]);
 
+  const duplicateSelected = React.useCallback(() => {
+    const editorNow = latest.current;
+    const duplication = blockDuplication(
+      editorNow.document,
+      editorNow.selectedId
+    );
+    // `null` means there is nothing to duplicate, or a position the op
+    // vocabulary cannot express. Nothing is applied and nothing is said,
+    // because there is no event to report.
+    if (duplication === null) return;
+
+    /*
+     * A lock does NOT stop a duplication.
+     *
+     * The engine's rule is that the command layer must not let an author move
+     * or delete a locked node, and duplicating does neither — the original
+     * stays exactly where it is, untouched. Refusing here would read as
+     * cautious and would mean an author could not take a copy of the one block
+     * they had most deliberately protected.
+     */
+    const applied = editorNow.apply({
+      kind: "insert",
+      node: duplication.node,
+      at: duplication.at,
+    });
+    if (applied === null) return;
+
+    // Selection follows the copy. It is the block the author is now working on
+    // — they duplicated it to change it — and leaving the original selected
+    // would send the next edit to the wrong one of two identical blocks.
+    editorNow.select(duplication.node.id);
+    announce(`${duplication.label} duplicated. Undo with ${UNDO_KEYS_SPOKEN}.`);
+  }, [announce]);
+
   const bindings = React.useMemo(
     () =>
       MOVE_KEYS.map(({ keys, direction, description }) => ({
@@ -323,6 +358,24 @@ export function useBlockKeyboardActions({
         run: () => deleteSelected(),
       },
       {
+        /*
+         * `mod+d`, which is what a duplicating editor binds nearly everywhere —
+         * Figma, Sketch and every canvas tool an author is likely to arrive
+         * from. The browser's own `mod+d` bookmarks the page, and taking it is
+         * the deliberate trade: inside a full-screen editor a bookmark is not
+         * what the keystroke means, and the shortcut manager prevents the
+         * default so the dialog does not appear over the canvas.
+         */
+        keys: "mod+d",
+        description: "Duplicate the selected block",
+        when: () => latest.current.selectedId !== null,
+        // Not while typing. `mod+d` in a text field is a browser action rather
+        // than an editing one, but an author mid-sentence is not asking for a
+        // block, and the manager cannot tell the two apart without this.
+        whenTyping: false,
+        run: () => duplicateSelected(),
+      },
+      {
         keys: "Backspace",
         description: "Delete the selected block",
         when: () => latest.current.selectedId !== null,
@@ -364,7 +417,7 @@ export function useBlockKeyboardActions({
         },
       },
     ],
-    [announce, deleteSelected]
+    [announce, deleteSelected, duplicateSelected]
   );
 
   useShortcuts([...bindings, ...editing], {
