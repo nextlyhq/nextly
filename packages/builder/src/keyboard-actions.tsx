@@ -31,6 +31,7 @@ import {
   type MoveDirection,
   type MoveEffect,
 } from "./keyboard-move";
+import { lockBlockingDelete, lockBlockingMove } from "./locking";
 
 /**
  * The bindings, and why these keys.
@@ -183,6 +184,31 @@ export function useBlockKeyboardActions({
     // said, because there is no event to report.
     if (deletion === null) return;
 
+    /*
+     * A lock is a POLICY refusal, so it is announced where a structural one is
+     * not.
+     *
+     * The moves below stay silent when a block simply has nowhere to go — that
+     * is a fact about the document an author can see, and saying it on every
+     * press at the end of a list is noise. A lock is the opposite: nothing about
+     * the page explains why the key did nothing, the remedy is one the author
+     * can act on, and a keyboard user has no badge to look at.
+     *
+     * The subtree is checked, not just the node. Deleting a container destroys
+     * what is inside it, so an author who locked a caption and then removed its
+     * section would lose the thing they locked through an action aimed at
+     * something else.
+     */
+    const blocked = lockBlockingDelete(editorNow.document, deletion.id);
+    if (blocked !== undefined) {
+      announce(
+        blocked.id === deletion.id
+          ? `${blockLabel(blocked.type)} is locked. Unlock it to delete it.`
+          : `This block contains ${blockLabel(blocked.type)}, which is locked. Unlock it to delete.`
+      );
+      return;
+    }
+
     const applied = editorNow.apply({
       kind: "remove",
       id: deletion.id,
@@ -216,6 +242,18 @@ export function useBlockKeyboardActions({
           const editorNow = latest.current;
           const selectedId = editorNow.selectedId;
           if (selectedId === null) return;
+
+          // Only the node itself, never its subtree: moving a container leaves
+          // a locked child in the same slot at the same index, so the lock is
+          // not violated and refusing would let one locked caption freeze the
+          // whole section around it.
+          const lockedNode = lockBlockingMove(editorNow.document, selectedId);
+          if (lockedNode !== undefined) {
+            announce(
+              `${blockLabel(lockedNode.type)} is locked. Unlock it to move it.`
+            );
+            return;
+          }
 
           const move = keyboardMovePosition(
             editorNow.document.nodes,

@@ -232,3 +232,14 @@ export {
   type LayerSearch,
 } from "./layers";
 export { blockLabel } from "./inserter";
+
+/**
+ * @experimental Whether the editor may move or delete a block the author has
+ * locked.
+ *
+ * From this entry because it is plain functions over a document. A host or an
+ * agent deciding whether an action is permitted has to ask the SAME question
+ * the editor asks — a second reading of `node.locked` would miss that deleting
+ * a container is refused by a lock anywhere inside it, while moving one is not.
+ */
+export { isLocked, lockBlockingDelete, lockBlockingMove } from "./locking";

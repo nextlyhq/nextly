@@ -117,6 +117,66 @@ describe("useBlockKeyboardActions", () => {
     expect(op.to).toEqual({ index: 1 });
   });
 
+  it("refuses to move a locked block, and says why", () => {
+    const editor = editorSpy(
+      documentOf([
+        { id: "a", type: "acme/text", version: 1, props: {}, locked: true },
+        { id: "b", type: "acme/text", version: 1, props: {} },
+      ] as BlockDocument["nodes"]),
+      "a"
+    );
+    mount(editor);
+
+    press("ArrowDown", { altKey: true });
+
+    expect(editor.apply).not.toHaveBeenCalled();
+    expect(screen.getByRole("status").textContent ?? "").toMatch(
+      /is locked\. unlock it to move it/i
+    );
+  });
+
+  it("ALLOWS moving a container that holds a locked block", () => {
+    /*
+     * The direction that is easy to get wrong by being cautious, and the reason
+     * move and delete ask different questions.
+     *
+     * Moving the container leaves the locked child in the same slot at the same
+     * index with the same neighbours, so nothing the lock protects has changed.
+     * Refusing here would let one locked caption freeze the entire section
+     * around it, which an author would experience as the editor breaking rather
+     * than as a lock working.
+     */
+    const editor = editorSpy(
+      documentOf([
+        {
+          id: "wrap",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          slots: {
+            children: [
+              {
+                id: "kid",
+                type: "acme/text",
+                version: 1,
+                props: {},
+                locked: true,
+              },
+            ],
+          },
+        },
+        { id: "after", type: "acme/text", version: 1, props: {} },
+      ] as BlockDocument["nodes"]),
+      "wrap"
+    );
+    mount(editor);
+
+    press("ArrowDown", { altKey: true });
+
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(editor.apply.mock.calls[0][0].kind).toBe("move");
+  });
+
   it("moves the selected block up", () => {
     const editor = editorSpy(pair(), "b");
     mount(editor);
@@ -391,6 +451,92 @@ describe("useBlockKeyboardActions", () => {
     // The declared-label case is asserted below.
     expect(said).toContain("Text deleted");
     expect(said).toContain("Undo");
+  });
+
+  it("refuses to delete a locked block, and says why", () => {
+    /*
+     * A lock is a POLICY refusal, so it is announced where a structural one is
+     * not. Nothing on the page explains why the key did nothing, the remedy is
+     * one the author can act on, and a keyboard user has no lock badge to look
+     * at — which is the whole reason silence would be wrong here.
+     */
+    const editor = editorSpy(
+      documentOf([
+        { id: "a", type: "acme/text", version: 1, props: {}, locked: true },
+        { id: "b", type: "acme/text", version: 1, props: {} },
+      ] as BlockDocument["nodes"]),
+      "a"
+    );
+    mount(editor);
+
+    press("Delete");
+
+    expect(editor.apply).not.toHaveBeenCalled();
+    expect(screen.getByRole("status").textContent ?? "").toMatch(
+      /is locked\. unlock it to delete it/i
+    );
+  });
+
+  it("refuses to delete a container holding a locked block, and names it", () => {
+    // THE case. Deleting the container destroys the locked child, which is the
+    // one outcome the flag exists to prevent — and it happens through an action
+    // aimed at something else, with the descendant count as the only clue.
+    const editor = editorSpy(
+      documentOf([
+        {
+          id: "wrap",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          slots: {
+            children: [
+              {
+                id: "kid",
+                type: "acme/text",
+                version: 1,
+                props: {},
+                locked: true,
+              },
+            ],
+          },
+        },
+      ] as BlockDocument["nodes"]),
+      "wrap"
+    );
+    mount(editor);
+
+    press("Delete");
+
+    expect(editor.apply).not.toHaveBeenCalled();
+    expect(screen.getByRole("status").textContent ?? "").toMatch(
+      /contains .*which is locked/i
+    );
+  });
+
+  it("still deletes a container whose children are all unlocked", () => {
+    // The control for both refusals above. Without it, a delete that refused
+    // everything would satisfy them and nothing would notice.
+    const editor = editorSpy(
+      documentOf([
+        {
+          id: "wrap",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          slots: {
+            children: [{ id: "kid", type: "acme/text", version: 1, props: {} }],
+          },
+        },
+      ] as BlockDocument["nodes"]),
+      "wrap"
+    );
+    mount(editor);
+
+    press("Delete");
+
+    expect(editor.apply).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "remove", id: "wrap" })
+    );
   });
 
   it("says how many blocks a container takes with it", () => {
