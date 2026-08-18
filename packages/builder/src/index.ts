@@ -213,3 +213,22 @@ export {
   type TargetId,
   type TargetSwitchState,
 } from "./target-switch";
+
+/**
+ * @experimental The document as a structure: the layers tree, the path to a
+ * block, and what a search leaves standing.
+ *
+ * From this entry rather than from `/shell`, because none of it touches React.
+ * A host that wants an outline of a stored document — a summary, an export, an
+ * agent describing a page — needs the tree without needing an editor.
+ */
+export {
+  ancestorIds,
+  filterLayers,
+  layerLabel,
+  layersOf,
+  pathTo,
+  type LayerNode,
+  type LayerSearch,
+} from "./layers";
+export { blockLabel } from "./inserter";

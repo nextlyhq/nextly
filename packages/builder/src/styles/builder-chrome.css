@@ -428,3 +428,128 @@
   width: 2px;
   transform: translateX(-1px);
 }
+
+/*
+ * The layers panel: a search field above a tree that takes the rest of the
+ * height.
+ *
+ * A column with `min-height: 0` so the tree can scroll. Without it the tree's
+ * own overflow never engages — a flex child's default minimum size is its
+ * content, so a tall tree grows the panel instead of scrolling inside it, and
+ * the search field is pushed off the top.
+ */
+.nx-layers-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  gap: 0.5rem;
+  padding: 0.75rem;
+}
+
+.nx-layers-panel__search {
+  flex: none;
+}
+
+.nx-layers-panel__tree {
+  flex: 1;
+  min-height: 0;
+}
+
+.nx-layers-panel__note {
+  margin: 0;
+  padding: 0.5rem 0.25rem;
+  font-size: 0.8125rem;
+  color: var(--nx-builder-text-muted);
+}
+
+/*
+ * One row: the name takes the space, the badges keep theirs.
+ *
+ * The name truncates rather than wrapping, because the tree's rows are a fixed
+ * height that the virtualizer depends on — a wrapped label would overflow its
+ * row and overlap the next one.
+ */
+.nx-layer-row {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+  width: 100%;
+}
+
+.nx-layer-row__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * A badge states a fact about the block, so it is dimmer than the name without
+ * being decoration.
+ *
+ * `--nx-builder-text-muted` rather than an opacity on the text colour: an
+ * alpha-blended foreground has a contrast ratio that depends on whatever is
+ * behind it, which changes between the panel and a selected row. The token is
+ * the value the design system already checks.
+ */
+.nx-layer-row__badge {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  color: var(--nx-builder-text-muted);
+}
+
+/*
+ * The ancestor breadcrumb, along the bottom bar.
+ *
+ * Scrolls horizontally rather than wrapping: the bar is a fixed-height strip,
+ * and a deep selection would otherwise grow it and shrink the canvas every time
+ * an author selected something nested.
+ */
+.nx-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 0.125rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.nx-breadcrumb__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.125rem;
+}
+
+.nx-breadcrumb__separator {
+  flex: none;
+  color: var(--nx-builder-text-muted);
+}
+
+.nx-breadcrumb__crumb {
+  padding: 0.125rem 0.25rem;
+  border-radius: 0.25rem;
+  font-size: 0.75rem;
+  color: var(--nx-builder-text-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.nx-breadcrumb__crumb:hover {
+  color: var(--nx-builder-text);
+}
+
+/*
+ * The current crumb is the selection, so it reads at full strength. Colour
+ * alone does not carry it — the `aria-current` attribute is what a screen
+ * reader announces, and this rule is the visual half of the same fact.
+ */
+.nx-breadcrumb__crumb[aria-current] {
+  color: var(--nx-builder-text);
+  font-weight: 500;
+}

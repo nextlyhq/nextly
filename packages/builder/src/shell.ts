@@ -137,3 +137,19 @@ export type {
   DropIndicatorProps,
   UseCanvasDragOptions,
 } from "./canvas-drag";
+
+/**
+ * The layers panel and the ancestor breadcrumb, behind the same client banner.
+ *
+ * Together because they answer one question from two directions — where does
+ * this block sit — and they read the SAME tree to answer it, so shipping one
+ * without the other would leave a host able to show a trail the panel could
+ * contradict.
+ *
+ * The tree they draw is derived in `layers`, which is plain functions over a
+ * document and ships from the root entry.
+ */
+export { LayersPanel } from "./layers-panel";
+export type { LayersPanelProps } from "./layers-panel";
+export { SelectionBreadcrumb } from "./breadcrumb";
+export type { SelectionBreadcrumbProps } from "./breadcrumb";
