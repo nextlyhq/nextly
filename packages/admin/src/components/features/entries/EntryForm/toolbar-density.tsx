@@ -43,11 +43,11 @@ export const TOOLBAR_CONTAINER = "@container/toolbar";
 /**
  * How early a label gives up its width.
  *
- * - `secondary` — supporting actions (preview, share a link). First to go, at
- *   48rem, because they are the ones an author is least often reaching for
- *   while typing a title.
- * - `lifecycle` — publish and unpublish. Held longer, to 42rem: these change
- *   what readers can see, so their words are worth more room than a preview's.
+ * - `secondary` — supporting actions (preview, share a link). First to go,
+ *   because they are the ones an author is least often reaching for while
+ *   typing a title.
+ * - `lifecycle` — publish and unpublish. Held longer: these change what readers
+ *   can see, so their words are worth more room than a preview's.
  *
  * The primary action (Save / Create) is deliberately absent. It never collapses
  * at any width — a toolbar that hides the thing it exists for has optimised the
@@ -56,19 +56,31 @@ export const TOOLBAR_CONTAINER = "@container/toolbar";
 export type ToolbarLabelPriority = "secondary" | "lifecycle";
 
 /**
- * Thresholds are read against the toolbar's CONTENT box, which is 48px narrower
- * than the row (`px-6`). They were chosen by measuring the widest cluster the
- * editor actually builds — a localized, publishable, previewable entry — and
- * requiring that the title keep its floor without the row overflowing:
+ * Thresholds are the ROW'S OUTER width, and the arbitrary values are the reason
+ * this note exists rather than a tidy `@max-3xl`.
+ *
+ * The container is declared on the header's sticky wrapper, which has no
+ * padding of its own, so a query against it measures the row's full width. The
+ * rows carry `px-6` themselves — they must, because the language row's top
+ * border has to span the header rather than sit inset — so the space actually
+ * available to the title and the actions is 48px less than what the query sees.
+ *
+ * These numbers therefore carry that 48px explicitly. They were chosen by
+ * measuring the widest cluster the editor builds — a localized, publishable,
+ * previewable entry — and requiring the title to keep its floor without the row
+ * overflowing:
  *
  *   cluster + title-floor + padding + gap <= row
  *
- * At a 632px row that leaves 412px for the cluster, and the localized cluster
- * is 442px until publish gives up its word.
+ * A round `3rem`-smaller threshold reads tidier and is wrong by exactly the
+ * padding: at a 792px row it leaves the labels at full width, the title pinned
+ * to its 10rem floor, and the row with no slack at all.
  */
 const COLLAPSE_AT: Record<ToolbarLabelPriority, string> = {
-  secondary: "@max-3xl/toolbar:sr-only",
-  lifecycle: "@max-2xl/toolbar:sr-only",
+  // 48rem of usable width + 3rem of padding.
+  secondary: "@max-[51rem]/toolbar:sr-only",
+  // 42rem of usable width + 3rem of padding.
+  lifecycle: "@max-[45rem]/toolbar:sr-only",
 };
 
 export interface ToolbarLabelProps {

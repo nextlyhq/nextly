@@ -65,12 +65,36 @@ describe("ToolbarLabel", () => {
 
     expect(cls(secondary)).toContain("/toolbar:sr-only");
     expect(cls(lifecycle)).toContain("/toolbar:sr-only");
-    // Tailwind's `@max-*` scale ascends, so the secondary label's breakpoint
-    // must be the LARGER one for it to collapse first.
-    const rank = ["xs", "sm", "md", "lg", "xl", "2xl", "3xl", "4xl", "5xl"];
-    const stepOf = (c: string) =>
-      rank.indexOf(c.replace(/^@max-/, "").replace(/\/toolbar:sr-only$/, ""));
-    expect(stepOf(cls(secondary))).toBeGreaterThan(stepOf(cls(lifecycle)));
+
+    // Compared as WIDTHS rather than as positions on Tailwind's named scale.
+    // The thresholds are deliberately arbitrary values — they carry the rows'
+    // horizontal padding, which no named step accounts for — so a rank lookup
+    // over `sm`/`md`/`lg` cannot read them and would report a false ordering.
+    const remOf = (c: string) => {
+      const arbitrary = /@max-\[(\d+(?:\.\d+)?)rem\]/.exec(c);
+      if (arbitrary) return Number(arbitrary[1]);
+      const named: Record<string, number> = {
+        xs: 20,
+        sm: 24,
+        md: 28,
+        lg: 32,
+        xl: 36,
+        "2xl": 42,
+        "3xl": 48,
+        "4xl": 56,
+        "5xl": 64,
+      };
+      const step = /@max-([a-z0-9]+)\//.exec(c)?.[1] ?? "";
+      const value = named[step];
+      if (value === undefined) {
+        throw new Error(`unreadable toolbar threshold: ${c}`);
+      }
+      return value;
+    };
+
+    // `@max-*` applies BELOW its value, so the label that collapses first is the
+    // one with the LARGER threshold.
+    expect(remOf(cls(secondary))).toBeGreaterThan(remOf(cls(lifecycle)));
   });
 
   it("passes extra classes through without dropping the collapse rule", () => {
