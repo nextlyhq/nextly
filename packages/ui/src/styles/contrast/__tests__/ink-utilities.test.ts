@@ -47,7 +47,19 @@ const { light, dark } = parseThemeTokens(themeCss);
 const scale = parseThemeScale(themeCss);
 
 /** Packages whose components render inside the admin shell. */
-const SCANNED = ["packages/admin/src", "packages/ui/src"];
+const SCANNED = [
+  "packages/admin/src",
+  "packages/ui/src",
+  // The first-party plugins and the builder paint admin chrome with the same
+  // ink utilities and were outside this scan, so a token misused as ink there
+  // was measured by nothing. Between them they carry 230 ink utilities and 41
+  // tinted fills. The builder keeps its own `--nx-builder-*` namespace, which
+  // this scan does not care about: it resolves whatever the utility names and
+  // measures the result.
+  "packages/plugin-form-builder/src",
+  "packages/plugin-page-builder/src",
+  "packages/builder/src",
+];
 const EXTENSIONS = new Set([".tsx", ".ts", ".jsx", ".js"]);
 
 /**
