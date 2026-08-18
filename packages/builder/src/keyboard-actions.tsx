@@ -36,6 +36,7 @@ import {
   isRefusal,
   selectionDeletion,
   selectionDuplication,
+  selectionMove,
 } from "./selection-ops";
 
 /**
@@ -315,8 +316,55 @@ export function useBlockKeyboardActions({
     announce(`${plan.subject} duplicated. Undo with ${UNDO_KEYS_SPOKEN}.`);
   }, [announce]);
 
+  /**
+   * Reordering a selection that holds more than one block.
+   *
+   * Only `up` and `down`. Depth is the other axis, and a set does not have one
+   * answer for it: `indent` appends to the container above, so two blocks
+   * indenting together would arrive in an order neither of them was in.
+   *
+   * Returns whether it handled the press, so the single-block path below stays
+   * exactly as it was for the case it already served.
+   */
+  const moveSet = React.useCallback(
+    (direction: MoveDirection): boolean => {
+      const editorNow = latest.current;
+      const ids = editorNow.selection.ids;
+      if (ids.length <= 1 || (direction !== "up" && direction !== "down")) {
+        return false;
+      }
+
+      const plan = selectionMove(editorNow.document, ids, direction);
+      // A set at the edge of its container, exactly as one block there: the
+      // press did nothing and that is the answer. Handled either way, because
+      // falling through would move the PRIMARY alone and break the set apart.
+      if (plan === null) return true;
+
+      /*
+       * A lock and a split selection are both POLICY refusals, so both are
+       * announced where a structural one is not. Nothing on the page explains
+       * why the key did nothing, and a keyboard author has no dimmed button to
+       * look at.
+       */
+      if (isRefusal(plan)) {
+        announce(plan.reason);
+        return true;
+      }
+
+      if (editorNow.applyAll(plan.ops) !== null) {
+        announce(`${plan.subject} moved.`);
+      }
+      // The selection deliberately does not change, for the same reason it does
+      // not for one block: a run of presses walks the same set across the list.
+      return true;
+    },
+    [announce]
+  );
+
   const moveSelected = React.useCallback(
     (direction: MoveDirection) => {
+      if (moveSet(direction)) return;
+
       const editorNow = latest.current;
       const selectedId = editorNow.selectedId;
       if (selectedId === null) return;
@@ -361,7 +409,7 @@ export function useBlockKeyboardActions({
       // the block still selected, so a second press continues moving the
       // same block — which is what makes a run of presses walk it across the
     },
-    [announce]
+    [announce, moveSet]
   );
 
   /**

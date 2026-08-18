@@ -13,7 +13,7 @@
  * eventually disagree with the toolbar and the keyboard, which act on one block
  * through those same functions.
  *
- * ## Order is load-bearing, and only for duplicate
+ * ## Order is load-bearing, and differently for each verb
  *
  * **Duplicating runs in REVERSE document order.** Each copy is inserted
  * immediately after its original, and inserting shifts every later sibling
@@ -21,6 +21,14 @@
  * document that a's copy has already changed, and the second copy lands in the
  * wrong place. Reversed, every insert happens after the positions still to be
  * used, and each one is correct when it applies.
+ *
+ * **Moving runs TOWARDS the edge it is heading for**: ascending for `up`,
+ * descending for `down`. A move vacates the index it leaves, so the block
+ * nearest the destination has to go first — planning `up` from the bottom of
+ * the run would step a block into a place its neighbour has not left yet.
+ * Taken in the right order, each move swaps a pair of adjacent positions that
+ * no later move in the group addresses, so every target computed against the
+ * original document is still correct when it applies.
  *
  * **Deleting does not care**, and that is worth stating so nobody "fixes" it:
  * a remove addresses a node by id, ids do not move, and the op layer derives
@@ -30,13 +38,18 @@
  * @module selection-ops
  */
 
-import { type BlockDocument, type BlockNode } from "@nextlyhq/blocks-engine";
+import {
+  locateNode,
+  type BlockDocument,
+  type BlockNode,
+} from "@nextlyhq/blocks-engine";
 
 import { blockDeletion } from "./delete-block";
 import { blockDuplication } from "./duplicate-block";
 import { lockOp } from "./inspector";
+import { keyboardMovePosition } from "./keyboard-move";
 import { layerLabel } from "./layers";
-import { lockBlockingDelete } from "./locking";
+import { lockBlockingDelete, lockBlockingMove } from "./locking";
 import type { BuilderOp } from "./ops";
 import { normalizeSelection } from "./selection";
 
@@ -77,8 +90,17 @@ export interface SelectionRefusal {
 /** Either a plan or the reason there is none. */
 export type SelectionPlan = SelectionEdit | SelectionRefusal | null;
 
-/** Whether a plan can be applied. */
-export function isRefusal(plan: SelectionPlan): plan is SelectionRefusal {
+/**
+ * Whether a plan can be applied.
+ *
+ * Accepts any planned edit rather than only a {@link SelectionPlan}, because
+ * every verb here answers with the same three-way shape and a caller should not
+ * need a different guard per verb. The `reason` field is what separates a
+ * refusal, and only a refusal carries one.
+ */
+export function isRefusal(
+  plan: SelectionEdit | SelectionMove | SelectionRefusal | null
+): plan is SelectionRefusal {
   return plan !== null && "reason" in plan;
 }
 
@@ -294,4 +316,141 @@ export function selectionLock(
     nextSelection: null,
     subject: subjectOf(document, ids),
   };
+}
+
+/** A planned reorder, with what to say about it. */
+export interface SelectionMove {
+  /** The moves, in the order they must apply. */
+  readonly ops: readonly BuilderOp[];
+  /** How many blocks the author selected, for phrasing. */
+  readonly count: number;
+  /** What to call the subject: the block's name, or "3 blocks". */
+  readonly subject: string;
+}
+
+/** Either a reorder, the reason there is none, or `null` for nothing to say. */
+export type SelectionMovePlan = SelectionMove | SelectionRefusal | null;
+
+/**
+ * Blocks that do not share one sibling list cannot travel together.
+ *
+ * Phrased as the remedy rather than the rule. "Different containers" describes
+ * the document; selecting within one container is the thing an author can do
+ * about it.
+ */
+const SPLIT_REFUSAL: SelectionRefusal = {
+  reason:
+    "These blocks sit in different containers. Move blocks that share one.",
+};
+
+/**
+ * The lock that stops this group being moved, phrased, or `null`.
+ *
+ * Separate from the deletion refusal because the verb reaches the author: a
+ * lock that forbids moving is not the same sentence as one that forbids
+ * deleting, and `lockBlockingMove` and `lockBlockingDelete` do not answer alike
+ * either — a locked child blocks a delete while the parent around it may still
+ * be reordered.
+ */
+function moveLockRefusal(
+  document: BlockDocument,
+  ids: readonly string[]
+): SelectionRefusal | null {
+  for (const id of ids) {
+    const blocked = lockBlockingMove(document, id);
+    if (blocked === undefined) continue;
+    const name = layerLabel(blocked);
+    return {
+      reason:
+        blocked.id === id
+          ? `${name} is locked. Unlock it to move it.`
+          : `The selection contains ${name}, which is locked. Unlock it to move.`,
+    };
+  }
+  return null;
+}
+
+/** Where each selected block sits, once they all sit in ONE list. */
+interface SharedRun {
+  /** The selected blocks, sorted by their index in that list. */
+  readonly places: readonly { readonly id: string; readonly index: number }[];
+}
+
+/**
+ * The selection as positions in a single sibling list, or `null`.
+ *
+ * `null` means they do not all share one list — the case a move has no answer
+ * for. Two blocks in different containers have no common order to step
+ * through, and "one step up" would mean a different distance for each.
+ */
+function sharedRun(
+  document: BlockDocument,
+  ids: readonly string[]
+): SharedRun | null {
+  const places: { id: string; index: number }[] = [];
+  let container: string | undefined;
+
+  for (const id of ids) {
+    const at = locateNode(document.nodes, id);
+    if (at === undefined) return null;
+    // Parent and slot together, because one parent's two slots are two lists.
+    // The separator is a space, which an id cannot contain, so no pair of
+    // distinct containers can collide into a single key.
+    const key = `${at.parent?.id ?? ""} ${at.slot ?? ""}`;
+    if (container === undefined) container = key;
+    else if (container !== key) return null;
+    places.push({ id, index: at.index });
+  }
+
+  if (places.length === 0) return null;
+  places.sort((left, right) => left.index - right.index);
+  return { places };
+}
+
+/**
+ * Moving every selected block one step, keeping their order and their spacing.
+ *
+ * **A set moves only within one container.** Duplicate and delete are the
+ * single-block verb repeated and need nothing of each other; a move is a step
+ * through a list, so blocks in different lists are not doing the same thing.
+ * That is a refusal an author is told about, because nothing on the page says
+ * the selection straddles a boundary.
+ *
+ * **One block at the edge refuses the WHOLE group**, like a lock. Letting the
+ * others move would close the gaps between them, and the set would come back
+ * differently arranged than it went, so `up` would no longer be undone by
+ * `down`. Preserving that inverse is what the two move axes exist to protect,
+ * and a group edit is where it is easiest to lose.
+ *
+ * **Every position is the single-block rule's**, asked once per block. Nothing
+ * here re-decides what one step means.
+ */
+export function selectionMove(
+  document: BlockDocument,
+  selectedIds: readonly string[],
+  direction: "up" | "down"
+): SelectionMovePlan {
+  const ids = normalizeSelection(document, selectedIds);
+  if (ids.length === 0) return null;
+
+  const refusal = moveLockRefusal(document, ids);
+  if (refusal !== null) return refusal;
+
+  const run = sharedRun(document, ids);
+  if (run === null) return SPLIT_REFUSAL;
+
+  // Towards the destination first, so each block steps into an index its
+  // neighbour has already left.
+  const order = direction === "up" ? run.places : [...run.places].reverse();
+
+  const ops: BuilderOp[] = [];
+  for (const place of order) {
+    const step = keyboardMovePosition(document.nodes, place.id, direction);
+    // At the edge of the container. Silent, like the single-block move: a
+    // selection that cannot go further has said so by not going.
+    if (step === null) return null;
+    ops.push({ kind: "move", id: place.id, to: step.to });
+  }
+
+  return { ops, count: ids.length, subject: subjectOf(document, ids) };
 }

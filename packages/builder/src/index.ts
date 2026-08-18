@@ -281,8 +281,11 @@ export {
   selectionDeletion,
   selectionDuplication,
   selectionLock,
+  selectionMove,
   type SelectionDuplication,
   type SelectionEdit,
+  type SelectionMove,
+  type SelectionMovePlan,
   type SelectionPlan,
   type SelectionRefusal,
 } from "./selection-ops";

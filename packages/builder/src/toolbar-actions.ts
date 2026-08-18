@@ -43,6 +43,7 @@ import type { Rect } from "./geometry";
 import { keyboardMovePosition } from "./keyboard-move";
 import { layerLabel, pathTo } from "./layers";
 import { lockBlockingDelete, lockBlockingMove } from "./locking";
+import { isRefusal, selectionMove } from "./selection-ops";
 
 /** The verbs the bar offers, in the order it draws them. */
 export type ToolbarActionId =
@@ -90,20 +91,49 @@ function lockedBy(locked: BlockNode, selectedId: string): string {
 }
 
 /**
+ * Whether a set can move one step, and what to say when it cannot.
+ *
+ * The plan itself is the answer: `selectionMove` already decides that a set
+ * straddling two containers has nowhere to go and that one block at the edge
+ * holds the rest, and asking it here keeps the bar agreeing with the keyboard
+ * rather than testing those rules a second time.
+ *
+ * `null` is the edge of the container, which is dimmed WITHOUT a reason —
+ * exactly as a single block at the end of its list is. Nothing needs saying
+ * about a step that has nowhere to go.
+ */
+function moveAction(
+  document: BlockDocument,
+  ids: readonly string[],
+  id: "move-up" | "move-down",
+  label: string,
+  direction: "up" | "down"
+): ToolbarAction {
+  const plan = selectionMove(document, ids, direction);
+  if (plan === null) return { id, label, enabled: false };
+  if (isRefusal(plan))
+    return { id, label, enabled: false, reason: plan.reason };
+  return { id, label, enabled: true };
+}
+
+/**
  * The bar for a selection holding more than one block.
  *
- * **Duplicate and delete keep their meaning; move and select-parent lose it.**
- * Copying six blocks is six copies each beside its own original, and removing
- * six is removing six — both are the single-block verb repeated, which is
- * exactly what `selection-ops` plans. Moving is not: a set spread across two
- * containers has no shared list to move within, and "the parent" of blocks with
- * different parents is not a block. Offering either would mean inventing an
- * answer to a question the author did not ask.
+ * **Duplicate, delete and move keep their meaning; select-parent loses it.**
+ * Copying six blocks is six copies each beside its own original, removing six
+ * is removing six, and moving six that share a list is one step for each — all
+ * three are the single-block verb repeated, which is what `selection-ops`
+ * plans. "The parent" of blocks with different parents is not a block, so
+ * select-parent has no answer to give and does not invent one.
  *
- * The bar keeps its five buttons and its one shape rather than shrinking to
- * two. A control that vanishes when a second block is selected moves every
- * button after it, so the one an author was aiming at is somewhere else by the
- * time they arrive — the same reason unavailable actions are dimmed rather than
+ * Move is offered but not always available: a set spread across two containers
+ * has no shared list to step through, and that refusal carries a reason because
+ * nothing on the page shows that the selection straddles a boundary.
+ *
+ * The bar keeps its five buttons and its one shape rather than shrinking. A
+ * control that vanishes when a second block is selected moves every button
+ * after it, so the one an author was aiming at is somewhere else by the time
+ * they arrive — the same reason unavailable actions are dimmed rather than
  * hidden with a single block.
  */
 function manyBlockActions(
@@ -122,8 +152,8 @@ function manyBlockActions(
       enabled: false,
       reason: many,
     },
-    { id: "move-up", label: "Move up", enabled: false, reason: many },
-    { id: "move-down", label: "Move down", enabled: false, reason: many },
+    moveAction(document, ids, "move-up", "Move up", "up"),
+    moveAction(document, ids, "move-down", "Move down", "down"),
     // A lock never stops a duplication, for a set as for one block: the
     // originals stay where they are.
     { id: "duplicate", label: "Duplicate", enabled: true },
