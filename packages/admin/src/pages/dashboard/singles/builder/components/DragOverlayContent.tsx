@@ -65,10 +65,7 @@ export function DragOverlayContent({ data }: DragOverlayContentProps) {
   const isRequired = field.validation?.required;
 
   return (
-    <div
-      className="flex items-center gap-4 py-3 px-4 bg-background  border border-border rounded-lg shadow-lg cursor-grabbing"
-      style={{ minWidth: 320 }}
-    >
+    <div className="flex items-center gap-4 py-3 px-4 bg-background  border border-border rounded-lg shadow-lg min-w-80 cursor-grabbing">
       {/* Drag handle */}
       <div className="p-1.5 shrink-0">
         {/* Muted foreground to match the reorder handle on the real row. */}

@@ -361,12 +361,11 @@ function SortableFieldRow({
       <TableCell className="whitespace-nowrap text-base">
         <div className="flex items-center gap-2">
           <span
-            className="cursor-grab text-muted-foreground hover:text-foreground shrink-0"
+            className="shrink-0 cursor-grab touch-none text-muted-foreground hover:text-foreground"
             {...attributes}
             {...listeners}
             tabIndex={0}
             aria-label="Drag to reorder"
-            style={{ touchAction: "none" }}
             onClick={e => e.stopPropagation()}
           >
             <GripVertical className="h-4 w-4" />

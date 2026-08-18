@@ -121,15 +121,13 @@ export function DraggableBlockMenuPlugin({
       menuComponent={
         <div
           ref={menuRef}
+          // design-lint-ok: the two properties carry different durations in one
+          // declaration, which a utility cannot express without changing them.
           style={{
-            position: "absolute",
-            left: 0,
-            top: 0,
-            willChange: "transform",
             transition:
               "transform 140ms ease-in-out, opacity 160ms ease-in-out",
           }}
-          className="flex items-center gap-0.5 rounded-md p-[2px_1px] z-10"
+          className="absolute top-0 left-0 z-10 flex items-center gap-0.5 rounded-md p-[2px_1px] will-change-transform"
         >
           <button
             type="button"
@@ -148,16 +146,9 @@ export function DraggableBlockMenuPlugin({
       targetLineComponent={
         <div
           ref={targetLineRef}
-          style={{
-            position: "absolute",
-            left: 0,
-            top: 0,
-            willChange: "transform",
-            height: "4px",
-            backgroundColor: "deepskyblue",
-            borderRadius: "4px",
-          }}
-          className="pointer-events-none"
+          // `deepskyblue` was a fixed colour that ignored the theme; the drop
+          // indicator now takes the primary token like every other affordance.
+          className="pointer-events-none absolute top-0 left-0 h-1 rounded bg-primary will-change-transform"
         />
       }
     />

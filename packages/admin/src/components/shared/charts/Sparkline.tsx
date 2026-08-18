@@ -55,6 +55,8 @@ export const Sparkline: React.FC<SparklineProps> = ({
         strokeLinecap="round"
         strokeLinejoin="round"
         className="text-primary transition-all duration-700 ease-in-out"
+        // design-lint-ok: stroke-dash geometry has no utility, and the animation
+        // names a keyframe declared in this component's own <style> block.
         style={{
           strokeDasharray: 400,
           strokeDashoffset: 400,

@@ -118,6 +118,8 @@ const SLIDER = "h-3 w-full cursor-pointer appearance-none rounded-full";
  * Fixed greys, deliberately, where the rest of this package uses theme tokens:
  * this is the standard rendering of "nothing here", and a chequerboard that
  * changed colour with the theme would read as part of the colour being edited.
+ *
+ * design-lint-ok: fixed greys are the point here; see above.
  */
 const CHECKERBOARD = "repeating-conic-gradient(#c8c8c8 0% 25%, #ffffff 0% 50%)";
 
@@ -320,6 +322,8 @@ export function ColorPicker<TValue = string>({
           commit({ ...hsva, h: hueAt(+event.target.value / (HUE_MAX + 1)) })
         }
         className={SLIDER}
+        // design-lint-ok: the hue strip renders the colour wheel itself, so its
+        // stops are the control's data rather than theming.
         style={{
           backgroundImage:
             "linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00)",

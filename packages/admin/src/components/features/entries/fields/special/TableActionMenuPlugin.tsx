@@ -296,7 +296,7 @@ export function TableActionMenuPlugin({
       <div style={separatorStyle} />
 
       <ActionButton
-        label={<Trash2 style={{ width: "13px", height: "13px" }} />}
+        label={<Trash2 className="h-[13px] w-[13px]" />}
         title="Delete entire table"
         onClick={deleteTable}
         destructive
