@@ -183,6 +183,47 @@ export interface UpdateSingleOptions {
 }
 
 /**
+ * Options for publishing every language of a Single at once.
+ *
+ * A deliberate subset of {@link UpdateSingleOptions}: this write persists no
+ * caller content and names no locale, so the write-locale, hook-context and
+ * version-lineage options an update carries have nothing to act on here.
+ */
+export interface PublishAllSingleLocalesOptions {
+  /** User context for access control. */
+  user?: UserContext;
+
+  /**
+   * Who performed the publish, recorded on the outbox events. The transport
+   * boundary resolves it, distinguishing a signed-in user from an API key
+   * acting on their behalf.
+   */
+  actor?: RequestActor;
+
+  /** When true, bypass all RBAC access control checks. */
+  overrideAccess?: boolean;
+
+  /**
+   * Set by the REST dispatcher: route middleware already ran the `update` gate,
+   * so only that redundant RBAC re-check is skipped. The `publish-{slug}` gate
+   * always runs, because the route never authorized this call as a publish.
+   */
+  routeAuthorized?: boolean;
+
+  /**
+   * The caller's authenticated scope. A scoped API key is judged on its OWN
+   * `publish-{slug}` grant rather than the key owner's RBAC.
+   */
+  authenticatedScope?: AuthenticatedScope;
+
+  /**
+   * Skip cache revalidation for this publish (the outbox drain still runs). Set
+   * by callers that own their cache strategy — a CLI, seed, or bulk import.
+   */
+  disableRevalidate?: boolean;
+}
+
+/**
  * Single document shape. All Singles have at least an id and updatedAt.
  */
 export interface SingleDocument {

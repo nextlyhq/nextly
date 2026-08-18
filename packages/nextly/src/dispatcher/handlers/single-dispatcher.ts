@@ -750,6 +750,54 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
     },
   },
 
+  publishAllSingleLocales: {
+    // Publish every language of a Single in one transaction. The Single
+    // equivalent of the collection entry's publish-all.
+    execute: async (svc, p) => {
+      const slug = requireParam(p, "slug", "Single slug");
+      const roles = readAuthenticatedRoles(p);
+      const user = p._authenticatedUserId
+        ? {
+            id: String(p._authenticatedUserId),
+            name: p._authenticatedUserName
+              ? String(p._authenticatedUserName)
+              : undefined,
+            email: p._authenticatedUserEmail
+              ? String(p._authenticatedUserEmail)
+              : undefined,
+            // Forward the decoded role set so role-based stored rules and the
+            // super-admin bypass evaluate against the real authorized scope;
+            // without it a publish the route allowed could be refused here.
+            roles,
+            // A representative singular role, for a stored rule reading
+            // `req.user.role`. Matches the update handler.
+            role: roles?.[0],
+          }
+        : undefined;
+      const result = await svc.entry.publishAllLocales(slug, {
+        user,
+        // Who performed the publish, recorded on the outbox events: an API-key
+        // caller attributes to the key rather than the user that owns it.
+        actor: readAuthenticatedActor(p),
+        overrideAccess: false,
+        // Route auth already ran the RBAC gate for `update`; attesting it skips
+        // only that re-check. The publish gate always runs.
+        routeAuthorized: !!user,
+        // The route authorized this POST as `update` against an API key's
+        // scope; the service judges the key's own `publish-{slug}` grant.
+        authenticatedScope: readAuthenticatedScope(p),
+      });
+      const published = unwrapServiceResult<{
+        id: string;
+        status?: "published";
+      }>(result, { slug });
+      return respondAction(result.message ?? "All languages published.", {
+        slug,
+        ...published,
+      });
+    },
+  },
+
   deleteSingle: {
     execute: async (svc, p) => {
       const slug = requireParam(p, "slug", "Single slug");

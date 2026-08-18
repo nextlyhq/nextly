@@ -609,6 +609,11 @@ export const SINGLE_DOCUMENT_METHODS = new Set([
   // The matching read. Named in the read branch below, so it resolves to
   // `read` rather than demanding update permission by sharing this set.
   "getSingleAutosave",
+  // Publishing every language writes the document's status, so the route parser
+  // marks it an `update` and this resolves it to `update-{slug}` rather than a
+  // definition mutation's manage-settings. The service checks `publish-{slug}`
+  // on top, which no route-level gate can express.
+  "publishAllSingleLocales",
 ]);
 
 /**
