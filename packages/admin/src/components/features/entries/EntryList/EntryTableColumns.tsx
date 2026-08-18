@@ -12,16 +12,13 @@
  * @since 1.0.0
  */
 
-import { Checkbox } from "@nextlyhq/ui";
-import type { ColumnDef } from "@tanstack/react-table";
 import type { FieldConfig, DataFieldConfig } from "nextly/config";
 
 import type { NextlyColumn } from "@admin/components/ui/table/data-table";
 import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
 
-import { EntryTableActions } from "./EntryTableActions";
 import { EntryTableCell } from "./EntryTableCell";
-import { TranslationCompletenessBadge } from "./TranslationCompletenessBadge";
+import { LanguageDots } from "./LanguageDots";
 
 // ============================================================================
 // Types
@@ -116,44 +113,6 @@ const DEFAULT_COLUMN_COUNT = 4;
  */
 function isSortableField(field: FieldConfig): boolean {
   return SORTABLE_FIELD_TYPES.includes(field.type);
-}
-
-/**
- * Calculates the appropriate column width based on field type.
- *
- * @param field - Field configuration
- * @returns Column width in pixels
- */
-function getColumnSize(field: FieldConfig): number {
-  const fieldType = field.type as string;
-  switch (fieldType) {
-    case "checkbox":
-      return 80;
-    case "date":
-      return 140;
-    case "email":
-      return 200;
-    case "select":
-      return 150;
-    case "radio":
-      return 150;
-    case "number":
-      return 100;
-    case "textarea":
-    case "richText":
-    case "code":
-      return 300;
-    case "relationship":
-      return 180;
-    case "upload":
-      return 120;
-    case "repeater":
-      return 100;
-    case "json":
-      return 150;
-    default:
-      return 200;
-  }
 }
 
 /**
@@ -304,6 +263,18 @@ export function getDefaultVisibleColumns(
   ];
 }
 
+function formatFieldName(name: string): string {
+  return (
+    name
+      // Handle camelCase
+      .replace(/([a-z])([A-Z])/g, "$1 $2")
+      // Handle snake_case
+      .replace(/_/g, " ")
+      // Capitalize first letter of each word
+      .replace(/\b\w/g, char => char.toUpperCase())
+  );
+}
+
 /**
  * Finds a field configuration by name, handling nested fields in layout wrappers.
  *
@@ -341,327 +312,6 @@ export function findFieldByName(
 // Main Column Generator
 // ============================================================================
 
-/**
- * Generates TanStack React Table column definitions from collection schema.
- *
- * Creates columns for:
- * 1. Row selection (checkboxes for bulk operations)
- * 2. Data columns based on collection fields
- * 3. Actions column (edit, delete, duplicate)
- *
- * @param options - Column generation options
- * @returns Array of column definitions for TanStack Table
- *
- * @example
- * ```tsx
- * const columns = useMemo(
- *   () => generateEntryColumns({
- *     collection,
- *     onEdit: (id) => router.push(`/entries/${collection.slug}/${id}`),
- *     onDelete: (id) => deleteEntry(id),
- *   }),
- *   [collection, router, deleteEntry]
- * );
- * ```
- */
-export function generateEntryColumns({
-  collection,
-  onEdit,
-  onDelete,
-  enableSelection = true,
-  enableActions = true,
-}: GenerateColumnsOptions): ColumnDef<Record<string, unknown>>[] {
-  const columns: ColumnDef<Record<string, unknown>>[] = [];
-
-  // -------------------------------------------------------------------------
-  // Selection Column
-  // -------------------------------------------------------------------------
-  if (enableSelection) {
-    columns.push({
-      id: "select",
-      header: ({ table }) => (
-        <Checkbox
-          checked={
-            table.getIsAllPageRowsSelected() ||
-            (table.getIsSomePageRowsSelected() && "indeterminate")
-          }
-          onCheckedChange={value => table.toggleAllPageRowsSelected(!!value)}
-          aria-label="Select all rows"
-          indeterminate={
-            table.getIsSomePageRowsSelected() &&
-            !table.getIsAllPageRowsSelected()
-          }
-        />
-      ),
-      cell: ({ row }) => (
-        <Checkbox
-          checked={row.getIsSelected()}
-          onCheckedChange={value => row.toggleSelected(!!value)}
-          aria-label="Select row"
-        />
-      ),
-      enableSorting: false,
-      enableHiding: false,
-      size: 40,
-    });
-  }
-
-  // -------------------------------------------------------------------------
-  // Data Columns
-  // -------------------------------------------------------------------------
-
-  // Define all available columns so they can be toggled via visibility state
-  const availableColumns = getAvailableColumns(collection);
-
-  // Identify which field should act as the primary title/navigation link
-  const titleFieldName =
-    collection.admin?.useAsTitle ||
-    (availableColumns.includes("title")
-      ? "title"
-      : availableColumns.includes("name")
-        ? "name"
-        : availableColumns.includes("label")
-          ? "label"
-          : availableColumns.find(
-              (col: string) =>
-                !["select", "id", "actions", "createdAt", "updatedAt"].includes(
-                  col
-                )
-            ));
-
-  for (const columnName of availableColumns) {
-    const field = findFieldByName(collection.fields, columnName);
-
-    if (!field) {
-      // i18n M7: translation-completeness column (localized collections only). Renders a compact
-      // "n/total" badge summarising how many languages are translated for the row.
-      if (columnName === "translations") {
-        columns.push({
-          id: "translations",
-          accessorKey: "_translations",
-          header: "Languages",
-          cell: ({ row }) => (
-            <TranslationCompletenessBadge
-              translations={
-                row.original._translations as
-                  | Record<string, { translated: boolean; status?: string }>
-                  | undefined
-              }
-            />
-          ),
-          size: 130,
-          enableSorting: false,
-        });
-        continue;
-      }
-
-      // Handle special built-in columns (createdAt, updatedAt, id)
-      if (columnName === "createdAt" || columnName === "updatedAt") {
-        columns.push({
-          id: columnName,
-          accessorKey: columnName,
-          header: columnName === "createdAt" ? "Created" : "Updated",
-          cell: ({ getValue, row }) => {
-            const value =
-              (getValue() as string | undefined) ||
-              ((columnName === "createdAt"
-                ? row.original.created_at
-                : row.original.updated_at) as string | undefined);
-            if (!value) return <span className="text-muted-foreground">-</span>;
-            return (
-              <span className="text-sm text-muted-foreground whitespace-nowrap">
-                {formatDateWithAdminTimezone(
-                  value,
-                  {
-                    year: "numeric",
-                    month: "short",
-                    day: "numeric",
-                    hour: "2-digit",
-                    minute: "2-digit",
-                    timeZoneName: "short",
-                  },
-                  "-"
-                )}
-              </span>
-            );
-          },
-          size: 190,
-          enableSorting: true,
-        });
-        continue;
-      }
-
-      if (columnName === "id") {
-        columns.push({
-          id: "id",
-          accessorKey: "id",
-          header: "ID",
-          cell: ({ getValue, row }) => {
-            const value = getValue() as string;
-            // Show truncated ID for UUIDs
-            const displayValue =
-              value.length > 8 ? `${value.slice(0, 8)}...` : value;
-
-            if (titleFieldName === "id") {
-              return (
-                <button
-                  type="button"
-                  onClick={e => {
-                    e.stopPropagation();
-                    onEdit(row.original.id as string);
-                  }}
-                  className="font-mono text-xs text-foreground hover:underline transition-colors text-left w-fit cursor-pointer"
-                  title={value}
-                >
-                  {displayValue}
-                </button>
-              );
-            }
-            return (
-              <span
-                className="font-mono text-xs text-muted-foreground"
-                title={value}
-              >
-                {displayValue}
-              </span>
-            );
-          },
-          size: 100,
-          enableSorting: false,
-        });
-        continue;
-      }
-
-      if (columnName === "title") {
-        columns.push({
-          id: "title",
-          accessorKey: "title",
-          header: "Title",
-          cell: ({ getValue, row }) => {
-            const value = getValue() as string | undefined;
-            if (!value) return <span className="text-muted-foreground">-</span>;
-
-            if (titleFieldName === "title") {
-              return (
-                <button
-                  type="button"
-                  onClick={e => {
-                    e.stopPropagation();
-                    onEdit(row.original.id as string);
-                  }}
-                  className="text-sm font-medium text-foreground hover:underline transition-colors text-left w-fit cursor-pointer"
-                >
-                  {value}
-                </button>
-              );
-            }
-            return <span className="text-sm text-foreground">{value}</span>;
-          },
-          size: 200,
-          enableSorting: true,
-        });
-        continue;
-      }
-
-      if (columnName === "slug") {
-        columns.push({
-          id: "slug",
-          accessorKey: "slug",
-          header: "Slug",
-          cell: ({ getValue }) => {
-            const value = getValue() as string | undefined;
-            if (!value) return <span className="text-muted-foreground">-</span>;
-            return (
-              <span className="font-mono text-sm text-foreground">{value}</span>
-            );
-          },
-          size: 150,
-          enableSorting: true,
-        });
-        continue;
-      }
-
-      // Unknown column name - skip
-      continue;
-    }
-
-    // Create column for data field (field is guaranteed to be a named data field)
-    columns.push({
-      id: field.name,
-      accessorKey: field.name,
-      header: field.label || formatFieldName(field.name),
-      cell: ({ row, getValue }) => (
-        <EntryTableCell
-          field={field}
-          value={getValue()}
-          entry={row.original}
-          collectionSlug={collection.slug}
-          isTitle={field.name === titleFieldName}
-          onEdit={onEdit}
-        />
-      ),
-      enableSorting: isSortableField(field),
-      size: getColumnSize(field),
-      meta: {
-        fieldType: field.type,
-        fieldConfig: field,
-      },
-    });
-  }
-
-  // -------------------------------------------------------------------------
-  // Actions Column
-  // -------------------------------------------------------------------------
-  if (enableActions) {
-    columns.push({
-      id: "actions",
-      header: "",
-      cell: ({ row }) => (
-        <EntryTableActions
-          entryId={row.original.id as string}
-          onEdit={onEdit}
-          onDelete={onDelete}
-        />
-      ),
-      enableSorting: false,
-      enableHiding: false,
-      size: 80,
-    });
-  }
-
-  return columns;
-}
-
-/**
- * Formats a field name into a human-readable label.
- * Converts camelCase and snake_case to Title Case.
- *
- * @param name - Field name to format
- * @returns Formatted label
- *
- * @example
- * formatFieldName('firstName') // 'First Name'
- * formatFieldName('created_at') // 'Created At'
- */
-function formatFieldName(name: string): string {
-  return (
-    name
-      // Handle camelCase
-      .replace(/([a-z])([A-Z])/g, "$1 $2")
-      // Handle snake_case
-      .replace(/_/g, " ")
-      // Capitalize first letter of each word
-      .replace(/\b\w/g, char => char.toUpperCase())
-  );
-}
-
-// ============================================================================
-// Unified DataTable column generator
-// ============================================================================
-
-/**
- * Resolves which column acts as the primary title / navigation link.
- */
 export function getEntryTitleField(
   collection: CollectionForColumns
 ): string | undefined {
@@ -714,6 +364,27 @@ export function buildEntryColumns(
     const hidden = isHidden(columnName);
 
     if (!field) {
+      // One dot per translatable language, so a row says WHICH languages are
+      // missing rather than only how many. Offered by `getAvailableColumns`
+      // for localized collections only, so a non-localized table is unchanged.
+      if (columnName === "translations") {
+        cols.push({
+          name: "translations",
+          header: "Languages",
+          sortable: false,
+          hidden,
+          cell: ({ row }) => (
+            <LanguageDots
+              translations={
+                row._translations as
+                  | Record<string, { translated: boolean; status?: string }>
+                  | undefined
+              }
+            />
+          ),
+        });
+        continue;
+      }
       if (columnName === "createdAt" || columnName === "updatedAt") {
         cols.push({
           name: columnName,

@@ -203,7 +203,8 @@ export function LanguagePanel({
   const active = activeLocale ?? defaultLocale;
   const counts = translationCounts(
     translations,
-    locales.map(l => l.code)
+    locales.map(l => l.code),
+    defaultLocale
   );
 
   return (

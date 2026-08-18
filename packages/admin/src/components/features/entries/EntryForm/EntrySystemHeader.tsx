@@ -280,7 +280,8 @@ export function EntrySystemHeader({
   // region, so the two can never disagree about how far along the document is.
   const counts = translationCounts(
     entryTranslations,
-    locales.map(l => l.code)
+    locales.map(l => l.code),
+    defaultLocale
   );
   const inputRef = useRef<HTMLInputElement>(null);
   const [unpublishOpen, setUnpublishOpen] = useState(false);
