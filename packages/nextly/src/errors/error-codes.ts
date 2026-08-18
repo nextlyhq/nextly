@@ -86,6 +86,11 @@ export const NEXTLY_ERROR_STATUS = {
   // nothing is broken, the install simply cannot carry it out yet, and the
   // remedy is one command on the server rather than a change by the caller.
   NEXTLY_EMAIL_TRANSPORT_UNAVAILABLE: 503,
+  // The tooling that compiles `nextly.config.ts` is an optional peer the host
+  // has not installed. 503 rather than 500 for the same reason as the mail
+  // transport above: nothing is broken and the request is not malformed, the
+  // install simply cannot carry it out until one command is run.
+  NEXTLY_CONFIG_TOOLING_UNAVAILABLE: 503,
 } as const;
 
 export type NextlyErrorCode = keyof typeof NEXTLY_ERROR_STATUS;
