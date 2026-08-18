@@ -66,6 +66,30 @@ export interface EntryLocaleContextValue {
    * itself.
    */
   fetchSourceValues?: (locale: string) => Promise<Record<string, unknown>>;
+  /**
+   * Publish every language of this document at once.
+   *
+   * Supplied by the form for the same reason `fetchSourceValues` is: entries
+   * and singles are addressed differently, and the mutation each owns carries
+   * its own query keys. Making the ACTION the seam lets one availability rule
+   * serve both, instead of the action existing only where its address shape
+   * happened to be hardcoded.
+   *
+   * Absent means the surface cannot publish every language, and the action does
+   * not offer itself.
+   */
+  publishAllLanguages?: {
+    /**
+     * The slug whose `publish-{slug}` permission this owes. The permission
+     * NAME is built by the shared rule, not here, so the two surfaces cannot
+     * come to disagree about what publishing is called.
+     */
+    slug: string;
+    /** Issue the publish and refresh the document. */
+    publish: () => void;
+    /** True while it is in flight. */
+    pending: boolean;
+  };
 }
 
 const EntryLocaleContext = createContext<EntryLocaleContextValue>({

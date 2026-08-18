@@ -71,7 +71,6 @@ import { coerceDateFieldsToDate } from "../../../shared/lib/field-transform";
 import {
   hasPasswordField,
   stripPasswordFieldValues,
-  stripSystemOwnerField,
 } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
 import { relationKey } from "../../collections/services/collection-relationship-service";
@@ -109,7 +108,8 @@ import type {
   UserContext,
 } from "../types";
 
-import { ensureSingleRuntimeTable } from "./ensure-runtime-table";
+import { resolveSingleForRequest } from "./ensure-runtime-table";
+import { applyReadShape } from "./single-read-shape";
 import type { SingleRegistryService } from "./single-registry-service";
 import {
   assertNoPasswordDefault,
@@ -1381,7 +1381,12 @@ export class SingleQueryService extends BaseService {
 
     try {
       // 1. Get Single metadata from registry
-      const singleMeta = await this.singleRegistryService.getSingleBySlug(slug);
+      const singleMeta = await resolveSingleForRequest(
+        this.adapter,
+        this.singleRegistryService,
+        slug,
+        this.logger
+      );
       if (!singleMeta) {
         return {
           success: false,
@@ -1389,13 +1394,6 @@ export class SingleQueryService extends BaseService {
           message: `Single "${slug}" not found`,
         };
       }
-
-      // 1.1. Lazily register the single's runtime table (and its localized
-      // companion) in this process. Create-time and boot-time registration
-      // are per-process, so a UI single created in another dev worker — or
-      // registered after this worker booted — would otherwise fail every
-      // read here with "not found in schema registry" until a restart.
-      await ensureSingleRuntimeTable(this.adapter, singleMeta, this.logger);
 
       // 1.5. Access check (RBAC) after metadata, before hooks/DB operations.
       // The Single's stored read rule is evaluated here against the caller the
@@ -2409,19 +2407,7 @@ export class SingleQueryService extends BaseService {
             parentRow[name] = value;
           }
         }
-        stripPasswordFieldValues(parentRow, singleMeta.fields);
-        stripSystemOwnerField(parentRow);
-        for (const field of singleMeta.fields) {
-          if (!("name" in field) || !field.name) continue;
-          const value = parentRow[field.name];
-          if (shouldTreatAsJson(field) && typeof value === "string") {
-            try {
-              parentRow[field.name] = JSON.parse(value);
-            } catch {
-              // Not valid JSON — keep the raw string.
-            }
-          }
-        }
+        applyReadShape(parentRow, singleMeta.fields);
         await captureInTx(tx, this.versionCapture, {
           ref: {
             scopeKind: "single",

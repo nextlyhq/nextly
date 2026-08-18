@@ -54,6 +54,7 @@ import {
 import { LanguagePanel } from "@admin/components/features/entries/LanguagePanel";
 import { historyEnabledFrom } from "@admin/components/features/versions/history-enabled";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
+import { usePublishAllSingleLocales } from "@admin/hooks/queries/usePublishAllSingleLocales";
 import { useAutosaveRecovery } from "@admin/hooks/useAutosaveRecovery";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
 import {
@@ -435,6 +436,14 @@ export function SingleForm({
   // the action collection-only by accident of addressing rather than by intent;
   // it now gates on `fetchSourceValues`, which a single can answer. Inert for
   // non-localized singles.
+  // The Single's own publish-every-language mutation, handed to the shared
+  // availability rule through the locale context. A Single is addressed by its
+  // slug alone, so it supplies its own action exactly as it supplies its own
+  // source read.
+  const publishAllSingleLanguages = usePublishAllSingleLocales({
+    slug: schema.slug,
+  });
+
   const localeCtx: EntryLocaleContextValue = useMemo(
     () => ({
       locale,
@@ -456,6 +465,12 @@ export function SingleForm({
       ),
       // A single is addressed by its slug alone, so it supplies its own read.
       fetchSourceValues: singleSourceFetcher(schema.slug),
+      // And its own publish-every-language action, for the same reason.
+      publishAllLanguages: {
+        slug: schema.slug,
+        publish: () => publishAllSingleLanguages.mutate(),
+        pending: publishAllSingleLanguages.isPending,
+      },
     }),
     [
       locale,
@@ -468,6 +483,7 @@ export function SingleForm({
       onLocaleChange,
       seedFromLocale,
       onSeedHandled,
+      publishAllSingleLanguages,
     ]
   );
 

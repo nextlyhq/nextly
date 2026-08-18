@@ -1298,6 +1298,20 @@ function parseSingleRoutes(
     };
   }
 
+  // POST /api/singles/[slug]/publish-all → publish every language at once.
+  // Authorized as an `update` like the collection entry equivalent: the route
+  // gate cannot express `publish`, so the service checks `publish-{slug}` for
+  // itself on top of the update the route authorized.
+  if (id && subresource === "publish-all" && !subId && httpMethod === "POST") {
+    routeParams.slug = id;
+    return {
+      service: "singles",
+      operation: "update",
+      method: "publishAllSingleLocales",
+      routeParams,
+    };
+  }
+
   // GET /api/singles/[slug]/schema → get Single schema/metadata
   if (id && subresource === "schema" && httpMethod === "GET") {
     routeParams.slug = id;

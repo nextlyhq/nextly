@@ -34,6 +34,7 @@ import { Posts } from "./src/collections/posts";
 import { Tags } from "./src/collections/tags";
 import { Seo } from "./src/field-groups/seo";
 import { styleFixturePlugin } from "./src/plugins/style-fixture/plugin";
+import { Announcement } from "./src/singles/announcement";
 import { Homepage } from "./src/singles/homepage";
 import { LandingPage } from "./src/singles/landing-page";
 import { SiteSettings } from "./src/singles/site-settings";
@@ -83,7 +84,10 @@ export default defineConfig({
   // (language row, copy-from, publish-all, list translation status) are
   // exercised in development rather than existing only in code.
   collections: [Posts, Categories, Tags, BlockPages, Authors],
-  singles: [Homepage, LandingPage, SiteSettings],
+  // Announcement is the localized single WITH the draft/published lifecycle,
+  // registered for the same reason Authors is: so the per-language publish
+  // surfaces are exercised in development rather than existing only in code.
+  singles: [Homepage, LandingPage, SiteSettings, Announcement],
   fieldGroups: [Seo],
   // Dev-harness plugins: page builder and form builder are what a contributor
   // works against.
