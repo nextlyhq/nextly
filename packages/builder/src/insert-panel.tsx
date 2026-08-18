@@ -50,8 +50,8 @@ import {
   groupByCategory,
   insertionPointFor,
   nodeForEntry,
+  registrySlotSource,
   type InsertionPoint,
-  type SlotSource,
   type InsertEntry,
 } from "./inserter";
 
@@ -103,22 +103,6 @@ function placementLabel(point: InsertionPoint, label?: string): string {
   return point.kind === "after-selection"
     ? "Adds after the selected block"
     : "Adds at the end of the page";
-}
-
-/**
- * The registry as a slot source.
- *
- * Reads the DEFINITION's declared slots rather than the node's, because a
- * container inserted from the palette has no `slots` key until something is put
- * in it — which is precisely the container that needs filling.
- */
-function registrySlotSource(): SlotSource {
-  return {
-    slotsOf: type => {
-      const declared = getBlock(type)?.slots;
-      return declared === undefined ? undefined : Object.keys(declared);
-    },
-  };
 }
 
 export function InsertPanel({

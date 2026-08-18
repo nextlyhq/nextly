@@ -157,3 +157,59 @@ export type {
  * without reaching for the client entry.
  */
 export type { BuilderCommand, CommandPaletteProps } from "./command-palette";
+
+/**
+ * @experimental The drop rules: where a dragged block can land, and which of
+ * those places a pointer means.
+ *
+ * From this entry rather than from `/shell`, because none of it touches React —
+ * it is arithmetic over measured rectangles, and the split is what lets the
+ * acceptance harness and a host reason about a drop without loading an editor.
+ *
+ * The same argument as the geometry above, and the same hazard: a harness
+ * carrying its own copy of this ranking would certify its own copy, and would
+ * keep passing through exactly the correction it exists to catch.
+ *
+ * `InsertTarget` and `SlotSource` travel with them because the region types are
+ * written in terms of both: a consumer that can name a region but not what it
+ * accepts cannot ask the nesting rule about one.
+ */
+export {
+  axisOfRects,
+  collectRegions,
+  movingSubtree,
+  regionAt,
+  resolveDrop,
+  ROOT_REGION,
+  targetsInRegion,
+  type DropAxis,
+  type DropQuery,
+  type DropRefusal,
+  type DropRegion,
+  type DropResolution,
+  type DropTarget,
+  type RectSource,
+} from "./drop-targets";
+export {
+  blockAllowedAt,
+  registrySlotSource,
+  type InsertTarget,
+  type SlotSource,
+} from "./inserter";
+
+/**
+ * @experimental When a drag is allowed to change the target it has committed
+ * to.
+ *
+ * Separate from the drop rules above because it decides something different:
+ * those say what the pointer is over NOW, this says when that answer may
+ * replace the one being drawn. Keeping them apart is what lets a region
+ * boundary be an ordinary candidate change rather than a case of its own.
+ */
+export {
+  nextTargetSwitchState,
+  NO_TARGET,
+  type PendingTarget,
+  type TargetId,
+  type TargetSwitchState,
+} from "./target-switch";

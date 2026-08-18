@@ -56,8 +56,48 @@ const SRC_DIR = dirname(fileURLToPath(import.meta.url));
  */
 const GEOMETRY_MODULE = "geometry.ts";
 
+/**
+ * The module that READS what the mapping needs from the DOM.
+ *
+ * A second allowed path, and deliberately not a widening of the rule this file
+ * enforces. `geometry.ts` documents itself as taking plain numbers so the
+ * arithmetic stays testable without a browser, which leaves the reads somewhere
+ * — and that somewhere has been `geometry-dom.ts` since it was split out. The
+ * two together ARE the boundary; the invariant is that a rectangle enters this
+ * package through one door, not that the door has one file behind it.
+ *
+ * The caution in the docblock still stands and still bites: the allowance is
+ * these two exact paths, so `overlay-geometry.ts` and `overlays/geometry-dom.ts`
+ * are both refused. Adding a third is a decision to be argued in a review, not a
+ * name to be chosen.
+ */
+const GEOMETRY_DOM_MODULE = "geometry-dom.ts";
+
 /** This file, which necessarily names the reads it is looking for. */
 const OWN_TEST = "geometry-ownership.test.ts";
+
+/**
+ * Whether a file is a test, which this guard does not constrain.
+ *
+ * A family of names, deliberately, and the one place that is safe here — for a
+ * STRUCTURAL reason rather than a convenience one. The invariant is that the
+ * editor maps between coordinate spaces in one place, and "the editor" is what
+ * ships: nothing in `dist` can reach a test file, because no entry point
+ * references one. A second mapping written in a test is therefore not a second
+ * mapping the editor could ever use.
+ *
+ * A test also has a legitimate need the product code does not. jsdom lays
+ * nothing out and reports every element as zero-sized, so a fixture with a
+ * position has to ASSIGN `getBoundingClientRect` — and an assignment reads to
+ * this scan exactly as a call does. Refusing those would make the geometry the
+ * one part of this package that cannot be exercised against a DOM.
+ *
+ * `layering.test.ts` makes the same split for the same reason, holding a
+ * separate `ALLOWED_IN_TESTS` list beside its runtime one.
+ */
+function isTest(file: string): boolean {
+  return /\.test\.(ts|tsx|mts)$/.test(file);
+}
 
 /** Whether a file IS the named module, by its path beneath `src`. */
 function isModule(file: string, relativePath: string): boolean {
@@ -134,16 +174,22 @@ function crossFrameReads(text: string, file: string): string[] {
 describe("rectangles are read across the frame in one place", () => {
   const files = sourceFiles(SRC_DIR);
 
-  it("has files to check", () => {
+  it("has PRODUCT files to check", () => {
     // A guard that read nothing reports the same clean pass as one that read
     // everything and found nothing, and a renamed directory is all it takes.
-    expect(files.length).toBeGreaterThan(0);
+    //
+    // Counted after the test files are removed, which is the half that matters
+    // now they are exempt: a scan that had somehow reduced to tests alone would
+    // constrain nothing while still satisfying a bare "found some files".
+    expect(files.filter(file => !isTest(file)).length).toBeGreaterThan(0);
   });
 
   it("finds no cross-frame read outside the geometry module", () => {
     const offenders = files
       .filter(file => !isModule(file, GEOMETRY_MODULE))
+      .filter(file => !isModule(file, GEOMETRY_DOM_MODULE))
       .filter(file => !isModule(file, OWN_TEST))
+      .filter(file => !isTest(file))
       .flatMap(file => {
         const reads = crossFrameReads(readFileSync(file, "utf8"), file);
         return reads.map(read => `${relative(SRC_DIR, file)} reads ${read}`);
@@ -166,6 +212,23 @@ describe("rectangles are read across the frame in one place", () => {
     // allowance is now the path rather than a shape of name.
     expect(
       isModule(join(SRC_DIR, "overlays", "geometry.ts"), GEOMETRY_MODULE)
+    ).toBe(false);
+
+    // The SECOND allowance carries the same narrowness, asserted rather than
+    // assumed. A second allowed path is where an exact-match rule quietly
+    // becomes a family of names, because the argument for adding one reads just
+    // as well the third time.
+    expect(
+      isModule(join(SRC_DIR, "geometry-dom.ts"), GEOMETRY_DOM_MODULE)
+    ).toBe(true);
+    expect(
+      isModule(join(SRC_DIR, "canvas-geometry-dom.ts"), GEOMETRY_DOM_MODULE)
+    ).toBe(false);
+    expect(
+      isModule(
+        join(SRC_DIR, "overlays", "geometry-dom.ts"),
+        GEOMETRY_DOM_MODULE
+      )
     ).toBe(false);
   });
 

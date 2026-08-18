@@ -36,15 +36,19 @@
 import {
   hasBlock,
   registerBlocks,
+  registryNestingSource,
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
 import { CORE_CATEGORIES, coreBlocks } from "@nextlyhq/blocks-react/blocks";
+import { registrySlotSource } from "@nextlyhq/builder";
 import {
   BlockKeyboardActions,
   BuilderShell,
   Canvas,
+  DropIndicator,
   InsertPanel,
   InspectorPanel,
+  useCanvasDrag,
   useEditorState,
 } from "@nextlyhq/builder/shell";
 import { useSuppressAdminChrome } from "@nextlyhq/plugin-sdk/admin";
@@ -194,6 +198,19 @@ function BlocksEditor({
   const editor = useEditorState({ initialDocument });
 
   /*
+   * Dragging blocks on the canvas.
+   *
+   * The registry answers both questions, and it is the SAME registry the
+   * inserter reads — so a container the palette will put a block into is a
+   * container a drag can aim at. Given separate sources the two would disagree,
+   * and a block would behave differently depending on how the author reached
+   * it.
+   */
+  const slots = useMemo(registrySlotSource, []);
+  const nesting = useMemo(registryNestingSource, []);
+  const drag = useCanvasDrag({ editor, slots, nesting });
+
+  /*
    * Writing back on the way out rather than on every keystroke.
    *
    * The form owns the value and its dirty flag; the editor owns the document
@@ -260,6 +277,12 @@ function BlocksEditor({
           siteStyles={siteSheet()}
           selectedId={editor.selectedId}
           onSelect={editor.select}
+          dragHandlers={drag.handlers}
+          // The indicator is the only chrome drawn over the page today. It goes
+          // through the canvas rather than beside it because it is positioned in
+          // the canvas's own content coordinates, which the canvas root is what
+          // establishes.
+          overlay={<DropIndicator target={drag.target} />}
         />
       </BuilderShell>
     </div>

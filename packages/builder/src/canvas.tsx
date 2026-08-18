@@ -35,6 +35,8 @@ import type { PageRendererProps } from "@nextlyhq/blocks-react";
 import { cn } from "@nextlyhq/ui/utils";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
+import type { CanvasDragHandlers } from "./canvas-drag";
+
 /**
  * The class marking the canvas root, and the boundary the hit-test stops at.
  *
@@ -116,6 +118,24 @@ export interface CanvasProps {
    */
   render?: Omit<PageRendererProps, "document" | "siteStyles">;
   className?: string;
+  /**
+   * Pointer handlers for dragging blocks, from `useCanvasDrag`.
+   *
+   * Taken as an object rather than as individual props so the set cannot be
+   * partially wired: a canvas carrying `onPointerDown` without `onPointerUp`
+   * starts gestures it never ends, and the failure is a canvas that behaves
+   * normally until the first drag.
+   */
+  dragHandlers?: CanvasDragHandlers;
+  /**
+   * Editor chrome drawn ABOVE the page — the drop indicator today.
+   *
+   * Inside the root rather than beside it, because the overlay is positioned in
+   * the canvas's own content coordinates and the root is what establishes them.
+   * Rendered after the page so it paints on top without needing a stacking
+   * context of its own.
+   */
+  overlay?: React.ReactNode;
 }
 
 /**
@@ -133,6 +153,8 @@ export function Canvas({
   onSelect,
   render,
   className,
+  dragHandlers,
+  overlay,
 }: CanvasProps) {
   const root = useRef<HTMLDivElement | null>(null);
   const handleClick = useCallback(
@@ -204,8 +226,14 @@ export function Canvas({
       // right up until someone writes a selector against the wrong one.
       data-nx-selected-id={selectedId ?? undefined}
       onClick={handleClick}
+      // Spread rather than merged with a handler of this component's own: the
+      // canvas has no pointer behaviour of its own apart from the drag, so
+      // there is nothing to combine, and merging would create a second place
+      // where the two could be ordered wrongly.
+      {...dragHandlers}
     >
       {page}
+      {overlay}
     </div>
   );
 }
