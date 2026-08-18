@@ -32,6 +32,8 @@
  * @module components/features/entries/TranslationMode/TranslationPanes
  */
 
+import type { Control, FieldValues } from "react-hook-form";
+
 import { useSuppressAdminChrome } from "@admin/components/layout/ChromeSuppression";
 import {
   ResizableHandle,
@@ -42,6 +44,8 @@ import { cn } from "@admin/lib/utils";
 
 import { SourceDocumentPane } from "./SourceDocumentPane";
 import type { SourcePaneDocument } from "./SourceDocumentPane";
+import { TranslationFieldProvider } from "./TranslationFieldContext";
+import { TranslationProgress } from "./TranslationProgress";
 
 export interface TranslationPanesProps {
   /**
@@ -64,15 +68,26 @@ export interface TranslationPanesProps {
   onExit?: (() => void) | undefined;
   /** The editor. Rendered in the target pane when the mode is on. */
   children: React.ReactNode;
+  /**
+   * The target form's control, so the bar can report how far along this
+   * language is as the translator types.
+   *
+   * The control rather than a rendered node: both editors were assembling the
+   * same progress element at the call site, derivation and all. Reading a form
+   * here is safe — the bar must contain nothing that WRITES, which is a
+   * different rule and one `useWatch` does not break.
+   */
+  control?: Control<FieldValues> | undefined;
 }
 
 export function TranslationPanes({
   source,
   onExit = () => {},
   children,
+  control,
 }: TranslationPanesProps) {
   return source ? (
-    <ActivePanes source={source} onExit={onExit}>
+    <ActivePanes source={source} onExit={onExit} control={control}>
       {children}
     </ActivePanes>
   ) : (
@@ -92,10 +107,12 @@ function ActivePanes({
   source,
   onExit,
   children,
+  control,
 }: {
   source: SourcePaneDocument;
   onExit: () => void;
   children: React.ReactNode;
+  control?: Control<FieldValues> | undefined;
 }) {
   // `documentSidebar` is deliberately absent: this asks for the admin's
   // furniture, and the editor's own rail is the document's, collapsed through
@@ -107,7 +124,7 @@ function ActivePanes({
 
   return (
     <div className="flex h-dvh flex-col">
-      <ModeBar source={source} onExit={onExit} />
+      <ModeBar source={source} onExit={onExit} control={control} />
       {/* Sizes are PERCENTAGE STRINGS, and that is load-bearing rather than a
           style choice: this library reads a bare number as PIXELS, so
           `defaultSize={40}` is a 40-pixel pane. A layout in pixels is also
@@ -133,7 +150,30 @@ function ActivePanes({
               the rail hides and its language panel takes over inline. No
               translation-mode branch anywhere in the form. */}
           <div className="@container/content h-full overflow-y-auto">
-            {children}
+            {/* The pane stands in for `PageContainer`, so it owes the same
+                horizontal padding. The editor cancels that padding itself at
+                `@4xl` with `-m-8` to run edge-to-edge — a negative margin with
+                nothing to cancel makes its layout 64px WIDER than the pane, so
+                the document rail is laid out past the right edge and clipped.
+                Measured before this: a 921px pane holding a 985px row.
+
+                On an INNER element, deliberately: the container is declared
+                above, and an element cannot query itself — padding written up
+                there would resolve against the page and reintroduce exactly the
+                mismatch this fixes. */}
+            {/* The per-field source, provided around the TARGET alone. The
+                source pane is a sibling, so its own fields read the default and
+                offer nothing — a field cannot fill itself from itself. */}
+            <TranslationFieldProvider
+              value={{
+                sourceValues: source.values,
+                sourceLabel: source.sourceLabel,
+              }}
+            >
+              <div className="px-4 @sm/content:px-6 @2xl/content:px-8">
+                {children}
+              </div>
+            </TranslationFieldProvider>
           </div>
         </ResizablePanel>
       </ResizablePanelGroup>
@@ -153,9 +193,11 @@ function ActivePanes({
 function ModeBar({
   source,
   onExit,
+  control,
 }: {
   source: SourcePaneDocument;
   onExit: () => void;
+  control?: Control<FieldValues> | undefined;
 }) {
   return (
     <div className="flex shrink-0 items-center gap-3 border-b border-border bg-background px-4 py-2">
@@ -170,6 +212,9 @@ function ModeBar({
         {source.sourceLabel}
       </span>
       <span className="flex-1" />
+      {control && (
+        <TranslationProgress control={control} fields={source.fields} />
+      )}
       <button
         type="button"
         onClick={onExit}
