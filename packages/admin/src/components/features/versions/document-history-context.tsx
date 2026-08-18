@@ -34,10 +34,35 @@ export interface ViewedVersion {
   error: Error | null;
 }
 
+/**
+ * Restoring, offered by the panel that owns the mutation and its confirmation.
+ *
+ * Published rather than reimplemented beside the banner: a second restore path
+ * would be a second answer to "may this caller write, and what happens when
+ * they do" — and the panel already holds the permission, the mutation and the
+ * dialog that guards it.
+ */
+export interface RestoreAffordance {
+  /** Whether this caller may write the document at all. */
+  canRestore: boolean;
+  /** Opens the panel's confirmation for the version currently on screen. */
+  request: () => void;
+  /**
+   * Returns to the live document THROUGH the panel, so its own selection is
+   * cleared with the shared one. Clearing only the shared state would leave a
+   * row marked active for a version no longer on screen, with restore and
+   * compare still aimed at it, and clicking that row again a no-op.
+   */
+  returnToCurrent: () => void;
+}
+
 export interface DocumentHistoryValue {
   /** The version on screen in place of the live document, or null for live. */
   viewing: ViewedVersion | null;
   setViewing: (viewing: ViewedVersion | null) => void;
+  /** Present only while the history panel is mounted to provide it. */
+  restore: RestoreAffordance | null;
+  setRestore: (restore: RestoreAffordance | null) => void;
 }
 
 /**
@@ -48,6 +73,8 @@ export interface DocumentHistoryValue {
 export const DocumentHistoryContext = createContext<DocumentHistoryValue>({
   viewing: null,
   setViewing: () => {},
+  restore: null,
+  setRestore: () => {},
 });
 
 export function useDocumentHistory(): DocumentHistoryValue {

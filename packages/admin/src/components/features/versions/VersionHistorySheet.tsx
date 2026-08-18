@@ -14,7 +14,7 @@
  * @module components/features/versions/VersionHistorySheet
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   Alert,
@@ -179,7 +179,7 @@ export function VersionHistorySheet({
   // Hand the chosen version to the document area, and take it back whenever
   // nothing is chosen — including when the panel closes, so dismissing it never
   // strands the editor on a version it can no longer see the list for.
-  const { setViewing } = useDocumentHistory();
+  const { setViewing, setRestore } = useDocumentHistory();
   const viewedSnapshot = detail.data?.snapshot;
   const viewedLocale = detail.data?.locale ?? null;
   const viewedLoading = detail.isLoading;
@@ -216,6 +216,24 @@ export function VersionHistorySheet({
     if (!open) return;
     return () => setViewing(null);
   }, [open, setViewing]);
+
+  // Restoring is offered from the banner in the document, which is where the
+  // reader is looking — but it stays THIS component's mutation, guarded by
+  // this component's confirmation. Only the trigger travels.
+  const requestRestore = useCallback(() => setConfirmingRestore(true), []);
+  // Clears this panel's own selection as well as the shared one, so the list
+  // stops marking a row active for a version that is no longer on screen.
+  const returnToCurrent = useCallback(() => setSelected(null), []);
+  useEffect(() => {
+    if (!open || selected === null) {
+      setRestore(null);
+      return;
+    }
+    setRestore({ canRestore, request: requestRestore, returnToCurrent });
+    // Withdrawn on unmount as well as on close: a banner left holding a
+    // trigger into an unmounted panel would open a dialog nothing renders.
+    return () => setRestore(null);
+  }, [open, selected, canRestore, requestRestore, returnToCurrent, setRestore]);
 
   const restore = useRestoreVersion({
     scope,

@@ -20,10 +20,12 @@ import { useCallback, useMemo, useState } from "react";
 
 import {
   DocumentHistoryContext,
+  type RestoreAffordance,
   type ViewedVersion,
 } from "@admin/components/features/versions/document-history-context";
 import { HistoricalDocumentBanner } from "@admin/components/features/versions/HistoricalDocumentBanner";
 import { historyEnabledFrom } from "@admin/components/features/versions/history-enabled";
+import { snapshotToFormValues } from "@admin/components/features/versions/snapshot-to-form-values";
 import { VersionSnapshotForm } from "@admin/components/features/versions/VersionSnapshotForm";
 import { Alert, AlertDescription, Skeleton } from "@admin/components/ui";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
@@ -317,10 +319,31 @@ export function EntryForm({
   const [viewingVersion, setViewingVersion] = useState<ViewedVersion | null>(
     null
   );
+  // Published by the history panel while it is mounted, so the banner can
+  // offer restoring without a second copy of the permission or the mutation.
+  const [restoreAffordance, setRestoreAffordance] =
+    useState<RestoreAffordance | null>(null);
   const documentHistory = useMemo(
-    () => ({ viewing: viewingVersion, setViewing: setViewingVersion }),
-    [viewingVersion]
+    () => ({
+      viewing: viewingVersion,
+      setViewing: setViewingVersion,
+      restore: restoreAffordance,
+      setRestore: setRestoreAffordance,
+    }),
+    [viewingVersion, restoreAffordance]
   );
+
+  // Which fields a version HAD, decided by that version's own values. The
+  // takeover layout is value-driven, so computing it from the live entry would
+  // show today's layout over yesterday's document — omitting fields the version
+  // stored, or offering fields it never had.
+  const historicalFields = useMemo(() => {
+    if (!viewingVersion) return null;
+    return computeMainFields(allFields, {
+      takeoverTypes,
+      values: snapshotToFormValues(allFields, viewingVersion.snapshot),
+    });
+  }, [viewingVersion, allFields, takeoverTypes]);
 
   // Whether this collection has Draft/Published status enabled at the meta
   // level. When true, the system header splits into Save Draft + Publish/Update
@@ -599,7 +622,13 @@ export function EntryForm({
                     <HistoricalDocumentBanner
                       versionNo={viewingVersion.versionNo}
                       locale={viewingVersion.locale}
-                      onReturnToCurrent={() => setViewingVersion(null)}
+                      // Routed through the panel when one is mounted, so its
+                      // selection clears with the shared state. The direct
+                      // fallback keeps the banner working without a panel.
+                      onReturnToCurrent={
+                        restoreAffordance?.returnToCurrent ??
+                        (() => setViewingVersion(null))
+                      }
                     />
                   ) : null}
                   <EntryMetaStrip
@@ -654,7 +683,7 @@ export function EntryForm({
                         </div>
                       ) : (
                         <VersionSnapshotForm
-                          fields={mainFields}
+                          fields={historicalFields ?? mainFields}
                           snapshot={viewingVersion.snapshot}
                         />
                       )}
