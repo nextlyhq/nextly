@@ -265,8 +265,15 @@ export function FieldWrapper({
   // Subtle marker on shared fields in a multilingual collection: their value applies to every
   // language and has no per-language draft state (spec §7), so editing one changes all — surface
   // it so editors aren't surprised. Only meaningful for real (named) data fields.
+  //
+  // Only while editing a NON-default language: on the default language every
+  // field behaves normally and the distinction has no consequence yet, so the
+  // badge on every shared field was noise on the ordinary editing path. The
+  // surprise it guards against — "editing this changes other languages too" —
+  // only exists once another language is the one being edited.
   const sharedHint =
     entryLocale.collectionLocalized &&
+    entryLocale.isNonDefaultLocale &&
     !isLocalizedField &&
     fieldName != null ? (
       // The whole fact is written out rather than abbreviated to "Shared"
