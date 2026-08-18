@@ -37,11 +37,8 @@ import { lazy, Suspense, useState, useEffect } from "react";
 import { useFormContext, useWatch } from "react-hook-form";
 
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
-import {
-  useBranding,
-  useBrandingStatus,
-} from "@admin/context/providers/BrandingProvider";
 import { evaluateCondition } from "@admin/lib/builder/condition-evaluator";
+import { usePluginFieldType } from "@admin/lib/plugins/plugin-field-type";
 
 import { FieldWrapper } from "./FieldWrapper";
 import { UploadInput } from "./media/UploadInput";
@@ -254,8 +251,6 @@ export function FieldRenderer({
     control,
   } = useFormContext();
 
-  // C7/D16 — plugin-registered custom field types, delivered via /admin-meta.
-  const branding = useBranding();
   /*
    * The plugin list arrives from the SESSION-GATED half of admin-meta, so it is
    * absent for a moment on every load — and a field whose type lives in a
@@ -266,7 +261,7 @@ export function FieldRenderer({
    * would say so has not come back. Only the first is a fact about the project;
    * treating the second as one reports a correctly-configured field as broken.
    */
-  const { isPending: pluginsPending } = useBrandingStatus();
+  const pluginFieldType = usePluginFieldType(field.type);
 
   // Determine if field should be read-only or disabled
   // Cast to any to handle fields that don't have readOnly/disabled in their admin options
@@ -354,11 +349,14 @@ export function FieldRenderer({
   // This is deliberately a STRUCTURAL question rather than a check against the
   // field's type name: an override leaves the type untouched while replacing
   // the component entirely, so no list of composite type names can see it.
+  //
+  // Derived from the one lookup above rather than scanning the plugin list a
+  // second time. Two scans of one list for one fact agree today and drift the
+  // first time either changes what it matches.
   const hasPluginEditor =
     Boolean(adminOptions?.component) ||
-    (branding?.plugins ?? [])
-      .flatMap(p => p.fieldTypes ?? [])
-      .some(ft => ft.type === (field.type as string));
+    (pluginFieldType.status === "ready" &&
+      pluginFieldType.component !== undefined);
 
   return (
     <FieldWrapper
@@ -553,26 +551,45 @@ export function FieldRenderer({
       // Unknown Type
       // =========================================
       default: {
-        // C7/D16 — a plugin-registered custom field type renders via its
-        // contributed editor component (PluginSlot isolates it, D53).
-        const customComponent = (branding?.plugins ?? [])
-          .flatMap(p => p.fieldTypes ?? [])
-          .find(ft => ft.type === fieldType)?.component;
-        if (customComponent) {
+        /*
+         * C7/D16 — a plugin-registered custom field type renders via its
+         * contributed editor component (PluginSlot isolates it, D53).
+         *
+         * The lookup reports whether the plugin list can answer at all, so the
+         * "unknown type" sentence below is reachable only from a list that
+         * actually arrived. Reading `branding.plugins` here instead would make
+         * a failed request indistinguishable from a project with no plugins.
+         */
+        if (pluginFieldType.status === "loading") return <EditorSkeleton />;
+        if (pluginFieldType.status === "unavailable") {
+          /*
+           * A THIRD state, not a slower version of the skeleton above.
+           *
+           * A skeleton says something is coming. The request is issued with
+           * `retry: false`, so once it has failed nothing is coming and a
+           * skeleton would leave the field pretending to load for as long as
+           * the server stays unreachable. Falling through to "unknown field
+           * type" is worse still: it blames the field for a request that
+           * failed, so a correctly-installed plugin reads as a broken
+           * configuration.
+           */
+          return (
+            <div className="rounded-lg border border-border bg-muted/50 p-4 text-center">
+              <p className="text-sm text-muted-foreground">
+                This field could not be loaded because the list of installed
+                plugins is unavailable. Reload the page to try again.
+              </p>
+            </div>
+          );
+        }
+        if (pluginFieldType.component) {
           return (
             <PluginSlot
-              path={customComponent}
+              path={pluginFieldType.component}
               props={{ ...commonProps, field }}
             />
           );
         }
-        /*
-         * The list that would name this type has not answered yet, so nothing
-         * is known about it. Reporting it as unknown here states a conclusion
-         * the data does not support, and it is the WRONG one for every
-         * plugin-contributed field on the page.
-         */
-        if (pluginsPending) return <EditorSkeleton />;
         return (
           <div className="rounded-lg  border border-destructive bg-destructive/10 p-4 text-center">
             <p className="text-sm text-destructive">

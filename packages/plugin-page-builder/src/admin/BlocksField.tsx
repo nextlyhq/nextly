@@ -48,6 +48,8 @@ import {
   DropIndicator,
   InsertPanel,
   InspectorPanel,
+  LayersPanel,
+  SelectionBreadcrumb,
   useCanvasDrag,
   useEditorState,
 } from "@nextlyhq/builder/shell";
@@ -77,14 +79,14 @@ export interface BlocksFieldProps<
 /**
  * Every left panel the editor can fill today.
  *
- * The inserter only; layers and the rest are not built. The shell draws all
+ * The inserter and the layers tree; the rest are not built. The shell draws all
  * seven regardless and disables the ones nothing fills, so the rail describes
  * the editor's shape while never opening a region with nothing in it. Listing a
  * panel here that renders nothing would reserve space and shrink the canvas to
  * show it, which is why this grows one entry at a time rather than being
  * declared ahead of the panels.
  */
-const AVAILABLE_PANELS = ["insert"] as const;
+const AVAILABLE_PANELS = ["insert", "layers"] as const;
 
 /** Names the registry attributes these blocks to, for diagnostics. */
 const PLUGIN_SOURCE = "@nextlyhq/plugin-page-builder";
@@ -260,11 +262,19 @@ function BlocksEditor({
         // whatever the rail reports open. The shell asks for the panel it
         // opened, and a renderer ignoring that argument would draw the inserter
         // under every heading the moment a second panel is listed above.
-        renderPanel={panel =>
-          panel === "insert" ? (
-            <InsertPanel editor={editor} categoryOrder={CORE_CATEGORIES} />
-          ) : null
-        }
+        // The trail sits in the bottom bar, which the shell owns. Passed as a
+        // slot rather than rendered beside the canvas so it cannot overlap the
+        // page an author is editing.
+        breadcrumb={<SelectionBreadcrumb editor={editor} />}
+        renderPanel={panel => {
+          if (panel === "insert") {
+            return (
+              <InsertPanel editor={editor} categoryOrder={CORE_CATEGORIES} />
+            );
+          }
+          if (panel === "layers") return <LayersPanel editor={editor} />;
+          return null;
+        }}
       >
         {/*
           Inside the shell, which is what provides the shortcut context — a

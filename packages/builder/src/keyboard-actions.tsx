@@ -20,12 +20,12 @@
  * @module keyboard-actions
  */
 
-import { getBlock } from "@nextlyhq/blocks-engine";
 import { useShortcuts } from "@nextlyhq/ui";
 import * as React from "react";
 
 import { blockDeletion } from "./delete-block";
 import type { EditorState } from "./editor-state";
+import { blockLabel } from "./inserter";
 import {
   keyboardMovePosition,
   type MoveDirection,
@@ -111,7 +111,7 @@ function deletionAnnouncement(type: string, descendants: number): string {
   // the label is what they were shown. Resolved here rather than carried on the
   // deletion, because the deletion is a document fact and the wording is a
   // presentation one.
-  const name = getBlock(type)?.editor?.label ?? type;
+  const name = blockLabel(type);
   const what =
     descendants === 0
       ? `${name} deleted`

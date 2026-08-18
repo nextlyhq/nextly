@@ -42,8 +42,8 @@ import { EmailInput } from "@admin/components/features/entries/fields/text/Email
 import { TextareaInput } from "@admin/components/features/entries/fields/text/TextareaInput";
 import { TextInput } from "@admin/components/features/entries/fields/text/TextInput";
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
-import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useUserFields } from "@admin/hooks/queries/useUserFields";
+import { usePluginFieldType } from "@admin/lib/plugins/plugin-field-type";
 import type { UserFieldDefinitionRecord } from "@admin/services/userFieldsApi";
 
 // ============================================================================
@@ -267,7 +267,7 @@ function UserFieldInput({
   error,
   disabled,
 }: UserFieldInputProps) {
-  const branding = useBranding();
+  const pluginFieldType = usePluginFieldType(fieldConfig.type);
   const isCheckbox = fieldConfig.type === "checkbox";
 
   return (
@@ -360,9 +360,27 @@ function UserFieldInput({
             </p>
           </div>
         );
-        const customComponent = (branding.plugins ?? [])
-          .flatMap(plugin => plugin.fieldTypes ?? [])
-          .find(fieldType => fieldType.type === fieldConfig.type)?.component;
+        /*
+         * The plugin list has three states and only one supports the sentence
+         * above. Reading it directly made "Unsupported field type" the answer
+         * while the list was still in flight AND when it had failed outright,
+         * so a correctly-installed plugin field read as a broken one on every
+         * load and stayed that way whenever the request did not come back.
+         */
+        if (pluginFieldType.status === "loading") {
+          return <Skeleton className="h-10 w-full" />;
+        }
+        if (pluginFieldType.status === "unavailable") {
+          return (
+            <div className="rounded-md border border-border bg-muted/50 p-3 text-center">
+              <p className="text-sm text-muted-foreground">
+                This field could not be loaded because the list of installed
+                plugins is unavailable. Reload the page to try again.
+              </p>
+            </div>
+          );
+        }
+        const customComponent = pluginFieldType.component;
         if (customComponent) {
           return (
             <PluginSlot
