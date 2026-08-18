@@ -90,6 +90,57 @@ function lockedBy(locked: BlockNode, selectedId: string): string {
 }
 
 /**
+ * The bar for a selection holding more than one block.
+ *
+ * **Duplicate and delete keep their meaning; move and select-parent lose it.**
+ * Copying six blocks is six copies each beside its own original, and removing
+ * six is removing six — both are the single-block verb repeated, which is
+ * exactly what `selection-ops` plans. Moving is not: a set spread across two
+ * containers has no shared list to move within, and "the parent" of blocks with
+ * different parents is not a block. Offering either would mean inventing an
+ * answer to a question the author did not ask.
+ *
+ * The bar keeps its five buttons and its one shape rather than shrinking to
+ * two. A control that vanishes when a second block is selected moves every
+ * button after it, so the one an author was aiming at is somewhere else by the
+ * time they arrive — the same reason unavailable actions are dimmed rather than
+ * hidden with a single block.
+ */
+function manyBlockActions(
+  document: BlockDocument,
+  ids: readonly string[]
+): ToolbarAction[] {
+  const many = `Only one block at a time. ${ids.length} are selected.`;
+  const deleteLock = ids
+    .map(id => lockBlockingDelete(document, id))
+    .find(node => node !== undefined);
+
+  return [
+    {
+      id: "select-parent",
+      label: "Select parent",
+      enabled: false,
+      reason: many,
+    },
+    { id: "move-up", label: "Move up", enabled: false, reason: many },
+    { id: "move-down", label: "Move down", enabled: false, reason: many },
+    // A lock never stops a duplication, for a set as for one block: the
+    // originals stay where they are.
+    { id: "duplicate", label: "Duplicate", enabled: true },
+    deleteLock === undefined
+      ? { id: "delete", label: "Delete", enabled: true }
+      : {
+          id: "delete",
+          label: "Delete",
+          enabled: false,
+          // ONE lock refuses the whole delete, because the group is applied
+          // atomically and there is no half-done delete to fall back to.
+          reason: `${layerLabel(deleteLock)} is locked. Unlock it to delete.`,
+        },
+  ];
+}
+
+/**
  * The toolbar's buttons for the current selection, or `[]` when there is none.
  *
  * `[]` also covers a selected id the document no longer holds, which an undo
@@ -98,12 +149,23 @@ function lockedBy(locked: BlockNode, selectedId: string): string {
  */
 export function toolbarActions(
   document: BlockDocument,
-  selectedId: string | null
+  selectedId: string | null,
+  /**
+   * Every selected id. Defaults to the primary alone.
+   *
+   * Optional so a caller with one block — the command palette, a host that has
+   * not adopted the set — keeps the same answer it had. What changes for a
+   * SET is which verbs are well defined, not which rules decide them.
+   */
+  selectedIds?: readonly string[]
 ): ToolbarAction[] {
   if (selectedId === null) return [];
 
   const path = pathTo(document, selectedId);
   if (path.length === 0) return [];
+
+  const ids = selectedIds ?? [selectedId];
+  if (ids.length > 1) return manyBlockActions(document, ids);
 
   const moveLock = lockBlockingMove(document, selectedId);
   const deleteLock = lockBlockingDelete(document, selectedId);
@@ -157,6 +219,34 @@ export function toolbarActions(
           reason: lockedBy(deleteLock, selectedId),
         },
   ];
+}
+
+/**
+ * The smallest rectangle containing all of them, or `undefined` for none.
+ *
+ * What a floating bar anchors to once a selection can hold several blocks. The
+ * PRIMARY's rectangle would be the easy choice and is the wrong one: with two
+ * blocks selected at opposite ends of a page, a bar drawn at one of them
+ * describes an action that is about to happen to both, and the author cannot
+ * see the other. The union is the shape the selection actually occupies.
+ */
+export function unionRect(rects: readonly Rect[]): Rect | undefined {
+  const [first, ...rest] = rects;
+  if (first === undefined) return undefined;
+
+  let left = first.x;
+  let top = first.y;
+  let right = first.x + first.width;
+  let bottom = first.y + first.height;
+
+  for (const rect of rest) {
+    left = Math.min(left, rect.x);
+    top = Math.min(top, rect.y);
+    right = Math.max(right, rect.x + rect.width);
+    bottom = Math.max(bottom, rect.y + rect.height);
+  }
+
+  return { x: left, y: top, width: right - left, height: bottom - top };
 }
 
 /** How big the bar measured, in canvas content pixels. */

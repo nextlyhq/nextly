@@ -36,6 +36,7 @@ import {
 } from "@admin/hooks/queries/useSingles";
 import { useEditorLocale } from "@admin/hooks/useEditorLocale";
 import { useLocalization } from "@admin/hooks/useLocalization";
+import { useTranslationMode } from "@admin/hooks/useTranslationMode";
 import { navigateTo } from "@admin/lib/navigation";
 
 // ============================================================================
@@ -185,14 +186,29 @@ export default function SingleEditPage({
     translationStatus: localizationEnabled,
   });
 
-  // i18n: while translating a non-default language, also load the default-language document so the
-  // editor can show the source text inline on each translatable field. Gated so it only fires when
-  // actually translating another language.
+  // i18n: while translating another language, also load the SOURCE document so
+  // the editor can show its text — inline on each translatable field, and in
+  // translation mode's source pane.
   const isNonDefaultLocale =
     !!locale && !!defaultLocale && locale !== defaultLocale;
+  const { translateFrom, enterTranslationMode, exitTranslationMode } =
+    useTranslationMode({
+      activeLocale: locale,
+      defaultLocale,
+    });
+  // The language the source is read AT. Translation mode names it explicitly;
+  // otherwise the inline hint's source has always been the app default.
+  const sourceLocale = translateFrom ?? defaultLocale;
   const { data: sourceDoc } = useSingleDocument(slug, {
-    locale: defaultLocale,
-    queryOptions: { enabled: isNonDefaultLocale && !!slug },
+    locale: sourceLocale,
+    // No fallback, matching `entry-locale-source.ts`'s SOURCE_READ. With
+    // fallback on, an untranslated SOURCE field resolves to yet another
+    // language's text — which would be presented as this language's source and
+    // copied into the target as if it were a translation.
+    fallbackLocale: "none",
+    queryOptions: {
+      enabled: (isNonDefaultLocale || !!translateFrom) && !!slug,
+    },
   });
 
   // Update mutation — routes the save to the active language's companion row.
@@ -318,6 +334,12 @@ export default function SingleEditPage({
           {...(seedFromLocale === undefined ? {} : { seedFromLocale })}
           onSeedHandled={clearSeed}
           sourceValues={isNonDefaultLocale ? sourceDoc : undefined}
+          translation={{
+            from: translateFrom,
+            sourceDocument: sourceDoc,
+            onEnter: enterTranslationMode,
+            onExit: exitTranslationMode,
+          }}
           // collections, so the page route owns navigation. Breadcrumbs and
           // DocumentTabs (Edit / API) are removed; the API view is reachable
           // via the consolidated dropdown in the system header.

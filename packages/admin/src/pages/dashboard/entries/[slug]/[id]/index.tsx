@@ -32,6 +32,7 @@ import { useEntry } from "@admin/hooks/queries/useEntry";
 import { useEditorLocale } from "@admin/hooks/useEditorLocale";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { usePluginAutoRegistration } from "@admin/hooks/usePluginAutoRegistration";
+import { useTranslationMode } from "@admin/hooks/useTranslationMode";
 import { navigateTo } from "@admin/lib/navigation";
 import {
   getComponent,
@@ -275,12 +276,16 @@ export default function EditEntryPage({
   // the primary fetch above (same cache key) and needs no source copy.
   const isNonDefaultLocale =
     !!locale && !!defaultLocale && locale !== defaultLocale;
+  const { translateFrom, enterTranslationMode, exitTranslationMode } =
+    useTranslationMode({ activeLocale: locale, defaultLocale });
+  // The language the source is read AT. Translation mode names it explicitly;
+  // otherwise the inline hint's source has always been the app default.
   const { data: sourceEntry } = useEntry({
     collectionSlug: slug || "",
     entryId: id,
     depth: 2,
-    locale: defaultLocale,
-    enabled: isNonDefaultLocale,
+    locale: translateFrom ?? defaultLocale,
+    enabled: isNonDefaultLocale || !!translateFrom,
   });
 
   // Auto-register plugin components when collection is loaded
@@ -510,6 +515,12 @@ export default function EditEntryPage({
           {...(seedFromLocale === undefined ? {} : { seedFromLocale })}
           onSeedHandled={clearSeed}
           sourceValues={sourceEntry}
+          translation={{
+            from: translateFrom,
+            sourceDocument: sourceEntry,
+            onEnter: enterTranslationMode,
+            onExit: exitTranslationMode,
+          }}
           onSuccess={handleSuccess}
           onDelete={handleDelete}
           onCancel={handleCancel}

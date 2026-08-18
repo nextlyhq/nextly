@@ -21,6 +21,7 @@ import {
   TOOLBAR_GAP_PX,
   toolbarActions,
   toolbarPlacement,
+  unionRect,
   type ToolbarAction,
   type ToolbarActionId,
 } from "./toolbar-actions";
@@ -266,5 +267,102 @@ describe("toolbarPlacement", () => {
         height: 800,
       }).x
     ).toBe(0);
+  });
+});
+
+describe("unionRect", () => {
+  it("is the rectangle itself for one", () => {
+    expect(unionRect([{ x: 10, y: 20, width: 30, height: 40 }])).toEqual({
+      x: 10,
+      y: 20,
+      width: 30,
+      height: 40,
+    });
+  });
+
+  it("spans two rectangles that do not touch", () => {
+    // What a bar anchors to once a selection can hold blocks at opposite ends
+    // of a page. Anchoring at one of them would describe an action about to
+    // happen to a block the author cannot see.
+    expect(
+      unionRect([
+        { x: 0, y: 0, width: 10, height: 10 },
+        { x: 100, y: 200, width: 20, height: 5 },
+      ])
+    ).toEqual({ x: 0, y: 0, width: 120, height: 205 });
+  });
+
+  it("is unaffected by the order they arrive in", () => {
+    const a = { x: 50, y: 5, width: 10, height: 10 };
+    const b = { x: 0, y: 40, width: 10, height: 10 };
+
+    expect(unionRect([a, b])).toEqual(unionRect([b, a]));
+  });
+
+  it("answers with nothing for an empty selection", () => {
+    expect(unionRect([])).toBeUndefined();
+  });
+});
+
+describe("toolbarActions for MORE than one block", () => {
+  it("keeps duplicate and delete, which repeat cleanly", () => {
+    const document = documentOf([node("a"), node("b")]);
+    const actions = toolbarActions(document, "a", ["a", "b"]);
+
+    expect(actionOf(actions, "duplicate").enabled).toBe(true);
+    expect(actionOf(actions, "delete").enabled).toBe(true);
+  });
+
+  it("withdraws move and select-parent, which do not", () => {
+    /*
+     * A set spread across two containers has no shared list to move within, and
+     * "the parent" of blocks with different parents is not a block. Offering
+     * either would invent an answer to a question the author did not ask.
+     */
+    const document = documentOf([node("a"), node("b")]);
+    const actions = toolbarActions(document, "a", ["a", "b"]);
+
+    for (const id of ["move-up", "move-down", "select-parent"] as const) {
+      expect(actionOf(actions, id).enabled).toBe(false);
+      expect(actionOf(actions, id).reason).toBe(
+        "Only one block at a time. 2 are selected."
+      );
+    }
+  });
+
+  it("keeps the same five buttons in the same order", () => {
+    // A control that vanished when a second block was selected would move every
+    // button after it, so the one an author was aiming at is somewhere else by
+    // the time they arrive.
+    const document = documentOf([node("a"), node("b")]);
+
+    expect(toolbarActions(document, "a", ["a", "b"]).map(x => x.id)).toEqual(
+      toolbarActions(document, "a").map(x => x.id)
+    );
+  });
+
+  it("ONE lock refuses the whole delete, and names it", () => {
+    const document = documentOf([
+      node("a"),
+      node("b", "acme/heading", { locked: true, name: "Pinned" }),
+    ]);
+    const actions = toolbarActions(document, "a", ["a", "b"]);
+
+    expect(actionOf(actions, "delete").enabled).toBe(false);
+    expect(actionOf(actions, "delete").reason).toBe(
+      "Pinned is locked. Unlock it to delete."
+    );
+    // Still duplicable: the originals stay where they are.
+    expect(actionOf(actions, "duplicate").enabled).toBe(true);
+  });
+
+  it("answers exactly as before for a set of ONE, which is the control", () => {
+    // Without this, the multi branch could be taken for every selection and
+    // every single-block case above would still pass.
+    const document = documentOf([node("a"), node("b")]);
+
+    expect(toolbarActions(document, "a", ["a"])).toEqual(
+      toolbarActions(document, "a")
+    );
   });
 });

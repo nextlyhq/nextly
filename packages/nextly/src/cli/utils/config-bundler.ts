@@ -50,17 +50,18 @@ import { mkdir, rm } from "node:fs/promises";
 import { dirname, join, basename, extname } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { build, type Plugin } from "esbuild";
+import type { Plugin } from "esbuild";
+
+import { loadEsbuild } from "./esbuild-loader";
 
 // Turbopack-bypass: the Function constructor body is a string — Turbopack's
 // static analyzer never sees the `import(path)` call inside it, so it
 // cannot emit "Cannot find module as expression is too dynamic". At runtime
 // the returned function performs a real dynamic ESM import.
 // eslint-disable-next-line @typescript-eslint/no-implied-eval
-const opaqueImport = new Function(
-  "path",
-  "return import(path)"
-) as (path: string) => Promise<unknown>;
+const opaqueImport = new Function("path", "return import(path)") as (
+  path: string
+) => Promise<unknown>;
 
 export interface BundleConfigResult {
   // The default-or-namespace export of the compiled config module.
@@ -135,6 +136,12 @@ export async function bundleAndRequire(
   };
 
   try {
+    // Loaded per call rather than held at module scope: this is the optional
+    // peer, and a module-level handle would have to resolve at import time,
+    // which is exactly what an optional dependency cannot promise. A
+    // production install that never compiles a config never reaches this.
+    const { build } = await loadEsbuild();
+
     const result = await build({
       entryPoints: [filepath],
       bundle: true,
