@@ -100,3 +100,43 @@ export const LANGUAGE_STATE_LABEL: Record<LanguageState, string> = {
   translated: "translated",
   published: "published",
 };
+
+/**
+ * Whether ONE field carries a translation.
+ *
+ * Blank-is-empty, matching what copy-from-language already treats as "present"
+ * and what the backend treats as untranslated — a field holding only whitespace
+ * has not been translated, and reporting it done would inflate every count that
+ * uses this.
+ *
+ * Deliberately structural rather than a comparison against the source: a
+ * translation that legitimately matches its source (a product name, a URL) is
+ * still a translation, and flagging it as outstanding would send a translator
+ * back to work that is finished.
+ */
+export function isFieldTranslated(value: unknown): boolean {
+  if (value === null || value === undefined) return false;
+  if (typeof value === "string") return value.trim() !== "";
+  if (Array.isArray(value)) return value.length > 0;
+  return true;
+}
+
+/**
+ * How far along ONE language's fields are, for the pair on screen.
+ *
+ * The document-level {@link translationCounts} answers "how many LANGUAGES",
+ * read off the backend's `_translations` map. This answers "how many FIELDS",
+ * read off the form's live values — so it moves as the translator types, which
+ * the stored map cannot do. Two different questions, deliberately not one
+ * function with a mode flag.
+ */
+export function fieldTranslationCounts(
+  fieldNames: readonly string[],
+  values: Record<string, unknown> | undefined
+): { translated: number; total: number } {
+  let translated = 0;
+  for (const name of fieldNames) {
+    if (isFieldTranslated(values?.[name])) translated += 1;
+  }
+  return { translated, total: fieldNames.length };
+}

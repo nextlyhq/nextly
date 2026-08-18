@@ -29,6 +29,7 @@ import { Button } from "@nextlyhq/ui";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { cn } from "@admin/lib/utils";
 
+import { CompletenessMeter } from "./CompletenessMeter";
 import { CopyFromLanguageDialog } from "./CopyFromLanguageDialog";
 import { useEntryLocale } from "./EntryLocaleContext";
 import {
@@ -68,27 +69,6 @@ export interface LanguagePanelProps {
  * The completeness meter. `aria-hidden` because the count beside it states the
  * same fact in words — a reader would otherwise hear the progress twice.
  */
-function CompletenessMeter({
-  translated,
-  total,
-}: {
-  translated: number;
-  total: number;
-}) {
-  if (total === 0) return null;
-  return (
-    <span
-      aria-hidden="true"
-      className="inline-flex h-1.5 w-16 overflow-hidden rounded-sm bg-muted"
-    >
-      <span
-        className="block bg-foreground"
-        style={{ width: `${(translated / total) * 100}%` }}
-      />
-    </span>
-  );
-}
-
 function LanguageRow({
   code,
   label,
@@ -114,26 +94,42 @@ function LanguageRow({
 }) {
   return (
     <li className="flex items-center gap-2 px-3 py-2 border-b border-border last:border-b-0">
-      <StateDot state={state} />
-      <span className="text-sm font-medium">{label}</span>
-      {isDefault && (
-        <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-          default
+      {/* The describing half SHRINKS and the acting half does not. This row
+          lives in a 320px rail, and with a long label, a `default`/`rtl` badge
+          and a state to report there is not always room for both buttons —
+          measured, the "Open" of an untranslated RTL language sat 38px past the
+          row's own right edge, unreachable by pointer. Truncating the state text
+          costs nothing that is not said elsewhere: the dot encodes it by SHAPE,
+          and the language button's accessible name carries it in words. */}
+      <div className="flex min-w-0 flex-1 items-center gap-2">
+        <StateDot state={state} />
+        {/* The language NAME does not yield. It is the row's identity, and a
+            flex row that shrinks everything proportionally turned "Arabic" into
+            "A…" — which names nothing — while the state beside it still read in
+            full. The state text below is the one thing that gives way. */}
+        <span className="shrink-0 whitespace-nowrap text-sm font-medium">
+          {label}
         </span>
-      )}
-      {rtl && (
-        <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-          rtl
+        {isDefault && (
+          <span className="shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground">
+            default
+          </span>
+        )}
+        {rtl && (
+          <span className="shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground">
+            rtl
+          </span>
+        )}
+        <span className="min-w-0 truncate text-xs text-muted-foreground">
+          {LANGUAGE_STATE_LABEL[state]}
         </span>
-      )}
-      <span className="text-xs text-muted-foreground">
-        {LANGUAGE_STATE_LABEL[state]}
-      </span>
-      <span className="flex-1" />
+      </div>
       {isActive ? (
-        <span className="text-xs text-muted-foreground">editing now</span>
+        <span className="shrink-0 text-xs text-muted-foreground">
+          editing now
+        </span>
       ) : (
-        <>
+        <div className="flex shrink-0 items-center gap-1.5">
           {/* Offered only where it is the useful next step: a language with
               nothing in it. Seeding one that already has content is the
               overwrite the confirm step exists to warn about, and it stays
@@ -171,7 +167,7 @@ function LanguageRow({
               Open
             </Button>
           )}
-        </>
+        </div>
       )}
     </li>
   );

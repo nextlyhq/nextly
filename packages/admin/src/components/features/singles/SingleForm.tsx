@@ -529,6 +529,7 @@ export function SingleForm({
         <TranslationPanes
           source={translationMode.source}
           onExit={translationMode.onExit}
+          control={form.control}
         >
           <div className={cn("space-y-0", className)}>
             <EntryFormProvider form={form} onSubmit={handleSubmit}>

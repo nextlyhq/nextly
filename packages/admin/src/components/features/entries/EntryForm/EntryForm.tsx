@@ -600,6 +600,7 @@ export function EntryForm({
           <TranslationPanes
             source={translationMode.source}
             onExit={translationMode.onExit}
+            control={form.control}
           >
             <EntryFormContextProvider
               entryId={entry?.id}

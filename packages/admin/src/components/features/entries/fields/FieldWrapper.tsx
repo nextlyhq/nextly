@@ -20,6 +20,7 @@ import { useLabelLandingCheck } from "@admin/lib/forms/label-landing";
 import { cn } from "@admin/lib/utils";
 
 import { useEntryLocale } from "../EntryLocaleContext";
+import { UseSourceButton } from "../TranslationMode/UseSourceButton";
 
 import { useFieldElementId } from "./field-id-scope";
 
@@ -309,6 +310,15 @@ export function FieldWrapper({
     </p>
   ) : null;
 
+  // In translation mode the source is already on screen in its own pane, so the
+  // field offers the ACTION rather than repeating the text: fill this one field
+  // from the source. Renders nothing outside the mode, and nothing on the source
+  // pane's own fields — that pane sits outside the context this reads.
+  const useSourceAction =
+    isLocalizedField && fieldName != null ? (
+      <UseSourceButton fieldName={fieldName} fieldLabel={label} />
+    ) : null;
+
   // Don't render if hidden
   if (isHidden) {
     return null;
@@ -443,6 +453,10 @@ export function FieldWrapper({
           Below the input it read as a footnote about the field rather than as
           the text being translated. */}
       {sourceHint}
+
+      {useSourceAction && (
+        <div className="flex justify-end">{useSourceAction}</div>
+      )}
 
       {/* Input (children) */}
       {children}
