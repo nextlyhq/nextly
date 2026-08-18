@@ -296,6 +296,88 @@ describe("moving through it with the keyboard", () => {
   });
 });
 
+describe("Alt is left to the host", () => {
+  it("does not move focus on alt+ArrowDown, and does not consume the event", () => {
+    /*
+     * A host binding `alt+ArrowDown` — reordering the selected block, in the
+     * page editor — otherwise loses it exactly where an author is most likely
+     * to press it. The switch reads `event.key`, and `ArrowDown` is
+     * `ArrowDown` whatever modifiers are held, so the row took focus and
+     * called `preventDefault` instead.
+     */
+    render(
+      <TreeView
+        aria-label="Layers"
+        nodes={[
+          { id: "a", label: "A" },
+          { id: "b", label: "B" },
+        ]}
+      />
+    );
+    const tree = screen.getByRole("tree");
+
+    focusRow("A");
+    const handled = fireEvent.keyDown(tree, {
+      key: "ArrowDown",
+      altKey: true,
+    });
+
+    // Focus stays put: navigation did not happen.
+    expect(document.activeElement?.textContent).toContain("A");
+    // And the event was NOT cancelled, so it goes on bubbling to the host.
+    // `fireEvent` returns false only when something called preventDefault.
+    expect(handled).toBe(true);
+  });
+
+  it("still navigates on a BARE ArrowDown, which is the control", () => {
+    // Without this, the assertion above passes on a tree that ignores every
+    // arrow key — including the ones it is supposed to handle.
+    render(
+      <TreeView
+        aria-label="Layers"
+        nodes={[
+          { id: "a", label: "A" },
+          { id: "b", label: "B" },
+        ]}
+      />
+    );
+    const tree = screen.getByRole("tree");
+
+    focusRow("A");
+    const handled = fireEvent.keyDown(tree, { key: "ArrowDown" });
+
+    expect(document.activeElement?.textContent).toContain("B");
+    expect(handled).toBe(false);
+  });
+
+  it("leaves alt+ArrowRight alone rather than expanding a branch", () => {
+    // The host binds all four directions; Right and Left are its indent and
+    // outdent, and expanding here would answer a gesture meant for the editor.
+    render(
+      <TreeView
+        aria-label="Layers"
+        nodes={[
+          {
+            id: "section",
+            label: "Section",
+            children: [{ id: "kid", label: "Kid" }],
+          },
+        ]}
+      />
+    );
+    const tree = screen.getByRole("tree");
+
+    focusRow("Section");
+    fireEvent.keyDown(tree, { key: "ArrowRight", altKey: true });
+
+    expect(screen.queryByText("Kid")).toBeNull();
+    // Control: the same key without Alt does expand, so the assertion above is
+    // about the modifier rather than about the branch being unopenable.
+    fireEvent.keyDown(tree, { key: "ArrowRight" });
+    expect(screen.getByText("Kid")).toBeTruthy();
+  });
+});
+
 describe("arrow keys stay inside the hierarchy", () => {
   it("does not leave the branch when an expanded one has nothing to enter", () => {
     // An empty array marks a branch, so Right on an already-open empty one has nowhere to go. A

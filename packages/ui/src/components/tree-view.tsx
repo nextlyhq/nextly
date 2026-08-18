@@ -413,6 +413,22 @@ const TreeView = React.forwardRef<HTMLDivElement, TreeViewProps>(
       const row = rows[index];
       if (row === undefined) return;
 
+      /*
+       * Alt belongs to the HOST, so nothing here claims it.
+       *
+       * The tree pattern uses bare arrows to move, Shift to extend and Ctrl to
+       * toggle; Alt appears nowhere in it, which leaves the chord free for
+       * whatever embeds the tree. A host that binds one — `alt+ArrowUp` to
+       * reorder, say — otherwise loses it exactly where the author is most
+       * likely to press it, because the switch below reads `event.key` and
+       * `ArrowUp` is `ArrowUp` whatever modifiers are down. The row then takes
+       * focus, calls `preventDefault`, and the host's binding never fires.
+       *
+       * Returning WITHOUT `preventDefault` is the whole point: the event has to
+       * go on bubbling for the host to see it.
+       */
+      if (event.altKey) return;
+
       switch (event.key) {
         case "ArrowDown":
           event.preventDefault();
