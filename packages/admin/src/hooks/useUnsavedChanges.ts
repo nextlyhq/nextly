@@ -63,6 +63,19 @@ export interface UseUnsavedChangesReturn {
    * Whether navigation is currently blocked.
    */
   isBlocked: boolean;
+
+  /**
+   * Declare that the navigation about to happen is deliberate, so it is not
+   * questioned.
+   *
+   * For the cases where the author has ALREADY answered this dialog's question
+   * by choosing the action — discarding changes, or leaving after a save. Those
+   * reset the form and navigate in the same breath, and the reset cannot reach
+   * this hook before the navigation does: the interceptor reads `isDirty` from
+   * the render that registered it, which is still the dirty one. So the intent
+   * is stated rather than inferred from state that has not caught up.
+   */
+  leaveWithoutWarning: () => void;
 }
 
 interface PendingNavigation {
@@ -171,6 +184,17 @@ export function useUnsavedChanges({
       }, 100);
     }
   }, [onConfirmLeave]);
+
+  // Deliberate leave: suppress the next interception. The window is generous
+  // because the caller navigates on the next tick or two (a form reset, a
+  // mutation settling), and it closes itself so a suppression can never leak
+  // into a later navigation the author did not ask for.
+  const leaveWithoutWarning = useCallback(() => {
+    isNavigating.current = true;
+    setTimeout(() => {
+      isNavigating.current = false;
+    }, 500);
+  }, []);
 
   // Cancel leaving - stay on page
   const cancelLeave = useCallback(() => {
@@ -368,5 +392,6 @@ export function useUnsavedChanges({
     confirmLeave,
     cancelLeave,
     isBlocked,
+    leaveWithoutWarning,
   };
 }
