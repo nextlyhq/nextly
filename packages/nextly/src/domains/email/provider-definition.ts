@@ -203,6 +203,19 @@ export interface EmailProviderDefinition<TConfig = Record<string, unknown>> {
   testConnection?: (
     config: TConfig
   ) => Promise<{ ok: boolean; detail?: string }>;
+  /**
+   * Whether this install can run the provider at all.
+   *
+   * Distinct from `testConnection`, which asks whether a CONFIGURATION works.
+   * This asks whether the code could run given one, which is a question about
+   * the machine rather than the credentials -- so it takes no config and is
+   * answered before anything is filled in.
+   *
+   * Omit it unless the provider needs something the host may not have. A
+   * provider that declares nothing is treated as ready, which is right for
+   * every transport that speaks over `fetch`.
+   */
+  checkAvailability?: () => ProviderAvailability;
 }
 
 /**
@@ -1154,6 +1167,11 @@ export interface RegisteredEmailProvider {
   ) => Promise<{ ok: boolean; detail?: string }>;
   /** Whether a probe exists, without exposing it. */
   readonly hasConnectionTest: boolean;
+  /**
+   * Present only when the definition supplied one. Takes no configuration, so
+   * unlike the other callbacks it needs no erased wrapper.
+   */
+  checkAvailability?: () => ProviderAvailability;
 }
 
 /**
@@ -1618,6 +1636,10 @@ export function defineEmailProvider<TConfig>(
         }
       : undefined,
     hasConnectionTest: typeof probe === "function",
+    // Forwarded rather than invoked here: the answer belongs to the moment the
+    // catalog is built, not to the moment the provider was defined, so calling
+    // it now would freeze the state the process started in.
+    checkAvailability: definition.checkAvailability,
   });
 }
 
@@ -1628,6 +1650,30 @@ export function defineEmailProvider<TConfig>(
  * compiled against. Functions are dropped rather than serialized to `undefined`
  * by accident, and nothing here carries a stored value.
  */
+/**
+ * Whether a registered provider can actually run on this install.
+ *
+ * A provider can be registered and still be unusable, because the transport
+ * library it needs is an optional peer dependency the host never installed.
+ * The admin has to be able to say so precisely, naming the package and the
+ * command, rather than offering an option that fails when a message is sent.
+ *
+ * A union rather than a boolean plus loose fields: "ready" carries nothing to
+ * report, and the unavailable case is useless without the remedy, so the two
+ * states have genuinely different shapes.
+ */
+export type ProviderAvailability =
+  | { status: "ready" }
+  | {
+      status: "needs-dependency";
+      /** The npm package that is missing. */
+      packageName: string;
+      /** The exact command that installs it. */
+      installCommand: string;
+      /** Where the provider documents its setup, when it does. */
+      docsUrl?: string;
+    };
+
 export interface EmailProviderDescriptor {
   type: string;
   label: string;
@@ -1636,6 +1682,7 @@ export interface EmailProviderDescriptor {
   senderGuidance?: string;
   capabilities: EmailProviderCapabilities;
   configFields: ReadonlyArray<EmailProviderConfigField>;
+  availability: ProviderAvailability;
 }
 
 /** Reduce a registered provider to what may safely leave the server. */
@@ -1890,6 +1937,47 @@ export function toDescriptor(
         typeof provider.testConnectionFrom === "function",
     },
     configFields: provider.configFields.map(publishableField),
+    availability: publishableAvailability(provider),
+  };
+}
+
+/**
+ * Whether this provider can run here, in the shape a client may receive.
+ *
+ * Asked at descriptor time rather than read from a stored flag: availability is
+ * a property of the machine, and a value captured at module load would keep
+ * reporting the state the process started in after an operator installs the
+ * package and restarts.
+ *
+ * Rebuilt key by key for the reason `publishableField` is: the definition is a
+ * structural type, so a JavaScript plugin can return an object carrying
+ * anything, and a spread would publish all of it to every client holding read.
+ */
+function publishableAvailability(
+  provider: RegisteredEmailProvider
+): ProviderAvailability {
+  let reported: ProviderAvailability;
+
+  try {
+    reported = provider.checkAvailability?.() ?? { status: "ready" };
+  } catch {
+    // A provider that cannot answer the question is not one to offer. Failing
+    // the whole catalog instead would let one badly written plugin take the
+    // Settings page down for every other provider on the install.
+    return {
+      status: "needs-dependency",
+      packageName: provider.type,
+      installCommand: `Check what the ${provider.label} provider requires before selecting it.`,
+    };
+  }
+
+  if (reported.status === "ready") return { status: "ready" };
+
+  return {
+    status: "needs-dependency",
+    packageName: reported.packageName,
+    installCommand: reported.installCommand,
+    ...(reported.docsUrl !== undefined ? { docsUrl: reported.docsUrl } : {}),
   };
 }
 
