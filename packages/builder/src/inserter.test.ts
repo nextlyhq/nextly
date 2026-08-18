@@ -21,6 +21,7 @@ import {
 
 import {
   UNCATEGORISED,
+  type SlotSource,
   allowedEntries,
   catalogFrom,
   entryAllowedAt,
@@ -546,6 +547,11 @@ describe("entryAllowedAt and allowedEntries", () => {
   });
 });
 
+/** A slot source over a fixed map, standing in for the registry. */
+function slotsFor(map: Record<string, readonly string[]>): SlotSource {
+  return { slotsOf: type => map[type] };
+}
+
 describe("insertionPointFor", () => {
   it("appends at the end of the document when nothing is selected", () => {
     const document = documentOf([
@@ -609,6 +615,81 @@ describe("insertionPointFor", () => {
 
     expect(insertionPointFor(document, "gone")?.kind).toBe("document-end");
     expect(insertionPointFor(document, "gone")?.at).toEqual({ index: 1 });
+  });
+
+  it("places into an EMPTY container rather than beside it", () => {
+    // THE case. Without this a container can be inserted and never filled:
+    // every insert lands as a sibling, so a columns block arrives empty and
+    // stays empty, and every container in the library is decorative.
+    const document = documentOf([
+      { id: "wrap", type: "acme/columns", version: 1, props: {} },
+    ]);
+
+    expect(
+      insertionPointFor(
+        document,
+        "wrap",
+        slotsFor({ "acme/columns": ["children"] })
+      )
+    ).toEqual({
+      kind: "inside-selection",
+      at: { parentId: "wrap", slot: "children", index: 0 },
+      target: { at: "slot", parentType: "acme/columns", slot: "children" },
+    });
+  });
+
+  it("places BESIDE a container that already holds something", () => {
+    // The separating case, and what keeps a sibling reachable at all. A
+    // container the author has filled takes a sibling; adding a third child is
+    // done by selecting the second and inserting after it.
+    const document = documentOf([
+      {
+        id: "wrap",
+        type: "acme/columns",
+        version: 1,
+        props: {},
+        slots: {
+          children: [{ id: "kid", type: "acme/text", version: 1, props: {} }],
+        },
+      },
+    ]);
+
+    expect(
+      insertionPointFor(
+        document,
+        "wrap",
+        slotsFor({ "acme/columns": ["children"] })
+      )?.kind
+    ).toBe("after-selection");
+  });
+
+  it("reads the DEFINITION's slots, not the node's", () => {
+    // A container inserted from the palette carries no `slots` key at all, so a
+    // rule asking the node whether it is a container answers "no" for exactly
+    // the empty ones that need filling. Same node as the first case; without a
+    // source it can only be a sibling.
+    const document = documentOf([
+      { id: "wrap", type: "acme/columns", version: 1, props: {} },
+    ]);
+
+    expect(insertionPointFor(document, "wrap")?.kind).toBe("after-selection");
+  });
+
+  it("places beside a leaf, whatever the source says", () => {
+    // The control: a block declaring no slots is not a container, so the rule
+    // must not claim one. Without it, a source answering for every type would
+    // send every insert inside its own selection.
+    const document = documentOf([
+      { id: "a", type: "acme/text", version: 1, props: {} },
+    ]);
+
+    expect(
+      insertionPointFor(
+        document,
+        "a",
+        slotsFor({ "acme/columns": ["children"] })
+      )?.kind
+    ).toBe("after-selection");
   });
 
   it("is empty-document safe", () => {
