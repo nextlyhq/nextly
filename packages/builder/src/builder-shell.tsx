@@ -1120,7 +1120,7 @@ export function BuilderShell({ store, ...props }: BuilderShellProps) {
               <div
                 ref={setOverlayHost}
                 data-slot="builder-overlay-host"
-                style={{ position: "absolute", width: 0, height: 0 }}
+                className="absolute h-0 w-0"
               />
               {/*
                * `null` until the host mounts, which `usePortalContainer` reads

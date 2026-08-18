@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import noHardcodedColors from "./rules/no-hardcoded-colors.js";
 import noPaletteClasses from "./rules/no-palette-classes.js";
 import noStaticInlineStyle from "./rules/no-static-inline-style.js";
+import noTokenAlphaSuffix from "./rules/no-token-alpha-suffix.js";
 
 // Read rather than hardcoded: the version is published metadata and a second
 // copy of it drifts the moment the release tooling bumps one and not the other.
@@ -26,6 +27,7 @@ const plugin = {
     "no-palette-classes": noPaletteClasses,
     "no-hardcoded-colors": noHardcodedColors,
     "no-static-inline-style": noStaticInlineStyle,
+    "no-token-alpha-suffix": noTokenAlphaSuffix,
   },
   configs: {},
 };
@@ -46,6 +48,7 @@ Object.assign(plugin.configs, {
         "@nextlyhq/no-palette-classes": "error",
         "@nextlyhq/no-hardcoded-colors": "error",
         "@nextlyhq/no-static-inline-style": "error",
+        "@nextlyhq/no-token-alpha-suffix": "error",
       },
     },
   ],
