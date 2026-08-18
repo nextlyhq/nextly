@@ -358,8 +358,21 @@ function getDefaultValues(
     const existingValue =
       existingData?.[fieldName] ?? existingData?.[toSnakeCase(fieldName)];
 
+    // A STORED NULL for a structural field is not a value to keep. The field's
+    // own inputs materialise the shape as they register — `seo: null` becomes
+    // `{ metaTitle: null, ... }` the moment its sub-fields mount — so taking the
+    // null verbatim guarantees the form's values can never equal its defaults,
+    // and the document reports itself edited before anyone has typed. Fall
+    // through to the structural default instead, which is the shape the form
+    // will actually hold.
+    const isStructural = field.type === "component" || field.type === "group";
+    const isRepeatable =
+      (field as { repeatable?: boolean }).repeatable === true;
+    const nullStructural =
+      existingValue === null && isStructural && !isRepeatable;
+
     // Use existing value if available
-    if (existingValue !== undefined) {
+    if (existingValue !== undefined && !nullStructural) {
       // Coerce checkbox values to boolean — the database may store/return
       // them as strings ("true"/"false") or integers (0/1).
       const fieldType = field.type as string;
