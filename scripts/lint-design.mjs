@@ -54,7 +54,7 @@ import {
  * they are site starters, and a palette colour on someone's own marketing page
  * is their design decision rather than a theme violation.
  */
-function deriveRoots() {
+export function deriveRoots() {
   const roots = [];
   const add = path => {
     if (existsSync(path)) roots.push(path);
@@ -90,6 +90,11 @@ const FILE_ALLOWLIST = ["plugin-page-builder/src/core/style-compiler.ts"];
 const PLUGIN_SURFACE_RE =
   /(?:^|\/)(?:packages\/plugin-[^/]+|templates\/plugin)\//;
 
+/** Whether this path is a plugin surface, and so subject to the stricter rules. */
+export function isPluginSurface(file) {
+  return PLUGIN_SURFACE_RE.test(file);
+}
+
 // Admin's reviewed `!important` baseline (see packages/admin/src/styles/globals.css). The
 // guard fails if this grows; lower it when overrides are removed.
 const ADMIN_IMPORTANT_BASELINE = 35;
@@ -99,7 +104,7 @@ const COLOR_LITERAL_RE = createColorLiteralPattern();
 const PALETTE_CLASS_RE = createPaletteClassPattern();
 
 /** True for a line that is nothing but a comment — `//`, `/* … *​/`, or a JSDoc `*`. */
-function isCommentLine(line) {
+export function isCommentLine(line) {
   const t = line.trim();
   return t.startsWith("//") || t.startsWith("*") || t.startsWith("/*");
 }
@@ -124,7 +129,7 @@ const listFiles = roots =>
 
 /** A color-literal line is exempt when nothing but mode-invariant black/white/transparent
  *  (or an allowed construct) remains after stripping the permitted pieces. */
-function colorLiteralIsExempt(line, file) {
+export function colorLiteralIsExempt(line, file) {
   if (hasExemptionDirective(line)) return true;
   if (FILE_ALLOWLIST.some((f) => file.endsWith(f))) return true;
   // The Tailwind palette scale (`--color-blue-500: #3b82f6`) is the literal
@@ -162,42 +167,61 @@ function refuse(missing) {
   process.exit(1);
 }
 
-const roots = deriveRoots();
-// Checked before `listFiles`, which shells out to `find`: with no paths that
-// command fails and takes the process down before any population is reported,
-// so the refusal below would be unreachable and the operator would see a stack
-// trace instead of the reason.
-if (roots.length === 0) refuse(["no roots"]);
+/**
+ * The four rules, each as its own decision so the reason a line is reported is
+ * separable from the loop that visits lines. Each returns the violation text,
+ * or `null` when the line is clean under that rule.
+ */
+export function tokenWrapViolation(at, line) {
+  if (!TOKEN_WRAP_RE.test(line)) return null;
+  return `${at}  token wrapped in color fn — use var(--token): ${line.trim()}`;
+}
 
-const files = listFiles(roots);
+export function colorLiteralViolation(at, line, file, { isCss, isPlugin }) {
+  if (!isCss && !isPlugin) return null;
+  if (!COLOR_LITERAL_RE.test(line)) return null;
+  if (colorLiteralIsExempt(line, file)) return null;
+  return `${at}  hardcoded color — use var(--token)/color-mix: ${line.trim()}`;
+}
 
-const violations = [];
-let adminImportant = 0;
-let pluginClassified = 0;
+export function paletteViolation(at, line, { isThemeSource }) {
+  if (isThemeSource || isCommentLine(line)) return null;
+  const match = PALETTE_CLASS_RE.exec(line);
+  if (!match || hasExemptionDirective(line)) return null;
+  return `${at}  palette class \`${match[1]}\` — ${paletteAdvice(match[1])}: ${line.trim()}`;
+}
 
-for (const file of files) {
+/**
+ * Audit one file's source.
+ *
+ * Takes the SOURCE rather than reading it, so the rules can be exercised
+ * without a fixture on disk — the reason this was previously untestable was
+ * that the only way to reach it was to run the whole scan.
+ *
+ * `!important` is counted rather than reported outside a plugin, because the
+ * admin carries a reviewed baseline that this returns for the caller to ratchet.
+ */
+export function auditFile(file, source) {
   const isCss = file.endsWith(".css");
-  const isPlugin = PLUGIN_SURFACE_RE.test(file);
-  if (isPlugin) pluginClassified += 1;
+  const isPlugin = isPluginSurface(file);
   // The theme declares the palette scales themselves; it is the one place the
   // hue names are the subject rather than a shortcut past the tokens.
   const isThemeSource = file.endsWith("ui/src/styles/theme.css");
-  const lines = readFileSync(file, "utf8").split("\n");
 
-  lines.forEach((line, i) => {
-    const at = `${file}:${i + 1}`;
+  const violations = [];
+  let adminImportant = 0;
 
-    // 1. token wrapped in a color function — everywhere.
-    if (TOKEN_WRAP_RE.test(line)) {
-      violations.push(`${at}  token wrapped in color fn — use var(--token): ${line.trim()}`);
+  source.split("\n").forEach((line, index) => {
+    const at = `${file}:${index + 1}`;
+
+    for (const found of [
+      tokenWrapViolation(at, line),
+      colorLiteralViolation(at, line, file, { isCss, isPlugin }),
+      paletteViolation(at, line, { isThemeSource }),
+    ]) {
+      if (found) violations.push(found);
     }
 
-    // 2. hardcoded color literal — CSS files (any package) or plugin source.
-    if ((isCss || isPlugin) && COLOR_LITERAL_RE.test(line) && !colorLiteralIsExempt(line, file)) {
-      violations.push(`${at}  hardcoded color — use var(--token)/color-mix: ${line.trim()}`);
-    }
-
-    // 3. !important — banned in plugins; baseline-capped in admin.
     if (line.includes("!important")) {
       if (isPlugin) {
         violations.push(`${at}  !important not allowed in plugins: ${line.trim()}`);
@@ -205,38 +229,56 @@ for (const file of files) {
         adminImportant += 1;
       }
     }
-
-    // 4. Tailwind palette utility — every package, every file type. The theme
-    //    defines its own `--color-{hue}-*` scales, so skip the file that owns them.
-    //    A comment naming a hue is prose (a JSDoc example, a note about what a
-    //    line used to be) and styles nothing, so whole-comment lines are skipped.
-    if (!isThemeSource && !isCommentLine(line)) {
-      const paletteMatch = PALETTE_CLASS_RE.exec(line);
-      if (paletteMatch && !hasExemptionDirective(line)) {
-        violations.push(
-          `${at}  palette class \`${paletteMatch[1]}\` — ${paletteAdvice(paletteMatch[1])}: ${line.trim()}`
-        );
-      }
-    }
   });
+
+  return { violations, adminImportant, isPlugin };
 }
 
 /**
- * What the run actually read, asserted before any verdict is reported.
- *
- * A scan whose roots resolved to nothing finds no violations and exits 0, which
- * is byte-identical to a clean repository. The three populations are reported
- * separately because they fail independently: roots can resolve while matching
- * no files, and files can be read while none of them is classified as a plugin
- * surface — and that last case makes every plugin-only rule inert while the
- * summary still reads as a pass.
+ * The populations whose emptiness means the run could not look, rather than
+ * that it looked and found nothing. Returned rather than printed so the caller
+ * decides, and so a test can ask without catching `process.exit`.
  */
-const empty = [
-  ["files", files.length],
-  ["plugin-surface files", pluginClassified],
-].filter(([, count]) => count === 0);
-if (empty.length > 0) refuse(empty.map(([label]) => `no ${label}`));
+export function emptyPopulations({ files, pluginClassified }) {
+  return [
+    ["files", files],
+    ["plugin-surface files", pluginClassified],
+  ]
+    .filter(([, count]) => count === 0)
+    .map(([label]) => `no ${label}`);
+}
 
+function main() {
+  const roots = deriveRoots();
+  // Checked before `listFiles`, which shells out to `find`: with no paths that
+  // command fails and takes the process down before any population is reported,
+  // so the refusal below would be unreachable and the operator would see a
+  // stack trace instead of the reason.
+  if (roots.length === 0) refuse(["no roots"]);
+
+  const files = listFiles(roots);
+
+  const violations = [];
+  let adminImportant = 0;
+  let pluginClassified = 0;
+
+  for (const file of files) {
+    const result = auditFile(file, readFileSync(file, "utf8"));
+    violations.push(...result.violations);
+    adminImportant += result.adminImportant;
+    if (result.isPlugin) pluginClassified += 1;
+  }
+
+  const empty = emptyPopulations({
+    files: files.length,
+    pluginClassified,
+  });
+  if (empty.length > 0) refuse(empty);
+
+  report({ roots, files, violations, adminImportant, pluginClassified });
+}
+
+function report({ roots, files, violations, adminImportant, pluginClassified }) {
 if (adminImportant > ADMIN_IMPORTANT_BASELINE) {
   violations.push(
     `admin: ${adminImportant} \`!important\` exceed the reviewed baseline of ${ADMIN_IMPORTANT_BASELINE}. ` +
@@ -259,3 +301,14 @@ console.log(
     `${adminImportant}/${ADMIN_IMPORTANT_BASELINE}.`
 );
 console.log(`  roots: ${roots.join(", ")}`);
+}
+
+// Runs only when invoked directly, so importing this module for tests does not
+// scan the repository or call `process.exit`. Matched on the script NAME rather
+// than by comparing `import.meta.url` to `process.argv[1]`: that comparison is
+// sensitive to how the path was resolved — a symlinked prefix breaks it, and
+// resolving with `realpathSync` breaks the opposite case, because
+// `--preserve-symlinks-main` is settable through `NODE_OPTIONS`.
+if (process.argv[1] && process.argv[1].endsWith("lint-design.mjs")) {
+  main();
+}
