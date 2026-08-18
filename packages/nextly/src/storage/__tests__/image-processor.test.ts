@@ -11,6 +11,16 @@ vi.mock("sharp", () => ({
   default: vi.fn(),
 }));
 
+/**
+ * The result of an operation that now returns null when this install has no
+ * image processing. Every test here mocks sharp, so a null is a real failure
+ * rather than the degraded path, and asserting it here says so once.
+ */
+function nonNull<T>(value: T | null): T {
+  if (value === null) throw new Error("expected a processed result, got null");
+  return value;
+}
+
 describe("ImageProcessor", () => {
   let processor: ImageProcessor;
   let mockSharpFunction: any;
@@ -55,9 +65,9 @@ describe("ImageProcessor", () => {
       const buffer = Buffer.from("fake image");
       const result = await processor.getMetadata(buffer);
 
-      expect(result.width).toBe(0);
-      expect(result.height).toBe(0);
-      expect(result.format).toBe("unknown");
+      expect(nonNull(result).width).toBe(0);
+      expect(nonNull(result).height).toBe(0);
+      expect(nonNull(result).format).toBe("unknown");
     });
   });
 
@@ -91,9 +101,9 @@ describe("ImageProcessor", () => {
         quality: 80,
         progressive: true,
       });
-      expect(result.buffer).toBe(mockProcessed.data);
-      expect(result.metadata.width).toBe(300);
-      expect(result.metadata.height).toBe(300);
+      expect(nonNull(result).buffer).toBe(mockProcessed.data);
+      expect(nonNull(result).metadata.width).toBe(300);
+      expect(nonNull(result).metadata.height).toBe(300);
     });
 
     it("should accept custom thumbnail size", async () => {
@@ -151,7 +161,7 @@ describe("ImageProcessor", () => {
         quality: 80,
         effort: 4,
       });
-      expect(result.metadata.format).toBe("webp");
+      expect(nonNull(result).metadata.format).toBe("webp");
     });
 
     it("should skip optimization for small WebP images", async () => {
@@ -166,8 +176,8 @@ describe("ImageProcessor", () => {
 
       const result = await processor.optimize(smallBuffer);
 
-      expect(result.buffer).toBe(smallBuffer);
-      expect(result.metadata.format).toBe("webp");
+      expect(nonNull(result).buffer).toBe(smallBuffer);
+      expect(nonNull(result).metadata.format).toBe("webp");
     });
 
     it("should accept custom quality parameter", async () => {
@@ -222,30 +232,35 @@ describe("ImageProcessor", () => {
         fit: "inside",
         withoutEnlargement: true,
       });
-      expect(result.metadata.width).toBe(800);
-      expect(result.metadata.height).toBe(600);
+      expect(nonNull(result).metadata.width).toBe(800);
+      expect(nonNull(result).metadata.height).toBe(600);
     });
   });
 
   describe("isValidImage", () => {
-    it("should return true for valid images", async () => {
+    it("reports 'valid' for an image the library reads", async () => {
       mockSharpFunction.mockReturnValue({
         metadata: vi.fn().mockResolvedValue({ width: 100, height: 100 }),
       });
 
-      const isValid = await processor.isValidImage(Buffer.from("valid image"));
+      const validity = await processor.isValidImage(Buffer.from("valid image"));
 
-      expect(isValid).toBe(true);
+      expect(validity).toBe("valid");
     });
 
-    it("should return false for invalid images", async () => {
+    it("reports 'invalid' when the library REFUSES the buffer", async () => {
       mockSharpFunction.mockReturnValue({
         metadata: vi.fn().mockRejectedValue(new Error("Invalid image")),
       });
 
-      const isValid = await processor.isValidImage(Buffer.from("not an image"));
+      const validity = await processor.isValidImage(
+        Buffer.from("not an image")
+      );
 
-      expect(isValid).toBe(false);
+      // "invalid" rather than "unknown": the library ran and rejected it,
+      // which is a verdict about the FILE and the only case that may refuse
+      // an upload.
+      expect(validity).toBe("invalid");
     });
   });
 

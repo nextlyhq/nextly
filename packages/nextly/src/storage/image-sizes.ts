@@ -160,6 +160,11 @@ export async function generateImageSizes(
         focalY: options.focalY ?? undefined,
       });
 
+      // No image processing on this install, so there is no variant to store.
+      // Skipping the whole set is right rather than failing the upload: image
+      // sizes are derived copies, and the original is already safe.
+      if (!resized) continue;
+
       // Build the variant filename
       const variantFilename = buildVariantFilename(
         originalFilename,
