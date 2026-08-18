@@ -32,6 +32,8 @@ import {
   DropdownMenuTrigger,
 } from "@admin/components/ui";
 
+import { ToolbarLabel } from "./toolbar-density";
+
 export interface PreviewActionsProps {
   /** Whether the collection has a preview URL configured. */
   isPreviewAvailable?: boolean;
@@ -110,9 +112,10 @@ export function PreviewActions({
         size={size}
         onClick={startPreview}
         disabled={disabled}
+        title={previewLabel}
       >
         <Eye className="h-4 w-4" />
-        {previewLabel}
+        <ToolbarLabel priority="secondary">{previewLabel}</ToolbarLabel>
       </Button>
     );
   }
@@ -125,13 +128,14 @@ export function PreviewActions({
         size={size}
         onClick={onCopyLink}
         disabled={disabled || isCopyingLink}
+        title={COPY_LABEL}
       >
         {isCopyingLink ? (
           <Loader2 className="h-4 w-4 animate-spin" />
         ) : (
           <Link2 className="h-4 w-4" />
         )}
-        {COPY_LABEL}
+        <ToolbarLabel priority="secondary">{COPY_LABEL}</ToolbarLabel>
       </Button>
     );
   }
@@ -148,13 +152,14 @@ export function PreviewActions({
           // says so: a control labelled only "Preview" that opens a list is a
           // different promise than the one it keeps.
           aria-label={`${previewLabel} options`}
+          title={`${previewLabel} options`}
         >
           {isCopyingLink ? (
             <Loader2 className="h-4 w-4 animate-spin" />
           ) : (
             <Eye className="h-4 w-4" />
           )}
-          {previewLabel}
+          <ToolbarLabel priority="secondary">{previewLabel}</ToolbarLabel>
           <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
         </Button>
       </DropdownMenuTrigger>

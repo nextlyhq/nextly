@@ -43,6 +43,7 @@ import { DocumentStatusLive } from "./DocumentStatusLive";
 import { effectiveEntryStatus } from "./entry-address";
 import { PreviewActions } from "./PreviewActions";
 import { ShowJSONDialog } from "./ShowJSONDialog";
+import { TOOLBAR_CONTAINER, ToolbarLabel } from "./toolbar-density";
 import { UnpublishConfirmDialog } from "./UnpublishConfirmDialog";
 import type { EntryData, EntryFormMode } from "./useEntryForm";
 
@@ -381,9 +382,16 @@ export function EntrySystemHeader({
 
   return (
     <div className="sticky top-0 z-30 bg-background border-b border-border">
-      <div className="px-6 py-3 flex items-center gap-3">
-        {/* Title input — borderless, 19px, autofocus on create */}
-        <div className="flex-1 min-w-0">
+      <div
+        className={cn(TOOLBAR_CONTAINER, "px-6 py-3 flex items-center gap-3")}
+      >
+        {/* Title input — borderless, 19px, autofocus on create.
+
+          The floor is the point: as a bare `flex-1 min-w-0` beside a cluster
+          that never shrank, the title was whatever was left over, and at common
+          window widths that was nothing. It now keeps a readable minimum and the
+          actions collapse around it (see `toolbar-density`). */}
+        <div className="flex-1 min-w-[10rem]">
           <input
             {...rhfRegister}
             ref={el => {
@@ -518,6 +526,7 @@ export function EntrySystemHeader({
                   size="sm"
                   disabled={isSubmitting || isInvalid}
                   onClick={onPublish}
+                  title="Publish"
                   data-status="published"
                 >
                   {isSubmitting ? (
@@ -525,7 +534,7 @@ export function EntrySystemHeader({
                   ) : (
                     <Globe className="h-3.5 w-3.5" />
                   )}
-                  Publish
+                  <ToolbarLabel priority="lifecycle">Publish</ToolbarLabel>
                 </Button>
               )}
               {canUnpublishDocument && (
@@ -537,10 +546,11 @@ export function EntrySystemHeader({
                   size="sm"
                   disabled={isSubmitting}
                   onClick={() => setUnpublishOpen(true)}
+                  title="Unpublish"
                   data-status="unpublish"
                 >
                   <EyeOff className="h-3.5 w-3.5" />
-                  Unpublish
+                  <ToolbarLabel priority="lifecycle">Unpublish</ToolbarLabel>
                 </Button>
               )}
             </>
@@ -565,6 +575,7 @@ export function EntrySystemHeader({
                   size="sm"
                   disabled={isSubmitting || isInvalid}
                   onClick={onPublish}
+                  title="Publish"
                   data-status="published"
                 >
                   {isSubmitting ? (
@@ -572,7 +583,7 @@ export function EntrySystemHeader({
                   ) : (
                     <Globe className="h-3.5 w-3.5" />
                   )}
-                  Publish
+                  <ToolbarLabel priority="lifecycle">Publish</ToolbarLabel>
                 </Button>
               )}
             </>
