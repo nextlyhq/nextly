@@ -159,35 +159,50 @@ async function main() {
     );
   }
 
-  // Auto-build workspace packages if the doctor flagged missing dist.
-  // The seed sub-process (and the runtime itself) imports compiled dist
-  // artifacts, so a fresh clone without `pnpm build` crashes seed and
-  // produces HTTP 500s in /admin. Turbo's cache makes this a no-op on
-  // subsequent runs once dist exists, so the cost is paid once.
-  if (!results.buildArtifacts.ok) {
-    console.log(
-      "[nextly] First boot detected (no built dist outputs). " +
-        "Running `pnpm turbo build --filter='./packages/*'`..."
+  /*
+   * Build the workspace before starting, every time.
+   *
+   * This used to run only when the doctor reported missing artifacts, and that
+   * gate could not see the case it most needed to: the doctor checks ONE
+   * sentinel directory — `packages/nextly/dist` — for being non-empty. A
+   * `packages/builder/dist` that is stale, partial or absent entirely leaves
+   * that sentinel untouched, so the build was skipped and `next dev` started
+   * against whatever happened to be on disk.
+   *
+   * The failure that produces does not look like a missing build. The page
+   * builder's stylesheet `@import`s `@nextlyhq/builder/styles.css`, which
+   * resolves through that package's export map into `dist`; when the file is
+   * not there the import throws a CssSyntaxError naming
+   * `plugin-page-builder/dist/styles/editor.css`, and the WHOLE ADMIN renders
+   * blank. Two sessions lost time to it in one day, neither of them looking at
+   * the package that was actually unbuilt.
+   *
+   * Running unconditionally replaces a proxy — does one directory exist — with
+   * the question that matters: is every package's output current for its
+   * inputs. Turbo already answers that by hashing, so a workspace that is
+   * already built costs a cache lookup: measured at ~430ms with 19 of 19 tasks
+   * cached, against a blank admin whose error names the wrong package.
+   */
+  console.log("[nextly] Building workspace packages (cached when current)...");
+  const buildExit = await runChild(
+    "pnpm",
+    ["turbo", "build", "--filter=./packages/*"],
+    NEXTLY_ROOT
+  );
+  if (buildExit !== 0) {
+    console.error(
+      `[nextly] ✗ build exited ${buildExit}. ` +
+        `Aborting — fix the build first, then re-run \`pnpm dev:app\`.`
     );
-    const buildExit = await runChild(
-      "pnpm",
-      ["turbo", "build", "--filter=./packages/*"],
-      NEXTLY_ROOT
-    );
-    if (buildExit !== 0) {
-      console.error(
-        `[nextly] ✗ build exited ${buildExit}. ` +
-          `Aborting — fix the build first, then re-run \`pnpm dev:app\`.`
-      );
-      process.exit(buildExit);
-    }
-    // Re-run doctor to refresh the buildArtifacts result.
-    ({ ok, results } = await runAllChecks({
-      nextlyRoot: NEXTLY_ROOT,
-      envPath,
-      port,
-    }));
+    process.exit(buildExit);
   }
+  // Re-run the checks against what the build produced, so anything downstream
+  // of the artifacts is judged on the current ones.
+  ({ ok, results } = await runAllChecks({
+    nextlyRoot: NEXTLY_ROOT,
+    envPath,
+    port,
+  }));
 
   if (!ok) {
     for (const [name, r] of Object.entries(results)) {
