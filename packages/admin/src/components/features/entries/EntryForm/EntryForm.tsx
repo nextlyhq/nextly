@@ -267,6 +267,19 @@ export function EntryForm({
     collectionSlug: collection.slug ?? collection.name,
   });
 
+  // Publish-every-language rides the same kind of seam `fetchSourceValues`
+  // does, and its ABSENCE is what keeps the action off a create form: there is
+  // no saved entry to publish until one exists.
+  const publishAllLanguages = useMemo(() => {
+    const entryId = entry?.id ?? undefined;
+    if (!entryId) return undefined;
+    return {
+      slug: collection.slug ?? collection.name,
+      publish: () => publishAllEntryLocales.mutate(entryId),
+      pending: publishAllEntryLocales.isPending,
+    };
+  }, [entry?.id, collection.slug, collection.name, publishAllEntryLocales]);
+
   const localeCtx = useMemo(() => {
     const collectionLocalized = collection.localized === true;
     const collectionSlug = collection.slug ?? collection.name;
@@ -296,16 +309,7 @@ export function EntryForm({
       // and singles alike — a single has no collection slug or entry id and
       // could otherwise never offer the action at all.
       fetchSourceValues: collectionSourceFetcher(collectionSlug, entryId),
-      // Publish-every-language rides the same kind of seam, and its ABSENCE is
-      // what keeps the action off a create form: there is no saved entry to
-      // publish until one exists.
-      publishAllLanguages: entryId
-        ? {
-            slug: collectionSlug,
-            publish: () => publishAllEntryLocales.mutate(entryId),
-            pending: publishAllEntryLocales.isPending,
-          }
-        : undefined,
+      publishAllLanguages,
     };
   }, [
     locale,
@@ -317,7 +321,7 @@ export function EntryForm({
     seedFromLocale,
     onSeedHandled,
     entry?.id,
-    publishAllEntryLocales,
+    publishAllLanguages,
   ]);
 
   // Get all fields. Title and slug are extracted as system fields rendered in

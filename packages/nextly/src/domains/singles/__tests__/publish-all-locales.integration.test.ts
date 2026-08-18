@@ -44,7 +44,9 @@ async function bootLocalized(): Promise<TestNextly> {
 }
 
 function singlesOf(t: TestNextly): SingleEntryService {
-  return t.getService<SingleEntryService>("singleEntryService");
+  // The type parameter names the registry KEY, so it is left to inference; the
+  // return type is asserted by this signature instead.
+  return t.getService("singleEntryService");
 }
 
 async function query(

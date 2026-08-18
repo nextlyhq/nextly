@@ -66,6 +66,7 @@ import {
   stripSystemOwnerField,
 } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
+import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import {
@@ -108,7 +109,7 @@ import type {
   UpdateSingleOptions,
 } from "../types";
 
-import { ensureSingleRuntimeTable } from "./ensure-runtime-table";
+import { resolveSingleForRequest } from "./ensure-runtime-table";
 import {
   SingleQueryService,
   buildSingleHookContext,
@@ -116,6 +117,7 @@ import {
   getSingleHookCollection,
   resolveNextlyForHooks,
 } from "./single-query-service";
+import { applyReadShape } from "./single-read-shape";
 import type { SingleRegistryService } from "./single-registry-service";
 import {
   buildSingleErrorResult,
@@ -273,7 +275,12 @@ export class SingleMutationService extends BaseService {
 
     try {
       // 1. Get Single metadata from registry
-      const singleMeta = await this.singleRegistryService.getSingleBySlug(slug);
+      const singleMeta = await resolveSingleForRequest(
+        this.adapter,
+        this.singleRegistryService,
+        slug,
+        this.logger
+      );
       if (!singleMeta) {
         return {
           success: false,
@@ -281,12 +288,6 @@ export class SingleMutationService extends BaseService {
           message: `Single "${slug}" not found`,
         };
       }
-
-      // 1.05. Lazily register the single's runtime table (and its localized
-      // companion) in this process — create/boot-time registration is
-      // per-process, so a write from a worker that never saw the create
-      // would otherwise fail with "not found in schema registry".
-      await ensureSingleRuntimeTable(this.adapter, singleMeta, this.logger);
 
       // 1.1. reject an unknown write locale rather than silently writing the
       // translatable values into the DEFAULT companion row (which would overwrite real
@@ -1616,99 +1617,36 @@ export class SingleMutationService extends BaseService {
                   }
                 }
               }
-              // Never let password hashes into durable version history: the row
-              // carries bcrypt hashes (hashPasswordFieldValues ran before the
-              // write), and a later password change would otherwise leave the
-              // superseded hash permanently recoverable via the snapshot. The
-              // response is redacted separately (stripPasswordFieldValues at the
-              // return), which does not cover this snapshot.
-              stripPasswordFieldValues(parentRow, fieldConfigs);
-              // Strip the system owner column (created_by) too, matching the
-              // read/response redaction, so history does not retain a stable
-              // owner id or let a restore overwrite ownership.
-              stripSystemOwnerField(parentRow);
-              // Parse JSON-backed fields (richtext, group, json, ...) to the read
-              // shape: on SQLite the returned row holds them as strings, so an
-              // unparsed snapshot would not match a normal read on restore.
-              for (const field of fieldConfigs) {
-                if (!("name" in field) || !field.name) continue;
-                const value = parentRow[field.name];
-                if (shouldTreatAsJson(field) && typeof value === "string") {
-                  try {
-                    parentRow[field.name] = JSON.parse(value);
-                  } catch {
-                    // Not valid JSON — keep the raw string.
-                  }
-                }
-              }
+              // Redact and normalise before the snapshot is durable: a password
+              // hash written into version history stays recoverable after the
+              // password changes, and an unparsed JSON field restores wrongly.
+              applyReadShape(parentRow, fieldConfigs);
               // Read the component subtrees from the TRANSACTION (read-your-
               // writes, #226): the component save above just persisted them, so
               // the read returns the complete, read-shaped, password-stripped
-              // subtrees with no in-memory overlay. A read failure fails the
-              // capture (rolls back) rather than persisting an incomplete snapshot.
-              const components: Record<string, unknown> = {};
-              if (this.fieldGroupDataService) {
-                const componentFields = fieldConfigs.filter(
-                  (f): f is typeof f & { name: string } =>
-                    isFieldGroupField(f) && !!f.name
-                );
-                if (componentFields.length > 0) {
-                  try {
-                    const populated =
-                      await this.fieldGroupDataService.populateComponentData({
-                        entry: { id: existingDoc.id },
-                        parentTable: singleMeta.tableName,
-                        fields: fieldConfigs,
-                        executor: tx.getDrizzle(),
-                        // References only, like the collection capture: an
-                        // expanded relationship/upload stores the whole related
-                        // row where the component write path expects an id, so a
-                        // restore of this snapshot would fail persistence; it
-                        // also smuggles the target's fields past a redaction list
-                        // built from this Single's tree alone.
-                        depth: 0,
-                        // Surface a read failure (the catch below fails the
-                        // write) instead of silently capturing an incomplete
-                        // component snapshot in durable version history.
-                        strict: true,
-                        // Read as the locale the components were written at,
-                        // with no fallback, so an embedded localized component
-                        // records this language's text rather than another's
-                        // standing in for it. `writeLocale` is undefined when
-                        // the Single itself is not localized, but its embedded
-                        // components can still be — and they were saved with
-                        // `options.locale` just above, so the snapshot has to
-                        // be read back the same way.
-                        ...(snapshotLocale !== undefined
-                          ? {
-                              locale: snapshotLocale,
-                              fallbackLocale: false as const,
-                            }
-                          : {}),
-                      });
-                    for (const f of componentFields) {
-                      if (populated[f.name] !== undefined) {
-                        components[f.name] = populated[f.name];
-                      }
+              // subtrees with no in-memory overlay.
+              const components = await readComponentSubtrees({
+                fieldGroupDataService: this.fieldGroupDataService,
+                tx,
+                entryId: existingDoc.id,
+                parentTable: singleMeta.tableName,
+                fieldConfigs,
+                // `snapshotLocale` is undefined when the Single itself is not
+                // localized, but its embedded components can still be — and they
+                // were saved with `options.locale` just above, so the snapshot
+                // has to be read back the same way.
+                locale: snapshotLocale,
+                reason: "version-snapshot-single-component-read",
+                logContext: { slug },
+                onReadFailure: err =>
+                  this.logger.error(
+                    "Version snapshot: failed to read single components; failing the write instead of capturing an incomplete snapshot",
+                    {
+                      slug,
+                      error: err instanceof Error ? err.message : String(err),
                     }
-                  } catch (err) {
-                    this.logger.error(
-                      "Version snapshot: failed to read single components; failing the write instead of capturing an incomplete snapshot",
-                      {
-                        slug,
-                        error: err instanceof Error ? err.message : String(err),
-                      }
-                    );
-                    throw NextlyError.internal({
-                      cause: err instanceof Error ? err : undefined,
-                      logContext: {
-                        reason: "version-snapshot-single-component-read",
-                        slug,
-                      },
-                    });
-                  }
-                }
-              }
+                  ),
+              });
               // A component subtree read as the write locale is locale-specific
               // state too, so a component-only translation edit is not mistaken
               // for a shared-field write and left unrestorable.

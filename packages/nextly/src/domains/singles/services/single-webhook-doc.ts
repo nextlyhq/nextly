@@ -16,20 +16,15 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
-import { isFieldGroupField } from "../../../collections/fields/guards";
 import type { FieldConfig } from "../../../collections/fields/types";
-import { NextlyError } from "../../../errors/nextly-error";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
-import {
-  stripPasswordFieldValues,
-  stripSystemOwnerField,
-} from "../../../shared/lib/password-fields";
+import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
 import { populateCompanionFields } from "../../i18n/companion-join";
 import type { CompanionSchema } from "../../i18n/runtime/companion-io";
 import { cachedCompanionReadiness } from "../../i18n/runtime/companion-readiness";
 
-import { shouldTreatAsJson } from "./single-utils";
+import { applyReadShape } from "./single-read-shape";
 
 /**
  * Read a Single's FULL companion translation state for one locale, keyed by
@@ -144,76 +139,21 @@ export async function buildSingleWebhookDoc(
       }
     }
   }
-  // Never let password hashes or the system owner column reach a webhook
-  // payload — same redaction the read/response path applies.
-  stripPasswordFieldValues(parentRow, fieldConfigs);
-  stripSystemOwnerField(parentRow);
-  // Parse JSON-backed fields (richtext, group, json, ...) to the read shape:
-  // on SQLite the row holds them as strings, so an unparsed value would not
-  // match a normal read.
-  for (const field of fieldConfigs) {
-    if (!("name" in field) || !field.name) continue;
-    const value = parentRow[field.name];
-    if (shouldTreatAsJson(field) && typeof value === "string") {
-      try {
-        parentRow[field.name] = JSON.parse(value);
-      } catch {
-        // Not valid JSON — keep the raw string.
-      }
-    }
-  }
+  // Redact and normalise: no password hash or system owner column reaches a
+  // webhook payload, and JSON-backed fields arrive parsed.
+  applyReadShape(parentRow, fieldConfigs);
   // Read the component subtrees on the transaction so the assembly sees the
-  // right generation (post-write: just saved; pre-write: prior). A read
-  // failure fails the write instead of shipping an incomplete payload.
-  const components: Record<string, unknown> = {};
-  if (fieldGroupDataService) {
-    const componentFields = fieldConfigs.filter(
-      (f): f is typeof f & { name: string } => isFieldGroupField(f) && !!f.name
-    );
-    if (componentFields.length > 0) {
-      try {
-        const populated = await fieldGroupDataService.populateComponentData({
-          entry: { id: entryId },
-          parentTable,
-          fields: fieldConfigs,
-          executor: tx.getDrizzle(),
-          // Keep a component's relationship/upload references as stored IDs
-          // rather than expanding them into full related entries: the
-          // sensitive-field list is built from this Single's tree only, so an
-          // expanded related entry could smuggle its own hidden/password
-          // fields into the payload. Matches the collection snapshot read.
-          depth: 0,
-          // This read feeds the durable webhook payload inside the write
-          // transaction, so a component read failure must roll the write
-          // back rather than ship a payload with silently-missing component
-          // data and a corrupted changed-field diff.
-          strict: true,
-          // Read as the locale the components were written at, with no
-          // fallback, so an embedded localized component reports this
-          // language's text rather than another standing in for it.
-          ...(snapshotLocale !== undefined
-            ? {
-                locale: snapshotLocale,
-                fallbackLocale: false as const,
-              }
-            : {}),
-        });
-        for (const f of componentFields) {
-          if (populated[f.name] !== undefined) {
-            components[f.name] = populated[f.name];
-          }
-        }
-      } catch (err) {
-        throw NextlyError.internal({
-          cause: err instanceof Error ? err : undefined,
-          logContext: {
-            reason: "webhook-single-component-read",
-            table: parentTable,
-          },
-        });
-      }
-    }
-  }
+  // right generation (post-write: just saved; pre-write: prior).
+  const components = await readComponentSubtrees({
+    fieldGroupDataService,
+    tx,
+    entryId,
+    parentTable,
+    fieldConfigs,
+    locale: snapshotLocale,
+    reason: "webhook-single-component-read",
+    logContext: { table: parentTable },
+  });
   const doc: Record<string, unknown> = { ...parentRow, ...components };
   // Overlay the resolved per-locale status: for a non-default-locale write the
   // main row keeps the default language's status, so the assembled `status`

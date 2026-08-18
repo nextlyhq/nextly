@@ -95,6 +95,7 @@ import {
 import type { SupportedDialect } from "../../../types/database";
 import { willRecordMutationActivity } from "../../audit/record-activity";
 import type { DynamicCollectionService } from "../../dynamic-collections";
+import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 import {
   populateCompanionFields,
@@ -1930,74 +1931,33 @@ export class CollectionMutationService extends BaseService {
     components: Record<string, unknown>;
     manyToMany: Record<string, string[]>;
   }> {
-    const components: Record<string, unknown> = {};
-    if (this.fieldGroupDataService) {
-      const componentFields = fields.filter(isFieldGroupField);
-      if (componentFields.length > 0) {
-        try {
-          const populated =
-            await this.fieldGroupDataService.populateComponentData({
-              entry: { id: entryId },
-              // Resolved parent table (custom `dbName` collections do not match
-              // getTableName(slug)) so the read targets the right comp_ tables.
-              parentTable,
-              fields: fields as unknown as FieldConfig[],
-              // Read on the transaction so components written earlier in it are
-              // visible (read-your-writes); the read path strips password fields.
-              executor: tx.getDrizzle(),
-              // References only. Expanding a relationship would embed a row from
-              // another collection, which this snapshot has no business copying:
-              // the sensitive-field list describes THIS collection's tree, so a
-              // hidden field on the target would ship unredacted, and the
-              // expansion reads through the pooled relationship service — taking
-              // a second connection while this write holds its own.
-              depth: 0,
-              // Propagate a component read failure instead of substituting a
-              // default: the result feeds a durable snapshot/event, so a real
-              // failure must roll the write back (caught below) rather than
-              // capture a document with silently-missing component data.
-              strict: true,
-              // The write's locale, so a localized component is read back in the
-              // same language it was just written in. Without it the read falls
-              // back to the default component locale and the snapshot records
-              // values this write never touched.
-              //
-              // Fallback is suppressed for the same reason: an untranslated
-              // component field would otherwise resolve to another locale's
-              // value, and the document is labelled as THIS locale. The parent's
-              // own translatable values are already read without fallback, so
-              // this keeps the two halves of the document consistent.
-              ...(locale !== undefined
-                ? { locale, fallbackLocale: false as const }
-                : {}),
-            });
-          for (const f of componentFields) {
-            if (populated[f.name] !== undefined) {
-              components[f.name] = populated[f.name];
-            }
+    const components = await readComponentSubtrees({
+      fieldGroupDataService: this.fieldGroupDataService,
+      tx: tx as TransactionContext,
+      entryId,
+      // Resolved parent table (custom `dbName` collections do not match
+      // getTableName(slug)) so the read targets the right comp_ tables.
+      parentTable,
+      fieldConfigs: fields as unknown as FieldConfig[],
+      // The write's locale, so a localized component is read back in the same
+      // language it was just written in. Without it the read falls back to the
+      // default component locale and the snapshot records values this write
+      // never touched.
+      locale,
+      reason: "version-snapshot-component-read",
+      logContext: { collection: collectionName, entryId },
+      onReadFailure: (err: unknown) =>
+        // A version that looks complete but silently dropped a component is
+        // worse than a failed, retriable write.
+        this.logger.error(
+          "Version snapshot: failed to read components; failing the write instead of capturing an incomplete snapshot",
+          {
+            collection: collectionName,
+            entryId,
+            error: err instanceof Error ? err.message : String(err),
           }
-        } catch (err) {
-          // A version that looks complete but silently dropped a component is
-          // worse than a failed, retriable write — fail the capture (rolls back).
-          this.logger.error(
-            "Version snapshot: failed to read components; failing the write instead of capturing an incomplete snapshot",
-            {
-              collection: collectionName,
-              entryId,
-              error: err instanceof Error ? err.message : String(err),
-            }
-          );
-          throw NextlyError.internal({
-            cause: err instanceof Error ? err : undefined,
-            logContext: {
-              reason: "version-snapshot-component-read",
-              collection: collectionName,
-              entryId,
-            },
-          });
-        }
-      }
-    }
+        ),
+    });
 
     const manyToMany: Record<string, string[]> = {};
     const txExecutor = tx.getDrizzle<RelationshipDbExecutor>();

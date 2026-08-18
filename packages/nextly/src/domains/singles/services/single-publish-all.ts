@@ -28,7 +28,7 @@ import {
   buildSingleRevalidationIntent,
   readRevalidateConfig,
 } from "../../../revalidation/intent-builders";
-import type { RevalidationIntent } from "../../../revalidation/types";
+import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types";
 import {
   AccessControlService,
   isSuperAdminContext,
@@ -37,6 +37,7 @@ import type { FieldGroupDataService } from "../../../services/field-groups/field
 import { BaseService } from "../../../shared/base-service";
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
 import type { Logger } from "../../../shared/types";
+import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
 import { readCompanionLocaleStatusAll } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import {
@@ -66,7 +67,7 @@ import type {
   UserContext,
 } from "../types";
 
-import { ensureSingleRuntimeTable } from "./ensure-runtime-table";
+import { resolveSingleForRequest } from "./ensure-runtime-table";
 import { checkSingleAccess } from "./single-query-service";
 import type { SingleRegistryService } from "./single-registry-service";
 import {
@@ -99,6 +100,68 @@ class SinglePublishDeniedError extends NextlyError {
 export interface PublishAllSingleResult {
   id: string;
   status?: "published";
+}
+
+/**
+ * Everything the publish acts on, resolved once before the transaction opens.
+ *
+ * Gathered up front because the transaction body may RE-RUN: `withVersionConflictRetry`
+ * replays it on a version_no race, and anything resolved inside would be
+ * resolved again — including the permission reads, which would then take a
+ * second connection while this write holds its own.
+ */
+interface PublishPlan {
+  slug: string;
+  singleMeta: DynamicSingleRecord;
+  existingDoc: SingleDocument;
+  /** Whether the MAIN row carries the draft/published lifecycle. */
+  hasMainStatus: boolean;
+  companion: CompanionSchema | null;
+  /** Whether the companion exists AND carries a per-locale `_status`. */
+  companionPublishable: boolean;
+  fieldConfigs: FieldConfig[];
+  recordingEnabled: boolean;
+  actor: ReturnType<typeof actorForWrite>;
+  /** Set by `authorizePublish`: re-judge the stored rule under the row lock. */
+  deferDocumentRule: boolean;
+}
+
+/** What the committed transaction tells the caller it owes afterwards. */
+interface PublishOutcome {
+  /** The row was gone by the time the lock was taken; nothing was written. */
+  documentVanished: boolean;
+  /** A content write is durable, so cache tags and retention are owed. */
+  committed: boolean;
+  /** A durable outbox event was appended, so the fast drain is owed. */
+  eventRecorded: boolean;
+}
+
+/**
+ * Whether this Single's stored publish rule has to be re-judged against the
+ * ROW, inside the transaction, rather than decided here.
+ *
+ * Only owner-only and custom rules depend on the document; the rest — public,
+ * authenticated, role-based — need none, so deciding them up front costs
+ * nothing and keeps the transaction shorter.
+ *
+ * A session super-admin bypasses stored rules on every transport (matching
+ * `checkSingleAccess`) but NOT via a scoped API key, so no document rule is
+ * installed for them: the under-lock evaluation does not re-apply the bypass
+ * and would otherwise 403 an admin on an owner-only Single they do not own.
+ */
+function deferDocumentRule(
+  singleMeta: DynamicSingleRecord,
+  options: PublishAllSingleLocalesOptions
+): boolean {
+  if (options.overrideAccess) return false;
+  const isSuperAdminSession =
+    isSuperAdminContext(options.user) &&
+    options.authenticatedScope?.actorType !== "apiKey";
+  if (isSuperAdminSession) return false;
+  const publishRule = singleMeta.accessRules?.publish as
+    | { type?: string }
+    | undefined;
+  return publishRule?.type === "owner-only" || publishRule?.type === "custom";
 }
 
 export class SinglePublishAllService extends BaseService {
@@ -145,339 +208,27 @@ export class SinglePublishAllService extends BaseService {
     // 500: the sentinel thrown inside the transaction is re-wrapped as the
     // adapter unwinds, so its type is no longer recoverable there.
     let publishDenied: SingleResult<PublishAllSingleResult> | undefined;
-    // Whether the transaction appended a durable outbox event, so the caller
-    // knows to schedule the fast drain after it commits.
-    let eventRecorded = false;
-    // Whether the transaction committed a real status write, independent of the
-    // recording and revalidation opt-outs — the signal the retention pass keys
-    // off, so a Single opting out of both still triggers write-path cleanup.
-    let committedWrite = false;
-    // Set inside the transaction when the row is gone by the time the lock is
-    // taken, so the caller answers not-found rather than reporting a publish of
-    // content that no longer exists.
-    let documentVanished = false;
 
     try {
-      const singleMeta = await this.singleRegistryService.getSingleBySlug(slug);
-      if (!singleMeta) {
-        return {
-          success: false,
-          statusCode: 404,
-          message: `Single "${slug}" not found`,
-        };
-      }
+      const resolved = await this.resolvePublishTarget(slug, options);
+      if ("result" in resolved) return resolved.result;
+      const plan = resolved.plan;
 
-      // Register the Single's runtime table (and its companion) in THIS
-      // process before any read touches them: registration happens at create
-      // and at boot, so a worker that has seen neither would otherwise fail on
-      // a table missing from the schema registry.
-      await ensureSingleRuntimeTable(this.adapter, singleMeta, this.logger);
+      const denial = await this.authorizePublish(plan, options);
+      if (denial) return denial;
 
-      // The live row. Unlike `update`, this path never auto-creates one: a
-      // Single that has never been written holds no content, and materializing
-      // an empty document in order to declare it published would put a blank
-      // page live. Reading the document is what creates it, so anything an
-      // editor can see already has a row here.
-      const existingDoc = await this.adapter.selectOne<SingleDocument>(
-        singleMeta.tableName,
-        {}
-      );
-      if (!existingDoc) {
-        return {
-          success: false,
-          statusCode: 404,
-          message: `Single "${slug}" has no document to publish`,
-        };
-      }
-
-      const accessDenied = await checkSingleAccess({
-        slug,
-        operation: "update",
-        user: options.user,
-        overrideAccess: options.overrideAccess,
-        // The route ran the `update` gate already (against an API key's scope
-        // where applicable), so skip only that redundant RBAC re-check; the
-        // publish gate below still runs, and stored rules still run here.
-        routeAuthorized: options.routeAuthorized,
-        rbacAccessControlService: this.rbacAccessControlService,
-        authenticatedScope: options.authenticatedScope,
-        accessControlService: this.accessControlService,
-        accessRules: singleMeta.accessRules,
-        document: existingDoc,
-        logger: this.logger,
-      });
-      if (accessDenied) return accessDenied;
-
-      // The draft/published lifecycle flag on the Single's own config, NOT the
-      // mere presence of a `status` column: a Single defining an ordinary user
-      // field named `status` has the column and no lifecycle, so it is not
-      // publishable and must not demand the publish permission below.
-      const hasMainStatus = singleMeta.status === true;
-      const companion =
-        this.localization && singleMeta.localized === true
-          ? buildCompanionSchema({
-              slug,
-              tableName: singleMeta.tableName,
-              fields: singleMeta.fields as { name: string; type: string }[],
-              dialect: this.adapter.dialect,
-              status: hasMainStatus,
-            })
-          : null;
-      // Only `ready` matters here: a companion that is not there has no
-      // per-locale publish lifecycle, and why it is not there changes nothing
-      // about that.
-      const companionPublishable =
-        !!companion &&
-        companion.hasStatus &&
-        (await isCompanionReady(this.adapter, companion.companionTableName));
-
-      if (!hasMainStatus && !companionPublishable) {
-        // Nothing to publish. Returned BEFORE the publish permission check, so
-        // a Single with no lifecycle does not demand `publish-{slug}` for a
-        // call that would change nothing.
-        return {
-          success: true,
-          statusCode: 200,
-          message: "Nothing to publish (single has no status).",
-          data: { id: existingDoc.id },
-        };
-      }
-
-      // This method exists to publish, so it is unconditionally a publish and
-      // owes `publish-{slug}` on top of update — checked directly rather than
-      // through a transition, since it publishes companion locales even when
-      // the main row is already published.
-      //
-      // A document-dependent (owner-only/custom) rule is DEFERRED to the
-      // under-lock re-check inside the transaction, so it is judged against the
-      // row this publish actually overwrites: a rule keyed on a mutable field
-      // that a concurrent writer changed must not be decided on the stale
-      // pre-transaction read. A session super-admin bypasses stored rules on
-      // every transport (matching `checkSingleAccess`) but NOT via a scoped API
-      // key, so no document rule is installed for them — the under-lock
-      // evaluation does not re-apply the bypass and would otherwise 403 an
-      // admin on an owner-only Single they do not own.
-      const isSuperAdminSession =
-        isSuperAdminContext(options.user) &&
-        options.authenticatedScope?.actorType !== "apiKey";
-      const storedRules = singleMeta.accessRules;
-      const publishRule = storedRules?.publish as { type?: string } | undefined;
-      const deferPublishDocumentRule =
-        !options.overrideAccess &&
-        !isSuperAdminSession &&
-        (publishRule?.type === "owner-only" || publishRule?.type === "custom");
-      const publishPermissionDenied = await checkSingleAccess({
-        slug,
-        operation: "publish",
-        user: options.user,
-        overrideAccess: options.overrideAccess,
-        // NOT route-authorized: the route authorized this POST as `update`, so
-        // the publish permission is checked here for the first time.
-        routeAuthorized: false,
-        rbacAccessControlService: this.rbacAccessControlService,
-        // A scoped API key is judged on its own `publish-{slug}` grant, not the
-        // key owner's — the route checked only `update` against the scope.
-        authenticatedScope: options.authenticatedScope,
-        accessControlService: this.accessControlService,
-        accessRules: singleMeta.accessRules,
-        document: existingDoc,
-        deferStoredRuleEval: deferPublishDocumentRule,
-        logger: this.logger,
-      });
-      if (publishPermissionDenied) return publishPermissionDenied;
-
-      const fieldConfigs = singleMeta.fields ?? [];
-      const recordingEnabled = isOutboxRecordingActive("single", slug);
-      const actor = actorForWrite(options.actor ?? null, options.user);
-
-      // The per-locale transitions this publish recorded, rebuilt each attempt
-      // by the closure so a version-conflict retry does not reuse a stale list.
-      let publishedLocales: string[] = [];
-      // Whether the main row itself moved to published, read under the lock.
-      let mainRowTransitioned = false;
-
-      await withVersionConflictRetry(() =>
-        this.adapter.transaction(async tx => {
-          // Reset per attempt: the conflict retry re-runs this whole closure.
-          documentVanished = false;
-          publishedLocales = [];
-          mainRowTransitioned = false;
-
-          // Lock the main row up front. One read serves three needs: it is the
-          // liveness check (a row deleted between the pre-transaction read and
-          // this lock is gone here, so the publish writes and records nothing);
-          // it carries the committed status the transition is judged against;
-          // and it is the document the deferred publish rule re-checks.
-          const lockedRow = await tx.selectOne<Record<string, unknown>>(
-            singleMeta.tableName,
-            { where: this.whereEq("id", existingDoc.id), forUpdate: true }
-          );
-          if (!lockedRow) {
-            documentVanished = true;
-            return;
-          }
-          const lockedStatus =
-            typeof lockedRow.status === "string" ? lockedRow.status : null;
-
-          // Re-check the deferred document-dependent publish rule against the
-          // row read UNDER the lock, before any write, so a concurrent change
-          // to a field the rule inspects is accounted for. Throwing here rolls
-          // the publish back with nothing written.
-          if (deferPublishDocumentRule && storedRules) {
-            const docResult = await this.accessControlService.evaluateAccess(
-              storedRules,
-              "publish",
-              {
-                user: options.user
-                  ? {
-                      id: options.user.id,
-                      role: options.user.role,
-                      roles: options.user.roles,
-                      email: options.user.email,
-                    }
-                  : undefined,
-              },
-              existingDoc.id,
-              lockedRow
-            );
-            if (!docResult.allowed) {
-              publishDenied = {
-                success: false,
-                statusCode: 403,
-                message:
-                  docResult.reason ??
-                  `Access denied: publish on single "${slug}" is not permitted`,
-              };
-              throw new SinglePublishDeniedError();
-            }
-          }
-
-          // Each locale's committed `_status` BEFORE the bulk flip below, so a
-          // real draft->published transition can be told from a locale that was
-          // already live. Read under the lock and inside the retry so it
-          // reflects the state this publish actually overwrites.
-          const priorCompanionStatuses =
-            companion && companionPublishable
-              ? await this.readPriorCompanionStatuses(
-                  tx,
-                  companion,
-                  existingDoc.id,
-                  slug
-                )
-              : new Map<string, string | null>();
-
-          const publishNow = new Date();
-          // The first-publication marker this write establishes, or undefined
-          // when it records none. Carried out of the closure so the event
-          // payload and the version snapshot — both built from the pre-update
-          // row with the new status overlaid — report the marker this very
-          // publication set, rather than reporting it absent.
-          let firstPublishedAt: Date | undefined;
-
-          if (hasMainStatus) {
-            mainRowTransitioned = lockedStatus !== "published";
-            const existingMarker = lockedRow.first_published_at;
-            // Publish-all can find a Single in a mixed state: a draft main row
-            // beside a translation that has been live since before this column
-            // existed. The main row's own transition then reads as a first
-            // publication when the document was already reachable, so the
-            // question asked is document-level rather than row-level. No locale
-            // is excluded — this write publishes all of them, so any already
-            // published one predates it.
-            const alreadyPublic =
-              lockedStatus === "published" ||
-              [...priorCompanionStatuses.values()].some(s => s === "published");
-            // Only when the marker is still absent, which is what makes it the
-            // FIRST publication rather than the latest: a republish after an
-            // unpublish must not move it. A row published before this column
-            // existed carries null precisely because its history was never
-            // captured, so dating it today would report a publication that
-            // never happened — which is what `alreadyPublic` prevents.
-            if (existingMarker == null && !alreadyPublic) {
-              firstPublishedAt = publishNow;
-            }
-            await tx.update(
-              singleMeta.tableName,
-              {
-                status: "published",
-                updated_at: publishNow,
-                ...(firstPublishedAt
-                  ? { first_published_at: firstPublishedAt }
-                  : {}),
-              },
-              this.whereEq("id", existingDoc.id)
-            );
-          }
-
-          if (companion && companionPublishable) {
-            // Every stored translation moves in ONE statement, through the
-            // adapter's typed update rather than an interpolated string, so the
-            // dialect quoting and parameter binding are the adapter's problem
-            // and not this module's.
-            await tx.update(
-              companion.companionTableName,
-              { _status: "published" },
-              this.whereEq("_parent", existingDoc.id)
-            );
-          }
-
-          committedWrite = hasMainStatus || priorCompanionStatuses.size > 0;
-
-          // The committed post-publish main row. Publishing mutates only the
-          // status and the marker, so the locked row's other columns are
-          // already the post-publish ones — overlay rather than taking a second
-          // pooled connection while this transaction holds one, which would
-          // deadlock a one-connection pool.
-          const publishedRow: Record<string, unknown> = {
-            ...lockedRow,
-            ...(hasMainStatus ? { status: "published" } : {}),
-            ...(hasMainStatus ? { updated_at: publishNow } : {}),
-            ...(firstPublishedAt
-              ? { first_published_at: firstPublishedAt }
-              : {}),
-          };
-
-          if (singleMeta.versions?.enabled) {
-            await this.capturePublishSnapshot(
-              tx,
-              slug,
-              existingDoc.id,
-              singleMeta.tableName,
-              publishedRow,
-              fieldConfigs,
-              options.user,
-              singleMeta.versions.maxPerDoc
-            );
-          }
-
-          if (recordingEnabled) {
-            eventRecorded = await this.recordPublishEvents(tx, {
-              slug,
-              entryId: existingDoc.id,
-              tableName: singleMeta.tableName,
-              fieldConfigs,
-              companion,
-              companionPublishable,
-              lockedRow,
-              publishedRow,
-              hasMainStatus,
-              mainRowTransitioned,
-              priorCompanionStatuses,
-              actor,
-              onLocalePublished: locale => publishedLocales.push(locale),
-            });
-          } else {
-            for (const [locale, prior] of priorCompanionStatuses) {
-              if (prior !== "published") publishedLocales.push(locale);
-            }
-          }
-        })
+      const outcome = await withVersionConflictRetry(() =>
+        this.adapter.transaction(tx =>
+          this.commitPublish(tx, plan, options, denied => {
+            publishDenied = denied;
+          })
+        )
       );
 
       // The document was deleted out from under the publish: nothing was
       // written or recorded, so answer not-found rather than reporting success
       // for content that is gone.
-      if (documentVanished) {
+      if (outcome.documentVanished) {
         return {
           success: false,
           statusCode: 404,
@@ -485,21 +236,22 @@ export class SinglePublishAllService extends BaseService {
         };
       }
 
-      // A Single is consumed sitewide, so its one tag is the whole cascade.
-      // Built whenever a row was written, including for a Single that opts out
-      // of recording: a committed content write must still bust its ISR tag.
-      const revalidationIntent: RevalidationIntent | undefined = committedWrite
-        ? buildSingleRevalidationIntent(slug, readRevalidateConfig(singleMeta))
-        : undefined;
-
       return {
         success: true,
         statusCode: 200,
         message: "All languages published.",
-        data: { id: existingDoc.id, status: "published" },
-        eventRecorded,
-        committed: committedWrite,
-        revalidationIntent,
+        data: { id: plan.existingDoc.id, status: "published" },
+        eventRecorded: outcome.eventRecorded,
+        committed: outcome.committed,
+        // A Single is consumed sitewide, so its one tag is the whole cascade.
+        // Built whenever a row was written, including for a Single that opts
+        // out of recording: a committed content write must still bust its tag.
+        revalidationIntent: outcome.committed
+          ? buildSingleRevalidationIntent(
+              slug,
+              readRevalidateConfig(plan.singleMeta)
+            )
+          : undefined,
       };
     } catch (error) {
       // A publish refused by the under-lock re-check aborts the transaction;
@@ -511,6 +263,417 @@ export class SinglePublishAllService extends BaseService {
         logContext: { reason: "single-publish-all", single: slug },
       });
     }
+  }
+
+  /**
+   * Resolve what this publish would act on, or the answer that ends it early.
+   *
+   * Three things end it before any authorization to publish: no such Single, no
+   * document to publish, and a caller who may not update this Single at all.
+   * A fourth ends it successfully — a Single with no draft/published lifecycle
+   * has nothing to publish, and that answer is produced HERE, before the
+   * publish permission is asked for, so a caller holding update but not publish
+   * is not refused for a call that would change nothing.
+   */
+  private async resolvePublishTarget(
+    slug: string,
+    options: PublishAllSingleLocalesOptions
+  ): Promise<
+    { plan: PublishPlan } | { result: SingleResult<PublishAllSingleResult> }
+  > {
+    const singleMeta = await resolveSingleForRequest(
+      this.adapter,
+      this.singleRegistryService,
+      slug,
+      this.logger
+    );
+    if (!singleMeta) {
+      return {
+        result: {
+          success: false,
+          statusCode: 404,
+          message: `Single "${slug}" not found`,
+        },
+      };
+    }
+
+    // The live row. Unlike `update`, this path never auto-creates one: a
+    // Single that has never been written holds no content, and materializing
+    // an empty document in order to declare it published would put a blank
+    // page live. Reading the document is what creates it, so anything an
+    // editor can see already has a row here.
+    const existingDoc = await this.adapter.selectOne<SingleDocument>(
+      singleMeta.tableName,
+      {}
+    );
+    if (!existingDoc) {
+      return {
+        result: {
+          success: false,
+          statusCode: 404,
+          message: `Single "${slug}" has no document to publish`,
+        },
+      };
+    }
+
+    const accessDenied = await checkSingleAccess({
+      slug,
+      operation: "update",
+      user: options.user,
+      overrideAccess: options.overrideAccess,
+      // The route ran the `update` gate already (against an API key's scope
+      // where applicable), so skip only that redundant RBAC re-check; the
+      // publish gate still runs, and stored rules still run here.
+      routeAuthorized: options.routeAuthorized,
+      rbacAccessControlService: this.rbacAccessControlService,
+      authenticatedScope: options.authenticatedScope,
+      accessControlService: this.accessControlService,
+      accessRules: singleMeta.accessRules,
+      document: existingDoc,
+      logger: this.logger,
+    });
+    if (accessDenied) return { result: accessDenied };
+
+    const { hasMainStatus, companion, companionPublishable } =
+      await this.resolveLifecycle(slug, singleMeta);
+
+    if (!hasMainStatus && !companionPublishable) {
+      return {
+        result: {
+          success: true,
+          statusCode: 200,
+          message: "Nothing to publish (single has no status).",
+          data: { id: existingDoc.id },
+        },
+      };
+    }
+
+    return {
+      plan: {
+        slug,
+        singleMeta,
+        existingDoc,
+        hasMainStatus,
+        companion,
+        companionPublishable,
+        fieldConfigs: singleMeta.fields ?? [],
+        recordingEnabled: isOutboxRecordingActive("single", slug),
+        actor: actorForWrite(options.actor ?? null, options.user),
+        deferDocumentRule: false,
+      },
+    };
+  }
+
+  /**
+   * Where this Single's draft/published lifecycle actually lives: the main row,
+   * its per-locale companion, or neither.
+   *
+   * `hasMainStatus` reads the CONFIG flag, not the mere presence of a `status`
+   * column: a Single defining an ordinary user field named `status` has the
+   * column and no lifecycle, so it is not publishable and must not be made to
+   * demand the publish permission.
+   */
+  private async resolveLifecycle(
+    slug: string,
+    singleMeta: DynamicSingleRecord
+  ): Promise<{
+    hasMainStatus: boolean;
+    companion: CompanionSchema | null;
+    companionPublishable: boolean;
+  }> {
+    const hasMainStatus = singleMeta.status === true;
+    const companion =
+      this.localization && singleMeta.localized === true
+        ? buildCompanionSchema({
+            slug,
+            tableName: singleMeta.tableName,
+            fields: singleMeta.fields as { name: string; type: string }[],
+            dialect: this.adapter.dialect,
+            status: hasMainStatus,
+          })
+        : null;
+    // Only `ready` matters here: a companion that is not there has no
+    // per-locale publish lifecycle, and why it is not there changes nothing
+    // about that.
+    const companionPublishable =
+      !!companion &&
+      companion.hasStatus &&
+      (await isCompanionReady(this.adapter, companion.companionTableName));
+    return { hasMainStatus, companion, companionPublishable };
+  }
+
+  /**
+   * Check `publish-{slug}` on top of the update already granted, and decide
+   * whether the Single's stored publish rule has to be re-judged under the lock.
+   *
+   * Checked directly rather than through a transition, since this publishes
+   * companion locales even when the main row is already published.
+   *
+   * A document-dependent (owner-only/custom) rule is DEFERRED to the under-lock
+   * re-check, so it is judged against the row this publish actually overwrites:
+   * a rule keyed on a mutable field a concurrent writer changed must not be
+   * decided on the stale pre-transaction read. A session super-admin bypasses
+   * stored rules on every transport (matching `checkSingleAccess`) but NOT via
+   * a scoped API key, so no document rule is installed for them — the
+   * under-lock evaluation does not re-apply the bypass and would otherwise 403
+   * an admin on an owner-only Single they do not own.
+   *
+   * Mutates `plan.deferDocumentRule`, which the transaction reads.
+   */
+  private async authorizePublish(
+    plan: PublishPlan,
+    options: PublishAllSingleLocalesOptions
+  ): Promise<SingleResult<PublishAllSingleResult> | undefined> {
+    plan.deferDocumentRule = deferDocumentRule(plan.singleMeta, options);
+
+    return (
+      (await checkSingleAccess({
+        slug: plan.slug,
+        operation: "publish",
+        user: options.user,
+        overrideAccess: options.overrideAccess,
+        // NOT route-authorized: the route authorized this POST as `update`, so
+        // the publish permission is checked here for the first time.
+        routeAuthorized: false,
+        rbacAccessControlService: this.rbacAccessControlService,
+        // A scoped API key is judged on its own `publish-{slug}` grant, not the
+        // key owner's — the route checked only `update` against the scope.
+        authenticatedScope: options.authenticatedScope,
+        accessControlService: this.accessControlService,
+        accessRules: plan.singleMeta.accessRules,
+        document: plan.existingDoc,
+        deferStoredRuleEval: plan.deferDocumentRule,
+        logger: this.logger,
+      })) ?? undefined
+    );
+  }
+
+  /**
+   * The publish itself: lock, re-check, write every status, capture, record.
+   *
+   * Runs inside `withVersionConflictRetry`, so the whole body may re-run — it
+   * therefore derives everything it reports from values read under THIS
+   * attempt's lock rather than carrying state across attempts.
+   */
+  private async commitPublish(
+    tx: TransactionContext,
+    plan: PublishPlan,
+    options: PublishAllSingleLocalesOptions,
+    onDenied: (denial: SingleResult<PublishAllSingleResult>) => void
+  ): Promise<PublishOutcome> {
+    const { slug, singleMeta, existingDoc, hasMainStatus } = plan;
+
+    // Lock the main row up front. One read serves three needs: it is the
+    // liveness check (a row deleted between the pre-transaction read and this
+    // lock is gone here, so the publish writes and records nothing); it carries
+    // the committed status the transition is judged against; and it is the
+    // document the deferred publish rule re-checks.
+    const lockedRow = await tx.selectOne<Record<string, unknown>>(
+      singleMeta.tableName,
+      { where: this.whereEq("id", existingDoc.id), forUpdate: true }
+    );
+    if (!lockedRow) {
+      return { documentVanished: true, committed: false, eventRecorded: false };
+    }
+
+    await this.assertPublishAllowedUnderLock(
+      plan,
+      options,
+      lockedRow,
+      onDenied
+    );
+
+    // Each locale's committed `_status` BEFORE the bulk flip below, so a real
+    // draft->published transition can be told from a locale that was already
+    // live. Read under the lock and inside the retry so it reflects the state
+    // this publish actually overwrites.
+    const priorCompanionStatuses =
+      plan.companion && plan.companionPublishable
+        ? await this.readPriorCompanionStatuses(
+            tx,
+            plan.companion,
+            existingDoc.id,
+            slug
+          )
+        : new Map<string, string | null>();
+
+    const written = await this.writePublishedStatuses(
+      tx,
+      plan,
+      lockedRow,
+      priorCompanionStatuses
+    );
+
+    if (singleMeta.versions?.enabled) {
+      await this.capturePublishSnapshot(
+        tx,
+        slug,
+        existingDoc.id,
+        singleMeta.tableName,
+        written.publishedRow,
+        plan.fieldConfigs,
+        options.user,
+        singleMeta.versions.maxPerDoc
+      );
+    }
+
+    const eventRecorded = plan.recordingEnabled
+      ? await this.recordPublishEvents(tx, {
+          plan,
+          lockedRow,
+          publishedRow: written.publishedRow,
+          mainRowTransitioned: written.mainRowTransitioned,
+          priorCompanionStatuses,
+        })
+      : false;
+
+    return {
+      documentVanished: false,
+      // A publish that moved nothing — no main lifecycle and no stored
+      // translation — has no content write for the caller to flush or prune.
+      committed: hasMainStatus || priorCompanionStatuses.size > 0,
+      eventRecorded,
+    };
+  }
+
+  /**
+   * Re-judge a deferred document-dependent publish rule against the row read
+   * UNDER the lock, before any write, so a concurrent change to a field the
+   * rule inspects is accounted for. Throwing rolls the publish back with
+   * nothing written.
+   */
+  private async assertPublishAllowedUnderLock(
+    plan: PublishPlan,
+    options: PublishAllSingleLocalesOptions,
+    lockedRow: Record<string, unknown>,
+    onDenied: (denial: SingleResult<PublishAllSingleResult>) => void
+  ): Promise<void> {
+    const storedRules = plan.singleMeta.accessRules;
+    if (!plan.deferDocumentRule || !storedRules) return;
+
+    const docResult = await this.accessControlService.evaluateAccess(
+      storedRules,
+      "publish",
+      {
+        user: options.user
+          ? {
+              id: options.user.id,
+              role: options.user.role,
+              roles: options.user.roles,
+              email: options.user.email,
+            }
+          : undefined,
+      },
+      plan.existingDoc.id,
+      lockedRow
+    );
+    if (docResult.allowed) return;
+
+    onDenied({
+      success: false,
+      statusCode: 403,
+      message:
+        docResult.reason ??
+        `Access denied: publish on single "${plan.slug}" is not permitted`,
+    });
+    throw new SinglePublishDeniedError();
+  }
+
+  /**
+   * Move the main row's status and every companion `_status` to published, and
+   * return the committed post-publish row.
+   *
+   * The row is built by OVERLAY rather than re-read: publishing mutates only
+   * the status and the marker, so the locked row's other columns are already
+   * the post-publish ones, and a second pooled read while this transaction
+   * holds a connection would deadlock a one-connection pool.
+   */
+  private async writePublishedStatuses(
+    tx: TransactionContext,
+    plan: PublishPlan,
+    lockedRow: Record<string, unknown>,
+    priorCompanionStatuses: Map<string, string | null>
+  ): Promise<{
+    publishedRow: Record<string, unknown>;
+    mainRowTransitioned: boolean;
+  }> {
+    const { singleMeta, existingDoc, hasMainStatus, companion } = plan;
+    const publishNow = new Date();
+    const lockedStatus =
+      typeof lockedRow.status === "string" ? lockedRow.status : null;
+    let mainRowTransitioned = false;
+    let firstPublishedAt: Date | undefined;
+
+    if (hasMainStatus) {
+      mainRowTransitioned = lockedStatus !== "published";
+      firstPublishedAt = this.resolveFirstPublication(
+        lockedRow,
+        lockedStatus,
+        priorCompanionStatuses,
+        publishNow
+      );
+      await tx.update(
+        singleMeta.tableName,
+        {
+          status: "published",
+          updated_at: publishNow,
+          ...(firstPublishedAt ? { first_published_at: firstPublishedAt } : {}),
+        },
+        this.whereEq("id", existingDoc.id)
+      );
+    }
+
+    if (companion && plan.companionPublishable) {
+      // Every stored translation moves in ONE statement, through the adapter's
+      // typed update rather than an interpolated string, so the dialect quoting
+      // and parameter binding are the adapter's problem and not this module's.
+      await tx.update(
+        companion.companionTableName,
+        { _status: "published" },
+        this.whereEq("_parent", existingDoc.id)
+      );
+    }
+
+    return {
+      publishedRow: {
+        ...lockedRow,
+        ...(hasMainStatus
+          ? { status: "published", updated_at: publishNow }
+          : {}),
+        ...(firstPublishedAt ? { first_published_at: firstPublishedAt } : {}),
+      },
+      mainRowTransitioned,
+    };
+  }
+
+  /**
+   * The first-publication marker this write establishes, or undefined when it
+   * records none.
+   *
+   * Two conditions, and they answer different questions. The marker must still
+   * be ABSENT, which is what makes this the first publication rather than the
+   * latest — a republish after an unpublish must not move it. And the document
+   * must not ALREADY be public: publish-all can find a Single in a mixed state,
+   * a draft main row beside a translation that has been live since before this
+   * column existed, and the main row's own transition then reads as a first
+   * publication when the document was already reachable. Such a row carries
+   * null precisely because its history was never captured, so dating it today
+   * would report a publication that never happened.
+   *
+   * No locale is excluded from that question — this write publishes all of
+   * them, so any already-published one predates it.
+   */
+  private resolveFirstPublication(
+    lockedRow: Record<string, unknown>,
+    lockedStatus: string | null,
+    priorCompanionStatuses: Map<string, string | null>,
+    publishNow: Date
+  ): Date | undefined {
+    if (lockedRow.first_published_at != null) return undefined;
+    const alreadyPublic =
+      lockedStatus === "published" ||
+      [...priorCompanionStatuses.values()].some(s => s === "published");
+    return alreadyPublic ? undefined : publishNow;
   }
 
   /**
@@ -589,29 +752,15 @@ export class SinglePublishAllService extends BaseService {
     const resolveComponent = (componentSlug: string) =>
       componentSchemas.get(componentSlug);
 
-    const components: Record<string, unknown> = {};
-    if (this.fieldGroupDataService) {
-      const populated = await this.fieldGroupDataService.populateComponentData({
-        entry: { id: entryId },
-        parentTable: tableName,
-        fields: fieldConfigs,
-        executor: tx.getDrizzle(),
-        // Keep relationship/upload references as stored IDs rather than
-        // expanding them: a snapshot records this document, and an expanded
-        // related entry would embed a copy of somebody else's.
-        depth: 0,
-        // A component read failure must roll the publish back rather than
-        // capture a version with silently-missing subtrees, which a later
-        // restore would then write back as the document.
-        strict: true,
-      });
-      for (const field of fieldConfigs) {
-        if (!("name" in field) || !field.name) continue;
-        if (populated[field.name] !== undefined) {
-          components[field.name] = populated[field.name];
-        }
-      }
-    }
+    const components = await readComponentSubtrees({
+      fieldGroupDataService: this.fieldGroupDataService,
+      tx,
+      entryId,
+      parentTable: tableName,
+      fieldConfigs,
+      reason: "single-publish-all-component-read",
+      logContext: { single: slug },
+    });
 
     await captureInTx(tx, this.versionCapture, {
       ref: { scopeKind: "single", scopeSlug: slug, entryId },
@@ -653,45 +802,28 @@ export class SinglePublishAllService extends BaseService {
   private async recordPublishEvents(
     tx: TransactionContext,
     args: {
-      slug: string;
-      entryId: string;
-      tableName: string;
-      fieldConfigs: FieldConfig[];
-      companion: CompanionSchema | null;
-      companionPublishable: boolean;
+      plan: PublishPlan;
       lockedRow: Record<string, unknown>;
       publishedRow: Record<string, unknown>;
-      hasMainStatus: boolean;
       mainRowTransitioned: boolean;
       priorCompanionStatuses: Map<string, string | null>;
-      actor: ReturnType<typeof actorForWrite>;
-      onLocalePublished: (locale: string) => void;
     }
   ): Promise<boolean> {
     const {
-      slug,
-      entryId,
-      tableName,
-      fieldConfigs,
-      companion,
-      companionPublishable,
+      plan,
       lockedRow,
       publishedRow,
-      hasMainStatus,
       mainRowTransitioned,
       priorCompanionStatuses,
-      actor,
-      onLocalePublished,
     } = args;
-
+    const entryId = plan.existingDoc.id;
     const defaultLocale = this.localization?.defaultLocale;
-    const readCompanion = !!companion && companionPublishable;
 
     // The Single's field tree with component references expanded, so a
     // subscriber's field filter can address a component's own fields. Read on
     // the transaction, for the same reason every other read here is.
     const webhookFields = await expandComponentFields(
-      fieldConfigs,
+      plan.fieldConfigs,
       async componentSlug =>
         this.fieldGroupDataService
           ? await this.fieldGroupDataService.getComponentFields(
@@ -700,141 +832,223 @@ export class SinglePublishAllService extends BaseService {
             )
           : null
     );
-
-    // The document-wide payload pair. On a localized Single the main row omits
-    // translatable columns, so both sides are assembled at the DEFAULT locale —
-    // the language an untagged event describes.
-    const defaultCompanionValues =
-      readCompanion && defaultLocale !== undefined
-        ? await readCompanionLocaleValues(
-            this.adapter,
-            tx,
-            companion,
-            entryId,
-            defaultLocale
-          )
-        : {};
-    const buildDoc = (
-      row: Record<string, unknown>,
-      companionValues: Record<string, unknown>,
-      localeStatus: string | undefined,
-      payloadLocale: string | undefined
-    ) =>
-      buildSingleWebhookDoc(
-        this.fieldGroupDataService,
-        tx,
-        entryId,
-        tableName,
-        row,
-        fieldConfigs,
-        companion,
-        readCompanion,
-        companionValues,
-        payloadLocale,
-        localeStatus
-      );
-
-    const publishedDocument = await buildDoc(
-      publishedRow,
-      defaultCompanionValues,
-      undefined,
-      defaultLocale
-    );
-    const previousDocument = await buildDoc(
-      lockedRow,
-      defaultCompanionValues,
-      undefined,
-      defaultLocale
-    );
-
     const resource: WebhookResource = {
       kind: "single",
-      slug,
+      slug: plan.slug,
       id: entryId,
     };
 
-    let recorded = await recordMutationEvent(tx, {
-      type: "single.updated",
-      resource,
-      data: publishedDocument,
-      previous: previousDocument,
-      fields: webhookFields,
-      actor,
-    });
-
     // Whether the default locale's own companion row transitions here. When it
-    // does, the per-locale loop below emits the default language's transition
-    // tagged with its locale, and the untagged main event would duplicate it.
+    // does, the per-locale pass emits the default language's transition tagged
+    // with its locale, and the untagged document event would duplicate it.
     const defaultCompanionTransitions =
       defaultLocale !== undefined &&
       priorCompanionStatuses.has(defaultLocale) &&
       priorCompanionStatuses.get(defaultLocale) !== "published";
 
-    if (hasMainStatus && mainRowTransitioned && !defaultCompanionTransitions) {
-      const mainRecorded = await recordMutationEvent(tx, {
+    const documentRecorded = await this.recordDocumentEvents(tx, {
+      plan,
+      lockedRow,
+      publishedRow,
+      webhookFields,
+      resource,
+      // The untagged publish event is emitted only when the main row really
+      // transitioned AND no default-locale companion event already encodes it.
+      emitPublished:
+        plan.hasMainStatus &&
+        mainRowTransitioned &&
+        !defaultCompanionTransitions,
+    });
+
+    const localeRecorded = await this.recordLocaleEvents(tx, {
+      plan,
+      lockedRow,
+      publishedRow,
+      priorCompanionStatuses,
+      webhookFields,
+      resource,
+    });
+
+    return documentRecorded || localeRecorded;
+  }
+
+  /**
+   * Build one side of an event payload for this Single.
+   *
+   * On a localized Single the main row omits translatable columns, so the
+   * caller supplies the companion values to overlay and the locale the payload
+   * REPRESENTS — the default language for an untagged event, that language's
+   * own for a locale-tagged one.
+   */
+  private buildEventDocument(
+    tx: TransactionContext,
+    plan: PublishPlan,
+    row: Record<string, unknown>,
+    companionValues: Record<string, unknown>,
+    payloadLocale: string | undefined,
+    localeStatus?: string
+  ): Promise<Record<string, unknown>> {
+    return buildSingleWebhookDoc(
+      this.fieldGroupDataService,
+      tx,
+      plan.existingDoc.id,
+      plan.singleMeta.tableName,
+      row,
+      plan.fieldConfigs,
+      plan.companion,
+      !!plan.companion && plan.companionPublishable,
+      companionValues,
+      payloadLocale,
+      localeStatus
+    );
+  }
+
+  /**
+   * The document-wide pair: `single.updated` for the write, and
+   * `single.published` when the main row itself went live.
+   *
+   * Both payloads are assembled at the DEFAULT locale, which is the language an
+   * untagged event describes.
+   */
+  private async recordDocumentEvents(
+    tx: TransactionContext,
+    args: {
+      plan: PublishPlan;
+      lockedRow: Record<string, unknown>;
+      publishedRow: Record<string, unknown>;
+      webhookFields: Awaited<ReturnType<typeof expandComponentFields>>;
+      resource: WebhookResource;
+      emitPublished: boolean;
+    }
+  ): Promise<boolean> {
+    const { plan, lockedRow, publishedRow, webhookFields, resource } = args;
+    const defaultLocale = this.localization?.defaultLocale;
+    const defaultCompanionValues =
+      plan.companion && plan.companionPublishable && defaultLocale !== undefined
+        ? await readCompanionLocaleValues(
+            this.adapter,
+            tx,
+            plan.companion,
+            plan.existingDoc.id,
+            defaultLocale
+          )
+        : {};
+
+    const data = await this.buildEventDocument(
+      tx,
+      plan,
+      publishedRow,
+      defaultCompanionValues,
+      defaultLocale
+    );
+    const previous = await this.buildEventDocument(
+      tx,
+      plan,
+      lockedRow,
+      defaultCompanionValues,
+      defaultLocale
+    );
+
+    let recorded = await recordMutationEvent(tx, {
+      type: "single.updated",
+      resource,
+      data,
+      previous,
+      fields: webhookFields,
+      actor: plan.actor,
+    });
+    if (args.emitPublished) {
+      const published = await recordMutationEvent(tx, {
         type: "single.published",
         resource,
-        data: publishedDocument,
-        previous: previousDocument,
+        data,
+        previous,
         fields: webhookFields,
-        actor,
+        actor: plan.actor,
       });
-      recorded = mainRecorded || recorded;
+      recorded = published || recorded;
     }
+    return recorded;
+  }
 
-    // Per-locale publish transitions. The bulk flip above moved every companion
-    // locale in one statement, but a subscriber watching a single language
-    // needs its own event — so each locale that actually transitioned gets one,
-    // tagged with the locale and carrying that language's own prior status.
-    //
-    // Only locales the app still CONFIGURES get an event: a locale removed from
-    // configuration can leave stale companion rows behind, and an event tagged
-    // with a locale that normal reads and writes reject would mislead a
-    // locale-routed consumer.
+  /**
+   * One locale-tagged `single.published` per translation that actually went
+   * live.
+   *
+   * The bulk flip moved every companion locale in one statement, but a
+   * subscriber watching a single language needs its own event, carrying that
+   * language's content and its own prior status.
+   *
+   * Only locales the app still CONFIGURES get one: a locale removed from
+   * configuration can leave stale companion rows behind, and an event tagged
+   * with a locale that normal reads and writes reject would mislead a
+   * locale-routed consumer.
+   */
+  private async recordLocaleEvents(
+    tx: TransactionContext,
+    args: {
+      plan: PublishPlan;
+      lockedRow: Record<string, unknown>;
+      publishedRow: Record<string, unknown>;
+      priorCompanionStatuses: Map<string, string | null>;
+      webhookFields: Awaited<ReturnType<typeof expandComponentFields>>;
+      resource: WebhookResource;
+    }
+  ): Promise<boolean> {
+    const {
+      plan,
+      lockedRow,
+      publishedRow,
+      priorCompanionStatuses,
+      webhookFields,
+      resource,
+    } = args;
     const configuredLocales = new Set(
       this.localization?.locales.map(l => l.code) ?? []
     );
+    let recorded = false;
+
     for (const [locale, priorStatus] of priorCompanionStatuses) {
       if (configuredLocales.size > 0 && !configuredLocales.has(locale))
         continue;
       if (priorStatus === "published") continue;
-      onLocalePublished(locale);
 
-      // This locale's own before/after documents. Publishing changes only the
-      // status, so the language's translatable values and its component
-      // subtrees are identical on both sides — read once and used for both.
-      const localeValues = companion
+      // Publishing changes only the status, so this language's translatable
+      // values and its component subtrees are identical on both sides — read
+      // once and used for both.
+      const localeValues = plan.companion
         ? await readCompanionLocaleValues(
             this.adapter,
             tx,
-            companion,
-            entryId,
+            plan.companion,
+            plan.existingDoc.id,
             locale
           )
         : {};
-      const localeData = await buildDoc(
-        publishedRow,
-        localeValues,
-        "published",
-        locale
-      );
-      const localePrevious = await buildDoc(
-        lockedRow,
-        localeValues,
-        priorStatus ?? undefined,
-        locale
-      );
       const localeRecorded = await recordMutationEvent(tx, {
         type: "single.published",
         resource: { ...resource, locale },
-        data: localeData,
-        previous: localePrevious,
+        data: await this.buildEventDocument(
+          tx,
+          plan,
+          publishedRow,
+          localeValues,
+          locale,
+          "published"
+        ),
+        previous: await this.buildEventDocument(
+          tx,
+          plan,
+          lockedRow,
+          localeValues,
+          locale,
+          priorStatus ?? undefined
+        ),
         fields: webhookFields,
-        actor,
+        actor: plan.actor,
       });
       recorded = localeRecorded || recorded;
     }
-
     return recorded;
   }
 }
