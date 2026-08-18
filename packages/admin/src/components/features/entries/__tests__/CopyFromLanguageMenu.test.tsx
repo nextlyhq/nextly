@@ -13,18 +13,21 @@ import {
   type EntryLocaleContextValue,
 } from "../EntryLocaleContext";
 
-const { useBranding, findByID, toast } = vi.hoisted(() => ({
+const { useBranding, toast } = vi.hoisted(() => ({
   useBranding: vi.fn(),
-  findByID: vi.fn(),
   toast: { info: vi.fn(), success: vi.fn(), error: vi.fn() },
 }));
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => useBranding(),
 }));
-vi.mock("@admin/services/entryApi", () => ({
-  entryApi: { findByID: (...args: unknown[]) => findByID(...args) },
-}));
 vi.mock("@admin/components/ui", () => ({ toast }));
+
+/**
+ * The source read. The action no longer knows HOW the document is addressed —
+ * it asks the context for a reader — so the test supplies one instead of
+ * mocking a specific API client.
+ */
+const fetchSourceValues = vi.fn();
 
 const LOCALES = {
   defaultLocale: "en",
@@ -35,6 +38,7 @@ const LOCALES = {
   ],
 };
 
+/** A collection entry: addressed by slug and id, and able to read a source. */
 const CTX: EntryLocaleContextValue = {
   rtl: false,
   collectionLocalized: true,
@@ -43,6 +47,21 @@ const CTX: EntryLocaleContextValue = {
   collectionSlug: "pages",
   entryId: "e1",
   localizedFieldNames: ["title", "body"],
+  fetchSourceValues,
+};
+
+/**
+ * A single: no collection slug and no entry id, because it genuinely has
+ * neither. It can still read another language of itself, which is the whole
+ * point of gating on the reader rather than on an address.
+ */
+const SINGLE_CTX: EntryLocaleContextValue = {
+  rtl: false,
+  collectionLocalized: true,
+  isNonDefaultLocale: true,
+  locale: "de",
+  localizedFieldNames: ["title", "body"],
+  fetchSourceValues,
 };
 
 let seenValues: Record<string, unknown> = {};
@@ -85,7 +104,7 @@ describe("pickLocalizedValues", () => {
 describe("CopyFromLanguageMenu", () => {
   beforeEach(() => {
     useBranding.mockReset();
-    findByID.mockReset();
+    fetchSourceValues.mockReset();
     toast.info.mockReset();
     toast.success.mockReset();
     toast.error.mockReset();
@@ -99,12 +118,22 @@ describe("CopyFromLanguageMenu", () => {
     expect(container.querySelector("button")).toBeNull();
   });
 
-  it("renders nothing without an entry id (create mode)", () => {
+  it("renders nothing without a source reader (create mode)", () => {
     useBranding.mockReturnValue({ locales: LOCALES });
     const { container } = render(
-      <Harness ctx={{ ...CTX, entryId: undefined }} />
+      <Harness ctx={{ ...CTX, fetchSourceValues: undefined }} />
     );
     expect(container.querySelector("button")).toBeNull();
+  });
+
+  it("offers itself to a single, which has no collection slug or entry id", async () => {
+    useBranding.mockReturnValue({ locales: LOCALES });
+    render(<Harness ctx={SINGLE_CTX} />);
+    expect(
+      await screen.findByRole("button", {
+        name: /copy content from another language/i,
+      })
+    ).toBeInTheDocument();
   });
 
   it("offers the other languages as copy sources", async () => {
@@ -124,7 +153,11 @@ describe("CopyFromLanguageMenu", () => {
 
   it("copies the source language's localized fields into the form on confirm", async () => {
     useBranding.mockReturnValue({ locales: LOCALES });
-    findByID.mockResolvedValue({ title: "Hello", body: "World", slug: "x" });
+    fetchSourceValues.mockResolvedValue({
+      title: "Hello",
+      body: "World",
+      slug: "x",
+    });
     render(<Harness defaults={{ title: "", body: "" }} />);
 
     await userEvent.click(
@@ -140,12 +173,10 @@ describe("CopyFromLanguageMenu", () => {
       await screen.findByRole("button", { name: /^Copy from English$/ })
     );
 
+    // The action asks for the SOURCE language by code, and nothing else: how
+    // this document is addressed is the reader's business, not its own.
     await waitFor(() => {
-      expect(findByID).toHaveBeenCalledWith("pages", "e1", {
-        locale: "en",
-        fallbackLocale: "none",
-        depth: 0,
-      });
+      expect(fetchSourceValues).toHaveBeenCalledWith("en");
     });
     await waitFor(() => {
       expect(seenValues.title).toBe("Hello");

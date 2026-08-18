@@ -28,6 +28,10 @@ import { useEffect, useMemo, useCallback, useRef } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
+import {
+  localizedFieldNamesOf,
+  singleSourceFetcher,
+} from "@admin/components/features/entries/entry-locale-source";
 import { AutosaveRecoveryBanner } from "@admin/components/features/entries/EntryForm/AutosaveRecoveryBanner";
 import { EntryFormContent } from "@admin/components/features/entries/EntryForm/EntryFormContent";
 import { EntryFormProvider } from "@admin/components/features/entries/EntryForm/EntryFormProvider";
@@ -560,18 +564,44 @@ export function SingleForm({
     _translations: (document as { _translations?: unknown })._translations,
   } as unknown as Parameters<typeof EntrySystemHeader>[0]["entry"];
 
-  // i18n: content-locale context for field components + the rail's language pills. Built like
-  // EntryForm's, but `collectionSlug`/`entryId` are intentionally omitted so the collection-only
-  // in-form actions (copy-from-language, publish-all-languages) hide for singles — they return
-  // null without a collectionSlug. Inert for non-localized singles.
-  const localeCtx: EntryLocaleContextValue = {
-    locale,
-    rtl: getLocale(locale)?.rtl ?? false,
-    collectionLocalized: schema.localized === true,
-    isNonDefaultLocale: !!locale && !!defaultLocale && locale !== defaultLocale,
-    sourceValues,
-    onLocaleChange,
-  };
+  // i18n: content-locale context for field components + the rail's language panel.
+  //
+  // `collectionSlug`/`entryId` stay absent because a single genuinely has
+  // neither. They used to double as the gate for copy-from-language, which made
+  // the action collection-only by accident of addressing rather than by intent;
+  // it now gates on `fetchSourceValues`, which a single can answer. Inert for
+  // non-localized singles.
+  const localeCtx: EntryLocaleContextValue = useMemo(
+    () => ({
+      locale,
+      // Resolve the default explicitly: `locale` is undefined while editing the
+      // implicit default language, so reading it alone would render an RTL
+      // default language left-to-right until it was picked by hand.
+      rtl: getLocale(locale ?? defaultLocale)?.rtl ?? false,
+      collectionLocalized: schema.localized === true,
+      isNonDefaultLocale:
+        !!locale && !!defaultLocale && locale !== defaultLocale,
+      sourceValues,
+      onLocaleChange,
+      // The translatable-field set, for the field-scoped copy-from-language action.
+      localizedFieldNames: localizedFieldNamesOf(
+        schema.fields,
+        schema.localized === true
+      ),
+      // A single is addressed by its slug alone, so it supplies its own read.
+      fetchSourceValues: singleSourceFetcher(schema.slug),
+    }),
+    [
+      locale,
+      getLocale,
+      defaultLocale,
+      schema.localized,
+      schema.fields,
+      schema.slug,
+      sourceValues,
+      onLocaleChange,
+    ]
+  );
 
   // Recovery points for this author, the same mechanism the entry editor uses.
   // A Single always exists once its schema does, so unlike an entry there is no

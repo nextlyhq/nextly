@@ -15,7 +15,6 @@
  * @since 1.0.0
  */
 
-import { resolveLocalizedFieldNames } from "nextly/config";
 import { useCallback, useMemo, useState } from "react";
 
 import {
@@ -46,6 +45,10 @@ import {
 } from "@admin/lib/builder/takeoverLayout";
 import { cn } from "@admin/lib/utils";
 
+import {
+  collectionSourceFetcher,
+  localizedFieldNamesOf,
+} from "../entry-locale-source";
 import { EntryLocaleProvider } from "../EntryLocaleContext";
 import { LanguagePanel } from "../LanguagePanel";
 
@@ -250,6 +253,8 @@ export function EntryForm({
   } = useLocalization();
   const localeCtx = useMemo(() => {
     const collectionLocalized = collection.localized === true;
+    const collectionSlug = collection.slug ?? collection.name;
+    const entryId = entry?.id ?? undefined;
     return {
       locale,
       // `locale` is undefined while editing the implicit default language, so
@@ -261,17 +266,18 @@ export function EntryForm({
         !!locale && !!defaultLocale && locale !== defaultLocale,
       sourceValues,
       onLocaleChange,
-      collectionSlug: collection.slug ?? collection.name,
-      entryId: entry?.id ?? undefined,
+      collectionSlug,
+      entryId,
       // The translatable-field set, for the field-scoped copy-from-language action.
-      localizedFieldNames: resolveLocalizedFieldNames(
-        getCollectionFields(collection).map(f => ({
-          type: (f as { type?: string }).type ?? "",
-          name: (f as { name?: string }).name ?? "",
-          localized: (f as { localized?: boolean }).localized,
-        })),
+      localizedFieldNames: localizedFieldNamesOf(
+        getCollectionFields(collection),
         collectionLocalized
       ),
+      // Copy-from-language reads its source THROUGH this seam instead of
+      // addressing the document itself, so one implementation serves entries
+      // and singles alike — a single has no collection slug or entry id and
+      // could otherwise never offer the action at all.
+      fetchSourceValues: collectionSourceFetcher(collectionSlug, entryId),
     };
   }, [
     locale,
