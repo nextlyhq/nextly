@@ -14,6 +14,8 @@ import {
 } from "../database/repair-sqlite-timestamps";
 import { seedRolePresets } from "../database/seeders/role-presets";
 import { getService } from "../di/register";
+import { warnAboutUnusableProviders } from "../domains/email/boot-check";
+import { getEmailProviderRegistry } from "../domains/email/services/email-provider-registry";
 import { collectRoles } from "../plugins/roles/collect-roles";
 import { seedPluginRoles } from "../plugins/roles/seed-roles";
 
@@ -147,5 +149,34 @@ export async function runPostInitTasks(): Promise<void> {
     // Silently skip — meta or the adapter may not be registered, or the tables
     // may not exist yet. A failed repair must never stop the app booting; the
     // marker stays unset, so the next boot tries again.
+  }
+
+  // Say so when a stored provider needs a package this install does not have.
+  // Runs LAST, after plugin contributions have registered, because whether a
+  // type is usable is a question only the fully seeded registry can answer.
+  try {
+    const providerService = getService("emailProviderService");
+    const logger = getService("logger");
+
+    await warnAboutUnusableProviders({
+      listProviderTypes: async () =>
+        (await providerService.listProviders()).map(provider => provider.type),
+      isAvailable: type => {
+        const registry = getEmailProviderRegistry();
+        // An unregistered type is unusable too, and `get` throws on one rather
+        // than returning nothing -- a stored provider whose plugin was removed
+        // reaches exactly that branch. Asked before getting, so the answer is
+        // "no" instead of an exception that loses every other provider's.
+        if (!registry.has(type)) return false;
+        return (
+          registry.get(type).checkAvailability?.().status !== "needs-dependency"
+        );
+      },
+      warn: message => logger.warn(message),
+    });
+  } catch {
+    // Silently skip — the email services may not be registered, or the
+    // providers table may not exist yet. A diagnostic must never be the
+    // reason a server fails to start.
   }
 }
