@@ -10,6 +10,7 @@
 import { renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { autoRegisterPluginComponents } from "@admin/lib/plugins/component-registry";
 import {
   clearPluginPages,
   registerPluginPages,
@@ -166,5 +167,22 @@ describe("usePluginPageRegistration", () => {
 
     expect(locationChangeCount(spy)).toBe(2);
     spy.mockRestore();
+  });
+
+  it("imports a plugin's form-toolbar slot module so the slot can resolve", () => {
+    // The toolbar slot renders inside the entry form's provider and resolves
+    // by string like any plugin component, but a plugin declaring only this
+    // slot has no page or collection to otherwise trigger its module import.
+    renderWith([
+      {
+        name: "acme",
+        collections: [],
+        entryFormToolbarSlot: "@acme/x/admin#Toolbar",
+      },
+    ]);
+
+    expect(vi.mocked(autoRegisterPluginComponents)).toHaveBeenCalledWith([
+      "@acme/x/admin#Toolbar",
+    ]);
   });
 });
