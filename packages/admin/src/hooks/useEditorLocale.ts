@@ -28,8 +28,7 @@
 import { useCallback, useState } from "react";
 
 import { LOCALE_PARAM } from "@admin/constants/search-params";
-import { useLocalization } from "@admin/hooks/useLocalization";
-import { useSearchParams } from "@admin/hooks/useSearchParams";
+import { useLocaleParam } from "@admin/hooks/useLocaleParam";
 import { setSearchParam } from "@admin/lib/navigation";
 
 export interface EditorLocale {
@@ -53,22 +52,10 @@ export interface EditorLocale {
 }
 
 export function useEditorLocale(): EditorLocale {
-  const searchParams = useSearchParams();
-  const { locales } = useLocalization();
-
-  // Only a CONFIGURED language is honoured. A hand-edited or stale `?locale=`
-  // would otherwise be sent to the API, which answers for a language the app
-  // does not have — so an unknown one reads as the default rather than as an
-  // error the reader cannot act on.
-  // Read straight off the parsed params rather than through `lib/routing`'s
-  // helper: that module imports the page registry, so reaching into it from a
-  // hook every page uses closes a cycle.
-  const raw = searchParams[LOCALE_PARAM];
-  const requested = (Array.isArray(raw) ? raw[0] : raw) ?? null;
-  const locale =
-    requested && locales.some(l => l.code === requested)
-      ? requested
-      : undefined;
+  // Only a CONFIGURED language is honoured, and translation mode's source param
+  // owes the same rule — see `useLocaleParam`, which is where it lives so the
+  // two cannot come to disagree.
+  const locale = useLocaleParam(LOCALE_PARAM);
 
   // The seed stays in component state deliberately. It is a one-shot intent
   // consumed on arrival, not a property of the page: in the URL it would

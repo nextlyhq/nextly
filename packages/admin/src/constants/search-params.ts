@@ -13,3 +13,15 @@
 
 /** The editor's active content language. Absent means the app default. */
 export const LOCALE_PARAM = "locale";
+
+/**
+ * The language translation mode reads its SOURCE from. Absent means the mode is
+ * off.
+ *
+ * A language rather than a boolean, so the pairing is in the URL: a translator
+ * working German from Spanish is a different screen from German from English,
+ * and a `?translate=1` that implied the default language could not express it.
+ * It also makes the mode linkable the way `LOCALE_PARAM` made the target
+ * linkable — a reviewer can be sent the exact pair.
+ */
+export const TRANSLATE_PARAM = "translate";

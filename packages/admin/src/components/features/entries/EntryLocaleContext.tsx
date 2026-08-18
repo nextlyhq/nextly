@@ -78,6 +78,16 @@ export interface EntryLocaleContextValue {
    * Absent means the surface cannot publish every language, and the action does
    * not offer itself.
    */
+  /**
+   * Enter translation mode, reading the source from the named language.
+   *
+   * A seam for the same reason the others are: the URL state belongs to the
+   * page, and the control that offers the action sits several levels below it.
+   * Absent means the surface cannot enter the mode, so the action does not offer
+   * itself — which keeps it off a create form and off any editor that has not
+   * been taught to render the panes.
+   */
+  onEnterTranslationMode?: (source: string) => void;
   publishAllLanguages?: {
     /**
      * The slug whose `publish-{slug}` permission this owes. The permission
