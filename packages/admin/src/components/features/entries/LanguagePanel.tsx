@@ -107,7 +107,7 @@ function LanguageRow({
   actionsDisabled: boolean;
 }) {
   return (
-    <div className="flex items-center gap-2 px-3 py-2 border-b border-border last:border-b-0">
+    <li className="flex items-center gap-2 px-3 py-2 border-b border-border last:border-b-0">
       <StateDot state={state} />
       <span className="text-sm font-medium">{label}</span>
       {isDefault && (
@@ -139,6 +139,10 @@ function LanguageRow({
               size="sm"
               className="h-7 px-2 text-xs"
               disabled={actionsDisabled}
+              // Named for the language it acts on. Read out of context — a
+              // screen reader listing this panel's controls — three buttons
+              // all saying "Start from…" name no language at all.
+              aria-label={`Start ${label} from another language`}
               onClick={onSeed}
             >
               Start from…
@@ -150,6 +154,12 @@ function LanguageRow({
               variant="ghost"
               size="sm"
               className="h-7 px-2 text-xs"
+              // Switching languages is withheld under the same gate that
+              // withholds the mutations: while a past version is on screen,
+              // changing the document underneath the history banner shows one
+              // language's history labelled as another's.
+              disabled={actionsDisabled}
+              aria-label={`Open ${label}`}
               onClick={() => onSelect(code)}
             >
               Open
@@ -157,7 +167,7 @@ function LanguageRow({
           )}
         </>
       )}
-    </div>
+    </li>
   );
 }
 
@@ -211,28 +221,30 @@ export function LanguagePanel({
         )}
       </div>
 
-      {locales.map(locale => (
-        <LanguageRow
-          key={locale.code}
-          code={locale.code}
-          label={locale.label}
-          rtl={locale.rtl}
-          isDefault={locale.code === defaultLocale}
-          state={languageState(translations?.[locale.code])}
-          isActive={locale.code === active}
-          canSeed={copy.available}
-          {...(onSelect === undefined ? {} : { onSelect })}
-          onSeed={() => {
-            // The language being edited right now is the source; the row
-            // clicked is the target. Switch first — seeding without switching
-            // fills a language the author is not looking at — then ask, so the
-            // confirm step names both sides correctly once the switch lands.
-            onSelect?.(locale.code);
-            copy.requestCopy(active);
-          }}
-          actionsDisabled={actionsDisabled}
-        />
-      ))}
+      <ul aria-label="Languages in this document">
+        {locales.map(locale => (
+          <LanguageRow
+            key={locale.code}
+            code={locale.code}
+            label={locale.label}
+            rtl={locale.rtl}
+            isDefault={locale.code === defaultLocale}
+            state={languageState(translations?.[locale.code])}
+            isActive={locale.code === active}
+            canSeed={copy.available}
+            {...(onSelect === undefined ? {} : { onSelect })}
+            onSeed={() => {
+              // The language being edited right now is the source; the row
+              // clicked is the target. Switch first — seeding without switching
+              // fills a language the author is not looking at — then ask, so the
+              // confirm step names both sides correctly once the switch lands.
+              onSelect?.(locale.code);
+              copy.requestCopy(active);
+            }}
+            actionsDisabled={actionsDisabled}
+          />
+        ))}
+      </ul>
       <CopyFromLanguageDialog copy={copy} />
     </div>
   );
