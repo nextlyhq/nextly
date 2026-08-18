@@ -20,13 +20,10 @@
  * @module keyboard-actions
  */
 
-import { findNode } from "@nextlyhq/blocks-engine";
 import { useShortcuts } from "@nextlyhq/ui";
 import * as React from "react";
 
 import { CANVAS_ESCAPE_PRIORITY, escapeOutcome } from "./canvas-escape";
-import { blockDeletion } from "./delete-block";
-import { blockDuplication } from "./duplicate-block";
 import type { EditorState } from "./editor-state";
 import {
   keyboardMovePosition,
@@ -34,7 +31,12 @@ import {
   type MoveEffect,
 } from "./keyboard-move";
 import { layerLabel, pathTo } from "./layers";
-import { lockBlockingDelete, lockBlockingMove } from "./locking";
+import { lockBlockingMove } from "./locking";
+import {
+  isRefusal,
+  selectionDeletion,
+  selectionDuplication,
+} from "./selection-ops";
 
 /**
  * The bindings, and why these keys.
@@ -250,96 +252,67 @@ export function useBlockKeyboardActions({
 
   const deleteSelected = React.useCallback(() => {
     const editorNow = latest.current;
-    const deletion = blockDeletion(editorNow.document, editorNow.selectedId);
-    // `null` means there is nothing to delete — no selection, or an id the
-    // document no longer holds after an undo. Nothing is applied and nothing is
-    // said, because there is no event to report.
-    if (deletion === null) return;
+    const plan = selectionDeletion(editorNow.document, editorNow.selection.ids);
+    // `null` means there is nothing to delete — no selection, or ids an undo
+    // has since removed. Nothing is applied and nothing is said, because there
+    // is no event to report.
+    if (plan === null) return;
 
     /*
      * A lock is a POLICY refusal, so it is announced where a structural one is
-     * not.
-     *
-     * The moves below stay silent when a block simply has nowhere to go — that
-     * is a fact about the document an author can see, and saying it on every
-     * press at the end of a list is noise. A lock is the opposite: nothing about
-     * the page explains why the key did nothing, the remedy is one the author
-     * can act on, and a keyboard user has no badge to look at.
-     *
-     * The subtree is checked, not just the node. Deleting a container destroys
-     * what is inside it, so an author who locked a caption and then removed its
-     * section would lose the thing they locked through an action aimed at
-     * something else.
+     * not. Nothing about the page explains why the key did nothing, the remedy
+     * is one the author can act on, and a keyboard user has no badge to look
+     * at. ONE lock refuses the whole group, because the group is atomic and
+     * there is no half-done delete to fall back to.
      */
-    const blocked = lockBlockingDelete(editorNow.document, deletion.id);
-    if (blocked !== undefined) {
-      announce(
-        blocked.id === deletion.id
-          ? `${layerLabel(blocked)} is locked. Unlock it to delete it.`
-          : `This block contains ${layerLabel(blocked)}, which is locked. Unlock it to delete.`
-      );
+    if (isRefusal(plan)) {
+      announce(plan.reason);
       return;
     }
 
-    const applied = editorNow.apply({
-      kind: "remove",
-      id: deletion.id,
-      dropSlotIfEmpty: deletion.dropSlotIfEmpty,
-    });
-    if (applied === null) return;
+    if (editorNow.applyAll(plan.ops) === null) return;
 
-    // Selection moved only after the store accepted the removal. Moving it
-    // first would leave the author pointed at a neighbour while the block they
-    // asked to delete is still there.
-    editorNow.select(deletion.nextSelection);
-    /*
-     * Named the way the layers panel and the breadcrumb name it.
-     *
-     * `blockLabel(type)` would say "Heading" for a block the author called
-     * "Hero title", so the one surface a screen-reader user hears would be the
-     * only one using a different name for the same block.
-     */
-    const removed = findNode(editorNow.document.nodes, deletion.id);
-    announce(
-      deletionAnnouncement(
-        removed === undefined ? deletion.type : layerLabel(removed),
-        deletion.descendantCount
-      )
-    );
+    // Moved only after the store accepted the removal. Moving it first would
+    // leave the author pointed at a neighbour while the blocks they asked to
+    // delete are still there.
+    editorNow.select(plan.nextSelection);
+    announce(deletionAnnouncement(plan.subject, plan.descendants));
   }, [announce]);
 
   const duplicateSelected = React.useCallback(() => {
     const editorNow = latest.current;
-    const duplication = blockDuplication(
+    const plan = selectionDuplication(
       editorNow.document,
-      editorNow.selectedId
+      editorNow.selection.ids
     );
     // `null` means there is nothing to duplicate, or a position the op
-    // vocabulary cannot express. Nothing is applied and nothing is said,
-    // because there is no event to report.
-    if (duplication === null) return;
+    // vocabulary cannot express. Nothing is applied and nothing is said.
+    if (plan === null) return;
 
     /*
-     * A lock does NOT stop a duplication.
-     *
-     * The engine's rule is that the command layer must not let an author move
-     * or delete a locked node, and duplicating does neither — the original
-     * stays exactly where it is, untouched. Refusing here would read as
-     * cautious and would mean an author could not take a copy of the one block
-     * they had most deliberately protected.
+     * A lock does NOT stop a duplication. The command layer must not let an
+     * author move or delete a locked node, and duplicating does neither — the
+     * originals stay exactly where they are. Refusing would mean an author
+     * could not take copies of the blocks they had most deliberately protected.
      */
-    const applied = editorNow.apply({
-      kind: "insert",
-      node: duplication.node,
-      at: duplication.at,
-    });
-    if (applied === null) return;
+    if (editorNow.applyAll(plan.ops) === null) return;
 
-    // Selection follows the copy. It is the block the author is now working on
-    // — they duplicated it to change it — and leaving the original selected
-    // would send the next edit to the wrong one of two identical blocks.
-    editorNow.select(duplication.node.id);
-    announce(`${duplication.label} duplicated. Undo with ${UNDO_KEYS_SPOKEN}.`);
+    /*
+     * Selection follows the copies: they are what the author is now working on,
+     * and leaving the originals selected would send the next edit to the wrong
+     * half of two identical runs.
+     *
+     * Built through the same grammar a click uses — one replace then toggles —
+     * rather than by writing a selection object directly, so there is no second
+     * way to construct one and no second place that has to remember the
+     * outermost rule.
+     */
+    const [first, ...rest] = plan.newIds;
+    if (first !== undefined) {
+      editorNow.select(first, "replace");
+      for (const id of rest) editorNow.select(id, "toggle");
+    }
+    announce(`${plan.subject} duplicated. Undo with ${UNDO_KEYS_SPOKEN}.`);
   }, [announce]);
 
   const moveSelected = React.useCallback(

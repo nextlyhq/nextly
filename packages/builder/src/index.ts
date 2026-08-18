@@ -259,6 +259,25 @@ export {
 } from "./duplicate-block";
 
 /**
+ * @experimental Delete, duplicate and lock across a whole selection.
+ *
+ * From this entry because each is a plain function returning ops. An agent
+ * asked to "remove these six" needs the same plan the editor makes — including
+ * that one lock refuses the whole group, and that copies must be planned in
+ * reverse so each lands beside its own original.
+ */
+export {
+  isRefusal,
+  selectionDeletion,
+  selectionDuplication,
+  selectionLock,
+  type SelectionDuplication,
+  type SelectionEdit,
+  type SelectionPlan,
+  type SelectionRefusal,
+} from "./selection-ops";
+
+/**
  * @experimental What "the selection" is once it can hold more than one block.
  *
  * From this entry because every part of it is a plain function over a document.
