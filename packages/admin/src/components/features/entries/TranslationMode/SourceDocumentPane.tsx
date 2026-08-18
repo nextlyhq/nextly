@@ -43,12 +43,13 @@ export interface SourcePaneDocument {
 export function SourceDocumentPane({ source }: { source: SourcePaneDocument }) {
   return (
     <div
-      // A SOLID token, not an alpha tint of one. `text-muted-foreground` is
-      // designed against `bg-muted`, so the pair is checkable; over
-      // `bg-muted/30` the text sits on a composite of muted and whatever is
-      // behind it, which the repo's contrast suite cannot see — it measures a
-      // foreground against the solid page token and reports a pass that
-      // describes a background the user is not looking at.
+      // A SOLID token rather than an alpha tint of one. `text-muted-foreground`
+      // is the foreground `bg-muted` is designed against, so the pair is one the
+      // contrast suite checks by NAME; over `bg-muted/30` the same text is
+      // measured against a computed blend instead. Both are covered — the ink
+      // suite composites a translucent fill over its surface — so this is a
+      // legibility-of-intent choice, not a contrast fix. The solid surface is
+      // also what makes this half read as the one that cannot be edited.
       className="@container/content h-full overflow-y-auto bg-muted"
       // The pane's own direction, from the SOURCE language. Translation mode is
       // the one place two directions are on screen at once — an English source
