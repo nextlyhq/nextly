@@ -20,7 +20,7 @@
  * @module geometry-dom
  */
 
-import type { FrameInset } from "./geometry";
+import type { FrameInset, Point, Rect } from "./geometry";
 
 /**
  * How far a frame's content viewport sits inside its border box.
@@ -42,5 +42,52 @@ export function frameInsetOf(frame: HTMLIFrameElement): FrameInset {
   return {
     left: frame.clientLeft + (Number.isFinite(paddingLeft) ? paddingLeft : 0),
     top: frame.clientTop + (Number.isFinite(paddingTop) ? paddingTop : 0),
+  };
+}
+
+/**
+ * A rectangle in the canvas's own CONTENT coordinates.
+ *
+ * The space the editor's chrome is drawn in: the origin is the canvas root's
+ * top-left, and scrolling the root does not move it. `getBoundingClientRect`
+ * answers in VIEWPORT coordinates, which move with every scroll and with the
+ * page's own layout — so a rectangle stored raw is only correct until something
+ * scrolls, and the symptom is an overlay that drifts rather than one that is
+ * plainly wrong.
+ *
+ * Adding the root's scroll is what makes the result stable, and it is also what
+ * makes it the same space an absolutely positioned child of the root resolves
+ * against: such a child is placed relative to the padding box with scroll
+ * included. So a rectangle measured here can be handed straight to `style.top`
+ * and lands on what was measured.
+ */
+export function canvasContentRect(element: Element, root: HTMLElement): Rect {
+  const box = element.getBoundingClientRect();
+  const rootBox = root.getBoundingClientRect();
+  return {
+    x: box.x - rootBox.x + root.scrollLeft,
+    y: box.y - rootBox.y + root.scrollTop,
+    width: box.width,
+    height: box.height,
+  };
+}
+
+/**
+ * A viewport point in the canvas's own content coordinates.
+ *
+ * The exact counterpart of {@link canvasContentRect} rather than a second
+ * mapping written to match: a pointer event arrives in viewport coordinates and
+ * has to be compared against rectangles measured above, and the two disagreeing
+ * by a scroll offset is the fault this pairing exists to prevent.
+ */
+export function canvasContentPoint(
+  clientX: number,
+  clientY: number,
+  root: HTMLElement
+): Point {
+  const rootBox = root.getBoundingClientRect();
+  return {
+    x: clientX - rootBox.x + root.scrollLeft,
+    y: clientY - rootBox.y + root.scrollTop,
   };
 }
