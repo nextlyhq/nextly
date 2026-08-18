@@ -101,9 +101,25 @@ export type { InsertPanelProps } from "./insert-panel";
  */
 export {
   BlockKeyboardActions,
+  useBlockActionsContext,
   useBlockKeyboardActions,
 } from "./keyboard-actions";
-export type { BlockKeyboardActionsOptions } from "./keyboard-actions";
+export type {
+  BlockActions,
+  BlockKeyboardActionsOptions,
+  BlockKeyboardActionsResult,
+} from "./keyboard-actions";
+
+/**
+ * The floating toolbar, from this entry because it is a client component and
+ * because it only works below `BlockKeyboardActions`.
+ *
+ * It presses the verbs that component publishes rather than applying ops of its
+ * own, which is what keeps one gesture having one answer — and what lets both
+ * the button and the keystroke announce into the single live region.
+ */
+export { BlockToolbar } from "./block-toolbar";
+export type { BlockToolbarProps } from "./block-toolbar";
 
 /**
  * The editor's document state, published beside the canvas because it is a hook

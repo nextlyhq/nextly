@@ -32,7 +32,7 @@ import {
   type MoveDirection,
   type MoveEffect,
 } from "./keyboard-move";
-import { layerLabel } from "./layers";
+import { layerLabel, pathTo } from "./layers";
 import { lockBlockingDelete, lockBlockingMove } from "./locking";
 
 /**
@@ -127,6 +127,58 @@ function deletionAnnouncement(name: string, descendants: number): string {
 /** How the undo shortcut is READ ALOUD, which is not how it is parsed. */
 const UNDO_KEYS_SPOKEN = "Control or Command Z";
 
+/**
+ * The structural verbs, as callables.
+ *
+ * Published so a POINTER surface can press exactly what a keystroke presses.
+ * The floating toolbar offers the same five actions, and a toolbar that applied
+ * its own ops would be a second answer to "what does duplicate do" — which an
+ * author meets as two buttons that disagree, months after the second one was
+ * written.
+ *
+ * Every one is silent when it has no subject, so a caller may press any of them
+ * without first asking whether it applies. `toolbarActions` answers that
+ * separately, for drawing a control as unavailable rather than for guarding the
+ * call.
+ */
+export interface BlockActions {
+  /** Move the selection one step in `direction`, lock permitting. */
+  readonly move: (direction: MoveDirection) => void;
+  /** Delete the selection and everything inside it, lock permitting. */
+  readonly delete: () => void;
+  /** Copy the selection in beside itself and select the copy. */
+  readonly duplicate: () => void;
+  /** Select the container holding the selection. */
+  readonly selectParent: () => void;
+}
+
+/**
+ * The verbs, for a surface rendered under {@link BlockKeyboardActions}.
+ *
+ * `null` until a provider is above it, which {@link useBlockActionsContext}
+ * turns into a thrown error rather than a silently inert toolbar.
+ */
+const BlockActionsContext = React.createContext<BlockActions | null>(null);
+
+/**
+ * The verbs from the nearest {@link BlockKeyboardActions}.
+ *
+ * Throws when there is none. A toolbar without them would render its buttons
+ * and do nothing on every press, which looks like a broken editor rather than
+ * like a missing wrapper — and it would reach a person before it reached a
+ * developer.
+ */
+export function useBlockActionsContext(): BlockActions {
+  const actions = React.useContext(BlockActionsContext);
+  if (actions === null) {
+    throw new Error(
+      "[@nextlyhq/builder] Block actions are only available inside " +
+        "<BlockKeyboardActions>. Render it as an ancestor of whatever uses them."
+    );
+  }
+  return actions;
+}
+
 export interface BlockKeyboardActionsOptions {
   /**
    * The editor whose document these move blocks in.
@@ -146,17 +198,32 @@ export interface BlockKeyboardActionsOptions {
   enabled?: boolean;
 }
 
+/** What the hook hands back: the region's text, and the verbs behind the keys. */
+export interface BlockKeyboardActionsResult {
+  /** The live region's current text. Owned by one region and one only. */
+  readonly announcement: string;
+  /** The same verbs the keystrokes run, for a pointer surface to press. */
+  readonly actions: BlockActions;
+}
+
 /**
  * Register the move bindings for as long as the caller is mounted.
  *
- * Returns nothing: there is no state here worth exposing, and a hook that
- * returned handlers would invite a second caller to wire them to different keys
- * — which is how one gesture ends up with two answers.
+ * The verbs come back as well as the announcement, and the reason is the one
+ * this hook's earlier note argued against: a returned handler could be bound to
+ * a second set of keys. What settles it is that the alternative is worse. The
+ * toolbar needs the same five verbs AND the same live region, and a surface
+ * that reimplemented either would produce two answers to one gesture — a second
+ * region that talks over the first, or a button whose op drifts from its
+ * keystroke's. Sharing them is what keeps there being one of each.
+ *
+ * The keys stay this module's alone: nothing here is bindable by a caller, and
+ * {@link BlockKeyboardActions} is the only supported way to reach the verbs.
  */
 export function useBlockKeyboardActions({
   editor,
   enabled = true,
-}: BlockKeyboardActionsOptions): string {
+}: BlockKeyboardActionsOptions): BlockKeyboardActionsResult {
   // The message a live region reads out. Held as state rather than written to
   // the DOM directly so React owns the node — a region mutated behind React's
   // back is reverted by the next render, silently and only sometimes.
@@ -274,6 +341,71 @@ export function useBlockKeyboardActions({
     announce(`${duplication.label} duplicated. Undo with ${UNDO_KEYS_SPOKEN}.`);
   }, [announce]);
 
+  const moveSelected = React.useCallback(
+    (direction: MoveDirection) => {
+      const editorNow = latest.current;
+      const selectedId = editorNow.selectedId;
+      if (selectedId === null) return;
+
+      // Only the node itself, never its subtree: moving a container leaves
+      // a locked child in the same slot at the same index, so the lock is
+      // not violated and refusing would let one locked caption freeze the
+      // whole section around it.
+      const lockedNode = lockBlockingMove(editorNow.document, selectedId);
+      if (lockedNode !== undefined) {
+        announce(`${layerLabel(lockedNode)} is locked. Unlock it to move it.`);
+        return;
+      }
+
+      const move = keyboardMovePosition(
+        editorNow.document.nodes,
+        selectedId,
+        direction
+      );
+      // `null` is an ordinary answer: the first block cannot move up, and a
+      // top-level block cannot outdent. Refusing quietly is right — a block
+      // at the end of its container has nowhere to go, and saying so would
+      // be an error message for pressing a key that did nothing.
+      if (move === null) return;
+
+      const applied = editorNow.apply({
+        kind: "move",
+        id: selectedId,
+        to: move.to,
+        dropSlotIfEmpty: move.dropSlotIfEmpty,
+      });
+      // Announced only once the store has accepted it. A keyboard author
+      // cannot see the result, and the store may refuse — announcing before
+      // it answered would report a move that did not happen, which is worse
+      // than silence because it cannot be told from one that did.
+      //
+      // Refusals stay silent, deliberately. "This block is already first"
+      // on every press at the end of a list is noise an author cannot act
+      // on, and the block not moving is itself the answer.
+      if (applied !== null) announce(EFFECT_ANNOUNCEMENT[move.effect]);
+      // The selection deliberately does NOT change. The block that moved is
+      // the block still selected, so a second press continues moving the
+      // same block — which is what makes a run of presses walk it across the
+    },
+    [announce]
+  );
+
+  /**
+   * Select the container holding the selection.
+   *
+   * Reads the same trail the breadcrumb draws, so "the parent" cannot mean one
+   * block here and another there. Silent when there is no container: a
+   * top-level block has none, and saying so on every press would be an error
+   * message for a control that is already disabled.
+   */
+  const selectParent = React.useCallback(() => {
+    const editorNow = latest.current;
+    const path = pathTo(editorNow.document, editorNow.selectedId);
+    const parent = path[path.length - 2];
+    if (parent === undefined) return;
+    editorNow.select(parent.id);
+  }, []);
+
   const bindings = React.useMemo(
     () =>
       MOVE_KEYS.map(({ keys, direction, description }) => ({
@@ -289,56 +421,9 @@ export function useBlockKeyboardActions({
         // word-wise caret movement on every platform that has it. An author
         // editing a heading must be able to move the caret through it.
         whenTyping: false,
-        run: () => {
-          const editorNow = latest.current;
-          const selectedId = editorNow.selectedId;
-          if (selectedId === null) return;
-
-          // Only the node itself, never its subtree: moving a container leaves
-          // a locked child in the same slot at the same index, so the lock is
-          // not violated and refusing would let one locked caption freeze the
-          // whole section around it.
-          const lockedNode = lockBlockingMove(editorNow.document, selectedId);
-          if (lockedNode !== undefined) {
-            announce(
-              `${layerLabel(lockedNode)} is locked. Unlock it to move it.`
-            );
-            return;
-          }
-
-          const move = keyboardMovePosition(
-            editorNow.document.nodes,
-            selectedId,
-            direction
-          );
-          // `null` is an ordinary answer: the first block cannot move up, and a
-          // top-level block cannot outdent. Refusing quietly is right — a block
-          // at the end of its container has nowhere to go, and saying so would
-          // be an error message for pressing a key that did nothing.
-          if (move === null) return;
-
-          const applied = editorNow.apply({
-            kind: "move",
-            id: selectedId,
-            to: move.to,
-            dropSlotIfEmpty: move.dropSlotIfEmpty,
-          });
-          // Announced only once the store has accepted it. A keyboard author
-          // cannot see the result, and the store may refuse — announcing before
-          // it answered would report a move that did not happen, which is worse
-          // than silence because it cannot be told from one that did.
-          //
-          // Refusals stay silent, deliberately. "This block is already first"
-          // on every press at the end of a list is noise an author cannot act
-          // on, and the block not moving is itself the answer.
-          if (applied !== null) announce(EFFECT_ANNOUNCEMENT[move.effect]);
-          // The selection deliberately does NOT change. The block that moved is
-          // the block still selected, so a second press continues moving the
-          // same block — which is what makes a run of presses walk it across the
-          // page rather than moving a different block each time.
-        },
+        run: () => moveSelected(direction),
       })),
-    [announce]
+    [moveSelected]
   );
 
   const editing = React.useMemo(
@@ -425,7 +510,17 @@ export function useBlockKeyboardActions({
     enabled,
   });
 
-  return announcement;
+  const actions = React.useMemo<BlockActions>(
+    () => ({
+      move: moveSelected,
+      delete: deleteSelected,
+      duplicate: duplicateSelected,
+      selectParent,
+    }),
+    [moveSelected, deleteSelected, duplicateSelected, selectParent]
+  );
+
+  return { announcement, actions };
 }
 
 /**
@@ -436,14 +531,25 @@ export function useBlockKeyboardActions({
  * otherwise have to invent a null-returning wrapper of its own, and every host
  * would invent a slightly different one.
  *
- * Renders nothing. It is a place to run a hook, which is the same shape the
- * command palette already uses for its modal key hold.
+ * Renders the live region, and publishes the verbs to whatever it wraps. Both
+ * belong to the same mount deliberately: a toolbar reachable without the region
+ * could act without announcing, and a keyboard author would meet a button that
+ * changes the page and says nothing.
+ *
+ * `children` is optional. A host that wants only the keystrokes passes none and
+ * gets exactly what this rendered before.
  */
 export function BlockKeyboardActions({
   editor,
   enabled,
-}: BlockKeyboardActionsOptions): React.JSX.Element {
-  const announcement = useBlockKeyboardActions({ editor, enabled });
+  children,
+}: BlockKeyboardActionsOptions & {
+  readonly children?: React.ReactNode;
+}): React.JSX.Element {
+  const { announcement, actions } = useBlockKeyboardActions({
+    editor,
+    enabled,
+  });
 
   // `polite`, not `assertive`: a move is the author's own action and its result
   // can wait for a pause. Assertive interrupts whatever is being read, which for
@@ -454,8 +560,11 @@ export function BlockKeyboardActions({
   // text is frequently not announced at all, because the assistive technology
   // has nothing it was already watching.
   return (
-    <p aria-live="polite" role="status" className="nx-sr-only">
-      {announcement}
-    </p>
+    <BlockActionsContext.Provider value={actions}>
+      <p aria-live="polite" role="status" className="nx-sr-only">
+        {announcement}
+      </p>
+      {children}
+    </BlockActionsContext.Provider>
   );
 }
