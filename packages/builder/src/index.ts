@@ -259,6 +259,25 @@ export {
 } from "./duplicate-block";
 
 /**
+ * @experimental What "the selection" is once it can hold more than one block.
+ *
+ * From this entry because every part of it is a plain function over a document.
+ * A host, an agent, or a surface answering "what is selected" needs the same
+ * normalisation the editor uses — a second reading would let one of them act on
+ * a container AND something inside it, which deletes the child twice.
+ */
+export {
+  EMPTY_SELECTION,
+  applySelection,
+  documentOrder,
+  normalizeSelection,
+  pruneSelection,
+  rangeBetween,
+  type Selection,
+  type SelectionMode,
+} from "./selection";
+
+/**
  * @experimental The palette's command list, as a plain function over state.
  *
  * From this entry because a host assembling its own palette — or an agent
