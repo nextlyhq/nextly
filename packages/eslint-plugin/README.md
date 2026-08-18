@@ -80,6 +80,23 @@ const shadow =
   "0 1px 2px color-mix(in oklch, var(--nx-foreground) 10%, transparent)";
 ```
 
+It also catches CSS **named** colours, which are the easiest to miss because
+they read as ordinary words:
+
+```jsx
+// ✗ ignores the theme completely
+<div style={{ backgroundColor: "deepskyblue" }} />;
+const css = ".badge { color: crimson }";
+
+// ✓
+<div className="bg-primary" />;
+```
+
+A colour name is only reported where its POSITION makes it a colour — the value
+of a colour-valued property, or the right-hand side of a CSS declaration. Prose
+and data are untouched, so `"the red team"`, `{ fruit: "plum" }` and a label
+reading `"Tomato"` are all fine.
+
 Black, white and transparent are exempt: they are mode-invariant, so routing
 them through a themed token would claim a variation that does not exist. So are
 `url(...)` payloads and `placeholder` example values.
