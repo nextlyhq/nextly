@@ -259,6 +259,22 @@ export {
 } from "./duplicate-block";
 
 /**
+ * @experimental Who owns Escape while the editor is on screen.
+ *
+ * From this entry because the rule is a plain function over the DOM and a
+ * selection. A host embedding the editor beside its own Escape handling needs
+ * the same answer the editor uses, and a second reading of it is how the two
+ * end up both claiming the key or both releasing it.
+ */
+export {
+  CANVAS_ESCAPE_PRIORITY,
+  escapeOutcome,
+  isTextEntry,
+  modalIsOpen,
+  type EscapeOutcome,
+} from "./canvas-escape";
+
+/**
  * @experimental What the floating toolbar offers, and where it sits.
  *
  * From this entry because both halves are plain functions. The action list is
