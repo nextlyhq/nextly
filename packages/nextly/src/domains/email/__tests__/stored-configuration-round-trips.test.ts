@@ -149,17 +149,24 @@ describe("a configuration whose parse is not a fixed point", () => {
     );
   });
 
-  // JSON carries no `Date`, so the column holds a string and the adapter is
-  // handed a shape this provider's own parser just rejected.
-  it("refuses a parser returning a value JSON cannot carry", async () => {
+  // The stored configuration IS its serialisation, so a value JSON can only
+  // carry as text is COERCED rather than refused. The cost is deliberate: the
+  // adapter is handed an ISO string where the parser returned a `Date`. That
+  // is a real DX wrinkle, taken in exchange for a rule that stops producing
+  // refusals for values nobody needed to be warned about.
+  it("stores the serialised form of a value JSON cannot carry", async () => {
     register("dated", input => ({
       apiKey: String((input as { apiKey: unknown }).apiKey),
       issuedAt: new Date(0),
     }));
 
-    await expect(write("dated", { apiKey: "k" })).rejects.toThrow(
-      /parsing what would be saved does not return what was saved/
-    );
+    const provider = await write("dated", { apiKey: "k" });
+
+    const stored = await service.getProviderDecrypted(provider.id);
+    expect(stored.configuration).toEqual({
+      apiKey: "k",
+      issuedAt: "1970-01-01T00:00:00.000Z",
+    });
   });
 
   // The same property reached by throwing rather than by returning something
@@ -186,7 +193,7 @@ describe("a configuration whose parse is not a fixed point", () => {
     }));
 
     await expect(write("optional", { apiKey: "k" })).rejects.toThrow(
-      /parsing what would be saved does not return what was saved/
+      /loses .* when written as JSON/
     );
   });
 
@@ -248,7 +255,11 @@ describe("a configuration whose parse is not a fixed point", () => {
   // A PASS-THROUGH parser: it accepts both the typed value and its JSON form,
   // so re-parsing agrees with itself while the value actually stored lost its
   // type. The Date test above recreates the Date and cannot see this.
-  it("refuses a pass-through parser whose value loses type in the column", async () => {
+  // The SAME coercion reached by a parser that passes its input through on the
+  // second call rather than rebuilding it. Accepted for the same reason, and
+  // kept as its own case because the two parsers differ in shape while the
+  // decision about them does not.
+  it("stores a coerced value a pass-through parser accepts back", async () => {
     register("passthrough-date", input => {
       const value = input as { apiKey: unknown; issuedAt?: unknown };
       return value.issuedAt === undefined
@@ -256,9 +267,13 @@ describe("a configuration whose parse is not a fixed point", () => {
         : (value as object);
     });
 
-    await expect(write("passthrough-date", { apiKey: "k" })).rejects.toThrow(
-      /parsing what would be saved does not return what was saved|cannot be written as JSON/
-    );
+    const provider = await write("passthrough-date", { apiKey: "k" });
+
+    const stored = await service.getProviderDecrypted(provider.id);
+    expect(stored.configuration).toEqual({
+      apiKey: "k",
+      issuedAt: "1970-01-01T00:00:00.000Z",
+    });
   });
 
   // A root `toJSON` returning undefined makes JSON.stringify return undefined
@@ -331,7 +346,7 @@ describe("a configuration whose parse is not a fixed point", () => {
     }));
 
     await expect(write("mapped", { apiKey: "k" })).rejects.toThrow(
-      /parsing what would be saved does not return what was saved/
+      /loses .* when written as JSON/
     );
   });
 
@@ -344,7 +359,7 @@ describe("a configuration whose parse is not a fixed point", () => {
     }));
 
     await expect(write("nested-set", { apiKey: "k" })).rejects.toThrow(
-      /parsing what would be saved does not return what was saved/
+      /loses .* when written as JSON/
     );
   });
 
@@ -357,7 +372,7 @@ describe("a configuration whose parse is not a fixed point", () => {
     }));
 
     await expect(write("self-emptying", { apiKey: "k" })).rejects.toThrow(
-      /parsing what would be saved does not return what was saved/
+      /loses .* when written as JSON/
     );
   });
 
@@ -370,7 +385,7 @@ describe("a configuration whose parse is not a fixed point", () => {
     }));
 
     await expect(write("named-array", { apiKey: "k" })).rejects.toThrow(
-      /parsing what would be saved does not return what was saved/
+      /loses .* when written as JSON/
     );
   });
 
