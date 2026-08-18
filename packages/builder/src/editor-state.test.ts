@@ -210,3 +210,152 @@ describe("selection", () => {
     expect(result.current.selectedId).toBe("a");
   });
 });
+
+describe("applying several ops as one action", () => {
+  /** Three top-level blocks, so a group can act on more than one of them. */
+  function three() {
+    return renderHook(() =>
+      useEditorState({
+        initialDocument: doc([node("a"), node("b"), node("c")]),
+      })
+    );
+  }
+
+  it("applies every op in the group", () => {
+    const { result } = three();
+
+    act(() => {
+      result.current.applyAll([
+        { kind: "remove", id: "a" },
+        { kind: "remove", id: "c" },
+      ]);
+    });
+
+    expect(ids(result.current.document)).toEqual(["b"]);
+  });
+
+  it("costs ONE undo, not one per op", () => {
+    /*
+     * The property the whole change exists for. "Delete these two" is one thing
+     * an author did, and two presses to take it back reads as the history being
+     * wrong rather than as a design.
+     */
+    const { result } = three();
+
+    act(() => {
+      result.current.applyAll([
+        { kind: "remove", id: "a" },
+        { kind: "remove", id: "c" },
+      ]);
+    });
+    expect(result.current.undoDepth).toBe(1);
+
+    act(() => result.current.undo());
+
+    expect(ids(result.current.document)).toEqual(["a", "b", "c"]);
+    expect(result.current.undoDepth).toBe(0);
+  });
+
+  it("redoes the whole group as one action too", () => {
+    const { result } = three();
+
+    act(() => {
+      result.current.applyAll([
+        { kind: "remove", id: "a" },
+        { kind: "remove", id: "c" },
+      ]);
+    });
+    act(() => result.current.undo());
+    act(() => result.current.redo());
+
+    expect(ids(result.current.document)).toEqual(["b"]);
+    expect(result.current.undoDepth).toBe(1);
+  });
+
+  it("commits NOTHING when any op in the group is refused", () => {
+    /*
+     * Atomicity, and the case that separates a group from a loop of applies.
+     * Removing four of six blocks because the fifth was refused leaves a
+     * document the author never asked for and that no single undo can leave.
+     */
+    const { result } = three();
+
+    let returned: unknown;
+    act(() => {
+      returned = result.current.applyAll([
+        { kind: "remove", id: "a" },
+        { kind: "remove", id: "does-not-exist" },
+      ]);
+    });
+
+    expect(returned).toBeNull();
+    expect(ids(result.current.document)).toEqual(["a", "b", "c"]);
+    // And no history either — a group that changed nothing must not be
+    // undoable, or one press of undo would appear to do nothing.
+    expect(result.current.undoDepth).toBe(0);
+  });
+
+  it("records nothing for an empty group", () => {
+    /*
+     * A delete with an empty selection. An entry here would be an undo that
+     * appears to do nothing, which reads as the history being broken.
+     *
+     * Asserted by making a REAL edit afterwards, not by reading `undoDepth`
+     * straight after the empty call. The empty case returns before the depth
+     * is published, so a stack corrupted by it stays invisible until something
+     * else republishes — which is exactly what a later edit does, and is how a
+     * stub that pushed an empty entry passed this test in its first form.
+     */
+    const { result } = three();
+
+    act(() => {
+      result.current.applyAll([]);
+    });
+    expect(ids(result.current.document)).toEqual(["a", "b", "c"]);
+
+    act(() => {
+      result.current.apply({ kind: "remove", id: "b" });
+    });
+
+    expect(result.current.undoDepth).toBe(1);
+
+    act(() => result.current.undo());
+
+    expect(ids(result.current.document)).toEqual(["a", "b", "c"]);
+    expect(result.current.canUndo).toBe(false);
+  });
+
+  it("undoes a group in reverse, so each inverse meets the tree it expects", () => {
+    /*
+     * The ordering case. Two inserts at fixed indices only reverse correctly
+     * when the LAST one is undone first — applied in collection order the first
+     * inverse would meet a document the second insert had already shifted.
+     */
+    const { result } = three();
+
+    act(() => {
+      result.current.applyAll([
+        { kind: "insert", node: node("x"), at: { index: 0 } },
+        { kind: "insert", node: node("y"), at: { index: 2 } },
+      ]);
+    });
+    expect(ids(result.current.document)).toEqual(["x", "a", "y", "b", "c"]);
+
+    act(() => result.current.undo());
+
+    expect(ids(result.current.document)).toEqual(["a", "b", "c"]);
+  });
+
+  it("a single apply is still one undo, which is the control", () => {
+    // Without this, "one entry per group" would pass against a store that had
+    // stopped recording single edits at all.
+    const { result } = three();
+
+    act(() => {
+      result.current.apply({ kind: "remove", id: "b" });
+    });
+
+    expect(result.current.undoDepth).toBe(1);
+    expect(ids(result.current.document)).toEqual(["a", "c"]);
+  });
+});
