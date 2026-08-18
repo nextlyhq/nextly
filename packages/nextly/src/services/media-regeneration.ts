@@ -14,6 +14,8 @@ import { and, sql, gt } from "drizzle-orm";
 
 import { getMediaStorage } from "@nextly/storage";
 
+import { SHARP_INSTALL_COMMAND, loadSharp } from "../storage/sharp-loader";
+
 import { BaseService } from "./base-service";
 import { ImageSizeService } from "./image-size";
 import type { Logger } from "./shared";
@@ -25,6 +27,41 @@ export interface RegenerationStatus {
   total: number;
   /** Whether a regeneration batch is currently running */
   inProgress: boolean;
+  /**
+   * Whether this install can process images at all.
+   *
+   * Reported alongside the counts because without it the page is honest but
+   * useless: it would show images pending forever with nothing explaining
+   * why regeneration produces nothing. `sharp` is an optional peer, so a
+   * perfectly healthy install can be in this state.
+   */
+  imageProcessing: {
+    available: boolean;
+    /** The package to install. Present only when unavailable. */
+    packageName?: string;
+    /** The exact command. Present only when unavailable. */
+    installCommand?: string;
+  };
+}
+
+/**
+ * How this install's image processing should be described to the admin.
+ *
+ * Built here rather than at each return so both paths report the same thing,
+ * and derived from the loader every operation uses rather than from a second
+ * probe that could disagree with it.
+ */
+async function describeImageProcessing(): Promise<
+  RegenerationStatus["imageProcessing"]
+> {
+  const sharp = await loadSharp();
+  if (sharp) return { available: true };
+
+  return {
+    available: false,
+    packageName: "sharp",
+    installCommand: SHARP_INSTALL_COMMAND,
+  };
 }
 
 export interface RegenerationBatchResult {
@@ -67,7 +104,12 @@ export class MediaRegenerationService extends BaseService {
     const configNames = sizeConfigs.map(s => s.name).sort();
 
     if (configNames.length === 0) {
-      return { pending: 0, total, inProgress: false };
+      return {
+        pending: 0,
+        total,
+        inProgress: false,
+        imageProcessing: await describeImageProcessing(),
+      };
     }
 
     // An image is up-to-date if its sizes JSONB contains all configured size names.
@@ -88,7 +130,12 @@ export class MediaRegenerationService extends BaseService {
       }
     }
 
-    return { pending, total, inProgress: false };
+    return {
+      pending,
+      total,
+      inProgress: false,
+      imageProcessing: await describeImageProcessing(),
+    };
   }
 
   /**

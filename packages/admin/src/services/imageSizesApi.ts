@@ -30,6 +30,44 @@ export interface ImageSize {
 // API helpers
 // ============================================================
 
+/**
+ * Whether the server can process images, and what to install if it cannot.
+ *
+ * Mirrors `RegenerationStatus["imageProcessing"]` in core: a wire contract
+ * parsed from JSON rather than an imported type, so the two move together.
+ */
+export interface ImageProcessingAvailability {
+  available: boolean;
+  packageName?: string;
+  installCommand?: string;
+}
+
+/**
+ * Ask the server whether image processing is available.
+ *
+ * `sharp` is an optional peer dependency, so an otherwise healthy install can
+ * be unable to generate sizes. Without this the page would list configured
+ * sizes that silently never materialise.
+ *
+ * Returns `available: true` when the request fails: a page that cannot reach
+ * the endpoint must not accuse the server of missing a package on no evidence.
+ */
+export async function fetchImageProcessingAvailability(): Promise<ImageProcessingAvailability> {
+  try {
+    const res = await authFetch("/admin/api/image-sizes/regeneration-status", {
+      credentials: "include",
+    });
+    if (!res.ok) return { available: true };
+
+    const data = (await res.json()) as {
+      imageProcessing?: ImageProcessingAvailability;
+    };
+    return data.imageProcessing ?? { available: true };
+  } catch {
+    return { available: true };
+  }
+}
+
 export async function fetchImageSizes(): Promise<ImageSize[]> {
   const res = await authFetch("/admin/api/image-sizes", {
     credentials: "include",
