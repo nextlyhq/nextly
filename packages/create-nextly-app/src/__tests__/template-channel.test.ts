@@ -60,6 +60,24 @@ describe("content-template dist-tag pinning", () => {
     expect(pkg.dependencies["@nextlyhq/adapter-drizzle"]).toBe(`^${ALPHA}`);
   });
 
+  // The plugin scaffold takes a DIFFERENT code path from the app scaffold —
+  // `generatePluginPackageJson`, a publishable library rather than an app — so
+  // asserting `templateNextlyChannel("plugin") === "alpha"` proves only that the
+  // routing function answers correctly, not that its answer reaches the
+  // manifest. This asserts the manifest, which is the thing an author installs.
+  it("pins the plugin scaffold's manifest to the alpha channel", async () => {
+    const pkg = JSON.parse(
+      await generatePackageJson("my-plugin", pgDatabase, false, "plugin")
+    );
+    // `latest` carries @nextlyhq/eslint-plugin's 0.0.0 bootstrap placeholder,
+    // which has no `main` and no `exports`: it installs and then fails at the
+    // author's first `pnpm lint`, when eslint.config.mjs imports it.
+    expect(pkg.devDependencies["@nextlyhq/eslint-plugin"]).toBe(`^${ALPHA}`);
+    expect(pkg.devDependencies["nextly"]).toBe(`^${ALPHA}`);
+    expect(pkg.peerDependencies["nextly"]).toBe(`^${ALPHA}`);
+    expect(pkg.peerDependencies["@nextlyhq/ui"]).toBe(`^${ALPHA}`);
+  });
+
   it("pins the blank scaffold's nextly to the latest channel", async () => {
     const pkg = JSON.parse(
       await generatePackageJson("blank-app", pgDatabase, false, "blank")

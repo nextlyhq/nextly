@@ -1118,7 +1118,11 @@ export async function generatePackageJson(
 ): Promise<string> {
   // Plugins are a publishable library, not an app — different package.json.
   if (projectType === "plugin") {
-    return generatePluginPackageJson(projectName, useYalc);
+    return generatePluginPackageJson(
+      projectName,
+      useYalc,
+      templateNextlyChannel(projectType)
+    );
   }
 
   // Fetch latest Next.js (and eslint-config-next) version from npm
@@ -1288,9 +1292,20 @@ async function resolvePluginNextlyRange(useYalc: boolean): Promise<string> {
  */
 async function generatePluginPackageJson(
   projectName: string,
-  useYalc: boolean
+  useYalc: boolean,
+  /**
+   * The dist-tag every `nextly` + `@nextlyhq/*` range resolves from.
+   *
+   * Passed in rather than defaulted here, because a default would be a second
+   * answer to a question {@link templateNextlyChannel} already owns, and the
+   * two would agree only until the routing changed. A plugin resolved from
+   * `latest` installs `@nextlyhq/eslint-plugin`'s 0.0.0 bootstrap placeholder,
+   * which has no `main` and no `exports` — so the scaffold succeeds and the
+   * author's first `pnpm lint` fails on the config that imports it.
+   */
+  channel: NextlyDistTag
 ): Promise<string> {
-  const versions = useYalc ? {} : await resolveNextlyVersions();
+  const versions = useYalc ? {} : await resolveNextlyVersions(channel);
   const runtimeVersions = await resolveRuntimeVersions();
   const range = (pkg: string): string => versions[pkg] ?? "latest";
 
