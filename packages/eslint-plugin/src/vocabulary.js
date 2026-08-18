@@ -103,6 +103,238 @@ export const HUE_REPLACEMENT = {
   orange: "warning-*",
 };
 
+/**
+ * CSS named colours, minus the mode-invariant ones.
+ *
+ * `black`, `white` and `transparent` are deliberately absent for the same
+ * reason their hex spellings are exempt: they are the same colour in light and
+ * dark, so routing them through a themed token would claim a variation that
+ * does not exist. Every other name is a fixed colour that ignores the theme —
+ * `deepskyblue` on a drop indicator was how this gap was found.
+ */
+export const CSS_NAMED_COLORS = [
+  "aliceblue",
+  "antiquewhite",
+  "aqua",
+  "aquamarine",
+  "azure",
+  "beige",
+  "bisque",
+  "blanchedalmond",
+  "blue",
+  "blueviolet",
+  "brown",
+  "burlywood",
+  "cadetblue",
+  "chartreuse",
+  "chocolate",
+  "coral",
+  "cornflowerblue",
+  "cornsilk",
+  "crimson",
+  "cyan",
+  "darkblue",
+  "darkcyan",
+  "darkgoldenrod",
+  "darkgray",
+  "darkgreen",
+  "darkgrey",
+  "darkkhaki",
+  "darkmagenta",
+  "darkolivegreen",
+  "darkorange",
+  "darkorchid",
+  "darkred",
+  "darksalmon",
+  "darkseagreen",
+  "darkslateblue",
+  "darkslategray",
+  "darkslategrey",
+  "darkturquoise",
+  "darkviolet",
+  "deeppink",
+  "deepskyblue",
+  "dimgray",
+  "dimgrey",
+  "dodgerblue",
+  "firebrick",
+  "floralwhite",
+  "forestgreen",
+  "fuchsia",
+  "gainsboro",
+  "ghostwhite",
+  "gold",
+  "goldenrod",
+  "gray",
+  "green",
+  "greenyellow",
+  "grey",
+  "honeydew",
+  "hotpink",
+  "indianred",
+  "indigo",
+  "ivory",
+  "khaki",
+  "lavender",
+  "lavenderblush",
+  "lawngreen",
+  "lemonchiffon",
+  "lightblue",
+  "lightcoral",
+  "lightcyan",
+  "lightgoldenrodyellow",
+  "lightgray",
+  "lightgreen",
+  "lightgrey",
+  "lightpink",
+  "lightsalmon",
+  "lightseagreen",
+  "lightskyblue",
+  "lightslategray",
+  "lightslategrey",
+  "lightsteelblue",
+  "lightyellow",
+  "lime",
+  "limegreen",
+  "linen",
+  "magenta",
+  "maroon",
+  "mediumaquamarine",
+  "mediumblue",
+  "mediumorchid",
+  "mediumpurple",
+  "mediumseagreen",
+  "mediumslateblue",
+  "mediumspringgreen",
+  "mediumturquoise",
+  "mediumvioletred",
+  "midnightblue",
+  "mintcream",
+  "mistyrose",
+  "moccasin",
+  "navajowhite",
+  "navy",
+  "oldlace",
+  "olive",
+  "olivedrab",
+  "orange",
+  "orangered",
+  "orchid",
+  "palegoldenrod",
+  "palegreen",
+  "paleturquoise",
+  "palevioletred",
+  "papayawhip",
+  "peachpuff",
+  "peru",
+  "pink",
+  "plum",
+  "powderblue",
+  "purple",
+  "rebeccapurple",
+  "red",
+  "rosybrown",
+  "royalblue",
+  "saddlebrown",
+  "salmon",
+  "sandybrown",
+  "seagreen",
+  "seashell",
+  "sienna",
+  "silver",
+  "skyblue",
+  "slateblue",
+  "slategray",
+  "slategrey",
+  "snow",
+  "springgreen",
+  "steelblue",
+  "tan",
+  "teal",
+  "thistle",
+  "tomato",
+  "turquoise",
+  "violet",
+  "wheat",
+  "whitesmoke",
+  "yellow",
+  "yellowgreen",
+];
+
+/**
+ * Style properties whose value IS a colour.
+ *
+ * A named colour is only a defect in one of these positions. Matching the bare
+ * word anywhere would flag `"the red team"`, a `plum` in seed data, or a CSS
+ * class fragment — so the PROPERTY is what makes the value a colour, and the
+ * rule keys on it. Both spellings are listed because a JS style object uses
+ * camelCase and a CSS declaration uses kebab-case.
+ */
+export const COLOR_VALUED_PROPERTIES = [
+  "color",
+  "backgroundColor",
+  "background-color",
+  "background",
+  "borderColor",
+  "border-color",
+  "borderTopColor",
+  "border-top-color",
+  "borderRightColor",
+  "border-right-color",
+  "borderBottomColor",
+  "border-bottom-color",
+  "borderLeftColor",
+  "border-left-color",
+  "outlineColor",
+  "outline-color",
+  "caretColor",
+  "caret-color",
+  "textDecorationColor",
+  "text-decoration-color",
+  "columnRuleColor",
+  "column-rule-color",
+  "fill",
+  "stroke",
+  "stopColor",
+  "stop-color",
+  "floodColor",
+  "flood-color",
+  "lightingColor",
+  "lighting-color",
+];
+
+/** Whether a value is exactly a fixed CSS named colour. */
+export function isNamedColor(value) {
+  return (
+    typeof value === "string" &&
+    CSS_NAMED_COLORS.includes(value.trim().toLowerCase())
+  );
+}
+
+/** Whether a property name takes a colour as its value. */
+export function isColorValuedProperty(name) {
+  return (
+    typeof name === "string" && COLOR_VALUED_PROPERTIES.includes(name.trim())
+  );
+}
+
+/**
+ * Build the pattern for a CSS DECLARATION assigning a named colour, e.g.
+ * `color: deepskyblue` inside a style string or a stylesheet.
+ *
+ * The declaration form is what makes this safe to run over free text: the
+ * property and the colon are what distinguish a colour from the same word used
+ * as prose or as part of an identifier.
+ */
+export function createNamedColorDeclarationPattern({ global = false } = {}) {
+  const props = COLOR_VALUED_PROPERTIES.join("|");
+  const names = CSS_NAMED_COLORS.join("|");
+  return new RegExp(
+    `(?:^|[\\s;{"'\`])(${props})\\s*:\\s*(${names})\\s*(?:[;}"'\`]|$)`,
+    global ? "gi" : "i"
+  );
+}
+
 /** The inline comment that exempts a line, and the reason it must carry one. */
 export const EXEMPTION_MARKER = "design-lint-ok";
 
