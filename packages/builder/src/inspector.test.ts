@@ -16,7 +16,13 @@ import {
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
 
-import { inspectSelection, propPatch, SUPPORTED_PROP_TYPES } from "./inspector";
+import {
+  inspectSelection,
+  lockOp,
+  propPatch,
+  renameOp,
+  SUPPORTED_PROP_TYPES,
+} from "./inspector";
 
 const base = {
   version: 1,
@@ -219,5 +225,91 @@ describe("propPatch", () => {
     propPatch(node, "text", "New");
 
     expect(node.props.text).toBe("Old");
+  });
+});
+
+describe("block identity", () => {
+  it("reports the author's name and the lock, and their absence", () => {
+    // Both fields are optional and absent on every document written before they
+    // existed, so "absent" is the common case rather than the edge one.
+    const named = inspectSelection(withHeading(), "a");
+    expect(named?.identity).toEqual({ name: "", locked: false });
+  });
+
+  it("carries a name and a lock the node does have", () => {
+    registerBlocks(
+      [{ ...base, name: "acme/thing", editor: { label: "Thing" } }] as never,
+      { source: "inspector-test" }
+    );
+    const inspection = inspectSelection(
+      documentOf([
+        {
+          id: "t",
+          type: "acme/thing",
+          version: 1,
+          props: {},
+          name: "Hero title",
+          locked: true,
+        } as BlockNode,
+      ]),
+      "t"
+    );
+
+    expect(inspection?.identity).toEqual({ name: "Hero title", locked: true });
+  });
+});
+
+describe("renameOp", () => {
+  it("sets a trimmed name", () => {
+    expect(renameOp("a", "  Hero title  ")).toEqual({
+      kind: "update",
+      id: "a",
+      patch: { name: "Hero title" },
+    });
+  });
+
+  it("UNSETS the field for an empty name rather than storing one", () => {
+    // THE case. `""` stored is a second spelling of "no name": absent is what
+    // the optional field already means, and `layerLabel` would have to know
+    // about both to avoid rendering a blank row.
+    expect(renameOp("a", "")).toEqual({
+      kind: "update",
+      id: "a",
+      patch: {},
+      unset: ["name"],
+    });
+  });
+
+  it("treats a name of only spaces as no name", () => {
+    // The same thing wearing a disguise: it passes a non-empty check, renders
+    // as nothing, and cannot be reached by the layers panel's typeahead.
+    expect(renameOp("a", "   ")).toEqual({
+      kind: "update",
+      id: "a",
+      patch: {},
+      unset: ["name"],
+    });
+  });
+});
+
+describe("lockOp", () => {
+  it("locks by setting the flag", () => {
+    expect(lockOp("a", true)).toEqual({
+      kind: "update",
+      id: "a",
+      patch: { locked: true },
+    });
+  });
+
+  it("UNSETS on release rather than storing false", () => {
+    // `locked` is absent on every node in every document written so far, so
+    // storing `false` would make an unlock a WRITE to every block an author
+    // touches, adding a field that means what its absence already meant.
+    expect(lockOp("a", false)).toEqual({
+      kind: "update",
+      id: "a",
+      patch: {},
+      unset: ["locked"],
+    });
   });
 });

@@ -20,17 +20,18 @@
  * @module keyboard-actions
  */
 
+import { findNode } from "@nextlyhq/blocks-engine";
 import { useShortcuts } from "@nextlyhq/ui";
 import * as React from "react";
 
 import { blockDeletion } from "./delete-block";
 import type { EditorState } from "./editor-state";
-import { blockLabel } from "./inserter";
 import {
   keyboardMovePosition,
   type MoveDirection,
   type MoveEffect,
 } from "./keyboard-move";
+import { layerLabel } from "./layers";
 import { lockBlockingDelete, lockBlockingMove } from "./locking";
 
 /**
@@ -105,14 +106,16 @@ const EFFECT_ANNOUNCEMENT: Readonly<Record<MoveEffect, string>> = {
  * becomes a keystroke — protecting nobody while costing everybody. That trade
  * only holds because undo is reachable, which is why these ship together.
  */
-function deletionAnnouncement(type: string, descendants: number): string {
-  // The block's own label, falling back to its type. An author who inserted
-  // "Divider" from the palette should hear "Divider deleted", not
-  // "core/divider deleted" — the identifier is what the registry calls it, and
-  // the label is what they were shown. Resolved here rather than carried on the
-  // deletion, because the deletion is a document fact and the wording is a
-  // presentation one.
-  const name = blockLabel(type);
+/**
+ * @param name - what to CALL the block, already resolved by the caller.
+ *
+ * A resolved name rather than a type, so the one rule that decides what a block
+ * is called lives in `layerLabel` and this only phrases it. Taking a type and
+ * resolving here would put a second resolution in the one surface a
+ * screen-reader user hears — and it would have to reach for `blockLabel`, which
+ * knows nothing about the name the author gave this instance.
+ */
+function deletionAnnouncement(name: string, descendants: number): string {
   const what =
     descendants === 0
       ? `${name} deleted`
@@ -203,8 +206,8 @@ export function useBlockKeyboardActions({
     if (blocked !== undefined) {
       announce(
         blocked.id === deletion.id
-          ? `${blockLabel(blocked.type)} is locked. Unlock it to delete it.`
-          : `This block contains ${blockLabel(blocked.type)}, which is locked. Unlock it to delete.`
+          ? `${layerLabel(blocked)} is locked. Unlock it to delete it.`
+          : `This block contains ${layerLabel(blocked)}, which is locked. Unlock it to delete.`
       );
       return;
     }
@@ -220,7 +223,20 @@ export function useBlockKeyboardActions({
     // first would leave the author pointed at a neighbour while the block they
     // asked to delete is still there.
     editorNow.select(deletion.nextSelection);
-    announce(deletionAnnouncement(deletion.type, deletion.descendantCount));
+    /*
+     * Named the way the layers panel and the breadcrumb name it.
+     *
+     * `blockLabel(type)` would say "Heading" for a block the author called
+     * "Hero title", so the one surface a screen-reader user hears would be the
+     * only one using a different name for the same block.
+     */
+    const removed = findNode(editorNow.document.nodes, deletion.id);
+    announce(
+      deletionAnnouncement(
+        removed === undefined ? deletion.type : layerLabel(removed),
+        deletion.descendantCount
+      )
+    );
   }, [announce]);
 
   const bindings = React.useMemo(
@@ -250,7 +266,7 @@ export function useBlockKeyboardActions({
           const lockedNode = lockBlockingMove(editorNow.document, selectedId);
           if (lockedNode !== undefined) {
             announce(
-              `${blockLabel(lockedNode.type)} is locked. Unlock it to move it.`
+              `${layerLabel(lockedNode)} is locked. Unlock it to move it.`
             );
             return;
           }

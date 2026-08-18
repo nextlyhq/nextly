@@ -24,7 +24,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import { blockLabel } from "./inserter";
-import type { NodePatch } from "./ops";
+import type { BuilderOp, NodePatch } from "./ops";
 
 /**
  * The prop types this inspector can draw a control for.
@@ -64,10 +64,27 @@ export interface EditableProp {
   readonly options: readonly string[];
 }
 
+/**
+ * What a block is, as distinct from what it holds.
+ *
+ * `name` and `locked` are fields on the NODE rather than entries in `props`, so
+ * no `PropSchema` describes them and the prop loop below cannot reach them.
+ * They are also the two the layers panel already displays — and until this
+ * existed, nothing in the editor could set either, so the panel showed
+ * information the editor had no way to produce.
+ */
+export interface BlockIdentity {
+  /** The author's own name for this instance, empty when they have not given one. */
+  readonly name: string;
+  readonly locked: boolean;
+}
+
 /** The selected block, as something to edit. */
 export interface BlockInspection {
   readonly nodeId: string;
   readonly blockName: string;
+  /** What the block IS, beside what it holds. */
+  readonly identity: BlockIdentity;
   /** What to title the panel: the block's label, or its name. */
   readonly label: string;
   /**
@@ -132,6 +149,7 @@ export function inspectSelection(
   return {
     nodeId: node.id,
     blockName: node.type,
+    identity: { name: node.name ?? "", locked: node.locked === true },
     // The same name the palette offered and the layers panel shows. Reading
     // `editor.label ?? node.type` here instead was a second rule that agreed
     // only for blocks which declare a label: an unlabelled third-party block
@@ -159,4 +177,38 @@ export function propPatch(
   value: unknown
 ): NodePatch {
   return { props: { ...node.props, [name]: value } };
+}
+
+/**
+ * The op that names a block, or takes its name away.
+ *
+ * An empty name UNSETS the field rather than storing `""`. The field is
+ * optional, so absent is what "no name" already means everywhere else — a
+ * stored empty string would be a second spelling of the same state, and
+ * `layerLabel` would have to know about both to avoid rendering a blank row.
+ *
+ * Trimmed, because a name of spaces is the same thing wearing a disguise: it
+ * satisfies a non-empty check, renders as nothing, and cannot be typed to in
+ * the layers panel's typeahead.
+ */
+export function renameOp(id: string, name: string): BuilderOp {
+  const trimmed = name.trim();
+  return trimmed === ""
+    ? { kind: "update", id, patch: {}, unset: ["name"] }
+    : { kind: "update", id, patch: { name: trimmed } };
+}
+
+/**
+ * The op that locks a block, or releases it.
+ *
+ * Unlocking UNSETS rather than storing `false`, for the reason above and one
+ * more: `locked` is absent on every node in every document written so far, so
+ * storing `false` on release would make an unlock a WRITE to every block an
+ * author ever touched, and the documents would grow a field that means what
+ * their absence already meant.
+ */
+export function lockOp(id: string, locked: boolean): BuilderOp {
+  return locked
+    ? { kind: "update", id, patch: { locked: true } }
+    : { kind: "update", id, patch: {}, unset: ["locked"] };
 }
