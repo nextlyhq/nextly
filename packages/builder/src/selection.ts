@@ -216,6 +216,96 @@ function slotListsOf(document: BlockDocument, parentId: string): BlockNode[][] {
  * `null` clears it, whatever the mode: a click on canvas background has no
  * subject to toggle or extend to.
  */
+/**
+ * The selection with `id` in it, or out of it if it was already there.
+ *
+ * Adding makes the NEW block primary: it is the one the author just pointed at
+ * and the one they expect the inspector to describe. Removing keeps whatever
+ * primary the selection had, which {@link withPrimary} corrects when the block
+ * removed WAS the primary.
+ */
+function toggled(
+  document: BlockDocument,
+  current: Selection,
+  targetId: string
+): Selection {
+  const has = current.ids.includes(targetId);
+  const ids = normalizeSelection(
+    document,
+    has ? current.ids.filter(id => id !== targetId) : [...current.ids, targetId]
+  );
+  return withPrimary(ids, has ? current.primary : targetId);
+}
+
+/**
+ * The run from the selection's anchor to `targetId`.
+ *
+ * The run REPLACES rather than unions with what was selected. Shift-click in
+ * every list this grammar comes from means "the selection is now
+ * anchor-to-here", and unioning would make a second shift-click GROW the
+ * selection instead of redefining it — so an author correcting their aim would
+ * have to clear and start again.
+ *
+ * The anchor stays primary, which is what makes a run of shift-clicks re-aim
+ * from the same end rather than walking the anchor along.
+ */
+function extended(
+  document: BlockDocument,
+  current: Selection,
+  targetId: string
+): Selection {
+  if (current.primary === null) return replaced(targetId);
+  const run = rangeBetween(document, current.primary, targetId);
+  // No contiguous run reaches the target — across two slots of one parent, for
+  // instance. Selecting the target alone is right; emptying the selection would
+  // read as the gesture being broken.
+  if (run.length === 0) return replaced(targetId);
+  return withPrimary(normalizeSelection(document, run), current.primary);
+}
+
+/** One block, selected on its own. */
+function replaced(targetId: string): Selection {
+  return { ids: [targetId], primary: targetId };
+}
+
+/**
+ * A selection whose primary is guaranteed to be a member of it.
+ *
+ * The one place that invariant is enforced, so no caller has to remember it. A
+ * primary outside the set would make the inspector edit a block the canvas does
+ * not show as selected.
+ *
+ * Falls back to the FIRST id in document order, deliberately: that is a
+ * position the author can see, where "the one next to what you just removed" is
+ * a rule they would have to be told. An earlier version chose the last survivor
+ * and no test could tell the two apart, which is how the arbitrariness was
+ * found.
+ */
+function withPrimary(
+  ids: readonly string[],
+  preferred: string | null
+): Selection {
+  if (ids.length === 0) return EMPTY_SELECTION;
+  return {
+    ids,
+    primary: preferred !== null && ids.includes(preferred) ? preferred : ids[0],
+  };
+}
+
+/**
+ * The selection after a gesture on `targetId`.
+ *
+ * `null` clears it, whatever the mode: a click on canvas background has no
+ * subject to toggle or extend to. A target the document does not hold is
+ * IGNORED rather than treated as a deselect — a stale id is not an instruction
+ * to clear, and treating it as one loses a selection for a reason the author
+ * cannot see.
+ *
+ * A dispatcher and nothing else. Each mode is its own function above, because
+ * the three were one body until a complexity gate objected — and it was right:
+ * the shared shape between them is only "normalise, then pick a primary", which
+ * {@link withPrimary} now owns for all three.
+ */
 export function applySelection(
   document: BlockDocument,
   current: Selection,
@@ -225,56 +315,9 @@ export function applySelection(
   if (targetId === null) return EMPTY_SELECTION;
   if (pathOf(document, targetId).length === 0) return current;
 
-  if (mode === "toggle") {
-    const has = current.ids.includes(targetId);
-    const next = has
-      ? current.ids.filter(id => id !== targetId)
-      : [...current.ids, targetId];
-    const ids = normalizeSelection(document, next);
-    if (ids.length === 0) return EMPTY_SELECTION;
-    /*
-     * Adding makes the NEW block primary: it is the one the author just pointed
-     * at and the one they expect the inspector to describe. Removing keeps the
-     * primary it had, which the guard below corrects when the block removed WAS
-     * the primary — it hands it to the first survivor in document order.
-     *
-     * First rather than nearest, deliberately. The set is ordered by the
-     * document, so "the first one still selected" is a position the author can
-     * see; "the one next to what you just removed" is a rule they would have to
-     * be told. An earlier version chose the last survivor and no test could
-     * tell the two apart, which is how the arbitrariness was found.
-     */
-    const primary = has ? current.primary : targetId;
-    return {
-      ids,
-      primary: primary !== null && ids.includes(primary) ? primary : ids[0],
-    };
-  }
-
-  if (mode === "extend" && current.primary !== null) {
-    const run = rangeBetween(document, current.primary, targetId);
-    if (run.length === 0) return { ids: [targetId], primary: targetId };
-    /*
-     * The run REPLACES rather than unions with what was selected.
-     *
-     * Shift-click in every list this grammar comes from means "the selection is
-     * now anchor-to-here". Unioning would make a second shift-click grow the
-     * selection instead of redefining it, so an author correcting their aim
-     * would have to clear and start again.
-     *
-     * The anchor stays primary, which is what makes a run of shift-clicks
-     * re-aim from the same end rather than walking the anchor along.
-     */
-    const ids = normalizeSelection(document, run);
-    return {
-      ids,
-      primary: ids.includes(current.primary)
-        ? current.primary
-        : (ids[0] ?? null),
-    };
-  }
-
-  return { ids: [targetId], primary: targetId };
+  if (mode === "toggle") return toggled(document, current, targetId);
+  if (mode === "extend") return extended(document, current, targetId);
+  return replaced(targetId);
 }
 
 /**
