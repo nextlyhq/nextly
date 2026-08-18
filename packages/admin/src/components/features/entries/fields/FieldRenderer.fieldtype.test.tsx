@@ -23,6 +23,13 @@ import {
  */
 let pluginsPending = false;
 
+/**
+ * Whether the plugin list NEVER answered. Distinct from `pluginsPending`
+ * because the two are different facts and only one of them ends: a request in
+ * flight resolves, a failed one does not.
+ */
+let pluginsUnavailable = false;
+
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => ({
     plugins: [
@@ -35,7 +42,7 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
   }),
   useBrandingStatus: () => ({
     isPending: pluginsPending,
-    isUnavailable: false,
+    isUnavailable: pluginsUnavailable,
     isBrandingUnavailable: false,
   }),
 }));
@@ -44,6 +51,7 @@ afterEach(() => {
   clearRegistry();
   vi.restoreAllMocks();
   pluginsPending = false;
+  pluginsUnavailable = false;
 });
 
 function Form({ children }: { children: ReactNode }) {
@@ -87,6 +95,52 @@ describe("FieldRenderer custom field types (C7/D16)", () => {
       </Form>
     );
     expect(screen.queryByText(/unknown field type/i)).not.toBeInTheDocument();
+  });
+
+  it("does not call a type unknown when the plugin list never arrived", () => {
+    // THE case behind a bug that read as an intermittent fault in the page
+    // builder. A failed request leaves `branding` undefined, which is the same
+    // value as a project with no plugins — so the field reported "Unknown field
+    // type" and blamed a correctly-installed plugin for a fetch that failed.
+    // A reload retries and usually succeeds, which is what made it look
+    // intermittent.
+    pluginsUnavailable = true;
+    render(
+      <Form>
+        <FieldRenderer field={field("blocks")} />
+      </Form>
+    );
+    expect(screen.queryByText(/unknown field type/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/could not be loaded/i)).toBeInTheDocument();
+  });
+
+  it("shows the loading editor while the list is still in flight", () => {
+    // The POSITIVE CONTROL for the case below. Without it, asserting that the
+    // failed state shows no loading editor would be satisfied by a renderer
+    // that never shows one at all — and the selector being wrong looks exactly
+    // the same as the behaviour being right.
+    pluginsPending = true;
+    render(
+      <Form>
+        <FieldRenderer field={field("blocks")} />
+      </Form>
+    );
+    expect(screen.getByText(/loading editor/i)).toBeInTheDocument();
+  });
+
+  it("says the list is unavailable rather than loading forever", () => {
+    // A loading state says something is coming. The request is issued with
+    // `retry: false`, so after it fails nothing is coming, and folding this
+    // state into the loading one would leave the field pretending to load for
+    // as long as the server stays unreachable.
+    pluginsUnavailable = true;
+    render(
+      <Form>
+        <FieldRenderer field={field("blocks")} />
+      </Form>
+    );
+    expect(screen.getByText(/could not be loaded/i)).toBeInTheDocument();
+    expect(screen.queryByText(/loading editor/i)).not.toBeInTheDocument();
   });
 
   it("still reports an unknown type once the list has ARRIVED without it", () => {
