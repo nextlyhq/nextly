@@ -77,6 +77,15 @@ describe("scaffold --template plugin (D44/D45 smoke test)", () => {
     expect(pkg.files).toEqual(["dist"]);
     expect(pkg.keywords).toContain("nextly-plugin");
     expect(pkg.scripts.dev).toContain("next dev dev");
+
+    // The UI kit is a HOST peer, not a bundled dependency. tsup externalises
+    // peers automatically and bundles devDependencies, so declaring it only as
+    // a devDependency ships a second copy of the whole kit inside every
+    // published plugin.
+    expect(pkg.peerDependencies["@nextlyhq/ui"]).toBeTruthy();
+
+    const tsup = await readFile(path.join(target, "tsup.config.ts"), "utf-8");
+    expect(tsup).toContain('"@nextlyhq/ui"');
     // The native-build allowlist lives in pnpm-workspace.yaml, NOT the package.json
     // `pnpm` field (pnpm 11 ignores that field). Without this, `pnpm install` aborts
     // on better-sqlite3 (the dev playground's native dep) with ERR_PNPM_IGNORED_BUILDS.
