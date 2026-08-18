@@ -191,6 +191,57 @@ function useControllable<T>(
   ];
 }
 
+/**
+ * Which gesture a row's modifiers meant.
+ *
+ * Named by the same three words the rest of the system uses, so a caller maps
+ * them onto its own selection rules without translating. Both Meta and Control
+ * mean toggle: a Mac author presses Command and a Windows author presses
+ * Control, and neither ever presses the other's.
+ *
+ * Shift outranks the toggle modifier — a shift+mod click is a slip rather than
+ * a fourth gesture, and extending is the one whose result is visible and undone
+ * by a plain click.
+ *
+ * @experimental
+ */
+export type TreeSelectionMode = "replace" | "toggle" | "extend";
+
+/**
+ * Read the gesture from the event that carried it.
+ *
+ * @experimental
+ */
+export function treeSelectionMode(modifiers: {
+  shiftKey: boolean;
+  metaKey: boolean;
+  ctrlKey: boolean;
+}): TreeSelectionMode {
+  if (modifiers.shiftKey) return "extend";
+  if (modifiers.metaKey || modifiers.ctrlKey) return "toggle";
+  return "replace";
+}
+
+/**
+ * Whether a row is in the selection at all.
+ *
+ * A helper rather than an expression inside the render, so the multi-select
+ * branch is one call there instead of a condition — a small edit to a large
+ * function is what pushes it across a complexity threshold.
+ *
+ * `selectedIds` when the caller owns a set, the single id otherwise, so a
+ * caller that has not adopted the set keeps exactly the behaviour it had.
+ *
+ * @experimental
+ */
+export function isRowSelected(
+  id: string,
+  primary: string | null | undefined,
+  selectedIds: readonly string[] | undefined
+): boolean {
+  return selectedIds === undefined ? primary === id : selectedIds.includes(id);
+}
+
 /** @experimental */
 export interface TreeViewProps
   extends Omit<React.HTMLAttributes<HTMLDivElement>, "onSelect"> {
@@ -202,12 +253,27 @@ export interface TreeViewProps
   defaultExpandedIds?: readonly string[];
   /** Called with the full next set whenever a branch opens or closes. */
   onExpandedChange?: (ids: string[]) => void;
-  /** The selected node id, if the caller owns it. */
+  /**
+   * The selected node id, if the caller owns it.
+   *
+   * With `selectedIds` also supplied this is the PRIMARY — the row a detail
+   * panel answers for. Drawn at a heavier weight so a reader can tell which
+   * member of a multi-row selection the rest of the screen describes.
+   */
   selectedId?: string | null;
+  /**
+   * Every selected id, when the caller holds more than one.
+   *
+   * Additive: omit it and the tree behaves exactly as it did. Supplying it also
+   * makes the tree announce itself as `aria-multiselectable`, which is why it
+   * is a separate prop rather than inferred — a single-select tree claiming to
+   * be multi-selectable is wrong in a way a screen-reader user acts on.
+   */
+  selectedIds?: readonly string[];
   /** Which id starts selected when the caller does not own selection. */
   defaultSelectedId?: string | null;
   /** Called when a row is chosen, by pointer or by Enter. */
-  onSelectedChange?: (id: string) => void;
+  onSelectedChange?: (id: string, mode: TreeSelectionMode) => void;
   /**
    * Names the tree for a screen reader. One of this or `aria-labelledby` is required: a tree
    * announced only as "tree" tells a user nothing about which one they are in.
@@ -228,6 +294,7 @@ const TreeView = React.forwardRef<HTMLDivElement, TreeViewProps>(
       defaultExpandedIds,
       onExpandedChange,
       selectedId,
+      selectedIds,
       defaultSelectedId,
       onSelectedChange,
       className,
@@ -298,9 +365,12 @@ const TreeView = React.forwardRef<HTMLDivElement, TreeViewProps>(
       commitExpanded(next);
     };
 
-    const choose = (id: string): void => {
+    const choose = (id: string, mode: TreeSelectionMode = "replace"): void => {
+      // The uncontrolled fallback tracks the PRIMARY only. A caller wanting a
+      // set owns it; inventing a default set here would give an uncontrolled
+      // tree a selection its caller never sees.
       if (selectedId === undefined) setSelected(id);
-      onSelectedChange?.(id);
+      onSelectedChange?.(id, mode);
     };
 
     /**
@@ -412,7 +482,16 @@ const TreeView = React.forwardRef<HTMLDivElement, TreeViewProps>(
         case "Enter":
         case " ":
           event.preventDefault();
-          if (row.node.disabled !== true) choose(row.node.id);
+          /*
+           * The same three gestures the pointer has, so multi-select is not a
+           * mouse-only capability. WCAG 2.2 SC 2.1.1 asks that everything
+           * reachable by pointer be reachable from a keyboard, and the APG's
+           * multi-select tree pattern names Ctrl+Space for toggle and Shift for
+           * extend — which is what these modifiers resolve to.
+           */
+          if (row.node.disabled !== true) {
+            choose(row.node.id, treeSelectionMode(event));
+          }
           return;
         case "*": {
           event.preventDefault();
@@ -485,6 +564,8 @@ const TreeView = React.forwardRef<HTMLDivElement, TreeViewProps>(
           // container around it. Left outside, a caller who names the tree with
           // `aria-labelledby` gets a tree with no accessible name at all — the label sits on a
           // plain div and the role element is announced as an unlabelled tree.
+          // Only when the caller actually holds a set — see `selectedIds`.
+          aria-multiselectable={selectedIds === undefined ? undefined : true}
           aria-label={ariaLabel}
           aria-labelledby={ariaLabelledBy}
           aria-describedby={ariaDescribedBy}
@@ -494,7 +575,14 @@ const TreeView = React.forwardRef<HTMLDivElement, TreeViewProps>(
           {virtualItems.map(item => {
             const row = rows[item.index];
             if (row === undefined) return null;
-            const isSelected = selected === row.node.id;
+            const isSelected = isRowSelected(
+              row.node.id,
+              selected,
+              selectedIds
+            );
+            // Which member the rest of the screen answers for. With no set
+            // supplied every selected row is the primary, so nothing changes.
+            const isPrimary = selected === row.node.id;
             return (
               <div
                 key={row.node.id}
@@ -512,10 +600,10 @@ const TreeView = React.forwardRef<HTMLDivElement, TreeViewProps>(
                 // than stopping at every node in it.
                 tabIndex={item.index === tabStopIndex ? 0 : -1}
                 onFocus={() => setActiveId(row.node.id)}
-                onClick={() => {
+                onClick={event => {
                   if (row.node.disabled === true) return;
                   setActiveId(row.node.id);
-                  choose(row.node.id);
+                  choose(row.node.id, treeSelectionMode(event));
                 }}
                 className={cn(
                   "absolute left-0 flex w-full select-none items-center gap-1 rounded-sm pr-2 text-sm outline-none",
@@ -523,7 +611,12 @@ const TreeView = React.forwardRef<HTMLDivElement, TreeViewProps>(
                   row.node.disabled === true
                     ? "pointer-events-none opacity-50"
                     : "cursor-pointer",
-                  isSelected ? "bg-muted text-foreground" : "hover:bg-muted/50"
+                  isSelected ? "bg-muted text-foreground" : "hover:bg-muted/50",
+                  // WEIGHT, not a second colour. Every row here is selected and
+                  // an action applies to all of them; what a reader needs is
+                  // which one the detail panel describes, and a second colour
+                  // would have to mean a second kind of selected.
+                  isSelected && isPrimary && "font-medium"
                 )}
                 style={{
                   height: item.size,
