@@ -21,9 +21,25 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@nextlyhq/ui";
-import type { ReactNode } from "react";
+import { createContext, useContext, type ReactNode } from "react";
 
 import { useUnsavedChanges } from "@admin/hooks/useUnsavedChanges";
+
+/**
+ * Lets a descendant say "this leave is deliberate" without the guard having to
+ * be threaded through as a prop. Defaults to a no-op, so a form rendered
+ * outside a guard — an embedded editor in a modal — calls it harmlessly.
+ */
+const LeaveWithoutWarningContext = createContext<() => void>(() => {});
+
+/**
+ * The escape for an action that has already asked the question: discarding
+ * changes, or leaving after a save. See `useUnsavedChanges` for why intent has
+ * to be stated rather than read off `isDirty`.
+ */
+export function useLeaveWithoutWarning(): () => void {
+  return useContext(LeaveWithoutWarningContext);
+}
 
 // ============================================================================
 // Types
@@ -105,14 +121,15 @@ export function UnsavedChangesGuard({
   disabled = false,
   children,
 }: UnsavedChangesGuardProps) {
-  const { showDialog, confirmLeave, cancelLeave } = useUnsavedChanges({
-    isDirty,
-    onConfirmLeave: onDiscard,
-    disabled,
-  });
+  const { showDialog, confirmLeave, cancelLeave, leaveWithoutWarning } =
+    useUnsavedChanges({
+      isDirty,
+      onConfirmLeave: onDiscard,
+      disabled,
+    });
 
   return (
-    <>
+    <LeaveWithoutWarningContext.Provider value={leaveWithoutWarning}>
       {children}
 
       <AlertDialog
@@ -145,6 +162,6 @@ export function UnsavedChangesGuard({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </>
+    </LeaveWithoutWarningContext.Provider>
   );
 }

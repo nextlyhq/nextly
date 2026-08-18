@@ -657,6 +657,8 @@ export function SingleForm({
   }, [recovery, form]);
 
   return (
+    // A single is only ever edited standalone, so there is no embedded case to
+    // exclude the way the entry editor has.
     <EntryLocaleProvider value={localeCtx}>
       <div className={cn("space-y-0", className)}>
         <EntryFormProvider form={form} onSubmit={handleSubmit}>

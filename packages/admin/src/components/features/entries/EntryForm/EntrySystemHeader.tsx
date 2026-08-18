@@ -45,6 +45,7 @@ import { PreviewActions } from "./PreviewActions";
 import { ShowJSONDialog } from "./ShowJSONDialog";
 import { TOOLBAR_CONTAINER, ToolbarLabel } from "./toolbar-density";
 import { UnpublishConfirmDialog } from "./UnpublishConfirmDialog";
+import { useLeaveWithoutWarning } from "./UnsavedChangesGuard";
 import type { EntryData, EntryFormMode } from "./useEntryForm";
 
 // into one component. The title input lives in the action-bar row (autofocus
@@ -293,6 +294,9 @@ export function EntrySystemHeader({
   const isReadingHistory = viewingVersion !== null;
 
   // Both collections and singles authorize a document write as `update-{slug}`.
+  // Read here, inside the guard this header renders under, so a deliberate
+  // discard can say so before it navigates.
+  const leaveWithoutWarning = useLeaveWithoutWarning();
   const canUpdateDocument = useCan(`update-${collectionSlug}`);
 
   // Publishing is its own permission, distinct from editing. Without it the
@@ -668,7 +672,16 @@ export function EntrySystemHeader({
                   </DropdownMenuItem>
                 )}
                 {isDirty && onCancel && (
-                  <DropdownMenuItem onClick={onCancel} disabled={isSubmitting}>
+                  <DropdownMenuItem
+                    // Says so before leaving: this action IS the answer to the
+                    // unsaved-changes question, so being asked it again reads as
+                    // a warning rather than as the confirmation just given.
+                    onClick={() => {
+                      leaveWithoutWarning();
+                      onCancel();
+                    }}
+                    disabled={isSubmitting}
+                  >
                     <RotateCcw className="h-3.5 w-3.5" />
                     Discard changes
                   </DropdownMenuItem>
