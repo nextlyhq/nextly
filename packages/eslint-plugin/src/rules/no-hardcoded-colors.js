@@ -1,6 +1,9 @@
 import { isExempt } from "../exempt.js";
 import {
   createColorLiteralPattern,
+  createNamedColorDeclarationPattern,
+  isColorValuedProperty,
+  isNamedColor,
   stripExemptColorPieces,
 } from "../vocabulary.js";
 
@@ -17,6 +20,12 @@ import {
  * examples never reach the pattern. Those are mode-invariant or are content, and
  * routing them through a themed token would claim a variation that does not
  * exist.
+ *
+ * NAMED colours are decided differently, and deliberately so. `deepskyblue` is
+ * an ordinary English word as well as a colour, so matching it anywhere would
+ * report prose, seed data and identifiers. What makes it a colour is the
+ * POSITION: the value of a colour-valued style property, or the right-hand side
+ * of a CSS declaration. Both of those are checked; a bare occurrence is not.
  */
 export default {
   meta: {
@@ -29,6 +38,8 @@ export default {
     messages: {
       hardcodedColor:
         "`{{literal}}` is a hardcoded colour — use var(--token) or color-mix(...).",
+      namedColor:
+        "`{{literal}}` is a fixed CSS colour — it ignores the theme and dark mode. Use var(--token) or a semantic utility.",
     },
   },
   create(context) {
@@ -62,12 +73,49 @@ export default {
       });
     }
 
+    /** A CSS declaration assigning a named colour, inside any string. */
+    function checkDeclaration(node, text) {
+      if (typeof text !== "string" || text.length === 0) return;
+      const match = createNamedColorDeclarationPattern().exec(text);
+      if (!match) return;
+      if (isExempt(sourceCode, node)) return;
+      context.report({
+        node,
+        messageId: "namedColor",
+        data: { literal: `${match[1]}: ${match[2]}` },
+      });
+    }
+
     return {
       Literal(node) {
-        if (typeof node.value === "string") check(node, node.value);
+        if (typeof node.value === "string") {
+          check(node, node.value);
+          checkDeclaration(node, node.value);
+        }
       },
       TemplateElement(node) {
-        check(node, node.value.cooked ?? node.value.raw);
+        const text = node.value.cooked ?? node.value.raw;
+        check(node, text);
+        checkDeclaration(node, text);
+      },
+      /**
+       * A style object entry whose KEY takes a colour and whose value is a
+       * named one — `{ backgroundColor: "deepskyblue" }`. The key is what makes
+       * the string a colour rather than a word.
+       */
+      Property(node) {
+        if (node.computed) return;
+        const key =
+          node.key.type === "Identifier" ? node.key.name : node.key.value;
+        if (!isColorValuedProperty(key)) return;
+        if (node.value.type !== "Literal") return;
+        if (!isNamedColor(node.value.value)) return;
+        if (isExempt(sourceCode, node)) return;
+        context.report({
+          node: node.value,
+          messageId: "namedColor",
+          data: { literal: String(node.value.value) },
+        });
       },
     };
   },
