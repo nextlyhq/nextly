@@ -171,6 +171,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "PluginRoute (type)",
   "PluginRouteContext (type)",
   "PluginRouteHandler (type)",
+  "ProviderAvailability (type)",
   "QueryOptions (type)",
   "RegisteredEmailProvider (type)",
   "RequestContext (type)",

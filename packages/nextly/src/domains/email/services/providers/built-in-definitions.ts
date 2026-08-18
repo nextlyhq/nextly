@@ -6,10 +6,12 @@
  * secret, and an authoritative parse. Nothing here is privileged — the registry
  * treats a built-in and a plugin provider identically, and that is the point.
  *
- * They stay in core because each is either zero-dependency (`resend`,
- * `sendlayer`, both plain `fetch`) or carries a dependency the host already
- * chooses to install (`smtp` via nodemailer). Weight, not vendor identity, is
- * what decides whether a provider belongs in a package.
+ * They stay in core because none of them puts weight in the dependency graph:
+ * `resend`, `sendlayer` and `log` are zero-dependency, and `smtp` reaches
+ * nodemailer through an OPTIONAL PEER dependency, so an install that does not
+ * send over SMTP never downloads it. Weight, not vendor identity, is what
+ * decides whether a provider belongs in a package -- which is also why a
+ * transport carrying a heavyweight vendor SDK belongs in a plugin instead.
  *
  * @module domains/email/services/providers/built-in-definitions
  */
@@ -20,6 +22,15 @@ import { NextlyError } from "../../../../errors";
 import type { RegisteredEmailProvider } from "../../provider-definition";
 import { defineEmailProvider } from "../../provider-definition";
 
+import {
+  LOG_PROVIDER_TYPE,
+  createLogProvider,
+  shouldIncludeBody,
+} from "./log-provider";
+import {
+  NODEMAILER_INSTALL_COMMAND,
+  isNodemailerAvailable,
+} from "./nodemailer-loader";
 import { createResendProvider } from "./resend-provider";
 import { createSendLayerProvider } from "./sendlayer-provider";
 import {
@@ -188,6 +199,19 @@ export const smtpDefinition: RegisteredEmailProvider = defineEmailProvider({
   },
   createAdapter: config => createSmtpProvider(config),
   testConnection: config => verifySmtpConnection(config),
+  // Declared rather than assumed: nodemailer is an optional peer dependency,
+  // so an install can register this provider and still be unable to run it.
+  // Evaluated per call so installing the package and restarting is enough to
+  // change the answer, with nothing to invalidate.
+  checkAvailability: () =>
+    isNodemailerAvailable()
+      ? { status: "ready" }
+      : {
+          status: "needs-dependency",
+          packageName: "nodemailer",
+          installCommand: NODEMAILER_INSTALL_COMMAND,
+          docsUrl: "https://nodemailer.com/smtp/",
+        },
 });
 
 export const resendDefinition: RegisteredEmailProvider = defineEmailProvider({
@@ -251,6 +275,29 @@ export const sendLayerDefinition: RegisteredEmailProvider = defineEmailProvider(
   }
 );
 
+/**
+ * The fallback transport, registered like any other so the delivery log, the
+ * descriptor catalog and the admin need no special case for it.
+ *
+ * It takes no configuration: there is nothing to configure about writing to
+ * the log, and an empty field list is what tells the admin to render no form.
+ */
+export const logDefinition: RegisteredEmailProvider = defineEmailProvider({
+  type: LOG_PROVIDER_TYPE,
+  label: "Log (no delivery)",
+  description:
+    "Writes messages to the server log instead of sending them. Used automatically when no other provider is configured.",
+  capabilities: {
+    attachments: false,
+    replyTo: true,
+    requiresVerifiedSender: false,
+  },
+  configFields: [],
+  parseConfig: () => ({}),
+  createAdapter: () =>
+    createLogProvider({ includeBody: shouldIncludeBody(process.env.NODE_ENV) }),
+});
+
 /** Every provider seeded into a fresh registry. */
 export const BUILT_IN_EMAIL_PROVIDERS: ReadonlyArray<RegisteredEmailProvider> =
-  [smtpDefinition, resendDefinition, sendLayerDefinition];
+  [smtpDefinition, resendDefinition, sendLayerDefinition, logDefinition];

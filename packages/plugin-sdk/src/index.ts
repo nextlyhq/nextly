@@ -282,5 +282,6 @@ export type {
   EmailProviderConfigField,
   EmailProviderCapabilities,
   EmailProviderDescriptor,
+  ProviderAvailability,
   RegisteredEmailProvider,
 } from "nextly";

@@ -42,12 +42,27 @@ function secrecyByField(
 }
 
 describe("built-in provider descriptors", () => {
-  it("publishes exactly the three built-ins", () => {
+  it("publishes exactly the built-ins, in registration order", () => {
     expect(BUILT_IN_EMAIL_PROVIDERS.map(provider => provider.type)).toEqual([
       "smtp",
       "resend",
       "sendlayer",
+      // The fallback transport. Registered rather than special-cased so the
+      // delivery log, the descriptor catalog and the admin treat it like any
+      // other provider, which is also why it appears in this list at all.
+      "log",
     ]);
+  });
+
+  it("gives the fallback transport no configuration to fill in", () => {
+    const log = BUILT_IN_EMAIL_PROVIDERS.find(
+      provider => provider.type === "log"
+    );
+
+    // An empty field list is the signal the admin reads to render no form.
+    // A field appearing here would ask an operator to configure something
+    // about writing to a log, which has nothing to configure.
+    expect(log?.configFields).toEqual([]);
   });
 
   it("pins SMTP's fields and which of them are credentials", () => {

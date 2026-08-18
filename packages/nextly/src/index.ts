@@ -463,6 +463,7 @@ export type {
   EmailProviderConfigField,
   EmailProviderCapabilities,
   EmailProviderDescriptor,
+  ProviderAvailability,
   RegisteredEmailProvider,
 } from "./domains/email/provider-definition";
 

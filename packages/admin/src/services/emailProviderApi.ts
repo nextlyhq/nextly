@@ -74,6 +74,24 @@ export interface EmailProviderCapabilities {
 }
 
 /**
+ * Whether the server can actually run this provider right now.
+ *
+ * A provider can be offered by the catalog and still be unusable, because the
+ * transport library it needs is an optional peer dependency the host has not
+ * installed. Mirrors `ProviderAvailability` in core: this is a wire contract
+ * parsed from JSON rather than an imported type, so the two move together and
+ * a change to one is a change to both.
+ */
+export type ProviderAvailability =
+  | { status: "ready" }
+  | {
+      status: "needs-dependency";
+      packageName: string;
+      installCommand: string;
+      docsUrl?: string;
+    };
+
+/**
  * The browser-safe half of a provider definition.
  *
  * Everything the form needs to render a provider the admin was never compiled
@@ -88,6 +106,16 @@ export interface EmailProviderDescriptor {
   senderGuidance?: string;
   capabilities: EmailProviderCapabilities;
   configFields: EmailProviderConfigField[];
+  /**
+   * Optional on the CONSUMER side even though the server always sends it.
+   *
+   * Core populates this for every descriptor, so a matched server guarantees
+   * it. The admin cannot guarantee the server it is talking to is matched, and
+   * the notice that reads this already treats absence as "nothing to report" --
+   * so declaring it required here would have the type promise something the
+   * code deliberately does not rely on.
+   */
+  availability?: ProviderAvailability;
 }
 
 export interface EmailProviderRecord {

@@ -81,6 +81,11 @@ export const NEXTLY_ERROR_STATUS = {
   // Plugin platform (P4) — contributes.routes collection (D25).
   NEXTLY_ROUTE_COLLISION: 409,
   NEXTLY_ROUTE_INVALID_PATH: 400,
+  // An email transport whose library is an optional peer dependency the host
+  // has not installed. 503 rather than 500: the request is not malformed and
+  // nothing is broken, the install simply cannot carry it out yet, and the
+  // remedy is one command on the server rather than a change by the caller.
+  NEXTLY_EMAIL_TRANSPORT_UNAVAILABLE: 503,
 } as const;
 
 export type NextlyErrorCode = keyof typeof NEXTLY_ERROR_STATUS;
