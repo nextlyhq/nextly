@@ -28,6 +28,7 @@ import type {
 import { SettingsRowGroup } from "../SettingsRowGroup";
 import { SettingsSection } from "../SettingsSection";
 
+import { ProviderAvailabilityNotice } from "./ProviderAvailabilityNotice";
 import { configFieldPath, ProviderConfigFields } from "./ProviderConfigFields";
 import { ProviderTypePicker } from "./ProviderTypePicker";
 import {
@@ -621,6 +622,15 @@ export function EmailProviderForm({
                       }}
                     />
                     <FormMessage className="mt-1.5" />
+                    {/* Sits with the picker rather than at the top of the
+                        form: it describes the provider that is selected, so
+                        it has to move when the selection does. */}
+                    {selectedDescriptor && (
+                      <ProviderAvailabilityNotice
+                        providerLabel={selectedDescriptor.label}
+                        availability={selectedDescriptor.availability}
+                      />
+                    )}
                   </SettingsRowGroup>
                 </FormItem>
               )}
