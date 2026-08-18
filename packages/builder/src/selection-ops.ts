@@ -113,13 +113,17 @@ function findIn(
  * locked one would leave an author who selected six blocks looking at one they
  * did not notice surviving.
  */
-export function selectionDeletion(
+/**
+ * The lock that stops this group being deleted, phrased, or `null`.
+ *
+ * Scanned across the WHOLE group before anything is planned, because the group
+ * is atomic: the answer is all or nothing, so it has to be known before the
+ * first op exists.
+ */
+function lockRefusal(
   document: BlockDocument,
-  selectedIds: readonly string[]
-): SelectionPlan {
-  const ids = normalizeSelection(document, selectedIds);
-  if (ids.length === 0) return null;
-
+  ids: readonly string[]
+): SelectionRefusal | null {
   for (const id of ids) {
     const blocked = lockBlockingDelete(document, id);
     if (blocked === undefined) continue;
@@ -131,11 +135,23 @@ export function selectionDeletion(
           : `The selection contains ${name}, which is locked. Unlock it to delete.`,
     };
   }
+  return null;
+}
 
+/** The removals themselves, with what the announcement and the selection need. */
+function removals(
+  document: BlockDocument,
+  ids: readonly string[]
+): {
+  ops: BuilderOp[];
+  descendants: number;
+  nextSelection: string | null;
+} {
   const ops: BuilderOp[] = [];
   const candidates: string[] = [];
   const removing = new Set(ids);
   let descendants = 0;
+
   for (const id of ids) {
     const deletion = blockDeletion(document, id);
     // `null` means the document no longer holds it, which `normalizeSelection`
@@ -158,12 +174,36 @@ export function selectionDeletion(
     });
   }
 
+  return { ops, descendants, nextSelection: candidates[0] ?? null };
+}
+
+/**
+ * Removing every selected block.
+ *
+ * **One lock refuses the WHOLE group**, and that follows from the group being
+ * atomic rather than being a separate policy: there is no half-done delete to
+ * fall back to, so the choice is all or nothing, and silently skipping the
+ * locked one would leave an author who selected six blocks looking at one they
+ * did not notice surviving.
+ */
+export function selectionDeletion(
+  document: BlockDocument,
+  selectedIds: readonly string[]
+): SelectionPlan {
+  const ids = normalizeSelection(document, selectedIds);
+  if (ids.length === 0) return null;
+
+  const refusal = lockRefusal(document, ids);
+  if (refusal !== null) return refusal;
+
+  const { ops, descendants, nextSelection } = removals(document, ids);
   if (ops.length === 0) return null;
+
   return {
     ops,
     count: ids.length,
     descendants,
-    nextSelection: candidates[0] ?? null,
+    nextSelection,
     subject: subjectOf(document, ids),
   };
 }
