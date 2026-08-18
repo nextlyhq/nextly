@@ -38,7 +38,14 @@ import {
 import * as React from "react";
 
 import type { EditorState } from "./editor-state";
-import { inspectSelection, propPatch, type EditableProp } from "./inspector";
+import {
+  inspectSelection,
+  lockOp,
+  propPatch,
+  renameOp,
+  type BlockIdentity,
+  type EditableProp,
+} from "./inspector";
 
 export interface InspectorPanelProps {
   /**
@@ -94,6 +101,24 @@ export function InspectorPanel({
   return (
     <div className="nx-inspector">
       <h2 className="nx-inspector__title">{inspection.label}</h2>
+
+      {/*
+        What the block IS, above what it holds.
+        
+        First because it answers "which block am I looking at" — a page with six
+        headings gives an author six identical inspector titles, and the name is
+        the only thing that tells them apart. Both fields are also the two the
+        layers panel already shows, so this is where that display gets a writer.
+      */}
+      <IdentityFields
+        // Keyed by node so the name input does not carry an uncommitted edit
+        // across a selection change, exactly as the prop fields are.
+        key={`${inspection.nodeId}:identity`}
+        nodeId={inspection.nodeId}
+        identity={inspection.identity}
+        editor={editor}
+      />
+
       {inspection.props.length === 0 ? (
         <p className="nx-inspector__note">
           This block has no editable properties.
@@ -112,6 +137,73 @@ export function InspectorPanel({
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * The block's own name and its lock.
+ *
+ * Applied through `editor.apply` like every other edit, so both are covered by
+ * undo — a rename an author regrets is one press away, and a lock is not a
+ * setting that sits outside the history everything else is in.
+ */
+function IdentityFields({
+  nodeId,
+  identity,
+  editor,
+}: {
+  nodeId: string;
+  identity: BlockIdentity;
+  editor: EditorState;
+}): React.JSX.Element {
+  const [draft, setDraft] = React.useState(identity.name);
+
+  // The stored name wins whenever it changes underneath the field — an undo, or
+  // a rename applied from somewhere else. Without this the input would go on
+  // showing a name the document no longer has.
+  React.useEffect(() => {
+    setDraft(identity.name);
+  }, [identity.name]);
+
+  const commitName = () => {
+    if (draft.trim() === identity.name) return;
+    editor.apply(renameOp(nodeId, draft));
+  };
+
+  return (
+    <div className="nx-inspector__fields nx-inspector__identity">
+      <div className="nx-inspector__field">
+        <Label htmlFor="nx-block-name">Name</Label>
+        <Input
+          id="nx-block-name"
+          value={draft}
+          placeholder="Unnamed"
+          onChange={event => setDraft(event.target.value)}
+          // Committed on blur and on Enter, matching the text props below: an
+          // op per keystroke would make one undo remove one letter.
+          onBlur={commitName}
+          onKeyDown={event => {
+            if (event.key !== "Enter") return;
+            event.preventDefault();
+            commitName();
+          }}
+        />
+      </div>
+
+      <div className="nx-inspector__field nx-inspector__field--inline">
+        <Checkbox
+          id="nx-block-locked"
+          checked={identity.locked}
+          // Immediately, with no blur to wait for. There is nothing to coalesce
+          // in a checkbox, and waiting would leave the canvas disagreeing with a
+          // control the author has already changed.
+          onCheckedChange={checked =>
+            editor.apply(lockOp(nodeId, checked === true))
+          }
+        />
+        <Label htmlFor="nx-block-locked">Lock this block</Label>
+      </div>
     </div>
   );
 }

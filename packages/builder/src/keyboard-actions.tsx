@@ -20,17 +20,20 @@
  * @module keyboard-actions
  */
 
+import { findNode } from "@nextlyhq/blocks-engine";
 import { useShortcuts } from "@nextlyhq/ui";
 import * as React from "react";
 
 import { blockDeletion } from "./delete-block";
+import { blockDuplication } from "./duplicate-block";
 import type { EditorState } from "./editor-state";
-import { blockLabel } from "./inserter";
 import {
   keyboardMovePosition,
   type MoveDirection,
   type MoveEffect,
 } from "./keyboard-move";
+import { layerLabel } from "./layers";
+import { lockBlockingDelete, lockBlockingMove } from "./locking";
 
 /**
  * The bindings, and why these keys.
@@ -104,14 +107,16 @@ const EFFECT_ANNOUNCEMENT: Readonly<Record<MoveEffect, string>> = {
  * becomes a keystroke — protecting nobody while costing everybody. That trade
  * only holds because undo is reachable, which is why these ship together.
  */
-function deletionAnnouncement(type: string, descendants: number): string {
-  // The block's own label, falling back to its type. An author who inserted
-  // "Divider" from the palette should hear "Divider deleted", not
-  // "core/divider deleted" — the identifier is what the registry calls it, and
-  // the label is what they were shown. Resolved here rather than carried on the
-  // deletion, because the deletion is a document fact and the wording is a
-  // presentation one.
-  const name = blockLabel(type);
+/**
+ * @param name - what to CALL the block, already resolved by the caller.
+ *
+ * A resolved name rather than a type, so the one rule that decides what a block
+ * is called lives in `layerLabel` and this only phrases it. Taking a type and
+ * resolving here would put a second resolution in the one surface a
+ * screen-reader user hears — and it would have to reach for `blockLabel`, which
+ * knows nothing about the name the author gave this instance.
+ */
+function deletionAnnouncement(name: string, descendants: number): string {
   const what =
     descendants === 0
       ? `${name} deleted`
@@ -183,6 +188,31 @@ export function useBlockKeyboardActions({
     // said, because there is no event to report.
     if (deletion === null) return;
 
+    /*
+     * A lock is a POLICY refusal, so it is announced where a structural one is
+     * not.
+     *
+     * The moves below stay silent when a block simply has nowhere to go — that
+     * is a fact about the document an author can see, and saying it on every
+     * press at the end of a list is noise. A lock is the opposite: nothing about
+     * the page explains why the key did nothing, the remedy is one the author
+     * can act on, and a keyboard user has no badge to look at.
+     *
+     * The subtree is checked, not just the node. Deleting a container destroys
+     * what is inside it, so an author who locked a caption and then removed its
+     * section would lose the thing they locked through an action aimed at
+     * something else.
+     */
+    const blocked = lockBlockingDelete(editorNow.document, deletion.id);
+    if (blocked !== undefined) {
+      announce(
+        blocked.id === deletion.id
+          ? `${layerLabel(blocked)} is locked. Unlock it to delete it.`
+          : `This block contains ${layerLabel(blocked)}, which is locked. Unlock it to delete.`
+      );
+      return;
+    }
+
     const applied = editorNow.apply({
       kind: "remove",
       id: deletion.id,
@@ -194,7 +224,54 @@ export function useBlockKeyboardActions({
     // first would leave the author pointed at a neighbour while the block they
     // asked to delete is still there.
     editorNow.select(deletion.nextSelection);
-    announce(deletionAnnouncement(deletion.type, deletion.descendantCount));
+    /*
+     * Named the way the layers panel and the breadcrumb name it.
+     *
+     * `blockLabel(type)` would say "Heading" for a block the author called
+     * "Hero title", so the one surface a screen-reader user hears would be the
+     * only one using a different name for the same block.
+     */
+    const removed = findNode(editorNow.document.nodes, deletion.id);
+    announce(
+      deletionAnnouncement(
+        removed === undefined ? deletion.type : layerLabel(removed),
+        deletion.descendantCount
+      )
+    );
+  }, [announce]);
+
+  const duplicateSelected = React.useCallback(() => {
+    const editorNow = latest.current;
+    const duplication = blockDuplication(
+      editorNow.document,
+      editorNow.selectedId
+    );
+    // `null` means there is nothing to duplicate, or a position the op
+    // vocabulary cannot express. Nothing is applied and nothing is said,
+    // because there is no event to report.
+    if (duplication === null) return;
+
+    /*
+     * A lock does NOT stop a duplication.
+     *
+     * The engine's rule is that the command layer must not let an author move
+     * or delete a locked node, and duplicating does neither — the original
+     * stays exactly where it is, untouched. Refusing here would read as
+     * cautious and would mean an author could not take a copy of the one block
+     * they had most deliberately protected.
+     */
+    const applied = editorNow.apply({
+      kind: "insert",
+      node: duplication.node,
+      at: duplication.at,
+    });
+    if (applied === null) return;
+
+    // Selection follows the copy. It is the block the author is now working on
+    // — they duplicated it to change it — and leaving the original selected
+    // would send the next edit to the wrong one of two identical blocks.
+    editorNow.select(duplication.node.id);
+    announce(`${duplication.label} duplicated. Undo with ${UNDO_KEYS_SPOKEN}.`);
   }, [announce]);
 
   const bindings = React.useMemo(
@@ -216,6 +293,18 @@ export function useBlockKeyboardActions({
           const editorNow = latest.current;
           const selectedId = editorNow.selectedId;
           if (selectedId === null) return;
+
+          // Only the node itself, never its subtree: moving a container leaves
+          // a locked child in the same slot at the same index, so the lock is
+          // not violated and refusing would let one locked caption freeze the
+          // whole section around it.
+          const lockedNode = lockBlockingMove(editorNow.document, selectedId);
+          if (lockedNode !== undefined) {
+            announce(
+              `${layerLabel(lockedNode)} is locked. Unlock it to move it.`
+            );
+            return;
+          }
 
           const move = keyboardMovePosition(
             editorNow.document.nodes,
@@ -269,6 +358,24 @@ export function useBlockKeyboardActions({
         run: () => deleteSelected(),
       },
       {
+        /*
+         * `mod+d`, which is what a duplicating editor binds nearly everywhere —
+         * Figma, Sketch and every canvas tool an author is likely to arrive
+         * from. The browser's own `mod+d` bookmarks the page, and taking it is
+         * the deliberate trade: inside a full-screen editor a bookmark is not
+         * what the keystroke means, and the shortcut manager prevents the
+         * default so the dialog does not appear over the canvas.
+         */
+        keys: "mod+d",
+        description: "Duplicate the selected block",
+        when: () => latest.current.selectedId !== null,
+        // Not while typing. `mod+d` in a text field is a browser action rather
+        // than an editing one, but an author mid-sentence is not asking for a
+        // block, and the manager cannot tell the two apart without this.
+        whenTyping: false,
+        run: () => duplicateSelected(),
+      },
+      {
         keys: "Backspace",
         description: "Delete the selected block",
         when: () => latest.current.selectedId !== null,
@@ -310,7 +417,7 @@ export function useBlockKeyboardActions({
         },
       },
     ],
-    [announce, deleteSelected]
+    [announce, deleteSelected, duplicateSelected]
   );
 
   useShortcuts([...bindings, ...editing], {

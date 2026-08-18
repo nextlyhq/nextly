@@ -117,6 +117,66 @@ describe("useBlockKeyboardActions", () => {
     expect(op.to).toEqual({ index: 1 });
   });
 
+  it("refuses to move a locked block, and says why", () => {
+    const editor = editorSpy(
+      documentOf([
+        { id: "a", type: "acme/text", version: 1, props: {}, locked: true },
+        { id: "b", type: "acme/text", version: 1, props: {} },
+      ] as BlockDocument["nodes"]),
+      "a"
+    );
+    mount(editor);
+
+    press("ArrowDown", { altKey: true });
+
+    expect(editor.apply).not.toHaveBeenCalled();
+    expect(screen.getByRole("status").textContent ?? "").toMatch(
+      /is locked\. unlock it to move it/i
+    );
+  });
+
+  it("ALLOWS moving a container that holds a locked block", () => {
+    /*
+     * The direction that is easy to get wrong by being cautious, and the reason
+     * move and delete ask different questions.
+     *
+     * Moving the container leaves the locked child in the same slot at the same
+     * index with the same neighbours, so nothing the lock protects has changed.
+     * Refusing here would let one locked caption freeze the entire section
+     * around it, which an author would experience as the editor breaking rather
+     * than as a lock working.
+     */
+    const editor = editorSpy(
+      documentOf([
+        {
+          id: "wrap",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          slots: {
+            children: [
+              {
+                id: "kid",
+                type: "acme/text",
+                version: 1,
+                props: {},
+                locked: true,
+              },
+            ],
+          },
+        },
+        { id: "after", type: "acme/text", version: 1, props: {} },
+      ] as BlockDocument["nodes"]),
+      "wrap"
+    );
+    mount(editor);
+
+    press("ArrowDown", { altKey: true });
+
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(editor.apply.mock.calls[0][0].kind).toBe("move");
+  });
+
   it("moves the selected block up", () => {
     const editor = editorSpy(pair(), "b");
     mount(editor);
@@ -391,6 +451,227 @@ describe("useBlockKeyboardActions", () => {
     // The declared-label case is asserted below.
     expect(said).toContain("Text deleted");
     expect(said).toContain("Undo");
+  });
+
+  it("duplicates the selected block through the store", () => {
+    // `ctrlKey`, not `metaKey`. The binding is declared as `mod`, which the
+    // shortcut manager resolves per platform — and jsdom is not macOS, so it
+    // resolves to Control here while a real browser on this machine wants
+    // Command. A test pressing Meta simply never fires the binding, and reads
+    // as the command being unwired.
+    const editor = editorSpy(pair(), "a");
+    mount(editor);
+
+    press("d", { ctrlKey: true });
+
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+    const op = editor.apply.mock.calls[0][0];
+    expect(op.kind).toBe("insert");
+    // Immediately after the original, not at the end of the page.
+    expect(op.at).toEqual({ index: 1 });
+  });
+
+  it("gives the copy a different id from the original", () => {
+    // Ids are the only thing the editor addresses by, so a copy that kept one
+    // would send every later edit to whichever node the walk found first.
+    const editor = editorSpy(pair(), "a");
+    mount(editor);
+
+    press("d", { ctrlKey: true });
+
+    expect(editor.apply.mock.calls[0][0].node.id).not.toBe("a");
+  });
+
+  it("selects the copy, not the original", () => {
+    // The copy is the block the author is now working on — they duplicated it
+    // in order to change it — and leaving the original selected would send the
+    // next edit to the wrong one of two identical blocks.
+    const editor = editorSpy(pair(), "a");
+    mount(editor);
+
+    press("d", { ctrlKey: true });
+
+    const copyId = editor.apply.mock.calls[0][0].node.id;
+    expect(editor.select).toHaveBeenCalledWith(copyId);
+  });
+
+  it("announces the duplication and the way back", () => {
+    const editor = editorSpy(pair(), "a");
+    mount(editor);
+
+    press("d", { ctrlKey: true });
+
+    const said = screen.getByRole("status").textContent ?? "";
+    expect(said).toMatch(/duplicated/i);
+    expect(said).toContain("Undo");
+  });
+
+  it("DUPLICATES a locked block rather than refusing", () => {
+    /*
+     * The engine's rule is that the command layer must not let an author move
+     * or DELETE a locked node. Duplicating does neither — the original stays
+     * exactly where it is — so refusing would read as cautious and would mean
+     * an author could not take a copy of the block they had most deliberately
+     * protected.
+     */
+    const editor = editorSpy(
+      documentOf([
+        { id: "a", type: "acme/text", version: 1, props: {}, locked: true },
+      ] as BlockDocument["nodes"]),
+      "a"
+    );
+    mount(editor);
+
+    press("d", { ctrlKey: true });
+
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(editor.apply.mock.calls[0][0].kind).toBe("insert");
+  });
+
+  it("does nothing with no selection", () => {
+    // The control for every case above: they would all pass against a binding
+    // that fired unconditionally.
+    const editor = editorSpy(pair(), null);
+    mount(editor);
+
+    press("d", { ctrlKey: true });
+
+    expect(editor.apply).not.toHaveBeenCalled();
+  });
+
+  it("names a block by the name its author gave it", () => {
+    // The layers panel and the breadcrumb both show the instance name, so the
+    // one surface a screen-reader user HEARS must not be the only one still
+    // calling the block by its type.
+    const editor = editorSpy(
+      documentOf([
+        {
+          id: "a",
+          type: "acme/text",
+          version: 1,
+          props: {},
+          name: "Hero title",
+        },
+        { id: "b", type: "acme/text", version: 1, props: {} },
+      ] as BlockDocument["nodes"]),
+      "a"
+    );
+    mount(editor);
+
+    press("Delete");
+
+    expect(screen.getByRole("status").textContent ?? "").toContain(
+      "Hero title deleted"
+    );
+  });
+
+  it("names a LOCKED block by its author's name too", () => {
+    const editor = editorSpy(
+      documentOf([
+        {
+          id: "a",
+          type: "acme/text",
+          version: 1,
+          props: {},
+          name: "Hero title",
+          locked: true,
+        },
+      ] as BlockDocument["nodes"]),
+      "a"
+    );
+    mount(editor);
+
+    press("Delete");
+
+    expect(screen.getByRole("status").textContent ?? "").toContain(
+      "Hero title is locked"
+    );
+  });
+
+  it("refuses to delete a locked block, and says why", () => {
+    /*
+     * A lock is a POLICY refusal, so it is announced where a structural one is
+     * not. Nothing on the page explains why the key did nothing, the remedy is
+     * one the author can act on, and a keyboard user has no lock badge to look
+     * at — which is the whole reason silence would be wrong here.
+     */
+    const editor = editorSpy(
+      documentOf([
+        { id: "a", type: "acme/text", version: 1, props: {}, locked: true },
+        { id: "b", type: "acme/text", version: 1, props: {} },
+      ] as BlockDocument["nodes"]),
+      "a"
+    );
+    mount(editor);
+
+    press("Delete");
+
+    expect(editor.apply).not.toHaveBeenCalled();
+    expect(screen.getByRole("status").textContent ?? "").toMatch(
+      /is locked\. unlock it to delete it/i
+    );
+  });
+
+  it("refuses to delete a container holding a locked block, and names it", () => {
+    // THE case. Deleting the container destroys the locked child, which is the
+    // one outcome the flag exists to prevent — and it happens through an action
+    // aimed at something else, with the descendant count as the only clue.
+    const editor = editorSpy(
+      documentOf([
+        {
+          id: "wrap",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          slots: {
+            children: [
+              {
+                id: "kid",
+                type: "acme/text",
+                version: 1,
+                props: {},
+                locked: true,
+              },
+            ],
+          },
+        },
+      ] as BlockDocument["nodes"]),
+      "wrap"
+    );
+    mount(editor);
+
+    press("Delete");
+
+    expect(editor.apply).not.toHaveBeenCalled();
+    expect(screen.getByRole("status").textContent ?? "").toMatch(
+      /contains .*which is locked/i
+    );
+  });
+
+  it("still deletes a container whose children are all unlocked", () => {
+    // The control for both refusals above. Without it, a delete that refused
+    // everything would satisfy them and nothing would notice.
+    const editor = editorSpy(
+      documentOf([
+        {
+          id: "wrap",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          slots: {
+            children: [{ id: "kid", type: "acme/text", version: 1, props: {} }],
+          },
+        },
+      ] as BlockDocument["nodes"]),
+      "wrap"
+    );
+    mount(editor);
+
+    press("Delete");
+
+    expect(editor.apply).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "remove", id: "wrap" })
+    );
   });
 
   it("says how many blocks a container takes with it", () => {
