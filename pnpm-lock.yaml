@@ -1131,9 +1131,6 @@ importers:
       next:
         specifier: ^16.2.12
         version: 16.2.12(@babel/core@7.29.7)(@playwright/test@1.61.1)(@types/node@20.19.17)(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
-      nodemailer:
-        specifier: ^9.0.1
-        version: 9.0.3
       picocolors:
         specifier: ^1.1.1
         version: 1.1.1
@@ -1220,6 +1217,9 @@ importers:
       mysql2:
         specifier: ^3.15.0
         version: 3.15.0
+      nodemailer:
+        specifier: ^9.0.1
+        version: 9.0.3
       pg:
         specifier: ^8.16.3
         version: 8.16.3

@@ -9,9 +9,9 @@
  * @since 1.0.0
  */
 
-import nodemailer from "nodemailer";
-
 import type { EmailProviderAdapter } from "../../types";
+
+import { loadNodemailer } from "./nodemailer-loader";
 
 /**
  * SMTP configuration shape stored in `EmailProviderRecord.configuration`.
@@ -144,6 +144,10 @@ export function createSmtpProvider(
 
   return {
     async send(options) {
+      // Loaded per send rather than held at module scope: this is the optional
+      // peer, and a module-level handle would have to resolve at import time,
+      // which is exactly what an optional dependency cannot promise.
+      const nodemailer = await loadNodemailer();
       const transport = nodemailer.createTransport(
         smtpTransportOptions(config)
       );
@@ -197,6 +201,20 @@ export function createSmtpProvider(
 export async function verifySmtpConnection(
   config: SmtpProviderConfig
 ): Promise<{ ok: boolean; detail?: string }> {
+  // Loading sits inside its own try, unlike the send path: this function
+  // reports a verdict rather than throwing, and a missing library is a probe
+  // failure the admin renders like any other. Letting it escape would surface
+  // as an unhandled error where a readable instruction belongs.
+  let nodemailer: Awaited<ReturnType<typeof loadNodemailer>>;
+  try {
+    nodemailer = await loadNodemailer();
+  } catch (error) {
+    return {
+      ok: false,
+      detail: error instanceof Error ? error.message : "Connection failed",
+    };
+  }
+
   // Identical options to the send path, including requireTLS: a probe
   // authenticates too, so it must not trust anything a send would not.
   const transport = nodemailer.createTransport(smtpTransportOptions(config));
