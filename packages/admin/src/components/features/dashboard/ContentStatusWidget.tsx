@@ -28,13 +28,17 @@ function StatusItem({
     <div className="flex items-center justify-between p-3 rounded-md hover:bg-primary/[0.03] transition-all duration-500 group/item  border border-border border-transparent hover:border-border">
       <div className="flex items-center gap-3.5">
         <div
-          className="h-2 w-2 rounded-full ring-4 ring-offset-2 ring-offset-transparent transition-all duration-500 group-hover/item:scale-125"
-          style={
-            {
-              backgroundColor: color,
-              ringColor: `${color}20`,
-            } as React.CSSProperties
-          }
+          /*
+           * The ring is a fixed decorative halo rather than a tint of `color`.
+           * It was `ringColor: `${color}20``, which never rendered: `ringColor`
+           * is not a CSS property — Tailwind's ring colour comes from
+           * `--tw-ring-color` — and the value was invalid regardless, because
+           * appending `20` to a `var()` is not the hex-alpha it looks like. Both
+           * halves failed silently, so the halo has always drawn in the default
+           * ring colour. Stated as a class the theme can move.
+           */
+          className="h-2 w-2 rounded-full ring-4 ring-primary/20 ring-offset-2 ring-offset-transparent transition-all duration-500 group-hover/item:scale-125"
+          style={{ backgroundColor: color }}
         />
         <span className="text-xs font-bold text-muted-foreground group-hover/item:text-foreground transition-colors tracking-tight">
           {label}

@@ -22,7 +22,9 @@ import {
   emptyPopulations,
   isCommentLine,
   isPluginSurface,
+  namedColorViolation,
   paletteViolation,
+  tokenAlphaSuffixViolation,
   tokenWrapViolation,
 } from "./lint-design.mjs";
 
@@ -84,6 +86,51 @@ describe("the individual rules", () => {
   it("tokenWrapViolation reports a token wrapped in a colour function", () => {
     expect(tokenWrapViolation("f:1", "color: hsl(var(--nx-primary));")).toContain("token wrapped");
     expect(tokenWrapViolation("f:1", "color: var(--nx-primary);")).toBeNull();
+  });
+
+  it("tokenAlphaSuffixViolation reports an alpha glued onto a token", () => {
+    expect(tokenAlphaSuffixViolation("f:1", 'a = "var(--nx-primary)20"')).toMatch(
+      /alpha suffix/
+    );
+    // One digit is the four-digit-hex spelling of the same mistake.
+    expect(tokenAlphaSuffixViolation("f:1", 'a = "var(--nx-primary)2"')).toMatch(
+      /alpha suffix/
+    );
+    // A percentage is how CSS says "some of this colour", and a length after a
+    // token is a length — neither is the defect.
+    expect(tokenAlphaSuffixViolation("f:1", "  border: var(--nx-primary) 20%;")).toBeNull();
+    expect(tokenAlphaSuffixViolation("f:1", "  gap: var(--nx-space)2px;")).toBeNull();
+    expect(
+      tokenAlphaSuffixViolation(
+        "f:1",
+        "  color: color-mix(in oklch, var(--nx-primary) 12%, transparent);"
+      )
+    ).toBeNull();
+    expect(
+      tokenAlphaSuffixViolation("f:1", 'a = "var(--nx-primary)20" // design-lint-ok: external embed')
+    ).toBeNull();
+  });
+
+  it("namedColorViolation reads CSS only, and both declaration forms", () => {
+    // A real property taking a name.
+    expect(namedColorViolation("f:1", "  color: rebeccapurple;", { isCss: true })).toMatch(
+      /named colour/
+    );
+    // A TOKEN DEFINED as a name — the form that ends the aliasing a whole
+    // namespace depends on.
+    expect(
+      namedColorViolation("f:1", "  --nx-builder-surface: rebeccapurple;", { isCss: true })
+    ).toMatch(/defined as the named colour/);
+    // Referencing a token is the correct form, in both shapes.
+    expect(namedColorViolation("f:1", "  color: var(--nx-foreground);", { isCss: true })).toBeNull();
+    expect(
+      namedColorViolation("f:1", "  --nx-builder-surface: var(--nx-muted);", { isCss: true })
+    ).toBeNull();
+    // Mode-invariant names stay exempt, as their hex spellings are.
+    expect(namedColorViolation("f:1", "  color: black;", { isCss: true })).toBeNull();
+    expect(namedColorViolation("f:1", "  border: 1px solid transparent;", { isCss: true })).toBeNull();
+    // `.tsx` is the published ESLint rule's job; this must not double-report.
+    expect(namedColorViolation("f:1", "  color: rebeccapurple;", { isCss: false })).toBeNull();
   });
 
   it("colorLiteralViolation applies to CSS and plugin source, not admin tsx", () => {

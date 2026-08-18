@@ -45,6 +45,7 @@ import type { RetentionRunner } from "../domains/retention/runner";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
 import { recordMutationEvent } from "../domains/webhooks/record-mutation-event";
 import { keysToSnakeCase } from "../lib/case-conversion";
+import { refusesUpload } from "../storage/image-processor";
 import { isImageMimeType, validateFileSize } from "../types/media";
 import type {
   Media,
@@ -287,8 +288,10 @@ export class MediaService extends BaseService {
       let thumbnailUrl: string | null = null;
 
       if (isImage) {
-        const isValid = await this.imageProcessor.isValidImage(file);
-        if (!isValid) {
+        const validity = await this.imageProcessor.isValidImage(file);
+        // Asked rather than re-derived here, so the rule lives in one place
+        // and is testable without the whole upload harness.
+        if (refusesUpload(validity)) {
           return {
             success: false,
             statusCode: 400,
@@ -306,27 +309,32 @@ export class MediaService extends BaseService {
 
         try {
           const thumbnail = await this.imageProcessor.generateThumbnail(file);
-          const thumbnailFilename = `thumb_${filename}`;
-          const thumbnailResult = await withRetry(
-            () =>
-              this.storage.upload(thumbnail.buffer, {
-                filename: thumbnailFilename,
-                mimeType: "image/jpeg",
-                collection: "media",
-              }),
-            {
-              maxAttempts: 3,
-              baseDelayMs: 500,
-              shouldRetry: isTransientError,
-              onRetry: (err, attempt) => {
-                console.warn(
-                  `[MediaService] Thumbnail upload retry ${attempt}:`,
-                  err instanceof Error ? err.message : err
-                );
-              },
-            }
-          );
-          thumbnailUrl = thumbnailResult.url;
+          // Null means no image processing on this install. The upload keeps
+          // its file and simply carries no thumbnail, rather than failing for
+          // a derived artefact that was never essential to storing it.
+          if (thumbnail) {
+            const thumbnailFilename = `thumb_${filename}`;
+            const thumbnailResult = await withRetry(
+              () =>
+                this.storage.upload(thumbnail.buffer, {
+                  filename: thumbnailFilename,
+                  mimeType: "image/jpeg",
+                  collection: "media",
+                }),
+              {
+                maxAttempts: 3,
+                baseDelayMs: 500,
+                shouldRetry: isTransientError,
+                onRetry: (err, attempt) => {
+                  console.warn(
+                    `[MediaService] Thumbnail upload retry ${attempt}:`,
+                    err instanceof Error ? err.message : err
+                  );
+                },
+              }
+            );
+            thumbnailUrl = thumbnailResult.url;
+          }
         } catch (error) {
           console.warn("[MediaService] Thumbnail generation failed:", error);
           // Continue without thumbnail

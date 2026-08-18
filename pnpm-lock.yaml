@@ -1149,9 +1149,6 @@ importers:
       server-only:
         specifier: ^0.0.1
         version: 0.0.1
-      sharp:
-        specifier: ^0.35.0
-        version: 0.35.3(@types/node@20.19.17)
       ws:
         specifier: ^8.21.0
         version: 8.21.1
@@ -1238,6 +1235,9 @@ importers:
       rollup-plugin-dts:
         specifier: ^6.4.1
         version: 6.4.1(rollup@4.60.1)(typescript@5.9.3)
+      sharp:
+        specifier: ^0.35.0
+        version: 0.35.3(@types/node@20.19.17)
       tsup:
         specifier: ^8.5.0
         version: 8.5.0(jiti@2.7.0)(postcss@8.5.23)(tsx@4.20.5)(typescript@5.9.3)(yaml@2.8.3)

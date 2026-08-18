@@ -259,6 +259,42 @@ export {
 } from "./duplicate-block";
 
 /**
+ * @experimental What "the selection" is once it can hold more than one block.
+ *
+ * From this entry because every part of it is a plain function over a document.
+ * A host, an agent, or a surface answering "what is selected" needs the same
+ * normalisation the editor uses — a second reading would let one of them act on
+ * a container AND something inside it, which deletes the child twice.
+ */
+export {
+  EMPTY_SELECTION,
+  applySelection,
+  documentOrder,
+  normalizeSelection,
+  pruneSelection,
+  rangeBetween,
+  type Selection,
+  type SelectionMode,
+} from "./selection";
+
+/**
+ * @experimental The palette's command list, as a plain function over state.
+ *
+ * From this entry because a host assembling its own palette — or an agent
+ * enumerating what the editor can do right now — needs the same list the editor
+ * offers, and availability derived from a second reading of the lock and move
+ * rules is how the two come to disagree.
+ */
+export {
+  BLOCK_GROUP,
+  EDITOR_GROUP,
+  HISTORY_GROUP,
+  builderCommands,
+  type BuilderCommandsInput,
+  type CommandVerbs,
+} from "./builder-commands";
+
+/**
  * @experimental Who owns Escape while the editor is on screen.
  *
  * From this entry because the rule is a plain function over the DOM and a

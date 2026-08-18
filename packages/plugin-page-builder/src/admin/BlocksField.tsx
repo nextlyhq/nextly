@@ -44,6 +44,7 @@ import { registrySlotSource } from "@nextlyhq/builder";
 import {
   BlockKeyboardActions,
   BlockToolbar,
+  EditorCommandPalette,
   BuilderShell,
   Canvas,
   DropIndicator,
@@ -284,6 +285,17 @@ function BlocksEditor({
           wraps, which is how the toolbar presses exactly what the keys press.
         */}
         <BlockKeyboardActions editor={editor}>
+          {/*
+            Inside the verbs provider, which is what lets the palette run
+            exactly what the keystrokes and the toolbar run.
+
+            `onExit` is the SAME handler the shell's exit button gets, so
+            leaving through the palette commits the document exactly as leaving
+            through the button does. Passing a different one — or omitting it
+            while the button exists — would give the editor two ways out that
+            behave differently.
+          */}
+          <EditorCommandPalette editor={editor} onExit={done} />
           <Canvas
             document={editor.document}
             siteStyles={siteSheet()}
