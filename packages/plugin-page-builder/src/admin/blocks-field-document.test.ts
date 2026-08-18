@@ -9,7 +9,7 @@
 import { DOCUMENT_FORMAT_VERSION } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
-import { documentFrom } from "./BlocksField";
+import { canEditBlocks, documentFrom } from "./BlocksField";
 
 describe("documentFrom", () => {
   it("keeps a document that already has nodes", () => {
@@ -52,5 +52,39 @@ describe("documentFrom", () => {
     const fresh = documentFrom(null);
     expect(fresh.formatVersion).toBe(DOCUMENT_FORMAT_VERSION);
     expect(typeof fresh.kind).toBe("string");
+  });
+});
+
+describe("canEditBlocks", () => {
+  /*
+   * The rule that decides whether a way INTO the editor is offered at all.
+   *
+   * Not cosmetic. Before this, `readOnly` arrived from the admin's shared
+   * `commonProps` and was dropped on the floor — so a version-history view,
+   * which renders the whole document read-only, still showed an enabled "Edit
+   * blocks" button. Opening it mounted a full-screen editor bound to whichever
+   * form was nearest, which there is the SNAPSHOT'S: committing wrote into a
+   * past version of the document. `VersionSnapshotForm`'s own docblock states
+   * that as impossible.
+   */
+  it("allows editing when neither flag is set", () => {
+    // The control. Without it, "always false" would satisfy every case below
+    // and no author could ever open the editor.
+    expect(canEditBlocks({})).toBe(true);
+    expect(canEditBlocks({ readOnly: false, disabled: false })).toBe(true);
+  });
+
+  it("refuses when the document is being READ", () => {
+    expect(canEditBlocks({ readOnly: true })).toBe(false);
+  });
+
+  it("refuses when the field is DISABLED", () => {
+    // Independently of `readOnly`: the admin sets the two for different
+    // reasons, and honouring one of them is being wrong half the time.
+    expect(canEditBlocks({ disabled: true })).toBe(false);
+  });
+
+  it("refuses when both are set", () => {
+    expect(canEditBlocks({ readOnly: true, disabled: true })).toBe(false);
   });
 });
