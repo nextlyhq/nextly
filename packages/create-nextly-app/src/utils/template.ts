@@ -1307,7 +1307,19 @@ async function generatePluginPackageJson(
 ): Promise<string> {
   const versions = useYalc ? {} : await resolveNextlyVersions(channel);
   const runtimeVersions = await resolveRuntimeVersions();
-  const range = (pkg: string): string => versions[pkg] ?? "latest";
+  /*
+   * The fallback is the TEMPLATE's channel rather than `latest`.
+   *
+   * `--use-yalc` empties the version map on purpose, so every range here falls
+   * back to a bare dist-tag — and the yalc installer then links a FIXED list
+   * (`nextly`, admin, ui, the adapters, the template's plugins) that does not
+   * include `@nextlyhq/eslint-plugin`. Whatever this names for a package
+   * outside that list is what the author actually installs, and on `latest`
+   * that is the 0.0.0 bootstrap placeholder: it has no `main` and no
+   * `exports`, so the install succeeds and `pnpm lint` fails on the config
+   * that imports it.
+   */
+  const range = (pkg: string): string => versions[pkg] ?? channel;
 
   const peerDependencies: Record<string, string> = {
     nextly: range("nextly"),

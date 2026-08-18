@@ -78,6 +78,20 @@ describe("content-template dist-tag pinning", () => {
     expect(pkg.peerDependencies["@nextlyhq/ui"]).toBe(`^${ALPHA}`);
   });
 
+  // `--use-yalc` empties the resolved-version map, so every range falls back to
+  // a bare dist-tag. That fallback must be the TEMPLATE's channel, not `latest`:
+  // the yalc installer links a fixed list that does not include
+  // `@nextlyhq/eslint-plugin`, so whatever the manifest names is what the author
+  // actually installs — and `latest` is the unusable 0.0.0 bootstrap package.
+  it("falls back to the template's channel, not latest, in yalc mode", async () => {
+    const pkg = JSON.parse(
+      await generatePackageJson("my-plugin", pgDatabase, true, "plugin")
+    );
+    expect(pkg.devDependencies["@nextlyhq/eslint-plugin"]).toBe("alpha");
+    expect(pkg.devDependencies["nextly"]).toBe("alpha");
+    expect(pkg.peerDependencies["nextly"]).toBe("alpha");
+  });
+
   it("pins the blank scaffold's nextly to the latest channel", async () => {
     const pkg = JSON.parse(
       await generatePackageJson("blank-app", pgDatabase, false, "blank")
