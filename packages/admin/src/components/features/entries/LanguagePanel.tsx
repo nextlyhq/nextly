@@ -36,8 +36,10 @@ import {
   StateDot,
   type LanguageState,
 } from "./LanguageControl";
-import type { LocaleTranslationMeta } from "./LanguageStatusPills";
-import { translationCounts } from "./TranslationStatus";
+import {
+  translationCounts,
+  type LocaleTranslationMeta,
+} from "./translation-meta";
 import { useCopyFromLanguage } from "./useCopyFromLanguage";
 import { usePublishAllLanguages } from "./usePublishAllLanguages";
 

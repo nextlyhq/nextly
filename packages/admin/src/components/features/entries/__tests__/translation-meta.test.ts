@@ -1,14 +1,13 @@
 /**
- * TranslationStatus — one instrument for "how far along are the translations".
- *
- * `translationCounts` is the shared derivation: the visible bar and the
- * header's spoken region both read it, so it is tested directly rather than
- * only through what the component renders.
+ * `translationCounts` is the shared derivation behind every surface that says
+ * how far along a document's translations are — the panel's meter, the
+ * header's spoken region, the list's badge. It is tested directly rather than
+ * through any one of them, so retiring a surface cannot take its coverage.
  */
 
 import { describe, expect, it } from "vitest";
 
-import { translationCounts } from "../TranslationStatus";
+import { translationCounts } from "../translation-meta";
 
 const CODES = ["en", "es", "fr", "de"] as const;
 

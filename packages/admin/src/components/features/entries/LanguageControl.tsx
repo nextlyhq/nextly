@@ -22,7 +22,7 @@
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { cn } from "@admin/lib/utils";
 
-import type { LocaleTranslationMeta } from "./LanguageStatusPills";
+import type { LocaleTranslationMeta } from "./translation-meta";
 
 export type LanguageState = "missing" | "draft" | "translated" | "published";
 
