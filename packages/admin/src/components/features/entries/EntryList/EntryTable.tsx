@@ -95,7 +95,8 @@ export interface EntryTableProps {
   /** Callback when search query changes */
   onSearchChange: (search: string) => void;
   /** Callback when edit action is triggered */
-  onEdit: (entryId: string) => void;
+  /** Open a row. `locale` opens it in that content language. */
+  onEdit: (entryId: string, locale?: string) => void;
   /** Callback when delete action is triggered */
   onDelete: (entryId: string) => void;
   /** Callback for bulk delete operation */
@@ -217,8 +218,11 @@ export const EntryTable = forwardRef<EntryTableRef, EntryTableProps>(
     // -------------------------------------------------------------------------
 
     const columns = useMemo(
-      () => buildEntryColumns(collection, columnsControl?.isColumnVisible),
-      [collection, columnsControl]
+      () =>
+        buildEntryColumns(collection, columnsControl?.isColumnVisible, {
+          openInLocale: (entryId, locale) => onEdit(entryId, locale),
+        }),
+      [collection, columnsControl, onEdit]
     );
 
     const titleField = useMemo(

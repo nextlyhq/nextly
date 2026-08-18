@@ -123,6 +123,54 @@ describe("UnsavedChangesGuard", () => {
     expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
+  it("treats a change of QUERY as leaving, because here it is", async () => {
+    // The editor addresses its content language as `?locale=`, and switching
+    // language refetches the document and discards unsaved edits exactly as
+    // leaving the page would. Comparing paths alone read that as "same place,
+    // let it through", and the work went without anything asking.
+    function SwitchLanguage() {
+      return (
+        <button
+          type="button"
+          onClick={() =>
+            window.history.pushState(null, "", `${START}?locale=de`)
+          }
+        >
+          switch
+        </button>
+      );
+    }
+    render(
+      <UnsavedChangesGuard isDirty>
+        <SwitchLanguage />
+      </UnsavedChangesGuard>
+    );
+    await userEvent.click(screen.getByRole("button", { name: "switch" }));
+    expect(window.location.search).toBe("");
+    expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+  });
+
+  it("lets a hash through, because it moves within the page rather than off it", async () => {
+    function JumpToSection() {
+      return (
+        <button
+          type="button"
+          onClick={() => window.history.pushState(null, "", `${START}#fields`)}
+        >
+          jump
+        </button>
+      );
+    }
+    render(
+      <UnsavedChangesGuard isDirty>
+        <JumpToSection />
+      </UnsavedChangesGuard>
+    );
+    await userEvent.click(screen.getByRole("button", { name: "jump" }));
+    expect(window.location.hash).toBe("#fields");
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
   it("withholds nothing while disabled, so a submit in flight can navigate", async () => {
     render(
       <UnsavedChangesGuard isDirty disabled>

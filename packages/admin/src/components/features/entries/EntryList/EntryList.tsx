@@ -19,6 +19,7 @@ import { Breadcrumbs } from "@admin/components/shared";
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import { useListColumns } from "@admin/components/ui/table/list-view";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
+import { LOCALE_PARAM } from "@admin/constants/search-params";
 import {
   useEntries,
   useBulkDeleteEntries,
@@ -32,7 +33,7 @@ import { useSearchParams } from "@admin/hooks/useSearchParams";
 import type { ListResponse } from "@admin/lib/api/response-types";
 import { navigateTo } from "@admin/lib/navigation";
 import type { InjectionPointProps } from "@admin/lib/plugins/component-registry";
-import { getSearchParam } from "@admin/lib/routing";
+import { getSearchParam } from "@admin/lib/search-params";
 import type { Entry } from "@admin/types/collection";
 import type { ApiCollection } from "@admin/types/entities";
 
@@ -399,12 +400,18 @@ export function EntryList({ collectionSlug }: EntryListProps) {
   // ---------------------------------------------------------------------------
 
   const handleEdit = useCallback(
-    (entryId: string) => {
+    (entryId: string, locale?: string) => {
+      const path = buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, {
+        slug: collectionSlug,
+        id: entryId,
+      });
+      // The language rides in the URL because that is where the editor reads
+      // it. Opening a row "in Arabic" from the list is the same act as being
+      // sent a link to the Arabic copy, and both arrive the same way.
       navigateTo(
-        buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, {
-          slug: collectionSlug,
-          id: entryId,
-        })
+        locale
+          ? `${path}?${new URLSearchParams({ [LOCALE_PARAM]: locale }).toString()}`
+          : path
       );
     },
     [collectionSlug]

@@ -78,6 +78,33 @@ export interface UseUnsavedChangesReturn {
   leaveWithoutWarning: () => void;
 }
 
+/**
+ * Whether a history write moves the reader somewhere else.
+ *
+ * Compares the QUERY as well as the path, because in this admin the query is
+ * part of where you are rather than decoration on it: the entry editor
+ * addresses its content language as `?locale=`, and switching language
+ * refetches the document and discards unsaved edits exactly as leaving the page
+ * would. Comparing paths alone reported that as "same place, let it through",
+ * and the work went without anything asking.
+ *
+ * The hash is deliberately excluded. It moves within a page rather than off it.
+ */
+function movesElsewhere(url: string | URL | null | undefined): boolean {
+  if (url === undefined || url === null) return false;
+  try {
+    const next = new URL(url.toString(), window.location.origin);
+    return (
+      next.pathname !== window.location.pathname ||
+      next.search !== window.location.search
+    );
+  } catch {
+    // An unparseable target is not something to silently allow past a guard
+    // whose whole job is to stop unnoticed leaves.
+    return true;
+  }
+}
+
 interface PendingNavigation {
   type: "pushState" | "replaceState" | "popstate";
   args?: [data: unknown, unused: string, url?: string | URL | null];
@@ -245,14 +272,8 @@ export function useUnsavedChanges({
         return originalPushState.current!.apply(this, [data, unused, url]);
       }
 
-      // Check if navigating to a different path
-      const currentPath = window.location.pathname;
-      const newPath = url
-        ? new URL(url.toString(), window.location.origin).pathname
-        : currentPath;
-
-      if (currentPath === newPath) {
-        // Same path, allow (might be query string change)
+      if (!movesElsewhere(url)) {
+        // Staying put — a hash, or a rewrite of the same address.
         return originalPushState.current!.apply(this, [data, unused, url]);
       }
 
@@ -289,14 +310,8 @@ export function useUnsavedChanges({
         return originalReplaceState.current!.apply(this, [data, unused, url]);
       }
 
-      // Check if navigating to a different path
-      const currentPath = window.location.pathname;
-      const newPath = url
-        ? new URL(url.toString(), window.location.origin).pathname
-        : currentPath;
-
-      if (currentPath === newPath) {
-        // Same path, allow
+      if (!movesElsewhere(url)) {
+        // Staying put — a hash, or a rewrite of the same address.
         return originalReplaceState.current!.apply(this, [data, unused, url]);
       }
 
