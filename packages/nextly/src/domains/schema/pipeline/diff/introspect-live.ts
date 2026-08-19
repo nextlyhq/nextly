@@ -543,6 +543,43 @@ function buildSnapshotFromPgRows(rows: PgRow[]): NextlySchemaSnapshot {
   };
 }
 
+/**
+ * The one expression MySQL accepts as a default without parentheses.
+ *
+ * `CURRENT_TIMESTAMP` is the documented exception, with or without a
+ * fractional-seconds precision. The server normalizes `NOW()`, `LOCALTIME` and
+ * `LOCALTIMESTAMP` to this spelling before recording it, so no synonym reaches
+ * here under its own name.
+ */
+const MYSQL_BARE_EXPRESSION_DEFAULT = /^current_timestamp(\s*\(\s*\d*\s*\))?$/i;
+
+/**
+ * An expression default as it must appear in DDL.
+ *
+ * `information_schema.COLUMN_DEFAULT` reports a function-call default with its
+ * enclosing parentheses STRIPPED — a column declared
+ * `DEFAULT (CONVERT(X'7b7d' USING utf8mb4))`, which is what a required JSON,
+ * repeater, group or chips field emits, comes back as
+ * `convert(0x7b7d using utf8mb4)` — and MySQL refuses that same text without
+ * them (`ER_PARSE_ERROR`). Recorded verbatim, a snapshot taken from a live
+ * MySQL database produces a `CREATE TABLE` that cannot be applied anywhere,
+ * including back to the database it came from.
+ *
+ * Two forms must be left exactly as reported. An expression that is not a
+ * single call is reported ALREADY parenthesised as a whole (`(1 + 2)`), so
+ * wrapping it again would make the recorded text differ from what the next
+ * introspection reads and show as drift. And `CURRENT_TIMESTAMP` must stay
+ * bare because the parenthesised form is a DIFFERENT column definition to
+ * MySQL: `DEFAULT (CURRENT_TIMESTAMP)` is recorded as the ordinary expression
+ * `now()`, losing the auto-initialisation the bare keyword carries.
+ */
+function mysqlExpressionDefault(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.startsWith("(")) return value;
+  if (MYSQL_BARE_EXPRESSION_DEFAULT.test(trimmed)) return value;
+  return `(${trimmed})`;
+}
+
 /** MySQL types whose default is reported as a bare number, not a literal. */
 const MYSQL_NUMERIC_TYPES = new Set([
   "tinyint",
@@ -569,16 +606,15 @@ const MYSQL_NUMERIC_TYPES = new Set([
  * snapshot could not be applied anywhere.
  *
  * `EXTRA` is what separates the two cases: an expression default (
- * `CURRENT_TIMESTAMP`, `json_array()`) carries `DEFAULT_GENERATED` and must be
- * left alone, while everything else is a literal. Numeric types need no quotes
- * either, and quoting them would turn a number into a string.
+ * `CURRENT_TIMESTAMP`, `json_array()`) carries `DEFAULT_GENERATED`, while
+ * everything else is a literal. Numeric types need no quotes either, and
+ * quoting them would turn a number into a string.
  */
 function mysqlDefaultExpression(row: MysqlRow): string | undefined {
   const value = row.COLUMN_DEFAULT;
   if (value === null || value === undefined) return undefined;
-  // An expression is already valid DDL as written.
   if ((row.EXTRA ?? "").toUpperCase().includes("DEFAULT_GENERATED")) {
-    return value;
+    return mysqlExpressionDefault(value);
   }
   if (MYSQL_NUMERIC_TYPES.has((row.DATA_TYPE ?? "").toLowerCase())) {
     return value;
