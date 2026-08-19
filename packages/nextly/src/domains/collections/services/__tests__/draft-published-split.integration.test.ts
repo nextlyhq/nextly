@@ -1405,6 +1405,49 @@ describe("draft/published split — promote on publish (integration)", () => {
     expect(promo?.label).toBe("live");
   });
 
+  it("returns the pending change to an explicit draft view of a LOCALIZED document", async () => {
+    // The draft-status read and the overlay must agree about what is eligible.
+    // A second, hand-rolled copy of the predicate decided whether to suppress
+    // the draft-only filter on the live row, and it still excluded a localized
+    // document — so the query filtered a PUBLISHED main row to `status = draft`,
+    // matched nothing, and answered 404 before the overlay could run. The write
+    // had held the edit; the read said the document did not exist.
+    handle = await createTestNextly({
+      localization: { locales: ["en", "es"], defaultLocale: "en" },
+      collections: [
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          localized: true,
+          versions: { drafts: true },
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const entries = handle
+      .getService("collectionsHandler")
+      .getEntryService() as CollectionEntryService;
+    const ctx = { collectionName: COLLECTION, overrideAccess: true };
+
+    await entries.createEntry(ctx, { title: "live", status: "published" });
+    const [row] = await handle.adapter.select<{ id: string }>(TABLE);
+    const id = row.id;
+
+    await entries.updateEntry({ ...ctx, entryId: id }, { title: "edited" });
+    expect(await workingDraftCount(id)).toBe(1);
+
+    const draftView = await entries.getEntry({
+      ...ctx,
+      entryId: id,
+      includeWorkingDraft: true,
+      status: "draft",
+      locale: "en",
+    });
+
+    expect(draftView.success).toBe(true);
+    expect((draftView.data as { title?: string }).title).toBe("edited");
+  });
+
   it("holds a localized edit that names no language, under the default", async () => {
     // A localized document IS eligible for the split, including one whose
     // schema references a component: a snapshot holds one locale's values and

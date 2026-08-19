@@ -215,6 +215,23 @@ function buildComponentValueCondition(
   return valueCondition;
 }
 
+/**
+ * A collection's declared top-level fields.
+ *
+ * The stored record carries them under `schemaDefinition.fields` for a
+ * Builder collection and `fields` for a code-first one. Read through one
+ * function because the draft-overlay decision and the read assembly both need
+ * them, and a second copy of this fallback would be a second place for the two
+ * to disagree about what the collection declares.
+ */
+function collectionFieldsFor(collection: unknown): FieldDefinition[] {
+  const record = collection as Record<string, unknown>;
+  const schemaDefinition = record.schemaDefinition as
+    | Record<string, unknown>
+    | undefined;
+  return (schemaDefinition?.fields || record.fields || []) as FieldDefinition[];
+}
+
 export class CollectionQueryService extends BaseService {
   constructor(
     adapter: DrizzleAdapter,
@@ -1404,13 +1421,7 @@ export class CollectionQueryService extends BaseService {
       const collection = await this.collectionService.getCollection(
         params.collectionName
       );
-      const fields = ((
-        (collection as Record<string, unknown>).schemaDefinition as
-          | Record<string, unknown>
-          | undefined
-      )?.fields ||
-        (collection as Record<string, unknown>).fields ||
-        []) as FieldDefinition[];
+      const fields = collectionFieldsFor(collection);
       const storedHooks = this.hookService.getStoredHooks(
         collection as Record<string, unknown>
       );
@@ -2461,20 +2472,38 @@ export class CollectionQueryService extends BaseService {
       // surface the pending draft. Drop it for a drafts-enabled collection when
       // `includeWorkingDraft` is set; the overlay returns the draft (or the live
       // row when none exists). Every other status filter is applied as usual.
+      // Whether this read could surface a working draft at all, from the same
+      // rule the overlay below uses. Computed ONCE and consulted twice: this
+      // predicate and the overlay must agree about what is eligible, and a
+      // second hand-rolled copy here is exactly how they came apart — it still
+      // excluded a localized document, so a draft-status read filtered a
+      // PUBLISHED main row to `status = draft`, matched nothing, and answered
+      // 404 before the overlay could run. The write had held the edit; the read
+      // said the document did not exist.
+      //
+      // Component schemas are left unresolved to keep the registry reads off the
+      // common path; the confirming check against resolved schemas runs before
+      // any draft is exposed.
+      const draftOverlayPossible = resolveDraftOverlay({
+        ...draftDocumentFacts(collectionForStatus as DraftDocumentConfig),
+        fields: collectionFieldsFor(collectionForStatus) as FieldConfig[],
+        componentSchemas: null,
+        includeWorkingDraft: params.includeWorkingDraft === true,
+        requestedStatus: params.status,
+        // The capability is probed against the loaded row further down; this
+        // asks only whether the document and the request allow an overlay.
+        callerMayEdit: true,
+        requestLocale: params.locale ?? null,
+        defaultLocale: this.localization?.defaultLocale ?? null,
+      }).overlay;
+
+      // An explicit `status: "draft"` view that opts into the working draft must
+      // not filter the live row to draft-only: the split keeps the main row
+      // published, so that predicate would 404 before the overlay can surface
+      // the pending draft. When nothing is overlaid after all, the 404 below
+      // still refuses to return the published row to a draft-only view.
       const suppressDraftStatusFilter =
-        params.includeWorkingDraft === true &&
-        statusFilter?.value === "draft" &&
-        // Only in the split's own domain: a non-localized status collection with
-        // drafts on. Outside it (a localized collection, or one with no status
-        // column) the normal draft predicate must stand, so a draft-status read
-        // still filters correctly and the no-draft 404 below does not apply.
-        (collectionForStatus as { status?: boolean }).status === true &&
-        (collectionForStatus as { localized?: boolean }).localized !== true &&
-        (
-          collectionForStatus as {
-            versions?: { drafts?: { enabled?: boolean } };
-          }
-        ).versions?.drafts?.enabled === true;
+        draftOverlayPossible && statusFilter?.value === "draft";
       const statusCondition =
         statusFilter && schema.status && !suppressDraftStatusFilter
           ? eq(schema.status, statusFilter.value)

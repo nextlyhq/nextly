@@ -857,13 +857,36 @@ export class SingleQueryService extends BaseService {
     );
     if (!workingDraft) return doc;
 
-    const overlaid = shapeDraftSnapshot({
+    const shaped = shapeDraftSnapshot({
       snapshot: workingDraft.snapshot as Record<string, unknown>,
       fields: singleMeta.fields,
       componentSchemas: view.componentSchemas,
       hasSlug: singleMeta.fields.some(f => f.name === "slug"),
       hasTitle: singleMeta.fields.some(f => f.name === "title"),
     }) as unknown as SingleDocument;
+
+    // The snapshot REPLACES the assembled document, so every response-shaping
+    // stage the live read applied has to be applied to it too — otherwise a
+    // drafted Single comes back in a different shape from a published one, and
+    // an afterRead hook receives a serialized string where it expects an object.
+    // The snapshot stores JSON-backed fields serialized and relations as ids,
+    // exactly as the live row does, so the same stages restore both.
+    let overlaid = this.deserializeJsonFields(shaped, singleMeta.fields);
+    overlaid = await this.expandUploadFields(
+      overlaid,
+      singleMeta.fields,
+      expansionAccess(options)
+    );
+    overlaid = await this.expandRelationshipFields(
+      overlaid,
+      singleMeta.fields,
+      options.depth,
+      expansionAccess(options)
+    );
+    // Component POPULATION is deliberately NOT re-run, mirroring the collection
+    // overlay. The snapshot already carries the draft's own component values;
+    // re-reading them from their tables would replace the pending edits with
+    // live content, which is the one thing an overlay must not do.
 
     // The flag the editor reads to show "Changed" and offer Discard. Set only
     // when a draft was actually overlaid, so a read of a language with no

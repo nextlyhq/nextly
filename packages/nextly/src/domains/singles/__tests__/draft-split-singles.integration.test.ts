@@ -14,7 +14,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineSingle, text } from "../../../config";
+import { defineSingle, group, text } from "../../../config";
 import {
   createTestNextly,
   type TestNextly,
@@ -42,6 +42,27 @@ async function bootPlain(): Promise<TestNextly> {
         // `overrideAccess`, so these rules do not change what they exercise.
         access: { read: () => true, update: () => true },
         fields: [text({ name: "siteName" }), text({ name: "tagline" })],
+      }),
+    ],
+  });
+  return current;
+}
+
+async function bootWithGroup(): Promise<TestNextly> {
+  current = await createTestNextly({
+    singles: [
+      defineSingle({
+        slug: SLUG,
+        status: true,
+        versions: { drafts: true },
+        access: { read: () => true, update: () => true },
+        fields: [
+          text({ name: "siteName" }),
+          group({
+            name: "seo",
+            fields: [text({ name: "metaTitle" })],
+          }),
+        ],
       }),
     ],
   });
@@ -347,6 +368,46 @@ describe("reading a Single's pending change (integration)", () => {
     expect(
       (en.data as { _isWorkingDraft?: boolean })._isWorkingDraft
     ).toBeUndefined();
+  });
+
+  it("returns a JSON-backed field in the same shape a live read does", async () => {
+    // The overlay replaces the assembled document, so every stage the live read
+    // applied has to be applied to the snapshot too. A group is stored
+    // serialized: handing the stored string back gives the editor — and any
+    // afterRead hook — a string where a live read gives an object.
+    const t = await bootWithGroup();
+    const singles = singlesOf(t);
+    await singles.update(
+      SLUG,
+      {
+        siteName: "live",
+        seo: { metaTitle: "live title" },
+        status: "published",
+      },
+      { overrideAccess: true }
+    );
+    const held = await singles.update(
+      SLUG,
+      { seo: { metaTitle: "pending title" } },
+      { overrideAccess: true }
+    );
+    expect(held.success).toBe(true);
+
+    const live = await singles.get(SLUG, { overrideAccess: true });
+    const draft = await singles.get(SLUG, {
+      overrideAccess: true,
+      includeWorkingDraft: true,
+      status: "all",
+    });
+
+    // Asserted against the LIVE read's shape rather than against a literal, so
+    // the two cannot drift apart whatever that shape becomes.
+    expect(typeof (draft.data as { seo?: unknown }).seo).toBe(
+      typeof (live.data as { seo?: unknown }).seo
+    );
+    expect(
+      (draft.data as { seo?: { metaTitle?: string } }).seo?.metaTitle
+    ).toBe("pending title");
   });
 
   it("shows what a publish would ship", async () => {
