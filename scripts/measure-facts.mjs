@@ -5,9 +5,11 @@
 // re-run rather than trust.
 //
 // Cheap facts run on every invocation. Facts needing a forced turbo run are
-// heavy (minutes of CPU) and run only with --full; without it they are listed
-// as not measured in this run, never seeded from memory — an unmeasured row
-// must not look like a measured one.
+// heavy (minutes of CPU) and run only with --full. A cheap run CARRIES the
+// previous file's heavy rows forward verbatim — original command line and
+// revision stamp included — so an old number always names the tree it was
+// read from; a heavy row with no prior measurement is listed as unmeasured
+// rather than invented.
 //
 // Two properties this file holds deliberately:
 // - the command shown in each row is the command that RAN — one
@@ -80,7 +82,7 @@ const facts = [
   {
     id: "pr-scopes",
     what: "PR scopes accepted by the title check (the enforced list; commitlint checks format only, not scope membership)",
-    cmd: "sed -n '/scopes: |/,/requireScope/p' .github/workflows/pr-title.yml | sed '1d;$d' | tr -d ' ' | grep . | awk '/^[a-z0-9-]+$/{print;next}{exit 1}' | tr '\\n' ' '",
+    cmd: "sed -n '/scopes: |/,/requireScope/p' .github/workflows/pr-title.yml | sed '1d;$d' | grep -vE '^ *$' | awk '/^ *[a-z0-9-]+ *$/{gsub(/ +/,\"\");print;next}{exit 1}' | tr '\\n' ' '",
   },
   {
     id: "engines",
