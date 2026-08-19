@@ -34,6 +34,57 @@ export interface EntryFormContextValue {
    * Whether the form is in create mode (vs edit mode).
    */
   isCreateMode: boolean;
+
+  /**
+   * Which family of document this form edits.
+   *
+   * Defaults to `"collection"`, so every existing provider keeps its meaning
+   * without naming it. A Single is not a collection entry — it has exactly one
+   * document, addressed by its own slug — and a consumer that guessed from the
+   * presence of an id would be wrong for a Single that has not been
+   * materialised yet.
+   */
+  kind: "collection" | "single";
+}
+
+/**
+ * Which document a field is being rendered inside.
+ *
+ * The plugin-facing shape, and deliberately NOT a versions scope. A field that
+ * wants to talk to any document API needs to know which document it is in;
+ * versions is one consumer of that and should not get to define the vocabulary
+ * for the rest. Mapping this to whatever a particular API wants is that API's
+ * job.
+ *
+ * `documentId` is absent while a collection entry is being created, because
+ * there is no document yet. A caller that must address one checks for it rather
+ * than inventing a placeholder.
+ *
+ * ## Language is deliberately NOT here
+ *
+ * A document's identity is the same whichever language you are reading it in:
+ * `posts/abc123` in Spanish and in French is one document. Folding the active
+ * locale in would make this answer CHANGE as an author switches language, which
+ * is wrong for every consumer that only wanted to know which document it is —
+ * a related query, a link, a permission check — and convenient for the one that
+ * did want the locale.
+ *
+ * So a surface needing the active language gets its own reader beside this one
+ * rather than a widened `DocumentIdentity`. The admin already resolves it
+ * internally (`useEntryLocaleContext`, `useEditorLocale`); none of that is
+ * exported to plugins yet, and it becomes necessary when anything
+ * plugin-contributed stores something per-language.
+ *
+ * The same reasoning keeps versions out: what a recording is KEYED by —
+ * per author today, per document and locale later — is the versions layer's
+ * decision, made by mapping this identity onto its own scope.
+ */
+export interface DocumentIdentity {
+  kind: "collection" | "single";
+  /** The collection name, or the Single's slug. */
+  slug: string;
+  /** The saved document's id, absent until it has been created once. */
+  documentId?: string;
 }
 
 export interface EntryFormContextProviderProps {
@@ -51,6 +102,9 @@ export interface EntryFormContextProviderProps {
    * Whether the form is in create mode.
    */
   isCreateMode?: boolean;
+
+  /** Which family of document this form edits. Defaults to `"collection"`. */
+  kind?: "collection" | "single";
 
   /**
    * Child components.
@@ -89,6 +143,7 @@ export function EntryFormContextProvider({
   entryId,
   collectionSlug,
   isCreateMode = false,
+  kind = "collection",
   children,
 }: EntryFormContextProviderProps) {
   const value = useMemo(
@@ -96,8 +151,9 @@ export function EntryFormContextProvider({
       entryId,
       collectionSlug,
       isCreateMode,
+      kind,
     }),
-    [entryId, collectionSlug, isCreateMode]
+    [entryId, collectionSlug, isCreateMode, kind]
   );
 
   return (
@@ -172,4 +228,31 @@ export function useEntryFormContext(): EntryFormContextValue {
  */
 export function useOptionalEntryFormContext(): EntryFormContextValue | null {
   return useContext(EntryFormContext);
+}
+
+/**
+ * Which document the surrounding form is editing, or `null` outside one.
+ *
+ * Returns `null` rather than throwing, unlike {@link useEntryFormContext}. A
+ * field component is rendered by the entry editor, by the Single editor, and by
+ * previews and pickers that have no document at all — so "there is no document
+ * here" is an ordinary answer a caller has to handle, not a programming error.
+ * Throwing would make every such caller wrap this in a try/catch, and the ones
+ * that forgot would break the surface they were embedded in.
+ *
+ * @example
+ * ```tsx
+ * const document = useDocumentIdentity();
+ * // Recording anything against a document needs one that exists.
+ * const canRecord = document?.documentId !== undefined;
+ * ```
+ */
+export function useDocumentIdentity(): DocumentIdentity | null {
+  const context = useContext(EntryFormContext);
+  if (!context) return null;
+  return {
+    kind: context.kind,
+    slug: context.collectionSlug,
+    documentId: context.entryId,
+  };
 }

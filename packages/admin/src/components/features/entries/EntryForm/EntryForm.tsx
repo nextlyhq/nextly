@@ -542,6 +542,7 @@ export function EntryForm({
   if (embedded) {
     return (
       <EntryFormContextProvider
+        kind="collection"
         entryId={entry?.id}
         collectionSlug={collection.name}
         isCreateMode={mode === "create"}
