@@ -1013,6 +1013,12 @@ export async function registerServices(
   // ----------------------------------------
   await syncCodeFirstCollections(adapter, resolvedLogger, transformedConfig);
 
+  // Independent of that sync, and deliberately not inside it: an app with no
+  // code-first collections still has Singles whose access functions decide what
+  // its callers may do. Registration only writes to an in-memory map, so it owes
+  // nothing to the table sync above.
+  registerCodeDefinedAccess(transformedConfig);
+
   // ----------------------------------------
   // Layer 5: Sync Code-First Components
   // ----------------------------------------
@@ -1758,6 +1764,36 @@ function logStorageConfiguration(
  * auto-creates their tables so plugin-provided collections work without
  * a separate CLI run.
  */
+/**
+ * Publish every code-defined `access` block to the RBAC service.
+ *
+ * `checkAccess` resolves these from an in-memory registry, and a slug missing
+ * from it falls through to the caller's stored permissions — so a rule that is
+ * never registered does not fail closed, it stops applying. A restrictive
+ * `access.read` silently stops restricting.
+ *
+ * Registration therefore runs for its own reasons rather than as a step of the
+ * collection sync: a config with no code-first collections still has Singles
+ * whose rules have to apply, and the sync returns early for exactly that config.
+ */
+function registerCodeDefinedAccess(
+  transformedConfig: NextlyServiceConfig
+): void {
+  const rbacService = container.get<RBACAccessControlService>(
+    "rbacAccessControlService"
+  );
+  for (const collection of transformedConfig.collections ?? []) {
+    if (collection.access) {
+      rbacService.registerCollectionAccess(collection.slug, collection.access);
+    }
+  }
+  for (const single of transformedConfig.singles ?? []) {
+    if (single.access) {
+      rbacService.registerSingleAccess(single.slug, single.access);
+    }
+  }
+}
+
 async function syncCodeFirstCollections(
   adapter: DrizzleAdapter,
   logger: Logger,
@@ -1865,25 +1901,6 @@ async function syncCodeFirstCollections(
         .map(e => `  - ${e.slug}: ${e.error}`)
         .join("\n");
       throw new Error(`Failed to register collections:\n${errorDetails}`);
-    }
-  }
-
-  // Register code-defined access control configs with RBAC service.
-  // Access functions are stored in-memory (not DB) and auto-resolved
-  // during checkAccess().
-  const rbacService = container.get<RBACAccessControlService>(
-    "rbacAccessControlService"
-  );
-  for (const collection of transformedConfig.collections) {
-    if (collection.access) {
-      rbacService.registerCollectionAccess(collection.slug, collection.access);
-    }
-  }
-  if (transformedConfig.singles) {
-    for (const single of transformedConfig.singles) {
-      if (single.access) {
-        rbacService.registerSingleAccess(single.slug, single.access);
-      }
     }
   }
 
