@@ -44,8 +44,13 @@ export function quoteForCmd(arg) {
  * Every other platform keeps the direct spawn it always had: pnpm is a real
  * executable, no shell means no quoting rules, and the arguments pass through
  * untouched. Linux and macOS therefore behave exactly as they did before this
- * function existed — which is also why CI, being Linux, could never have
- * caught the Windows fault.
+ * function existed.
+ *
+ * CI did not catch the Windows fault, but not for want of Windows: `ci.yml`
+ * runs `dev-script-smoke` and `Scaffold smoke` on windows-latest today. The
+ * real gap is narrower, and worth stating exactly because it names the matrix
+ * a future job would extend — no CI job runs `dev-playground.mjs` on ANY
+ * platform, so the wrapper is unexercised everywhere, not only on Linux.
  *
  * @param {string[]} args - arguments to pnpm.
  * @param {string} platform - a `process.platform` value.

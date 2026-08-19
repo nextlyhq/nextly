@@ -6,7 +6,8 @@
  * and two Node behaviours then compound: spawn without a shell skips PATHEXT
  * (ENOENT), and naming pnpm.cmd instead is refused outright by the BatBadBut
  * mitigation (EINVAL). So dev:app, dev:postgres and dev:mysql could not start
- * at all, while CI stayed green because CI is Linux.
+ * at all, while CI stayed green — not for want of Windows, which the matrix
+ * has, but because no CI job runs the wrapper on any platform.
  *
  * Going through a shell is therefore forced on Windows, and quoting is the
  * price of it: with shell: true Node escapes nothing, and the seed step passes
@@ -16,7 +17,7 @@
  *
  * @module pnpm-invocation.test
  */
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -26,6 +27,8 @@ import { pnpmInvocation, quoteForCmd } from "./pnpm-invocation.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WRAPPER = path.join(HERE, "dev-playground.mjs");
+const MODULE = path.join(HERE, "pnpm-invocation.mjs");
+const WORKFLOWS = path.join(HERE, "..", ".github", "workflows");
 
 describe("pnpmInvocation on POSIX", () => {
   it.each(["linux", "darwin", "freebsd"])(
@@ -104,6 +107,39 @@ describe("quoteForCmd", () => {
 
   it("doubles an embedded quote, as cmd.exe expects", () => {
     expect(quoteForCmd('a "b" c')).toBe('"a ""b"" c"');
+  });
+});
+
+describe("what CI does and does not cover", () => {
+  // The module's docblock tells the next reader where coverage could go. Two
+  // facts make it true, and both live in a file this module cannot see, so
+  // they are pinned here rather than trusted to stay put.
+  it("still has the windows-latest legs the docblock points at", async () => {
+    const ci = await readFile(path.join(WORKFLOWS, "ci.yml"), "utf-8");
+
+    expect(ci).toContain("dev-script-smoke");
+    expect(ci).toContain("windows-latest");
+  });
+
+  it("still runs the wrapper on no platform at all", async () => {
+    // The narrow, accurate claim: unexercised everywhere, not only on Linux.
+    // A workflow that starts running it makes the docblock wrong, and this
+    // is the only place that would notice.
+    const names = await readdir(WORKFLOWS);
+
+    const running = [];
+    for (const name of names) {
+      const body = await readFile(path.join(WORKFLOWS, name), "utf-8");
+      if (body.includes("dev-playground")) running.push(name);
+    }
+
+    expect(running).toEqual([]);
+  });
+
+  it("does not claim CI is Linux-only", async () => {
+    const source = await readFile(MODULE, "utf-8");
+
+    expect(source).not.toMatch(/CI, being Linux/);
   });
 });
 
