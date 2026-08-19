@@ -24,6 +24,7 @@ import type {
   VersionsWhereCondition,
 } from "./db-api";
 import type { PrunableVersion } from "./retention";
+import { workingDraftKey } from "./working-draft-key";
 
 const TABLE = "nextly_versions";
 
@@ -282,31 +283,39 @@ export class VersionsRepository {
       );
       return;
     }
-    await this.db.insert(
-      TABLE,
-      {
-        id: crypto.randomUUID(),
-        scopeKind: input.ref.scopeKind,
-        scopeSlug: input.ref.scopeSlug,
-        entryId: input.ref.entryId,
-        // A working draft is neither a durable history version (no sequence
-        // number) nor an autosave row; it is the sidecar draft head.
-        versionNo: null,
-        status: "draft",
-        isAutosave: false,
-        // Pre-stringified for the same cross-dialect reason as insertVersion:
-        // the transaction insert path binds this value straight into the driver
-        // query with no column-type awareness.
-        snapshot: serializedSnapshot,
-        label: null,
-        locale: input.locale ?? null,
-        sourceVersionNo: null,
-        createdBy: input.createdBy ?? null,
-        createdAt: now,
-        updatedAt: now,
-      },
-      { returning: [] }
-    );
+    const row = {
+      id: crypto.randomUUID(),
+      scopeKind: input.ref.scopeKind,
+      scopeSlug: input.ref.scopeSlug,
+      entryId: input.ref.entryId,
+      // A working draft is neither a durable history version (no sequence
+      // number) nor an autosave row; it is the sidecar draft head.
+      versionNo: null,
+      status: "draft",
+      isAutosave: false,
+      // Pre-stringified for the same cross-dialect reason as insertVersion:
+      // the transaction insert path binds this value straight into the driver
+      // query with no column-type awareness.
+      snapshot: serializedSnapshot,
+      label: null,
+      locale: input.locale ?? null,
+      // Carried only by this row class, and unique across it, so the database
+      // holds the one-per-document-per-locale rule the read above cannot.
+      draftKey: workingDraftKey(input.ref, input.locale ?? null),
+      sourceVersionNo: null,
+      createdBy: input.createdBy ?? null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    // A concurrent writer that committed its own draft between the read above
+    // and this insert makes the unique index refuse this row. That refusal is
+    // the point: without it both rows land and a later read, which takes the
+    // first of an unordered match, picks between them arbitrarily. The
+    // violation is left to travel — the write path above this owns turning it
+    // into an answer the caller can act on, and a repository has no way to know
+    // whether it is inside a caller's transaction, where PostgreSQL has already
+    // marked everything after the error unusable.
+    await this.db.insert(TABLE, row, { returning: [] });
   }
 
   /** Fetch the working draft (snapshot included) for a document in one locale. */
