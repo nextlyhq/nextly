@@ -28,6 +28,24 @@ export { useDocumentIdentity, type DocumentIdentity } from "@nextlyhq/admin";
 export type { ComponentPath } from "@nextlyhq/admin";
 
 /**
+ * Which language the surrounding document is being edited in (@experimental).
+ *
+ * A field inside a localized document can say WHICH document it is in but not
+ * which language its value belongs to, so anything keyed per language — a
+ * per-language draft, a translation memory, a language-scoped preview — had no
+ * way to ask.
+ *
+ * Separate from `useDocumentIdentity` rather than folded into it: a document's
+ * identity is the same whichever language you read it in, and widening the
+ * identity would re-render every consumer of it on a language switch.
+ *
+ * `null` means the language is not knowable here — outside a form, and inside
+ * one that carries no locale context, such as an embedded quick-edit. It is an
+ * ordinary answer to handle, not an error.
+ */
+export { useDocumentLocale, type DocumentLocale } from "@nextlyhq/admin";
+
+/**
  * How the surrounding document stands (@experimental).
  *
  * For a field that covers the editor's own chrome — the page builder takes the
