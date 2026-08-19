@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { CANONICAL_TYPE_TOKENS } from "../diff/normalize-type";
 import {
   isTypesCompatible,
   typeFamilyOf,
@@ -134,5 +135,41 @@ describe("isTypesCompatible - symmetry", () => {
     expect(isTypesCompatible("text", "integer", "postgresql")).toBe(
       isTypesCompatible("integer", "text", "postgresql")
     );
+  });
+});
+
+// Two implementations answer "which spellings mean one type", and only one is consulted when a
+// rename decides whether to move the data.
+//
+//   normalizeType   collapses aliases to a canonical token — the string PostgreSQL introspection
+//                   actually reports, because `udt_name` names the underlying type
+//   PG_FAMILIES     is keyed by SPELLING, so it recognises only what it happens to list
+//
+// A spelling the family table lists but introspection never returns is dead weight; a canonical
+// token it omits is worse — that column is incompatible with ITSELF, because `typeFamilyOf` answers
+// null for both sides of the pair and the detector falls to drop_and_add. It recreates the column
+// empty for a change the diff says is not a change.
+//
+// Asserted over the alias TARGETS rather than a hand-written list of types, so it is complete over
+// the set where the two implementations can disagree at all: a non-aliased token passes through
+// `normalizeType` unchanged and so already matches whatever the table lists. Adding an alias now
+// forces a family decision here rather than failing silently on a live database.
+describe("every canonical type token PostgreSQL introspection can report has a family", () => {
+  it("leaves no canonical token without one", () => {
+    // 🔴 The population is asserted by MEMBERSHIP, not by size. The assertion below passes on an
+    // empty filter result, which a float-less token set satisfies perfectly — so a later edit to
+    // `TYPE_ALIASES` dropping the float entries would leave this green while removing the very pair
+    // it exists to watch. Naming them is what makes that edit fail here.
+    expect(
+      CANONICAL_TYPE_TOKENS,
+      "the floating-point canonical tokens this check exists to cover"
+    ).toEqual(expect.arrayContaining(["float8", "float4"]));
+
+    expect(
+      CANONICAL_TYPE_TOKENS.filter(
+        token => typeFamilyOf(token, "postgresql") === null
+      ),
+      "introspection reports these spellings and the rename detector does not recognise them — a rename between two columns of such a type drops the data"
+    ).toEqual([]);
   });
 });
