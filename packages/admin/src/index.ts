@@ -91,6 +91,19 @@ export {
   useDocumentIdentity,
   type DocumentIdentity,
 } from "./components/features/entries/EntryForm/EntryFormContext";
+/**
+ * Put a contributed surface's live state somewhere a crash cannot take it.
+ *
+ * Exported for the plugin surface alongside the identity above: a field holding
+ * its own editing state has work at risk that the form cannot see, because that
+ * state does not reach the form until the surface commits it.
+ */
+export {
+  useDocumentCheckpoint,
+  type UseDocumentCheckpointOptions,
+  type UseDocumentCheckpointResult,
+  type AutosaveStatus,
+} from "./hooks/useDocumentCheckpoint";
 export { Can } from "./components/guards/Can";
 export type { CanProps } from "./components/guards/Can";
 export { useRowSelection } from "./hooks/useRowSelection";

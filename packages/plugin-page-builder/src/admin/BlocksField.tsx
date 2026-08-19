@@ -55,10 +55,14 @@ import {
   useCanvasDrag,
   useEditorState,
 } from "@nextlyhq/builder/shell";
-import { useSuppressAdminChrome } from "@nextlyhq/plugin-sdk/admin";
-import { useCallback, useMemo, useState } from "react";
+import {
+  useDocumentCheckpoint,
+  useSuppressAdminChrome,
+} from "@nextlyhq/plugin-sdk/admin";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   useController,
+  useWatch,
   type Control,
   type FieldValues,
   type Path,
@@ -68,6 +72,7 @@ import { emptyBlockDocument } from "../fields/blocks-document";
 import { siteSheet } from "../site-style";
 
 import { BlocksSummary } from "./BlocksSummary";
+import { withValueAtPath } from "./snapshot-merge";
 
 export interface BlocksFieldProps<
   TFieldValues extends FieldValues = FieldValues,
@@ -211,6 +216,10 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
       initialValue={field.value}
       onCommit={field.onChange}
       onClose={() => setOpen(false)}
+      // Named and controlled so the editor can record its live document as
+      // part of the whole document's recovery point — see `useCheckpoints`.
+      name={name}
+      control={control}
     />
   ) : (
     <div className="flex flex-col gap-3">
@@ -239,6 +248,54 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
 }
 
 /**
+ * Record the LIVE document as this author's recovery point while the editor is
+ * open.
+ *
+ * The form cannot do this for itself. Its own recording writes the values it
+ * holds, and this field's value is deliberately not among them until the editor
+ * exits — so an author who spends twenty minutes laying out a page and then
+ * loses the tab has, from the form's point of view, changed nothing at all. The
+ * recording is what closes that gap; the commit-on-exit rule above is what
+ * makes it necessary, and neither is a workaround for the other.
+ *
+ * Recorded as the WHOLE document rather than as this field alone, because
+ * restoring a recovery point replaces the form's values wholesale: a snapshot
+ * carrying only the layout would restore cleanly and blank the title beside it.
+ *
+ * The very document the editor opened with is deliberately not recorded. It is
+ * what the server already holds, and storing it would offer the author their
+ * own unmodified page back as "unsaved changes from a moment ago".
+ */
+function useCheckpoints<TFieldValues extends FieldValues>({
+  name,
+  control,
+  document,
+}: {
+  name: Path<TFieldValues>;
+  control: Control<TFieldValues>;
+  document: BlockDocument;
+}): void {
+  const values = useWatch({ control });
+  const snapshot = useMemo(
+    () => withValueAtPath(values as Record<string, unknown>, name, document),
+    [values, name, document]
+  );
+
+  const { schedule } = useDocumentCheckpoint({ snapshot });
+
+  /*
+   * A new document object is what an edit produces — the editor's state is
+   * replaced rather than mutated — so reference inequality is the signal, and
+   * a render caused by anything else asks for nothing.
+   */
+  const openedWith = useRef(document);
+  useEffect(() => {
+    if (document === openedWith.current) return;
+    schedule();
+  }, [document, schedule]);
+}
+
+/**
  * The editor itself, mounted only while open.
  *
  * Separate component so the hooks below — editor state, and the chrome request
@@ -246,14 +303,18 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
  * ask the admin to hide its navigation for every entry form holding a blocks
  * field, open or not.
  */
-function BlocksEditor({
+function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   initialValue,
   onCommit,
   onClose,
+  name,
+  control,
 }: {
   initialValue: unknown;
   onCommit: (value: BlockDocument) => void;
   onClose: () => void;
+  name: Path<TFieldValues>;
+  control: Control<TFieldValues>;
 }) {
   // Before anything reads the registry. Inside the component that mounts the
   // editor rather than at module scope: this file is imported by the field
@@ -279,6 +340,8 @@ function BlocksEditor({
   const slots = useMemo(registrySlotSource, []);
   const nesting = useMemo(registryNestingSource, []);
   const drag = useCanvasDrag({ editor, slots, nesting });
+
+  useCheckpoints({ name, control, document: editor.document });
 
   /*
    * Writing back on the way out rather than on every keystroke.

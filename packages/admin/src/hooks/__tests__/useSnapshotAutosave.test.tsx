@@ -244,3 +244,150 @@ describe("the identity is opaque, and it bounds a pending recording", () => {
     await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
   });
 });
+
+describe("a refusal is not asked again", () => {
+  /** The shape `parseApiError` gives every non-2xx response. */
+  function refused(status: number) {
+    const error = new Error("nope") as Error & { status: number };
+    error.status = status;
+    return error;
+  }
+
+  it("stops asking after the server refuses", async () => {
+    // Recording is opt-in per entity and enforced on the server, so an entity
+    // whose owner has not enabled it answers identically every time. Without
+    // this the editor collects one rejected request every debounce for as long
+    // as it stays open.
+    const save = vi.fn(() => Promise.reject(refused(403)));
+    const { result } = renderHook(() =>
+      useSnapshotAutosave({ identity: "doc-1", save, debounceMs: DEBOUNCE })
+    );
+
+    act(() => result.current.schedule());
+    act(() => void vi.advanceTimersByTime(DEBOUNCE));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+
+    act(() => result.current.schedule());
+    act(() => void vi.advanceTimersByTime(DEBOUNCE * 3));
+
+    expect(save).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps trying after a failure that is not an answer, which is the control", async () => {
+    // Without this, the case above passes on a core that stops recording after
+    // ANY rejection — which would silently give up on a document because one
+    // request timed out.
+    const save = vi.fn(() => Promise.reject(new Error("network")));
+    const { result } = renderHook(() =>
+      useSnapshotAutosave({ identity: "doc-1", save, debounceMs: DEBOUNCE })
+    );
+
+    act(() => result.current.schedule());
+    act(() => void vi.advanceTimersByTime(DEBOUNCE));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+
+    act(() => result.current.schedule());
+    act(() => void vi.advanceTimersByTime(DEBOUNCE));
+
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+  });
+
+  it("treats a server fault as retryable, not as a refusal", async () => {
+    // 5xx is not an answer about this request; asking again can produce a
+    // different one. Only the 4xx class is a settled no.
+    const save = vi.fn(() => Promise.reject(refused(500)));
+    const { result } = renderHook(() =>
+      useSnapshotAutosave({ identity: "doc-1", save, debounceMs: DEBOUNCE })
+    );
+
+    act(() => result.current.schedule());
+    act(() => void vi.advanceTimersByTime(DEBOUNCE));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+
+    act(() => result.current.schedule());
+    act(() => void vi.advanceTimersByTime(DEBOUNCE));
+
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+  });
+
+  it("keeps trying after a 401, which the session refresh may yet fix", async () => {
+    // The admin refreshes an expired token and retries underneath this module,
+    // so a 401 reaching here means the REFRESH failed — for a reason that may
+    // not last. Latching would stop recording for the rest of a session whose
+    // credentials were never actually rejected.
+    const save = vi.fn(() => Promise.reject(refused(401)));
+    const { result } = renderHook(() =>
+      useSnapshotAutosave({ identity: "doc-1", save, debounceMs: DEBOUNCE })
+    );
+
+    act(() => result.current.schedule());
+    act(() => void vi.advanceTimersByTime(DEBOUNCE));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+
+    act(() => result.current.schedule());
+    act(() => void vi.advanceTimersByTime(DEBOUNCE));
+
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+  });
+
+  it("keeps trying after a rate limit, which is a later-not-never", async () => {
+    const save = vi.fn(() => Promise.reject(refused(429)));
+    const { result } = renderHook(() =>
+      useSnapshotAutosave({ identity: "doc-1", save, debounceMs: DEBOUNCE })
+    );
+
+    act(() => result.current.schedule());
+    act(() => void vi.advanceTimersByTime(DEBOUNCE));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+
+    act(() => result.current.schedule());
+    act(() => void vi.advanceTimersByTime(DEBOUNCE));
+
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+  });
+
+  it("shows a refusal as idle rather than as an error", async () => {
+    // An entity whose owner never turned recording on has not failed at
+    // anything, and an indicator stuck on "Couldn't save" would report a
+    // policy as a fault over an editor whose work is not at risk that way.
+    const save = vi.fn(() => Promise.reject(refused(403)));
+    const { result } = renderHook(() =>
+      useSnapshotAutosave({ identity: "doc-1", save, debounceMs: DEBOUNCE })
+    );
+
+    act(() => result.current.schedule());
+    act(() => void vi.advanceTimersByTime(DEBOUNCE));
+
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    expect(result.current.status).toBe("idle");
+  });
+
+  it("asks again under a new identity", async () => {
+    // The refusal belonged to that document. Another document is another
+    // entity with its own setting and its own access, so inheriting the answer
+    // would disable recording on a document nobody has refused.
+    const save = vi.fn(() => Promise.reject(refused(403)));
+    const { result, rerender } = renderHook(
+      ({ id }: { id: string }) =>
+        useSnapshotAutosave({ identity: id, save, debounceMs: DEBOUNCE }),
+      { initialProps: { id: "doc-1" } }
+    );
+
+    act(() => result.current.schedule());
+    act(() => void vi.advanceTimersByTime(DEBOUNCE));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+
+    // The latch is ON first. Without asserting that here, this case passes on a
+    // core that never latches at all: "it asked again" is satisfied perfectly
+    // by never having stopped.
+    act(() => result.current.schedule());
+    act(() => void vi.advanceTimersByTime(DEBOUNCE));
+    expect(save).toHaveBeenCalledTimes(1);
+
+    rerender({ id: "doc-2" });
+    act(() => result.current.schedule());
+    act(() => void vi.advanceTimersByTime(DEBOUNCE));
+
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+  });
+});
