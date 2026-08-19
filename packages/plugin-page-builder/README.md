@@ -32,7 +32,7 @@ export default defineConfig({
 });
 ```
 
-This contributes a `pages` collection (title, slug, `content` block tree, `customCss`,
+This contributes a `pages` collection (title, slug, `content` block tree,
 draft/publish status) whose Edit view is the page builder.
 
 ### 2. Add the public render route
@@ -163,9 +163,6 @@ Colors may be raw values or design-token references (`{ token: "color.primary" }
 `var(--nx-color-primary)`). Breakpoints are desktop-first; per-breakpoint overrides are
 edited in the **Responsive** tab and visible at real device widths in the iframe canvas.
 
-Page-level **custom CSS** is parsed, allow-listed, and scoped under the page root — no
-`@import`, no `javascript:` urls, no `</style>` breakout.
-
 ## Extending — add your own block
 
 The block registry is the extensibility seam. One `defineBlock` call describes the
@@ -217,7 +214,9 @@ newer definition than this build registers is left exactly as found.
 
 - Text is escaped; image/link/video URLs are scheme-validated (rejects `javascript:` /
   `vbscript:` / `data:`, including control-char-obfuscated variants).
-- Custom CSS is parser-validated, scoped, and allow-listed.
+- There is no author-written CSS surface. A `customCss` field existed, gated by
+  its own permission, and nothing rendered or sanitized what it stored; it was
+  removed rather than left one line away from reaching a page.
 - Structural limits: max depth, max node count, unique ids, no move-into-descendant,
   namespaced types, slot allow-lists.
 - The renderer's root entry imports no CMS runtime, no admin code and no `next/*`
