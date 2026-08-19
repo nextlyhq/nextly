@@ -65,15 +65,17 @@ describe("schemaDraftsEnabled", () => {
     ).resolves.toBe(true);
   });
 
-  it("is false for a localized component without failing", async () => {
+  it("is true for a localized component", async () => {
     getComponentBySlugSpy.mockResolvedValue({
       fields: [{ name: "heading", type: "text" }],
       localized: true,
     });
 
+    // A localized component is representable: a snapshot holds one locale's
+    // values and the draft is keyed by that locale.
     await expect(
       schemaDraftsEnabled(draftsCollection(componentFields))
-    ).resolves.toBe(false);
+    ).resolves.toBe(true);
   });
 
   it("never touches the registry when the collection has no components", async () => {

@@ -1023,7 +1023,14 @@ export class CollectionMutationService extends BaseService {
     collectionName: string,
     entryData: Record<string, unknown>,
     locale: string | undefined,
-    isCreate: boolean
+    isCreate: boolean,
+    /**
+     * Transaction-bound executor, when this runs inside a caller's transaction.
+     * The companion metadata read would otherwise check out a second pooled
+     * connection the open transaction is holding, which stalls against a small
+     * pool.
+     */
+    executor?: unknown
   ): Promise<{
     companionTableName: string;
     writeLocale: string;
@@ -1039,8 +1046,10 @@ export class CollectionMutationService extends BaseService {
     hasStatus: boolean;
   } | null> {
     if (!this.localization) return null;
-    const companion =
-      await this.fileManager.loadCompanionSchema(collectionName);
+    const companion = await this.fileManager.loadCompanionSchema(
+      collectionName,
+      executor
+    );
     if (!companion) return null;
 
     // Route to the companion ONLY when it physically exists (the migration has run). Before
@@ -4483,7 +4492,6 @@ export class CollectionMutationService extends BaseService {
     const componentSchemas =
       collectionHasStatus &&
       versionsConfig?.drafts?.enabled === true &&
-      !documentLocalized &&
       !hasPasswordField(args.fields)
         ? await resolveComponentSchemas(args.fields as unknown as FieldConfig[])
         : null;
@@ -5079,7 +5087,7 @@ export class CollectionMutationService extends BaseService {
       // body — see the create path.
       const intendedStatus = finalData.status;
 
-      const localizedUpdate = await this.splitLocalizedWriteData(
+      let localizedUpdate = await this.splitLocalizedWriteData(
         params.collectionName,
         finalData,
         params.locale,
@@ -5097,7 +5105,7 @@ export class CollectionMutationService extends BaseService {
       // companion `_status` the split produced (a string only when one was
       // provided), otherwise the main-row status.
       const transitionNextStatus = isNonDefaultLocaleStatusWrite
-        ? localizedUpdate.companionData._status
+        ? localizedUpdate?.companionData._status
         : intendedStatus;
       // Resolve the one publish permission this write could require — keyed on
       // the status it will persist — BEFORE the transaction opens, so the RBAC
@@ -5213,7 +5221,6 @@ export class CollectionMutationService extends BaseService {
       const splitComponentSchemas =
         collectionHasStatus &&
         versionsConfig?.drafts?.enabled === true &&
-        !documentLocalized &&
         !hasPasswordField(fields)
           ? await resolveComponentSchemas(fields as unknown as FieldConfig[])
           : null;
@@ -5228,7 +5235,6 @@ export class CollectionMutationService extends BaseService {
       const splitEnabled = isDraftSplitEligible({
         collectionHasStatus,
         draftsVersioningEnabled: versionsConfig?.drafts?.enabled === true,
-        documentLocalized,
         fields: fields as unknown as FieldConfig[],
         componentSchemas: splitComponentSchemas,
       });
@@ -5277,9 +5283,11 @@ export class CollectionMutationService extends BaseService {
             hasTitle:
               !isPluginForRestore || fields.some(f => f.name === "title"),
             componentSchemas: splitComponentSchemas ?? undefined,
-            // The split is non-localized-only, so the document holds no per-locale
-            // values and the snapshot's locale is the resolved request locale.
-            documentLocalized: false,
+            documentLocalized,
+            // A working draft always knows which language it holds: it is keyed
+            // by that language, and a write that cannot name one does not store
+            // a draft at all. So the snapshot's locale is never the unknown one
+            // here, and its translatable values need not be held back.
             localeUnknown: false,
           }
         : null;
@@ -5795,6 +5803,27 @@ export class CollectionMutationService extends BaseService {
               finalData = mergedPromoteData;
               componentFieldData = draftParts.componentFieldData;
               manyToManyData = draftParts.manyToManyData;
+              // Rebuild the companion payload from the promoted document, and
+              // do it BEFORE the main-row payload is taken: the split moves a
+              // localized field out of the document and into the companion, so
+              // taking the main payload first would carry translated values to
+              // the main table, which has no column for them.
+              //
+              // It was originally split from the CALLER's patch before this
+              // transaction, and a publish carries no content of its own — so
+              // without this the draft's translated values never reach the
+              // language's row at all and the translation publishes unchanged.
+              //
+              // Bound to this transaction's executor: the companion metadata
+              // read would otherwise take a second pooled connection that this
+              // open transaction is holding.
+              localizedUpdate = await this.splitLocalizedWriteData(
+                params.collectionName,
+                finalData,
+                draftLocaleKey ?? params.locale,
+                false,
+                tx.getDrizzle()
+              );
               updatePayload = {
                 ...stripImmutableSystemFields(finalData, "collection"),
                 updatedAt: updatePayload.updatedAt,
@@ -6425,7 +6454,7 @@ export class CollectionMutationService extends BaseService {
                 localizedStatusRecorded = await this.recordStatusEvents(tx, {
                   collection: params.collectionName,
                   id: params.entryId,
-                  locale: localizedUpdate.writeLocale,
+                  locale: localizedUpdate?.writeLocale,
                   from: localizedPreviousStatus,
                   to: companionNext,
                   isCreate: false,
