@@ -57,6 +57,10 @@ coverage
 .next/
 # Build directory for the browser suite's own dev server (see e2e/playwright.config.ts).
 .next-e2e/
+# And for the production exit demo, which builds rather than serving from source
+# (see e2e/playwright.production.config.ts). A separate directory because two
+# Next processes on one app fight over the same one.
+.next-e2e-prod/
 out/
 build
 dist
