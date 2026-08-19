@@ -6,14 +6,9 @@ import { useState } from "react";
 import { FormProvider, useForm } from "react-hook-form";
 import { z } from "zod";
 
-import {
-  Eye,
-  EyeOff,
-  ArrowRight,
-  Loader2,
-  Mail,
-} from "@admin/components/icons";
+import { ArrowRight, Loader2, Mail } from "@admin/components/icons";
 import { AuthFormCard } from "@admin/components/shared/auth/AuthFormCard";
+import { PasswordVisibilityToggle } from "@admin/components/shared/auth/PasswordVisibilityToggle";
 import { toast } from "@admin/components/ui";
 import {
   FormControl,
@@ -295,18 +290,10 @@ export function Login() {
                           className="pr-10 h-11 rounded-md border-input"
                         />
                       </FormControl>
-                      <button
-                        type="button"
-                        onClick={() => setShowPassword(!showPassword)}
-                        tabIndex={-1}
-                        className="absolute cursor-pointer right-3 top-1/2 transform -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                      >
-                        {showPassword ? (
-                          <EyeOff className="h-5 w-5" />
-                        ) : (
-                          <Eye className="h-5 w-5" />
-                        )}
-                      </button>
+                      <PasswordVisibilityToggle
+                        visible={showPassword}
+                        onToggle={() => setShowPassword(!showPassword)}
+                      />
                     </div>
                     <div className="flex justify-end">
                       <Link
