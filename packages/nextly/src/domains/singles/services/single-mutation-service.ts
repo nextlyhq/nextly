@@ -1094,6 +1094,7 @@ export class SingleMutationService extends BaseService {
                 namedStatus: (updatePayload as Record<string, unknown>).status,
                 liveStatus: singleLiveStatus,
                 requestLocale: writeLocale ?? null,
+                defaultLocale: this.localization?.defaultLocale ?? null,
               });
 
             // Publishing folds this language's pending change into the write.

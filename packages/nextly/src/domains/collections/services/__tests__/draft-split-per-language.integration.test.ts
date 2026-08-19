@@ -195,4 +195,24 @@ describe("pending changes per language (integration)", () => {
     expect(await pendingLocales(id)).toEqual(["en"]);
     expect(await readBody(entries, id, "en")).toBe("en body");
   });
+
+  it("holds an edit that names no language, under the default", async () => {
+    // The admin omits `?locale=` when editing the default language, so this is
+    // the ordinary path rather than an edge case. A localized document whose
+    // request names no locale still lands somewhere — the default language —
+    // and its pending change has to key there too. Treating "unnamed" as
+    // "unknown" refuses the hold and puts the edit straight on the live site,
+    // which is the opposite of what the author asked for.
+    const entries = await boot();
+    const id = await publishBoth(entries);
+
+    const res = await entries.updateEntry(
+      { collectionName: COLLECTION, entryId: id, overrideAccess: true },
+      { body: "edited with no locale named" }
+    );
+    expect(res.success).toBe(true);
+
+    expect(await pendingLocales(id)).toEqual(["en"]);
+    expect(await readBody(entries, id, "en")).toBe("en body");
+  });
 });

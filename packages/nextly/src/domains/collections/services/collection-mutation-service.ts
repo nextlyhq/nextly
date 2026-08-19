@@ -1539,6 +1539,7 @@ export class CollectionMutationService extends BaseService {
           documentLocalized:
             (collection as { localized?: boolean }).localized === true,
           requestLocale: params.locale ?? null,
+          defaultLocale: this.localization?.defaultLocale ?? null,
         })
       );
     });
@@ -4504,6 +4505,7 @@ export class CollectionMutationService extends BaseService {
       namedStatus: args.namedStatus,
       liveStatus: args.liveStatus,
       requestLocale: args.requestLocale,
+      defaultLocale: this.localization?.defaultLocale ?? null,
     });
     return { hold, componentSchemas, draftLocale };
   }
@@ -5210,6 +5212,7 @@ export class CollectionMutationService extends BaseService {
       const draftLocaleKey = workingDraftLocale({
         documentLocalized,
         requestLocale: params.locale ?? null,
+        defaultLocale: this.localization?.defaultLocale ?? null,
       });
       // The component schemas reachable from this collection, resolved once off
       // the transaction (registry reads on the pooled connection, the same reason
@@ -5626,6 +5629,7 @@ export class CollectionMutationService extends BaseService {
             namedStatus: namesNoStatus ? undefined : transitionNextStatus,
             liveStatus: draftLiveStatus,
             requestLocale: params.locale ?? null,
+            defaultLocale: this.localization?.defaultLocale ?? null,
           }).hold;
 
           // TOCTOU-safe authorization: classify the transition against the

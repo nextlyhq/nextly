@@ -2719,6 +2719,7 @@ export class CollectionQueryService extends BaseService {
             documentLocalized:
               (collection as { localized?: boolean }).localized === true,
             requestLocale: params.locale ?? null,
+            defaultLocale: this.localization?.defaultLocale ?? null,
           })
         );
         // Mirror the write gate's eligibility check before overlaying: a
