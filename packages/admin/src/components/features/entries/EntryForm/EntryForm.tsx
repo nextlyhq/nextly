@@ -505,10 +505,20 @@ export function EntryForm({
     scope: autosaveScope,
     form,
     locale: locale ?? null,
-    // Held off while a real save is in flight. The document is about to change
-    // underneath the snapshot, so a recovery point written now would describe a
-    // state that never existed.
-    enabled: !isSubmitting,
+    /*
+     * Held off while a real save is in flight: the document is about to change
+     * underneath the snapshot, so a recovery point written now would describe a
+     * state that never existed.
+     *
+     * And held off while a PAST VERSION is on screen, which is the sharper
+     * case. Choosing a version replaces the form's values, so the form goes
+     * dirty exactly as it would for typing — and recording that stores an old
+     * version as this author's unsaved work. The offer on the next visit then
+     * reads "you have unsaved changes", and accepting it silently reverts the
+     * document to whatever the reader happened to be looking at. Reading is not
+     * editing, and the write is the only part of that which is recoverable.
+     */
+    enabled: !isSubmitting && viewingVersion === null,
   });
   const linkLocale = previewLinkLocale({
     localized: collection.localized === true,
