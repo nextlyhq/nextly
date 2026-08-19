@@ -138,4 +138,38 @@
   //     `dependsOn: ["^build"]` builds them before Playwright boots the
   //     playground, which does use them. Without the declaration the suite
   //     starts against a stale or missing dist.
+
+  // Clone groups that have been read and kept. A key is
+  // `<fingerprint>:<instance-count>`, and the fingerprint is derived from the
+  // tokens of the group itself, so editing either instance — or a third
+  // appearing — produces a different key and the group reports again. That
+  // self-invalidation is why this is preferred to a `duplicates.ignore` glob,
+  // which would blind a path permanently and silently.
+  //
+  // An entry without a reason is indistinguishable from a silenced bug, so
+  // each one names what the shared block is and why merging it would be worse
+  // than repeating it.
+  "duplicates": {
+    "ignoredClones": [
+      // collections/services/collection-mutation-service.ts — 17 lines shared
+      // by `createEntryWrite` and `updateEntryWrite`: the closing lines of the
+      // validation gate, then the collection-level and field-level
+      // beforeChange hook calls.
+      //
+      // These are not one decision written twice. The two differ in the
+      // operation they name, the validation mode they pass, whether an
+      // `originalData` accompanies the hook context, and whether the slug is
+      // re-sanitized afterwards — a create generates and dedupes one, an
+      // update does not. Sharing the block needs five discriminating
+      // parameters to carry seventeen lines of hook wiring, which reads worse
+      // at both call sites than the repetition does and buys no single source
+      // of truth: the parameters ARE the difference.
+      //
+      // The surrounding write pipeline that genuinely was one decision with
+      // two implementations is now shared — see `createEntryWrite`,
+      // `updateEntryWrite` and `deleteEntryWrite`, each of which the
+      // transaction API and the batch worker both delegate to.
+      "dup:c77b3abb6f87acd9-2:2",
+    ],
+  },
 }

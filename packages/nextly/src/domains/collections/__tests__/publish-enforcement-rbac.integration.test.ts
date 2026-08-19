@@ -704,4 +704,46 @@ describe("publish enforcement on the dispatcher path (RBAC wiring)", () => {
     });
     expect(row?.title).toBe("trusted");
   });
+
+  it("refuses an untrusted createEntryInTransaction the create gate denies", async () => {
+    // The negative twin of the overrideAccess case above. That one proves the
+    // bypass works, which an ABSENT gate satisfies just as well — so on its own
+    // it cannot tell an enforced coarse `create` gate from no gate at all. This
+    // one fails if the gate stops running, which is the property worth pinning:
+    // the transaction API is reachable by plugins and importers, and it is the
+    // only place the collection-level create rule is applied to them.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          status: true,
+          access: { create: () => false },
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const entries = handler.getEntryService() as CollectionEntryService;
+
+    // overrideAccess: false PLUS a user is what asks for the rule to be
+    // enforced; the flag defaults to true for trusted server contexts.
+    const result = await current.adapter.transaction(tx =>
+      entries.createEntryInTransaction(
+        tx,
+        {
+          collectionName: "posts",
+          user: { id: "u1" },
+          overrideAccess: false,
+        },
+        { title: "refused" }
+      )
+    );
+
+    expect(result.success).toBe(false);
+    const rows = await current.adapter.select<{ title: string }>("dc_posts", {
+      where: { and: [{ column: "title", op: "=", value: "refused" }] },
+    });
+    expect(rows).toHaveLength(0);
+  });
 });
