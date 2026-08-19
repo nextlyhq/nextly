@@ -84,6 +84,26 @@ export {
 export { useReportUnsavedWork } from "@nextlyhq/admin";
 
 /**
+ * Render the entry's remaining fields inside a takeover surface (@experimental).
+ *
+ * A field whose type is registered as a TAKEOVER collapses the form body to
+ * itself, so an entry edited through one has its SEO, its relations and its
+ * custom fields removed from the page — not merely covered. This returns a
+ * renderer for exactly those, so the surface that took the body over can offer
+ * them back without the author leaving it.
+ *
+ * Null when nothing is hidden, which is a different answer from a renderer that
+ * draws nothing: the first means offer no panel, the second means offer an
+ * empty one. A shell that reserves width to display nothing reads as a broken
+ * control rather than an absent feature.
+ *
+ * The renderer is built from the FORM'S OWN control, so what the surface draws
+ * and what the form submits are one thing. Constructing a second form would
+ * fork the state and lose the edit made in whichever copy did not save.
+ */
+export { useEntryFieldsPanel } from "@nextlyhq/admin";
+
+/**
  * Record a recovery point for the surrounding document (@experimental).
  *
  * For a contributed field that holds its own editing state — a canvas, a

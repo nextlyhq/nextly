@@ -150,6 +150,50 @@ export function computeMainFields<T extends LayoutField>(
   );
 }
 
+/**
+ * The body fields a surface may offer BESIDE the one it was opened for.
+ *
+ * Everything the form body would show, minus the field at `excludePath` — the
+ * field whose own surface is asking. A page builder rendering this inside its
+ * own panel must not be offered itself, which would nest an editor in its own
+ * settings.
+ *
+ * Deliberately NOT keyed on whether a takeover is active. `layout: "takeover"`
+ * is declared in the branding type and no shipped plugin sets it, so a rule
+ * conditioned on it would be inert: the body never collapses, and a panel
+ * derived from "what the takeover hid" would be permanently empty. Excluding
+ * one path by name works whether or not the body also shows these fields —
+ * and while a full-screen surface covers the body, showing them is the only
+ * way an author reaches them without leaving it.
+ *
+ * System fields are already stripped, so the title and slug drawn by the system
+ * header are not offered a second, competing editor here.
+ */
+export function computeFieldsBeside<T extends LayoutField>(
+  fields: T[],
+  excludePath: string
+): T[] {
+  /*
+   * The field whose value decides whether the asking field is visible at all is
+   * withheld too.
+   *
+   * A page builder shown only when `editorMode === "page-builder"` would
+   * otherwise offer `editorMode` inside its own panel, where changing it
+   * un-renders the surface the author is standing in. Leaving the editor is
+   * what the exit control is for; a settings panel should not be a second,
+   * unlabelled way to do it.
+   */
+  const asking = fields.find(f => (f.name ?? "") === excludePath);
+  const controller = asking === undefined ? undefined : controllerName(asking);
+  return fields.filter(
+    f =>
+      !SYSTEM_FIELDS.has(f.name ?? "") &&
+      !isHidden(f) &&
+      (f.name ?? "") !== excludePath &&
+      (f.name ?? "") !== controller
+  );
+}
+
 /** Resolve the value a field's condition source currently holds. */
 function valueFor(f: LayoutField, values: Record<string, unknown>): unknown {
   const field = controllerName(f);

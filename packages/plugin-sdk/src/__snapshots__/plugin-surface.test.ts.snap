@@ -81,6 +81,7 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "useDocumentIdentity (value)",
   "useDocumentLocale (value)",
   "useDocumentStatus (value)",
+  "useEntryFieldsPanel (value)",
   "usePluginClientConfig (value)",
   "usePluginFieldTypeEntries (value)",
   "useReportUnsavedWork (value)",
