@@ -46,6 +46,7 @@ import { findNode } from "@nextlyhq/blocks-engine";
 import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import * as React from "react";
 
+import { autoscrollStep } from "./autoscroll";
 import { nodeIdFromEvent } from "./canvas";
 import {
   collectRegions,
@@ -58,7 +59,12 @@ import {
 } from "./drop-targets";
 import type { EditorState } from "./editor-state";
 import type { Point, Rect } from "./geometry";
-import { canvasContentPoint, canvasContentRect } from "./geometry-dom";
+import {
+  canvasContentPoint,
+  canvasContentRect,
+  containerEdges,
+  scrollableAncestor,
+} from "./geometry-dom";
 import type { SlotSource } from "./inserter";
 import { lockBlockingMove } from "./locking";
 import {
@@ -140,6 +146,26 @@ interface Gesture {
   switchState: TargetSwitchState;
   /** Targets by id, so the committed id resolves back to something drawable. */
   targets: Map<string, DropTarget>;
+  /**
+   * The canvas root, kept so a frame with no pointer event still has it.
+   *
+   * Autoscroll runs between moves — a pointer resting in the edge band produces
+   * no events at all — so the element cannot come from `event.currentTarget`
+   * the way every other read here does.
+   */
+  readonly root: HTMLElement;
+  /**
+   * The element that actually scrolls, or `null` when nothing does.
+   *
+   * Resolved once at drag start rather than per frame: it is a walk up the tree
+   * reading computed styles, and the answer cannot change mid-gesture.
+   */
+  readonly scroller: HTMLElement | null;
+  /** The last pointer position, in CLIENT coordinates. */
+  clientX: number;
+  clientY: number;
+  /** The scheduled frame, or `null` when no loop is running. */
+  frame: number | null;
 }
 
 /**
@@ -200,6 +226,13 @@ export function useCanvasDrag({
   latest.current = { editor, slots, nesting };
 
   const reset = React.useCallback(() => {
+    // Cancelling here rather than in each ending: `reset` is what pointer-up,
+    // Escape and unmount all funnel through, so a frame cannot outlive the
+    // gesture it scrolls for by any route.
+    const running = gesture.current?.frame;
+    if (running !== null && running !== undefined) {
+      cancelAnimationFrame(running);
+    }
     gesture.current = null;
     setState({ draggingId: null, target: null, refusal: null });
   }, []);
@@ -240,52 +273,28 @@ export function useCanvasDrag({
         active: false,
         switchState: NO_TARGET,
         targets: new Map(),
+        root,
+        scroller: scrollableAncestor(root),
+        clientX: event.clientX,
+        clientY: event.clientY,
+        frame: null,
       };
       // NOT captured here. See the activation branch in `onPointerMove`.
     },
     []
   );
 
-  const onPointerMove = React.useCallback(
-    (event: React.PointerEvent<HTMLElement>) => {
-      const drag = gesture.current;
-      if (drag === null) return;
-
-      const root = event.currentTarget;
-      const pointer = canvasContentPoint(event.clientX, event.clientY, root);
-
-      if (!drag.active) {
-        const travelled = Math.hypot(
-          pointer.x - drag.origin.x,
-          pointer.y - drag.origin.y
-        );
-        if (travelled < activationPx) return;
-        drag.active = true;
-        /*
-         * Capture the pointer HERE rather than on the press, so that a press
-         * which stays a click never captures at all.
-         *
-         * Capture retargets every later pointer event to the capturing element,
-         * and the browser derives a `click`'s target from where the press and
-         * the release landed — so capturing on `pointerdown` makes every click
-         * on the canvas report the CANVAS ROOT as its target. The canvas
-         * resolves a click by walking up from the target to the nearest block,
-         * finds none above the root, and reads that as "the author clicked the
-         * background": selecting a block by clicking it cleared the selection
-         * instead.
-         *
-         * A drag needs capture because it may leave the canvas and must keep
-         * receiving moves. A click does not, and until the pointer has travelled
-         * far enough there is no way to tell which one this is — so the capture
-         * waits for the answer.
-         */
-        event.currentTarget.setPointerCapture(event.pointerId);
-        // Selecting on activation rather than on press: a press that turns out
-        // to be a click is handled by the canvas's own click handler, and
-        // selecting here as well would run the same decision twice.
-        latest.current.editor.select(drag.nodeId);
-      }
-
+  /**
+   * Re-aim the drag at a content point, and draw the result.
+   *
+   * Shared by the pointer handler and the autoscroll frame because they ask the
+   * same question at different moments: a move changes where the pointer is, and
+   * a scroll changes what is under it. Computing the answer twice is how the
+   * indicator and the committed target come apart — the frame would draw one
+   * thing and the release would apply another.
+   */
+  const aim = React.useCallback(
+    (drag: Gesture, pointer: Point) => {
       const resolution = resolveDrop(
         {
           blockName: drag.blockName,
@@ -336,7 +345,102 @@ export function useCanvasDrag({
         refusal: resolution.kind === "refused" ? resolution.refusal : null,
       });
     },
-    [activationPx, switchPx]
+    [switchPx]
+  );
+
+  /**
+   * Scroll the canvas while the pointer rests near an edge, and keep aiming.
+   *
+   * A drag can only drop where it can point, so without this a block cannot be
+   * moved anywhere outside the visible band of a long page — the position it
+   * would land at never comes on screen.
+   *
+   * **Re-aiming is not optional.** The pointer may not move at all while this
+   * runs, and the rects were measured once at drag start in CONTENT coordinates,
+   * which scrolling deliberately does not invalidate. What changes is which of
+   * them the pointer is over, so a frame that scrolled without re-aiming would
+   * slide the page beneath a frozen indicator.
+   *
+   * The loop runs for as long as the drag does rather than starting and stopping
+   * with the band, because a pointer held still inside it produces no events to
+   * restart on.
+   */
+  const pump = React.useCallback(() => {
+    const drag = gesture.current;
+    if (drag === null || !drag.active) return;
+
+    const scroller = drag.scroller;
+    if (scroller === null) return;
+
+    // The SCROLLER's edges, not the canvas root's. The root grows to its
+    // content, so once a page is long enough to need scrolling its bottom edge
+    // is somewhere below the window and a band measured against it never
+    // contains the pointer — the case autoscroll exists for is exactly the case
+    // that would stop working.
+    const edges = containerEdges(scroller);
+    const step = autoscrollStep(drag.clientY, edges.top, edges.bottom);
+    if (step !== 0) {
+      const before = scroller.scrollTop;
+      scroller.scrollTop = before + step;
+      // Only when the scroll actually moved. At either end of the content the
+      // assignment is clamped to what it already was, and re-aiming then costs
+      // a full resolve per frame to arrive at the answer already on screen.
+      if (scroller.scrollTop !== before) {
+        aim(drag, canvasContentPoint(drag.clientX, drag.clientY, drag.root));
+      }
+    }
+    drag.frame = requestAnimationFrame(pump);
+  }, [aim]);
+
+  const onPointerMove = React.useCallback(
+    (event: React.PointerEvent<HTMLElement>) => {
+      const drag = gesture.current;
+      if (drag === null) return;
+
+      const root = event.currentTarget;
+      const pointer = canvasContentPoint(event.clientX, event.clientY, root);
+      // Recorded for the frame loop, which runs between moves and has no event
+      // of its own to read a position from.
+      drag.clientX = event.clientX;
+      drag.clientY = event.clientY;
+
+      if (!drag.active) {
+        const travelled = Math.hypot(
+          pointer.x - drag.origin.x,
+          pointer.y - drag.origin.y
+        );
+        if (travelled < activationPx) return;
+        drag.active = true;
+        /*
+         * Capture the pointer HERE rather than on the press, so that a press
+         * which stays a click never captures at all.
+         *
+         * Capture retargets every later pointer event to the capturing element,
+         * and the browser derives a `click`'s target from where the press and
+         * the release landed — so capturing on `pointerdown` makes every click
+         * on the canvas report the CANVAS ROOT as its target. The canvas
+         * resolves a click by walking up from the target to the nearest block,
+         * finds none above the root, and reads that as "the author clicked the
+         * background": selecting a block by clicking it cleared the selection
+         * instead.
+         *
+         * A drag needs capture because it may leave the canvas and must keep
+         * receiving moves. A click does not, and until the pointer has travelled
+         * far enough there is no way to tell which one this is — so the capture
+         * waits for the answer.
+         */
+        event.currentTarget.setPointerCapture(event.pointerId);
+        // Started once, at activation. A press that stays a click never scrolls.
+        drag.frame = requestAnimationFrame(pump);
+        // Selecting on activation rather than on press: a press that turns out
+        // to be a click is handled by the canvas's own click handler, and
+        // selecting here as well would run the same decision twice.
+        latest.current.editor.select(drag.nodeId);
+      }
+
+      aim(drag, pointer);
+    },
+    [activationPx, aim, pump]
   );
 
   const onPointerUp = React.useCallback(
