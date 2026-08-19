@@ -106,6 +106,7 @@ import {
 } from "../../i18n/resolve-locale";
 import { resolveCompanionSchemaReadiness } from "../../i18n/runtime/companion-readiness";
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
+import { resolveDraftOverlay } from "../../versions/draft-overlay";
 import {
   buildRestorePayload,
   type ComponentSchemas,
@@ -2645,25 +2646,32 @@ export class CollectionQueryService extends BaseService {
       // a published-only or untrusted read: `statusFilter === null` excludes the
       // published default and `?status=published`, and `overrideAccess ||
       // routeAuthorized` excludes an anonymous caller passing `?status=all`.
-      const draftEligible =
-        (collectionForStatus as { status?: boolean }).status === true &&
-        // Only when drafts are still enabled. If the collection turned drafts
-        // off after a working draft was written, the write path no longer
-        // promotes or deletes it, so surfacing it here would shadow the live
-        // document with a sidecar nothing can ever consume.
-        (
-          collectionForStatus as {
-            versions?: { drafts?: { enabled?: boolean } };
-          }
-        ).versions?.drafts?.enabled === true &&
-        // The caller explicitly asked to see the working draft (an editor
-        // opening the document to edit). This is opt-in on purpose: many
-        // internal callers issue a status-less read (duplicate, reference
-        // labels) and must keep seeing the published row, so draft visibility
-        // follows an explicit editor intent, not every status-less read.
-        params.includeWorkingDraft === true &&
-        // An explicit published view still suppresses the draft.
-        params.status !== "published";
+      // The CHEAP half of the shared rule, with component schemas unresolved so
+      // the registry reads stay off the common read path. With no schemas the
+      // eligibility test can only be MORE permissive, so a `false` here is final
+      // while a `true` is provisional — confirmed below against resolved schemas
+      // before any draft is exposed.
+      const draftEligible = resolveDraftOverlay({
+        collectionHasStatus:
+          (collectionForStatus as { status?: boolean }).status === true,
+        draftsVersioningEnabled:
+          (
+            collectionForStatus as {
+              versions?: { drafts?: { enabled?: boolean } };
+            }
+          ).versions?.drafts?.enabled === true,
+        documentLocalized:
+          (collection as { localized?: boolean }).localized === true,
+        fields: fields as FieldConfig[],
+        componentSchemas: null,
+        includeWorkingDraft: params.includeWorkingDraft === true,
+        requestedStatus: params.status,
+        // The capability is probed below against the loaded row; this half asks
+        // only whether the document and the request allow an overlay at all.
+        callerMayEdit: true,
+        requestLocale: params.locale ?? null,
+        defaultLocale: this.localization?.defaultLocale ?? null,
+      }).overlay;
       // Even with the opt-in, a pending draft is surfaced only to a caller
       // trusted to EDIT the document. `overrideAccess` attests that directly.
       // `routeAuthorized` is NOT trusted: on this read path the REST dispatcher
@@ -2728,16 +2736,28 @@ export class CollectionQueryService extends BaseService {
         const draftComponentSchemas = workingDraft
           ? await resolveComponentSchemas(fields as FieldConfig[])
           : null;
-        const draftIneligible = draftComponentSchemas
-          ? hasPasswordField(fields) ||
-            [...draftComponentSchemas.values()].some(
-              schema =>
-                schema.localized ||
-                !schema.resolved ||
-                hasPasswordField(schema.fields)
-            )
-          : false;
-        if (workingDraft && !draftIneligible) {
+        // The CONFIRMING half, against resolved schemas and through the same
+        // rule the write uses. It replaced an inline copy that additionally
+        // refused `schema.localized` — a clause the write dropped when a
+        // localized component became representable in a snapshot. The write held
+        // those edits and this read declined to show them, so the author saw
+        // their own save reported as successful and the old content returned.
+        const draftShowable =
+          draftComponentSchemas === null ||
+          resolveDraftOverlay({
+            collectionHasStatus: true,
+            draftsVersioningEnabled: true,
+            documentLocalized:
+              (collection as { localized?: boolean }).localized === true,
+            fields: fields as FieldConfig[],
+            componentSchemas: draftComponentSchemas,
+            includeWorkingDraft: true,
+            requestedStatus: params.status,
+            callerMayEdit: true,
+            requestLocale: params.locale ?? null,
+            defaultLocale: this.localization?.defaultLocale ?? null,
+          }).overlay;
+        if (workingDraft && draftShowable) {
           const rawSnapshot = workingDraft.snapshot as Record<string, unknown>;
           // Shape the snapshot to the current schema before exposing it. A field
           // removed or renamed while the draft was pending leaves a key the
