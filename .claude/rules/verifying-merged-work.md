@@ -585,8 +585,10 @@ Related, and cheap to get wrong:
   `eslint . --max-warnings 0`. Check by exit code, not by grepping output for
   "error": the log reads "0 errors, 1 warning" and still exits 1.
   Two qualifications worth knowing before you trust a green:
-  - The pre-push hook runs `pnpm turbo lint --continue --filter='./packages/*'`,
-    not the root `pnpm lint`. It does not cover `apps/*` or `e2e/`.
+  - The pre-push hook runs `pnpm lint:design`, `pnpm lint:workspace`,
+    `pnpm turbo lint --continue --filter='./packages/*'` and `pnpm run build`,
+    not the root `pnpm lint`. The turbo leg does not cover `apps/*` or `e2e/`,
+    and the whole hook exits early under CI (ci.yml re-runs the same gates).
   - Not every package opts in. `packages/admin-css` runs a bare `eslint .`, so a
     warning there exits 0 and the hook stays green.
 - **Never run a unit suite while an integration leg is in flight.** Unrelated
