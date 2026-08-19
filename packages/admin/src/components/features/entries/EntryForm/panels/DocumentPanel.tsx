@@ -52,6 +52,22 @@ export interface DocumentPanelProps {
  *   show Modified (they are inherently work-in-progress).
  */
 export type PillState = "draft" | "modified" | "changed" | "published";
+
+/**
+ * What each state is CALLED, in one place.
+ *
+ * Exported because the page builder covers this panel and has to report the
+ * same document in the same words. Two maps of four strings agree on the day
+ * they are written and drift the first time one of them is reworded, and the
+ * result is one editor calling a document "Changed" while another calls it
+ * "Modified" — a distinction `pillStateFromForm` is careful to make.
+ */
+export const PILL_LABEL: Record<PillState, string> = {
+  draft: "Draft",
+  modified: "Modified",
+  changed: "Changed",
+  published: "Published",
+};
 export function pillStateFromForm(
   status: string | undefined,
   isDirty: boolean,
@@ -201,12 +217,6 @@ function StatusRow({ state }: { state: PillState }) {
     changed:
       "bg-warning-100 text-warning-800 border border-warning-200 dark:bg-warning-950/40 dark:text-warning-200 dark:border-warning-900",
     published: "bg-foreground text-background",
-  };
-  const PILL_LABEL: Record<PillState, string> = {
-    draft: "Draft",
-    modified: "Modified",
-    changed: "Changed",
-    published: "Published",
   };
   return (
     <div className="flex items-center justify-between gap-3">

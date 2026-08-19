@@ -60,6 +60,22 @@ type VersionRow = {
   versionNo: number | null;
 };
 
+async function workingDraftLocales(id: string): Promise<string[]> {
+  const rows = await handle!.adapter.select<
+    VersionRow & { locale: string | null }
+  >("nextly_versions", {
+    where: {
+      and: [
+        { column: "entryId", op: "=", value: id },
+        { column: "isAutosave", op: "=", value: false },
+        { column: "versionNo", op: "IS NULL" },
+        { column: "status", op: "=", value: "draft" },
+      ],
+    },
+  });
+  return rows.map(r => r.locale ?? "").sort();
+}
+
 async function workingDraftCount(id: string): Promise<number> {
   return (
     await handle!.adapter.select<VersionRow>("nextly_versions", {
@@ -554,6 +570,67 @@ describe("draft/published split — discard working draft (integration)", () => 
     const [liveAfter] = await handle.adapter.select<LiveRow>(TABLE);
     expect(liveAfter.title).toBe("live");
     expect(liveAfter.status).toBe("published");
+  });
+
+  it("discards only the language it was asked for, leaving other languages' pending changes", async () => {
+    // A localized document holds one pending change per language, so a discard
+    // is one language's concern. Throwing away a language the author never
+    // opened destroys work nobody asked to lose, and leaving the language they
+    // DID ask about means the editor still shows the edit it just reported
+    // discarding.
+    handle = await createTestNextly({
+      localization: { locales: ["en", "es"], defaultLocale: "en" },
+      collections: [
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          localized: true,
+          versions: { drafts: true },
+          access: { read: () => true, update: () => true },
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const entries = handle
+      .getService("collectionsHandler")
+      .getEntryService() as CollectionEntryService;
+    const trusted = { collectionName: COLLECTION, overrideAccess: true };
+
+    await entries.createEntry(trusted, {
+      title: "live-en",
+      status: "published",
+    });
+    const [row] = await handle.adapter.select<{ id: string }>(TABLE);
+    const id = row.id;
+
+    // A pending change in each language. The English save names no locale,
+    // which is the admin's ordinary path for the default language.
+    await entries.updateEntry(
+      { ...trusted, entryId: id },
+      { title: "edited-en" }
+    );
+    await entries.updateEntry(
+      { ...trusted, entryId: id, locale: "es" },
+      { title: "edited-es" }
+    );
+    expect(await workingDraftLocales(id)).toEqual(["en", "es"]);
+
+    // The editor is on Spanish and discards. The request names that language.
+    await discardWorkingDraftForDocument({
+      scopeKind: "collection",
+      slug: COLLECTION,
+      entryId: id,
+      user: { id: "editor-1" },
+      locale: "es",
+      params: {
+        collectionName: COLLECTION,
+        entryId: id,
+        _authenticatedUserId: "editor-1",
+      },
+    });
+
+    // Spanish is gone and English survives untouched.
+    expect(await workingDraftLocales(id)).toEqual(["en"]);
   });
 });
 
@@ -1328,10 +1405,12 @@ describe("draft/published split — promote on publish (integration)", () => {
     expect(promo?.label).toBe("live");
   });
 
-  it("edits a localized collection live without a working draft", async () => {
-    // A localized document is ineligible for the split (a disqualifier known
-    // without the registry), so a status-less edit writes the live row directly
-    // and stores no working draft even when the schema references a component.
+  it("holds a localized edit that names no language, under the default", async () => {
+    // A localized document IS eligible for the split, including one whose
+    // schema references a component: a snapshot holds one locale's values and
+    // the draft is keyed by that locale. A request naming no locale is the
+    // admin's ordinary path for the default language, and its pending change
+    // keys under the default rather than being refused.
     handle = await createTestNextly({
       localization: { locales: ["en", "es"], defaultLocale: "en" },
       fieldGroups: [
@@ -1364,11 +1443,12 @@ describe("draft/published split — promote on publish (integration)", () => {
       { title: "edited" }
     );
     expect(res.success).toBe(true);
-    expect(await workingDraftCount(id)).toBe(0);
+    expect(await workingDraftCount(id)).toBe(1);
     // A localized collection keeps its text per locale, so read the live value
-    // back through getEntry rather than the main row.
+    // back through getEntry rather than the main row. The live translation is
+    // untouched: the edit is held, not published.
     const read = await entries.getEntry({ ...ctx, entryId: id, locale: "en" });
-    expect((read.data as { title?: string }).title).toBe("edited");
+    expect((read.data as { title?: string }).title).toBe("live");
   });
 
   it("keeps a live single component's other sub-fields on a first partial draft save", async () => {
@@ -1867,7 +1947,7 @@ describe("draft/published split — schema and component eligibility (integratio
     ],
   });
 
-  it("keeps a status-less edit live (no draft) when the collection embeds a localized component", async () => {
+  it("holds a status-less edit when the collection embeds a localized component", async () => {
     const entries = await bootFile(withHero(true));
     const ctx = { collectionName: COLLECTION, overrideAccess: true };
 
@@ -1875,8 +1955,10 @@ describe("draft/published split — schema and component eligibility (integratio
     const [row] = await handle!.adapter.select<LiveRow>(TABLE);
     const id = row.id;
 
-    // A localized component makes the collection ineligible for the split, so a
-    // status-less edit writes the live row directly rather than storing a draft.
+    // A localized component is representable in a draft snapshot, which holds
+    // exactly one locale's values and is keyed by that locale. What is still
+    // refused is an UNRESOLVED component, whose subtree would be dropped on
+    // promote without anyone noticing.
     const res = await entries.updateEntry(
       { ...ctx, entryId: id },
       { title: "edited" }
@@ -1884,8 +1966,8 @@ describe("draft/published split — schema and component eligibility (integratio
     expect(res.success).toBe(true);
 
     const [live] = await handle!.adapter.select<LiveRow>(TABLE);
-    expect(live.title).toBe("edited");
-    expect(await workingDraftCount(id)).toBe(0);
+    expect(live.title).toBe("live");
+    expect(await workingDraftCount(id)).toBe(1);
   });
 
   it("prunes fields the current schema no longer declares from a draft read", async () => {
@@ -2253,7 +2335,10 @@ describe("draft/published split — schema draftsEnabled flag (integration)", ()
     ).toBe(false);
   });
 
-  it("is false for a localized collection", async () => {
+  it("is true for a localized collection", async () => {
+    // The editor is told drafts are on for a translated document, because they
+    // are: a pending change is held per language, keyed by the language it
+    // belongs to.
     expect(
       await draftsEnabledFor(
         defineCollection({
@@ -2264,7 +2349,7 @@ describe("draft/published split — schema draftsEnabled flag (integration)", ()
           fields: [text({ name: "title" })],
         })
       )
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("is false for a collection with a reachable password field", async () => {

@@ -33,15 +33,26 @@ export interface QuoteProps {
 export function renderQuote({
   props,
   className,
+  markProp,
 }: BlockRenderArgs<QuoteProps>): ReactElement {
   const quoted = text(props.text);
   const attribution = text(props.attribution);
   const source = text(props.source);
   const citeUrl = url(props.citeUrl);
 
+  /*
+   * Only the two values that already have an element of their own are marked.
+   * `attribution` is a bare text node inside the figcaption, and an attribute
+   * needs an element — wrapping it in a span to gain one would change the
+   * published markup for the editor's convenience, which is the wrong trade.
+   * It stays editable in the inspector, which is the safe direction.
+   */
+  const markText = markProp?.("text");
+  const markSource = markProp?.("source");
+
   const blockquote = (
     <blockquote {...(citeUrl === undefined ? {} : { cite: citeUrl })}>
-      <p>{quoted}</p>
+      <p {...markText}>{quoted}</p>
     </blockquote>
   );
 
@@ -52,7 +63,7 @@ export function renderQuote({
         className={className}
         {...(citeUrl === undefined ? {} : { cite: citeUrl })}
       >
-        <p>{quoted}</p>
+        <p {...markText}>{quoted}</p>
       </blockquote>
     );
   }
@@ -63,7 +74,7 @@ export function renderQuote({
       <figcaption>
         {attribution}
         {attribution !== "" && source !== "" ? ", " : null}
-        {source === "" ? null : <cite>{source}</cite>}
+        {source === "" ? null : <cite {...markSource}>{source}</cite>}
       </figcaption>
     </figure>
   );
@@ -87,9 +98,9 @@ export const quote = defineBlock<QuoteProps, PageContext>({
     keywords: ["blockquote", "pull quote", "citation"],
   },
   props: {
-    text: { type: "textarea" },
+    text: { type: "textarea", inline: true },
     attribution: { type: "text" },
-    source: { type: "text" },
+    source: { type: "text", inline: true },
     citeUrl: { type: "url" },
   },
   defaultProps: { text: "" },

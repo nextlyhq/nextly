@@ -20,6 +20,7 @@ import { useLabelLandingCheck } from "@admin/lib/forms/label-landing";
 import { cn } from "@admin/lib/utils";
 
 import { useEntryLocale } from "../EntryLocaleContext";
+import { UseSourceButton } from "../TranslationMode/UseSourceButton";
 
 import { useFieldElementId } from "./field-id-scope";
 
@@ -115,7 +116,11 @@ const WIDTH_STYLES: Record<string, string> = {
  *
  * Measured dangling on `/admin/collections/posts/create` in both themes before
  * this list existed: `richText:content`, `relationship:categories`,
- * `relationship:tags`, `upload:featuredImage`.
+ * `relationship:tags`, `upload:featuredImage`. `code:customCss` was measured
+ * the same way on the page-builder `pages` collection, and belongs here for the
+ * same reason rich text does: the editor is a scrolling surface built from
+ * several elements, and the one that takes focus is created by the editor at
+ * runtime rather than being the element an id could be placed on.
  *
  * The list covers the types this codebase has evidence for. It is deliberately
  * NOT a guess at the rest: `useFieldLabelLandingCheck` below fires in
@@ -127,6 +132,7 @@ const GROUP_FIELD_TYPES: ReadonlySet<string> = new Set([
   "richText",
   "relationship",
   "upload",
+  "code",
 ]);
 
 /**
@@ -309,6 +315,15 @@ export function FieldWrapper({
     </p>
   ) : null;
 
+  // In translation mode the source is already on screen in its own pane, so the
+  // field offers the ACTION rather than repeating the text: fill this one field
+  // from the source. Renders nothing outside the mode, and nothing on the source
+  // pane's own fields — that pane sits outside the context this reads.
+  const useSourceAction =
+    isLocalizedField && fieldName != null ? (
+      <UseSourceButton fieldName={fieldName} fieldLabel={label} />
+    ) : null;
+
   // Don't render if hidden
   if (isHidden) {
     return null;
@@ -368,6 +383,16 @@ export function FieldWrapper({
           {/* show the default-language source hint in the horizontal
               (checkbox) layout too — it was only rendered in the vertical layout. */}
           {sourceHint}
+
+          {/* And the source-fill action beside it, for the same reason. A
+              checkbox is not localized by default, but only `password` can
+              NEVER be — so a schema author who declares `localized: true` on one
+              gets a field that showed its source and offered no way to take it,
+              which is the layout branch disagreeing with itself rather than a
+              decision about checkboxes. */}
+          {useSourceAction && (
+            <div className="flex justify-end">{useSourceAction}</div>
+          )}
         </div>
       </div>
     );
@@ -443,6 +468,10 @@ export function FieldWrapper({
           Below the input it read as a footnote about the field rather than as
           the text being translated. */}
       {sourceHint}
+
+      {useSourceAction && (
+        <div className="flex justify-end">{useSourceAction}</div>
+      )}
 
       {/* Input (children) */}
       {children}

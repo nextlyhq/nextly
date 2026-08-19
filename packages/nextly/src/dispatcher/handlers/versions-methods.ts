@@ -36,7 +36,10 @@ import {
   type VersionMetaWithAuthor,
 } from "../../domains/versions/author-hydration";
 import type { VersionDiff } from "../../domains/versions/diff";
-import { discardWorkingDraft } from "../../domains/versions/discard-working-draft";
+import {
+  discardWorkingDraft,
+  type DiscardScopeKind,
+} from "../../domains/versions/discard-working-draft";
 import { restoreVersion } from "../../domains/versions/restore-version";
 import {
   resolveComponentFieldMap,
@@ -609,9 +612,25 @@ export async function restoreVersionForDocument(
  * Returns the published document as a plain read would, so the editor can reset
  * to the live values without a second request. A no-op that still returns the
  * live row when no working draft exists.
+ *
+ * A localized document holds one pending change per language, so the request
+ * names the language it discards; the others are left alone.
  */
 export async function discardWorkingDraftForDocument(
-  args: VersionMethodArgs & { params: Params }
+  args: Omit<VersionMethodArgs, "locale" | "scopeKind"> & {
+    /**
+     * Narrower than the shared `VersionMethodArgs` scope, because a discard is
+     * implemented for these two kinds only — see `DiscardScopeKind`.
+     */
+    scopeKind: DiscardScopeKind;
+    params: Params;
+    /**
+     * Which language's pending change to discard. Absent (or null) means the
+     * request named none, which a localized document resolves to its default
+     * language — the admin omits `?locale=` when editing that one.
+     */
+    locale?: string | null;
+  }
 ): Promise<unknown> {
   const caller = readAccessCallerFromParams(args.params, args.user);
 
@@ -652,9 +671,11 @@ export async function discardWorkingDraftForDocument(
   );
 
   return discardWorkingDraft({
+    scopeKind: args.scopeKind,
     slug: args.slug,
     entryId: args.entryId,
     user: args.user,
+    locale: args.locale ?? null,
     authenticatedScope,
   });
 }

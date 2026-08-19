@@ -72,7 +72,10 @@ import type {
 } from "../../../services/shared";
 import { consoleLogger } from "../../../services/shared";
 import type { UploadValidator } from "../../../services/upload-validation";
-import type { ImageProcessor } from "../../../storage/image-processor";
+import type {
+  ImageProcessor,
+  ImageValidity,
+} from "../../../storage/image-processor";
 import type { IStorageAdapter } from "../../../storage/types";
 import {
   isImageMimeType,
@@ -1168,9 +1171,13 @@ export class MediaService {
    * Validate an image buffer
    *
    * @param buffer - File buffer
-   * @returns True if buffer is a valid image
+   * @returns Whether the buffer is an image, or "unknown" when this install
+   *   has no image processing and therefore could not look.
    */
-  async validateImage(buffer: Buffer): Promise<boolean> {
+  async validateImage(buffer: Buffer): Promise<ImageValidity> {
+    // Forwarded rather than collapsed to a boolean. Squeezing three states
+    // into two is what made a missing library read as a bad file, and a
+    // wrapper that re-flattens it here would reintroduce that at one remove.
     return this.imageProcessor.isValidImage(buffer);
   }
 

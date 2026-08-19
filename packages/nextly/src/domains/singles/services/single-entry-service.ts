@@ -27,17 +27,23 @@ import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import type { WebhookFastDrainScheduler } from "../../webhooks/after-drain";
 import type {
   GetSingleOptions,
+  PublishAllSingleLocalesOptions,
   SingleResult,
   UpdateSingleOptions,
 } from "../types";
 
 import { SingleMutationService } from "./single-mutation-service";
+import {
+  SinglePublishAllService,
+  type PublishAllSingleResult,
+} from "./single-publish-all";
 import { SingleQueryService } from "./single-query-service";
 import type { SingleRegistryService } from "./single-registry-service";
 
 // Re-export types so legacy imports from this module keep working.
 export type {
   GetSingleOptions,
+  PublishAllSingleLocalesOptions,
   UpdateSingleOptions,
   UserContext,
   SingleResult,
@@ -55,6 +61,7 @@ export type {
 export class SingleEntryService extends BaseService {
   private readonly queryService: SingleQueryService;
   private readonly mutationService: SingleMutationService;
+  private readonly publishAllService: SinglePublishAllService;
 
   constructor(
     adapter: DrizzleAdapter,
@@ -119,6 +126,18 @@ export class SingleEntryService extends BaseService {
       rbacAccessControlService,
       localization
     );
+
+    // Publishing every language is its own write path — no caller content, no
+    // write locale, one status across every companion row — so it gets its own
+    // service rather than a further method on the update path.
+    this.publishAllService = new SinglePublishAllService(
+      adapter,
+      logger,
+      singleRegistryService,
+      fieldGroupDataService,
+      rbacAccessControlService,
+      localization
+    );
   }
 
   // ============================================================
@@ -151,15 +170,62 @@ export class SingleEntryService extends BaseService {
     options?: UpdateSingleOptions
   ): Promise<SingleResult> {
     const result = await this.mutationService.update(slug, data, options);
-    // Cache revalidation AND the opportunistic retention pass both follow the
-    // CONTENT write, not the webhook event: a committed write (even one that opts
-    // out of recording) must still bust its ISR tags, and — since the write path
-    // is the only prune trigger for installs with no webhook drain — must still
-    // offer a retention pass. Keyed off the explicit `committed` flag, set the
-    // moment a row is written independent of the opt-outs, so a Single with BOTH
-    // `webhooks: false` and `revalidate: { disable: true }` whose post-commit hook
-    // then throws (reporting `success:false`, no event, no intent) is still
-    // covered. NOT keyed off `success`, which a no-op also reports.
+    await this.afterWrite(result, options?.disableRevalidate === true);
+    return result;
+  }
+
+  /**
+   * Remove a Single's pending working-draft sidecar for one language.
+   *
+   * Deliberately without the post-write plumbing `update` and
+   * `publishAllLocales` carry. Those flush cache tags and offer a retention pass
+   * because they changed the LIVE document; a discard removes an unpublished
+   * sidecar and leaves the live row byte-identical, so there is nothing for a
+   * reader's cache to be stale about and no new version to prune.
+   */
+  async discardWorkingDraft(
+    params: Parameters<SingleMutationService["discardWorkingDraft"]>[0]
+  ): Promise<void> {
+    return this.mutationService.discardWorkingDraft(params);
+  }
+
+  /**
+   * Publish every language of a Single at once.
+   *
+   * The main row's status and every companion `_status` move in one
+   * transaction, so the document is never observable half-live. Carries the
+   * same post-write plumbing as an update, because it is the same kind of
+   * event: a committed content write with an outbox record and a cache tag.
+   */
+  async publishAllLocales(
+    slug: string,
+    options?: PublishAllSingleLocalesOptions
+  ): Promise<SingleResult<PublishAllSingleResult>> {
+    const result = await this.publishAllService.publishAllLocales(
+      slug,
+      options
+    );
+    await this.afterWrite(result, options?.disableRevalidate === true);
+    return result;
+  }
+
+  /**
+   * The side effects every committed Single write owes, whatever produced it.
+   *
+   * Cache revalidation AND the opportunistic retention pass both follow the
+   * CONTENT write, not the webhook event: a committed write (even one that opts
+   * out of recording) must still bust its ISR tags, and — since the write path
+   * is the only prune trigger for installs with no webhook drain — must still
+   * offer a retention pass. Keyed off the explicit `committed` flag, set the
+   * moment a row is written independent of the opt-outs, so a Single with BOTH
+   * `webhooks: false` and `revalidate: { disable: true }` whose post-commit hook
+   * then throws (reporting `success:false`, no event, no intent) is still
+   * covered. NOT keyed off `success`, which a no-op also reports.
+   */
+  private async afterWrite(
+    result: SingleResult<unknown>,
+    disableRevalidate: boolean
+  ): Promise<void> {
     if (
       result.committed === true ||
       result.eventRecorded === true ||
@@ -167,7 +233,7 @@ export class SingleEntryService extends BaseService {
     ) {
       // The per-operation escape hatch skips cache revalidation (a CLI / seed /
       // bulk-import write); the retention pass still runs.
-      if (options?.disableRevalidate !== true) {
+      if (!disableRevalidate) {
         await this.flushRevalidation(result);
       }
       await this.retentionRunner?.maybeRun(
@@ -181,7 +247,6 @@ export class SingleEntryService extends BaseService {
     if (result.eventRecorded === true) {
       this.fastDrainScheduler?.offer();
     }
-    return result;
   }
 
   /**
@@ -190,7 +255,9 @@ export class SingleEntryService extends BaseService {
    * an async revalidator is not left detached; absorbs its own failure so
    * revalidation never turns a committed write into an error.
    */
-  private async flushRevalidation(result: SingleResult): Promise<void> {
+  private async flushRevalidation(
+    result: SingleResult<unknown>
+  ): Promise<void> {
     if (!result.revalidationIntent) return;
     // Resolve at flush time so a Next cache adapter registered after this
     // service was constructed (at request time, well after boot) is honored.

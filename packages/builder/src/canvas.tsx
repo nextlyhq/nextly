@@ -36,6 +36,7 @@ import { cn } from "@nextlyhq/ui/utils";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
 import type { CanvasDragHandlers } from "./canvas-drag";
+import { selectionModeFor, type SelectionMode } from "./selection";
 
 /**
  * The class marking the canvas root, and the boundary the hit-test stops at.
@@ -129,10 +130,32 @@ export interface CanvasProps {
    * the module docblock for why this one is not optional.
    */
   siteStyles: NonNullable<PageRendererProps["siteStyles"]>;
-  /** The selected node's id, or null when the selection is empty. */
+  /**
+   * The PRIMARY selected node's id, or null when the selection is empty.
+   *
+   * The one the inspector edits. Marked `data-nx-selected="primary"` so a
+   * multi-block selection can show which member the panels answer for — with
+   * one block selected there is nothing to distinguish and the distinction
+   * costs nothing.
+   */
   selectedId?: string | null;
-  /** Raised with the clicked node's id, or null when the click hit no node. */
-  onSelect?: (id: string | null) => void;
+  /**
+   * Every selected id. Defaults to the primary alone.
+   *
+   * A separate prop rather than derived from `selectedId`, because the canvas
+   * must not decide what a selection IS — `selection.ts` does, and a canvas
+   * that reconstructed the set from one id would silently disagree with it the
+   * moment there were two.
+   */
+  selectedIds?: readonly string[];
+  /**
+   * Raised with the clicked node's id and the gesture its modifiers meant, or
+   * null when the click hit no node.
+   *
+   * The MODE travels with the id because only the event knows it, and a caller
+   * reading modifiers off a later render's event would read a different click.
+   */
+  onSelect?: (id: string | null, mode: SelectionMode) => void;
   /**
    * Everything else the renderer needs, passed through untouched.
    *
@@ -151,6 +174,16 @@ export interface CanvasProps {
    * normally until the first drag.
    */
   dragHandlers?: CanvasDragHandlers;
+  /**
+   * Raised when a double-click lands on the page.
+   *
+   * Separate from `onSelect` because the two gestures mean different things and
+   * one handler deciding between them by counting clicks would be a second
+   * place the distinction lives. A double-click that hits no editable value
+   * does nothing, which the handler decides — the canvas does not know what is
+   * editable.
+   */
+  onDoubleClick?: (event: React.MouseEvent<HTMLDivElement>) => void;
   /**
    * Editor chrome drawn ABOVE the page — the drop indicator today.
    *
@@ -174,13 +207,24 @@ export function Canvas({
   document,
   siteStyles,
   selectedId = null,
+  selectedIds,
   onSelect,
   render,
   className,
   dragHandlers,
+  onDoubleClick,
   overlay,
 }: CanvasProps) {
   const root = useRef<HTMLDivElement | null>(null);
+
+  /*
+   * What to mark. The primary alone when a host has not adopted the set yet,
+   * which keeps every existing caller correct without a change.
+   */
+  const marked = useMemo(
+    () => selectedIds ?? (selectedId === null ? [] : [selectedId]),
+    [selectedIds, selectedId]
+  );
   const handleClick = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
       if (!onSelect) return;
@@ -191,7 +235,7 @@ export function Canvas({
       // A click on the canvas background resolves to null, which CLEARS the
       // selection rather than being ignored. Ignoring it leaves an inspector
       // showing a node the author believes they have deselected.
-      onSelect(nodeIdFromEvent(event.target));
+      onSelect(nodeIdFromEvent(event.target), selectionModeFor(event));
     },
     [onSelect]
   );
@@ -233,15 +277,24 @@ export function Canvas({
     // that declares its iterator, and this package compiles without one — so the
     // loop that reads more naturally does not type-check here.
     container.querySelectorAll(`[${NODE_ID_ATTRIBUTE}]`).forEach(element => {
-      element.toggleAttribute(
+      const id = element.getAttribute(NODE_ID_ATTRIBUTE);
+      const isSelected = id !== null && marked.includes(id);
+      if (!isSelected) {
+        element.removeAttribute(SELECTED_ATTRIBUTE);
+        return;
+      }
+      // The VALUE carries which member the panels answer for. A boolean
+      // attribute could not, and a second attribute for the primary would be a
+      // state where a block is primary without being selected.
+      element.setAttribute(
         SELECTED_ATTRIBUTE,
-        element.getAttribute(NODE_ID_ATTRIBUTE) === selectedId
+        id === selectedId ? "primary" : ""
       );
     });
     // Re-marked whenever the rendered tree changes as well as when the
     // selection does: a re-render replaces the elements, and an effect keyed on
     // the selection alone would leave the new tree carrying no marker at all.
-  }, [selectedId, page]);
+  }, [selectedId, marked, page]);
 
   return (
     <div
@@ -254,6 +307,12 @@ export function Canvas({
       // right up until someone writes a selector against the wrong one.
       data-nx-selected-id={selectedId ?? undefined}
       onClick={handleClick}
+      // Chrome is excluded for the same reason it is on click: a double-click
+      // on a control drawn over the page is not a double-click on the page.
+      onDoubleClick={event => {
+        if (isChrome(event.target)) return;
+        onDoubleClick?.(event);
+      }}
       // Spread rather than merged with a handler of this component's own: the
       // canvas has no pointer behaviour of its own apart from the drag, so
       // there is nothing to combine, and merging would create a second place

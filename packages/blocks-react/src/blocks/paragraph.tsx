@@ -25,8 +25,13 @@ export interface ParagraphProps {
 export function renderParagraph({
   props,
   className,
+  markProp,
 }: BlockRenderArgs<ParagraphProps>): ReactElement {
-  return <p className={className}>{text(props.text)}</p>;
+  return (
+    <p className={className} {...markProp?.("text")}>
+      {text(props.text)}
+    </p>
+  );
 }
 
 // Defined against the ENGINE's `defineBlock`, not the plugin SDK's: the engine
@@ -46,7 +51,7 @@ export const paragraph = defineBlock<ParagraphProps, PageContext>({
     category: CONTENT,
     keywords: ["paragraph", "copy", "body", "prose"],
   },
-  props: { text: { type: "textarea" } },
+  props: { text: { type: "textarea", inline: true } },
   defaultProps: { text: "" },
   // The opening prose is what a search result should quote. Offered whole and
   // untruncated: how long a description may be is the metadata layer's rule,

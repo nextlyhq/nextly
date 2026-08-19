@@ -13,7 +13,78 @@ export {
   registerComponents,
   registerKnownPlugin,
 } from "@nextlyhq/admin";
+
+/**
+ * Which document the surrounding form is editing, or `null` outside one
+ * (@experimental).
+ *
+ * A field component receives a name and a control and nothing that says which
+ * document it is inside, so anything addressing the document itself — a
+ * recovery point, a related query, a link — had no way to ask. `null` is an
+ * ordinary answer rather than an error: field components also render in
+ * previews and pickers, which have no document.
+ */
+export { useDocumentIdentity, type DocumentIdentity } from "@nextlyhq/admin";
 export type { ComponentPath } from "@nextlyhq/admin";
+
+/**
+ * How the surrounding document stands (@experimental).
+ *
+ * For a field that covers the editor's own chrome — the page builder takes the
+ * whole window — leaving an author no way to see whether the page is live.
+ *
+ * Separate from `useDocumentIdentity` rather than folded into it: a document's
+ * identity is the same whichever language you read it in, and its status is
+ * not. This answers for the language being edited.
+ *
+ * It reports FACTS. What to call a published document with local edits is
+ * `pillStateFromForm`'s question, because only the caller knows whether IT has
+ * unsaved work — a surface holding its own document outside the form is not
+ * described by the form's dirty flag.
+ */
+export {
+  useDocumentStatus,
+  pillStateFromForm,
+  PILL_LABEL,
+  type DocumentStatus,
+  type PillState,
+} from "@nextlyhq/admin";
+
+/**
+ * Tell the surrounding form this surface holds unsaved work (@experimental).
+ *
+ * For a field that keeps its own editing state rather than writing through the
+ * form — the page builder holds its block document and commits on exit — so the
+ * form's dirty flag stays false while real work is outstanding, and everything
+ * derived from it is wrong together: the navigation guard does not warn, the
+ * save shortcut declines, and the header shows nothing pending.
+ *
+ * It reports ONE BOOLEAN about itself. It cannot save, publish, or write to the
+ * form; the form still decides what to do about it. Retracted automatically
+ * when the surface unmounts.
+ */
+export { useReportUnsavedWork } from "@nextlyhq/admin";
+
+/**
+ * Record a recovery point for the surrounding document (@experimental).
+ *
+ * For a contributed field that holds its own editing state — a canvas, a
+ * diagram, an editor with its own history — whose work the form cannot see
+ * until the surface commits it. The caller passes the WHOLE document as it
+ * believes it stands (its own live value merged over the form's other values),
+ * because restoring a recovery point replaces the form's values wholesale, and
+ * calls `schedule()` when its state has changed in a way worth keeping.
+ *
+ * Whether recording is permitted at all is the entity owner's setting and is
+ * enforced on the server; a refusal is not retried, and nothing here needs to
+ * ask.
+ */
+export {
+  useDocumentCheckpoint,
+  type UseDocumentCheckpointOptions,
+  type UseDocumentCheckpointResult,
+  type AutosaveStatus,
+} from "@nextlyhq/admin";
 
 /**
  * Token-driven layout primitives (@experimental). Compose plugin admin UI from

@@ -46,6 +46,13 @@ export const nextlyVersionsSqlite = sqliteTable(
     label: text("label"),
     locale: text("locale"),
     sourceVersionNo: integer("source_version_no"),
+    // Set ONLY on a working draft, to the digest of the four values that
+    // identify it (see workingDraftKey). NULL on durable and autosave rows, so
+    // the unique index below constrains working drafts alone: all three
+    // dialects allow unlimited NULLs in a unique index. The sequence index
+    // cannot do this job — a working draft carries no version_no, and NULL is
+    // distinct from NULL, so any number of them satisfy it.
+    draftKey: text("draft_key"),
 
     createdBy: text("created_by"),
     createdAt: integer("created_at", { mode: "timestamp" })
@@ -72,6 +79,8 @@ export const nextlyVersionsSqlite = sqliteTable(
       table.entryId,
       table.versionNo
     ),
+    // One working draft per document per locale.
+    uniqueIndex("nextly_versions_working_draft_uidx").on(table.draftKey),
     index("nextly_versions_doc_recent_idx").on(
       table.scopeKind,
       table.scopeSlug,

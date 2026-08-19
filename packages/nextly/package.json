@@ -225,6 +225,7 @@
     "acorn": "^8.15.0",
     "acorn-walk": "^8.3.4",
     "better-sqlite3": "^12.5.0",
+    "esbuild": "^0.28.1",
     "eslint": "^9.39.1",
     "mysql2": "^3.15.0",
     "nodemailer": "^9.0.1",
@@ -232,6 +233,7 @@
     "rimraf": "^6.1.3",
     "rollup": "^4.60.1",
     "rollup-plugin-dts": "^6.4.1",
+    "sharp": "^0.35.0",
     "tsup": "^8.5.0",
     "tsx": "^4.20.5",
     "typescript": "^5.9.3",
@@ -242,20 +244,28 @@
     "@nextlyhq/adapter-mysql": "workspace:*",
     "@nextlyhq/adapter-postgres": "workspace:*",
     "@nextlyhq/adapter-sqlite": "workspace:*",
+    "esbuild": "^0.28.1",
     "next": "^14.0.0 || ^15.0.0 || ^16.0.0",
-    "nodemailer": "^9.0.1"
+    "nodemailer": "^9.0.1",
+    "sharp": "^0.35.0"
   },
   "peerDependenciesMeta": {
-    "@nextlyhq/adapter-postgres": {
+    "@nextlyhq/adapter-mysql": {
       "optional": true
     },
-    "@nextlyhq/adapter-mysql": {
+    "@nextlyhq/adapter-postgres": {
       "optional": true
     },
     "@nextlyhq/adapter-sqlite": {
       "optional": true
     },
+    "esbuild": {
+      "optional": true
+    },
     "nodemailer": {
+      "optional": true
+    },
+    "sharp": {
       "optional": true
     }
   },
@@ -274,7 +284,6 @@
     "dotenv": "^17.2.2",
     "drizzle-kit": "1.0.0-rc.4",
     "drizzle-orm": "1.0.0-rc.4",
-    "esbuild": "^0.28.1",
     "file-type": "^21",
     "isomorphic-dompurify": "^2",
     "jose": "^6.2.2",
@@ -282,7 +291,6 @@
     "safe-regex2": "^5.1.1",
     "semver": "^7.6.0",
     "server-only": "^0.0.1",
-    "sharp": "^0.35.0",
     "ws": "^8.21.1",
     "zod": "^4.1.12"
   },

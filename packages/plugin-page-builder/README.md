@@ -32,69 +32,84 @@ export default defineConfig({
 });
 ```
 
-This contributes a `pages` collection (title, slug, `content` block tree, `customCss`,
+This contributes a `pages` collection (title, slug, `content` block tree,
 draft/publish status) whose Edit view is the page builder.
 
 ### 2. Add the public render route
 
-A plugin can't inject Next.js routes, so the consuming app declares **one** catch-all
-route and hands the stored block tree to `PageRenderer`. The renderer never imports the
-CMS runtime — you inject a small `dataProvider` backed by `getNextly()`:
+A plugin cannot inject Next.js routes, so the consuming app declares **one** catch-all
+route. `createBlocksPage` fills its body: it resolves the path against your collections,
+404s on a miss or a reserved path, and renders the stored document.
+
+Install the renderer in your own app rather than relying on it being present underneath
+this plugin:
+
+```bash
+npm install @nextlyhq/blocks-react
+```
 
 ```tsx
-// app/(site)/[...slug]/page.tsx
-import {
-  PageRenderer,
-  type DataProvider,
-} from "@nextlyhq/plugin-page-builder/render";
-import { notFound } from "next/navigation";
+// app/(frontend)/[...slug]/page.tsx
+import { createBlockResolver } from "@nextlyhq/blocks-react";
+import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
+import { createBlocksPage } from "@nextlyhq/blocks-react/next";
 import { getNextly } from "nextly";
-import nextlyConfig from "../../../../nextly.config";
+import type { NextlyContentReader } from "nextly/runtime";
 
-function dataProvider(nx: Awaited<ReturnType<typeof getNextly>>): DataProvider {
-  return {
-    find: async args => ({ items: (await nx.find(args as never)).items ?? [] }),
-    findOne: async ({ collection, id }) =>
-      (await nx.findByID({ collection, id })) ?? null,
-    resolveMedia: async () => null,
-  };
-}
+import nextlyConfig from "../../../nextly.config";
 
-export default async function SitePage({
-  params,
-}: {
-  params: Promise<{ slug: string[] }>;
-}) {
-  const { slug } = await params;
-  const nx = await getNextly({ config: nextlyConfig });
-  const { items } = await nx.find({
-    collection: "pages",
-    where: {
-      slug: { equals: slug.join("/") },
-      status: { equals: "published" },
+type NextlyInstance = Awaited<ReturnType<typeof getNextly>>;
+
+// Per call rather than once: a public page can be the first request a cold server
+// handles. `getNextly` caches, so later calls are a lookup.
+const instance = () => getNextly({ config: nextlyConfig });
+
+const reader: NextlyContentReader & {
+  media: Pick<NextlyInstance["media"], "findByID">;
+} = {
+  find: async args => (await instance()).find(args),
+  findByID: async args => (await instance()).findByID(args),
+  // Images storing a media id resolve through this; omit it and they draw nothing
+  // while images with a literal URL keep working.
+  media: {
+    findByID: async args => (await instance()).media.findByID(args),
+  },
+};
+
+const { ContentPage, generateMetadata } = createBlocksPage({
+  collections: ["pages"],
+  field: "content",
+  nextly: reader,
+  blocks: createBlockResolver(coreBlocks),
+  // Without a breakpoint set the renderer emits class names with no CSS behind
+  // them, and the page comes out structurally correct and visually bare.
+  styleContext: {
+    breakpoints: {
+      viewport: [
+        { id: "base", label: "Base" },
+        { id: "tablet", label: "Tablet", maxWidth: 1024 },
+        { id: "mobile", label: "Mobile", maxWidth: 640 },
+      ],
+      container: [],
     },
-    limit: 1,
-  });
-  const page = items[0] as
-    | { content?: unknown; customCss?: string }
-    | undefined;
-  if (!page?.content) notFound();
-  return (
-    <PageRenderer
-      document={page.content as never}
-      customCss={page.customCss}
-      dataProvider={dataProvider(nx)}
-    />
-  );
-}
+  },
+});
+
+export { generateMetadata };
+export default ContentPage;
 ```
+
+`createBlocksPage` reads **access-enforced** content, so it needs no database during
+`next build`. A wholly public site calls `createPublicBlocksPage` instead, which reads
+trusted, pre-renders, and returns a `generateStaticParams` to export beside the other two.
+The posture is the factory you call; there is no option for it.
 
 ## Field mount (collections **and** singles)
 
-Use the builder as a **field** alongside other fields — in any collection or single:
+Use the builder as a **field** alongside other fields, in any collection or single:
 
 ```ts
-import { pageBuilderField } from "@nextlyhq/plugin-page-builder";
+import { blocks } from "@nextlyhq/plugin-page-builder";
 import { defineSingle, text } from "nextly/config";
 
 export const Homepage = defineSingle({
@@ -102,80 +117,43 @@ export const Homepage = defineSingle({
   label: { singular: "Homepage" },
   fields: [
     text({ name: "title" }),
-    pageBuilderField("layout", { label: "Layout" }),
+    blocks({ name: "layout", label: "Layout", blocks: { allow: ["core/*"] } }),
   ],
 });
 ```
 
-`pageBuilderField` stores the block tree as JSON and mounts the editor via the field's
-`admin.component`. The **host form** persists it (no separate save button). Render it the
-same way — hand the field's value to `PageRenderer` (for a single, fetch via
-`nx.findSingle({ slug })`).
+`blocks()` stores a `BlockDocument` as JSON and mounts the editor through the field's
+admin component. The **host form** persists it; there is no separate save button.
 
-## Per-entry editor choice (Default vs Page Builder)
+The field decides how an entry is edited, and nothing decides it per entry. An earlier
+release shipped a stored `editorMode` select that let each entry choose between the normal
+form and the builder. It is gone: a UI preference stored as content travelled in API
+responses and exports, both editors' columns stayed live with only one of them rendered,
+and it applied only to collections declared in code.
 
-Let **each entry** of a collection or single choose between the normal Nextly fields and the
-visual Page Builder canvas — Elementor/WordPress-style.
-
-**Code-first:** wrap the config with `withPageBuilder()`. It adds an `editorMode` select + the
-reserved `content` page-builder field, and sets `admin.pageBuilder.enabled`:
-
-```ts
-import { withPageBuilder } from "@nextlyhq/plugin-page-builder";
-import { defineCollection, text, textarea } from "nextly/config";
-
-export const Articles = defineCollection(
-  withPageBuilder({
-    slug: "articles",
-    labels: { singular: "Article", plural: "Articles" },
-    status: true,
-    fields: [
-      text({ name: "title", required: true }),
-      text({ name: "slug", required: true, unique: true }),
-      textarea({ name: "excerpt" }),
-    ],
-  })
-);
-```
-
-**UI-created collections/singles:** open the schema builder → toggle **"Use Page Builder"**
-(shown only when this plugin is installed). It adds/removes the same two fields.
-
-When an entry picks **Page Builder**, the edit screen shows the canvas plus the essentials
-(title, slug, status); the other fields are hidden. Picking **Default** shows the normal form.
-
-**Front-end** — render whichever the entry chose:
-
-```tsx
-import { PageRenderer } from "@nextlyhq/plugin-page-builder/render";
-
-const article = await nx.findOne({ collection: "articles", where: { slug } });
-export default function Article() {
-  return article.editormode === "builder" ? (
-    <PageRenderer
-      document={article.content}
-      registry={registry}
-      dataProvider={dp}
-    />
-  ) : (
-    <NormalArticle entry={article} />
-  ); // your normal-fields template
-}
-```
+Render a single the same way you render a collection, reading it with
+`nextly.findSingle({ slug })` and handing the field's value to the renderer.
 
 ## Built-in blocks
 
-`core/heading`, `core/paragraph`, `core/image`, `core/button`, `core/video`,
-`core/container`, `core/grid`, and the dynamic `core/query-loop`. Each declares content
-fields (Content tab) and style controls (Style/Responsive tabs) that drive the inspector.
+Nineteen, from `@nextlyhq/blocks-react/blocks`:
 
-## Query Loop
+`core/accordion`, `core/accordion-item`, `core/box`, `core/button`,
+`core/collection-loop`, `core/card`, `core/column`, `core/columns`, `core/divider`,
+`core/embed`, `core/form`, `core/gallery`, `core/heading`, `core/image`, `core/list`,
+`core/quote`, `core/section`, `core/spacer`, `core/text`.
 
-Drop a **Query Loop**, set its collection/sort/limit, and place a template inside it. At
-render the loop fetches entries through your `dataProvider` and renders the template once
-per item. Bind any content field on a nested block to an item field (Content tab → **Bind**
-→ path, e.g. `title` or `author.name`) — bindings resolve at any depth. Empty / error /
-config states are first-class, and a per-page query budget bounds nested loops.
+Each declares its props (Content tab) and which style groups it supports, and those drive
+the inspector.
+
+## Collection Loop
+
+Drop a **`core/collection-loop`**, set its collection, sort and limit, and place a template
+inside it. At render the loop fetches entries through the route's data access and renders
+the template once per item. Bind any prop on a nested block to an item field (Content tab →
+**Bind** → path, for example `title` or `author.name`); bindings resolve at any depth.
+Empty, error and unconfigured states are first-class, and a per-page query budget bounds
+nested loops — depth in a document becomes multiplication in reads.
 
 ## Styling, tokens & responsive
 
@@ -185,64 +163,75 @@ Colors may be raw values or design-token references (`{ token: "color.primary" }
 `var(--nx-color-primary)`). Breakpoints are desktop-first; per-breakpoint overrides are
 edited in the **Responsive** tab and visible at real device widths in the iframe canvas.
 
-Page-level **custom CSS** is parsed, allow-listed, and scoped under the page root — no
-`@import`, no `javascript:` urls, no `</style>` breakout.
-
 ## Extending — add your own block
 
-The block registry is the single extensibility seam. One `defineBlock` call wires the
-validator, renderer, and inspector — no core edit:
+The block registry is the extensibility seam. One `defineBlock` call describes the
+props, the editor metadata and the renderer:
 
 ```tsx
-import { defineBlock } from "@nextlyhq/plugin-page-builder";
+import { defineBlock } from "@nextlyhq/plugin-sdk/blocks";
 
-defineBlock({
-  type: "acme/pricing-table", // must be namespaced
+export const pricingTable = defineBlock({
+  name: "acme/pricing-table", // must be namespaced
   version: 1,
-  label: "Pricing Table",
-  icon: "Table",
-  category: "basic",
+  description: "A plan comparison table.",
+  editor: {
+    label: "Pricing Table",
+    category: "content",
+    keywords: ["plan", "pricing"],
+  },
+  props: {
+    plan: { type: "text" },
+  },
   defaultProps: { plan: "Pro" },
-  contentFields: [{ name: "plan", type: "text", label: "Plan" }],
-  styleControls: [
-    { control: "color", styleKey: "backgroundColor", label: "Background" },
-  ],
+  supports: { typography: true, color: true, spacing: true },
   render: ({ props, className }) => (
     <div className={className}>{String(props.plan)}</div>
   ),
 });
 ```
 
-Blocks can bump `version` and ship a pure `migrate(old, fromVersion)`, and unknown blocks are
-preserved (never dropped).
+Hand it to the route beside the core set so the public page can draw it:
 
-Migration runs when the **editor** loads a document, so the inspector reads props through controls
-that describe them. Where it PERSISTS depends on the mount:
+```ts
+blocks: createBlockResolver([...coreBlocks, pricingTable]);
+```
 
-- the **edit view** saves what the editor holds, so an opened-and-saved page is upgraded;
-- a **field mount** (`PageBuilderField`) does not. The host form keeps the value it was given, and
-  the upgrade reaches storage with the author's first real edit rather than on open;
-- the **published page** does not migrate at all: `PageRenderer` draws the stored document as it is.
+Pass an explicit set rather than relying on the process-wide registry: that registry is
+populated by whatever booted the editor, so a public route depending on it renders the
+unknown-block placeholder whenever a visitor arrives before an admin does.
 
-So blocks have to read their props defensively whatever version wrote them — which they must do
-anyway for a hand-edited or plugin-authored document. Migration only ever moves a document
-FORWARD: a node written by a newer definition than this build registers is left exactly as found.
+Blocks may bump `version` and ship a pure `migrate(old, fromVersion)`, and unknown blocks
+are preserved rather than dropped. Migration runs when the **editor** loads a document, so
+where it PERSISTS depends on the mount: a field mount keeps the value the host form was
+given, and the upgrade reaches storage with the author's first real edit. The published
+page does not migrate at all — it draws the stored document as it is. So a block reads its
+props defensively whatever version wrote them, which it must do anyway for a hand-edited or
+API-authored document. Migration only ever moves a document FORWARD: a node written by a
+newer definition than this build registers is left exactly as found.
 
 ## Security
 
 - Text is escaped; image/link/video URLs are scheme-validated (rejects `javascript:` /
   `vbscript:` / `data:`, including control-char-obfuscated variants).
-- Custom CSS is parser-validated, scoped, and allow-listed.
+- There is no author-written CSS surface. A `customCss` field existed, gated by
+  its own permission, and nothing rendered or sanitized what it stored; it was
+  removed rather than left one line away from reaching a page.
 - Structural limits: max depth, max node count, unique ids, no move-into-descendant,
   namespaced types, slot allow-lists.
-- The `./render` entry imports no CMS runtime and no admin code (enforced by a test).
+- The renderer's root entry imports no CMS runtime, no admin code and no `next/*`
+  (enforced by a layering test), so it is usable standalone.
 
 ## Package entries
 
-- `.` — isomorphic core (registries, tree/validate/migrate, `pageBuilder`, `pageBuilderField`).
-- `./render` — server-first `PageRenderer` (+ `DataProvider`).
+- `.` — isomorphic, React-free registration surface (`pageBuilder`, `blocks`,
+  `pagesCollection`, the document types).
+- `./blocks` — the blocks this plugin contributes.
 - `./admin` — the React editor (registers its components on import).
 - `./styles/editor.css` — editor styles.
+
+Rendering lives in `@nextlyhq/blocks-react`, and the document model in
+`@nextlyhq/blocks-engine`. This package registers them rather than reimplementing them.
 
 ## Environment note
 

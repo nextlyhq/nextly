@@ -14,6 +14,13 @@ const ADMIN_UI_FILES = [
   "packages/plugin-*/src/**/*.{ts,tsx}",
   "packages/admin/src/**/*.{ts,tsx}",
   "packages/ui/src/**/*.{ts,tsx}",
+  // The builder keeps its own `--nx-builder-*` namespace, and these rules do
+  // not care which namespace a token belongs to — they care whether a colour
+  // was written down instead of referenced, and whether a hue stood in for a
+  // meaning. `scripts/lint-design.mjs` reads this tree too, but its
+  // hardcoded-colour rule only runs on CSS files and plugin surfaces, so a
+  // literal in a builder `.tsx` was caught by neither guard.
+  "packages/builder/src/**/*.{ts,tsx}",
 ];
 
 // Apply the React + react-hooks rule set to React-bearing paths so

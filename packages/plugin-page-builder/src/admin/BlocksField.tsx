@@ -44,20 +44,30 @@ import { registrySlotSource } from "@nextlyhq/builder";
 import {
   BlockKeyboardActions,
   BlockToolbar,
+  EditorCommandPalette,
   BuilderShell,
   Canvas,
   DropIndicator,
   InsertPanel,
   InspectorPanel,
   LayersPanel,
+  OnboardingChecklist,
   SelectionBreadcrumb,
+  useBuilderChecklist,
   useCanvasDrag,
   useEditorState,
+  useInlineText,
 } from "@nextlyhq/builder/shell";
-import { useSuppressAdminChrome } from "@nextlyhq/plugin-sdk/admin";
-import { useCallback, useMemo, useState } from "react";
+import {
+  useDocumentCheckpoint,
+  usePluginClientConfig,
+  useReportUnsavedWork,
+  useSuppressAdminChrome,
+} from "@nextlyhq/plugin-sdk/admin";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   useController,
+  useWatch,
   type Control,
   type FieldValues,
   type Path,
@@ -67,6 +77,8 @@ import { emptyBlockDocument } from "../fields/blocks-document";
 import { siteSheet } from "../site-style";
 
 import { BlocksSummary } from "./BlocksSummary";
+import { DocumentStatusPill } from "./DocumentStatusPill";
+import { withValueAtPath } from "./snapshot-merge";
 
 export interface BlocksFieldProps<
   TFieldValues extends FieldValues = FieldValues,
@@ -75,6 +87,25 @@ export interface BlocksFieldProps<
   name: Path<TFieldValues>;
   /** React Hook Form control the entry form owns. */
   control: Control<TFieldValues>;
+  /**
+   * The document is being READ, not edited, so no way in is offered.
+   *
+   * The admin passes this to every field through one `commonProps`, and a field
+   * that ignores it does not merely look wrong: this one opened a full-screen
+   * editor bound to whichever form was nearest, which in a version-history view
+   * is the SNAPSHOT'S. Committing there writes into a past version of the
+   * document — `VersionSnapshotForm` states that as impossible in its own
+   * docblock, and nothing was enforcing it.
+   */
+  readOnly?: boolean;
+  /**
+   * The field is unavailable — no permission, or a form mid-submit.
+   *
+   * Accepted alongside `readOnly` because the admin sets the two independently,
+   * and a field honouring one of them is a field that is wrong half the time.
+   * Both mean the same thing here: there is no way in.
+   */
+  disabled?: boolean;
 }
 
 /**
@@ -138,14 +169,51 @@ export function documentFrom(value: unknown): BlockDocument {
     : emptyBlockDocument();
 }
 
+/**
+ * Whether this field may be edited at all.
+ *
+ * Exported and tested apart from the render for the same reason `documentFrom`
+ * is: this package has no DOM harness, and the rule is worth pinning on its own
+ * because getting it wrong is not cosmetic. A blocks field that ignored
+ * `readOnly` offered a full-screen editor from inside a version-history view,
+ * bound to the SNAPSHOT'S form — so committing wrote into a past version of the
+ * document.
+ *
+ * Both flags mean the same thing here. The admin sets them independently —
+ * `readOnly` for a document being read, `disabled` for no permission or a form
+ * mid-submit — and a field honouring one of them is a field that is wrong half
+ * the time.
+ */
+export function canEditBlocks(options: {
+  readOnly?: boolean;
+  disabled?: boolean;
+}): boolean {
+  return options.readOnly !== true && options.disabled !== true;
+}
+
 export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
   name,
   control,
+  readOnly = false,
+  disabled = false,
 }: BlocksFieldProps<TFieldValues>) {
   const [open, setOpen] = useState(false);
   const { field } = useController({ name, control });
 
-  return open ? (
+  const editable = canEditBlocks({ readOnly, disabled });
+
+  /*
+   * Closed if the form becomes read-only while the editor is up.
+   *
+   * Not a hypothetical: a permission can be revoked and a form can start
+   * submitting under an open editor. Rendering the summary instead of the
+   * editor from that render on is not enough on its own — the state has to go
+   * back too, or reopening later would show an editor seeded from a value the
+   * author has not seen since.
+   */
+  if (open && !editable) setOpen(false);
+
+  return open && editable ? (
     <BlocksEditor
       // Remounted per opening: the editor seeds its own history from the value
       // it opened with, and a key change is what discards a previous session's
@@ -154,21 +222,83 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
       initialValue={field.value}
       onCommit={field.onChange}
       onClose={() => setOpen(false)}
+      // Named and controlled so the editor can record its live document as
+      // part of the whole document's recovery point — see `useCheckpoints`.
+      name={name}
+      control={control}
     />
   ) : (
     <div className="flex flex-col gap-3">
       <BlocksSummary name={name} control={control} />
-      <div>
-        <button
-          type="button"
-          onClick={() => setOpen(true)}
-          className="inline-flex h-9 items-center rounded-md border border-border bg-background px-3 text-sm font-medium text-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          Edit blocks
-        </button>
-      </div>
+      {/*
+        No button at all rather than a disabled one.
+        
+        A disabled control says "you could do this, but not now", which is the
+        wrong sentence for a document that cannot be edited at all — and the
+        summary above already says what the field holds. An affordance that
+        cannot ever act here is one an author spends attention on.
+      */}
+      {editable ? (
+        <div>
+          <button
+            type="button"
+            onClick={() => setOpen(true)}
+            className="inline-flex h-9 items-center rounded-md border border-border bg-background px-3 text-sm font-medium text-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            Edit blocks
+          </button>
+        </div>
+      ) : null}
     </div>
   );
+}
+
+/**
+ * Record the LIVE document as this author's recovery point while the editor is
+ * open.
+ *
+ * The form cannot do this for itself. Its own recording writes the values it
+ * holds, and this field's value is deliberately not among them until the editor
+ * exits — so an author who spends twenty minutes laying out a page and then
+ * loses the tab has, from the form's point of view, changed nothing at all. The
+ * recording is what closes that gap; the commit-on-exit rule above is what
+ * makes it necessary, and neither is a workaround for the other.
+ *
+ * Recorded as the WHOLE document rather than as this field alone, because
+ * restoring a recovery point replaces the form's values wholesale: a snapshot
+ * carrying only the layout would restore cleanly and blank the title beside it.
+ *
+ * The very document the editor opened with is deliberately not recorded. It is
+ * what the server already holds, and storing it would offer the author their
+ * own unmodified page back as "unsaved changes from a moment ago".
+ */
+function useCheckpoints<TFieldValues extends FieldValues>({
+  name,
+  control,
+  document,
+}: {
+  name: Path<TFieldValues>;
+  control: Control<TFieldValues>;
+  document: BlockDocument;
+}): void {
+  const values = useWatch({ control });
+  const snapshot = useMemo(
+    () => withValueAtPath(values as Record<string, unknown>, name, document),
+    [values, name, document]
+  );
+
+  const { schedule } = useDocumentCheckpoint({ snapshot });
+
+  /*
+   * A new document object is what an edit produces — the editor's state is
+   * replaced rather than mutated — so reference inequality is the signal, and
+   * a render caused by anything else asks for nothing.
+   */
+  const openedWith = useRef(document);
+  useEffect(() => {
+    if (document === openedWith.current) return;
+    schedule();
+  }, [document, schedule]);
 }
 
 /**
@@ -179,14 +309,18 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
  * ask the admin to hide its navigation for every entry form holding a blocks
  * field, open or not.
  */
-function BlocksEditor({
+function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   initialValue,
   onCommit,
   onClose,
+  name,
+  control,
 }: {
   initialValue: unknown;
   onCommit: (value: BlockDocument) => void;
   onClose: () => void;
+  name: Path<TFieldValues>;
+  control: Control<TFieldValues>;
 }) {
   // Before anything reads the registry. Inside the component that mounts the
   // editor rather than at module scope: this file is imported by the field
@@ -212,6 +346,39 @@ function BlocksEditor({
   const slots = useMemo(registrySlotSource, []);
   const nesting = useMemo(registryNestingSource, []);
   const drag = useCanvasDrag({ editor, slots, nesting });
+
+  /*
+   * Typing a block's text on the canvas. The hook owns the caret; which values
+   * may be typed into is the block's own declaration, read by the builder.
+   */
+  const inline = useInlineText(editor);
+
+  /*
+   * The getting-started card, and the host's switch for it.
+   *
+   * `checklist === false` is the only value that turns it off: an absent
+   * config and a malformed one both leave it on, because the default is the
+   * behaviour a site that configured nothing asked for.
+   */
+  const clientConfig = usePluginClientConfig(PLUGIN_SOURCE);
+  const checklist = useBuilderChecklist({
+    document: editor.document,
+    enabled: clientConfig?.checklist !== false,
+  });
+
+  useCheckpoints({ name, control, document: editor.document });
+
+  /*
+   * Tell the form this editor holds work its values do not contain, so the
+   * navigation guard warns and the save shortcut works while the canvas is
+   * open. `undoDepth` rather than comparing documents: an edit and its undo
+   * leave a document equal to the original but not identical to it, so a
+   * reference comparison would report work that was taken back.
+   *
+   * Retracted when this component unmounts, which is the same moment `done`
+   * commits the document and makes the form dirty for real.
+   */
+  useReportUnsavedWork(`blocks:${name}`, editor.undoDepth > 0);
 
   /*
    * Writing back on the way out rather than on every keystroke.
@@ -254,6 +421,11 @@ function BlocksEditor({
       <BuilderShell
         onExit={done}
         availablePanels={AVAILABLE_PANELS}
+        // Whether the page is live, which the admin's own chrome would have
+        // shown had this editor not asked for it to be hidden. `undoDepth` is
+        // the editor's OWN dirty signal: the form's is false for as long as the
+        // editor is open, because the document is committed on the way out.
+        topBar={<DocumentStatusPill isDirty={editor.undoDepth > 0} />}
         // The shell owns the region; this fills it. Rendered unconditionally
         // rather than only when something is selected, because the panel states
         // "select a block to edit it" — a region that appears and disappears
@@ -267,6 +439,17 @@ function BlocksEditor({
         // slot rather than rendered beside the canvas so it cannot overlap the
         // page an author is editing.
         breadcrumb={<SelectionBreadcrumb editor={editor} />}
+        // Rendered only while it has somewhere to go: passing an element the
+        // shell would position and then hide leaves an empty positioner over
+        // the canvas.
+        checklist={
+          checklist.visible ? (
+            <OnboardingChecklist
+              steps={checklist.steps}
+              onDismiss={checklist.dismiss}
+            />
+          ) : undefined
+        }
         renderPanel={panel => {
           if (panel === "insert") {
             return (
@@ -283,13 +466,29 @@ function BlocksEditor({
           It draws the live region and publishes the structural verbs to what it
           wraps, which is how the toolbar presses exactly what the keys press.
         */}
-        <BlockKeyboardActions editor={editor}>
+        <BlockKeyboardActions editor={editor} onEditText={inline.begin}>
+          {/*
+            Inside the verbs provider, which is what lets the palette run
+            exactly what the keystrokes and the toolbar run.
+
+            `onExit` is the SAME handler the shell's exit button gets, so
+            leaving through the palette commits the document exactly as leaving
+            through the button does. Passing a different one — or omitting it
+            while the button exists — would give the editor two ways out that
+            behave differently.
+          */}
+          <EditorCommandPalette editor={editor} onExit={done} />
           <Canvas
             document={editor.document}
             siteStyles={siteSheet()}
             selectedId={editor.selectedId}
+            selectedIds={editor.selection.ids}
             onSelect={editor.select}
             dragHandlers={drag.handlers}
+            // The pointer route into typing a block's text. Its keyboard
+            // counterpart is the Enter binding above, registered in the same
+            // place so a surface cannot gain one without the other.
+            onDoubleClick={inline.onDoubleClick}
             // Both pieces of chrome go through the canvas rather than beside it,
             // because both are positioned in the canvas's own content
             // coordinates and the canvas root is what establishes them.

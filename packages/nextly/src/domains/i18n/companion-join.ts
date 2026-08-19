@@ -529,6 +529,19 @@ export interface LocaleTranslationMeta {
    * collection has per-locale status (i18n M6) and a companion row exists for the locale.
    */
   status?: string;
+  /**
+   * Whether this language holds a saved change that has not been published.
+   *
+   * Separate from `status` deliberately: `status` says what the language is,
+   * this says whether something is waiting. An overview that reported only the
+   * status would show a document as fully published while an author's held work
+   * sat inside it, visible only by opening that language — which with several
+   * languages means it is not seen at all.
+   *
+   * Absent rather than `false` when there is nothing pending, matching how the
+   * rest of this map omits what does not apply.
+   */
+  pendingChange?: boolean;
 }
 
 export interface TranslationStatusArgs {
@@ -548,11 +561,47 @@ export interface TranslationStatusArgs {
   /** Row key to write the per-locale map under (default `_translations`). */
   outKey?: string;
   /**
+   * Which languages hold a pending change, keyed by document id.
+   *
+   * Supplied by the caller rather than read here: this module owns the
+   * companion join and holds no versions handle, and the lookup is one batched
+   * query the caller already has an adapter for. Absent means report none,
+   * which is the right answer for a collection with no draft lifecycle.
+   */
+  pendingChangeLocales?: Map<string, Set<string | null>>;
+  /**
    * Per-locale status filter (i18n M6). When set (e.g. `"published"`), a companion row whose
    * `_status` differs is treated as absent, so a published read's overview never reports a
    * draft-only translation as present. Undefined = report every row (admin / no per-locale status).
    */
   statusValue?: string;
+}
+
+/**
+ * Mark the languages of one document that hold a saved, unpublished change.
+ *
+ * Carried separately from `status` on purpose: `status` answers what a language
+ * IS, this answers whether something is waiting. Keeping them apart means a new
+ * lifecycle state later does not have to be crossed with "has pending work".
+ *
+ * A pending change stored under no locale belongs to the default language: that
+ * is the language a document is edited in when localization is configured but
+ * the document itself is not localized.
+ */
+function markPendingChanges(
+  meta: Record<string, LocaleTranslationMeta>,
+  locales: string[],
+  defaultLocale: string,
+  pending: Set<string | null> | undefined
+): void {
+  if (!pending) return;
+  for (const code of locales) {
+    const entry = meta[code];
+    if (!entry) continue;
+    if (pending.has(code) || (code === defaultLocale && pending.has(null))) {
+      entry.pendingChange = true;
+    }
+  }
 }
 
 /**
@@ -631,6 +680,12 @@ export async function populateTranslationStatus(
       }
       meta[code] = entry;
     }
+    markPendingChanges(
+      meta,
+      locales,
+      defaultLocale,
+      args.pendingChangeLocales?.get(String(row[idKey]))
+    );
     row[outKey] = meta;
   }
 }

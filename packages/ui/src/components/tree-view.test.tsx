@@ -262,7 +262,8 @@ describe("moving through it with the keyboard", () => {
     expect(onSelectedChange).not.toHaveBeenCalled();
 
     fireEvent.keyDown(tree, { key: "Enter" });
-    expect(onSelectedChange).toHaveBeenCalledWith("header");
+    // The gesture travels with the id now; a plain Enter is a replace.
+    expect(onSelectedChange).toHaveBeenCalledWith("header", "replace");
   });
 
   it("types ahead to a row further down", () => {
@@ -292,6 +293,88 @@ describe("moving through it with the keyboard", () => {
     fireEvent.keyDown(tree, { key: "ArrowDown" });
 
     expect(document.activeElement?.textContent).toContain("C");
+  });
+});
+
+describe("Alt is left to the host", () => {
+  it("does not move focus on alt+ArrowDown, and does not consume the event", () => {
+    /*
+     * A host binding `alt+ArrowDown` — reordering the selected block, in the
+     * page editor — otherwise loses it exactly where an author is most likely
+     * to press it. The switch reads `event.key`, and `ArrowDown` is
+     * `ArrowDown` whatever modifiers are held, so the row took focus and
+     * called `preventDefault` instead.
+     */
+    render(
+      <TreeView
+        aria-label="Layers"
+        nodes={[
+          { id: "a", label: "A" },
+          { id: "b", label: "B" },
+        ]}
+      />
+    );
+    const tree = screen.getByRole("tree");
+
+    focusRow("A");
+    const handled = fireEvent.keyDown(tree, {
+      key: "ArrowDown",
+      altKey: true,
+    });
+
+    // Focus stays put: navigation did not happen.
+    expect(document.activeElement?.textContent).toContain("A");
+    // And the event was NOT cancelled, so it goes on bubbling to the host.
+    // `fireEvent` returns false only when something called preventDefault.
+    expect(handled).toBe(true);
+  });
+
+  it("still navigates on a BARE ArrowDown, which is the control", () => {
+    // Without this, the assertion above passes on a tree that ignores every
+    // arrow key — including the ones it is supposed to handle.
+    render(
+      <TreeView
+        aria-label="Layers"
+        nodes={[
+          { id: "a", label: "A" },
+          { id: "b", label: "B" },
+        ]}
+      />
+    );
+    const tree = screen.getByRole("tree");
+
+    focusRow("A");
+    const handled = fireEvent.keyDown(tree, { key: "ArrowDown" });
+
+    expect(document.activeElement?.textContent).toContain("B");
+    expect(handled).toBe(false);
+  });
+
+  it("leaves alt+ArrowRight alone rather than expanding a branch", () => {
+    // The host binds all four directions; Right and Left are its indent and
+    // outdent, and expanding here would answer a gesture meant for the editor.
+    render(
+      <TreeView
+        aria-label="Layers"
+        nodes={[
+          {
+            id: "section",
+            label: "Section",
+            children: [{ id: "kid", label: "Kid" }],
+          },
+        ]}
+      />
+    );
+    const tree = screen.getByRole("tree");
+
+    focusRow("Section");
+    fireEvent.keyDown(tree, { key: "ArrowRight", altKey: true });
+
+    expect(screen.queryByText("Kid")).toBeNull();
+    // Control: the same key without Alt does expand, so the assertion above is
+    // about the modifier rather than about the branch being unopenable.
+    fireEvent.keyDown(tree, { key: "ArrowRight" });
+    expect(screen.getByText("Kid")).toBeTruthy();
   });
 });
 
@@ -412,5 +495,105 @@ describe("virtualization", () => {
     // 500 rows at 28px. A height of only the rendered window would make the scrollbar claim the
     // tree is a fraction of its real length.
     expect(screen.getByRole("tree").style.height).toBe("14000px");
+  });
+});
+
+describe("a tree holding more than one selected row", () => {
+  function multi(props: Partial<React.ComponentProps<typeof TreeView>>) {
+    return render(
+      <TreeView
+        aria-label="Blocks"
+        nodes={[
+          { id: "a", label: "A" },
+          { id: "b", label: "B" },
+          { id: "c", label: "C" },
+        ]}
+        {...props}
+      />
+    );
+  }
+
+  it("marks every selected row, not only the primary", () => {
+    const { container } = multi({ selectedId: "a", selectedIds: ["a", "c"] });
+
+    expect(
+      Array.from(container.querySelectorAll('[role="treeitem"]')).map(row => [
+        row.textContent,
+        row.getAttribute("aria-selected"),
+      ])
+    ).toEqual([
+      ["A", "true"],
+      ["B", "false"],
+      ["C", "true"],
+    ]);
+  });
+
+  it("announces itself as multi-selectable ONLY when a set is supplied", () => {
+    /*
+     * The control that matters most here. A single-select tree claiming to be
+     * multi-selectable is wrong in a way a screen-reader user ACTS on — they
+     * would look for a selection gesture the tree does not have — so it is
+     * worse than the gap it would be closing.
+     */
+    const withSet = multi({ selectedId: "a", selectedIds: ["a"] });
+    expect(
+      withSet.container
+        .querySelector('[role="tree"]')
+        ?.getAttribute("aria-multiselectable")
+    ).toBe("true");
+
+    cleanup();
+
+    const withoutSet = multi({ selectedId: "a" });
+    expect(
+      withoutSet.container
+        .querySelector('[role="tree"]')
+        ?.getAttribute("aria-multiselectable")
+    ).toBeNull();
+  });
+
+  it("selects exactly the primary when no set is supplied, which is the control", () => {
+    // Without this, "existing callers keep working" is a claim rather than a
+    // check — every other case here passes a set.
+    const { container } = multi({ selectedId: "b" });
+
+    expect(
+      Array.from(container.querySelectorAll('[role="treeitem"]')).map(row =>
+        row.getAttribute("aria-selected")
+      )
+    ).toEqual(["false", "true", "false"]);
+  });
+
+  it("reports the gesture a click's modifiers meant", () => {
+    const onSelectedChange = vi.fn();
+    const { container } = multi({ selectedId: "a", onSelectedChange });
+    const second = container.querySelectorAll('[role="treeitem"]')[1];
+    if (second === undefined) throw new Error("expected a second row");
+
+    fireEvent.click(second, { metaKey: true });
+    expect(onSelectedChange).toHaveBeenCalledWith("b", "toggle");
+
+    fireEvent.click(second, { shiftKey: true });
+    expect(onSelectedChange).toHaveBeenCalledWith("b", "extend");
+
+    fireEvent.click(second);
+    expect(onSelectedChange).toHaveBeenCalledWith("b", "replace");
+  });
+
+  it("gives the KEYBOARD the same three gestures", () => {
+    /*
+     * WCAG 2.2 SC 2.1.1. A tree that could only build a multi-row selection by
+     * clicking would make the one capability this change adds mouse-only.
+     */
+    const onSelectedChange = vi.fn();
+    const { container } = multi({ selectedId: "a", onSelectedChange });
+    const tree = container.querySelector('[role="tree"]');
+    if (tree === null) throw new Error("expected a tree");
+
+    fireEvent.keyDown(tree, { key: " ", ctrlKey: true });
+    expect(onSelectedChange).toHaveBeenCalledWith("a", "toggle");
+
+    fireEvent.keyDown(tree, { key: "Enter", shiftKey: true });
+    expect(onSelectedChange).toHaveBeenCalledWith("a", "extend");
   });
 });

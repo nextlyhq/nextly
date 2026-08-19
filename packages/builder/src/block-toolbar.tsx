@@ -55,11 +55,13 @@ import * as React from "react";
 
 import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE } from "./canvas";
 import type { EditorState } from "./editor-state";
+import type { Rect } from "./geometry";
 import { canvasContentRect } from "./geometry-dom";
 import { useBlockActionsContext } from "./keyboard-actions";
 import {
   toolbarActions,
   toolbarPlacement,
+  unionRect,
   type ToolbarAction,
   type ToolbarActionId,
   type ToolbarPlacement,
@@ -124,9 +126,10 @@ export function BlockToolbar({
   );
 
   const { document, selectedId } = editor;
+  const selectedIds = editor.selection.ids;
   const actions = React.useMemo(
-    () => toolbarActions(document, selectedId),
-    [document, selectedId]
+    () => toolbarActions(document, selectedId, selectedIds),
+    [document, selectedId, selectedIds]
   );
 
   /*
@@ -176,8 +179,20 @@ export function BlockToolbar({
       setPlacement(null);
       return;
     }
-    const block = selectedElement(root, selectedId);
-    if (block === null) {
+    /*
+     * Anchored to the UNION of everything selected, not to the primary.
+     *
+     * With two blocks selected at opposite ends of a page, a bar drawn at one
+     * of them describes an action about to happen to the other, which the
+     * author cannot see. The union is the shape the selection occupies.
+     */
+    const rects: Rect[] = [];
+    for (const id of selectedIds) {
+      const element = selectedElement(root, id);
+      if (element !== null) rects.push(canvasContentRect(element, root));
+    }
+    const block = unionRect(rects);
+    if (block === undefined) {
       setPlacement(null);
       return;
     }
@@ -189,7 +204,7 @@ export function BlockToolbar({
     const size = canvasContentRect(element, root);
     setPlacement(
       toolbarPlacement(
-        canvasContentRect(block, root),
+        block,
         { width: size.width, height: size.height },
         // The root's own box rather than its scroll extent. `scrollWidth` and
         // `scrollHeight` are the CONTENT's size, so a long page would report a
@@ -198,7 +213,7 @@ export function BlockToolbar({
         canvasContentRect(root, root)
       )
     );
-  }, [selectedId]);
+  }, [selectedId, selectedIds]);
 
   React.useLayoutEffect(() => {
     if (hidden) return;
@@ -217,18 +232,27 @@ export function BlockToolbar({
     const element = bar.current;
     const root = element?.closest(`.${CANVAS_ROOT_CLASS}`);
     if (!(root instanceof HTMLElement)) return;
-    const block = selectedElement(root, selectedId);
-    if (block === null) return;
-
     // Absent in jsdom unless a test supplies one, and absent in older browsers.
     // A missing observer costs a re-measure, not correctness — every render
     // path above still measures.
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(() => measure());
-    observer.observe(block);
+
+    /*
+     * EVERY selected block, not only the primary.
+     *
+     * The bar is anchored to the union of them all, so any one of them changing
+     * size moves where it belongs. Watching the primary alone would leave the
+     * bar stale whenever a secondary block reflowed — which is most of what
+     * happens while an image loads or a webfont swaps.
+     */
+    for (const id of selectedIds) {
+      const block = selectedElement(root, id);
+      if (block !== null) observer.observe(block);
+    }
     observer.observe(root);
     return () => observer.disconnect();
-  }, [measure, hidden, selectedId, document]);
+  }, [measure, hidden, selectedId, selectedIds, document]);
 
   const focusAt = React.useCallback((index: number) => {
     setActiveIndex(index);

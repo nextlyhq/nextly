@@ -13,23 +13,75 @@
 
 import type { default as SharpDefault } from "sharp";
 
+import { loadSharp } from "./sharp-loader";
 import type { ImageMetadata, ProcessedImage } from "./types";
 
-// Lazy-load sharp to avoid Next.js module resolution issues
-let sharpModule: typeof SharpDefault | null = null;
-async function getSharp() {
-  if (!sharpModule) {
-    sharpModule = (await import("sharp")).default;
-  }
-  return sharpModule;
+type SharpModule = typeof SharpDefault;
+
+/**
+ * Whether a buffer is an image, or whether this install could not tell.
+ *
+ * `unknown` exists because "no image processing here" and "not an image" have
+ * different remedies and only one of them is the uploader's problem.
+ */
+export type ImageValidity = "valid" | "invalid" | "unknown";
+
+/**
+ * Whether a validity finding is grounds to REFUSE an upload.
+ *
+ * Extracted from the upload path so the decision has one home and can be
+ * tested on its own. It is the decision that produced the defect this three
+ * state type exists for: only a positive "invalid" is a statement about the
+ * file. "unknown" means this install has no image processing, which says
+ * nothing about what was uploaded, and the magic-byte gate has already run.
+ */
+export function refusesUpload(validity: ImageValidity): boolean {
+  return validity === "invalid";
+}
+
+/**
+ * Dependencies an ImageProcessor may be built with.
+ *
+ * `loader` is injected so a test can model an install without sharp without
+ * touching the filesystem. Production constructs the class with no argument
+ * and it reaches the shared loader.
+ */
+export interface ImageProcessorDeps {
+  loader?: () => Promise<SharpModule | null>;
 }
 
 export class ImageProcessor {
+  constructor(private readonly deps: ImageProcessorDeps = {}) {}
+
+  /** The library, or null when this install does not have it. */
+  private sharp(): Promise<SharpModule | null> {
+    return (this.deps.loader ?? loadSharp)();
+  }
+
+  /**
+   * Whether this install can process images at all.
+   *
+   * Exposed so a caller can decide BEFORE doing work, and so the admin can say
+   * what is missing once rather than letting each operation fail separately.
+   */
+  async canProcess(): Promise<boolean> {
+    // DERIVED from the same loader every operation uses, rather than asking
+    // resolution a second time. A separate synchronous probe answers a
+    // different question from the one the work depends on -- an injected or
+    // shimmed loader can yield nothing while resolution succeeds, and the two
+    // would disagree silently.
+    return (await this.sharp()) !== null;
+  }
+
   /**
    * Get image metadata without loading full image
    */
-  async getMetadata(buffer: Buffer): Promise<ImageMetadata> {
-    const sharp = await getSharp();
+  async getMetadata(buffer: Buffer): Promise<ImageMetadata | null> {
+    const sharp = await this.sharp();
+    // No processing available on this install: the file is still stored, it
+    // simply has no derived data. Callers read null as "not generated", never
+    // as a failure, so an upload proceeds without it.
+    if (!sharp) return null;
     const metadata = await sharp(buffer).metadata();
 
     return {
@@ -48,8 +100,12 @@ export class ImageProcessor {
   async generateThumbnail(
     buffer: Buffer,
     size: number = 300
-  ): Promise<ProcessedImage> {
-    const sharp = await getSharp();
+  ): Promise<ProcessedImage | null> {
+    const sharp = await this.sharp();
+    // No processing available on this install: the file is still stored, it
+    // simply has no derived data. Callers read null as "not generated", never
+    // as a failure, so an upload proceeds without it.
+    if (!sharp) return null;
     const processed = await sharp(buffer)
       .resize(size, size, {
         fit: "cover", // Crop to fill entire area
@@ -79,8 +135,12 @@ export class ImageProcessor {
   async optimize(
     buffer: Buffer,
     quality: number = 80
-  ): Promise<ProcessedImage> {
-    const sharp = await getSharp();
+  ): Promise<ProcessedImage | null> {
+    const sharp = await this.sharp();
+    // No processing available on this install: the file is still stored, it
+    // simply has no derived data. Callers read null as "not generated", never
+    // as a failure, so an upload proceeds without it.
+    if (!sharp) return null;
     const metadata = await sharp(buffer).metadata();
 
     // If already small and WebP, return as-is
@@ -122,8 +182,12 @@ export class ImageProcessor {
     buffer: Buffer,
     maxWidth?: number,
     maxHeight?: number
-  ): Promise<ProcessedImage> {
-    const sharp = await getSharp();
+  ): Promise<ProcessedImage | null> {
+    const sharp = await this.sharp();
+    // No processing available on this install: the file is still stored, it
+    // simply has no derived data. Callers read null as "not generated", never
+    // as a failure, so an upload proceeds without it.
+    if (!sharp) return null;
     const processed = await sharp(buffer)
       .resize(maxWidth, maxHeight, {
         fit: "inside", // Fit within bounds, maintaining aspect ratio
@@ -166,8 +230,12 @@ export class ImageProcessor {
     height: number;
     format: string;
     size: number;
-  }> {
-    const sharp = await getSharp();
+  } | null> {
+    const sharp = await this.sharp();
+    // No processing available on this install: the file is still stored, it
+    // simply has no derived data. Callers read null as "not generated", never
+    // as a failure, so an upload proceeds without it.
+    if (!sharp) return null;
     const quality = options.quality ?? 80;
 
     // Get original metadata to determine output format
@@ -294,13 +362,19 @@ export class ImageProcessor {
   /**
    * Check if buffer is a valid image
    */
-  async isValidImage(buffer: Buffer): Promise<boolean> {
+  async isValidImage(buffer: Buffer): Promise<ImageValidity> {
+    const sharp = await this.sharp();
+    // THREE states, not two. `catch { return false }` reported "not an image"
+    // when the library was merely absent, and the upload route turns that into
+    // a 400 blaming the user's file. "unknown" says the check did not run,
+    // which is not grounds to refuse an upload the magic-byte gate passed.
+    if (!sharp) return "unknown";
+
     try {
-      const sharp = await getSharp();
       await sharp(buffer).metadata();
-      return true;
+      return "valid";
     } catch {
-      return false;
+      return "invalid";
     }
   }
 
@@ -311,7 +385,11 @@ export class ImageProcessor {
     buffer: Buffer
   ): Promise<{ width: number; height: number } | null> {
     try {
-      const sharp = await getSharp();
+      const sharp = await this.sharp();
+      // No processing available on this install: the file is still stored, it
+      // simply has no derived data. Callers read null as "not generated", never
+      // as a failure, so an upload proceeds without it.
+      if (!sharp) return null;
       const metadata = await sharp(buffer).metadata();
       if (metadata.width && metadata.height) {
         return { width: metadata.width, height: metadata.height };

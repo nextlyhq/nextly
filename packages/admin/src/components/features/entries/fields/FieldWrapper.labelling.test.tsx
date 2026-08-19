@@ -93,6 +93,9 @@ describe("FieldWrapper labelling — composite fields are named groups", () => {
     ["richText", "content", "Content"],
     ["relationship", "categories", "Categories"],
     ["upload", "featuredImage", "Featured Image"],
+    // Measured on the page-builder `pages` collection: the code editor builds
+    // its focusable surface at runtime, so the label had nothing to land on.
+    ["code", "customCss", "Custom Css"],
   ])("names a %s field through role=group", (type, name, label) => {
     const { container } = renderWith({ name, type, label });
     const el = wrapper(container);

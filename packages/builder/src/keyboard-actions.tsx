@@ -20,13 +20,10 @@
  * @module keyboard-actions
  */
 
-import { findNode } from "@nextlyhq/blocks-engine";
 import { useShortcuts } from "@nextlyhq/ui";
 import * as React from "react";
 
 import { CANVAS_ESCAPE_PRIORITY, escapeOutcome } from "./canvas-escape";
-import { blockDeletion } from "./delete-block";
-import { blockDuplication } from "./duplicate-block";
 import type { EditorState } from "./editor-state";
 import {
   keyboardMovePosition,
@@ -34,7 +31,13 @@ import {
   type MoveEffect,
 } from "./keyboard-move";
 import { layerLabel, pathTo } from "./layers";
-import { lockBlockingDelete, lockBlockingMove } from "./locking";
+import { lockBlockingMove } from "./locking";
+import {
+  isRefusal,
+  selectionDeletion,
+  selectionDuplication,
+  selectionMove,
+} from "./selection-ops";
 
 /**
  * The bindings, and why these keys.
@@ -197,6 +200,19 @@ export interface BlockKeyboardActionsOptions {
    * than unmounting the canvas, so the selection survives whatever is over it.
    */
   enabled?: boolean;
+  /**
+   * Begin typing the selected block's text in place, reporting whether it
+   * could be.
+   *
+   * The keyboard route to the gesture a double-click performs. A pointer-only
+   * way into editing would leave the text of every block unreachable without a
+   * mouse, which is the plainest kind of WCAG 2.1.1 failure — and it is a real
+   * one here, because the canvas is where the text is.
+   *
+   * Optional: a host that has not wired inline editing registers no binding at
+   * all, rather than one that presses and does nothing.
+   */
+  onEditText?: (nodeId: string) => boolean;
 }
 
 /** What the hook hands back: the region's text, and the verbs behind the keys. */
@@ -224,6 +240,7 @@ export interface BlockKeyboardActionsResult {
 export function useBlockKeyboardActions({
   editor,
   enabled = true,
+  onEditText,
 }: BlockKeyboardActionsOptions): BlockKeyboardActionsResult {
   // The message a live region reads out. Held as state rather than written to
   // the DOM directly so React owns the node — a region mutated behind React's
@@ -250,100 +267,118 @@ export function useBlockKeyboardActions({
 
   const deleteSelected = React.useCallback(() => {
     const editorNow = latest.current;
-    const deletion = blockDeletion(editorNow.document, editorNow.selectedId);
-    // `null` means there is nothing to delete — no selection, or an id the
-    // document no longer holds after an undo. Nothing is applied and nothing is
-    // said, because there is no event to report.
-    if (deletion === null) return;
+    const plan = selectionDeletion(editorNow.document, editorNow.selection.ids);
+    // `null` means there is nothing to delete — no selection, or ids an undo
+    // has since removed. Nothing is applied and nothing is said, because there
+    // is no event to report.
+    if (plan === null) return;
 
     /*
      * A lock is a POLICY refusal, so it is announced where a structural one is
-     * not.
-     *
-     * The moves below stay silent when a block simply has nowhere to go — that
-     * is a fact about the document an author can see, and saying it on every
-     * press at the end of a list is noise. A lock is the opposite: nothing about
-     * the page explains why the key did nothing, the remedy is one the author
-     * can act on, and a keyboard user has no badge to look at.
-     *
-     * The subtree is checked, not just the node. Deleting a container destroys
-     * what is inside it, so an author who locked a caption and then removed its
-     * section would lose the thing they locked through an action aimed at
-     * something else.
+     * not. Nothing about the page explains why the key did nothing, the remedy
+     * is one the author can act on, and a keyboard user has no badge to look
+     * at. ONE lock refuses the whole group, because the group is atomic and
+     * there is no half-done delete to fall back to.
      */
-    const blocked = lockBlockingDelete(editorNow.document, deletion.id);
-    if (blocked !== undefined) {
-      announce(
-        blocked.id === deletion.id
-          ? `${layerLabel(blocked)} is locked. Unlock it to delete it.`
-          : `This block contains ${layerLabel(blocked)}, which is locked. Unlock it to delete.`
-      );
+    if (isRefusal(plan)) {
+      announce(plan.reason);
       return;
     }
 
-    const applied = editorNow.apply({
-      kind: "remove",
-      id: deletion.id,
-      dropSlotIfEmpty: deletion.dropSlotIfEmpty,
-    });
-    if (applied === null) return;
+    if (editorNow.applyAll(plan.ops) === null) return;
 
-    // Selection moved only after the store accepted the removal. Moving it
-    // first would leave the author pointed at a neighbour while the block they
-    // asked to delete is still there.
-    editorNow.select(deletion.nextSelection);
-    /*
-     * Named the way the layers panel and the breadcrumb name it.
-     *
-     * `blockLabel(type)` would say "Heading" for a block the author called
-     * "Hero title", so the one surface a screen-reader user hears would be the
-     * only one using a different name for the same block.
-     */
-    const removed = findNode(editorNow.document.nodes, deletion.id);
-    announce(
-      deletionAnnouncement(
-        removed === undefined ? deletion.type : layerLabel(removed),
-        deletion.descendantCount
-      )
-    );
+    // Moved only after the store accepted the removal. Moving it first would
+    // leave the author pointed at a neighbour while the blocks they asked to
+    // delete are still there.
+    editorNow.select(plan.nextSelection);
+    announce(deletionAnnouncement(plan.subject, plan.descendants));
   }, [announce]);
 
   const duplicateSelected = React.useCallback(() => {
     const editorNow = latest.current;
-    const duplication = blockDuplication(
+    const plan = selectionDuplication(
       editorNow.document,
-      editorNow.selectedId
+      editorNow.selection.ids
     );
     // `null` means there is nothing to duplicate, or a position the op
-    // vocabulary cannot express. Nothing is applied and nothing is said,
-    // because there is no event to report.
-    if (duplication === null) return;
+    // vocabulary cannot express. Nothing is applied and nothing is said.
+    if (plan === null) return;
 
     /*
-     * A lock does NOT stop a duplication.
-     *
-     * The engine's rule is that the command layer must not let an author move
-     * or delete a locked node, and duplicating does neither — the original
-     * stays exactly where it is, untouched. Refusing here would read as
-     * cautious and would mean an author could not take a copy of the one block
-     * they had most deliberately protected.
+     * A lock does NOT stop a duplication. The command layer must not let an
+     * author move or delete a locked node, and duplicating does neither — the
+     * originals stay exactly where they are. Refusing would mean an author
+     * could not take copies of the blocks they had most deliberately protected.
      */
-    const applied = editorNow.apply({
-      kind: "insert",
-      node: duplication.node,
-      at: duplication.at,
-    });
-    if (applied === null) return;
+    if (editorNow.applyAll(plan.ops) === null) return;
 
-    // Selection follows the copy. It is the block the author is now working on
-    // — they duplicated it to change it — and leaving the original selected
-    // would send the next edit to the wrong one of two identical blocks.
-    editorNow.select(duplication.node.id);
-    announce(`${duplication.label} duplicated. Undo with ${UNDO_KEYS_SPOKEN}.`);
+    /*
+     * Selection follows the copies: they are what the author is now working on,
+     * and leaving the originals selected would send the next edit to the wrong
+     * half of two identical runs.
+     *
+     * Built through the same grammar a click uses — one replace then toggles —
+     * rather than by writing a selection object directly, so there is no second
+     * way to construct one and no second place that has to remember the
+     * outermost rule.
+     */
+    const [first, ...rest] = plan.newIds;
+    if (first !== undefined) {
+      editorNow.select(first, "replace");
+      for (const id of rest) editorNow.select(id, "toggle");
+    }
+    announce(`${plan.subject} duplicated. Undo with ${UNDO_KEYS_SPOKEN}.`);
   }, [announce]);
+
+  /**
+   * Reordering a selection that holds more than one block.
+   *
+   * Only `up` and `down`. Depth is the other axis, and a set does not have one
+   * answer for it: `indent` appends to the container above, so two blocks
+   * indenting together would arrive in an order neither of them was in.
+   *
+   * Returns whether it handled the press, so the single-block path below stays
+   * exactly as it was for the case it already served.
+   */
+  const moveSet = React.useCallback(
+    (direction: MoveDirection): boolean => {
+      const editorNow = latest.current;
+      const ids = editorNow.selection.ids;
+      if (ids.length <= 1 || (direction !== "up" && direction !== "down")) {
+        return false;
+      }
+
+      const plan = selectionMove(editorNow.document, ids, direction);
+      // A set at the edge of its container, exactly as one block there: the
+      // press did nothing and that is the answer. Handled either way, because
+      // falling through would move the PRIMARY alone and break the set apart.
+      if (plan === null) return true;
+
+      /*
+       * A lock and a split selection are both POLICY refusals, so both are
+       * announced where a structural one is not. Nothing on the page explains
+       * why the key did nothing, and a keyboard author has no dimmed button to
+       * look at.
+       */
+      if (isRefusal(plan)) {
+        announce(plan.reason);
+        return true;
+      }
+
+      if (editorNow.applyAll(plan.ops) !== null) {
+        announce(`${plan.subject} moved.`);
+      }
+      // The selection deliberately does not change, for the same reason it does
+      // not for one block: a run of presses walks the same set across the list.
+      return true;
+    },
+    [announce]
+  );
 
   const moveSelected = React.useCallback(
     (direction: MoveDirection) => {
+      if (moveSet(direction)) return;
+
       const editorNow = latest.current;
       const selectedId = editorNow.selectedId;
       if (selectedId === null) return;
@@ -388,7 +423,7 @@ export function useBlockKeyboardActions({
       // the block still selected, so a second press continues moving the
       // same block — which is what makes a run of presses walk it across the
     },
-    [announce]
+    [announce, moveSet]
   );
 
   /**
@@ -506,7 +541,39 @@ export function useBlockKeyboardActions({
     [announce, deleteSelected, duplicateSelected]
   );
 
-  useShortcuts([...bindings, ...editing], {
+  /*
+   * Enter opens the selected block's text for typing, which is the keyboard
+   * route to what a double-click does on the canvas.
+   *
+   * Registered only when a host supplied the verb: a binding that presses and
+   * does nothing is worse than no binding, because it teaches an author the key
+   * is broken rather than absent.
+   *
+   * `whenTyping: false` is what stops it firing again once the caret is in.
+   * The shortcut manager counts a `contentEditable` element as a typing target,
+   * so an author pressing Enter inside a paragraph gets a line break from the
+   * element rather than a second attempt to begin an edit that is already open.
+   */
+  const inlineEditing = React.useMemo(
+    () =>
+      onEditText === undefined
+        ? []
+        : [
+            {
+              keys: "Enter",
+              description: "Edit the selected block's text",
+              when: () => latest.current.selectedId !== null,
+              whenTyping: false,
+              run: () => {
+                const id = latest.current.selectedId;
+                if (id !== null) onEditText(id);
+              },
+            },
+          ],
+    [onEditText]
+  );
+
+  useShortcuts([...bindings, ...editing, ...inlineEditing], {
     name: "builder-block-actions",
     enabled,
   });
@@ -590,6 +657,7 @@ export function useBlockKeyboardActions({
 export function BlockKeyboardActions({
   editor,
   enabled,
+  onEditText,
   children,
 }: BlockKeyboardActionsOptions & {
   readonly children?: React.ReactNode;
@@ -597,6 +665,7 @@ export function BlockKeyboardActions({
   const { announcement, actions } = useBlockKeyboardActions({
     editor,
     enabled,
+    ...(onEditText === undefined ? {} : { onEditText }),
   });
 
   // `polite`, not `assertive`: a move is the author's own action and its result

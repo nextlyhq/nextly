@@ -31,6 +31,13 @@ import type { BlockDocument, DocumentLimits } from "@nextlyhq/blocks-engine";
 import { useCallback, useMemo, useRef, useState } from "react";
 
 import { applyOp, type BuilderOp } from "./ops";
+import {
+  EMPTY_SELECTION,
+  applySelection,
+  pruneSelection,
+  type BlockSelection,
+  type SelectionMode,
+} from "./selection";
 
 /** How deep the undo history goes before the oldest step is dropped. */
 export const MAX_HISTORY = 100;
@@ -40,14 +47,34 @@ export interface EditorState {
   document: BlockDocument;
   /** The selected node's id, or null when nothing is selected. */
   selectedId: string | null;
+  /**
+   * Everything selected, in document order, with the primary named.
+   *
+   * `selectedId` IS `selection.primary`, derived rather than stored twice: the
+   * two disagreeing would put an outline on one block and the inspector on
+   * another, and there is no render in which that is what an author meant.
+   */
+  selection: BlockSelection;
   /** Select a node, or clear the selection with null. */
-  select: (id: string | null) => void;
+  select: (id: string | null, mode?: SelectionMode) => void;
   /**
    * Apply an edit. Returns the applied op's outcome, or null when the op was
    * refused — a caller that needs to know whether its edit landed can ask,
    * rather than comparing documents afterwards.
    */
   apply: (op: BuilderOp) => BlockDocument | null;
+  /**
+   * Apply several ops as ONE action, or nothing at all.
+   *
+   * For an edit whose subject is a multi-block selection. Atomic — a group that
+   * failed halfway would leave a document the author never asked for — and it
+   * costs exactly one undo, because "delete these six" is one thing an author
+   * did and six presses to take it back would read as the history being wrong.
+   *
+   * Returns the new document, or `null` when any op was refused and nothing was
+   * committed.
+   */
+  applyAll: (ops: readonly BuilderOp[]) => BlockDocument | null;
   undo: () => void;
   redo: () => void;
   canUndo: boolean;
@@ -84,10 +111,10 @@ export function useEditorState({
   limits,
 }: UseEditorStateArgs): EditorState {
   const [document, setDocument] = useState<BlockDocument>(initialDocument);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selection, setSelection] = useState<BlockSelection>(EMPTY_SELECTION);
 
-  const undoStack = useRef<BuilderOp[]>([]);
-  const redoStack = useRef<BuilderOp[]>([]);
+  const undoStack = useRef<BuilderOp[][]>([]);
+  const redoStack = useRef<BuilderOp[][]>([]);
   // Mirrors the stack lengths so the flags below are STATE and re-render when
   // they change. Reading `undoStack.current.length` directly would leave an
   // undo button disabled after the first edit, because a ref mutation does not
@@ -103,17 +130,59 @@ export function useEditorState({
    * a refused op does, which is nothing at all: no state change, no history
    * entry, and the caller told.
    */
+  /**
+   * Apply a GROUP of ops as one action.
+   *
+   * ## Atomic, and that is the point
+   *
+   * Every op is folded onto a WORKING document and nothing is committed until
+   * all of them have succeeded. A group that failed halfway would leave the
+   * document in a state the author never asked for and no single undo could
+   * leave — deleting four of six blocks because the fifth was locked is worse
+   * than deleting none.
+   *
+   * ## One group, one undo
+   *
+   * The inverses are collected in REVERSE order and pushed as a single stack
+   * entry. Undo granularity belongs to the history rather than to the document
+   * format: the op vocabulary stays four flat kinds, which matters because ops
+   * are persisted in a `json()` column and a nested "batch" op would make every
+   * reader of that column understand recursion.
+   *
+   * A single op is a group of one, so there is one code path rather than a fast
+   * path and a batch path that can drift.
+   */
   const run = useCallback(
-    (op: BuilderOp, into: "undo" | "redo" | "new"): BlockDocument | null => {
-      let applied;
-      try {
-        applied = applyOp(document, op, limits);
-      } catch {
-        // A refused op is an ordinary outcome, not a crash: an insert past a
-        // cap, a move onto a node that no longer exists, an update to a node a
-        // concurrent edit removed. The caller decides what to say about it.
-        return null;
+    (
+      ops: readonly BuilderOp[],
+      into: "undo" | "redo" | "new"
+    ): BlockDocument | null => {
+      // Nothing to do, and nothing to record. An empty group must NOT push an
+      // entry: that would be an undo that appears to do nothing, which reads as
+      // the history being broken.
+      if (ops.length === 0) return document;
+
+      let working = document;
+      const inverses: BuilderOp[] = [];
+      for (const op of ops) {
+        let applied;
+        try {
+          applied = applyOp(working, op, limits);
+        } catch {
+          // A refused op is an ordinary outcome, not a crash: an insert past a
+          // cap, a move onto a node that no longer exists, an update to a node
+          // a concurrent edit removed. The caller decides what to say about it.
+          // Nothing is committed — see the atomicity note above.
+          return null;
+        }
+        working = applied.document;
+        // Front, so undoing the group runs the LAST op's inverse first. Applied
+        // in the order they were collected, each inverse would meet a document
+        // the later ops had already changed.
+        inverses.unshift(applied.inverse);
       }
+
+      const applied = { document: working, inverse: inverses };
 
       if (into === "new") {
         undoStack.current.push(applied.inverse);
@@ -142,70 +211,72 @@ export function useEditorState({
       // NEW document whether the id is still there, rather than by inspecting
       // the op — an op that removes a container removes its subtree too, and
       // the op names only the container.
-      setSelectedId(current =>
-        current !== null && !hasNode(applied.document, current) ? null : current
-      );
+      setSelection(current => pruneSelection(applied.document, current));
 
       return applied.document;
     },
     [document, limits]
   );
 
-  const apply = useCallback((op: BuilderOp) => run(op, "new"), [run]);
+  const apply = useCallback((op: BuilderOp) => run([op], "new"), [run]);
+
+  const applyAll = useCallback(
+    (ops: readonly BuilderOp[]) => run(ops, "new"),
+    [run]
+  );
 
   const undo = useCallback(() => {
-    const op = undoStack.current.pop();
-    if (op === undefined) return;
+    const group = undoStack.current.pop();
+    if (group === undefined) return;
     // Popped before running, and NOT pushed back on failure. A refused undo
     // means the inverse no longer applies to this document, so keeping it would
     // leave a step that fails every time it is reached — an undo button that
     // does nothing and never clears.
     setDepths(d => ({ ...d, undo: undoStack.current.length }));
-    run(op, "redo");
+    run(group, "redo");
   }, [run]);
 
   const redo = useCallback(() => {
-    const op = redoStack.current.pop();
-    if (op === undefined) return;
+    const group = redoStack.current.pop();
+    if (group === undefined) return;
     setDepths(d => ({ ...d, redo: redoStack.current.length }));
-    run(op, "undo");
+    run(group, "undo");
   }, [run]);
 
-  const select = useCallback((id: string | null) => setSelectedId(id), []);
+  /*
+   * The document is read from a REF rather than closed over.
+   *
+   * A gesture is handled by whatever handler the last render bound, and the
+   * selection rules need the document that is current when the click lands —
+   * not the one that was current when the handler was made. Closing over it
+   * would resolve a range against a stale tree, which is a wrong selection
+   * rather than a missing one.
+   */
+  const latestDocument = useRef(document);
+  latestDocument.current = document;
+
+  const select = useCallback(
+    (id: string | null, mode: SelectionMode = "replace") =>
+      setSelection(current =>
+        applySelection(latestDocument.current, current, id, mode)
+      ),
+    []
+  );
 
   return useMemo(
     () => ({
       document,
-      selectedId,
+      selectedId: selection.primary,
+      selection,
       select,
       apply,
+      applyAll,
       undo,
       redo,
       canUndo: depths.undo > 0,
       canRedo: depths.redo > 0,
       undoDepth: depths.undo,
     }),
-    [document, selectedId, select, apply, undo, redo, depths]
+    [document, selection, select, apply, applyAll, undo, redo, depths]
   );
-}
-
-/**
- * Whether a node id is anywhere in the document.
- *
- * An explicit walk rather than the engine's tree helpers, because this asks the
- * cheapest possible question — presence — and stops at the first hit. The
- * helpers that find a node also compute its path and parent, which nothing here
- * reads.
- */
-function hasNode(doc: BlockDocument, id: string): boolean {
-  const stack = [...doc.nodes];
-  while (stack.length > 0) {
-    const node = stack.pop();
-    if (node === undefined) continue;
-    if (node.id === id) return true;
-    if (node.slots !== undefined) {
-      for (const children of Object.values(node.slots)) stack.push(...children);
-    }
-  }
-  return false;
 }

@@ -118,6 +118,16 @@ export type {
  * own, which is what keeps one gesture having one answer — and what lets both
  * the button and the keystroke announce into the single live region.
  */
+/**
+ * The command palette, assembled and mounted for the editor.
+ *
+ * From this entry because it is a client component and because it only works
+ * below `BlockKeyboardActions`, whose verbs it runs. A host that wants to build
+ * its own list uses `CommandPalette` with `builderCommands` instead.
+ */
+export { EditorCommandPalette } from "./editor-command-palette";
+export type { EditorCommandPaletteProps } from "./editor-command-palette";
+
 export { BlockToolbar } from "./block-toolbar";
 export type { BlockToolbarProps } from "./block-toolbar";
 
@@ -146,6 +156,38 @@ export type { EditorState, UseEditorStateArgs } from "./editor-state";
  * caller can reach them without loading React.
  */
 export { DropIndicator, useCanvasDrag } from "./canvas-drag";
+/**
+ * Typing a block's text in place on the canvas.
+ *
+ * The hook owns the caret and the handover; the rules about WHAT may be edited
+ * are `inline-text`'s, and a block declares its own through its prop schemas.
+ */
+export { useInlineText, EDITING_ATTRIBUTE } from "./use-inline-text";
+export type { InlineTextEditing, UseInlineTextResult } from "./use-inline-text";
+export { inlineTargets, inlineTarget, inlineTextOp } from "./inline-text";
+/**
+ * The first-run checklist: what an author has not done on this page yet.
+ *
+ * Every step is DERIVED from the document rather than tracked, so it describes
+ * the page rather than a person's history with it.
+ */
+export {
+  OnboardingChecklist,
+  useBuilderChecklist,
+  CHECKLIST_STORAGE_KEY,
+} from "./onboarding-checklist";
+export type {
+  OnboardingChecklistProps,
+  UseBuilderChecklistOptions,
+  UseBuilderChecklistResult,
+} from "./onboarding-checklist";
+export {
+  builderChecklist,
+  checklistComplete,
+  checklistDoneCount,
+} from "./onboarding";
+export type { ChecklistStep } from "./onboarding";
+export type { InlineTextTarget } from "./inline-text";
 export type {
   CanvasDrag,
   CanvasDragHandlers,

@@ -91,3 +91,54 @@ export function canvasContentPoint(
     y: clientY - rootBox.y + root.scrollTop,
   };
 }
+
+/**
+ * The nearest ancestor that actually scrolls, or `null` when nothing does.
+ *
+ * The canvas root is NOT it. That element carries the drag handlers and sizes
+ * itself to its content — `overflow: visible` — so assigning `scrollTop` on it
+ * is silently ignored, and an autoscroll written against it does nothing on a
+ * page long enough to need one. The scrolling is done by an ancestor the shell
+ * owns, which is where the visible window's edges live too.
+ *
+ * Matched on the COMPUTED overflow rather than on whether the element currently
+ * overflows. A container is the scroller because of how it is styled, not
+ * because of how much happens to be in it right now — testing the current
+ * amount would answer "no" for an empty canvas and change its mind once a block
+ * was added, which is a different element for the same drag.
+ *
+ * Starts at the root's parent: the root is excluded by definition, since it is
+ * the thing being scrolled WITHIN.
+ */
+export function scrollableAncestor(root: HTMLElement): HTMLElement | null {
+  let element = root.parentElement;
+  while (element !== null) {
+    const overflowY = getComputedStyle(element).overflowY;
+    if (overflowY === "auto" || overflowY === "scroll") return element;
+    element = element.parentElement;
+  }
+  return null;
+}
+
+/**
+ * The container's top and bottom edges, in CLIENT coordinates.
+ *
+ * Client rather than content, because the only caller compares them against a
+ * pointer's client position to decide whether it is resting near an edge. That
+ * question is about where the container sits on SCREEN, and converting either
+ * side into content space would answer a different one — a container scrolled
+ * halfway down its content has the same edges on screen as one scrolled to the
+ * top.
+ *
+ * Here rather than at the caller because this module is the one place allowed to
+ * read layout from the DOM, and a guard enforces it. The rule is worth the
+ * indirection: every reflow-forcing read being in one file is what makes the
+ * cost of one findable.
+ */
+export function containerEdges(root: HTMLElement): {
+  top: number;
+  bottom: number;
+} {
+  const box = root.getBoundingClientRect();
+  return { top: box.top, bottom: box.bottom };
+}

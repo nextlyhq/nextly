@@ -44,21 +44,32 @@ function pair(): BlockDocument {
   ]);
 }
 
-function editorSpy(
-  doc: BlockDocument,
-  selectedId: string | null
-): EditorState & { apply: ReturnType<typeof vi.fn> } {
+type EditorSpy = EditorState & {
+  apply: ReturnType<typeof vi.fn>;
+  applyAll: ReturnType<typeof vi.fn>;
+  select: ReturnType<typeof vi.fn>;
+};
+
+function editorSpy(doc: BlockDocument, selectedId: string | null): EditorSpy {
   return {
     document: doc,
     selectedId,
+    // The set the structural verbs now read. Derived from the primary here so
+    // every existing case keeps describing one selected block, which is what
+    // they were written to describe.
+    selection: {
+      ids: selectedId === null ? [] : [selectedId],
+      primary: selectedId,
+    },
     select: vi.fn(),
     apply: vi.fn(() => doc),
+    applyAll: vi.fn(() => doc),
     undo: vi.fn(),
     redo: vi.fn(),
     canUndo: false,
     canRedo: false,
     undoDepth: 0,
-  } as unknown as EditorState & { apply: ReturnType<typeof vi.fn> };
+  } as unknown as EditorSpy;
 }
 
 /**
@@ -399,8 +410,8 @@ describe("useBlockKeyboardActions", () => {
 
     press("Delete");
 
-    expect(editor.apply).toHaveBeenCalledTimes(1);
-    const op = editor.apply.mock.calls[0][0];
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    const op = editor.applyAll.mock.calls[0][0][0];
     expect(op.kind).toBe("remove");
     expect(op.id).toBe("a");
   });
@@ -413,7 +424,7 @@ describe("useBlockKeyboardActions", () => {
 
     press("Backspace");
 
-    expect(editor.apply.mock.calls[0][0].kind).toBe("remove");
+    expect(editor.applyAll.mock.calls[0][0][0].kind).toBe("remove");
   });
 
   it("moves the selection forward, not backward", () => {
@@ -439,7 +450,7 @@ describe("useBlockKeyboardActions", () => {
     // Moving it first would leave the author pointed at a neighbour while the
     // block they asked to delete is still on the page.
     const editor = editorSpy(pair(), "a");
-    editor.apply.mockReturnValue(null);
+    editor.applyAll.mockReturnValue(null);
     mount(editor);
 
     press("Delete");
@@ -478,8 +489,8 @@ describe("useBlockKeyboardActions", () => {
 
     press("d", { ctrlKey: true });
 
-    expect(editor.apply).toHaveBeenCalledTimes(1);
-    const op = editor.apply.mock.calls[0][0];
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    const op = editor.applyAll.mock.calls[0][0][0];
     expect(op.kind).toBe("insert");
     // Immediately after the original, not at the end of the page.
     expect(op.at).toEqual({ index: 1 });
@@ -493,7 +504,7 @@ describe("useBlockKeyboardActions", () => {
 
     press("d", { ctrlKey: true });
 
-    expect(editor.apply.mock.calls[0][0].node.id).not.toBe("a");
+    expect(editor.applyAll.mock.calls[0][0][0].node.id).not.toBe("a");
   });
 
   it("selects the copy, not the original", () => {
@@ -505,8 +516,10 @@ describe("useBlockKeyboardActions", () => {
 
     press("d", { ctrlKey: true });
 
-    const copyId = editor.apply.mock.calls[0][0].node.id;
-    expect(editor.select).toHaveBeenCalledWith(copyId);
+    const copyId = editor.applyAll.mock.calls[0][0][0].node.id;
+    // Through the same grammar a click uses, so there is no second way to build
+    // a selection: one replace, then a toggle per further copy.
+    expect(editor.select).toHaveBeenCalledWith(copyId, "replace");
   });
 
   it("announces the duplication and the way back", () => {
@@ -538,8 +551,8 @@ describe("useBlockKeyboardActions", () => {
 
     press("d", { ctrlKey: true });
 
-    expect(editor.apply).toHaveBeenCalledTimes(1);
-    expect(editor.apply.mock.calls[0][0].kind).toBe("insert");
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(editor.applyAll.mock.calls[0][0][0].kind).toBe("insert");
   });
 
   it("does nothing with no selection", () => {
@@ -550,7 +563,7 @@ describe("useBlockKeyboardActions", () => {
 
     press("d", { ctrlKey: true });
 
-    expect(editor.apply).not.toHaveBeenCalled();
+    expect(editor.applyAll).not.toHaveBeenCalled();
   });
 
   it("names a block by the name its author gave it", () => {
@@ -620,7 +633,7 @@ describe("useBlockKeyboardActions", () => {
 
     press("Delete");
 
-    expect(editor.apply).not.toHaveBeenCalled();
+    expect(editor.applyAll).not.toHaveBeenCalled();
     expect(screen.getByRole("status").textContent ?? "").toMatch(
       /is locked\. unlock it to delete it/i
     );
@@ -656,7 +669,7 @@ describe("useBlockKeyboardActions", () => {
 
     press("Delete");
 
-    expect(editor.apply).not.toHaveBeenCalled();
+    expect(editor.applyAll).not.toHaveBeenCalled();
     expect(screen.getByRole("status").textContent ?? "").toMatch(
       /contains .*which is locked/i
     );
@@ -683,9 +696,11 @@ describe("useBlockKeyboardActions", () => {
 
     press("Delete");
 
-    expect(editor.apply).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: "remove", id: "wrap" })
-    );
+    // A GROUP now, even for one block: the verbs plan across the selection and
+    // a single block is a selection of one.
+    expect(editor.applyAll).toHaveBeenCalledWith([
+      expect.objectContaining({ kind: "remove", id: "wrap" }),
+    ]);
   });
 
   it("says how many blocks a container takes with it", () => {
@@ -791,6 +806,96 @@ describe("useBlockKeyboardActions", () => {
       "Paragraph deleted"
     );
     clearBlocks();
+  });
+});
+
+describe("the verbs act on the WHOLE selection", () => {
+  /** An editor with three top-level blocks and two of them selected. */
+  function twoSelected() {
+    return {
+      ...editorSpy(
+        documentOf([
+          { id: "a", type: "acme/text", version: 1, props: {} },
+          { id: "b", type: "acme/text", version: 1, props: {} },
+          { id: "c", type: "acme/text", version: 1, props: {} },
+        ]),
+        "a"
+      ),
+      selection: { ids: ["a", "c"], primary: "a" },
+    } as ReturnType<typeof editorSpy>;
+  }
+
+  it("deletes every selected block in ONE group", () => {
+    // One group, so one undo. Two separate applies would cost two presses to
+    // take back something the author did once.
+    const editor = twoSelected();
+    mount(editor);
+
+    press("Delete");
+
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(
+      editor.applyAll.mock.calls[0][0].map((op: { id: string }) => op.id)
+    ).toEqual(["a", "c"]);
+  });
+
+  it("counts the blocks in what it says, rather than naming one", () => {
+    // "Hero title deleted" would be wrong and confusing when three went.
+    const editor = twoSelected();
+    mount(editor);
+
+    press("Delete");
+
+    expect(screen.getByRole("status").textContent).toContain(
+      "2 blocks deleted"
+    );
+  });
+
+  it("duplicates every selected block and selects the copies", () => {
+    const editor = twoSelected();
+    mount(editor);
+
+    press("d", { ctrlKey: true });
+
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(editor.applyAll.mock.calls[0][0]).toHaveLength(2);
+    // One replace then one toggle: the copies become the selection through the
+    // same grammar a click uses.
+    expect(editor.select).toHaveBeenCalledWith(expect.any(String), "replace");
+    expect(editor.select).toHaveBeenCalledWith(expect.any(String), "toggle");
+  });
+
+  it("refuses the whole delete when ONE selected block is locked", () => {
+    /*
+     * Atomic: there is no half-done delete to fall back to. Silently skipping
+     * the locked one would leave an author who selected two blocks looking at
+     * one they did not notice surviving.
+     */
+    const editor = {
+      ...editorSpy(
+        documentOf([
+          { id: "a", type: "acme/text", version: 1, props: {} },
+          {
+            id: "c",
+            type: "acme/text",
+            version: 1,
+            props: {},
+            locked: true,
+            name: "Pinned",
+          },
+        ] as never),
+        "a"
+      ),
+      selection: { ids: ["a", "c"], primary: "a" },
+    } as ReturnType<typeof editorSpy>;
+    mount(editor);
+
+    press("Delete");
+
+    expect(editor.applyAll).not.toHaveBeenCalled();
+    expect(screen.getByRole("status").textContent).toBe(
+      "Pinned is locked. Unlock it to delete it."
+    );
   });
 });
 

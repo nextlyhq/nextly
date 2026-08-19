@@ -25,18 +25,22 @@
  */
 
 import { Button } from "@nextlyhq/ui";
+import { useState } from "react";
 
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { cn } from "@admin/lib/utils";
 
+import { CompletenessMeter } from "./CompletenessMeter";
 import { CopyFromLanguageDialog } from "./CopyFromLanguageDialog";
 import { useEntryLocale } from "./EntryLocaleContext";
 import {
   languageState,
+  languageStateLabel,
   LANGUAGE_STATE_LABEL,
   StateDot,
   type LanguageState,
 } from "./LanguageControl";
+import { PublishAllConfirmDialog } from "./PublishAllConfirmDialog";
 import {
   translationCounts,
   type LocaleTranslationMeta,
@@ -68,33 +72,13 @@ export interface LanguagePanelProps {
  * The completeness meter. `aria-hidden` because the count beside it states the
  * same fact in words — a reader would otherwise hear the progress twice.
  */
-function CompletenessMeter({
-  translated,
-  total,
-}: {
-  translated: number;
-  total: number;
-}) {
-  if (total === 0) return null;
-  return (
-    <span
-      aria-hidden="true"
-      className="inline-flex h-1.5 w-16 overflow-hidden rounded-sm bg-muted"
-    >
-      <span
-        className="block bg-foreground"
-        style={{ width: `${(translated / total) * 100}%` }}
-      />
-    </span>
-  );
-}
-
 function LanguageRow({
   code,
   label,
   rtl,
   isDefault,
   state,
+  pendingChange,
   isActive,
   canSeed,
   onSelect,
@@ -106,6 +90,8 @@ function LanguageRow({
   rtl: boolean;
   isDefault: boolean;
   state: LanguageState;
+  /** Whether this language holds a saved change nobody has published. */
+  pendingChange?: boolean;
   isActive: boolean;
   canSeed: boolean;
   onSelect?: (code: string, options?: { seedFrom?: string }) => void;
@@ -114,26 +100,58 @@ function LanguageRow({
 }) {
   return (
     <li className="flex items-center gap-2 px-3 py-2 border-b border-border last:border-b-0">
-      <StateDot state={state} />
-      <span className="text-sm font-medium">{label}</span>
-      {isDefault && (
-        <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-          default
+      {/* The describing half SHRINKS and the acting half does not. This row
+          lives in a 320px rail, and with a long label, a `default`/`rtl` badge
+          and a state to report there is not always room for both buttons —
+          measured, the "Open" of an untranslated RTL language sat 38px past the
+          row's own right edge, unreachable by pointer. Truncating the state text
+          costs nothing that is not said elsewhere: the dot encodes it by SHAPE,
+          and the language button's accessible name carries it in words. */}
+      <div className="flex min-w-0 flex-1 items-center gap-2">
+        <StateDot state={state} />
+        {/* The language NAME does not yield. It is the row's identity, and a
+            flex row that shrinks everything proportionally turned "Arabic" into
+            "A…" — which names nothing — while the state beside it still read in
+            full. The state text below is the one thing that gives way. */}
+        <span className="shrink-0 whitespace-nowrap text-sm font-medium">
+          {label}
         </span>
-      )}
-      {rtl && (
-        <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-          rtl
+        {isDefault && (
+          <span className="shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground">
+            default
+          </span>
+        )}
+        {rtl && (
+          <span className="shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground">
+            rtl
+          </span>
+        )}
+        {/* A chip, not part of the state text, and measured that way: in a
+            277px rail "published · unpublished changes" truncated to
+            "publishe…", which hides the one fact in the row an author has to
+            act on. The chip does not shrink, so it survives at any width — the
+            same device the `default` and `rtl` markers already use. */}
+        {pendingChange && (
+          <span
+            className="shrink-0 rounded-sm border border-border px-1 text-[10px] uppercase tracking-wide text-foreground"
+            title="This language has changes that have not been published"
+          >
+            changes
+          </span>
+        )}
+        <span
+          className="min-w-0 truncate text-xs text-muted-foreground"
+          title={languageStateLabel(state, pendingChange)}
+        >
+          {LANGUAGE_STATE_LABEL[state]}
         </span>
-      )}
-      <span className="text-xs text-muted-foreground">
-        {LANGUAGE_STATE_LABEL[state]}
-      </span>
-      <span className="flex-1" />
+      </div>
       {isActive ? (
-        <span className="text-xs text-muted-foreground">editing now</span>
+        <span className="shrink-0 text-xs text-muted-foreground">
+          editing now
+        </span>
       ) : (
-        <>
+        <div className="flex shrink-0 items-center gap-1.5">
           {/* Offered only where it is the useful next step: a language with
               nothing in it. Seeding one that already has content is the
               overwrite the confirm step exists to warn about, and it stays
@@ -171,7 +189,7 @@ function LanguageRow({
               Open
             </Button>
           )}
-        </>
+        </div>
       )}
     </li>
   );
@@ -185,8 +203,10 @@ export function LanguagePanel({
   actionsDisabled = false,
   className,
 }: LanguagePanelProps) {
+  const [confirmPublishAll, setConfirmPublishAll] = useState(false);
   const { enabled, locales, defaultLocale } = useLocalization();
-  const { collectionLocalized } = useEntryLocale();
+  const { collectionLocalized, isNonDefaultLocale, onEnterTranslationMode } =
+    useEntryLocale();
   const copy = useCopyFromLanguage();
   const publish = usePublishAllLanguages(
     hasStatus === undefined ? {} : { hasStatus }
@@ -201,6 +221,12 @@ export function LanguagePanel({
   if (!enabled || !collectionLocalized || locales.length < 2) return null;
 
   const active = activeLocale ?? defaultLocale;
+  // How many languages hold work nobody has published. Stated in the confirm
+  // below, because publishing all of them is the one action here that can put
+  // another person's held edit on the public site.
+  const pendingCount = locales.filter(
+    l => translations?.[l.code]?.pendingChange
+  ).length;
   const counts = translationCounts(
     translations,
     locales.map(l => l.code),
@@ -221,6 +247,25 @@ export function LanguagePanel({
           {counts.translated} of {counts.total} translated
         </span>
         <span className="flex-1" />
+        {/* Offered only while a NON-default language is being edited, because
+            that is the only time there is a translation to do: the default is
+            the language everything else is translated FROM, so pairing it with
+            itself is the one arrangement the mode cannot show. The source is the
+            default language — the overwhelmingly common pairing, and the URL
+            carries the source explicitly so a different one is addressable
+            without this control needing to grow a picker. */}
+        {onEnterTranslationMode && isNonDefaultLocale && defaultLocale && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-7 px-2 text-xs"
+            disabled={actionsDisabled}
+            onClick={() => onEnterTranslationMode(defaultLocale)}
+          >
+            Translate
+          </Button>
+        )}
         {publish.available && (
           <Button
             type="button"
@@ -228,12 +273,24 @@ export function LanguagePanel({
             size="sm"
             className="h-7 px-2 text-xs"
             disabled={actionsDisabled || publish.pending}
-            onClick={publish.publishAll}
+            onClick={() => setConfirmPublishAll(true)}
           >
             {publish.pending ? "Publishing…" : "Publish all"}
           </Button>
         )}
       </div>
+
+      <PublishAllConfirmDialog
+        open={confirmPublishAll}
+        onOpenChange={setConfirmPublishAll}
+        languageCount={locales.length}
+        pendingCount={pendingCount}
+        isLoading={publish.pending}
+        onConfirm={() => {
+          publish.publishAll();
+          setConfirmPublishAll(false);
+        }}
+      />
 
       <ul aria-label="Languages in this document">
         {locales.map(locale => (
@@ -244,6 +301,7 @@ export function LanguagePanel({
             rtl={locale.rtl}
             isDefault={locale.code === defaultLocale}
             state={languageState(translations?.[locale.code])}
+            pendingChange={translations?.[locale.code]?.pendingChange}
             isActive={locale.code === active}
             canSeed={copy.available}
             {...(onSelect === undefined ? {} : { onSelect })}

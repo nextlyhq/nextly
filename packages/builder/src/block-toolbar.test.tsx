@@ -86,8 +86,15 @@ function editorSpy(
   return {
     document: doc,
     selectedId,
+    // The set the structural verbs read. Derived from the primary so every case
+    // here keeps describing one selected block, which is what they assert.
+    selection: {
+      ids: selectedId === null ? [] : [selectedId],
+      primary: selectedId,
+    },
     select: vi.fn(),
     apply: vi.fn(() => doc),
+    applyAll: vi.fn(() => doc),
     undo: vi.fn(),
     redo: vi.fn(),
     canUndo: false,
@@ -169,9 +176,11 @@ describe("BlockToolbar", () => {
 
     fireEvent.click(screen.getByLabelText("Duplicate"));
 
-    expect(editor.apply).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: "insert", at: { index: 1 } })
-    );
+    // A group, because the verbs plan across the selection and one block is a
+    // selection of one.
+    expect(editor.applyAll).toHaveBeenCalledWith([
+      expect.objectContaining({ kind: "insert", at: { index: 1 } }),
+    ]);
     // Selection follows the copy, which is the keyboard duplicate's behaviour
     // and therefore has to be this one's.
     expect(editor.select).toHaveBeenCalled();
@@ -206,7 +215,7 @@ describe("BlockToolbar", () => {
 
     fireEvent.click(screen.getByLabelText("Delete"));
 
-    expect(editor.apply).not.toHaveBeenCalled();
+    expect(editor.applyAll).not.toHaveBeenCalled();
     expect(screen.getByRole("status").textContent).toBe(
       "Leaf is locked. Unlock it to delete it."
     );
@@ -344,6 +353,8 @@ describe("a press on the toolbar and the canvas's own click handling", () => {
     if (root === null) throw new Error("expected a canvas root");
     fireEvent.click(root);
 
-    expect(editor.select).toHaveBeenCalledWith(null);
+    // With the gesture, which the canvas now reports alongside the id: a plain
+    // click on background is a "replace" with nothing to replace it with.
+    expect(editor.select).toHaveBeenCalledWith(null, "replace");
   });
 });

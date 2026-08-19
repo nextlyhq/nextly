@@ -23,6 +23,21 @@ import type { MigrationMap } from "./migration";
  */
 export interface PropSchema {
   type: string;
+  /**
+   * Whether an editor may let an author type this value directly on the canvas.
+   *
+   * Opt-in per prop, and it is a claim about the PROP rather than about the
+   * block: a quote's quoted text is edited in place, while the URL it cites is
+   * not, and no block-level flag can say that. Named after the same opt-in in
+   * Puck, whose `contentEditable` is likewise declared per field.
+   *
+   * Declaring it is half of the contract. The other half is the block marking
+   * WHICH element carries the value, through `markProp` in
+   * {@link BlockRenderArgs} — a prop declared inline whose element is never
+   * marked simply is not editable in place, which is the safe direction: the
+   * inspector still edits it.
+   */
+  inline?: boolean;
   [option: string]: unknown;
 }
 
@@ -112,6 +127,31 @@ export interface BlockRenderArgs<P, C = unknown> {
    * render a single element and never wrap it, so styles target that element.
    */
   className: string;
+  /**
+   * Marks the element that carries a named prop's value, for an editor.
+   *
+   * Spread onto the element the value is rendered into:
+   * `<p {...markProp?.("text")}>`. Absent outside an editor, and a renderer
+   * that supplies it returns nothing for a prop the block never declared
+   * `inline` — so a published page carries none of this and a block written
+   * against an older renderer keeps working.
+   *
+   * ## Why the BLOCK says where its text is
+   *
+   * Nothing else can. A quote renders three separate text props into three
+   * different nested elements, and the structure it chooses depends on which
+   * of them are empty; a heading renders its text inside an anchor when it has
+   * a link and directly otherwise. An editor inferring the element from the
+   * rendered DOM would be guessing, and guessing WRONG puts an author's typing
+   * into a different prop than the one they aimed at.
+   *
+   * The alternative the field is deliberately avoiding is a second render path
+   * for editing — the shape Gutenberg takes, where a block writes `edit` and
+   * `save` separately and the two must agree. One renderer draws both the
+   * canvas and the published page here, and that property is worth more than
+   * the convenience of an editor-only component.
+   */
+  markProp?: (name: string) => Record<string, string>;
   /**
    * Render one of this block's slots, optionally under a different context.
    *

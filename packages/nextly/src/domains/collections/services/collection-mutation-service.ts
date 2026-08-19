@@ -95,6 +95,7 @@ import {
 import type { SupportedDialect } from "../../../types/database";
 import { willRecordMutationActivity } from "../../audit/record-activity";
 import type { DynamicCollectionService } from "../../dynamic-collections";
+import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 import {
   populateCompanionFields,
@@ -115,6 +116,7 @@ import {
 } from "../../i18n/runtime/companion-readiness";
 import { assembleDocument } from "../../versions/assemble-document";
 import { captureInTx } from "../../versions/capture-in-tx";
+import { resolveDraftHold } from "../../versions/draft-hold";
 import { isDraftSplitEligible } from "../../versions/draft-split-eligibility";
 import {
   buildRestorePayload,
@@ -132,6 +134,7 @@ import {
 import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
 import { VersionsRepository } from "../../versions/versions-repository";
+import { workingDraftLocale } from "../../versions/working-draft-locale";
 import { expandComponentFields } from "../../webhooks/expand-component-fields";
 import { projectFields } from "../../webhooks/project-fields";
 import {
@@ -347,6 +350,42 @@ export interface TransitionAuthorization {
     accessRules: CollectionAccessRules;
     user: UserContext | undefined;
   } | null;
+}
+
+/**
+ * What the working-draft write needs from the caller that reached it.
+ *
+ * Every field is one all three write paths already hold at that point. A field
+ * a caller cannot supply honestly does not belong here — it would mean the
+ * write is deciding something the caller has already decided differently.
+ */
+interface WorkingDraftWriteContext {
+  collection: unknown;
+  collectionHasStatus: boolean;
+  componentFieldData: Record<string, unknown>;
+  /**
+   * The locale this document's working draft is keyed under, from
+   * `workingDraftLocale`. `null` is the unlocalized slot, not "unknown": the
+   * store, the read overlay, the promote and the discard must all derive it the
+   * same way, because a draft written under one key and looked for under
+   * another is never found again and the edit disappears without an error.
+   */
+  draftLocale: string | null;
+  fields: FieldDefinition[];
+  manyToManyData: Record<string, string[]>;
+  params: { collectionName: string; entryId: string; user?: UserContext };
+  parentRow: Record<string, unknown>;
+  snapshotComponents: Record<string, unknown> | undefined;
+  snapshotM2M: Record<string, string[]> | undefined;
+  splitComponentSchemas: ComponentSchemas | null;
+  updatePayload: Record<string, unknown>;
+}
+
+/** What the caller needs back: the draft as a read would shape it, and its predecessor. */
+interface WorkingDraftWriteResult {
+  workingDraftDocument?: Record<string, unknown>;
+  /** The draft BEFORE this save, so a hook diffing old against new is like-for-like. */
+  priorWorkingDraftDocument?: Record<string, unknown>;
 }
 
 export class CollectionMutationService extends BaseService {
@@ -984,7 +1023,14 @@ export class CollectionMutationService extends BaseService {
     collectionName: string,
     entryData: Record<string, unknown>,
     locale: string | undefined,
-    isCreate: boolean
+    isCreate: boolean,
+    /**
+     * Transaction-bound executor, when this runs inside a caller's transaction.
+     * The companion metadata read would otherwise check out a second pooled
+     * connection the open transaction is holding, which stalls against a small
+     * pool.
+     */
+    executor?: unknown
   ): Promise<{
     companionTableName: string;
     writeLocale: string;
@@ -1000,8 +1046,10 @@ export class CollectionMutationService extends BaseService {
     hasStatus: boolean;
   } | null> {
     if (!this.localization) return null;
-    const companion =
-      await this.fileManager.loadCompanionSchema(collectionName);
+    const companion = await this.fileManager.loadCompanionSchema(
+      collectionName,
+      executor
+    );
     if (!companion) return null;
 
     // Route to the companion ONLY when it physically exists (the migration has run). Before
@@ -1465,6 +1513,13 @@ export class CollectionMutationService extends BaseService {
   async discardWorkingDraft(params: {
     collectionName: string;
     entryId: string;
+    /**
+     * Which language's pending change to discard. Discarding is one language's
+     * concern: a document can hold a pending change in several at once, and
+     * removing them all would throw away work in languages the author never
+     * opened. Ignored for an unlocalized document, which has one.
+     */
+    locale?: string | null;
   }): Promise<void> {
     const collection = await this.collectionService.getCollection(
       params.collectionName
@@ -1480,7 +1535,12 @@ export class CollectionMutationService extends BaseService {
           scopeSlug: params.collectionName,
           entryId: params.entryId,
         },
-        null
+        workingDraftLocale({
+          documentLocalized:
+            (collection as { localized?: boolean }).localized === true,
+          requestLocale: params.locale ?? null,
+          defaultLocale: this.localization?.defaultLocale ?? null,
+        })
       );
     });
   }
@@ -1930,74 +1990,33 @@ export class CollectionMutationService extends BaseService {
     components: Record<string, unknown>;
     manyToMany: Record<string, string[]>;
   }> {
-    const components: Record<string, unknown> = {};
-    if (this.fieldGroupDataService) {
-      const componentFields = fields.filter(isFieldGroupField);
-      if (componentFields.length > 0) {
-        try {
-          const populated =
-            await this.fieldGroupDataService.populateComponentData({
-              entry: { id: entryId },
-              // Resolved parent table (custom `dbName` collections do not match
-              // getTableName(slug)) so the read targets the right comp_ tables.
-              parentTable,
-              fields: fields as unknown as FieldConfig[],
-              // Read on the transaction so components written earlier in it are
-              // visible (read-your-writes); the read path strips password fields.
-              executor: tx.getDrizzle(),
-              // References only. Expanding a relationship would embed a row from
-              // another collection, which this snapshot has no business copying:
-              // the sensitive-field list describes THIS collection's tree, so a
-              // hidden field on the target would ship unredacted, and the
-              // expansion reads through the pooled relationship service — taking
-              // a second connection while this write holds its own.
-              depth: 0,
-              // Propagate a component read failure instead of substituting a
-              // default: the result feeds a durable snapshot/event, so a real
-              // failure must roll the write back (caught below) rather than
-              // capture a document with silently-missing component data.
-              strict: true,
-              // The write's locale, so a localized component is read back in the
-              // same language it was just written in. Without it the read falls
-              // back to the default component locale and the snapshot records
-              // values this write never touched.
-              //
-              // Fallback is suppressed for the same reason: an untranslated
-              // component field would otherwise resolve to another locale's
-              // value, and the document is labelled as THIS locale. The parent's
-              // own translatable values are already read without fallback, so
-              // this keeps the two halves of the document consistent.
-              ...(locale !== undefined
-                ? { locale, fallbackLocale: false as const }
-                : {}),
-            });
-          for (const f of componentFields) {
-            if (populated[f.name] !== undefined) {
-              components[f.name] = populated[f.name];
-            }
+    const components = await readComponentSubtrees({
+      fieldGroupDataService: this.fieldGroupDataService,
+      tx: tx as TransactionContext,
+      entryId,
+      // Resolved parent table (custom `dbName` collections do not match
+      // getTableName(slug)) so the read targets the right comp_ tables.
+      parentTable,
+      fieldConfigs: fields as unknown as FieldConfig[],
+      // The write's locale, so a localized component is read back in the same
+      // language it was just written in. Without it the read falls back to the
+      // default component locale and the snapshot records values this write
+      // never touched.
+      locale,
+      reason: "version-snapshot-component-read",
+      logContext: { collection: collectionName, entryId },
+      onReadFailure: (err: unknown) =>
+        // A version that looks complete but silently dropped a component is
+        // worse than a failed, retriable write.
+        this.logger.error(
+          "Version snapshot: failed to read components; failing the write instead of capturing an incomplete snapshot",
+          {
+            collection: collectionName,
+            entryId,
+            error: err instanceof Error ? err.message : String(err),
           }
-        } catch (err) {
-          // A version that looks complete but silently dropped a component is
-          // worse than a failed, retriable write — fail the capture (rolls back).
-          this.logger.error(
-            "Version snapshot: failed to read components; failing the write instead of capturing an incomplete snapshot",
-            {
-              collection: collectionName,
-              entryId,
-              error: err instanceof Error ? err.message : String(err),
-            }
-          );
-          throw NextlyError.internal({
-            cause: err instanceof Error ? err : undefined,
-            logContext: {
-              reason: "version-snapshot-component-read",
-              collection: collectionName,
-              entryId,
-            },
-          });
-        }
-      }
-    }
+        ),
+    });
 
     const manyToMany: Record<string, string[]> = {};
     const txExecutor = tx.getDrizzle<RelationshipDbExecutor>();
@@ -4436,6 +4455,241 @@ export class CollectionMutationService extends BaseService {
     return null;
   }
 
+  /**
+   * Whether this write should hold its edit as a working draft, and the
+   * component schemas the decision needed.
+   *
+   * One implementation of the question for every write path. Asked separately
+   * in each of them, the three answers could drift, and a surface that answered
+   * "no" where the others answered "yes" would publish an edit nobody published
+   * — which is the shape of the defect this exists to prevent.
+   */
+  private async resolveWorkingDraftHold(args: {
+    collection: unknown;
+    fields: FieldDefinition[];
+    /** The status this write names, if any. */
+    namedStatus: unknown;
+    /** The committed status of the row being written. */
+    liveStatus: unknown;
+    /**
+     * The locale this write is for. Omitted by a surface that has no locale
+     * concept, which is what makes such a surface decline to hold a localized
+     * document's edit rather than key it under the wrong slot.
+     */
+    requestLocale?: string | null;
+  }): Promise<{
+    hold: boolean;
+    componentSchemas: ComponentSchemas | null;
+    draftLocale: string | null;
+  }> {
+    const collectionHasStatus =
+      (args.collection as { status?: boolean }).status === true;
+    const versionsConfig = (args.collection as Record<string, unknown>)
+      .versions as ResolvedVersionsConfig | null | undefined;
+    const documentLocalized =
+      (args.collection as { localized?: boolean }).localized === true;
+    // Resolved only once the cheap disqualifiers pass, so a collection the
+    // split can never take never pays for a registry read.
+    const componentSchemas =
+      collectionHasStatus &&
+      versionsConfig?.drafts?.enabled === true &&
+      !hasPasswordField(args.fields)
+        ? await resolveComponentSchemas(args.fields as unknown as FieldConfig[])
+        : null;
+    const { hold, draftLocale } = resolveDraftHold({
+      collectionHasStatus,
+      draftsVersioningEnabled: versionsConfig?.drafts?.enabled === true,
+      documentLocalized,
+      fields: args.fields as unknown as FieldConfig[],
+      componentSchemas,
+      namedStatus: args.namedStatus,
+      liveStatus: args.liveStatus,
+      requestLocale: args.requestLocale,
+      defaultLocale: this.localization?.defaultLocale ?? null,
+    });
+    return { hold, componentSchemas, draftLocale };
+  }
+
+  /**
+   * The document a working draft should now hold, after this save.
+   *
+   * Accumulates onto the draft already stored rather than re-deriving from the
+   * live row: a second status-less save of different fields would otherwise
+   * rebuild from live content and silently revert the first pending edit.
+   */
+  private async buildAccumulatedDraft(
+    tx: TransactionContext,
+    ctx: WorkingDraftWriteContext,
+    existingDraft: { snapshot: unknown } | undefined
+  ): Promise<Record<string, unknown>> {
+    const {
+      componentFieldData,
+      fields,
+      manyToManyData,
+      parentRow,
+      snapshotComponents,
+      snapshotM2M,
+      splitComponentSchemas,
+      updatePayload,
+    } = ctx;
+    const draftParts = await this.snapshotPartsFor(
+      {
+        parentRow,
+        components: {
+          ...snapshotComponents,
+          ...componentFieldData,
+        },
+        manyToMany: { ...snapshotM2M, ...manyToManyData },
+      },
+      fields,
+      tx
+    );
+    const patchedDocument = assembleDocument(draftParts);
+    // This document is built from the live parent + relations with
+    // only the CURRENT patch overlaid. Accumulate it onto an existing
+    // working draft rather than the live row: a second status-less
+    // save of different fields would otherwise re-derive from live and
+    // revert the first pending edit. Read the draft under the row lock
+    // (already held above) and, when one exists, overlay only the
+    // fields this patch touched onto it, at the assembled read shape.
+    // Reused after the transaction as the response/hook document,
+    // since the live row the re-fetch returns is the unchanged
+    // published content.
+    // base below rather than replacing it.
+    const touched = new Set<string>([
+      ...Object.keys(updatePayload),
+      ...Object.keys(componentFieldData),
+      ...Object.keys(manyToManyData),
+    ]);
+    const patchFields = Object.fromEntries(
+      Object.entries(patchedDocument).filter(([key]) => touched.has(key))
+    );
+    // Accumulate onto the existing working draft, or onto the live
+    // document on the first save. The live base is assembled through
+    // the same snapshot shaping so its components carry the type markers
+    // promotion needs, and merging (not replacing) keeps a live single
+    // component's other sub-fields when the patch only changed some.
+    const draftBase = existingDraft
+      ? (existingDraft.snapshot as Record<string, unknown>)
+      : assembleDocument(
+          await this.snapshotPartsFor(
+            {
+              parentRow,
+              components: snapshotComponents ?? {},
+              manyToMany: snapshotM2M ?? {},
+            },
+            fields,
+            tx
+          )
+        );
+    // A single (non-repeatable) component holds an object of sub-fields,
+    // and a patch-shaped save carries only the ones it changed. Merge
+    // the patch's component objects onto the base recursively (into
+    // nested single components) rather than overwriting them, so
+    // disjoint sub-field edits coalesce at any depth. A dynamic zone, a
+    // repeatable component, and a scalar are replaced whole.
+    const draftDocument = this.mergeSingleComponentPatches(
+      draftBase,
+      patchFields,
+      fields as unknown as FieldConfig[],
+      splitComponentSchemas
+    );
+    return draftDocument;
+  }
+
+  /**
+   * Store the pending edit as this document's working draft, on the caller's
+   * transaction.
+   *
+   * Lifted out of the update path so every write surface can reach it. The
+   * split had one call site, which is why a status-less update through the
+   * transaction-owning and batch surfaces wrote the live row instead of holding
+   * the edit.
+   *
+   * Takes what it needs rather than resolving it: each caller arrives here
+   * having already read the parent row, its relations and the resolved schemas
+   * on its own transaction, and reading them again would issue a second query
+   * on that connection and could observe a row other than the one the caller is
+   * about to write.
+   */
+  private async storeWorkingDraftInTx(
+    tx: TransactionContext,
+    ctx: WorkingDraftWriteContext
+  ): Promise<WorkingDraftWriteResult> {
+    const {
+      collection,
+      collectionHasStatus,
+      draftLocale,
+      fields,
+      params,
+      splitComponentSchemas,
+    } = ctx;
+    let priorWorkingDraftDocument: Record<string, unknown> | undefined;
+
+    const draftRepo = new VersionsRepository(tx);
+    const draftRef = {
+      scopeKind: "collection" as const,
+      scopeSlug: params.collectionName,
+      entryId: params.entryId,
+    };
+    const existingDraft = await draftRepo.findWorkingDraft(
+      draftRef,
+      draftLocale
+    );
+    // The fields this save actually touched, at the assembled read
+    // shape. `patchedDocument` overlaid the current patch onto the live
+    // relations and REPLACED a single component whole, so a partial
+    // patch is captured here (touched keys only) and merged onto the
+    const draftDocument = await this.buildAccumulatedDraft(
+      tx,
+      ctx,
+      existingDraft
+    );
+    // The response and hooks see the draft as an ordinary read, so
+    // shape the accumulated snapshot through the current schema the
+    // same way the read overlay does. The persisted `draftDocument`
+    // below keeps its markers for promotion.
+    const responseDeclaredFields = fields as unknown as FieldConfig[];
+    const draftIsPluginCollection =
+      (collection as { admin?: { isPlugin?: boolean } }).admin?.isPlugin ===
+      true;
+    const workingDraftDocument = this.shapeDraftForResponse(
+      draftDocument,
+      responseDeclaredFields,
+      splitComponentSchemas ?? null,
+      collectionHasStatus,
+      draftIsPluginCollection
+    );
+    // The afterUpdate/afterChange hooks compare against the document
+    // BEFORE this save: the published row on the first draft save, but
+    // the prior working draft on a later one, so a hook diffing old and
+    // new does not see an earlier save's edits as changing again. Shape
+    // it the same way so the comparison is like-for-like.
+    if (existingDraft) {
+      priorWorkingDraftDocument = this.shapeDraftForResponse(
+        existingDraft.snapshot as Record<string, unknown>,
+        responseDeclaredFields,
+        splitComponentSchemas ?? null,
+        collectionHasStatus,
+        draftIsPluginCollection
+      );
+    }
+    await draftRepo.upsertWorkingDraft({
+      ref: draftRef,
+      // The split is non-localized only, so the working draft is one
+      // logical document with no per-locale variant: key it under the
+      // unlocalized `locale IS NULL` slot. Keying it by the resolved
+      // request locale would orphan it when a later read or publish
+      // arrives under a different locale in a localization-configured
+      // app. The read overlay and promote use the same null key.
+      locale: draftLocale,
+      snapshot: draftDocument,
+      createdBy: params.user?.id ?? null,
+    });
+
+    return { workingDraftDocument, priorWorkingDraftDocument };
+  }
+
   async updateEntry(
     params: {
       collectionName: string;
@@ -4835,7 +5089,7 @@ export class CollectionMutationService extends BaseService {
       // body — see the create path.
       const intendedStatus = finalData.status;
 
-      const localizedUpdate = await this.splitLocalizedWriteData(
+      let localizedUpdate = await this.splitLocalizedWriteData(
         params.collectionName,
         finalData,
         params.locale,
@@ -4853,7 +5107,7 @@ export class CollectionMutationService extends BaseService {
       // companion `_status` the split produced (a string only when one was
       // provided), otherwise the main-row status.
       const transitionNextStatus = isNonDefaultLocaleStatusWrite
-        ? localizedUpdate.companionData._status
+        ? localizedUpdate?.companionData._status
         : intendedStatus;
       // Resolve the one publish permission this write could require — keyed on
       // the status it will persist — BEFORE the transaction opens, so the RBAC
@@ -4951,6 +5205,15 @@ export class CollectionMutationService extends BaseService {
       // design and is handled separately.
       const documentLocalized =
         (collection as { localized?: boolean }).localized === true;
+      // The one key this document's working draft is stored, read, promoted and
+      // discarded under, in this method. Derived once: the store and the read
+      // disagreeing is a silent loss, because a draft written under one key is
+      // simply never found under another and no error is raised anywhere.
+      const draftLocaleKey = workingDraftLocale({
+        documentLocalized,
+        requestLocale: params.locale ?? null,
+        defaultLocale: this.localization?.defaultLocale ?? null,
+      });
       // The component schemas reachable from this collection, resolved once off
       // the transaction (registry reads on the pooled connection, the same reason
       // as `webhookFields` below) and reused by the promote path. Skipped when a
@@ -4961,7 +5224,6 @@ export class CollectionMutationService extends BaseService {
       const splitComponentSchemas =
         collectionHasStatus &&
         versionsConfig?.drafts?.enabled === true &&
-        !documentLocalized &&
         !hasPasswordField(fields)
           ? await resolveComponentSchemas(fields as unknown as FieldConfig[])
           : null;
@@ -4976,7 +5238,6 @@ export class CollectionMutationService extends BaseService {
       const splitEnabled = isDraftSplitEligible({
         collectionHasStatus,
         draftsVersioningEnabled: versionsConfig?.drafts?.enabled === true,
-        documentLocalized,
         fields: fields as unknown as FieldConfig[],
         componentSchemas: splitComponentSchemas,
       });
@@ -5025,9 +5286,11 @@ export class CollectionMutationService extends BaseService {
             hasTitle:
               !isPluginForRestore || fields.some(f => f.name === "title"),
             componentSchemas: splitComponentSchemas ?? undefined,
-            // The split is non-localized-only, so the document holds no per-locale
-            // values and the snapshot's locale is the resolved request locale.
-            documentLocalized: false,
+            documentLocalized,
+            // A working draft always knows which language it holds: it is keyed
+            // by that language, and a write that cannot name one does not store
+            // a draft at all. So the snapshot's locale is never the unknown one
+            // here, and its translatable values need not be held back.
             localeUnknown: false,
           }
         : null;
@@ -5053,7 +5316,7 @@ export class CollectionMutationService extends BaseService {
             scopeSlug: params.collectionName,
             entryId: params.entryId,
           },
-          null
+          draftLocaleKey
         );
         if (advisoryDraft) {
           const { payload: draftInput } = buildRestorePayload(
@@ -5353,8 +5616,21 @@ export class CollectionMutationService extends BaseService {
             : (((preUpdateRow as { status?: unknown } | undefined)?.status as
                 | string
                 | undefined) ?? null);
-          storeAsWorkingDraft =
-            splitEnabled && namesNoStatus && draftLiveStatus === "published";
+          // The one hold rule, shared with the transaction and batch surfaces.
+          // Eligibility is passed in rather than recomputed: it was resolved
+          // off the transaction because it reads the component registry, and
+          // the promote path below needs it too.
+          storeAsWorkingDraft = resolveDraftHold({
+            collectionHasStatus,
+            draftsVersioningEnabled: versionsConfig?.drafts?.enabled === true,
+            documentLocalized,
+            fields: fields as unknown as FieldConfig[],
+            componentSchemas: splitComponentSchemas,
+            namedStatus: namesNoStatus ? undefined : transitionNextStatus,
+            liveStatus: draftLiveStatus,
+            requestLocale: params.locale ?? null,
+            defaultLocale: this.localization?.defaultLocale ?? null,
+          }).hold;
 
           // TOCTOU-safe authorization: classify the transition against the
           // status just read UNDER THE ROW LOCK (`preUpdateRow` /
@@ -5447,7 +5723,7 @@ export class CollectionMutationService extends BaseService {
                 scopeSlug: params.collectionName,
                 entryId: params.entryId,
               },
-              null
+              draftLocaleKey
             );
             if (workingDraft) {
               // Promoting a working draft publishes (or unpublishes) its pending
@@ -5531,6 +5807,27 @@ export class CollectionMutationService extends BaseService {
               finalData = mergedPromoteData;
               componentFieldData = draftParts.componentFieldData;
               manyToManyData = draftParts.manyToManyData;
+              // Rebuild the companion payload from the promoted document, and
+              // do it BEFORE the main-row payload is taken: the split moves a
+              // localized field out of the document and into the companion, so
+              // taking the main payload first would carry translated values to
+              // the main table, which has no column for them.
+              //
+              // It was originally split from the CALLER's patch before this
+              // transaction, and a publish carries no content of its own — so
+              // without this the draft's translated values never reach the
+              // language's row at all and the translation publishes unchanged.
+              //
+              // Bound to this transaction's executor: the companion metadata
+              // read would otherwise take a second pooled connection that this
+              // open transaction is holding.
+              localizedUpdate = await this.splitLocalizedWriteData(
+                params.collectionName,
+                finalData,
+                draftLocaleKey ?? params.locale,
+                false,
+                tx.getDrizzle()
+              );
               updatePayload = {
                 ...stripImmutableSystemFields(finalData, "collection"),
                 updatedAt: updatePayload.updatedAt,
@@ -5935,126 +6232,28 @@ export class CollectionMutationService extends BaseService {
               // relations onto the (unchanged) live relations read for the
               // snapshot so a changed component/m2m field is reflected.
               if (storeAsWorkingDraft) {
-                const draftParts = await this.snapshotPartsFor(
-                  {
-                    parentRow,
-                    components: {
-                      ...snapshotComponents,
-                      ...componentFieldData,
-                    },
-                    manyToMany: { ...snapshotM2M, ...manyToManyData },
-                  },
-                  fields,
-                  tx
-                );
-                // This document is built from the live parent + relations with
-                // only the CURRENT patch overlaid. Accumulate it onto an existing
-                // working draft rather than the live row: a second status-less
-                // save of different fields would otherwise re-derive from live and
-                // revert the first pending edit. Read the draft under the row lock
-                // (already held above) and, when one exists, overlay only the
-                // fields this patch touched onto it, at the assembled read shape.
-                // Reused after the transaction as the response/hook document,
-                // since the live row the re-fetch returns is the unchanged
-                // published content.
-                const draftRepo = new VersionsRepository(tx);
-                const patchedDocument = assembleDocument(draftParts);
-                const draftRef = {
-                  scopeKind: "collection" as const,
-                  scopeSlug: params.collectionName,
-                  entryId: params.entryId,
-                };
-                const existingDraft = await draftRepo.findWorkingDraft(
-                  draftRef,
-                  null
-                );
-                // The fields this save actually touched, at the assembled read
-                // shape. `patchedDocument` overlaid the current patch onto the live
-                // relations and REPLACED a single component whole, so a partial
-                // patch is captured here (touched keys only) and merged onto the
-                // base below rather than replacing it.
-                const touched = new Set<string>([
-                  ...Object.keys(updatePayload),
-                  ...Object.keys(componentFieldData),
-                  ...Object.keys(manyToManyData),
-                ]);
-                const patchFields = Object.fromEntries(
-                  Object.entries(patchedDocument).filter(([key]) =>
-                    touched.has(key)
-                  )
-                );
-                // Accumulate onto the existing working draft, or onto the live
-                // document on the first save. The live base is assembled through
-                // the same snapshot shaping so its components carry the type markers
-                // promotion needs, and merging (not replacing) keeps a live single
-                // component's other sub-fields when the patch only changed some.
-                const draftBase = existingDraft
-                  ? (existingDraft.snapshot as Record<string, unknown>)
-                  : assembleDocument(
-                      await this.snapshotPartsFor(
-                        {
-                          parentRow,
-                          components: snapshotComponents ?? {},
-                          manyToMany: snapshotM2M ?? {},
-                        },
-                        fields,
-                        tx
-                      )
-                    );
-                // A single (non-repeatable) component holds an object of sub-fields,
-                // and a patch-shaped save carries only the ones it changed. Merge
-                // the patch's component objects onto the base recursively (into
-                // nested single components) rather than overwriting them, so
-                // disjoint sub-field edits coalesce at any depth. A dynamic zone, a
-                // repeatable component, and a scalar are replaced whole.
-                const draftDocument = this.mergeSingleComponentPatches(
-                  draftBase,
-                  patchFields,
-                  fields as unknown as FieldConfig[],
-                  splitComponentSchemas
-                );
-                // The response and hooks see the draft as an ordinary read, so
-                // shape the accumulated snapshot through the current schema the
-                // same way the read overlay does. The persisted `draftDocument`
-                // below keeps its markers for promotion.
-                const responseDeclaredFields =
-                  fields as unknown as FieldConfig[];
-                const draftIsPluginCollection =
-                  (collection as { admin?: { isPlugin?: boolean } }).admin
-                    ?.isPlugin === true;
-                workingDraftDocument = this.shapeDraftForResponse(
-                  draftDocument,
-                  responseDeclaredFields,
-                  splitComponentSchemas ?? null,
+                const draftWrite = await this.storeWorkingDraftInTx(tx, {
+                  collection,
                   collectionHasStatus,
-                  draftIsPluginCollection
-                );
-                // The afterUpdate/afterChange hooks compare against the document
-                // BEFORE this save: the published row on the first draft save, but
-                // the prior working draft on a later one, so a hook diffing old and
-                // new does not see an earlier save's edits as changing again. Shape
-                // it the same way so the comparison is like-for-like.
-                if (existingDraft) {
-                  priorWorkingDraftDocument = this.shapeDraftForResponse(
-                    existingDraft.snapshot as Record<string, unknown>,
-                    responseDeclaredFields,
-                    splitComponentSchemas ?? null,
-                    collectionHasStatus,
-                    draftIsPluginCollection
-                  );
-                }
-                await draftRepo.upsertWorkingDraft({
-                  ref: draftRef,
-                  // The split is non-localized only, so the working draft is one
-                  // logical document with no per-locale variant: key it under the
-                  // unlocalized `locale IS NULL` slot. Keying it by the resolved
-                  // request locale would orphan it when a later read or publish
-                  // arrives under a different locale in a localization-configured
-                  // app. The read overlay and promote use the same null key.
-                  locale: null,
-                  snapshot: draftDocument,
-                  createdBy: params.user?.id ?? null,
+                  componentFieldData,
+                  // The locale this write is for: the companion row's write
+                  // locale when the patch touched localized columns, and the
+                  // request's otherwise. Derived through the same function the
+                  // read overlay and the promote use, so all three look under
+                  // one key.
+                  draftLocale: draftLocaleKey,
+                  fields,
+                  manyToManyData,
+                  params,
+                  parentRow,
+                  snapshotComponents,
+                  snapshotM2M,
+                  splitComponentSchemas,
+                  updatePayload,
                 });
+                workingDraftDocument = draftWrite.workingDraftDocument;
+                priorWorkingDraftDocument =
+                  draftWrite.priorWorkingDraftDocument;
               }
 
               // Promote-on-publish: the accumulated draft has been folded
@@ -6071,7 +6270,7 @@ export class CollectionMutationService extends BaseService {
                     entryId: params.entryId,
                   },
                   // Same unlocalized key the fetch and store use.
-                  null
+                  draftLocaleKey
                 );
               }
 
@@ -6092,7 +6291,7 @@ export class CollectionMutationService extends BaseService {
                     scopeSlug: params.collectionName,
                     entryId: params.entryId,
                   },
-                  null
+                  draftLocaleKey
                 );
               }
 
@@ -6117,7 +6316,7 @@ export class CollectionMutationService extends BaseService {
                     scopeSlug: params.collectionName,
                     entryId: params.entryId,
                   },
-                  null
+                  draftLocaleKey
                 );
               }
 
@@ -6259,7 +6458,7 @@ export class CollectionMutationService extends BaseService {
                 localizedStatusRecorded = await this.recordStatusEvents(tx, {
                   collection: params.collectionName,
                   id: params.entryId,
-                  locale: localizedUpdate.writeLocale,
+                  locale: localizedUpdate?.writeLocale,
                   from: localizedPreviousStatus,
                   to: companionNext,
                   isCreate: false,
@@ -6867,18 +7066,15 @@ export class CollectionMutationService extends BaseService {
         if (deletedCount === 0) return;
         deletedRow = true;
 
-        // Remove any pending working-draft sidecar for the deleted entry in the
+        // Remove EVERY locale's pending working-draft sidecar for the deleted
         // same transaction: it is keyed by entry id and excluded from history and
         // retention queries, so after the row it belongs to is gone it would
         // otherwise linger unreachable in nextly_versions. A no-op when none.
-        await new VersionsRepository(tx).deleteWorkingDraft(
-          {
-            scopeKind: "collection",
-            scopeSlug: params.collectionName,
-            entryId: params.entryId,
-          },
-          null
-        );
+        await new VersionsRepository(tx).deleteAllWorkingDrafts({
+          scopeKind: "collection",
+          scopeSlug: params.collectionName,
+          entryId: params.entryId,
+        });
 
         // Recovery points go with it, every author's. They are excluded from
         // history, from version reads and from retention pruning, so nothing
@@ -7961,16 +8157,39 @@ export class CollectionMutationService extends BaseService {
         });
       }
 
-      const [updated] = await tx.update<unknown>(
-        tableName,
-        {
-          ...stripImmutableSystemFields(finalData, "collection"),
-          updatedAt: nowForTxUpdate,
-          ...(txUpdateStamp ? { first_published_at: txUpdateStamp } : {}),
-        },
-        this.whereEq("id", params.entryId),
-        { returning: "*" }
-      );
+      // The same eligibility question the pooled path asks, through the same
+      // predicate: a status-less update to a published document on a
+      // drafts-enabled collection holds the edit instead of writing the live
+      // row. Asked here because this surface reaches the row write without
+      // passing through that path, which is why an update through the
+      // transaction API published an edit its author had not published.
+      const {
+        hold: txStoreAsWorkingDraft,
+        componentSchemas: txSplitComponentSchemas,
+        draftLocale: txDraftLocale,
+      } = await this.resolveWorkingDraftHold({
+        collection,
+        fields,
+        namedStatus: finalData.status,
+        liveStatus: existingEntry.status,
+      });
+
+      // Skip the live-row UPDATE for a held edit; the pending change is stored
+      // below instead. `updated` still carries a row so everything after this
+      // reports the document as it stands — which, for a held edit, is the
+      // published content the public still sees.
+      const [updated] = txStoreAsWorkingDraft
+        ? [existingEntry]
+        : await tx.update<unknown>(
+            tableName,
+            {
+              ...stripImmutableSystemFields(finalData, "collection"),
+              updatedAt: nowForTxUpdate,
+              ...(txUpdateStamp ? { first_published_at: txUpdateStamp } : {}),
+            },
+            this.whereEq("id", params.entryId),
+            { returning: "*" }
+          );
 
       if (!updated) {
         return {
@@ -8029,23 +8248,65 @@ export class CollectionMutationService extends BaseService {
       // after the delete+insert below would report the new ids as the old ones.
       // The pre-update parent row plus its current (pre-rewrite) component and
       // m2m relations, read on `tx`.
-      const { document: previousDocument } = await this.readTxDocumentParts(
-        tx,
-        {
+      const { documentParts: previousParts, document: previousDocument } =
+        await this.readTxDocumentParts(tx, {
           collectionName: params.collectionName,
           tableName,
           entryId: params.entryId,
           parentRow: this.readShapeEventDocument(existingEntry, fields),
           fields,
           manyToManyFields,
-          needsRelations: previousNeedsRelations,
-        }
-      );
+          // A held edit needs the live relations whether or not anything is
+          // being recorded: they are the base the pending change accumulates
+          // onto, and without them the draft would drop every component and
+          // relationship the author had not touched in this save.
+          needsRelations: previousNeedsRelations || txStoreAsWorkingDraft,
+        });
+
+      // Store the pending edit rather than the live row, through the same
+      // method the pooled path uses so the two cannot answer differently.
+      let txWorkingDraftDocument: Record<string, unknown> | undefined;
+      if (txStoreAsWorkingDraft) {
+        ({ workingDraftDocument: txWorkingDraftDocument } =
+          await this.storeWorkingDraftInTx(tx, {
+            collection,
+            collectionHasStatus:
+              (collection as { status?: boolean }).status === true,
+            // This surface writes no component subtrees of its own, so the
+            // draft's components come from the live read alone.
+            componentFieldData: {},
+            draftLocale: txDraftLocale,
+            fields,
+            manyToManyData,
+            params: {
+              collectionName: params.collectionName,
+              entryId: params.entryId,
+              user: params.user,
+            },
+            parentRow: this.readShapeEventDocument(
+              {
+                ...existingEntry,
+                ...stripImmutableSystemFields(finalData, "collection"),
+              },
+              fields
+            ),
+            snapshotComponents: previousParts.components,
+            snapshotM2M: previousParts.manyToMany,
+            splitComponentSchemas: txSplitComponentSchemas,
+            updatePayload: finalData,
+          }));
+      }
 
       // Handle many-to-many relationships on the caller's transaction so the
-      // junction writes commit atomically with the update.
+      // junction writes commit atomically with the update. Skipped for a held
+      // edit: the junction rows ARE live content, so rewriting them would put
+      // the pending relationship change on the public site while the rest of
+      // the edit waits.
       for (const field of manyToManyFields) {
-        if (manyToManyData[field.name] !== undefined) {
+        if (
+          !txStoreAsWorkingDraft &&
+          manyToManyData[field.name] !== undefined
+        ) {
           await this.relationshipService.deleteManyToManyRelations(
             params.collectionName,
             params.entryId,
@@ -8089,15 +8350,19 @@ export class CollectionMutationService extends BaseService {
           manyToManyFields,
           needsRelations,
         });
-      await this.captureTxVersion(tx, {
-        collectionName: params.collectionName,
-        entryId: params.entryId,
-        contentStatus: (updated as { status?: unknown }).status,
-        createdBy: params.user?.id ?? null,
-        versionsConfig,
-        documentParts: updatedParts,
-        fields,
-      });
+      // A held edit records no durable version: nothing was published, and a
+      // version here would enter the history as though it had been.
+      if (!txStoreAsWorkingDraft) {
+        await this.captureTxVersion(tx, {
+          collectionName: params.collectionName,
+          entryId: params.entryId,
+          contentStatus: (updated as { status?: unknown }).status,
+          createdBy: params.user?.id ?? null,
+          versionsConfig,
+          documentParts: updatedParts,
+          fields,
+        });
+      }
       const eventFields = await this.webhookFieldTreeIfRecording(
         params.collectionName,
         fields,
@@ -8194,7 +8459,10 @@ export class CollectionMutationService extends BaseService {
         success: true,
         statusCode: 200,
         message: "Entry updated successfully",
-        data: updated,
+        // A held edit answers with the pending document, not the live row. The
+        // caller asked for its own change back; returning the published content
+        // it did not write reads as the write having been ignored.
+        data: txWorkingDraftDocument ?? updated,
         eventRecorded,
         revalidationIntent,
       };
@@ -8425,17 +8693,14 @@ export class CollectionMutationService extends BaseService {
       }
       deleteNeedsRollback = true;
 
-      // Remove any pending working-draft sidecar for the deleted entry in the
+      // Remove EVERY locale's pending working-draft sidecar for the deleted
       // same transaction, so it does not linger unreachable in nextly_versions
       // after its row is gone. A no-op when none exists.
-      await new VersionsRepository(tx).deleteWorkingDraft(
-        {
-          scopeKind: "collection",
-          scopeSlug: params.collectionName,
-          entryId: params.entryId,
-        },
-        null
-      );
+      await new VersionsRepository(tx).deleteAllWorkingDrafts({
+        scopeKind: "collection",
+        scopeSlug: params.collectionName,
+        entryId: params.entryId,
+      });
 
       // Recovery points go with it; see the single-delete path.
       await new VersionsRepository(tx).deleteAutosaves({
@@ -9545,16 +9810,36 @@ export class CollectionMutationService extends BaseService {
         });
       }
 
-      const [updated] = await tx.update<unknown>(
-        tableName,
-        {
-          ...stripImmutableSystemFields(finalData, "collection"),
-          updatedAt: nowForBulkUpdate,
-          ...(bulkUpdateStamp ? { first_published_at: bulkUpdateStamp } : {}),
-        },
-        this.whereEq("id", entryId),
-        { returning: "*" }
-      );
+      // The same eligibility question the other two paths ask, through the same
+      // predicate. Without it a bulk update publishes every held edit in the
+      // batch, which is the widest form of the defect: one call, many documents.
+      const {
+        hold: bulkStoreAsWorkingDraft,
+        componentSchemas: bulkSplitComponentSchemas,
+        draftLocale: bulkDraftLocale,
+      } = await this.resolveWorkingDraftHold({
+        collection,
+        fields,
+        namedStatus: finalData.status,
+        liveStatus: existingEntry.status,
+      });
+
+      // Skip the live-row UPDATE for a held edit; the pending change is stored
+      // below instead.
+      const [updated] = bulkStoreAsWorkingDraft
+        ? [existingEntry]
+        : await tx.update<unknown>(
+            tableName,
+            {
+              ...stripImmutableSystemFields(finalData, "collection"),
+              updatedAt: nowForBulkUpdate,
+              ...(bulkUpdateStamp
+                ? { first_published_at: bulkUpdateStamp }
+                : {}),
+            },
+            this.whereEq("id", entryId),
+            { returning: "*" }
+          );
 
       if (!updated) {
         return {
@@ -9612,24 +9897,60 @@ export class CollectionMutationService extends BaseService {
       // so a relationship-only update still lists the changed field: reading m2m
       // after the delete+insert below would report the new ids as the old ones.
       // The pre-update parent row plus its current (pre-rewrite) relations on `tx`.
-      const { document: previousDocument } = await this.readTxDocumentParts(
-        tx,
-        {
+      const { documentParts: previousParts, document: previousDocument } =
+        await this.readTxDocumentParts(tx, {
           collectionName: params.collectionName,
           tableName,
           entryId,
           parentRow: this.readShapeEventDocument(existingEntry, fields),
           fields,
           manyToManyFields,
-          needsRelations: previousNeedsRelations,
-        }
-      );
+          // A held edit needs the live relations regardless of what is being
+          // recorded: they are the base the pending change accumulates onto.
+          needsRelations: previousNeedsRelations || bulkStoreAsWorkingDraft,
+        });
+
+      // Store the pending edit rather than the live row, through the same
+      // method the other two paths use.
+      let bulkWorkingDraftDocument: Record<string, unknown> | undefined;
+      if (bulkStoreAsWorkingDraft) {
+        ({ workingDraftDocument: bulkWorkingDraftDocument } =
+          await this.storeWorkingDraftInTx(tx, {
+            collection,
+            collectionHasStatus:
+              (collection as { status?: boolean }).status === true,
+            componentFieldData: {},
+            draftLocale: bulkDraftLocale,
+            fields,
+            manyToManyData,
+            params: {
+              collectionName: params.collectionName,
+              entryId,
+              user: params.user,
+            },
+            parentRow: this.readShapeEventDocument(
+              {
+                ...existingEntry,
+                ...stripImmutableSystemFields(finalData, "collection"),
+              },
+              fields
+            ),
+            snapshotComponents: previousParts.components,
+            snapshotM2M: previousParts.manyToMany,
+            splitComponentSchemas: bulkSplitComponentSchemas,
+            updatePayload: finalData,
+          }));
+      }
 
       // Handle many-to-many relationships on the caller's transaction so the
       // junction writes commit atomically with the update.
       const txExecutor = tx.getDrizzle<RelationshipDbExecutor>();
       for (const field of manyToManyFields) {
-        if (manyToManyData[field.name] !== undefined) {
+        // Skipped for a held edit: junction rows are live content.
+        if (
+          !bulkStoreAsWorkingDraft &&
+          manyToManyData[field.name] !== undefined
+        ) {
           // Delete existing relations
           await this.relationshipService.deleteManyToManyRelations(
             params.collectionName,
@@ -9674,15 +9995,18 @@ export class CollectionMutationService extends BaseService {
           manyToManyFields,
           needsRelations,
         });
-      await this.captureTxVersion(tx, {
-        collectionName: params.collectionName,
-        entryId,
-        contentStatus: (updated as { status?: unknown }).status,
-        createdBy: params.user?.id ?? null,
-        versionsConfig,
-        documentParts: updatedParts,
-        fields,
-      });
+      // A held edit records no durable version: nothing was published.
+      if (!bulkStoreAsWorkingDraft) {
+        await this.captureTxVersion(tx, {
+          collectionName: params.collectionName,
+          entryId,
+          contentStatus: (updated as { status?: unknown }).status,
+          createdBy: params.user?.id ?? null,
+          versionsConfig,
+          documentParts: updatedParts,
+          fields,
+        });
+      }
       const eventFields = await this.webhookFieldTreeIfRecording(
         params.collectionName,
         fields,
@@ -9787,7 +10111,8 @@ export class CollectionMutationService extends BaseService {
         success: true,
         statusCode: 200,
         message: "Entry updated successfully",
-        data: updated,
+        // A held edit answers with the pending document, not the live row.
+        data: bulkWorkingDraftDocument ?? updated,
         eventRecorded,
         revalidationIntent,
       };
@@ -10066,17 +10391,14 @@ export class CollectionMutationService extends BaseService {
       }
       deleteNeedsRollback = true;
 
-      // Remove any pending working-draft sidecar for the deleted entry in the
+      // Remove EVERY locale's pending working-draft sidecar for the deleted
       // same transaction, so a batch delete does not leave it unreachable in
       // nextly_versions after its row is gone. A no-op when none exists.
-      await new VersionsRepository(tx).deleteWorkingDraft(
-        {
-          scopeKind: "collection",
-          scopeSlug: params.collectionName,
-          entryId,
-        },
-        null
-      );
+      await new VersionsRepository(tx).deleteAllWorkingDrafts({
+        scopeKind: "collection",
+        scopeSlug: params.collectionName,
+        entryId,
+      });
 
       // Recovery points go with it; see the single-delete path.
       await new VersionsRepository(tx).deleteAutosaves({

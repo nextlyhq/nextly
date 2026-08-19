@@ -34,9 +34,12 @@ import { execFileSync } from "node:child_process";
 
 import {
   createColorLiteralPattern,
+  createNamedColorDeclarationPattern,
   createPaletteClassPattern,
+  createTokenAlphaSuffixPattern,
   createTokenWrapPattern,
   hasExemptionDirective,
+  isNamedColor,
   paletteAdvice,
   stripExemptColorPieces,
 } from "@nextlyhq/eslint-plugin/vocabulary";
@@ -70,6 +73,13 @@ export function deriveRoots() {
       add(`packages/${entry.name}/src`);
     }
   }
+  // The builder paints admin chrome through its own `--nx-builder-*`
+  // namespace, which is deliberate and stays. What a separate namespace does
+  // NOT change is whether a colour may be written down instead of referenced,
+  // and these rules are namespace-agnostic — they hold here exactly as in the
+  // admin. Added because this was the largest first-party UI surface no guard
+  // read at all: 48 files, ~10k lines, the editor's entire interface.
+  add("packages/builder/src");
   add("templates/plugin/src");
 
   return roots;
@@ -102,6 +112,10 @@ const ADMIN_IMPORTANT_BASELINE = 35;
 const TOKEN_WRAP_RE = createTokenWrapPattern();
 const COLOR_LITERAL_RE = createColorLiteralPattern();
 const PALETTE_CLASS_RE = createPaletteClassPattern();
+const TOKEN_ALPHA_RE = createTokenAlphaSuffixPattern();
+const NAMED_COLOR_DECL_RE = createNamedColorDeclarationPattern();
+/** `--some-token: <value>` — the custom-property form of a declaration. */
+const CUSTOM_PROP_DECL_RE = /^\s*(--[\w-]+)\s*:\s*([^;]+);?/;
 
 /** True for a line that is nothing but a comment — `//`, `/* … *​/`, or a JSDoc `*`. */
 export function isCommentLine(line) {
@@ -168,13 +182,60 @@ function refuse(missing) {
 }
 
 /**
- * The four rules, each as its own decision so the reason a line is reported is
+ * The six rules, each as its own decision so the reason a line is reported is
  * separable from the loop that visits lines. Each returns the violation text,
  * or `null` when the line is clean under that rule.
  */
 export function tokenWrapViolation(at, line) {
   if (!TOKEN_WRAP_RE.test(line)) return null;
   return `${at}  token wrapped in color fn — use var(--token): ${line.trim()}`;
+}
+
+/**
+ * A token with an alpha suffix glued on — `var(--nx-primary)20`.
+ *
+ * The sibling of {@link tokenWrapViolation}: both are idioms that were correct
+ * while colours were hex and produce invalid CSS once they are tokens, and both
+ * fail by the browser DROPPING the declaration rather than by anything raising.
+ * The element loses its colour and the code still reads like the version that
+ * worked.
+ */
+export function tokenAlphaSuffixViolation(at, line) {
+  if (!TOKEN_ALPHA_RE.test(line)) return null;
+  if (hasExemptionDirective(line)) return null;
+  return `${at}  token with an alpha suffix — use color-mix(in oklch, var(--token) N%, transparent): ${line.trim()}`;
+}
+
+/**
+ * A CSS declaration assigning a colour by NAME — `color: rebeccapurple`.
+ *
+ * Rule 2 reads hex and the colour functions, so a name slipped past it entirely:
+ * `rebeccapurple` is as fixed as `#663399` and follows a retheme no better. The
+ * published ESLint rules already decide this for `.ts`/`.tsx`; this is the same
+ * vocabulary applied to the stylesheets they cannot see, so the two guards
+ * cannot disagree about what counts.
+ *
+ * Custom properties are checked separately because the shared pattern keys on
+ * real CSS property names and `--nx-builder-surface` is not one. That form is
+ * where it matters most: a token DEFINITION is the one place a colour is
+ * written down rather than referenced, so a named colour there silently ends
+ * the aliasing that carries every downstream contrast guarantee.
+ */
+export function namedColorViolation(at, line, { isCss }) {
+  if (!isCss) return null;
+  if (hasExemptionDirective(line)) return null;
+
+  const declared = NAMED_COLOR_DECL_RE.exec(line);
+  if (declared) {
+    return `${at}  named colour \`${declared[2]}\` — use var(--token): ${line.trim()}`;
+  }
+
+  const custom = CUSTOM_PROP_DECL_RE.exec(line);
+  if (custom && isNamedColor(custom[2].trim())) {
+    return `${at}  token \`${custom[1]}\` is defined as the named colour \`${custom[2].trim()}\` — define it from another token, e.g. var(--nx-muted): ${line.trim()}`;
+  }
+
+  return null;
 }
 
 export function colorLiteralViolation(at, line, file, { isCss, isPlugin }) {
@@ -216,6 +277,8 @@ export function auditFile(file, source) {
 
     for (const found of [
       tokenWrapViolation(at, line),
+      tokenAlphaSuffixViolation(at, line),
+      namedColorViolation(at, line, { isCss }),
       colorLiteralViolation(at, line, file, { isCss, isPlugin }),
       paletteViolation(at, line, { isThemeSource }),
     ]) {

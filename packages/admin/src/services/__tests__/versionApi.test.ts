@@ -104,6 +104,27 @@ describe("versionApi.discardWorkingDraft", () => {
       "/collections/posts/entries/e1/versions/working-draft"
     );
   });
+
+  it("names the language in the query string when one is given", async () => {
+    // A localized document holds one pending change per language, so the
+    // request has to say which one it is throwing away.
+    await versionApi.discardWorkingDraft(collection, "es");
+
+    expect(delSpy).toHaveBeenCalledWith(
+      "/collections/posts/entries/e1/versions/working-draft?locale=es"
+    );
+  });
+
+  it("omits the query string when no language is named", async () => {
+    // An unlocalized collection, and the default language the editor addresses
+    // without naming it, both reach the server with no locale — which it
+    // resolves to the default rather than refusing.
+    await versionApi.discardWorkingDraft(collection, null);
+
+    expect(delSpy).toHaveBeenCalledWith(
+      "/collections/posts/entries/e1/versions/working-draft"
+    );
+  });
 });
 
 /**

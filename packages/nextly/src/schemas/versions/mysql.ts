@@ -43,6 +43,16 @@ export const nextlyVersionsMysql = mysqlTable(
     label: text("label"),
     locale: varchar("locale", { length: 32 }),
     sourceVersionNo: int("source_version_no"),
+    // Set ONLY on a working draft, to the digest of the four values that
+    // identify it (see workingDraftKey). NULL on durable and autosave rows, so
+    // the unique index below constrains working drafts alone: all three
+    // dialects allow unlimited NULLs in a unique index. The sequence index
+    // cannot do this job — a working draft carries no version_no, and NULL is
+    // distinct from NULL, so any number of them satisfy it.
+    // 64 = the fixed width of the sha256 hex digest workingDraftKey produces.
+    // A fixed width keeps this well inside InnoDB's 3072-byte index key limit,
+    // which a variable readable composite would not be.
+    draftKey: varchar("draft_key", { length: 64 }),
 
     // 191 to match users.id (varchar(191)); created_by holds a user id, which
     // is wider than the 36-char UUID used for this table's own id.
@@ -71,6 +81,8 @@ export const nextlyVersionsMysql = mysqlTable(
       table.entryId,
       table.versionNo
     ),
+    // One working draft per document per locale.
+    uniqueIndex("nextly_versions_working_draft_uidx").on(table.draftKey),
     index("nextly_versions_doc_recent_idx").on(
       table.scopeKind,
       table.scopeSlug,

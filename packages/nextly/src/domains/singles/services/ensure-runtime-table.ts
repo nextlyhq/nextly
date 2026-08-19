@@ -38,6 +38,7 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types";
 import type { Logger } from "../../../shared/types";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { resolveCompanionReadiness } from "../../i18n/runtime/companion-readiness";
@@ -246,4 +247,33 @@ export async function ensureSingleRuntimeTable(
       error: err instanceof Error ? err.message : String(err),
     });
   }
+}
+
+/**
+ * Resolve a Single's registry metadata and make its tables usable in THIS
+ * process, or answer null when no such Single exists.
+ *
+ * Every request-scoped Single service opens this way, and the second half is
+ * the reason it cannot be left to each of them: table registration happens at
+ * create time and at boot, both per-process, so a worker that has seen neither
+ * fails on a table missing from the schema registry until it is restarted. A
+ * path that looks up the metadata and forgets to register works in development
+ * and fails on the second server process.
+ *
+ * The not-found ENVELOPE stays with the caller, deliberately: a read, a write
+ * and a publish each answer for their own operation, and the message a caller
+ * returns is part of its contract rather than something to centralize here.
+ */
+export async function resolveSingleForRequest(
+  adapter: DrizzleAdapter,
+  registry: {
+    getSingleBySlug: (slug: string) => Promise<DynamicSingleRecord | null>;
+  },
+  slug: string,
+  logger?: Logger
+): Promise<DynamicSingleRecord | null> {
+  const singleMeta = await registry.getSingleBySlug(slug);
+  if (!singleMeta) return null;
+  await ensureSingleRuntimeTable(adapter, singleMeta, logger);
+  return singleMeta;
 }

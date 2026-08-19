@@ -24,6 +24,7 @@ import type {
   VersionsWhereCondition,
 } from "./db-api";
 import type { PrunableVersion } from "./retention";
+import { workingDraftKey } from "./working-draft-key";
 
 const TABLE = "nextly_versions";
 
@@ -282,31 +283,39 @@ export class VersionsRepository {
       );
       return;
     }
-    await this.db.insert(
-      TABLE,
-      {
-        id: crypto.randomUUID(),
-        scopeKind: input.ref.scopeKind,
-        scopeSlug: input.ref.scopeSlug,
-        entryId: input.ref.entryId,
-        // A working draft is neither a durable history version (no sequence
-        // number) nor an autosave row; it is the sidecar draft head.
-        versionNo: null,
-        status: "draft",
-        isAutosave: false,
-        // Pre-stringified for the same cross-dialect reason as insertVersion:
-        // the transaction insert path binds this value straight into the driver
-        // query with no column-type awareness.
-        snapshot: serializedSnapshot,
-        label: null,
-        locale: input.locale ?? null,
-        sourceVersionNo: null,
-        createdBy: input.createdBy ?? null,
-        createdAt: now,
-        updatedAt: now,
-      },
-      { returning: [] }
-    );
+    const row = {
+      id: crypto.randomUUID(),
+      scopeKind: input.ref.scopeKind,
+      scopeSlug: input.ref.scopeSlug,
+      entryId: input.ref.entryId,
+      // A working draft is neither a durable history version (no sequence
+      // number) nor an autosave row; it is the sidecar draft head.
+      versionNo: null,
+      status: "draft",
+      isAutosave: false,
+      // Pre-stringified for the same cross-dialect reason as insertVersion:
+      // the transaction insert path binds this value straight into the driver
+      // query with no column-type awareness.
+      snapshot: serializedSnapshot,
+      label: null,
+      locale: input.locale ?? null,
+      // Carried only by this row class, and unique across it, so the database
+      // holds the one-per-document-per-locale rule the read above cannot.
+      draftKey: workingDraftKey(input.ref, input.locale ?? null),
+      sourceVersionNo: null,
+      createdBy: input.createdBy ?? null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    // A concurrent writer that committed its own draft between the read above
+    // and this insert makes the unique index refuse this row. That refusal is
+    // the point: without it both rows land and a later read, which takes the
+    // first of an unordered match, picks between them arbitrarily. The
+    // violation is left to travel — the write path above this owns turning it
+    // into an answer the caller can act on, and a repository has no way to know
+    // whether it is inside a caller's transaction, where PostgreSQL has already
+    // marked everything after the error unusable.
+    await this.db.insert(TABLE, row, { returning: [] });
   }
 
   /** Fetch the working draft (snapshot included) for a document in one locale. */
@@ -319,6 +328,88 @@ export class VersionsRepository {
       limit: 1,
     });
     return rows[0];
+  }
+
+  /**
+   * Which languages hold a pending change, for many documents at once.
+   *
+   * One query for a whole page of documents rather than one per document: the
+   * overview that consumes this is built for a list, and a per-row query there
+   * turns a page render into N round trips.
+   *
+   * Returns only the (document, locale) pairs that HAVE one, so a caller reads
+   * absence as absence rather than having to distinguish it from a document it
+   * never asked about.
+   */
+  async findPendingChangeLocales(
+    scopeKind: VersionScopeKind,
+    scopeSlug: string,
+    entryIds: string[]
+  ): Promise<Map<string, Set<string | null>>> {
+    const byEntry = new Map<string, Set<string | null>>();
+    if (entryIds.length === 0) return byEntry;
+    const rows = await this.db.select<{
+      entryId: string;
+      locale: string | null;
+    }>(TABLE, {
+      columns: ["entryId", "locale"],
+      where: {
+        and: [
+          { column: "scopeKind", op: "=", value: scopeKind },
+          { column: "scopeSlug", op: "=", value: scopeSlug },
+          { column: "entryId", op: "IN", value: entryIds },
+          { column: "isAutosave", op: "=", value: false },
+          { column: "versionNo", op: "IS NULL" },
+          { column: "status", op: "=", value: "draft" },
+        ],
+      },
+    });
+    for (const row of rows) {
+      const set = byEntry.get(row.entryId) ?? new Set<string | null>();
+      set.add(row.locale ?? null);
+      byEntry.set(row.entryId, set);
+    }
+    return byEntry;
+  }
+
+  /**
+   * Every working draft this document holds, one per locale.
+   *
+   * For the operations that act on the whole document at once — publishing all
+   * of its languages — rather than on the language in front of the author.
+   */
+  async findAllWorkingDrafts(ref: VersionRef): Promise<VersionRow[]> {
+    return this.db.select<VersionRow>(TABLE, {
+      where: {
+        and: [
+          ...this.docWhere(ref),
+          { column: "isAutosave", op: "=", value: false },
+          { column: "versionNo", op: "IS NULL" },
+          { column: "status", op: "=", value: "draft" },
+        ],
+      },
+    });
+  }
+
+  /**
+   * Delete EVERY working draft this document has, in every locale, returning
+   * the number of rows removed. Called when the document itself goes away.
+   *
+   * Separate from {@link deleteWorkingDraft} because they answer different
+   * questions, and reaching for the wrong one is harmful in both directions:
+   * removing one locale's draft on a document delete strands the rest, pointing
+   * at a row that no longer exists, while removing all of them on a discard
+   * throws away pending work in languages the author never touched.
+   */
+  async deleteAllWorkingDrafts(ref: VersionRef): Promise<number> {
+    return this.db.delete(TABLE, {
+      and: [
+        ...this.docWhere(ref),
+        { column: "isAutosave", op: "=", value: false },
+        { column: "versionNo", op: "IS NULL" },
+        { column: "status", op: "=", value: "draft" },
+      ],
+    });
   }
 
   /**

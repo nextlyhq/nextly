@@ -86,6 +86,8 @@ function editorFor(
   return {
     document,
     selectedId: "a",
+    selection: { ids: ["a"], primary: "a" },
+    applyAll: vi.fn(() => document),
     select: vi.fn(),
     apply: vi.fn(() => document),
     undo: vi.fn(),
@@ -202,5 +204,99 @@ describe("InspectorPanel identity fields", () => {
 
     expect(screen.queryByLabelText("Name")).toBeNull();
     expect(screen.queryByLabelText("Lock this block")).toBeNull();
+  });
+});
+
+describe("InspectorPanel with several blocks selected", () => {
+  function manyEditor(locks: readonly boolean[]) {
+    register();
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: locks.map((locked, i) => ({
+        id: String(i),
+        type: "acme/heading",
+        version: 1,
+        props: {},
+        ...(locked ? { locked: true } : {}),
+      })),
+    } as unknown as BlockDocument;
+    const editor = {
+      ...editorFor(document),
+      selectedId: "0",
+      selection: { ids: locks.map((_, i) => String(i)), primary: "0" },
+    } as unknown as EditorState & {
+      applyAll: ReturnType<typeof vi.fn>;
+    };
+    render(<InspectorPanel editor={editor} />);
+    return editor;
+  }
+
+  it("says how many, rather than describing one of them", () => {
+    /*
+     * Showing the primary's name and props while three blocks are selected
+     * would describe one block on a screen where the canvas outlines three and
+     * the toolbar's delete removes all of them.
+     */
+    manyEditor([false, false, false]);
+
+    expect(screen.getByText("3 blocks selected")).toBeDefined();
+    expect(screen.queryByLabelText("Name")).toBeNull();
+  });
+
+  it("shows the lock as MIXED when only some are locked", () => {
+    // A real third state. `checked` or unchecked here would tell the author
+    // something false about half of what they selected.
+    manyEditor([true, false]);
+
+    const box = screen.getByRole("checkbox", { name: /lock these blocks/i });
+    expect(box.getAttribute("aria-checked")).toBe("mixed");
+    expect((box as HTMLInputElement).indeterminate).toBe(true);
+  });
+
+  it("shows it as checked when they are ALL locked, which is the control", () => {
+    // Without this, "always mixed" would satisfy the case above.
+    manyEditor([true, true]);
+
+    const box = screen.getByRole("checkbox", { name: /lock these blocks/i });
+    expect(box.getAttribute("aria-checked")).toBe("true");
+    expect((box as HTMLInputElement).indeterminate).toBe(false);
+  });
+
+  it("LOCKS everything on the first press from mixed", () => {
+    /*
+     * Rather than unlocking. Unlocking from mixed is a first press that appears
+     * to do nothing to the blocks that were already unlocked, and every file
+     * manager and design tool resolves it this way.
+     */
+    const editor = manyEditor([true, false]);
+
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: /lock these blocks/i })
+    );
+
+    /*
+     * ONLY the block that changes. The already-locked one is omitted, because
+     * `applyOp` refuses an update writing what a node already holds and the
+     * group is atomic — planning it would abort the whole edit and lock
+     * nothing. That is what the editor actually did until a browser run caught
+     * it; this suite passed throughout, because the spy never ran the ops.
+     */
+    expect(editor.applyAll).toHaveBeenCalledWith([
+      { kind: "update", id: "1", patch: { locked: true } },
+    ]);
+  });
+
+  it("unlocks everything when they are all locked", () => {
+    const editor = manyEditor([true, true]);
+
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: /lock these blocks/i })
+    );
+
+    expect(editor.applyAll).toHaveBeenCalledWith([
+      { kind: "update", id: "0", patch: {}, unset: ["locked"] },
+      { kind: "update", id: "1", patch: {}, unset: ["locked"] },
+    ]);
   });
 });

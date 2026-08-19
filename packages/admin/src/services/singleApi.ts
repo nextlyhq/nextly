@@ -270,6 +270,27 @@ export const singleApi = {
     );
     return result.item;
   },
+
+  /**
+   * Publish every language of a Single at once.
+   *
+   * Hits `POST /api/singles/{slug}/publish-all`, which moves the main status
+   * and every companion `_status` in one transaction — so the document is never
+   * observable with some languages live and others not.
+   */
+  publishAllLocales: async (
+    slug: string
+  ): Promise<{ id: string; status?: string }> => {
+    // The route answers with the action envelope (`{ message, ...data }`)
+    // rather than a document, since publishing changes status and returns no
+    // content the editor did not already have.
+    return protectedApi.post<{
+      message: string;
+      slug: string;
+      id: string;
+      status?: string;
+    }>(`/singles/${slug}/publish-all`, {});
+  },
 } as const;
 
 // ============================================================

@@ -80,6 +80,52 @@ export { useRecentActivity } from "./hooks/queries/useRecentActivity";
 export { useDebouncedValue } from "./hooks/useDebouncedValue";
 // Permission gating (D36) — client-side UX checks for admin + plugin UI.
 export { useCan } from "./hooks/useCan";
+/**
+ * Which document a field is rendered inside.
+ *
+ * Exported for the plugin surface: a contributed field that has to address the
+ * document — to record against it, to query it, to link to it — cannot derive
+ * that from the props a field receives, which name a value and nothing else.
+ */
+export {
+  useDocumentIdentity,
+  type DocumentIdentity,
+} from "./components/features/entries/EntryForm/EntryFormContext";
+/**
+ * How the surrounding document stands, for a field that covers the editor's own
+ * chrome. Separate from the identity deliberately: which document this is does
+ * not change with the language, and how it stands does.
+ */
+export {
+  useDocumentStatus,
+  hasPendingWorkingDraft,
+  type DocumentStatus,
+} from "./components/features/entries/EntryForm/EntryFormContext";
+/**
+ * A field telling the form it holds work the form's values do not contain.
+ *
+ * Exported for the plugin surface: a contributed field with its own editing
+ * state is invisible to the dirty flag everything else is derived from.
+ */
+export { useReportUnsavedWork } from "./components/features/entries/EntryForm/UnsavedWorkContext";
+export {
+  pillStateFromForm,
+  PILL_LABEL,
+  type PillState,
+} from "./components/features/entries/EntryForm/panels/DocumentPanel";
+/**
+ * Put a contributed surface's live state somewhere a crash cannot take it.
+ *
+ * Exported for the plugin surface alongside the identity above: a field holding
+ * its own editing state has work at risk that the form cannot see, because that
+ * state does not reach the form until the surface commits it.
+ */
+export {
+  useDocumentCheckpoint,
+  type UseDocumentCheckpointOptions,
+  type UseDocumentCheckpointResult,
+  type AutosaveStatus,
+} from "./hooks/useDocumentCheckpoint";
 export { Can } from "./components/guards/Can";
 export type { CanProps } from "./components/guards/Can";
 export { useRowSelection } from "./hooks/useRowSelection";

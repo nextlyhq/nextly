@@ -174,6 +174,14 @@ export function LayersPanel({ editor }: LayersPanelProps): React.JSX.Element {
           aria-label="Layers"
           nodes={nodes}
           selectedId={editor.selectedId}
+          // The panel shows what the canvas shows. Passing only the primary
+          // would leave two surfaces disagreeing about what is selected, on a
+          // screen where a delete acts on all of it.
+          selectedIds={editor.selection.ids}
+          // The tree's three gestures ARE the editor's three gestures: it
+          // reports which one a row's modifiers meant and the store's own rules
+          // decide what that does. A panel translating them itself would be a
+          // second grammar to keep in step.
           onSelectedChange={editor.select}
           expandedIds={expandedIds}
           // The tree reports the whole next set, which during a search includes

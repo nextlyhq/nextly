@@ -28,12 +28,13 @@ import { useEffect, useMemo, useCallback, useRef } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
-import {
-  localizedFieldNamesOf,
-  singleSourceFetcher,
-} from "@admin/components/features/entries/entry-locale-source";
+import { singleSourceFetcher } from "@admin/components/features/entries/entry-locale-source";
 import { AutosaveRecoveryBanner } from "@admin/components/features/entries/EntryForm/AutosaveRecoveryBanner";
 import { EntryFormContent } from "@admin/components/features/entries/EntryForm/EntryFormContent";
+import {
+  EntryFormContextProvider,
+  hasPendingWorkingDraft,
+} from "@admin/components/features/entries/EntryForm/EntryFormContext";
 import { EntryFormProvider } from "@admin/components/features/entries/EntryForm/EntryFormProvider";
 import { EntryFormSidebar } from "@admin/components/features/entries/EntryForm/EntryFormSidebar";
 import { EntryFormToolbarSlots } from "@admin/components/features/entries/EntryForm/EntryFormToolbarSlots";
@@ -42,18 +43,23 @@ import { EntrySystemHeader } from "@admin/components/features/entries/EntryForm/
 import { FormErrorSummary } from "@admin/components/features/entries/EntryForm/FormErrorSummary";
 import { UnsavedChangesGuard } from "@admin/components/features/entries/EntryForm/UnsavedChangesGuard";
 import {
+  UnsavedWorkProvider,
+  useFormUnsavedWork,
+} from "@admin/components/features/entries/EntryForm/UnsavedWorkContext";
+import {
   mapIntentToPayload,
   passwordFieldNames,
   type EntryFormIntent,
 } from "@admin/components/features/entries/EntryForm/useEntryForm";
 import { useRailCollapsed } from "@admin/components/features/entries/EntryForm/useRailCollapsed";
-import {
-  EntryLocaleProvider,
-  type EntryLocaleContextValue,
-} from "@admin/components/features/entries/EntryLocaleContext";
+import { EntryLocaleProvider } from "@admin/components/features/entries/EntryLocaleContext";
 import { LanguagePanel } from "@admin/components/features/entries/LanguagePanel";
+import { TranslationPanes } from "@admin/components/features/entries/TranslationMode/TranslationPanes";
+import { useTranslationSource } from "@admin/components/features/entries/TranslationMode/useTranslationSource";
+import { useEntryLocaleContext } from "@admin/components/features/entries/useEntryLocaleContext";
 import { historyEnabledFrom } from "@admin/components/features/versions/history-enabled";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
+import { usePublishAllSingleLocales } from "@admin/hooks/queries/usePublishAllSingleLocales";
 import { useAutosaveRecovery } from "@admin/hooks/useAutosaveRecovery";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
 import {
@@ -148,6 +154,24 @@ export interface SingleFormProps {
   seedFromLocale?: string;
   /** Clears that seed once it has been offered. */
   onSeedHandled?: () => void;
+  /**
+   * i18n: translation mode — the language being translated FROM, the source
+   * document read at it, and the way in and out.
+   *
+   * One prop rather than four, because they are one concept and always travel
+   * together: three of them are meaningless without `from`, and a form given
+   * some of them is in a state the page cannot produce.
+   */
+  translation?: {
+    /** The source language, or absent when the mode is off. */
+    from?: string | undefined;
+    /** The source document's values, read at `from`. */
+    sourceDocument?: Record<string, unknown> | undefined;
+    /** Enter the mode, reading the source from the named language. */
+    onEnter?: (source: string) => void;
+    /** Leave the mode, keeping the language being edited. */
+    onExit?: () => void;
+  };
   /** Additional CSS classes */
   className?: string;
 }
@@ -214,6 +238,7 @@ export function SingleForm({
   onLocaleChange,
   seedFromLocale,
   onSeedHandled,
+  translation,
   sourceValues,
   className,
 }: SingleFormProps) {
@@ -332,12 +357,23 @@ export function SingleForm({
   // Keyboard Shortcuts
   // ---------------------------------------------------------------------------
 
+  /*
+   * Work a FIELD holds that the form's values do not contain — the page builder
+   * commits its document on exit, so the form is not dirty while it is open.
+   *
+   * Declared HERE rather than beside the autosave below, because the shortcut
+   * registration that reads it comes first: a save shortcut guarded on the
+   * form's own flag declines for the whole time the editor is open.
+   */
+  const unsavedWork = useFormUnsavedWork(isDirty);
+  const hasUnsavedWork = unsavedWork.hasUnsavedWork;
+
   useEntryFormShortcuts({
     onSave: () => {
       void handleSubmit();
     },
     onCancel: handleCancel,
-    isDirty,
+    isDirty: hasUnsavedWork,
     isSubmitting,
     enabled: true,
   });
@@ -435,41 +471,44 @@ export function SingleForm({
   // the action collection-only by accident of addressing rather than by intent;
   // it now gates on `fetchSourceValues`, which a single can answer. Inert for
   // non-localized singles.
-  const localeCtx: EntryLocaleContextValue = useMemo(
-    () => ({
-      locale,
-      // Resolve the default explicitly: `locale` is undefined while editing the
-      // implicit default language, so reading it alone would render an RTL
-      // default language left-to-right until it was picked by hand.
-      rtl: getLocale(locale ?? defaultLocale)?.rtl ?? false,
-      collectionLocalized: schema.localized === true,
-      isNonDefaultLocale:
-        !!locale && !!defaultLocale && locale !== defaultLocale,
-      sourceValues,
-      onLocaleChange,
-      seedFromLocale,
-      onSeedHandled,
-      // The translatable-field set, for the field-scoped copy-from-language action.
-      localizedFieldNames: localizedFieldNamesOf(
-        schema.fields,
-        schema.localized === true
-      ),
-      // A single is addressed by its slug alone, so it supplies its own read.
-      fetchSourceValues: singleSourceFetcher(schema.slug),
-    }),
-    [
-      locale,
-      getLocale,
-      defaultLocale,
-      schema.localized,
-      schema.fields,
-      schema.slug,
-      sourceValues,
-      onLocaleChange,
-      seedFromLocale,
-      onSeedHandled,
-    ]
-  );
+  // The Single's own publish-every-language mutation, handed to the shared
+  // availability rule through the locale context. A Single is addressed by its
+  // slug alone, so it supplies its own action exactly as it supplies its own
+  // source read.
+  const publishAllSingleLanguages = usePublishAllSingleLocales({
+    slug: schema.slug,
+  });
+
+  const translationMode = useTranslationSource({
+    fields: schema.fields,
+    documentLocalized: schema.localized === true,
+    translation,
+    locale,
+    defaultLocale,
+    getLocale,
+  });
+
+  const localeCtx = useEntryLocaleContext({
+    locale,
+    defaultLocale,
+    getLocale,
+    documentLocalized: schema.localized === true,
+    fields: schema.fields,
+    sourceValues,
+    inTranslationMode: translationMode.active,
+    onLocaleChange,
+    seedFromLocale,
+    onSeedHandled,
+    onEnterTranslationMode: translationMode.onEnter,
+    // A single is addressed by its slug alone, so it supplies its own read and
+    // no entry addressing at all.
+    fetchSourceValues: singleSourceFetcher(schema.slug),
+    publishAllLanguages: {
+      slug: schema.slug,
+      publish: () => publishAllSingleLanguages.mutate(),
+      pending: publishAllSingleLanguages.isPending,
+    },
+  });
 
   // Recovery points for this author, the same mechanism the entry editor uses.
   // A Single always exists once its schema does, so unlike an entry there is no
@@ -503,153 +542,187 @@ export function SingleForm({
   return (
     // A single is only ever edited standalone, so unlike the entry editor there
     // is no embedded case to exclude.
-    <UnsavedChangesGuard isDirty={isDirty} disabled={isSubmitting}>
-      <EntryLocaleProvider value={localeCtx}>
-        <div className={cn("space-y-0", className)}>
-          <EntryFormProvider form={form} onSubmit={handleSubmit}>
-            <FormErrorSummary
-              errors={errors}
-              submitCount={submitCount}
-              className="mx-6 mt-3"
-            />
+    <UnsavedChangesGuard isDirty={hasUnsavedWork} disabled={isSubmitting}>
+      <UnsavedWorkProvider report={unsavedWork.report}>
+        {/*
+        Which document the fields are inside. The entry editor has always
+        supplied this and the Single editor did not, so a field rendered here
+        could not tell what it was editing — which is fine for an input bound to
+        a name, and not fine for one that has to address the document itself.
 
-            <div className="flex flex-col @4xl/content:flex-row @4xl/content:min-h-[calc(100vh-4rem)] items-stretch @4xl/content:-m-8">
-              {/* Main column */}
-              <div className="flex-1 min-w-0 flex flex-col">
-                {/* Why: same fix as EntryForm — the parent flex's @4xl/content:-m-8
+        `isCreateMode` is false by construction: a Single is materialised before
+        its form renders, so there is no create mode to be in.
+      */}
+        <EntryFormContextProvider
+          kind="single"
+          collectionSlug={schema.slug}
+          entryId={document.id}
+          isCreateMode={false}
+          // The same status the meta strip below shows, plus the pending-draft
+          // fact the strip does not yet surface for a Single. Carrying the richer
+          // answer rather than the strip's: "changed" means published with a
+          // pending change, so a field reading it says MORE than the strip rather
+          // than something different.
+          documentStatus={{
+            status: documentStatus,
+            hasWorkingDraft: hasPendingWorkingDraft(document),
+          }}
+        >
+          <EntryLocaleProvider value={localeCtx}>
+            {/* Renders its child alone when there is no source — see the module. */}
+            <TranslationPanes
+              source={translationMode.source}
+              onExit={translationMode.onExit}
+              control={form.control}
+            >
+              <div className={cn("space-y-0", className)}>
+                <EntryFormProvider form={form} onSubmit={handleSubmit}>
+                  <FormErrorSummary
+                    errors={errors}
+                    submitCount={submitCount}
+                    className="mx-6 mt-3"
+                  />
+
+                  <div className="flex flex-col @4xl/content:flex-row @4xl/content:min-h-[calc(100vh-4rem)] items-stretch @4xl/content:-m-8">
+                    {/* Main column */}
+                    <div className="flex-1 min-w-0 flex flex-col">
+                      {/* Why: same fix as EntryForm — the parent flex's @4xl/content:-m-8
                 already cancels PageContainer's px-8, so wrapping the header / meta
                 strip in another -mx-8 was double-negative and pushed them
                 past the page edges. */}
-                <EntrySystemHeader
-                  autosaveEnabled={autosaveScope !== null}
-                  autosaveStatus={autosave.status}
-                  autosaveLastSavedAt={autosave.lastSavedAt}
-                  mode="edit"
-                  titleField={titleField}
-                  historyFields={schema.fields}
-                  historyEnabled={historyEnabledFrom(schema)}
-                  hasStatus={hasStatus}
-                  isSubmitting={isSubmitting}
-                  isDirty={isDirty}
-                  entry={entryLike}
-                  collectionSlug={schema.slug}
-                  /* i18n: forward the active locale + switch handler so a localized single shows
+                      <EntrySystemHeader
+                        autosaveEnabled={autosaveScope !== null}
+                        autosaveStatus={autosave.status}
+                        autosaveLastSavedAt={autosave.lastSavedAt}
+                        mode="edit"
+                        titleField={titleField}
+                        historyFields={schema.fields}
+                        historyEnabled={historyEnabledFrom(schema)}
+                        hasStatus={hasStatus}
+                        isSubmitting={isSubmitting}
+                        isDirty={isDirty}
+                        entry={entryLike}
+                        collectionSlug={schema.slug}
+                        /* i18n: forward the active locale + switch handler so a localized single shows
                    the primary header language switcher (the sidebar pills are unavailable when
                    the rail is collapsed or on narrow layouts). The switcher self-hides when the
                    single isn't localized / localization isn't configured. */
-                  locale={locale}
-                  onLocaleChange={onLocaleChange}
-                  localized={schema.localized === true}
-                  toolbarSlot={
-                    <EntryFormToolbarSlots
-                      context="single"
-                      controllerField={controllerNames[0]}
-                    />
-                  }
-                  onSaveDraft={() => {
-                    void handleSubmit(undefined, "save-draft");
-                  }}
-                  onPublish={() => {
-                    void handleSubmit(undefined, "publish");
-                  }}
-                  onSaveChanges={() => {
-                    void handleSubmit(undefined, "save-changes");
-                  }}
-                  onUnpublish={() => {
-                    void handleSubmit(undefined, "unpublish");
-                  }}
-                  onCancel={handleCancel}
-                  onViewApi={onViewApi}
-                  /* Why: Singles share the Show JSON dialog with collections,
+                        locale={locale}
+                        onLocaleChange={onLocaleChange}
+                        localized={schema.localized === true}
+                        toolbarSlot={
+                          <EntryFormToolbarSlots
+                            context="single"
+                            controllerField={controllerNames[0]}
+                          />
+                        }
+                        onSaveDraft={() => {
+                          void handleSubmit(undefined, "save-draft");
+                        }}
+                        onPublish={() => {
+                          void handleSubmit(undefined, "publish");
+                        }}
+                        onSaveChanges={() => {
+                          void handleSubmit(undefined, "save-changes");
+                        }}
+                        onUnpublish={() => {
+                          void handleSubmit(undefined, "unpublish");
+                        }}
+                        onCancel={handleCancel}
+                        onViewApi={onViewApi}
+                        /* Why: Singles share the Show JSON dialog with collections,
                  but at the /api/singles/{slug} URL pattern. Passing
                  `scope="single"` routes the dialog through singleApi
                  instead of entryApi. */
-                  scope="single"
-                  lockIdentity
-                  isRailCollapsed={railCollapsed}
-                  onToggleRail={toggleRail}
-                />
-                <EntryMetaStrip
-                  slugField={slugField}
-                  hasStatus={hasStatus}
-                  status={documentStatus}
-                  isRailCollapsed={railCollapsed}
-                  lockSlug
-                />
+                        scope="single"
+                        lockIdentity
+                        isRailCollapsed={railCollapsed}
+                        onToggleRail={toggleRail}
+                      />
+                      <EntryMetaStrip
+                        slugField={slugField}
+                        hasStatus={hasStatus}
+                        status={documentStatus}
+                        isRailCollapsed={railCollapsed}
+                        lockSlug
+                      />
 
-                {/* Inside the main column, below the header, matching the entry
+                      {/* Inside the main column, below the header, matching the entry
                   editor. Placed above the flex row it sat UNDER the sticky
                   header, which intercepted pointer events: the offer was
                   visible and its buttons were not clickable. */}
-                {recovery.offer ? (
-                  <AutosaveRecoveryBanner
-                    savedAt={recovery.offer.savedAt}
-                    onRestore={restoreRecovery}
-                    onDismiss={recovery.dismiss}
-                    className="mx-6 mt-3"
-                  />
-                ) : null}
+                      {recovery.offer ? (
+                        <AutosaveRecoveryBanner
+                          savedAt={recovery.offer.savedAt}
+                          onRestore={restoreRecovery}
+                          onDismiss={recovery.dismiss}
+                          className="mx-6 mt-3"
+                        />
+                      ) : null}
 
-                {/* The language panel, inline. The rail that otherwise carries it
+                      {/* The language panel, inline. The rail that otherwise carries it
                   is `hidden @4xl/content:flex`, so this is the exact
                   complement: shown only where the rail is not, and rendered
                   unconditionally once the author collapses the rail. Without
                   it a single loses its language workflow entirely at narrow
                   widths, which is the failure this panel exists to remove. */}
-                {localizationEnabled && (
-                  <div
-                    className={cn(
-                      "px-6 pt-4",
-                      !railCollapsed && "@4xl/content:hidden"
+                      {localizationEnabled && (
+                        <div
+                          className={cn(
+                            "px-6 pt-4",
+                            !railCollapsed && "@4xl/content:hidden"
+                          )}
+                        >
+                          <LanguagePanel
+                            {...(singleTranslations === undefined
+                              ? {}
+                              : { translations: singleTranslations })}
+                            {...(locale === undefined
+                              ? {}
+                              : { activeLocale: locale })}
+                            {...(onLocaleChange === undefined
+                              ? {}
+                              : { onSelect: onLocaleChange })}
+                            hasStatus={hasStatus}
+                          />
+                        </div>
+                      )}
+
+                      {mainFields.length > 0 && (
+                        <div className="@4xl/content:p-8 pt-6">
+                          <EntryFormContent
+                            fields={mainFields}
+                            disabled={isSubmitting}
+                            withCard
+                          />
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Rail (collapsible). Same shape and width as collections. */}
+                    {!railCollapsed && (
+                      <div className="hidden @4xl/content:flex w-[320px] shrink-0 border-l border-border bg-background flex-col relative z-10">
+                        <div className="@4xl/content:sticky @4xl/content:top-0 @4xl/content:h-[calc(100vh-4rem)] overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col">
+                          <EntryFormSidebar
+                            mode="edit"
+                            entry={entryLike}
+                            hasStatus={hasStatus}
+                            isDirty={isDirty}
+                            {...(locale === undefined ? {} : { locale })}
+                            {...(onLocaleChange === undefined
+                              ? {}
+                              : { onLocaleChange })}
+                          />
+                        </div>
+                      </div>
                     )}
-                  >
-                    <LanguagePanel
-                      {...(singleTranslations === undefined
-                        ? {}
-                        : { translations: singleTranslations })}
-                      {...(locale === undefined
-                        ? {}
-                        : { activeLocale: locale })}
-                      {...(onLocaleChange === undefined
-                        ? {}
-                        : { onSelect: onLocaleChange })}
-                      hasStatus={hasStatus}
-                    />
                   </div>
-                )}
-
-                {mainFields.length > 0 && (
-                  <div className="@4xl/content:p-8 pt-6">
-                    <EntryFormContent
-                      fields={mainFields}
-                      disabled={isSubmitting}
-                      withCard
-                    />
-                  </div>
-                )}
+                </EntryFormProvider>
               </div>
-
-              {/* Rail (collapsible). Same shape and width as collections. */}
-              {!railCollapsed && (
-                <div className="hidden @4xl/content:flex w-[320px] shrink-0 border-l border-border bg-background flex-col relative z-10">
-                  <div className="@4xl/content:sticky @4xl/content:top-0 @4xl/content:h-[calc(100vh-4rem)] overflow-y-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] flex flex-col">
-                    <EntryFormSidebar
-                      mode="edit"
-                      entry={entryLike}
-                      hasStatus={hasStatus}
-                      isDirty={isDirty}
-                      {...(locale === undefined ? {} : { locale })}
-                      {...(onLocaleChange === undefined
-                        ? {}
-                        : { onLocaleChange })}
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-          </EntryFormProvider>
-        </div>
-      </EntryLocaleProvider>
+            </TranslationPanes>
+          </EntryLocaleProvider>
+        </EntryFormContextProvider>
+      </UnsavedWorkProvider>
     </UnsavedChangesGuard>
   );
 }

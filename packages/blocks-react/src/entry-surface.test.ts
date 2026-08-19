@@ -213,6 +213,7 @@ describe("the root entry", () => {
       "BlockList",
       "BlockPlaceholder",
       "NODE_ID_ATTRIBUTE",
+      "PROP_ATTRIBUTE",
       "PageRenderer",
       "createBlockResolver",
       "createStandaloneContext",
@@ -373,6 +374,8 @@ describe("the next entry", () => {
       "DEFAULT_MAX_QUERIES",
       "createBlocksPage",
       "createPublicBlocksPage",
+      "createPublicSinglePage",
+      "createSinglePage",
     ]);
   });
 });

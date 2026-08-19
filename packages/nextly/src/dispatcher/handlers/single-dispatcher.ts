@@ -112,6 +112,7 @@ import { assertSchemaVersionMatch } from "./schema-version-guard";
 import {
   assertLabelRequestValid,
   autosaveForDocument,
+  discardWorkingDraftForDocument,
   getAutosaveForDocument,
   requireSnapshotBody,
   getVersionDiffForDocument,
@@ -374,6 +375,28 @@ export const SINGLE_VERSION_METHODS: Record<
       );
     },
   },
+  discardSingleWorkingDraft: {
+    execute: async (_svc, p) => {
+      const slug = String(p.slug ?? "");
+      // The document id comes from the live row rather than the URL, as
+      // everywhere in this handler: it is what the authorization checks are
+      // made against, and a client-supplied one would let a caller aim them at
+      // a document other than the one being written.
+      const entryId = await requireLiveSingleId(slug);
+      const item = await discardWorkingDraftForDocument({
+        scopeKind: "single",
+        slug,
+        entryId,
+        user: userFromParams(p),
+        params: p,
+        // `?locale=` names the language whose pending change is being thrown
+        // away. An empty value is the same as none: the request named no
+        // language, which a localized Single resolves to its default.
+        locale: typeof p.locale === "string" && p.locale ? p.locale : null,
+      });
+      return respondMutation("Working draft discarded.", item);
+    },
+  },
 };
 
 /**
@@ -388,6 +411,39 @@ async function requireLiveSingleId(slug: string): Promise<string> {
     });
   }
   return id;
+}
+
+/**
+ * The caller a Single write is performed as, or undefined for an unauthenticated
+ * request.
+ *
+ * Both write handlers need the same shape and for the same reasons: the decoded
+ * role SET, so role-based stored rules and the super-admin bypass evaluate
+ * against the real authorized scope; and a representative singular `role`, for a
+ * rule or a field-level `access` callback reading `req.user.role`. Two copies
+ * agreed the day they were written and would drift the moment either learned a
+ * new claim, which for an authorization input is the expensive kind of drift.
+ *
+ * Distinct from `userFromParams`, which the version handlers use: that one
+ * always returns a user, defaulting the id to the empty string, because its
+ * callers pass it into a gate that treats an unknown caller as unauthorized.
+ * A write needs the absence itself, so that the service can tell an anonymous
+ * request from one made by a user with no id.
+ */
+function authenticatedSingleUser(p: Params) {
+  if (!p._authenticatedUserId) return undefined;
+  const roles = readAuthenticatedRoles(p);
+  return {
+    id: String(p._authenticatedUserId),
+    name: p._authenticatedUserName
+      ? String(p._authenticatedUserName)
+      : undefined,
+    email: p._authenticatedUserEmail
+      ? String(p._authenticatedUserEmail)
+      : undefined,
+    roles,
+    role: roles?.[0],
+  };
 }
 
 const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
@@ -702,26 +758,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
     execute: async (svc, p, body) => {
       const slug = requireParam(p, "slug", "Single slug");
       if (!body) throw new Error("Update data is required");
-      const roles = readAuthenticatedRoles(p);
-      const user = p._authenticatedUserId
-        ? {
-            id: String(p._authenticatedUserId),
-            name: p._authenticatedUserName
-              ? String(p._authenticatedUserName)
-              : undefined,
-            email: p._authenticatedUserEmail
-              ? String(p._authenticatedUserEmail)
-              : undefined,
-            // Forward decoded role slugs so field-level `access.read` redaction
-            // evaluates against the caller's roles, matching the collection and
-            // standalone-single paths.
-            roles,
-            // Also expose a representative singular `role` so field-level
-            // `access.update`/`access.read` callbacks reading `req.user.role`
-            // see an authorized value instead of stripping fields.
-            role: roles?.[0],
-          }
-        : undefined;
+      const user = authenticatedSingleUser(p);
       const result = await svc.entry.update(
         slug,
         body as Record<string, unknown>,
@@ -747,6 +784,36 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         result.message ?? `Single "${slug}" updated.`,
         doc
       );
+    },
+  },
+
+  publishAllSingleLocales: {
+    // Publish every language of a Single in one transaction. The Single
+    // equivalent of the collection entry's publish-all.
+    execute: async (svc, p) => {
+      const slug = requireParam(p, "slug", "Single slug");
+      const user = authenticatedSingleUser(p);
+      const result = await svc.entry.publishAllLocales(slug, {
+        user,
+        // Who performed the publish, recorded on the outbox events: an API-key
+        // caller attributes to the key rather than the user that owns it.
+        actor: readAuthenticatedActor(p),
+        overrideAccess: false,
+        // Route auth already ran the RBAC gate for `update`; attesting it skips
+        // only that re-check. The publish gate always runs.
+        routeAuthorized: !!user,
+        // The route authorized this POST as `update` against an API key's
+        // scope; the service judges the key's own `publish-{slug}` grant.
+        authenticatedScope: readAuthenticatedScope(p),
+      });
+      const published = unwrapServiceResult<{
+        id: string;
+        status?: "published";
+      }>(result, { slug });
+      return respondAction(result.message ?? "All languages published.", {
+        slug,
+        ...published,
+      });
     },
   },
 

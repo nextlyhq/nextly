@@ -245,6 +245,16 @@ export { blockLabel } from "./inserter";
 export { isLocked, lockBlockingDelete, lockBlockingMove } from "./locking";
 
 /**
+ * @experimental How a lock reads across a whole selection.
+ *
+ * From this entry because it is a plain function over a document, and because
+ * anything showing a lock for several blocks needs the same THREE answers the
+ * inspector uses. A surface that collapsed "some of these" into on or off would
+ * tell an author something false about half of what they selected.
+ */
+export { lockStateOf, type LockState } from "./inspector";
+
+/**
  * @experimental Duplicating a block: the copy, and where it goes.
  *
  * From this entry because it is a plain function over a document. An agent
@@ -257,6 +267,64 @@ export {
   COPY_SUFFIX,
   type BlockDuplication,
 } from "./duplicate-block";
+
+/**
+ * @experimental Delete, duplicate and lock across a whole selection.
+ *
+ * From this entry because each is a plain function returning ops. An agent
+ * asked to "remove these six" needs the same plan the editor makes — including
+ * that one lock refuses the whole group, and that copies must be planned in
+ * reverse so each lands beside its own original.
+ */
+export {
+  isRefusal,
+  selectionDeletion,
+  selectionDuplication,
+  selectionLock,
+  selectionMove,
+  type SelectionDuplication,
+  type SelectionEdit,
+  type SelectionMove,
+  type SelectionMovePlan,
+  type SelectionPlan,
+  type SelectionRefusal,
+} from "./selection-ops";
+
+/**
+ * @experimental What "the selection" is once it can hold more than one block.
+ *
+ * From this entry because every part of it is a plain function over a document.
+ * A host, an agent, or a surface answering "what is selected" needs the same
+ * normalisation the editor uses — a second reading would let one of them act on
+ * a container AND something inside it, which deletes the child twice.
+ */
+export {
+  EMPTY_SELECTION,
+  applySelection,
+  documentOrder,
+  normalizeSelection,
+  pruneSelection,
+  rangeBetween,
+  type BlockSelection,
+  type SelectionMode,
+} from "./selection";
+
+/**
+ * @experimental The palette's command list, as a plain function over state.
+ *
+ * From this entry because a host assembling its own palette — or an agent
+ * enumerating what the editor can do right now — needs the same list the editor
+ * offers, and availability derived from a second reading of the lock and move
+ * rules is how the two come to disagree.
+ */
+export {
+  BLOCK_GROUP,
+  EDITOR_GROUP,
+  HISTORY_GROUP,
+  builderCommands,
+  type BuilderCommandsInput,
+  type CommandVerbs,
+} from "./builder-commands";
 
 /**
  * @experimental Who owns Escape while the editor is on screen.
@@ -286,6 +354,7 @@ export {
   TOOLBAR_GAP_PX,
   toolbarActions,
   toolbarPlacement,
+  unionRect,
   type ToolbarAction,
   type ToolbarActionId,
   type ToolbarPlacement,

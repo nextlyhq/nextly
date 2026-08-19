@@ -51,6 +51,9 @@ function buildEntryErrorEnvelope(error: Error) {
 const user = { id: "u1", roles: ["editor"] } as unknown as UserContext;
 
 const args = {
+  // The kind is explicit now that one function serves both: a discard for a
+  // Single reads and deletes through different services.
+  scopeKind: "collection" as const,
   slug: "posts",
   entryId: "e1",
   user,
@@ -72,15 +75,40 @@ describe("discardWorkingDraft", () => {
       title: "live",
       status: "published",
     });
+    // A request naming no language reaches the handler as an explicit null, so
+    // the one rule that resolves a language decides what that means rather than
+    // the delete falling to whichever key happens to be absent.
     expect(discardSpy).toHaveBeenCalledWith({
       collectionName: "posts",
       entryId: "e1",
+      locale: null,
     });
     expect(unlockedDeleteSpy).not.toHaveBeenCalled();
     // The live read precedes the deletion, so a read failure can leave the draft
     // intact (pinned by the next case).
     expect(getEntrySpy.mock.invocationCallOrder[0]).toBeLessThan(
       discardSpy.mock.invocationCallOrder[0]
+    );
+  });
+
+  it("forwards the language being discarded to the read and the delete", async () => {
+    // A localized document holds one pending change per language. Both halves
+    // need the language: the delete to remove the right one, and the read so the
+    // values handed back are the ones the editor resets to.
+    getEntrySpy.mockResolvedValue({
+      success: true,
+      data: { id: "e1", title: "vive", status: "published" },
+    });
+
+    await discardWorkingDraft({ ...args, locale: "es" });
+
+    expect(discardSpy).toHaveBeenCalledWith({
+      collectionName: "posts",
+      entryId: "e1",
+      locale: "es",
+    });
+    expect(getEntrySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ locale: "es" })
     );
   });
 
