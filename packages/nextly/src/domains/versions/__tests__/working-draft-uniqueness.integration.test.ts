@@ -20,13 +20,21 @@ import {
 } from "../../../plugins/test-nextly";
 import { VersionsRepository, type VersionRef } from "../versions-repository";
 
-const describeIfPg = process.env.TEST_POSTGRES_URL ? describe : describe.skip;
+// Both server dialects, because the constraint is expressed once in the shared
+// Drizzle schema but each dialect creates it its own way, and MySQL in
+// particular has an index key length limit a wider key would have hit. SQLite is
+// absent deliberately: it serializes its writers, so it cannot express two
+// transactions reading before either writes.
+const DIALECTS = [
+  { name: "postgresql" as const, url: process.env.TEST_POSTGRES_URL },
+  { name: "mysql" as const, url: process.env.TEST_MYSQL_URL },
+].filter(d => Boolean(d.url));
 
-describeIfPg("working-draft uniqueness (integration)", () => {
+describe.each(DIALECTS)("working-draft uniqueness on $name", ({ name }) => {
   let handle: TestNextly;
 
   beforeAll(async () => {
-    handle = await createTestNextly({ dialect: "postgresql" });
+    handle = await createTestNextly({ dialect: name });
   });
 
   afterAll(async () => {
@@ -152,5 +160,25 @@ describeIfPg("working-draft uniqueness (integration)", () => {
       { where: { and: [{ column: "entryId", op: "=", value: ref.entryId }] } }
     );
     expect(rows).toHaveLength(4);
+  });
+});
+
+// SQLite cannot express the concurrent case, but the constraint still has to
+// EXIST there: the schema declares it once for all three dialects, and a
+// dialect that quietly failed to create it would enforce nothing while every
+// other signal looked identical.
+describe("working-draft uniqueness on sqlite", () => {
+  it("creates the unique index", async () => {
+    const handle = await createTestNextly();
+    try {
+      const rows = await handle.adapter.executeQuery(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'nextly_versions_working_draft_uidx'"
+      );
+      expect(JSON.stringify(rows)).toContain(
+        "nextly_versions_working_draft_uidx"
+      );
+    } finally {
+      await handle.destroy();
+    }
   });
 });
