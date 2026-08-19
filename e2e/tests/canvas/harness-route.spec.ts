@@ -121,4 +121,69 @@ test.describe("the canvas harness route", () => {
 
     await page.mouse.up();
   });
+
+  test("renders the author's own node styles, not just their class names", async ({
+    page,
+  }) => {
+    await page.goto(ROUTE);
+    await expect(page.locator(NODE)).toHaveCount(SEEDED.length);
+
+    // The POSITIVE CONTROL for everything below: the fixture has to carry
+    // styles at all. A seed that lost them would make every assertion here
+    // pass against a canvas that renders nothing — which is exactly how this
+    // regression was introduced and then re-discovered.
+    const authored = await page.locator(NODE).evaluateAll(nodes =>
+      nodes.map(node => {
+        const cls = [...node.classList].find(c => c.startsWith("nx-pb-"));
+        return cls ?? null;
+      })
+    );
+    expect(authored.every(c => c !== null)).toBe(true);
+
+    // The class alone proves nothing: `resolvePageStyles` keeps class names
+    // even when it withholds the sheet, so a canvas given no style context
+    // emits every class and defines none of them. Assert the RULES exist.
+    const scopedRules = await page.evaluate(() => {
+      let count = 0;
+      for (const sheet of Array.from(document.styleSheets)) {
+        let rules: CSSRuleList;
+        try {
+          rules = sheet.cssRules;
+        } catch {
+          continue;
+        }
+        for (const rule of Array.from(rules)) {
+          if (rule.cssText.includes("nx-pb-") && rule.cssText.includes("{")) {
+            count += 1;
+          }
+        }
+      }
+      return count;
+    });
+    expect(scopedRules).toBeGreaterThan(0);
+
+    // And that they took effect. Geometry rather than computed style, because
+    // a rule can exist and lose the cascade: the authored 24px gaps are what
+    // the drop indicator needs somewhere to draw, and the spacer's authored
+    // height is what makes it hittable at all.
+    const { gaps, spacerHeight } = await page.evaluate(() => {
+      const nodes = Array.from(document.querySelectorAll("[data-nx-node]"));
+      const boxes = nodes.map(node => {
+        const rect = node.getBoundingClientRect();
+        return {
+          id: node.getAttribute("data-nx-node"),
+          top: Math.round(rect.top),
+          height: Math.round(rect.height),
+        };
+      });
+      return {
+        gaps: boxes
+          .slice(1)
+          .map((box, i) => box.top - (boxes[i].top + boxes[i].height)),
+        spacerHeight: boxes.find(box => box.id === "hx-spacer")?.height ?? null,
+      };
+    });
+    expect(gaps.every(gap => gap > 0)).toBe(true);
+    expect(spacerHeight).toBeGreaterThan(0);
+  });
 });

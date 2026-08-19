@@ -110,6 +110,14 @@ export function BuilderCanvasHarness() {
       <Canvas
         document={editor.document}
         siteStyles={siteStyles}
+        // Mirrors what `BlocksField` passes. The per-node style tier compiles
+        // only when the renderer is given a style context, and without it the
+        // canvas draws every block flush and unstyled while the published page
+        // draws the author's real spacing — so a harness omitting it would
+        // certify a canvas nobody ships.
+        render={{
+          styleContext: { breakpoints: { viewport: [], container: [] } },
+        }}
         selectedId={editor.selectedId}
         selectedIds={editor.selection.ids}
         onSelect={editor.select}

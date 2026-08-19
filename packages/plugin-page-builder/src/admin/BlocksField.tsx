@@ -74,7 +74,7 @@ import {
 } from "react-hook-form";
 
 import { emptyBlockDocument } from "../fields/blocks-document";
-import { siteSheet } from "../site-style";
+import { siteBreakpoints, siteSheet } from "../site-style";
 
 import { BlocksSummary } from "./BlocksSummary";
 import { DocumentStatusPill } from "./DocumentStatusPill";
@@ -484,6 +484,27 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             selectedId={editor.selectedId}
             selectedIds={editor.selection.ids}
             onSelect={editor.select}
+            // The per-node style tier, which is a SEPARATE input from
+            // `siteStyles` and was reaching only the published page.
+            //
+            // `PageRenderer` compiles a document's own node styles only when it
+            // is given a style context; without one `resolvePageStyles`
+            // withholds the sheet and — in its own words — "Classes are kept
+            // either way, so blocks still carry the names the rest of the
+            // system expects". The symptom is therefore silent and specific:
+            // every block carries its `nx-pb-<hash>` class and nothing defines
+            // it, so an author's margins, spacing and dimensions render on the
+            // published page and vanish in the editor. Measured before this
+            // line existed: the same document rendered zero scoped rules and
+            // flush blocks here, six rules and 24px gaps through the public
+            // route.
+            //
+            // The breakpoints come from `siteBreakpoints()` rather than a set
+            // spelled here, because `site-style.ts` exists precisely so the
+            // field validator and the canvas cannot disagree about what this
+            // site's breakpoints are — and this is now the third consumer of
+            // that one answer.
+            render={{ styleContext: { breakpoints: siteBreakpoints() } }}
             dragHandlers={drag.handlers}
             // The pointer route into typing a block's text. Its keyboard
             // counterpart is the Enter binding above, registered in the same
