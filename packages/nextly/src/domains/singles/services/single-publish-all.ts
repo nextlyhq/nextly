@@ -56,6 +56,7 @@ import {
 } from "../../versions/tag-component-types";
 import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
+import { VersionsRepository } from "../../versions/versions-repository";
 import { expandComponentFields } from "../../webhooks/expand-component-fields";
 import { recordMutationEvent } from "../../webhooks/record-mutation-event";
 import { isOutboxRecordingActive } from "../../webhooks/recording-activation";
@@ -67,6 +68,10 @@ import type {
   UserContext,
 } from "../types";
 
+import {
+  splitPendingChange,
+  writeCompanionValues,
+} from "./apply-pending-change";
 import { resolveSingleForRequest } from "./ensure-runtime-table";
 import { checkSingleAccess } from "./single-query-service";
 import type { SingleRegistryService } from "./single-registry-service";
@@ -623,6 +628,12 @@ export class SinglePublishAllService extends BaseService {
       );
     }
 
+    // Every language's pending change goes live with its status. Without this
+    // the statuses would all say published while the content each author was
+    // holding stayed unapplied — the document would report itself fully
+    // published and show none of the work being published.
+    await this.promotePendingChanges(tx, plan, publishNow);
+
     if (companion && plan.companionPublishable) {
       // Every stored translation moves in ONE statement, through the adapter's
       // typed update rather than an interpolated string, so the dialect quoting
@@ -644,6 +655,65 @@ export class SinglePublishAllService extends BaseService {
       },
       mainRowTransitioned,
     };
+  }
+
+  /**
+   * Apply every language's pending change, then consume it.
+   *
+   * Split per language the same way an ordinary write is: a translated value
+   * belongs on that language's companion row, and folding it into the main row
+   * would write it to a table with no column for it.
+   */
+  private async promotePendingChanges(
+    tx: TransactionContext,
+    plan: PublishPlan,
+    publishNow: Date
+  ): Promise<void> {
+    const { slug, singleMeta, existingDoc, companion } = plan;
+    if (singleMeta.versions?.drafts?.enabled !== true) return;
+
+    const repo = new VersionsRepository(tx);
+    const ref = {
+      scopeKind: "single" as const,
+      scopeSlug: slug,
+      entryId: existingDoc.id,
+    };
+    const pending = await repo.findAllWorkingDrafts(ref);
+    if (pending.length === 0) return;
+
+    for (const draft of pending) {
+      // The pending change carries no lifecycle of its own; the statuses this
+      // publish writes are the ones that count.
+      const { main, companion: companionValues } = splitPendingChange(
+        draft.snapshot,
+        companion
+      );
+      delete main.status;
+
+      if (Object.keys(main).length > 0) {
+        await tx.update(
+          singleMeta.tableName,
+          { ...main, updated_at: publishNow },
+          this.whereEq("id", existingDoc.id)
+        );
+      }
+      if (
+        companion &&
+        draft.locale &&
+        Object.keys(companionValues).length > 0
+      ) {
+        await writeCompanionValues({
+          tx,
+          dialect: this.adapter.dialect,
+          companionTableName: companion.companionTableName,
+          entryId: existingDoc.id,
+          locale: draft.locale,
+          values: companionValues,
+        });
+      }
+    }
+
+    await repo.deleteAllWorkingDrafts(ref);
   }
 
   /**

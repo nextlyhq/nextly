@@ -331,6 +331,25 @@ export class VersionsRepository {
   }
 
   /**
+   * Every working draft this document holds, one per locale.
+   *
+   * For the operations that act on the whole document at once — publishing all
+   * of its languages — rather than on the language in front of the author.
+   */
+  async findAllWorkingDrafts(ref: VersionRef): Promise<VersionRow[]> {
+    return this.db.select<VersionRow>(TABLE, {
+      where: {
+        and: [
+          ...this.docWhere(ref),
+          { column: "isAutosave", op: "=", value: false },
+          { column: "versionNo", op: "IS NULL" },
+          { column: "status", op: "=", value: "draft" },
+        ],
+      },
+    });
+  }
+
+  /**
    * Delete EVERY working draft this document has, in every locale, returning
    * the number of rows removed. Called when the document itself goes away.
    *
