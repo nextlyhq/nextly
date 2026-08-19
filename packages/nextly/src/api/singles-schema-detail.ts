@@ -28,6 +28,7 @@ import {
   coerceBuilderMaxPerDoc,
   resolveBuilderVersions,
 } from "../domains/versions/builder-versions";
+import { schemaDraftsEnabled } from "../domains/versions/draft-split-eligibility";
 import { resolveBuilderWebhooks } from "../domains/webhooks/builder-webhooks";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
@@ -97,9 +98,25 @@ export const GET = withErrorHandler(
       });
     }
 
+    // Whether a status-less save on this Single holds the edit rather than
+    // writing the live row. Derived from the SAME predicate the write gates on,
+    // so the editor's affordance can never disagree with what a save does — an
+    // editor told drafts are off sends an explicit published save, which
+    // overwrites the live document.
+    //
+    // A resolution failure propagates rather than defaulting to false: for a
+    // drafts-configured Single, false is the destructive answer.
+    const draftsEnabled = await schemaDraftsEnabled({
+      status: (single as { status?: boolean }).status,
+      versions: single.versions,
+      localized: (single as { localized?: boolean }).localized,
+      fields: single.fields,
+    });
+
     return respondDoc({
       ...single,
       fields: enrichedFields,
+      draftsEnabled,
     } as unknown as typeof single);
   }
 );
