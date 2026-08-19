@@ -14,6 +14,7 @@
     "lint:fix": "eslint . --fix"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
     "@nextlyhq/adapter-drizzle": "workspace:*",
     "@nextlyhq/adapter-sqlite": "workspace:*",
     "@nextlyhq/admin": "workspace:*",

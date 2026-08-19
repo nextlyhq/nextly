@@ -906,7 +906,14 @@ function ShellRegions({
                 ref={element => {
                   regionRefs.current.canvas = element;
                 }}
-                tabIndex={-1}
+                /*
+                 * `0`, not `-1`. This region SCROLLS, and nothing inside it is
+                 * focusable — blocks are selected by pointer, not by tab — so
+                 * at `-1` a keyboard user could not scroll the canvas at all.
+                 * Programmatically focusable was enough for F6 region cycling
+                 * and not enough to read the page.
+                 */
+                tabIndex={0}
                 aria-label="Canvas"
                 className="h-full overflow-auto"
               >
@@ -945,10 +952,14 @@ function ShellRegions({
         </ResizablePanelGroup>
       </div>
 
-      <footer
-        className="border-[color:var(--nx-builder-border)] text-[color:var(--nx-builder-text-muted)] flex h-8 shrink-0 items-center gap-2 border-t px-3 text-xs"
-        aria-label="Selection path"
-      >
+      {/*
+        No `aria-label`. A `<footer>` nested inside a section is `generic`, and
+        `aria-label` is PROHIBITED on that role — so the name was not announced
+        and the element was invalid. Nothing is lost: the breadcrumb inside
+        names itself ("Selected block's ancestors"), which is the thing a
+        reader actually lands on.
+      */}
+      <footer className="border-[color:var(--nx-builder-border)] text-[color:var(--nx-builder-text-muted)] flex h-8 shrink-0 items-center gap-2 border-t px-3 text-xs">
         {breadcrumb}
       </footer>
     </div>
