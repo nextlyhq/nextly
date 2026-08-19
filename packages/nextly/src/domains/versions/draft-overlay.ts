@@ -40,6 +40,37 @@ import { isDraftSplitEligible } from "./draft-split-eligibility";
 import type { ComponentSchemas } from "./restore-snapshot";
 import { workingDraftLocale } from "./working-draft-locale";
 
+/**
+ * The three facts about a document that decide whether the split applies to it.
+ *
+ * Read through one function rather than cast at each call site: collections and
+ * Singles hold the same three properties in the same shape, and each reading
+ * them for itself is how the two ended up disagreeing about eligibility in the
+ * first place.
+ */
+export interface DraftDocumentConfig {
+  status?: boolean;
+  localized?: boolean;
+  versions?: { drafts?: { enabled?: boolean } } | null;
+}
+
+export interface DraftDocumentFacts {
+  collectionHasStatus: boolean;
+  draftsVersioningEnabled: boolean;
+  documentLocalized: boolean;
+}
+
+/** The split-relevant facts a document's config carries. */
+export function draftDocumentFacts(
+  config: DraftDocumentConfig
+): DraftDocumentFacts {
+  return {
+    collectionHasStatus: config.status === true,
+    draftsVersioningEnabled: config.versions?.drafts?.enabled === true,
+    documentLocalized: config.localized === true,
+  };
+}
+
 export interface DraftOverlayInput {
   /** `status === true` — the document has the Draft/Published lifecycle. */
   collectionHasStatus: boolean;

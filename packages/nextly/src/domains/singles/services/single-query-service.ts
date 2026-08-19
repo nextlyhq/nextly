@@ -99,6 +99,13 @@ import {
   isTextStorageKind,
 } from "../../schema/services/field-column-descriptor";
 import { captureInTx } from "../../versions/capture-in-tx";
+import {
+  draftDocumentFacts,
+  resolveDraftOverlay,
+} from "../../versions/draft-overlay";
+import type { ComponentSchemas } from "../../versions/restore-snapshot";
+import { resolveComponentSchemas } from "../../versions/restore-version";
+import { shapeDraftSnapshot } from "../../versions/shape-draft-snapshot";
 import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
 import { VersionsRepository } from "../../versions/versions-repository";
@@ -724,6 +731,147 @@ export class SingleQueryService extends BaseService {
    * runs and nothing is written, so this is safe to perform for a caller who may
    * still be refused.
    */
+  /**
+   * Replace the assembled live document with this Single's pending change, when
+   * the caller asked for it and may edit the document.
+   *
+   * Returns the document unchanged whenever no overlay applies, so the caller
+   * reads as one statement rather than a branch.
+   */
+  /**
+   * Whether this read shows the Single's pending change, and what it needs to
+   * fetch it — or `null` when it does not.
+   *
+   * Separated from the application below because they answer different
+   * questions and fail for different reasons: this one is entirely about
+   * eligibility and trust, and returns nothing the caller has to interpret.
+   */
+  private async resolveWorkingDraftView(params: {
+    slug: string;
+    singleMeta: DynamicSingleRecord;
+    options: GetSingleOptions;
+  }): Promise<{
+    draftLocale: string | null;
+    componentSchemas: ComponentSchemas;
+  } | null> {
+    const { slug, singleMeta, options } = params;
+
+    const overlayInput = {
+      ...draftDocumentFacts(singleMeta),
+      fields: singleMeta.fields,
+      includeWorkingDraft: options.includeWorkingDraft === true,
+      requestedStatus: options.status,
+      requestLocale: options.locale ?? null,
+      defaultLocale: this.localization?.defaultLocale ?? null,
+    };
+
+    // The CHEAP half: component schemas unresolved, so the registry reads stay
+    // off the common read path. With no schemas the eligibility test can only be
+    // more permissive, so a `false` here is final.
+    if (
+      !resolveDraftOverlay({
+        ...overlayInput,
+        componentSchemas: null,
+        callerMayEdit: true,
+      }).overlay
+    ) {
+      return null;
+    }
+
+    if (!(await this.callerMayEditSingle(slug, singleMeta, options))) {
+      return null;
+    }
+
+    const componentSchemas = await resolveComponentSchemas(singleMeta.fields);
+    const decision = resolveDraftOverlay({
+      ...overlayInput,
+      componentSchemas,
+      callerMayEdit: true,
+    });
+    return decision.overlay
+      ? { draftLocale: decision.draftLocale, componentSchemas }
+      : null;
+  }
+
+  /**
+   * Whether this caller may EDIT the Single, which is what a pending change is
+   * shown to.
+   *
+   * `routeAuthorized` is deliberately not consulted: on the read path it attests
+   * that a READ was authorized, so trusting it would hand one author's
+   * unpublished work to any authenticated reader.
+   */
+  private async callerMayEditSingle(
+    slug: string,
+    singleMeta: DynamicSingleRecord,
+    options: GetSingleOptions
+  ): Promise<boolean> {
+    if (options.overrideAccess === true) return true;
+    if (options.user === undefined) return false;
+
+    const updateDenied = await checkSingleAccess({
+      slug,
+      operation: "update",
+      accessRules: singleMeta.accessRules,
+      user: options.user,
+      overrideAccess: false,
+      routeAuthorized: false,
+      rbacAccessControlService: this.rbacAccessControlService,
+      accessControlService: this.accessControlService,
+      authenticatedScope: options.authenticatedScope,
+      logger: this.logger,
+    });
+    return !updateDenied;
+  }
+
+  /**
+   * Replace the assembled live document with this Single's pending change, when
+   * one applies.
+   *
+   * Returns the document unchanged whenever no overlay applies, so the caller
+   * reads as one statement rather than a branch.
+   */
+  private async overlayWorkingDraft(params: {
+    slug: string;
+    singleMeta: DynamicSingleRecord;
+    doc: SingleDocument;
+    options: GetSingleOptions;
+  }): Promise<SingleDocument> {
+    const { slug, singleMeta, doc, options } = params;
+
+    const entryId = (doc as { id?: string }).id;
+    if (entryId === undefined) return doc;
+
+    const view = await this.resolveWorkingDraftView({
+      slug,
+      singleMeta,
+      options,
+    });
+    if (view === null) return doc;
+
+    const workingDraft = await new VersionsRepository(
+      this.adapter
+    ).findWorkingDraft(
+      { scopeKind: "single", scopeSlug: slug, entryId },
+      view.draftLocale
+    );
+    if (!workingDraft) return doc;
+
+    const overlaid = shapeDraftSnapshot({
+      snapshot: workingDraft.snapshot as Record<string, unknown>,
+      fields: singleMeta.fields,
+      componentSchemas: view.componentSchemas,
+      hasSlug: singleMeta.fields.some(f => f.name === "slug"),
+      hasTitle: singleMeta.fields.some(f => f.name === "title"),
+    }) as unknown as SingleDocument;
+
+    // The flag the editor reads to show "Changed" and offer Discard. Set only
+    // when a draft was actually overlaid, so a read of a language with no
+    // pending change reports nothing — which is what makes it per-language.
+    (overlaid as Record<string, unknown>)._isWorkingDraft = true;
+    return overlaid;
+  }
+
   private async assembleStoredDocument(params: {
     slug: string;
     singleMeta: DynamicSingleRecord;
@@ -1679,6 +1827,23 @@ export class SingleQueryService extends BaseService {
           responseWithheld
         );
       }
+
+      // On a trusted draft-view read, surface this Single's pending change in
+      // place of the live document. Placed AFTER the live assembly, so
+      // re-reading live companion values by the same id cannot clobber the
+      // draft's, and BEFORE the password strip, the afterRead hooks and the
+      // field-level read access below, so a snapshot is redacted and judged
+      // exactly like any other read.
+      //
+      // The decision comes from the same rule the WRITE uses. A read that
+      // decided this for itself is how a held edit becomes invisible: the write
+      // reports success and the read returns the old content.
+      doc = await this.overlayWorkingDraft({
+        slug,
+        singleMeta,
+        doc,
+        options,
+      });
 
       // attach the per-locale `_translations` overview for the admin's language pills
       // (opt-in via `?translation-status=1`). No-op for non-localized singles / public reads.

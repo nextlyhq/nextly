@@ -106,7 +106,11 @@ import {
 } from "../../i18n/resolve-locale";
 import { resolveCompanionSchemaReadiness } from "../../i18n/runtime/companion-readiness";
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
-import { resolveDraftOverlay } from "../../versions/draft-overlay";
+import {
+  draftDocumentFacts,
+  resolveDraftOverlay,
+  type DraftDocumentConfig,
+} from "../../versions/draft-overlay";
 import {
   buildRestorePayload,
   type ComponentSchemas,
@@ -2652,16 +2656,12 @@ export class CollectionQueryService extends BaseService {
       // while a `true` is provisional — confirmed below against resolved schemas
       // before any draft is exposed.
       const draftEligible = resolveDraftOverlay({
-        collectionHasStatus:
-          (collectionForStatus as { status?: boolean }).status === true,
-        draftsVersioningEnabled:
-          (
-            collectionForStatus as {
-              versions?: { drafts?: { enabled?: boolean } };
-            }
-          ).versions?.drafts?.enabled === true,
-        documentLocalized:
-          (collection as { localized?: boolean }).localized === true,
+        ...draftDocumentFacts({
+          ...(collectionForStatus as DraftDocumentConfig),
+          // Localization is read off the collection record, which is where the
+          // read path already carries it.
+          localized: (collection as { localized?: boolean }).localized,
+        }),
         fields: fields as FieldConfig[],
         componentSchemas: null,
         includeWorkingDraft: params.includeWorkingDraft === true,

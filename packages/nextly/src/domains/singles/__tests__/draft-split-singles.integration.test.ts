@@ -239,6 +239,152 @@ describe("pending changes for Singles (integration)", () => {
  * gap this closes was never in the delete: a Single had no discard PATH at all,
  * so a service-level test would pass over exactly the wiring that was missing.
  */
+/**
+ * Seeing a Single's pending change.
+ *
+ * Until this existed the hold was WRITE-ONLY: the engine stored the edit, the
+ * publish promoted it, and no read ever returned it — so an author saved, got
+ * the live values back, and could not tell their work had been kept.
+ */
+describe("reading a Single's pending change (integration)", () => {
+  it("returns the pending change to an editor who asks for it", async () => {
+    const t = await bootPlain();
+    const singles = singlesOf(t);
+    await singles.update(
+      SLUG,
+      { siteName: "live", status: "published" },
+      { overrideAccess: true }
+    );
+    const held = await singles.update(
+      SLUG,
+      { siteName: "edited" },
+      { overrideAccess: true }
+    );
+    expect(held.success).toBe(true);
+    expect(await pendingLocales(t)).toEqual(["(none)"]);
+
+    const draft = await singles.get(SLUG, {
+      overrideAccess: true,
+      includeWorkingDraft: true,
+      status: "all",
+    });
+
+    expect((draft.data as { siteName?: string }).siteName).toBe("edited");
+    expect((draft.data as { _isWorkingDraft?: boolean })._isWorkingDraft).toBe(
+      true
+    );
+    // The live document is still the published one: the overlay is a view, not
+    // a write. Paired with the assertion above, because "live is untouched" is
+    // satisfied just as well by a system that stored nothing.
+    expect(await storedName(t)).toBe("live");
+  });
+
+  it("does not surface the draft to a read that did not ask", async () => {
+    // The public route and every internal read issue status-less reads and must
+    // keep seeing the published document.
+    const t = await bootPlain();
+    const singles = singlesOf(t);
+    await singles.update(
+      SLUG,
+      { siteName: "live", status: "published" },
+      { overrideAccess: true }
+    );
+    await singles.update(
+      SLUG,
+      { siteName: "edited" },
+      { overrideAccess: true }
+    );
+    expect(await pendingLocales(t)).toEqual(["(none)"]);
+
+    const plain = await singles.get(SLUG, { overrideAccess: true });
+    expect((plain.data as { siteName?: string }).siteName).toBe("live");
+    expect(
+      (plain.data as { _isWorkingDraft?: boolean })._isWorkingDraft
+    ).toBeUndefined();
+  });
+
+  it("shows each language its OWN pending change, and no other's", async () => {
+    const t = await bootLocalized();
+    const singles = singlesOf(t);
+    await singles.update(
+      SLUG,
+      { siteName: "EN live", status: "published" },
+      { locale: "en", overrideAccess: true }
+    );
+    await singles.update(
+      SLUG,
+      { siteName: "DE live", status: "published" },
+      { locale: "de", overrideAccess: true }
+    );
+    await singles.update(
+      SLUG,
+      { siteName: "DE edited" },
+      { locale: "de", overrideAccess: true }
+    );
+    expect(await pendingLocales(t)).toEqual(["de"]);
+
+    const de = await singles.get(SLUG, {
+      locale: "de",
+      overrideAccess: true,
+      includeWorkingDraft: true,
+      status: "all",
+    });
+    expect((de.data as { siteName?: string }).siteName).toBe("DE edited");
+    expect((de.data as { _isWorkingDraft?: boolean })._isWorkingDraft).toBe(
+      true
+    );
+
+    // English holds no pending change, so the same opt-in read returns its live
+    // values and reports no draft. This is what makes the flag per-language
+    // rather than per-document.
+    const en = await singles.get(SLUG, {
+      locale: "en",
+      overrideAccess: true,
+      includeWorkingDraft: true,
+      status: "all",
+    });
+    expect((en.data as { siteName?: string }).siteName).toBe("EN live");
+    expect(
+      (en.data as { _isWorkingDraft?: boolean })._isWorkingDraft
+    ).toBeUndefined();
+  });
+
+  it("shows what a publish would ship", async () => {
+    // The invariant that makes the overlay worth having, asserted as a PAIR:
+    // either half can be right on its own while the two disagree, and a reader
+    // shown one document who ships another is the failure this prevents.
+    const t = await bootPlain();
+    const singles = singlesOf(t);
+    await singles.update(
+      SLUG,
+      { siteName: "live", status: "published" },
+      { overrideAccess: true }
+    );
+    await singles.update(
+      SLUG,
+      { siteName: "edited" },
+      { overrideAccess: true }
+    );
+
+    const shown = await singles.get(SLUG, {
+      overrideAccess: true,
+      includeWorkingDraft: true,
+      status: "all",
+    });
+    const publish = await singles.update(
+      SLUG,
+      { status: "published" },
+      { overrideAccess: true }
+    );
+    expect(publish.success).toBe(true);
+
+    expect({
+      shown: (shown.data as { siteName?: string }).siteName,
+      shipped: await storedName(t),
+    }).toEqual({ shown: "edited", shipped: "edited" });
+  });
+});
+
 describe("discarding a Single's pending change (integration)", () => {
   /** The live document id, which a Single's caller resolves rather than names. */
   async function liveId(t: TestNextly): Promise<string> {
