@@ -281,7 +281,7 @@ describe.each(getConfiguredTestDialects())(
       spy.mockRestore();
     });
 
-    it("reports the earliest pending transition, ignoring past and unscheduled ones", async () => {
+    it("reports the earliest scheduled instant, including one already past", async () => {
       const app = await boot(dialect);
       const repo = new ReleasesRepository(app.adapter);
       const now = new Date();
@@ -296,25 +296,32 @@ describe.each(getConfiguredTestDialects())(
       const soonRelease = await repo.createRelease({ title: "Soon" });
       await repo.scheduleRelease(soonRelease.id, soon, "UTC");
 
-      const earliest = await repo.findEarliestPendingTransition(now);
+      const earliest = await repo.findEarliestScheduledTransition();
 
+      // The PAST release wins, and that is the point: a release whose time has
+      // passed but which nothing has materialised yet is affecting reads right
+      // now. Answering with the earliest FUTURE instant instead would report
+      // "nothing pending" for exactly the case the lookup exists to catch.
+      //
       // Whole seconds: SQLite stores epoch seconds, so a millisecond comparison
       // would pass on two dialects and fail on the third for no real difference.
       expect(Math.floor((earliest?.getTime() ?? 0) / 1000)).toBe(
-        Math.floor(soon.getTime() / 1000)
+        Math.floor(PAST.getTime() / 1000)
       );
       expect(draft.state).toBe("draft");
     });
 
-    it("reports no pending transition when every scheduled release is in the past", async () => {
+    it("reports nothing once no release is scheduled at all", async () => {
+      // A release leaves `scheduled` when it materialises or is cancelled, so
+      // the cheap check goes quiet again on its own rather than needing to be
+      // told.
       const app = await boot(dialect);
       const repo = new ReleasesRepository(app.adapter);
-      const release = await repo.createRelease({ title: "Already gone" });
+      const release = await repo.createRelease({ title: "Called off" });
       await repo.scheduleRelease(release.id, PAST, "UTC");
+      await repo.cancelRelease(release.id);
 
-      await expect(
-        repo.findEarliestPendingTransition(new Date())
-      ).resolves.toBeNull();
+      await expect(repo.findEarliestScheduledTransition()).resolves.toBeNull();
     });
 
     it("removes a member", async () => {
