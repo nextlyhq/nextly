@@ -21,7 +21,10 @@ export interface AcceptanceProperty {
   readonly n: number;
   /** The property, in the plan's own words. */
   readonly property: string;
-  /** The PR that was meant to turn it green, kept for traceability. */
+  /**
+   * Identifier of the work that was meant to turn it green, kept for
+   * traceability — a plan item such as `B-6`, not a revision or a branch.
+   */
   readonly greenIn: string;
   readonly status: "covered" | "deferred";
   /**
