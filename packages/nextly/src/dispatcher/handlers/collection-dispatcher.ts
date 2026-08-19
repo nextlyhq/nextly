@@ -232,6 +232,10 @@ export const COLLECTION_VERSION_METHODS: Record<
         entryId: String(p.entryId ?? ""),
         user: userFromParams(p),
         params: p,
+        // `?locale=` names the language whose pending change is being thrown
+        // away. An empty value is the same as none: the request named no
+        // language, which a localized document resolves to its default.
+        locale: typeof p.locale === "string" && p.locale ? p.locale : null,
       });
       return respondMutation("Working draft discarded.", item);
     },

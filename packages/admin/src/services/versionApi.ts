@@ -206,15 +206,23 @@ export const versionApi = {
    * reverting the editor to the live published row. A DELETE on the sidecar
    * sub-resource; the response carries the live published document.
    *
-   * Collection-only: the split gives a published document a separate draft head,
-   * which a Single — one row, no published/draft pair — never has.
+   * A localized document holds one pending change per language, so the locale
+   * names which one is being thrown away and which language's live values come
+   * back. Omitting it means the request names no language, which the server
+   * resolves to the default — the ordinary path when editing that language.
    */
   discardWorkingDraft: (
-    scope: Extract<VersionScope, { kind: "collection" }>
-  ): Promise<DiscardWorkingDraftResponse> =>
-    protectedApi.delete<DiscardWorkingDraftResponse>(
-      `${basePath(scope)}/working-draft`
-    ),
+    scope: Extract<VersionScope, { kind: "collection" }>,
+    locale?: string | null
+  ): Promise<DiscardWorkingDraftResponse> => {
+    const search = new URLSearchParams();
+    if (locale) search.set("locale", locale);
+    const query = search.toString();
+
+    return protectedApi.delete<DiscardWorkingDraftResponse>(
+      `${basePath(scope)}/working-draft${query ? `?${query}` : ""}`
+    );
+  },
 
   /**
    * Record the editor's current values as this author's recovery point.

@@ -742,10 +742,9 @@ export class CollectionsHandler {
    * keeps it from deleting a draft another editor committed after this request's
    * authorization checks. The discard handler authorizes read and update first.
    */
-  async discardWorkingDraft(params: {
-    collectionName: string;
-    entryId: string;
-  }): Promise<void> {
+  async discardWorkingDraft(
+    params: Parameters<CollectionEntryService["discardWorkingDraft"]>[0]
+  ): Promise<void> {
     return this.entryService.discardWorkingDraft(params);
   }
 

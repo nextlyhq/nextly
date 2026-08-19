@@ -60,6 +60,22 @@ type VersionRow = {
   versionNo: number | null;
 };
 
+async function workingDraftLocales(id: string): Promise<string[]> {
+  const rows = await handle!.adapter.select<
+    VersionRow & { locale: string | null }
+  >("nextly_versions", {
+    where: {
+      and: [
+        { column: "entryId", op: "=", value: id },
+        { column: "isAutosave", op: "=", value: false },
+        { column: "versionNo", op: "IS NULL" },
+        { column: "status", op: "=", value: "draft" },
+      ],
+    },
+  });
+  return rows.map(r => r.locale ?? "").sort();
+}
+
 async function workingDraftCount(id: string): Promise<number> {
   return (
     await handle!.adapter.select<VersionRow>("nextly_versions", {
@@ -554,6 +570,67 @@ describe("draft/published split — discard working draft (integration)", () => 
     const [liveAfter] = await handle.adapter.select<LiveRow>(TABLE);
     expect(liveAfter.title).toBe("live");
     expect(liveAfter.status).toBe("published");
+  });
+
+  it("discards only the language it was asked for, leaving other languages' pending changes", async () => {
+    // A localized document holds one pending change per language, so a discard
+    // is one language's concern. Throwing away a language the author never
+    // opened destroys work nobody asked to lose, and leaving the language they
+    // DID ask about means the editor still shows the edit it just reported
+    // discarding.
+    handle = await createTestNextly({
+      localization: { locales: ["en", "es"], defaultLocale: "en" },
+      collections: [
+        defineCollection({
+          slug: COLLECTION,
+          status: true,
+          localized: true,
+          versions: { drafts: true },
+          access: { read: () => true, update: () => true },
+          fields: [text({ name: "title" })],
+        }),
+      ],
+    });
+    const entries = handle
+      .getService("collectionsHandler")
+      .getEntryService() as CollectionEntryService;
+    const trusted = { collectionName: COLLECTION, overrideAccess: true };
+
+    await entries.createEntry(trusted, {
+      title: "live-en",
+      status: "published",
+    });
+    const [row] = await handle.adapter.select<{ id: string }>(TABLE);
+    const id = row.id;
+
+    // A pending change in each language. The English save names no locale,
+    // which is the admin's ordinary path for the default language.
+    await entries.updateEntry(
+      { ...trusted, entryId: id },
+      { title: "edited-en" }
+    );
+    await entries.updateEntry(
+      { ...trusted, entryId: id, locale: "es" },
+      { title: "edited-es" }
+    );
+    expect(await workingDraftLocales(id)).toEqual(["en", "es"]);
+
+    // The editor is on Spanish and discards. The request names that language.
+    await discardWorkingDraftForDocument({
+      scopeKind: "collection",
+      slug: COLLECTION,
+      entryId: id,
+      user: { id: "editor-1" },
+      locale: "es",
+      params: {
+        collectionName: COLLECTION,
+        entryId: id,
+        _authenticatedUserId: "editor-1",
+      },
+    });
+
+    // Spanish is gone and English survives untouched.
+    expect(await workingDraftLocales(id)).toEqual(["en"]);
   });
 });
 
