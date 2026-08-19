@@ -1,98 +1,31 @@
 /**
- * Public route for the code-first blocks renderer.
+ * Public route for the CODE-FIRST blocks renderer.
  *
  * The whole route is `createBlocksPage` plus the re-exports Next wants — there
  * is no per-request wiring here, which is the point of the helper.
  *
- * The document this renders is a `@nextlyhq/blocks-engine` `BlockDocument`, NOT
- * the page builder's `BlockNode`. They are different shapes (`styles` and a
- * `visibility` that may carry conditions, against `style`/`styleHover` and a
- * per-breakpoint boolean map), so this route and the page builder's
- * `(site)/[...slug]` route are not interchangeable and neither can read the
- * other's rows. That is why this reads its own collection.
+ * ## What makes this different from the page-builder route
+ *
+ * Not the document. Both store the engine's `BlockDocument`: `blocks()` declares
+ * `storage: "json"` exactly as `json()` does, and there is one `BlockDocument`
+ * in the repo. A document authored here renders there and vice versa.
+ *
+ * The difference is who WRITES it. `block-pages` holds its document in a plain
+ * `json` field, so it is authored in code or by an API client and has no editor
+ * attached — which is the path a developer takes who wants blocks without the
+ * page builder installed. `(frontend)/[...slug]` reads the plugin's `pages`
+ * collection, whose `blocks()` field mounts the visual editor.
+ *
+ * Keeping both is deliberate: converting this collection's field would leave
+ * nothing covering the code-authored path.
+ *
+ * @module app/blocks/[[...slug]]
  */
 import { createBlockResolver } from "@nextlyhq/blocks-react";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { createBlocksPage } from "@nextlyhq/blocks-react/next";
-import { getNextly } from "nextly";
-import type { NextlyContentReader } from "nextly/runtime";
 
-import nextlyConfig from "../../../../nextly.config";
-
-type NextlyInstance = Awaited<ReturnType<typeof getNextly>>;
-
-/**
- * The site's breakpoints, and the reason this route compiles its own sheet.
- *
- * `PageRenderer` emits class NAMES unconditionally and CSS only when it is
- * given either a stored `styles` artifact or a `styleContext` to compile from.
- * This collection stores the document alone — there is no write path here
- * producing a compiled sheet — so without a context every authored node style
- * and every `visibility.devices` rule would resolve to a class that no rule
- * ever defines, and the page would render structurally correct and visually
- * bare.
- *
- * Declared by the host because breakpoints are a site decision: the engine
- * never reads storage and ships no default set. Ids must be unique across both
- * axes, and the base breakpoint carries no `maxWidth` — it is the fallback the
- * others narrow.
- *
- * Left unannotated deliberately. `StyleCompileContext` is what
- * `createBlocksPage` accepts, and `@nextlyhq/blocks-react` does not re-export
- * it — naming the type here would mean taking a direct dependency on
- * `@nextlyhq/blocks-engine` purely to label a config object. The shape is still
- * fully checked where it is passed, so nothing is lost but the label.
- */
-const STYLE_CONTEXT = {
-  breakpoints: {
-    viewport: [
-      { id: "base", label: "Base" },
-      { id: "tablet", label: "Tablet", maxWidth: 1024 },
-      { id: "mobile", label: "Mobile", maxWidth: 640 },
-    ],
-    container: [],
-  },
-};
-
-/**
- * The route's reader, resolved per call.
- *
- * `createBlocksPage` otherwise falls back to the synchronous `getNextly()` from
- * `nextly/runtime`, which returns the already-registered singleton and throws
- * when nothing has registered it. A public page can be the FIRST request a cold
- * server handles, so relying on that means the route works only once something
- * else has booted the CMS — in this app, a visit to `/admin`.
- *
- * Async boot cannot happen where the config is captured (module scope), so the
- * indirection is per call rather than a value. `getNextly` caches its instance,
- * so every call after the first is a lookup.
- */
-const instance = () => getNextly({ config: nextlyConfig });
-
-/**
- * Just the media lookup `createBlocksPage` probes for.
- *
- * Narrower than the instance's whole `media` namespace on purpose: this reader
- * exists to be READ from, and forwarding `upload`/`update`/`delete` would offer
- * a public page route a write surface it has no reason to hold.
- */
-type MediaLookup = Pick<NextlyInstance["media"], "findByID">;
-
-const reader: NextlyContentReader & { media: MediaLookup } = {
-  find: async args => (await instance()).find(args),
-  findByID: async args => (await instance()).findByID(args),
-  // The media namespace, forwarded rather than dropped.
-  //
-  // Ordinary Nextly media lives in a SYSTEM table with its own namespace, and
-  // `createBlocksPage` resolves an image's `mediaId` through `reader.media
-  // .findByID`. A wrapper exposing only `find` and `findByID` satisfies
-  // `NextlyContentReader` and silently loses that lookup, so every `core/image`
-  // storing a media id — rather than a literal `src` — resolves to null and
-  // draws nothing.
-  media: {
-    findByID: async args => (await instance()).media.findByID(args),
-  },
-};
+import { siteReader, SITE_STYLE_CONTEXT } from "../../../lib/site-content";
 
 /**
  * Where this route is mounted, for canonical URLs.
@@ -135,7 +68,7 @@ function canonicalFor(path: string): string {
 const { ContentPage, generateMetadata } = createBlocksPage({
   collections: ["block-pages"],
   field: "content",
-  nextly: reader,
+  nextly: siteReader,
   // Stated even though it is this site's default language, because the read is
   // not the only thing it feeds. An omitted locale still serves the right page
   // — the read defaults it internally — but it is also what a `draft` decision
@@ -149,7 +82,7 @@ const { ContentPage, generateMetadata } = createBlocksPage({
   // editor — so a public route depending on it renders the unknown-block
   // placeholder whenever this request arrived before the admin did.
   blocks: createBlockResolver(coreBlocks),
-  styleContext: STYLE_CONTEXT,
+  styleContext: SITE_STYLE_CONTEXT,
   metadata: (entry, context, derived) => ({
     title: derived.title ?? (entry.title as string | undefined),
     description: derived.description,

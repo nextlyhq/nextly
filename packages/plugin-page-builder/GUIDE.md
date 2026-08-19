@@ -194,26 +194,27 @@ After logging in you'll land on the dashboard. In the left sidebar (or on the
 dashboard cards) you'll see a **Pages** collection — that's the one the plugin
 added. Click it, then click **New Page** (or **Create Page**).
 
-### 6.3 Switch between Normal and Page Builder
+### 6.3 The builder opens automatically
 
-At the top-right of the page editor there's a small toggle with two options:
+There is no editor switch. Whether a page is edited visually is decided by the
+FIELD on the collection rather than per entry: the plugin's `pages` collection
+declares a blocks field named `content`, so opening a page shows the builder
+canvas.
 
-- **Normal** — a plain form (simple fields).
-- **Page Builder** — the full visual editor.
-
-Click **Page Builder**. The form is replaced by the builder canvas (this is the
-"takeover" view). You can switch back to **Normal** at any time; your choice is
-saved per page.
+An earlier release stored that choice per page in an `editorMode` column. It is
+gone. A UI preference stored as content travelled in API responses and exports and
+could be set by any writer, and both editors' content persisted at once with only
+one of them ever shown.
 
 ### 6.4 Build the page
 
 The builder has three areas:
 
-| Area                 | What it's for                                                                                                                                            |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Left — Blocks**    | The building blocks: Paragraph, Heading, Button, Container, Grid, Image, Video, Query Loop. Click **Insert** (or drag) to add one to the canvas.         |
-| **Middle — Canvas**  | A live preview of your page. Click any block to select it. Use the **Desktop / Tablet / Mobile** buttons on top to preview different screen sizes.       |
-| **Right — Settings** | When a block is selected, its options appear here (e.g. a Heading's text and level H1–H6), organized into **Content**, **Style**, and **Advanced** tabs. |
+| Area                 | What it's for                                                                                                                                                                                                                                            |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Left — Blocks**    | The nineteen building blocks: Heading, Text, Button, Section, Box, Columns, Column, Card, Image, Gallery, Embed, List, Quote, Accordion, Accordion item, Divider, Spacer, Form and Collection loop. Click **Insert** (or drag) to add one to the canvas. |
+| **Middle — Canvas**  | A live preview of your page. Click any block to select it. Use the **Desktop / Tablet / Mobile** buttons on top to preview different screen sizes.                                                                                                       |
+| **Right — Settings** | When a block is selected, its options appear here (e.g. a Heading's text and level H1–H6), organized into **Content**, **Style**, and **Advanced** tabs.                                                                                                 |
 
 Try it: insert a **Heading**, then edit its text and level in the Settings panel on
 the right. You'll see the canvas update immediately.
@@ -229,130 +230,163 @@ publishing.
 ## Step 7 — Show your pages on the public website (frontend)
 
 Everything so far happens inside the admin. The builder **saves each page into your
-database** — but it does not automatically create the public web page. You add one
-small route to your app that reads a page from the database (by its slug) and hands
-it to the plugin's renderer. Do this once and **every** page your team builds is
-served automatically.
+database**, but it does not create the public web page. You add **one** small route
+to your app, and from then on every page your team publishes is served
+automatically, with no further code and no deploy.
 
-### 7.1 Create the route file
+This is the "pages collection" model: the page's **slug** is its URL. An author
+creates a page, types `about`, publishes, and `/about` is live.
+
+### 7.1 Install the renderer
+
+The route draws block documents, which is `@nextlyhq/blocks-react`'s job. Add it to
+your app's own dependencies rather than relying on it being installed underneath
+the plugin — package managers do not guarantee that a dependency of a dependency is
+importable from your code.
+
+```bash
+npm install @nextlyhq/blocks-react
+```
+
+### 7.2 Create the route file
 
 Create this file in your app:
 
 ```text
-src/app/(site)/[...slug]/page.tsx
+src/app/(frontend)/[...slug]/page.tsx
 ```
 
-- `(site)` is a route group — it just keeps your public pages separate from
-  `/admin`. The parentheses mean it does **not** show up in the URL.
+- `(frontend)` is a **route group**. The parentheses mean it does not appear in the
+  URL; it only keeps your public pages separate from `/admin` in the file tree.
 - `[...slug]` is a **catch-all**: it matches any path (`/about`, `/pricing`,
-  `/blog/hello`, …) and passes it to your code as the page's slug.
+  `/pricing/enterprise`, …) and hands it to your code.
 
-### 7.2 Paste this code
+Use `[...slug]` with single brackets when your app already has its own `/` page,
+which most do. The optional form `[[...slug]]` matches the site root as well, and
+two routes claiming `/` is a build error rather than a question of precedence.
+
+### 7.3 Paste this code
 
 ```tsx
-import {
-  PageRenderer,
-  type DataProvider,
-} from "@nextlyhq/plugin-page-builder/render";
-import { notFound } from "next/navigation";
+import { createBlockResolver } from "@nextlyhq/blocks-react";
+import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
+import { createBlocksPage } from "@nextlyhq/blocks-react/next";
 import { getNextly } from "nextly";
+import type { NextlyContentReader } from "nextly/runtime";
 
 // Adjust the number of "../" so this points at your project's nextly.config file.
-import nextlyConfig from "../../../../nextly.config";
-
-// Pages live in the database, so render them fresh on each request instead of
-// trying to pre-build them (the build machine has no database).
-export const dynamic = "force-dynamic";
+import nextlyConfig from "../../../nextly.config";
 
 type NextlyInstance = Awaited<ReturnType<typeof getNextly>>;
 
-// The renderer doesn't talk to your database directly — you give it this small
-// adapter so it can fetch related content (e.g. a Query Loop block listing posts)
-// and resolve media. This is the same for every project; copy it as-is.
-function makeDataProvider(nx: NextlyInstance): DataProvider {
-  return {
-    find: async args => {
-      const result = await nx.find(args as never);
-      return { items: (result.items ?? []) as Record<string, unknown>[] };
+// Resolved per call, not once. A public page can be the very first request a cold
+// server handles, so a value captured at module scope would work only after
+// something else had booted the CMS. `getNextly` caches, so later calls are a
+// lookup.
+const instance = () => getNextly({ config: nextlyConfig });
+
+const reader: NextlyContentReader & {
+  media: Pick<NextlyInstance["media"], "findByID">;
+} = {
+  find: async args => (await instance()).find(args),
+  findByID: async args => (await instance()).findByID(args),
+  // Images that store a media id resolve through this. Leave it out and every
+  // such image renders nothing, while images with a literal URL still work —
+  // which makes it look like a content problem rather than a wiring one.
+  media: {
+    findByID: async args => (await instance()).media.findByID(args),
+  },
+};
+
+const { ContentPage, generateMetadata } = createBlocksPage({
+  // The collection the plugin contributes. It already has a unique `slug` and a
+  // Draft/Published lifecycle, so an unpublished page 404s rather than rendering.
+  collections: ["pages"],
+  // The blocks field on that collection. Named rather than guessed: a wrong guess
+  // renders a blank page instead of raising an error.
+  field: "content",
+  nextly: reader,
+  // An explicit set rather than the global registry, which is populated by
+  // whatever booted the editor — so a public route that relies on it renders
+  // placeholders whenever a visitor arrives before an admin does.
+  blocks: createBlockResolver(coreBlocks),
+  // Your site's breakpoints. The renderer always emits class NAMES and emits CSS
+  // only when it has something to compile from, so without this the page comes
+  // out structurally correct and visually bare. The base tier carries no
+  // `maxWidth`: it is the fallback the others narrow.
+  styleContext: {
+    breakpoints: {
+      viewport: [
+        { id: "base", label: "Base" },
+        { id: "tablet", label: "Tablet", maxWidth: 1024 },
+        { id: "mobile", label: "Mobile", maxWidth: 640 },
+      ],
+      container: [],
     },
-    findOne: async ({ collection, id }) => {
-      const doc = await nx.findByID({ collection, id } as never);
-      return (doc ?? null) as Record<string, unknown> | null;
-    },
-    resolveMedia: async () => null,
-  };
-}
+  },
+});
 
-interface PageData {
-  content?: unknown;
-  customCss?: string;
-  editorMode?: string;
-  body?: string;
-}
-
-export default async function SitePage({
-  params,
-}: {
-  params: Promise<{ slug: string[] }>;
-}) {
-  const { slug } = await params;
-  const nx = await getNextly({ config: nextlyConfig });
-
-  // Look up the published page whose slug matches the URL.
-  const { items } = await nx.find({
-    collection: "pages",
-    where: {
-      slug: { equals: slug.join("/") },
-      status: { equals: "published" },
-    },
-    limit: 1,
-    richTextFormat: "html", // so "Normal" pages come back as ready-to-show HTML
-  } as never);
-
-  const page = items[0] as PageData | undefined;
-  if (!page) notFound(); // no matching page -> 404
-
-  // A page saved in "Normal" mode is plain rich text — just render its HTML.
-  if (page.editorMode === "normal") {
-    return <article dangerouslySetInnerHTML={{ __html: page.body ?? "" }} />;
-  }
-
-  // A page built with the visual builder -> hand its block tree to the renderer.
-  if (!page.content) notFound();
-  return (
-    <PageRenderer
-      document={page.content as never}
-      customCss={page.customCss}
-      dataProvider={makeDataProvider(nx)}
-    />
-  );
-}
+export { generateMetadata };
+export default ContentPage;
 ```
 
-### 7.3 What this code does, in plain terms
+### 7.4 What this does, in plain terms
 
-1. It reads the URL (e.g. `/about` → slug `"about"`).
+1. It reads the URL (`/about` → slug `"about"`).
 2. It asks Nextly for the **published** page with that slug.
-3. If there isn't one, it shows a **404**.
-4. If the page was made in **Normal** mode, it renders that page's rich-text HTML.
-5. If the page was made in the **Page Builder**, it passes the saved blocks to
-   `<PageRenderer>`, which turns them back into a real web page. Any custom CSS you
-   set on the page is applied automatically.
+3. If there is not one, it shows a **404**.
+4. If there is, it hands the saved blocks to the renderer, which turns them back
+   into a real web page — and returns the page's SEO metadata to Next as well.
 
-You do **not** need extra `next.config` changes for this — the plugin is already in
-`transpilePackages` from Step 2, and that covers the renderer too.
+You do **not** need extra `next.config` changes for this: the plugin is already in
+`transpilePackages` from Step 2.
 
-### 7.4 See it live
+Two things the helper does that are easy to miss. It refuses **reserved paths**, so
+a page saved with the slug `admin` or `api` 404s here instead of shadowing your
+admin panel. And it reads content **as the visitor would**, enforcing your access
+rules on every request, which is why it needs no database at build time.
 
-1. In the admin, open a page, give it a slug (e.g. `about`), and click **Publish**.
-2. Visit it in the browser: `http://localhost:3000/about`.
+### 7.5 See it live
 
-Your built page is now served to the public. 🎉
+1. In the admin, open a page, give it a slug (for example `about`), and click
+   **Publish**.
+2. Visit `http://localhost:3000/about`.
 
-> **Tip — a fixed landing page.** The catch-all above handles every slug. If you
-> also want a specific route (say your homepage at `/`), create
-> `src/app/(site)/page.tsx` with the same code but look up a fixed slug (e.g.
-> `where: { slug: { equals: "home" } }`) instead of reading it from the URL.
+Your built page is now served to the public.
+
+### 7.6 Structured content needs its own route
+
+The catch-all above is for **free-form pages** — the ones an author invents without
+asking a developer. Content with a predictable URL shape, such as blog posts under
+`/blog/...`, is better served by its own route file (`src/app/(frontend)/blog/[slug]/page.tsx`)
+that renders the fields you designed for it. Next.js matches more specific routes
+first, so the two live side by side with nothing to configure.
+
+### 7.7 Going faster: pre-built pages
+
+`createBlocksPage` renders on each request. For a public marketing site, swap it
+for `createPublicBlocksPage`, which pre-renders pages at build time and returns a
+`generateStaticParams` for you to export alongside the other two:
+
+```tsx
+const { ContentPage, generateMetadata, generateStaticParams } =
+  createPublicBlocksPage({
+    /* the same options, plus: */
+    // A write to the collection busts these, so publishing updates the live page
+    // immediately instead of waiting for the next deploy.
+    tags: ["pages"],
+  });
+
+export { generateMetadata, generateStaticParams };
+export default ContentPage;
+```
+
+Two things change with it, and both are deliberate. It reads content **without**
+enforcing access rules, on the assumption that everything in the collection is
+public — so do not point it at a collection that is not. And it reads your database
+during `next build`, which means your build environment needs one.
+
+The posture is the factory you call. There is no option to flip.
 
 ---
 
@@ -377,16 +411,13 @@ If it still misbehaves, delete the `.next` folder and restart.
 Make sure you completed Step 3 (registered `pageBuilder()` in `nextly.config.ts`)
 and Step 4 (`npx nextly db:sync`), then restart the dev server.
 
-**You see two "editor" controls (a toggle at the top _and_ an "Editor" dropdown in
-the form)**
-This is a known cosmetic duplication in the current release; the dropdown will be
-hidden in an upcoming version. Use the top toggle — both do the same thing.
-
 **Visiting your page URL shows a 404 (Step 7)**
-Three things to check: (1) the page is **Published**, not just saved as a draft;
+Four things to check: (1) the page is **Published**, not just saved as a draft;
 (2) the page's **slug** matches the URL you're visiting; (3) the `import
 nextlyConfig from "../../.../nextly.config"` line has the right number of `../` to
-reach your project's `nextly.config` file.
+reach your project's `nextly.config` file; (4) the slug is not a **reserved path** —
+anything under `admin`, `api`, `_next` or `static`, and well-known files such as
+`sitemap.xml`, are refused so content cannot shadow your admin panel.
 
 **Visiting your page URL shows a blank page**
 The page probably has no blocks yet, or was saved empty. Open it in the builder,
@@ -410,9 +441,10 @@ npx nextly db:sync
 # 5. Run
 npm run dev
 
-# 6. Open http://localhost:3000/admin  ->  Pages  ->  New Page  ->  "Page Builder"
+# 6. Open http://localhost:3000/admin  ->  Pages  ->  New Page
 
-# 7. Frontend: add src/app/(site)/[...slug]/page.tsx (see Step 7) to serve pages,
+# 7. Frontend: npm install @nextlyhq/blocks-react, then add
+#    src/app/(frontend)/[...slug]/page.tsx (see Step 7) to serve every page,
 #    then visit http://localhost:3000/<your-page-slug>
 ```
 
