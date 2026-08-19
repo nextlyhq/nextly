@@ -51,6 +51,21 @@ export {
 } from "@nextlyhq/admin";
 
 /**
+ * Tell the surrounding form this surface holds unsaved work (@experimental).
+ *
+ * For a field that keeps its own editing state rather than writing through the
+ * form — the page builder holds its block document and commits on exit — so the
+ * form's dirty flag stays false while real work is outstanding, and everything
+ * derived from it is wrong together: the navigation guard does not warn, the
+ * save shortcut declines, and the header shows nothing pending.
+ *
+ * It reports ONE BOOLEAN about itself. It cannot save, publish, or write to the
+ * form; the form still decides what to do about it. Retracted automatically
+ * when the surface unmounts.
+ */
+export { useReportUnsavedWork } from "@nextlyhq/admin";
+
+/**
  * Record a recovery point for the surrounding document (@experimental).
  *
  * For a contributed field that holds its own editing state — a canvas, a
