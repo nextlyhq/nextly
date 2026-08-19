@@ -3,6 +3,7 @@
 exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`] = `
 [
   "AdminChromeLayer (type)",
+  "AutosaveStatus (type)",
   "BulkAction (type)",
   "Card (value)",
   "CardAction (value)",
@@ -32,6 +33,7 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "DataTableTarget (type)",
   "DataTableView (value)",
   "DataTableViewProps (type)",
+  "DocumentIdentity (type)",
   "FieldDefaultOption (type)",
   "FieldDefaultValueInput (value)",
   "FieldDefaultValueInputProps (type)",
@@ -56,6 +58,8 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "StackProps (type)",
   "Stat (value)",
   "StatProps (type)",
+  "UseDocumentCheckpointOptions (type)",
+  "UseDocumentCheckpointResult (type)",
   "ValidationNumberField (value)",
   "ValidationNumberFieldProps (type)",
   "operatorTakesValue (value)",
@@ -68,6 +72,8 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "registerKnownPlugin (value)",
   "registerRowAction (value)",
   "transformColumns (value)",
+  "useDocumentCheckpoint (value)",
+  "useDocumentIdentity (value)",
   "usePluginClientConfig (value)",
   "usePluginFieldTypeEntries (value)",
   "useSuppressAdminChrome (value)",
