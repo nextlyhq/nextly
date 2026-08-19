@@ -350,6 +350,34 @@ export interface TransitionAuthorization {
   } | null;
 }
 
+/**
+ * What the working-draft write needs from the caller that reached it.
+ *
+ * Every field is one all three write paths already hold at that point. A field
+ * a caller cannot supply honestly does not belong here — it would mean the
+ * write is deciding something the caller has already decided differently.
+ */
+interface WorkingDraftWriteContext {
+  collection: unknown;
+  collectionHasStatus: boolean;
+  componentFieldData: Record<string, unknown>;
+  fields: FieldDefinition[];
+  manyToManyData: Record<string, string[]>;
+  params: { collectionName: string; entryId: string; user?: UserContext };
+  parentRow: Record<string, unknown>;
+  snapshotComponents: Record<string, unknown> | undefined;
+  snapshotM2M: Record<string, string[]> | undefined;
+  splitComponentSchemas: ComponentSchemas | null;
+  updatePayload: Record<string, unknown>;
+}
+
+/** What the caller needs back: the draft as a read would shape it, and its predecessor. */
+interface WorkingDraftWriteResult {
+  workingDraftDocument?: Record<string, unknown>;
+  /** The draft BEFORE this save, so a hook diffing old against new is like-for-like. */
+  priorWorkingDraftDocument?: Record<string, unknown>;
+}
+
 export class CollectionMutationService extends BaseService {
   constructor(
     adapter: DrizzleAdapter,
@@ -4396,6 +4424,182 @@ export class CollectionMutationService extends BaseService {
     return null;
   }
 
+  /**
+   * The document a working draft should now hold, after this save.
+   *
+   * Accumulates onto the draft already stored rather than re-deriving from the
+   * live row: a second status-less save of different fields would otherwise
+   * rebuild from live content and silently revert the first pending edit.
+   */
+  private async buildAccumulatedDraft(
+    tx: TransactionContext,
+    ctx: WorkingDraftWriteContext,
+    existingDraft: { snapshot: unknown } | undefined
+  ): Promise<Record<string, unknown>> {
+    const {
+      componentFieldData,
+      fields,
+      manyToManyData,
+      parentRow,
+      snapshotComponents,
+      snapshotM2M,
+      splitComponentSchemas,
+      updatePayload,
+    } = ctx;
+    const draftParts = await this.snapshotPartsFor(
+      {
+        parentRow,
+        components: {
+          ...snapshotComponents,
+          ...componentFieldData,
+        },
+        manyToMany: { ...snapshotM2M, ...manyToManyData },
+      },
+      fields,
+      tx
+    );
+    const patchedDocument = assembleDocument(draftParts);
+    // This document is built from the live parent + relations with
+    // only the CURRENT patch overlaid. Accumulate it onto an existing
+    // working draft rather than the live row: a second status-less
+    // save of different fields would otherwise re-derive from live and
+    // revert the first pending edit. Read the draft under the row lock
+    // (already held above) and, when one exists, overlay only the
+    // fields this patch touched onto it, at the assembled read shape.
+    // Reused after the transaction as the response/hook document,
+    // since the live row the re-fetch returns is the unchanged
+    // published content.
+    // base below rather than replacing it.
+    const touched = new Set<string>([
+      ...Object.keys(updatePayload),
+      ...Object.keys(componentFieldData),
+      ...Object.keys(manyToManyData),
+    ]);
+    const patchFields = Object.fromEntries(
+      Object.entries(patchedDocument).filter(([key]) => touched.has(key))
+    );
+    // Accumulate onto the existing working draft, or onto the live
+    // document on the first save. The live base is assembled through
+    // the same snapshot shaping so its components carry the type markers
+    // promotion needs, and merging (not replacing) keeps a live single
+    // component's other sub-fields when the patch only changed some.
+    const draftBase = existingDraft
+      ? (existingDraft.snapshot as Record<string, unknown>)
+      : assembleDocument(
+          await this.snapshotPartsFor(
+            {
+              parentRow,
+              components: snapshotComponents ?? {},
+              manyToMany: snapshotM2M ?? {},
+            },
+            fields,
+            tx
+          )
+        );
+    // A single (non-repeatable) component holds an object of sub-fields,
+    // and a patch-shaped save carries only the ones it changed. Merge
+    // the patch's component objects onto the base recursively (into
+    // nested single components) rather than overwriting them, so
+    // disjoint sub-field edits coalesce at any depth. A dynamic zone, a
+    // repeatable component, and a scalar are replaced whole.
+    const draftDocument = this.mergeSingleComponentPatches(
+      draftBase,
+      patchFields,
+      fields as unknown as FieldConfig[],
+      splitComponentSchemas
+    );
+    return draftDocument;
+  }
+
+  /**
+   * Store the pending edit as this document's working draft, on the caller's
+   * transaction.
+   *
+   * Lifted out of the update path so every write surface can reach it. The
+   * split had one call site, which is why a status-less update through the
+   * transaction-owning and batch surfaces wrote the live row instead of holding
+   * the edit.
+   *
+   * Takes what it needs rather than resolving it: each caller arrives here
+   * having already read the parent row, its relations and the resolved schemas
+   * on its own transaction, and reading them again would issue a second query
+   * on that connection and could observe a row other than the one the caller is
+   * about to write.
+   */
+  private async storeWorkingDraftInTx(
+    tx: TransactionContext,
+    ctx: WorkingDraftWriteContext
+  ): Promise<WorkingDraftWriteResult> {
+    const {
+      collection,
+      collectionHasStatus,
+      fields,
+      params,
+      splitComponentSchemas,
+    } = ctx;
+    let priorWorkingDraftDocument: Record<string, unknown> | undefined;
+
+    const draftRepo = new VersionsRepository(tx);
+    const draftRef = {
+      scopeKind: "collection" as const,
+      scopeSlug: params.collectionName,
+      entryId: params.entryId,
+    };
+    const existingDraft = await draftRepo.findWorkingDraft(draftRef, null);
+    // The fields this save actually touched, at the assembled read
+    // shape. `patchedDocument` overlaid the current patch onto the live
+    // relations and REPLACED a single component whole, so a partial
+    // patch is captured here (touched keys only) and merged onto the
+    const draftDocument = await this.buildAccumulatedDraft(
+      tx,
+      ctx,
+      existingDraft
+    );
+    // The response and hooks see the draft as an ordinary read, so
+    // shape the accumulated snapshot through the current schema the
+    // same way the read overlay does. The persisted `draftDocument`
+    // below keeps its markers for promotion.
+    const responseDeclaredFields = fields as unknown as FieldConfig[];
+    const draftIsPluginCollection =
+      (collection as { admin?: { isPlugin?: boolean } }).admin?.isPlugin ===
+      true;
+    const workingDraftDocument = this.shapeDraftForResponse(
+      draftDocument,
+      responseDeclaredFields,
+      splitComponentSchemas ?? null,
+      collectionHasStatus,
+      draftIsPluginCollection
+    );
+    // The afterUpdate/afterChange hooks compare against the document
+    // BEFORE this save: the published row on the first draft save, but
+    // the prior working draft on a later one, so a hook diffing old and
+    // new does not see an earlier save's edits as changing again. Shape
+    // it the same way so the comparison is like-for-like.
+    if (existingDraft) {
+      priorWorkingDraftDocument = this.shapeDraftForResponse(
+        existingDraft.snapshot as Record<string, unknown>,
+        responseDeclaredFields,
+        splitComponentSchemas ?? null,
+        collectionHasStatus,
+        draftIsPluginCollection
+      );
+    }
+    await draftRepo.upsertWorkingDraft({
+      ref: draftRef,
+      // The split is non-localized only, so the working draft is one
+      // logical document with no per-locale variant: key it under the
+      // unlocalized `locale IS NULL` slot. Keying it by the resolved
+      // request locale would orphan it when a later read or publish
+      // arrives under a different locale in a localization-configured
+      // app. The read overlay and promote use the same null key.
+      locale: null,
+      snapshot: draftDocument,
+      createdBy: params.user?.id ?? null,
+    });
+
+    return { workingDraftDocument, priorWorkingDraftDocument };
+  }
+
   async updateEntry(
     params: {
       collectionName: string;
@@ -5895,126 +6099,22 @@ export class CollectionMutationService extends BaseService {
               // relations onto the (unchanged) live relations read for the
               // snapshot so a changed component/m2m field is reflected.
               if (storeAsWorkingDraft) {
-                const draftParts = await this.snapshotPartsFor(
-                  {
-                    parentRow,
-                    components: {
-                      ...snapshotComponents,
-                      ...componentFieldData,
-                    },
-                    manyToMany: { ...snapshotM2M, ...manyToManyData },
-                  },
-                  fields,
-                  tx
-                );
-                // This document is built from the live parent + relations with
-                // only the CURRENT patch overlaid. Accumulate it onto an existing
-                // working draft rather than the live row: a second status-less
-                // save of different fields would otherwise re-derive from live and
-                // revert the first pending edit. Read the draft under the row lock
-                // (already held above) and, when one exists, overlay only the
-                // fields this patch touched onto it, at the assembled read shape.
-                // Reused after the transaction as the response/hook document,
-                // since the live row the re-fetch returns is the unchanged
-                // published content.
-                const draftRepo = new VersionsRepository(tx);
-                const patchedDocument = assembleDocument(draftParts);
-                const draftRef = {
-                  scopeKind: "collection" as const,
-                  scopeSlug: params.collectionName,
-                  entryId: params.entryId,
-                };
-                const existingDraft = await draftRepo.findWorkingDraft(
-                  draftRef,
-                  null
-                );
-                // The fields this save actually touched, at the assembled read
-                // shape. `patchedDocument` overlaid the current patch onto the live
-                // relations and REPLACED a single component whole, so a partial
-                // patch is captured here (touched keys only) and merged onto the
-                // base below rather than replacing it.
-                const touched = new Set<string>([
-                  ...Object.keys(updatePayload),
-                  ...Object.keys(componentFieldData),
-                  ...Object.keys(manyToManyData),
-                ]);
-                const patchFields = Object.fromEntries(
-                  Object.entries(patchedDocument).filter(([key]) =>
-                    touched.has(key)
-                  )
-                );
-                // Accumulate onto the existing working draft, or onto the live
-                // document on the first save. The live base is assembled through
-                // the same snapshot shaping so its components carry the type markers
-                // promotion needs, and merging (not replacing) keeps a live single
-                // component's other sub-fields when the patch only changed some.
-                const draftBase = existingDraft
-                  ? (existingDraft.snapshot as Record<string, unknown>)
-                  : assembleDocument(
-                      await this.snapshotPartsFor(
-                        {
-                          parentRow,
-                          components: snapshotComponents ?? {},
-                          manyToMany: snapshotM2M ?? {},
-                        },
-                        fields,
-                        tx
-                      )
-                    );
-                // A single (non-repeatable) component holds an object of sub-fields,
-                // and a patch-shaped save carries only the ones it changed. Merge
-                // the patch's component objects onto the base recursively (into
-                // nested single components) rather than overwriting them, so
-                // disjoint sub-field edits coalesce at any depth. A dynamic zone, a
-                // repeatable component, and a scalar are replaced whole.
-                const draftDocument = this.mergeSingleComponentPatches(
-                  draftBase,
-                  patchFields,
-                  fields as unknown as FieldConfig[],
-                  splitComponentSchemas
-                );
-                // The response and hooks see the draft as an ordinary read, so
-                // shape the accumulated snapshot through the current schema the
-                // same way the read overlay does. The persisted `draftDocument`
-                // below keeps its markers for promotion.
-                const responseDeclaredFields =
-                  fields as unknown as FieldConfig[];
-                const draftIsPluginCollection =
-                  (collection as { admin?: { isPlugin?: boolean } }).admin
-                    ?.isPlugin === true;
-                workingDraftDocument = this.shapeDraftForResponse(
-                  draftDocument,
-                  responseDeclaredFields,
-                  splitComponentSchemas ?? null,
+                const draftWrite = await this.storeWorkingDraftInTx(tx, {
+                  collection,
                   collectionHasStatus,
-                  draftIsPluginCollection
-                );
-                // The afterUpdate/afterChange hooks compare against the document
-                // BEFORE this save: the published row on the first draft save, but
-                // the prior working draft on a later one, so a hook diffing old and
-                // new does not see an earlier save's edits as changing again. Shape
-                // it the same way so the comparison is like-for-like.
-                if (existingDraft) {
-                  priorWorkingDraftDocument = this.shapeDraftForResponse(
-                    existingDraft.snapshot as Record<string, unknown>,
-                    responseDeclaredFields,
-                    splitComponentSchemas ?? null,
-                    collectionHasStatus,
-                    draftIsPluginCollection
-                  );
-                }
-                await draftRepo.upsertWorkingDraft({
-                  ref: draftRef,
-                  // The split is non-localized only, so the working draft is one
-                  // logical document with no per-locale variant: key it under the
-                  // unlocalized `locale IS NULL` slot. Keying it by the resolved
-                  // request locale would orphan it when a later read or publish
-                  // arrives under a different locale in a localization-configured
-                  // app. The read overlay and promote use the same null key.
-                  locale: null,
-                  snapshot: draftDocument,
-                  createdBy: params.user?.id ?? null,
+                  componentFieldData,
+                  fields,
+                  manyToManyData,
+                  params,
+                  parentRow,
+                  snapshotComponents,
+                  snapshotM2M,
+                  splitComponentSchemas,
+                  updatePayload,
                 });
+                workingDraftDocument = draftWrite.workingDraftDocument;
+                priorWorkingDraftDocument =
+                  draftWrite.priorWorkingDraftDocument;
               }
 
               // Promote-on-publish: the accumulated draft has been folded
