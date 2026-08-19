@@ -1,15 +1,9 @@
 "use client";
 
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@nextlyhq/ui";
 import { useEffect, useRef, useState } from "react";
 
 import { ArrowLeft, ArrowRight, Loader2 } from "@admin/components/icons";
+import { AuthStatusCard } from "@admin/components/shared/auth/AuthStatusCard";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
 import { verifyEmail } from "@admin/services/authApi";
@@ -58,114 +52,74 @@ export function VerifyEmail({ searchParams }: VerifyEmailProps) {
   // No token in URL
   if (state === "no-token") {
     return (
-      <div className="w-full max-w-[480px] mx-auto">
-        <Card className="transition-all duration-300 ease-in-out border-border-strong shadow-none p-10 opacity-100">
-          <CardHeader className="space-y-1 p-0 mb-8" noBorder>
-            <CardTitle className="text-xl font-bold tracking-tight text-foreground mb-3 text-wrap-balance">
-              Invalid Link
-            </CardTitle>
-            <CardDescription className="text-base text-muted-foreground">
-              This verification link is missing a token. If you need to verify
-              your email, please check your inbox for the original verification
-              email.
-            </CardDescription>
-          </CardHeader>
-
-          <CardContent className="p-0">
-            <div className="mt-2 text-left">
-              <Link
-                href={ROUTES.LOGIN}
-                className="inline-flex items-center text-primary cursor-pointer font-medium transition-colors"
-              >
-                <ArrowLeft className="h-4 w-4" />
-                Back to Sign In
-              </Link>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+      <AuthStatusCard
+        title="Invalid Link"
+        description="This verification link is missing a token. If you need to verify your email, please check your inbox for the original verification email."
+      >
+        <div className="mt-2 text-left">
+          <Link
+            href={ROUTES.LOGIN}
+            className="inline-flex items-center text-primary cursor-pointer font-medium transition-colors"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            Back to Sign In
+          </Link>
+        </div>
+      </AuthStatusCard>
     );
   }
 
   // Loading state
   if (state === "loading") {
     return (
-      <div className="w-full max-w-[480px] mx-auto">
-        <Card className="transition-all duration-300 ease-in-out border-border-strong shadow-none p-10 opacity-100">
-          <CardHeader className="space-y-1 p-0 mb-8" noBorder>
-            <CardTitle className="text-xl font-bold tracking-tight text-foreground mb-3 text-wrap-balance">
-              Verifying Your Email
-            </CardTitle>
-            <CardDescription className="text-base text-muted-foreground">
-              Please wait while we verify your email address...
-            </CardDescription>
-          </CardHeader>
-
-          <CardContent className="p-0 flex justify-start">
-            <Loader2 className="h-6 w-6 animate-spin text-primary" />
-          </CardContent>
-        </Card>
-      </div>
+      <AuthStatusCard
+        title="Verifying Your Email"
+        description="Please wait while we verify your email address..."
+      >
+        <div className="flex justify-start">
+          <Loader2 className="h-6 w-6 animate-spin text-primary" />
+        </div>
+      </AuthStatusCard>
     );
   }
 
   // Success state
   if (state === "success") {
     return (
-      <div className="w-full max-w-[480px] mx-auto">
-        <Card className="transition-all duration-300 ease-in-out border-border-strong shadow-none p-10 opacity-100">
-          <CardHeader className="space-y-1 p-0 mb-8" noBorder>
-            <CardTitle className="text-xl font-bold tracking-tight text-foreground mb-3 text-wrap-balance">
-              Email Verified
-            </CardTitle>
-            <CardDescription className="text-base text-muted-foreground">
-              Your email has been verified successfully. You can now sign in to
-              your account.
-            </CardDescription>
-          </CardHeader>
-
-          <CardContent className="p-0">
-            <div className="mt-2 text-left">
-              <Link
-                href={ROUTES.LOGIN}
-                className="inline-flex items-center text-primary cursor-pointer font-medium transition-colors"
-              >
-                Go to Sign In
-                <ArrowRight className="h-4 w-4 ml-2" />
-              </Link>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+      <AuthStatusCard
+        title="Email Verified"
+        description="Your email has been verified successfully. You can now sign in to your account."
+      >
+        <div className="mt-2 text-left">
+          <Link
+            href={ROUTES.LOGIN}
+            className="inline-flex items-center text-primary cursor-pointer font-medium transition-colors"
+          >
+            Go to Sign In
+            <ArrowRight className="h-4 w-4 ml-2" />
+          </Link>
+        </div>
+      </AuthStatusCard>
     );
   }
 
   // Error state
   return (
-    <div className="w-full max-w-[480px] mx-auto">
-      <Card className="transition-all duration-300 ease-in-out border-border-strong shadow-none p-10 opacity-100">
-        <CardHeader className="space-y-1 p-0 mb-8" noBorder>
-          <CardTitle className="text-xl font-bold tracking-tight text-foreground mb-3 text-wrap-balance">
-            Verification Failed
-          </CardTitle>
-          <CardDescription className="text-base text-muted-foreground">
-            {errorMessage ||
-              "This verification link is invalid or has expired."}
-          </CardDescription>
-        </CardHeader>
-
-        <CardContent className="p-0">
-          <div className="mt-2 text-left">
-            <Link
-              href={ROUTES.LOGIN}
-              className="inline-flex items-center text-primary cursor-pointer font-medium transition-colors"
-            >
-              <ArrowLeft className="h-4 w-4" />
-              Back to Sign In
-            </Link>
-          </div>
-        </CardContent>
-      </Card>
-    </div>
+    <AuthStatusCard
+      title="Verification Failed"
+      description={
+        errorMessage || "This verification link is invalid or has expired."
+      }
+    >
+      <div className="mt-2 text-left">
+        <Link
+          href={ROUTES.LOGIN}
+          className="inline-flex items-center text-primary cursor-pointer font-medium transition-colors"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Back to Sign In
+        </Link>
+      </div>
+    </AuthStatusCard>
   );
 }
