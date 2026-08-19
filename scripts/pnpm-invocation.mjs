@@ -31,6 +31,39 @@ export function quoteForCmd(arg) {
 }
 
 /**
+ * Variable references cmd.exe would expand inside an argument.
+ *
+ * Quoting does NOT suppress this: cmd expands `%NAME%` inside double quotes,
+ * before the callee ever sees the string, and a command line offers no escape
+ * for it. Both candidates were measured and both fail — `^%` arrives literally
+ * as `^%`, and `%%` yields a bare `%` wrapped around a name that still
+ * expanded. So the only honest options are to corrupt the argument silently or
+ * to refuse it, and this module refuses.
+ *
+ * A lone `%` is harmless, and so is a pair naming nothing in the environment
+ * the child will receive, since cmd leaves those alone. Only a reference that
+ * would really resolve counts, which keeps an ordinary directory like
+ * `50% off` working instead of failing a check it does not deserve.
+ *
+ * @param {string} arg - a single argument.
+ * @param {Record<string, string|undefined>} env - the environment the child is
+ *   spawned with. cmd expands against that, not against the parent's, so the
+ *   caller has to pass the one it is about to hand to spawn.
+ * @returns {string[]} the names that would expand, in order of appearance.
+ */
+export function cmdExpansions(arg, env) {
+  // Windows environment lookup is case-insensitive; %path% resolves as well
+  // as %PATH% does.
+  const defined = new Set(Object.keys(env ?? {}).map(key => key.toUpperCase()));
+
+  const names = [];
+  for (const [, name] of arg.matchAll(/%([^%\r\n]+)%/g)) {
+    if (defined.has(name.toUpperCase())) names.push(name);
+  }
+  return names;
+}
+
+/**
  * How to spawn a pnpm sub-command on a given platform.
  *
  * Windows has no `pnpm.exe` — pnpm ships as `pnpm.CMD` beside a `.ps1` and a
@@ -57,14 +90,41 @@ export function quoteForCmd(arg) {
  * a future job would extend — no CI job runs `dev-playground.mjs` on ANY
  * platform, so the wrapper is unexercised everywhere, not only on Linux.
  *
+ * Quoting closes the splitting hole but not the expansion one, so the Windows
+ * branch also refuses an argument cmd would rewrite — see `cmdExpansions`. It
+ * throws rather than warning because the alternative is a path that is wrong
+ * by the time anything can report it.
+ *
  * @param {string[]} args - arguments to pnpm.
  * @param {string} platform - a `process.platform` value.
+ * @param {Record<string, string|undefined>} env - the environment the child is
+ *   spawned with, which is what cmd expands against.
  * @returns {{command: string, args: string[], shell: boolean}} spawn inputs.
+ * @throws {Error} on Windows, when an argument carries a reference cmd would
+ *   expand, since no quoting can carry it through intact.
  */
-export function pnpmInvocation(args, platform = process.platform) {
+export function pnpmInvocation(
+  args,
+  platform = process.platform,
+  env = process.env
+) {
   if (platform !== "win32") {
     return { command: "pnpm", args, shell: false };
   }
+
+  for (const arg of args) {
+    const expanded = cmdExpansions(arg, env);
+    if (expanded.length > 0) {
+      const refs = expanded.map(name => `%${name}%`).join(", ");
+      throw new Error(
+        `cannot spawn pnpm: the argument ${JSON.stringify(arg)} contains ` +
+          `${refs}, which cmd.exe expands even inside quotes, and no escape ` +
+          `suppresses it. Move or rename the path so it carries no ` +
+          `%VARIABLE% reference.`
+      );
+    }
+  }
+
   return { command: "pnpm", args: args.map(quoteForCmd), shell: true };
 }
 

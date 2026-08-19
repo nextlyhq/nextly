@@ -24,6 +24,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import {
+  cmdExpansions,
   pnpmInvocation,
   quoteForCmd,
   treeKillCommand,
@@ -111,6 +112,83 @@ describe("quoteForCmd", () => {
 
   it("doubles an embedded quote, as cmd.exe expects", () => {
     expect(quoteForCmd('a "b" c')).toBe('"a ""b"" c"');
+  });
+});
+
+// One fixture for every case needing a real Windows path, written raw so the
+// separators survive: a plain literal eats \U and \s, and \1 is an octal escape
+// that does not parse at all.
+const EXPANDING_PATH = String.raw`C:\p%FOO%th\seed.ts`;
+
+describe("cmdExpansions", () => {
+  const env = { FOO: "EXPANDED", Path: String.raw`C:\Windows` };
+
+  it("starts from a fixture that still carries its separators", () => {
+    expect(EXPANDING_PATH.split("\\")).toHaveLength(3);
+  });
+
+  it("finds a reference the environment would resolve", () => {
+    expect(cmdExpansions(EXPANDING_PATH, env)).toEqual(["FOO"]);
+  });
+
+  it("matches case-insensitively, as Windows lookup does", () => {
+    expect(cmdExpansions("%path%", env)).toEqual(["path"]);
+  });
+
+  it("ignores a pair naming nothing, which cmd leaves alone", () => {
+    expect(cmdExpansions("%NOT_SET_ANYWHERE%", env)).toEqual([]);
+  });
+
+  it("ignores a lone percent, so a 50% directory still works", () => {
+    expect(cmdExpansions(String.raw`C:\100% done\seed.ts`, env)).toEqual([]);
+  });
+
+  it("reports every reference in the argument", () => {
+    const found = cmdExpansions("%FOO%-%Path%", env);
+
+    expect(found).toEqual(["FOO", "Path"]);
+  });
+
+  it("treats a missing environment as defining nothing", () => {
+    expect(cmdExpansions("%FOO%", undefined)).toEqual([]);
+  });
+});
+
+describe("pnpmInvocation and the expansion cmd cannot be stopped from doing", () => {
+  const env = { FOO: "EXPANDED" };
+
+  it("refuses rather than hand cmd a path it would rewrite", () => {
+    // Quoting is no defence: cmd expands inside double quotes, before pnpm
+    // sees anything. Measured, along with the two escapes that do not work:
+    // ^% survives literally, and %% leaves the name still expanded.
+    expect(() =>
+      pnpmInvocation(["tsx", EXPANDING_PATH], "win32", env)
+    ).toThrow(/%FOO%/);
+  });
+
+  it("names the offending argument, since the fix is to move the path", () => {
+    expect(() =>
+      pnpmInvocation(["tsx", EXPANDING_PATH], "win32", env)
+    ).toThrow(/cmd\.exe expands even inside quotes/);
+  });
+
+  it("lets an unresolvable pair through, quoted as usual", () => {
+    const arg = String.raw`C:\a b\%NOT_SET%\seed.ts`;
+
+    const { args } = pnpmInvocation(["tsx", arg], "win32", env);
+
+    expect(args).toEqual(["tsx", `"${arg}"`]);
+  });
+
+  it("does not police POSIX, where nothing expands anything", () => {
+    // No shell there, so the argument reaches pnpm byte for byte. Throwing
+    // would break a path that works today.
+    const arg = "/home/ci/p%FOO%th/seed.ts";
+
+    expect(pnpmInvocation(["tsx", arg], "linux", env).args).toEqual([
+      "tsx",
+      arg,
+    ]);
   });
 });
 
@@ -220,5 +298,18 @@ describe("the wrapper's spawn sites", () => {
     // builds its invocation inline because it is the long-lived child.
     expect(source.match(/await runPnpm\(/g) ?? []).toHaveLength(3);
     expect(source.match(/pnpmInvocation\(\[/g) ?? []).toHaveLength(1);
+  });
+
+  it("checks the arguments against the env the child will get", async () => {
+    const source = await readFile(WRAPPER, "utf-8");
+
+    // The expansion check is only as good as the environment it is run
+    // against, and the wrapper does not spawn with process.env: it merges
+    // .env in first. A call site that drops back to the two-argument form
+    // would check the parent's environment and pass the child's.
+    const calls = source.match(/pnpmInvocation\([^)]*\)/g) ?? [];
+
+    expect(calls.length).toBeGreaterThan(0);
+    for (const call of calls) expect(call).toContain("childEnv");
   });
 });

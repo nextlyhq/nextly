@@ -273,7 +273,7 @@ async function main() {
 
   // Spawn `next dev` from the playground directory. Inherit stdio so
   // Next.js logs flow through unmodified.
-  const dev = pnpmInvocation(["next", "dev"]);
+  const dev = pnpmInvocation(["next", "dev"], process.platform, childEnv);
   child = spawn(dev.command, dev.args, {
     cwd: PLAYGROUND_DIR,
     stdio: "inherit",
@@ -290,11 +290,19 @@ async function main() {
 // it needs and the quoting that shell then requires.
 function runPnpm(args, cwd, env) {
   return new Promise(resolve => {
-    const { command, args: argv, shell } = pnpmInvocation(args);
+    // One env object for both, because pnpmInvocation checks the arguments
+    // against the environment cmd.exe will actually expand against, and a
+    // check run against a different one is no check.
+    const childEnv = env ?? { ...process.env };
+    const {
+      command,
+      args: argv,
+      shell,
+    } = pnpmInvocation(args, process.platform, childEnv);
     const proc = spawn(command, argv, {
       cwd,
       stdio: "inherit",
-      env: env ?? { ...process.env },
+      env: childEnv,
       shell,
     });
     proc.on("exit", code => resolve(code ?? 0));
