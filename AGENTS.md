@@ -68,10 +68,10 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
   checkout, measured with the cache forced off so the numbers are of work that
   actually ran:
 
-  | command                                         | result on a clean tree (measured 2026-08-19, 04204b028) |
-  | ----------------------------------------------- | ------------------------------------------------------- |
-  | `pnpm turbo run check-types --continue --force` | 6 of 22 successful, 16 packages failing on `TS2307`     |
-  | `pnpm turbo run lint --continue --force`        | 9 of 24 successful                                      |
+  | command                                         | result on a clean tree                    |
+  | ----------------------------------------------- | ----------------------------------------- |
+  | `pnpm turbo run check-types --continue --force` | `AGENTS.measured.md` → `check-types-cold` |
+  | `pnpm turbo run lint --continue --force`        | `AGENTS.measured.md` → `lint-cold`        |
 
   `check-types` fails because a workspace import resolves through the sibling's
   package exports to a `dist/index.d.ts` that does not exist yet. `lint` fails
@@ -259,9 +259,9 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
   `create-nextly-app`, `eslint-config`, `eslint-plugin`, `prettier-config`, `tsconfig`,
   `telemetry`, `client`) plus `playground`, `root`, `ci`, `docs`, `deps`,
   `release`. Scope is optional; the subject must not start with an uppercase
-  letter. Subsystem names are not valid scopes. Two packages currently have NO
-  accepted scope (`admin-css`, `module-specifiers`) — scope commits touching
-  them to the nearest listed package until that gap is closed.
+  letter. Subsystem names are not valid scopes. Packages currently without an
+  accepted scope (`admin-css`, `module-specifiers`) get scoped to the nearest
+  listed package until that gap is closed.
 - Errors thrown inside `packages/nextly/**` PRODUCT CODE use `NextlyError`
   (static factories: `notFound`, `forbidden`, `validation`, `conflict`,
   `duplicate`, `authRequired`, `invalidCredentials`, `rateLimited`,
