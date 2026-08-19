@@ -68,10 +68,10 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
   checkout, measured with the cache forced off so the numbers are of work that
   actually ran:
 
-  | command                                         | result on a clean tree                              |
-  | ----------------------------------------------- | --------------------------------------------------- |
-  | `pnpm turbo run check-types --continue --force` | 6 of 21 successful, 15 packages failing on `TS2307` |
-  | `pnpm turbo run lint --continue --force`        | 8 of 22 successful                                  |
+  | command                                         | result on a clean tree (measured 2026-08-19, 04204b028) |
+  | ----------------------------------------------- | ------------------------------------------------------- |
+  | `pnpm turbo run check-types --continue --force` | 6 of 22 successful, 16 packages failing on `TS2307`     |
+  | `pnpm turbo run lint --continue --force`        | 9 of 24 successful                                      |
 
   `check-types` fails because a workspace import resolves through the sibling's
   package exports to a `dist/index.d.ts` that does not exist yet. `lint` fails

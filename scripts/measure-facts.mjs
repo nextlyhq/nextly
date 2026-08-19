@@ -4,83 +4,92 @@
 // carries its own measurement date and the exact command, so a reader can
 // re-run rather than trust.
 //
-// Cheap facts run on every invocation. Facts needing a forced, cache-cold
-// turbo run are heavy (minutes of CPU) and run only with --full; without it
-// they are listed as not measured in this run, never seeded from memory —
-// an unmeasured row must not look like a measured one.
+// Cheap facts run on every invocation. Facts needing a forced turbo run are
+// heavy (minutes of CPU) and run only with --full; without it they are listed
+// as not measured in this run, never seeded from memory — an unmeasured row
+// must not look like a measured one.
+//
+// Two properties this file holds deliberately:
+// - the command shown in each row is the command that RAN — one
+//   implementation of each question, so display and measurement cannot drift;
+// - a command's exit status is captured beside its output, never lost to a
+//   pipeline, so a failing measurement reads as a failure rather than as a
+//   number.
 //
 //   node scripts/measure-facts.mjs           # cheap facts only
 //   node scripts/measure-facts.mjs --full    # also the forced turbo runs
 
-import { execSync } from "node:child_process";
-import { writeFileSync, readFileSync, readdirSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { writeFileSync, existsSync, readdirSync } from "node:fs";
 
 const FULL = process.argv.includes("--full");
 
-// Each fact returns a short string; a thrown error records the failure text
-// instead, so a broken measurement is visible rather than absent.
-function sh(cmd, opts = {}) {
-  return execSync(cmd, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], ...opts }).trim();
+// Runs the row's own command and reports output AND status together. spawnSync
+// through bash keeps shell syntax available without a pipeline swallowing the
+// exit code: the status here is the whole command's, read directly.
+function measure(cmd) {
+  const r = spawnSync("bash", ["-o", "pipefail", "-c", cmd], {
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  const out = `${r.stdout || ""}${r.stderr || ""}`.trim();
+  return { out, status: r.status };
 }
 
 // The turbo summary line ("Tasks: N successful, M total") is the number the
-// humans quote, so it is the number recorded.
-function turboSummary(cmd) {
-  let out = "";
-  try {
-    out = sh(cmd, { maxBuffer: 64 * 1024 * 1024 });
-  } catch (e) {
-    out = `${e.stdout || ""}${e.stderr || ""}`;
-  }
+// humans quote, so it is the number recorded — with the run's exit status,
+// because turbo exits nonzero when tasks fail and that is part of the reading.
+function turboRow(cmd) {
+  const { out, status } = measure(cmd);
   const m = out.match(/Tasks:\s+(\d+)\s+successful,\s+(\d+)\s+total/);
-  return m ? `${m[1]} of ${m[2]} successful` : "summary line not found (turbo output format changed?)";
+  return {
+    out: m ? `${m[1]} of ${m[2]} successful` : "summary line not found (turbo output format changed?)",
+    status,
+  };
+}
+
+// Heavy rows depend on what is already built: a forced run reads no cache, but
+// an existing dist still satisfies the sibling imports the cold numbers are
+// about. Recording the dist-state beside the number lets a reader interpret it
+// instead of trusting a label the generator never established.
+function distState() {
+  const pkgs = readdirSync("packages").filter(p => existsSync(`packages/${p}/package.json`));
+  const built = pkgs.filter(p => existsSync(`packages/${p}/dist`));
+  return `${built.length} of ${pkgs.length} packages have dist/`;
 }
 
 const facts = [
   {
     id: "packages",
     what: "packages in the workspace",
-    cmd: "ls packages | wc -l",
-    run: () => `${readdirSync("packages").length}: ${readdirSync("packages").join(", ")}`,
+    cmd: "ls packages | tr '\\n' ' '",
   },
   {
     id: "pr-scopes",
     what: "PR scopes accepted by the title check (the enforced list; commitlint checks format only, not scope membership)",
-    cmd: "sed -n '/scopes: |/,/requireScope/p' .github/workflows/pr-title.yml",
-    run: () => {
-      const y = readFileSync(".github/workflows/pr-title.yml", "utf8");
-      const m = y.match(/scopes: \|\n([\s\S]*?)\n\s+requireScope/);
-      return m ? m[1].split("\n").map(l => l.trim()).filter(Boolean).join(", ") : "scopes block not found";
-    },
+    cmd: "sed -n '/scopes: |/,/requireScope/p' .github/workflows/pr-title.yml | sed '1d;$d' | tr -d ' ' | tr '\\n' ' '",
   },
   {
     id: "engines",
     what: "supported node ranges and the pinned pnpm",
-    cmd: "node -e \"const p=require('./package.json');console.log(p.engines.node, p.packageManager)\"",
-    run: () => {
-      const p = JSON.parse(readFileSync("package.json", "utf8"));
-      return `node ${p.engines.node} · ${p.packageManager}`;
-    },
+    cmd: `node -e "const p=require('./package.json');console.log(p.engines.node, '·', p.packageManager)"`,
   },
   {
     id: "comment-convention",
     what: "comment-convention baseline (allowlisted pre-existing offences)",
-    cmd: "node scripts/check-comment-convention.mjs | tail -1",
-    run: () => sh("node scripts/check-comment-convention.mjs 2>&1 | tail -1", { maxBuffer: 16 * 1024 * 1024 }),
+    cmd: "node scripts/check-comment-convention.mjs 2>&1 | tail -1",
   },
   {
     id: "check-types-cold",
-    what: "check-types on a clean tree, cache forced off (the honest failure count before a build)",
+    what: "check-types with the turbo cache forced off (read the dist-state line before interpreting)",
     cmd: "pnpm turbo run check-types --continue --force",
     heavy: true,
-    run: () => turboSummary("pnpm turbo run check-types --continue --force"),
   },
   {
     id: "lint-cold",
-    what: "lint on a clean tree, cache forced off",
+    what: "lint with the turbo cache forced off (read the dist-state line before interpreting)",
     cmd: "pnpm turbo run lint --continue --force",
     heavy: true,
-    run: () => turboSummary("pnpm turbo run lint --continue --force"),
   },
 ];
 
@@ -90,10 +99,10 @@ const lines = [
   "",
   "# Measured facts",
   "",
-  "Perishable numbers referenced by AGENTS.md. Every row names its command so",
-  "a doubtful reader re-runs it instead of trusting the file. Heavy rows need",
-  "`--full` and a tree whose cache state you know — a warm cache overstates",
-  "health and a missing `dist` overstates breakage.",
+  "Perishable numbers referenced by AGENTS.md. Every row shows the command that",
+  "actually ran and its exit status, so a doubtful reader re-runs instead of",
+  "trusting and a failed measurement cannot read as a number. Heavy rows need",
+  "`--full`; their meaning depends on the build state recorded beside them.",
   "",
 ];
 
@@ -101,10 +110,12 @@ for (const f of facts) {
   lines.push(`## ${f.id}`, "", f.what, "", "```", `$ ${f.cmd}`);
   if (f.heavy && !FULL) {
     lines.push("(not measured in this run — heavy; re-run with --full)");
+  } else if (f.heavy) {
+    const { out, status } = turboRow(f.cmd);
+    lines.push(`${out}  [exit ${status}]`, `dist-state at measurement: ${distState()}`);
   } else {
-    let v;
-    try { v = f.run(); } catch (e) { v = `MEASUREMENT FAILED: ${String(e.message).split("\n")[0]}`; }
-    lines.push(v);
+    const { out, status } = measure(f.cmd);
+    lines.push(status === 0 ? out : `MEASUREMENT FAILED [exit ${status}]: ${out.split("\n").slice(-1)[0]}`);
   }
   lines.push("```", "");
 }
