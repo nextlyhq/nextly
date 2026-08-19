@@ -60,7 +60,12 @@ describe("pnpmInvocation on Windows", () => {
   });
 
   it("quotes a spaced path so cmd.exe does not split it in two", () => {
-    const seed = "C:\Users\Faisal Mehmood\playground\scripts\seed.ts";
+    // String.raw, not an escaped literal: a plain string eats \U and \s,
+    // which silently turned this fixture into a path with no separators at
+    // all — and it still passed, because the space alone forced the quoting.
+    const seed = String.raw`C:\Users\Faisal Mehmood\playground\scripts\seed.ts`;
+
+    expect(seed).toContain("\\");
 
     const { args } = pnpmInvocation(["tsx", seed], "win32");
 
