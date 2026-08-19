@@ -92,6 +92,16 @@ export {
   type DocumentIdentity,
 } from "./components/features/entries/EntryForm/EntryFormContext";
 /**
+ * Which language the surrounding document is being edited in. Separate from the
+ * identity for the same reason the status is: a document is the same document
+ * in every language, so a consumer reading only the identity should not
+ * re-render when the language changes.
+ */
+export {
+  useDocumentLocale,
+  type DocumentLocale,
+} from "./components/features/entries/EntryForm/EntryFormContext";
+/**
  * How the surrounding document stands, for a field that covers the editor's own
  * chrome. Separate from the identity deliberately: which document this is does
  * not change with the language, and how it stands does.
