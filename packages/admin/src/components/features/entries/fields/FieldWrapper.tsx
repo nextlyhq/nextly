@@ -116,7 +116,11 @@ const WIDTH_STYLES: Record<string, string> = {
  *
  * Measured dangling on `/admin/collections/posts/create` in both themes before
  * this list existed: `richText:content`, `relationship:categories`,
- * `relationship:tags`, `upload:featuredImage`.
+ * `relationship:tags`, `upload:featuredImage`. `code:customCss` was measured
+ * the same way on the page-builder `pages` collection, and belongs here for the
+ * same reason rich text does: the editor is a scrolling surface built from
+ * several elements, and the one that takes focus is created by the editor at
+ * runtime rather than being the element an id could be placed on.
  *
  * The list covers the types this codebase has evidence for. It is deliberately
  * NOT a guess at the rest: `useFieldLabelLandingCheck` below fires in
@@ -128,6 +132,7 @@ const GROUP_FIELD_TYPES: ReadonlySet<string> = new Set([
   "richText",
   "relationship",
   "upload",
+  "code",
 ]);
 
 /**
