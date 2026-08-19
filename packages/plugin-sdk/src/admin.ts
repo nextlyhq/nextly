@@ -13,6 +13,18 @@ export {
   registerComponents,
   registerKnownPlugin,
 } from "@nextlyhq/admin";
+
+/**
+ * Which document the surrounding form is editing, or `null` outside one
+ * (@experimental).
+ *
+ * A field component receives a name and a control and nothing that says which
+ * document it is inside, so anything addressing the document itself — a
+ * recovery point, a related query, a link — had no way to ask. `null` is an
+ * ordinary answer rather than an error: field components also render in
+ * previews and pickers, which have no document.
+ */
+export { useDocumentIdentity, type DocumentIdentity } from "@nextlyhq/admin";
 export type { ComponentPath } from "@nextlyhq/admin";
 
 /**

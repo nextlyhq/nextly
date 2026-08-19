@@ -80,6 +80,17 @@ export { useRecentActivity } from "./hooks/queries/useRecentActivity";
 export { useDebouncedValue } from "./hooks/useDebouncedValue";
 // Permission gating (D36) — client-side UX checks for admin + plugin UI.
 export { useCan } from "./hooks/useCan";
+/**
+ * Which document a field is rendered inside.
+ *
+ * Exported for the plugin surface: a contributed field that has to address the
+ * document — to record against it, to query it, to link to it — cannot derive
+ * that from the props a field receives, which name a value and nothing else.
+ */
+export {
+  useDocumentIdentity,
+  type DocumentIdentity,
+} from "./components/features/entries/EntryForm/EntryFormContext";
 export { Can } from "./components/guards/Can";
 export type { CanProps } from "./components/guards/Can";
 export { useRowSelection } from "./hooks/useRowSelection";
