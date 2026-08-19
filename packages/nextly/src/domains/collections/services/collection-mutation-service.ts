@@ -4425,6 +4425,51 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * Whether this write should hold its edit as a working draft, and the
+   * component schemas the decision needed.
+   *
+   * One implementation of the question for every write path. Asked separately
+   * in each of them, the three answers could drift, and a surface that answered
+   * "no" where the others answered "yes" would publish an edit nobody published
+   * — which is the shape of the defect this exists to prevent.
+   */
+  private async resolveWorkingDraftHold(args: {
+    collection: unknown;
+    fields: FieldDefinition[];
+    /** The status this write names, if any. */
+    namedStatus: unknown;
+    /** The committed status of the row being written. */
+    liveStatus: unknown;
+  }): Promise<{ hold: boolean; componentSchemas: ComponentSchemas | null }> {
+    const collectionHasStatus =
+      (args.collection as { status?: boolean }).status === true;
+    const versionsConfig = (args.collection as Record<string, unknown>)
+      .versions as ResolvedVersionsConfig | null | undefined;
+    const documentLocalized =
+      (args.collection as { localized?: boolean }).localized === true;
+    // Resolved only once the cheap disqualifiers pass, so a collection the
+    // split can never take never pays for a registry read.
+    const componentSchemas =
+      collectionHasStatus &&
+      versionsConfig?.drafts?.enabled === true &&
+      !documentLocalized &&
+      !hasPasswordField(args.fields)
+        ? await resolveComponentSchemas(args.fields as unknown as FieldConfig[])
+        : null;
+    const hold =
+      isDraftSplitEligible({
+        collectionHasStatus,
+        draftsVersioningEnabled: versionsConfig?.drafts?.enabled === true,
+        documentLocalized,
+        fields: args.fields as unknown as FieldConfig[],
+        componentSchemas,
+      }) &&
+      args.namedStatus === undefined &&
+      args.liveStatus === "published";
+    return { hold, componentSchemas };
+  }
+
+  /**
    * The document a working draft should now hold, after this save.
    *
    * Accumulates onto the draft already stored rather than re-deriving from the
@@ -8021,16 +8066,38 @@ export class CollectionMutationService extends BaseService {
         });
       }
 
-      const [updated] = await tx.update<unknown>(
-        tableName,
-        {
-          ...stripImmutableSystemFields(finalData, "collection"),
-          updatedAt: nowForTxUpdate,
-          ...(txUpdateStamp ? { first_published_at: txUpdateStamp } : {}),
-        },
-        this.whereEq("id", params.entryId),
-        { returning: "*" }
-      );
+      // The same eligibility question the pooled path asks, through the same
+      // predicate: a status-less update to a published document on a
+      // drafts-enabled collection holds the edit instead of writing the live
+      // row. Asked here because this surface reaches the row write without
+      // passing through that path, which is why an update through the
+      // transaction API published an edit its author had not published.
+      const {
+        hold: txStoreAsWorkingDraft,
+        componentSchemas: txSplitComponentSchemas,
+      } = await this.resolveWorkingDraftHold({
+        collection,
+        fields,
+        namedStatus: finalData.status,
+        liveStatus: existingEntry.status,
+      });
+
+      // Skip the live-row UPDATE for a held edit; the pending change is stored
+      // below instead. `updated` still carries a row so everything after this
+      // reports the document as it stands — which, for a held edit, is the
+      // published content the public still sees.
+      const [updated] = txStoreAsWorkingDraft
+        ? [existingEntry]
+        : await tx.update<unknown>(
+            tableName,
+            {
+              ...stripImmutableSystemFields(finalData, "collection"),
+              updatedAt: nowForTxUpdate,
+              ...(txUpdateStamp ? { first_published_at: txUpdateStamp } : {}),
+            },
+            this.whereEq("id", params.entryId),
+            { returning: "*" }
+          );
 
       if (!updated) {
         return {
@@ -8089,23 +8156,64 @@ export class CollectionMutationService extends BaseService {
       // after the delete+insert below would report the new ids as the old ones.
       // The pre-update parent row plus its current (pre-rewrite) component and
       // m2m relations, read on `tx`.
-      const { document: previousDocument } = await this.readTxDocumentParts(
-        tx,
-        {
+      const { documentParts: previousParts, document: previousDocument } =
+        await this.readTxDocumentParts(tx, {
           collectionName: params.collectionName,
           tableName,
           entryId: params.entryId,
           parentRow: this.readShapeEventDocument(existingEntry, fields),
           fields,
           manyToManyFields,
-          needsRelations: previousNeedsRelations,
-        }
-      );
+          // A held edit needs the live relations whether or not anything is
+          // being recorded: they are the base the pending change accumulates
+          // onto, and without them the draft would drop every component and
+          // relationship the author had not touched in this save.
+          needsRelations: previousNeedsRelations || txStoreAsWorkingDraft,
+        });
+
+      // Store the pending edit rather than the live row, through the same
+      // method the pooled path uses so the two cannot answer differently.
+      let txWorkingDraftDocument: Record<string, unknown> | undefined;
+      if (txStoreAsWorkingDraft) {
+        ({ workingDraftDocument: txWorkingDraftDocument } =
+          await this.storeWorkingDraftInTx(tx, {
+            collection,
+            collectionHasStatus:
+              (collection as { status?: boolean }).status === true,
+            // This surface writes no component subtrees of its own, so the
+            // draft's components come from the live read alone.
+            componentFieldData: {},
+            fields,
+            manyToManyData,
+            params: {
+              collectionName: params.collectionName,
+              entryId: params.entryId,
+              user: params.user,
+            },
+            parentRow: this.readShapeEventDocument(
+              {
+                ...existingEntry,
+                ...stripImmutableSystemFields(finalData, "collection"),
+              },
+              fields
+            ),
+            snapshotComponents: previousParts.components,
+            snapshotM2M: previousParts.manyToMany,
+            splitComponentSchemas: txSplitComponentSchemas,
+            updatePayload: finalData,
+          }));
+      }
 
       // Handle many-to-many relationships on the caller's transaction so the
-      // junction writes commit atomically with the update.
+      // junction writes commit atomically with the update. Skipped for a held
+      // edit: the junction rows ARE live content, so rewriting them would put
+      // the pending relationship change on the public site while the rest of
+      // the edit waits.
       for (const field of manyToManyFields) {
-        if (manyToManyData[field.name] !== undefined) {
+        if (
+          !txStoreAsWorkingDraft &&
+          manyToManyData[field.name] !== undefined
+        ) {
           await this.relationshipService.deleteManyToManyRelations(
             params.collectionName,
             params.entryId,
@@ -8149,15 +8257,19 @@ export class CollectionMutationService extends BaseService {
           manyToManyFields,
           needsRelations,
         });
-      await this.captureTxVersion(tx, {
-        collectionName: params.collectionName,
-        entryId: params.entryId,
-        contentStatus: (updated as { status?: unknown }).status,
-        createdBy: params.user?.id ?? null,
-        versionsConfig,
-        documentParts: updatedParts,
-        fields,
-      });
+      // A held edit records no durable version: nothing was published, and a
+      // version here would enter the history as though it had been.
+      if (!txStoreAsWorkingDraft) {
+        await this.captureTxVersion(tx, {
+          collectionName: params.collectionName,
+          entryId: params.entryId,
+          contentStatus: (updated as { status?: unknown }).status,
+          createdBy: params.user?.id ?? null,
+          versionsConfig,
+          documentParts: updatedParts,
+          fields,
+        });
+      }
       const eventFields = await this.webhookFieldTreeIfRecording(
         params.collectionName,
         fields,
@@ -8254,7 +8366,10 @@ export class CollectionMutationService extends BaseService {
         success: true,
         statusCode: 200,
         message: "Entry updated successfully",
-        data: updated,
+        // A held edit answers with the pending document, not the live row. The
+        // caller asked for its own change back; returning the published content
+        // it did not write reads as the write having been ignored.
+        data: txWorkingDraftDocument ?? updated,
         eventRecorded,
         revalidationIntent,
       };
@@ -9605,16 +9720,35 @@ export class CollectionMutationService extends BaseService {
         });
       }
 
-      const [updated] = await tx.update<unknown>(
-        tableName,
-        {
-          ...stripImmutableSystemFields(finalData, "collection"),
-          updatedAt: nowForBulkUpdate,
-          ...(bulkUpdateStamp ? { first_published_at: bulkUpdateStamp } : {}),
-        },
-        this.whereEq("id", entryId),
-        { returning: "*" }
-      );
+      // The same eligibility question the other two paths ask, through the same
+      // predicate. Without it a bulk update publishes every held edit in the
+      // batch, which is the widest form of the defect: one call, many documents.
+      const {
+        hold: bulkStoreAsWorkingDraft,
+        componentSchemas: bulkSplitComponentSchemas,
+      } = await this.resolveWorkingDraftHold({
+        collection,
+        fields,
+        namedStatus: finalData.status,
+        liveStatus: existingEntry.status,
+      });
+
+      // Skip the live-row UPDATE for a held edit; the pending change is stored
+      // below instead.
+      const [updated] = bulkStoreAsWorkingDraft
+        ? [existingEntry]
+        : await tx.update<unknown>(
+            tableName,
+            {
+              ...stripImmutableSystemFields(finalData, "collection"),
+              updatedAt: nowForBulkUpdate,
+              ...(bulkUpdateStamp
+                ? { first_published_at: bulkUpdateStamp }
+                : {}),
+            },
+            this.whereEq("id", entryId),
+            { returning: "*" }
+          );
 
       if (!updated) {
         return {
@@ -9672,24 +9806,59 @@ export class CollectionMutationService extends BaseService {
       // so a relationship-only update still lists the changed field: reading m2m
       // after the delete+insert below would report the new ids as the old ones.
       // The pre-update parent row plus its current (pre-rewrite) relations on `tx`.
-      const { document: previousDocument } = await this.readTxDocumentParts(
-        tx,
-        {
+      const { documentParts: previousParts, document: previousDocument } =
+        await this.readTxDocumentParts(tx, {
           collectionName: params.collectionName,
           tableName,
           entryId,
           parentRow: this.readShapeEventDocument(existingEntry, fields),
           fields,
           manyToManyFields,
-          needsRelations: previousNeedsRelations,
-        }
-      );
+          // A held edit needs the live relations regardless of what is being
+          // recorded: they are the base the pending change accumulates onto.
+          needsRelations: previousNeedsRelations || bulkStoreAsWorkingDraft,
+        });
+
+      // Store the pending edit rather than the live row, through the same
+      // method the other two paths use.
+      let bulkWorkingDraftDocument: Record<string, unknown> | undefined;
+      if (bulkStoreAsWorkingDraft) {
+        ({ workingDraftDocument: bulkWorkingDraftDocument } =
+          await this.storeWorkingDraftInTx(tx, {
+            collection,
+            collectionHasStatus:
+              (collection as { status?: boolean }).status === true,
+            componentFieldData: {},
+            fields,
+            manyToManyData,
+            params: {
+              collectionName: params.collectionName,
+              entryId,
+              user: params.user,
+            },
+            parentRow: this.readShapeEventDocument(
+              {
+                ...existingEntry,
+                ...stripImmutableSystemFields(finalData, "collection"),
+              },
+              fields
+            ),
+            snapshotComponents: previousParts.components,
+            snapshotM2M: previousParts.manyToMany,
+            splitComponentSchemas: bulkSplitComponentSchemas,
+            updatePayload: finalData,
+          }));
+      }
 
       // Handle many-to-many relationships on the caller's transaction so the
       // junction writes commit atomically with the update.
       const txExecutor = tx.getDrizzle<RelationshipDbExecutor>();
       for (const field of manyToManyFields) {
-        if (manyToManyData[field.name] !== undefined) {
+        // Skipped for a held edit: junction rows are live content.
+        if (
+          !bulkStoreAsWorkingDraft &&
+          manyToManyData[field.name] !== undefined
+        ) {
           // Delete existing relations
           await this.relationshipService.deleteManyToManyRelations(
             params.collectionName,
@@ -9734,15 +9903,18 @@ export class CollectionMutationService extends BaseService {
           manyToManyFields,
           needsRelations,
         });
-      await this.captureTxVersion(tx, {
-        collectionName: params.collectionName,
-        entryId,
-        contentStatus: (updated as { status?: unknown }).status,
-        createdBy: params.user?.id ?? null,
-        versionsConfig,
-        documentParts: updatedParts,
-        fields,
-      });
+      // A held edit records no durable version: nothing was published.
+      if (!bulkStoreAsWorkingDraft) {
+        await this.captureTxVersion(tx, {
+          collectionName: params.collectionName,
+          entryId,
+          contentStatus: (updated as { status?: unknown }).status,
+          createdBy: params.user?.id ?? null,
+          versionsConfig,
+          documentParts: updatedParts,
+          fields,
+        });
+      }
       const eventFields = await this.webhookFieldTreeIfRecording(
         params.collectionName,
         fields,
@@ -9847,7 +10019,8 @@ export class CollectionMutationService extends BaseService {
         success: true,
         statusCode: 200,
         message: "Entry updated successfully",
-        data: updated,
+        // A held edit answers with the pending document, not the live row.
+        data: bulkWorkingDraftDocument ?? updated,
         eventRecorded,
         revalidationIntent,
       };
