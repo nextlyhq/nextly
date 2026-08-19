@@ -58,6 +58,31 @@ export function splitStatements(sqlStatements: string[]): string[] {
  * exist", which on PostgreSQL is also what a statement referencing a genuinely
  * missing table reports — swallowing that would hide a real broken reconcile.
  */
+/**
+ * Whether an execution error says a statement named a column the table lacks.
+ *
+ * Distinct from {@link isIdempotencyError}: that one recognises work already
+ * done, this one recognises work whose PRECONDITION has not been done yet. The
+ * only caller that may act on it is the additive-tables-only baseline, where an
+ * index over a not-yet-added column is an expected casualty of diffing from an
+ * empty snapshot and the following pass creates both in order.
+ */
+export function isMissingColumnError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  const causeMsg =
+    err instanceof Error && err.cause instanceof Error ? err.cause.message : "";
+  return [msg, causeMsg].some(m =>
+    [
+      // SQLite
+      /no such column/i,
+      // MySQL (ER_KEY_COLUMN_DOES_NOT_EXIST)
+      /key column .* doesn't exist in table/i,
+      // PostgreSQL
+      /column .* does not exist/i,
+    ].some(p => p.test(m))
+  );
+}
+
 export function isIdempotencyError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
   const causeMsg =

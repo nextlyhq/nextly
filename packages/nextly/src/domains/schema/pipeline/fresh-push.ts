@@ -50,7 +50,11 @@ import {
   filterUnsafeStatements,
   findUnexpectedDestructiveStatements,
 } from "./filter-unsafe-statements";
-import { isIdempotencyError, splitStatements } from "./sql-statement-utils";
+import {
+  isIdempotencyError,
+  isMissingColumnError,
+  splitStatements,
+} from "./sql-statement-utils";
 
 // Re-exported so existing importers (v1-golden suite) keep working; the
 // implementation lives in sql-statement-utils.ts.
@@ -179,7 +183,13 @@ async function applyPushResult(
     );
   }
 
-  const executed = await executeStatements(dialect, db, runnable);
+  // A degraded pass cannot add a column, so an index over one it lacks is a
+  // casualty of the baseline rather than a fault; the pass that follows builds
+  // both in order.
+  const degraded = result.hints.some(h =>
+    h.hint.startsWith(DEGRADED_PASS_HINT)
+  );
+  const executed = await executeStatements(dialect, db, runnable, degraded);
 
   return { hints, statementsExecuted: executed };
 }
@@ -298,6 +308,28 @@ async function withResolverCrashFallback(
   }
 }
 
+/**
+ * Whether a failed statement is an index the additive baseline could not build
+ * yet.
+ *
+ * The baseline is diffed from an EMPTY snapshot, so it carries every index in
+ * the desired schema while emitting no `ALTER TABLE ADD COLUMN` at all. An
+ * index naming a column the live table has not gained yet therefore fails on a
+ * precondition the same pass is incapable of satisfying. Skipping it is safe
+ * only because a degraded pass is always followed by another, and that one adds
+ * the column and then indexes it.
+ *
+ * Narrow on purpose: only CREATE INDEX, only a missing-column error, and only
+ * when the caller says the pass degraded. A failure to create an index for any
+ * other reason still stops the reconcile.
+ */
+function isIndexAwaitingItsColumn(statement: string, err: unknown): boolean {
+  return (
+    /^\s*CREATE\s+(UNIQUE\s+)?INDEX/i.test(statement) &&
+    isMissingColumnError(err)
+  );
+}
+
 // Executes statements per dialect, swallowing idempotency errors
 // ("already exists" / duplicate column) so re-runs over an existing
 // schema reconcile instead of failing. v1 wraps driver errors in
@@ -306,7 +338,8 @@ async function withResolverCrashFallback(
 async function executeStatements(
   dialect: FreshPushDialect,
   db: unknown,
-  statements: string[]
+  statements: string[],
+  degraded: boolean
 ): Promise<string[]> {
   if (statements.length === 0) return [];
   const { sql: sqlTag } = await import("drizzle-orm");
@@ -350,6 +383,7 @@ async function executeStatements(
           executed.push(stmt);
         } catch (err) {
           if (isIdempotencyError(err)) continue;
+          if (degraded && isIndexAwaitingItsColumn(stmt, err)) continue;
           throw err;
         }
       }
@@ -378,6 +412,7 @@ async function executeStatements(
       executed.push(stmt);
     } catch (err) {
       if (isIdempotencyError(err)) continue;
+      if (degraded && isIndexAwaitingItsColumn(stmt, err)) continue;
       throw err;
     }
   }
