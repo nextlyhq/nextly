@@ -6972,18 +6972,15 @@ export class CollectionMutationService extends BaseService {
         if (deletedCount === 0) return;
         deletedRow = true;
 
-        // Remove any pending working-draft sidecar for the deleted entry in the
+        // Remove EVERY locale's pending working-draft sidecar for the deleted
         // same transaction: it is keyed by entry id and excluded from history and
         // retention queries, so after the row it belongs to is gone it would
         // otherwise linger unreachable in nextly_versions. A no-op when none.
-        await new VersionsRepository(tx).deleteWorkingDraft(
-          {
-            scopeKind: "collection",
-            scopeSlug: params.collectionName,
-            entryId: params.entryId,
-          },
-          null
-        );
+        await new VersionsRepository(tx).deleteAllWorkingDrafts({
+          scopeKind: "collection",
+          scopeSlug: params.collectionName,
+          entryId: params.entryId,
+        });
 
         // Recovery points go with it, every author's. They are excluded from
         // history, from version reads and from retention pruning, so nothing
@@ -8600,17 +8597,14 @@ export class CollectionMutationService extends BaseService {
       }
       deleteNeedsRollback = true;
 
-      // Remove any pending working-draft sidecar for the deleted entry in the
+      // Remove EVERY locale's pending working-draft sidecar for the deleted
       // same transaction, so it does not linger unreachable in nextly_versions
       // after its row is gone. A no-op when none exists.
-      await new VersionsRepository(tx).deleteWorkingDraft(
-        {
-          scopeKind: "collection",
-          scopeSlug: params.collectionName,
-          entryId: params.entryId,
-        },
-        null
-      );
+      await new VersionsRepository(tx).deleteAllWorkingDrafts({
+        scopeKind: "collection",
+        scopeSlug: params.collectionName,
+        entryId: params.entryId,
+      });
 
       // Recovery points go with it; see the single-delete path.
       await new VersionsRepository(tx).deleteAutosaves({
@@ -10299,17 +10293,14 @@ export class CollectionMutationService extends BaseService {
       }
       deleteNeedsRollback = true;
 
-      // Remove any pending working-draft sidecar for the deleted entry in the
+      // Remove EVERY locale's pending working-draft sidecar for the deleted
       // same transaction, so a batch delete does not leave it unreachable in
       // nextly_versions after its row is gone. A no-op when none exists.
-      await new VersionsRepository(tx).deleteWorkingDraft(
-        {
-          scopeKind: "collection",
-          scopeSlug: params.collectionName,
-          entryId,
-        },
-        null
-      );
+      await new VersionsRepository(tx).deleteAllWorkingDrafts({
+        scopeKind: "collection",
+        scopeSlug: params.collectionName,
+        entryId,
+      });
 
       // Recovery points go with it; see the single-delete path.
       await new VersionsRepository(tx).deleteAutosaves({

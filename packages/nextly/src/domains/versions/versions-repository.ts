@@ -331,6 +331,27 @@ export class VersionsRepository {
   }
 
   /**
+   * Delete EVERY working draft this document has, in every locale, returning
+   * the number of rows removed. Called when the document itself goes away.
+   *
+   * Separate from {@link deleteWorkingDraft} because they answer different
+   * questions, and reaching for the wrong one is harmful in both directions:
+   * removing one locale's draft on a document delete strands the rest, pointing
+   * at a row that no longer exists, while removing all of them on a discard
+   * throws away pending work in languages the author never touched.
+   */
+  async deleteAllWorkingDrafts(ref: VersionRef): Promise<number> {
+    return this.db.delete(TABLE, {
+      and: [
+        ...this.docWhere(ref),
+        { column: "isAutosave", op: "=", value: false },
+        { column: "versionNo", op: "IS NULL" },
+        { column: "status", op: "=", value: "draft" },
+      ],
+    });
+  }
+
+  /**
    * Delete the working draft for a document in one locale, returning the number
    * of rows removed. Called when the draft is promoted (published) or discarded.
    */
