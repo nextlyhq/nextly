@@ -59,6 +59,25 @@ export interface EntryFormContextValue {
  * `documentId` is absent while a collection entry is being created, because
  * there is no document yet. A caller that must address one checks for it rather
  * than inventing a placeholder.
+ *
+ * ## Language is deliberately NOT here
+ *
+ * A document's identity is the same whichever language you are reading it in:
+ * `posts/abc123` in Spanish and in French is one document. Folding the active
+ * locale in would make this answer CHANGE as an author switches language, which
+ * is wrong for every consumer that only wanted to know which document it is —
+ * a related query, a link, a permission check — and convenient for the one that
+ * did want the locale.
+ *
+ * So a surface needing the active language gets its own reader beside this one
+ * rather than a widened `DocumentIdentity`. The admin already resolves it
+ * internally (`useEntryLocaleContext`, `useEditorLocale`); none of that is
+ * exported to plugins yet, and it becomes necessary when anything
+ * plugin-contributed stores something per-language.
+ *
+ * The same reasoning keeps versions out: what a recording is KEYED by —
+ * per author today, per document and locale later — is the versions layer's
+ * decision, made by mapping this identity onto its own scope.
  */
 export interface DocumentIdentity {
   kind: "collection" | "single";
