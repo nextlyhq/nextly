@@ -249,12 +249,19 @@ export class ReleasesRepository {
   }
 
   /**
-   * The nearest scheduled instant still in the future, or `null`.
+   * The earliest instant any SCHEDULED release takes effect, past or future,
+   * or `null` when no release is scheduled at all.
    *
    * Drives the cheap check that keeps the release lookup off the common read
-   * path: while `now` is before this, no document can be affected by anything.
+   * path. Deliberately NOT filtered to the future: a release whose time has
+   * passed but which nothing has materialised yet is affecting reads right
+   * now, and its instant is in the past — so a future-only answer would report
+   * "nothing pending" for precisely the case the lookup exists to catch.
+   *
+   * A release leaves `scheduled` when it materialises or is cancelled, so this
+   * returns `null` again once nothing is outstanding.
    */
-  async findEarliestPendingTransition(now: Date): Promise<Date | null> {
+  async findEarliestScheduledTransition(): Promise<Date | null> {
     const rows = await this.db.select<{ scheduledAt: Date | null }>(RELEASES, {
       columns: ["scheduledAt"],
       where: {
@@ -266,12 +273,7 @@ export class ReleasesRepository {
       orderBy: [{ column: "scheduledAt", direction: "asc" }],
     });
     for (const row of rows) {
-      if (
-        row.scheduledAt !== null &&
-        row.scheduledAt.getTime() > now.getTime()
-      ) {
-        return row.scheduledAt;
-      }
+      if (row.scheduledAt !== null) return row.scheduledAt;
     }
     return null;
   }
