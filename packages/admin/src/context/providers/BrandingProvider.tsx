@@ -66,6 +66,23 @@ export function useBranding(): AdminBranding {
 }
 
 /**
+ * What to call this product on screen.
+ *
+ * One implementation, because the answer is one decision: a screen that spells
+ * `branding.logoText ?? "Nextly"` for itself can disagree with the component
+ * beside it. The signed-out screens had that shape — the card supplied the
+ * logo's label while the screen supplied the sentence under it, so a change to
+ * either fallback made the two contradict each other on one page.
+ */
+export function useAppName(): string {
+  // `??` alone would let a configured-but-empty `logoText` through, and an
+  // empty name is worse than a default one: the sign-in line reads "Sign in to
+  // your  account" and the card passes `alt=""`, which strips the logo's
+  // accessible name rather than just looking odd.
+  return useBranding().logoText?.trim() || "Nextly";
+}
+
+/**
  * The admin-meta request's state, for readers that draw a conclusion from
  * something being MISSING from branding.
  *
