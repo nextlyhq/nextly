@@ -36,6 +36,7 @@ import { useEntryLocale } from "./EntryLocaleContext";
 import {
   languageState,
   languageStateLabel,
+  LANGUAGE_STATE_LABEL,
   StateDot,
   type LanguageState,
 } from "./LanguageControl";
@@ -125,20 +126,24 @@ function LanguageRow({
             rtl
           </span>
         )}
-        {/* The state is what gives way when the row runs out of room, so the
-            full phrase also rides in `title` for a sighted reader. Assistive
-            technology is unaffected either way: the truncation is CSS, and the
-            text stays whole in the accessibility tree. It is NOT repeated into
-            the Open button's name — that would bury what the button does
-            behind a state the row already states. */}
+        {/* A chip, not part of the state text, and measured that way: in a
+            277px rail "published · unpublished changes" truncated to
+            "publishe…", which hides the one fact in the row an author has to
+            act on. The chip does not shrink, so it survives at any width — the
+            same device the `default` and `rtl` markers already use. */}
+        {pendingChange && (
+          <span
+            className="shrink-0 rounded-sm border border-border px-1 text-[10px] uppercase tracking-wide text-foreground"
+            title="This language has changes that have not been published"
+          >
+            changes
+          </span>
+        )}
         <span
-          className={cn(
-            "min-w-0 truncate text-xs",
-            pendingChange ? "text-foreground" : "text-muted-foreground"
-          )}
+          className="min-w-0 truncate text-xs text-muted-foreground"
           title={languageStateLabel(state, pendingChange)}
         >
-          {languageStateLabel(state, pendingChange)}
+          {LANGUAGE_STATE_LABEL[state]}
         </span>
       </div>
       {isActive ? (

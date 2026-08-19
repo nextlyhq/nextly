@@ -280,11 +280,11 @@ describe("LanguagePanel", () => {
       },
     });
 
-    expect(
-      screen.getByTitle("published · unpublished changes")
-    ).toBeInTheDocument();
-    // And the language WITHOUT pending work still reads plainly — without this
-    // the assertion above would pass against a panel that marked every row.
-    expect(screen.getAllByTitle("published")).toHaveLength(1);
+    // The chip, not the state text: the phrase truncates in a 277px rail and
+    // this is the fact that must survive.
+    expect(screen.getByText("changes")).toBeInTheDocument();
+    // And the language WITHOUT pending work carries no chip — without this the
+    // assertion above would pass against a panel that marked every row.
+    expect(screen.getAllByText("changes")).toHaveLength(1);
   });
 });
