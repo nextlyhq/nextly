@@ -32,6 +32,13 @@ const MYSQL_URL = process.env.TEST_MYSQL_URL;
 // identifier, so interpolating it into DDL is not an injection surface.
 const DB_NAME = `nextly_mysql_expr_default_${randomBytes(16).toString("hex")}`;
 
+// `drizzle` is overloaded, so `ReturnType<typeof drizzle>` names a DIFFERENT
+// instantiation from the one this call produces and the two are unrelated
+// types. Naming the handle through the call itself keeps the annotation and
+// the value in step.
+const openDrizzle = (client: Pool) => drizzle({ client });
+type MysqlHandle = ReturnType<typeof openDrizzle>;
+
 const SOURCE_TABLE = "dc_expr_defaults";
 const REBUILT_TABLE = "dc_expr_defaults_rebuilt";
 
@@ -51,7 +58,7 @@ const SOURCE_DDL = `CREATE TABLE ${SOURCE_TABLE} (
 describe.skipIf(!MYSQL_URL)("MySQL expression-default rebuild", () => {
   let bootstrap: Pool;
   let pool: Pool;
-  let db: ReturnType<typeof drizzle>;
+  let db: MysqlHandle;
 
   beforeAll(async () => {
     bootstrap = createPool({ uri: MYSQL_URL });
@@ -59,7 +66,7 @@ describe.skipIf(!MYSQL_URL)("MySQL expression-default rebuild", () => {
     const url = new URL(MYSQL_URL as string);
     url.pathname = `/${DB_NAME}`;
     pool = createPool({ uri: url.toString() });
-    db = drizzle({ client: pool });
+    db = openDrizzle(pool);
     await pool.promise().query(SOURCE_DDL);
   });
 
