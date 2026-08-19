@@ -120,6 +120,17 @@ export {
  */
 export { useEntryFieldsPanel } from "./components/features/entries/EntryForm/EntryFormContext";
 /**
+ * The rich-text editor's nodes and theme, for a surface that must edit this
+ * site's rich text with the SAME node registry the field editor uses.
+ *
+ * A loader rather than the classes themselves: they carry Lexical and PrismJS,
+ * which belong behind a dynamic import — see the module for the measurement.
+ */
+export {
+  loadRichTextEditorKit,
+  type RichTextEditorKit,
+} from "./lib/rich-text/load-editor-kit";
+/**
  * A field telling the form it holds work the form's values do not contain.
  *
  * Exported for the plugin surface: a contributed field with its own editing

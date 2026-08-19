@@ -104,6 +104,32 @@ export { useReportUnsavedWork } from "@nextlyhq/admin";
 export { useEntryFieldsPanel } from "@nextlyhq/admin";
 
 /**
+ * Edit this site's rich text from your own surface (@experimental).
+ *
+ * Returns the node classes and theme the admin's own rich-text field uses, so a
+ * surface that renders rich text outside that field — the page builder's canvas
+ * is the first — registers the SAME nodes. Sharing the registry is not a nicety:
+ * Lexical recognises content by the identity of the classes that wrote it, and
+ * an editor built on a different set reads existing content as PLAIN TEXT,
+ * silently, at read time, on documents that already saved.
+ *
+ * ASYNC because the classes bring Lexical and PrismJS with them — a 630KB chunk
+ * that `@nextlyhq/admin` deliberately keeps behind a dynamic import. Awaiting it
+ * is what stops that weight reaching consumers who never open an editor.
+ *
+ * You still build the editor: this hands over the registry and the theme, not a
+ * mounted component, because where an editor mounts and how it is toolbarred is
+ * the surface's own business.
+ *
+ * @example
+ * ```ts
+ * const { nodes, theme } = await loadRichTextEditorKit();
+ * const editor = createEditor({ namespace: "canvas", nodes: [...nodes], theme });
+ * ```
+ */
+export { loadRichTextEditorKit, type RichTextEditorKit } from "@nextlyhq/admin";
+
+/**
  * Record a recovery point for the surrounding document (@experimental).
  *
  * For a contributed field that holds its own editing state — a canvas, a
