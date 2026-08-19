@@ -31,7 +31,10 @@ import { z } from "zod";
 import { singleSourceFetcher } from "@admin/components/features/entries/entry-locale-source";
 import { AutosaveRecoveryBanner } from "@admin/components/features/entries/EntryForm/AutosaveRecoveryBanner";
 import { EntryFormContent } from "@admin/components/features/entries/EntryForm/EntryFormContent";
-import { EntryFormContextProvider } from "@admin/components/features/entries/EntryForm/EntryFormContext";
+import {
+  EntryFormContextProvider,
+  hasPendingWorkingDraft,
+} from "@admin/components/features/entries/EntryForm/EntryFormContext";
 import { EntryFormProvider } from "@admin/components/features/entries/EntryForm/EntryFormProvider";
 import { EntryFormSidebar } from "@admin/components/features/entries/EntryForm/EntryFormSidebar";
 import { EntryFormToolbarSlots } from "@admin/components/features/entries/EntryForm/EntryFormToolbarSlots";
@@ -539,6 +542,15 @@ export function SingleForm({
         collectionSlug={schema.slug}
         entryId={document.id}
         isCreateMode={false}
+        // The same status the meta strip below shows, plus the pending-draft
+        // fact the strip does not yet surface for a Single. Carrying the richer
+        // answer rather than the strip's: "changed" means published with a
+        // pending change, so a field reading it says MORE than the strip rather
+        // than something different.
+        documentStatus={{
+          status: documentStatus,
+          hasWorkingDraft: hasPendingWorkingDraft(document),
+        }}
       >
         <EntryLocaleProvider value={localeCtx}>
           {/* Renders its child alone when there is no source — see the module. */}
