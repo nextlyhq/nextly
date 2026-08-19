@@ -60,10 +60,14 @@ function collectAdminSlotPaths(admin: PluginAdminContributions): string[] {
 }
 
 /**
- * Collect every admin `ComponentPath` an ENABLED plugin contributes (pages,
- * settings, per-collection views, header and schema-builder and form-toolbar
- * slots, and field-type editor components). Disabled plugins contribute no
- * behavior.
+ * Collect every admin `ComponentPath` a plugin contributes that the admin
+ * can resolve by string: pages, settings, per-collection views, header and
+ * schema-builder and form-toolbar slots, and field-type editor components.
+ * Behavioral UI (everything but field types) exists only for an ENABLED
+ * plugin; field-type editors are collected regardless, because a disabled
+ * plugin keeps its collections and their fields — admin-meta serializes
+ * their types for exactly that reason, and a retained field renders empty
+ * without its editor module.
  *
  * The set must stay a superset of what `buildPluginAdminMeta` exposes: the
  * browser resolves each of those strings through the component registry, and
@@ -73,9 +77,6 @@ function collectAdminSlotPaths(admin: PluginAdminContributions): string[] {
  * when admin-meta grows a path kind this collector has not learned.
  */
 export function collectAdminComponentPaths(plugin: PluginDefinition): string[] {
-  if (plugin.enabled === false) return [];
-  const admin = plugin.contributes?.admin;
-
   // Field-type editor components live under `contributes` rather than
   // `contributes.admin` because that is where a type is declared, but they
   // are admin components in every other sense: the entry form resolves the
@@ -88,7 +89,8 @@ export function collectAdminComponentPaths(plugin: PluginDefinition): string[] {
     fieldType => fieldType.component
   );
 
-  if (!admin) return fieldTypePaths;
+  const admin = plugin.contributes?.admin;
+  if (plugin.enabled === false || !admin) return fieldTypePaths;
 
   const paths = [...fieldTypePaths];
   for (const page of admin.pages ?? []) paths.push(page.component);

@@ -267,7 +267,11 @@ describe("field-type and slot components", () => {
     expect(collectAdminComponentPaths(p)).toEqual(["@acme/x/admin#LegacySlot"]);
   });
 
-  it("skips a disabled plugin's field types and slots", () => {
+  it("keeps a disabled plugin's field-type editors but drops its slots", () => {
+    // admin-meta serializes fieldTypes regardless of enabled state — a
+    // disabled plugin keeps its collections and their fields, so their
+    // editors still mount and still need their modules imported. Behavioral
+    // UI (pages, settings, slots) is withheld for a disabled plugin.
     const p = {
       name: "@acme/x",
       version: "1.0.0",
@@ -281,7 +285,7 @@ describe("field-type and slot components", () => {
       },
     } as unknown as PluginDefinition;
 
-    expect(collectAdminComponentPaths(p)).toEqual([]);
+    expect(collectAdminComponentPaths(p)).toEqual(["@x/admin#Rating"]);
   });
 });
 
@@ -329,6 +333,48 @@ describe("parity with the admin-meta surface", () => {
       ...collectAdminComponentPaths(p),
       ...collectBlockEditorComponentPaths([p]),
     ]);
+    for (const path of exposed) {
+      expect(collected.has(path)).toBe(true);
+    }
+  });
+
+  it("covers a disabled plugin too, whose meta keeps its field types", () => {
+    // admin-meta withholds a disabled plugin's behavioral UI but still
+    // serializes its field types (retained collections keep rendering their
+    // fields), so the collector must import those editors or the fields of a
+    // disabled plugin render empty.
+    const p = {
+      name: "@acme/off",
+      version: "1.0.0",
+      nextly: "*",
+      enabled: false,
+      contributes: {
+        fieldTypes: [
+          {
+            type: "rating",
+            storage: "json",
+            component: "@acme/off/admin#Rating",
+          },
+        ],
+        admin: {
+          pages: [{ path: "reports", component: "@acme/off/admin#Reports" }],
+          schemaBuilderSlot: "@acme/off/admin#SchemaSlot",
+        },
+      },
+    } as unknown as PluginDefinition;
+
+    const meta = buildPluginAdminMeta([p], undefined);
+    const exposed = [
+      ...(JSON.stringify(meta).match(/"[^"]*#[^"]*"/g) ?? []),
+    ].map(s => JSON.parse(s));
+
+    // Positive controls: the meta still carries the field type and withholds
+    // the page and slot — otherwise the assertions below prove nothing.
+    expect(exposed).toContain("@acme/off/admin#Rating");
+    expect(exposed).not.toContain("@acme/off/admin#Reports");
+    expect(exposed).not.toContain("@acme/off/admin#SchemaSlot");
+
+    const collected = new Set(collectAdminComponentPaths(p));
     for (const path of exposed) {
       expect(collected.has(path)).toBe(true);
     }
