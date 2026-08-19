@@ -1,0 +1,121 @@
+"use client";
+
+import {
+  hasBlock,
+  registerBlocks,
+  registryNestingSource,
+} from "@nextlyhq/blocks-engine";
+import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
+import { registrySlotSource } from "@nextlyhq/builder";
+import {
+  Canvas,
+  DropIndicator,
+  useCanvasDrag,
+  useEditorState,
+} from "@nextlyhq/builder/shell";
+import { useMemo } from "react";
+
+// The design system's sheet FIRST, then the editor's, which supplements it —
+// the same order and the same reason as the shell harness: the editor's sheet
+// ships neither the `--nx-*` tokens nor the base reset, because the host owns
+// both and a second copy would make the result depend on which one won.
+import "@nextlyhq/ui/styles.css";
+import "@nextlyhq/builder/styles.css";
+
+import { canvasHarnessDocument } from "./seed";
+
+const HARNESS_SOURCE = "e2e-canvas-harness";
+
+/**
+ * The canvas, mounted for real, so a browser can drive it.
+ *
+ * SEPARATE from the shell harness on purpose. That route's slots are inert by
+ * decision — its own docblock says "anything interactive here would be testing
+ * the harness rather than the shell" — and its twenty-seven passing tests
+ * measure the shell's geometry against markers. Mounting a live canvas into it
+ * would put a moving, scrolling, drag-handling surface inside the box those
+ * tests measure, so the two harnesses would share a failure mode with nothing
+ * naming which one broke.
+ *
+ * So the shell keeps its markers and this route mounts the real thing: `Canvas`
+ * with `useCanvasDrag`, over a document with the neighbours the drop rules
+ * actually turn on. No shell chrome at all — the rail, panels and top bar are
+ * the shell's subject, not the canvas's, and a canvas that fills the viewport
+ * is the one a pointer test can reach every edge of.
+ *
+ * What this harness must NOT do is compute anything the canvas computes. It
+ * seeds a document and renders the editor's own components; every threshold,
+ * every drop decision and every indicator position comes from the engine under
+ * test. A harness that positioned its own indicator would certify itself.
+ */
+export function BuilderCanvasHarness() {
+  /*
+   * Register the core blocks before anything reads the registry.
+   *
+   * Only the ones missing, and through the same guarded call the production
+   * host uses: the registry is process-wide, so a second unconditional
+   * registration throws on a dev-server hot reload where the module is
+   * re-evaluated but the registry survives.
+   */
+  useMemo(() => {
+    const missing = coreBlocks.filter(block => !hasBlock(block.name));
+    if (missing.length > 0) registerBlocks(missing, { source: HARNESS_SOURCE });
+  }, []);
+
+  const initialDocument = useMemo(() => canvasHarnessDocument(), []);
+  const editor = useEditorState({ initialDocument });
+
+  /*
+   * Both drop questions answered by the SAME registry the inserter reads, which
+   * is the production wiring rather than a harness shortcut. Given separate
+   * sources, a container the palette would insert into and a container a drag
+   * may aim at could disagree — and a suite built on the disagreement would
+   * certify the wrong rule.
+   */
+  const slots = useMemo(() => registrySlotSource(), []);
+  const nesting = useMemo(() => registryNestingSource(), []);
+  const drag = useCanvasDrag({ editor, slots, nesting });
+
+  /*
+   * The site sheet the published route passes. Empty breakpoint sets: this
+   * fixture asserts nothing responsive, and a breakpoint here would make the
+   * canvas's own width one more thing a drop coordinate depends on.
+   */
+  const siteStyles = useMemo(
+    () => ({ breakpoints: { viewport: [], container: [] } }),
+    []
+  );
+
+  return (
+    <div
+      data-testid="canvas-harness"
+      /*
+       * A fixed, non-viewport height with its own scroll, because autoscroll is
+       * one of the properties under test and it engages on the canvas's
+       * scrollable box. A canvas sized to the window would make the test depend
+       * on the browser's own scrolling instead.
+       */
+      style={{ height: "100vh", overflow: "auto" }}
+      /*
+       * Reported rather than asserted here: the drag's live state, so a test can
+       * read what the ENGINE decided instead of inferring it from pixels. A
+       * property about which target is active is otherwise only observable
+       * through the indicator's position, which is a second derivation of the
+       * same fact and fails for a different reason than the rule it stands in
+       * for.
+       */
+      data-nx-dragging={drag.draggingId ?? ""}
+      data-nx-drop-target={drag.target ? JSON.stringify(drag.target) : ""}
+    >
+      <Canvas
+        document={editor.document}
+        siteStyles={siteStyles}
+        selectedId={editor.selectedId}
+        selectedIds={editor.selection.ids}
+        onSelect={editor.select}
+        dragHandlers={drag.handlers}
+        overlay={<DropIndicator target={drag.target} />}
+      />
+    </div>
+  );
+}

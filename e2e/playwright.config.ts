@@ -125,6 +125,10 @@ export default defineConfig({
       // reason: a dev-only route under `src/app/` is otherwise reachable in
       // `pnpm dev:app` and indistinguishable from product.
       NEXTLY_E2E_SHELL_HARNESS: "1",
+      // The canvas harness route. Separate from the shell's because the two
+      // harnesses are deliberately different: the shell's slots are inert
+      // markers, and this one mounts the real canvas so a pointer can drive it.
+      NEXTLY_E2E_CANVAS_HARNESS: "1",
     },
   },
 
