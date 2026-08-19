@@ -28,6 +28,13 @@ export interface UseDiscardWorkingDraftOptions {
   collectionSlug: string;
   /** The entry whose working draft is being discarded. */
   entryId: string;
+  /**
+   * Which language's pending change to discard. A localized document holds one
+   * per language, so discarding without naming one would throw away a language
+   * the author never opened. Absent for an unlocalized collection, and for the
+   * default language, which the editor addresses without naming it.
+   */
+  locale?: string | null;
   /** Callback fired on a successful discard, with the live published document. */
   onSuccess?: (data: DiscardWorkingDraftResponse) => void;
   /** Callback fired on error. */
@@ -39,6 +46,7 @@ export interface UseDiscardWorkingDraftOptions {
 export function useDiscardWorkingDraft({
   collectionSlug,
   entryId,
+  locale,
   onSuccess,
   onError,
   showToast = true,
@@ -47,11 +55,14 @@ export function useDiscardWorkingDraft({
 
   return useMutation<DiscardWorkingDraftResponse, Error, void>({
     mutationFn: () =>
-      versionApi.discardWorkingDraft({
-        kind: "collection",
-        slug: collectionSlug,
-        entryId,
-      }),
+      versionApi.discardWorkingDraft(
+        {
+          kind: "collection",
+          slug: collectionSlug,
+          entryId,
+        },
+        locale
+      ),
 
     onSuccess: data => {
       // Seed the authoritative live row the discard returned into every scoped

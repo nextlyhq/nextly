@@ -59,15 +59,48 @@ describe("useDiscardWorkingDraft", () => {
 
     await result.current.mutateAsync();
 
-    expect(discardSpy).toHaveBeenCalledWith({
-      kind: "collection",
-      slug: "posts",
-      entryId: "e1",
-    });
+    // No locale named: the caller is an unlocalized collection, or the default
+    // language, which the editor addresses without naming it.
+    expect(discardSpy).toHaveBeenCalledWith(
+      {
+        kind: "collection",
+        slug: "posts",
+        entryId: "e1",
+      },
+      undefined
+    );
     expect(invalidateSpy).toHaveBeenCalledWith({
       queryKey: entryKeys.detail("posts", "e1"),
     });
     expect(toastSuccessSpy).toHaveBeenCalledWith("Working draft discarded");
+  });
+
+  it("names the language whose pending change is being discarded", async () => {
+    // A localized document holds one pending change per language. Dropping the
+    // locale here would discard the default language's, which is neither the
+    // one the author is looking at nor one they asked about.
+    const client = makeClient();
+    discardSpy.mockResolvedValue({
+      message: "Working draft discarded.",
+      item: { id: "e1", status: "published" },
+    });
+
+    const { result } = renderHook(
+      () =>
+        useDiscardWorkingDraft({
+          collectionSlug: "posts",
+          entryId: "e1",
+          locale: "es",
+        }),
+      { wrapper: makeWrapper(client) }
+    );
+
+    await result.current.mutateAsync();
+
+    expect(discardSpy).toHaveBeenCalledWith(
+      { kind: "collection", slug: "posts", entryId: "e1" },
+      "es"
+    );
   });
 
   it("toasts the error and does not invalidate on failure", async () => {

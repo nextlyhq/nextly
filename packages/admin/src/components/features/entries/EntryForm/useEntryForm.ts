@@ -478,6 +478,10 @@ export function useEntryForm({
   const discardMutation = useDiscardWorkingDraft({
     collectionSlug: collection.name,
     entryId: entry?.id ?? "",
+    // The editor discards the language it is showing. Without this a localized
+    // document's discard falls to the default language, throwing away a pending
+    // change the author is not looking at and leaving the one they are.
+    locale,
   });
 
   // Singular label for UI
