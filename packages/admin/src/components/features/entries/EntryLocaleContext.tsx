@@ -102,15 +102,35 @@ export interface EntryLocaleContextValue {
   };
 }
 
-const EntryLocaleContext = createContext<EntryLocaleContextValue>({
+/**
+ * What a reader sees with no provider above it: an unlocalized, left-to-right
+ * editor. Kept as a value rather than as the context's default so that "no
+ * provider" and "a provider describing an unlocalized document" stay
+ * distinguishable — they are the same answer for rendering a field, and a
+ * different answer for a caller asking whether the locale is KNOWN.
+ */
+const NO_LOCALE_CONTEXT: EntryLocaleContextValue = {
   rtl: false,
   collectionLocalized: false,
   isNonDefaultLocale: false,
-});
+};
+
+const EntryLocaleContext = createContext<EntryLocaleContextValue | null>(null);
 
 export const EntryLocaleProvider = EntryLocaleContext.Provider;
 
 /** Read the active content-locale context (defaults to LTR / no locale / non-localized). */
 export function useEntryLocale(): EntryLocaleContextValue {
+  return useContext(EntryLocaleContext) ?? NO_LOCALE_CONTEXT;
+}
+
+/**
+ * The active content-locale context, or `null` when no provider supplies one.
+ *
+ * For callers that must not answer at all rather than answer with the defaults:
+ * an embedded quick-edit renders fields with no locale provider above them, and
+ * reporting "unlocalized" there would describe a localized collection wrongly.
+ */
+export function useOptionalEntryLocale(): EntryLocaleContextValue | null {
   return useContext(EntryLocaleContext);
 }

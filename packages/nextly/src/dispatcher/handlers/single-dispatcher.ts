@@ -65,7 +65,10 @@ import type { SingleEntryService } from "../../domains/singles/services/single-e
 import type { SingleMetadataService } from "../../domains/singles/services/single-metadata-service";
 import type { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
 import { resolveBuilderVersions } from "../../domains/versions/builder-versions";
-import { schemaDraftsEnabled } from "../../domains/versions/draft-split-eligibility";
+import {
+  draftSplitResponseFields,
+  schemaDraftSplit,
+} from "../../domains/versions/draft-split-eligibility";
 import { resolveBuilderWebhooks } from "../../domains/webhooks/builder-webhooks";
 import { NextlyError } from "../../errors";
 import { transformRichTextFields } from "../../lib/field-transform";
@@ -907,11 +910,11 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // the live document is overwritten. Derived from the ORIGINAL fields, not
       // the enriched ones, because enrichment drops the markers component
       // eligibility reads.
-      const draftsEnabled = await schemaDraftsEnabled({
+      const draftSplit = await schemaDraftSplit({
         status: (single as { status?: boolean }).status,
         versions: single.versions,
-        localized: (single as { localized?: boolean }).localized,
         fields: single.fields,
+        slug: (single as { slug?: string }).slug,
       });
 
       // The schema record IS the doc here, so the admin Schema Builder
@@ -921,7 +924,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         ...injectSingleDefaultFields(
           enrichedData as unknown as SingleWithFields
         ),
-        draftsEnabled,
+        ...draftSplitResponseFields(draftSplit),
       });
     },
   },

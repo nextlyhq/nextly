@@ -13,9 +13,29 @@
 
 import { createContext, useContext, useMemo, type ReactNode } from "react";
 
+import { useOptionalEntryLocale } from "../EntryLocaleContext";
+
 // ============================================================================
 // Types
 // ============================================================================
+
+/**
+ * Which language a field's surrounding document is being edited in.
+ *
+ * FACTS about the active language, not a rendering decision. `code` is `null`
+ * for the app's default language, which is how the rest of the admin addresses
+ * it — an absent `?locale=` means the default.
+ */
+export interface DocumentLocale {
+  /** The active content locale, or `null` for the app default. */
+  code: string | null;
+  /** Whether the document itself is localized at all. */
+  documentLocalized: boolean;
+  /** Whether the active language IS the app default. */
+  isDefaultLocale: boolean;
+  /** Whether the active language is written right-to-left. */
+  rtl: boolean;
+}
 
 export interface EntryFormContextValue {
   /**
@@ -352,4 +372,38 @@ export function useDocumentIdentity(): DocumentIdentity | null {
  */
 export function useDocumentStatus(): DocumentStatus | null {
   return useContext(EntryFormContext)?.documentStatus ?? null;
+}
+
+/**
+ * Which language the surrounding form is editing, or `null` when nothing knows.
+ *
+ * Separate from {@link useDocumentIdentity} rather than folded into it, because
+ * they answer about different things: a document's identity is the same
+ * whichever language you read it in. Widening the identity would make every
+ * consumer of it re-render on a language switch that changed nothing they read.
+ *
+ * `null` has one meaning — the language is not knowable here. That covers a
+ * field outside any form, and a field inside one that carries no locale
+ * context: an embedded quick-edit renders fields without one, and answering
+ * "unlocalized" there would describe a localized collection wrongly.
+ *
+ * @example
+ * ```tsx
+ * const locale = useDocumentLocale();
+ * // A per-language surface has nothing to key on until the language is known.
+ * const key = locale ? `${locale.code ?? "default"}` : null;
+ * ```
+ */
+export function useDocumentLocale(): DocumentLocale | null {
+  const form = useContext(EntryFormContext);
+  const locale = useOptionalEntryLocale();
+  if (!form || !locale) return null;
+  return {
+    // `undefined` on the context means the app default is in use; `null` is the
+    // same fact spelled so a consumer can hold it in a key or a query param.
+    code: locale.locale ?? null,
+    documentLocalized: locale.collectionLocalized,
+    isDefaultLocale: !locale.isNonDefaultLocale,
+    rtl: locale.rtl,
+  };
 }

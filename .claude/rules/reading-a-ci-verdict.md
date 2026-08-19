@@ -102,6 +102,31 @@ node scripts/check-comment-convention.mjs > out.log 2>&1; echo "EXIT=$?"
 An unavailable answer must never read as a passing one, and neither must an
 answer whose status you did not look at.
 
+**A redirect is not safe BECAUSE it is a redirect — it is safe because the
+status is read on the next line.** Redirecting to `/dev/null` destroys the
+verdict exactly as a pipe does, and the silence that follows is
+indistinguishable from success. Measured here: a lane ran
+`pnpm install --frozen-lockfile > /dev/null 2>&1` after a cherry-pick and never
+read `$?`. The install FAILED at that moment and said so, into `/dev/null`.
+
+So the property to hold is not "redirect rather than pipe". It is that **both
+halves of a command's answer — its output and its exit status — reach a
+reader**, and each can be lost independently:
+
+| what you wrote                       | output    | status             | why it reads as clean                          |
+| ------------------------------------ | --------- | ------------------ | ---------------------------------------------- |
+| `cmd \| tail -60`                    | truncated | `tail`'s, always 0 | the tail of a failing run looks like a summary |
+| `cmd > /dev/null 2>&1`               | discarded | available, unread  | nothing is printed, so nothing looks wrong     |
+| `cmd > out.log 2>&1`                 | kept      | available, unread  | the log is on disk and nobody opens it         |
+| `cmd > out.log 2>&1; echo "EXIT=$?"` | kept      | READ               | —                                              |
+
+Only the last row answers. `| tail` is worth naming separately, because it is
+written for readability rather than to discard anything and it loses BOTH halves
+at once: the output a caller needs is cut off, and the status belongs to `tail`.
+Measured while writing this section: a unit run reporting 360 failures came back
+through `| tail -60` as `exited with code 0`, with 31 of its 32 failing files
+missing from what the reader saw.
+
 **Requiring `success` from a FIXED list is the obvious form and it is wrong
 here**, because some skips are the pipeline working. `ci.yml`'s first job
 decides what the commit can affect and publishes an `inert` output, and

@@ -24,12 +24,15 @@ vi.mock("../../../di", () => ({
 }));
 
 import type { FieldConfig } from "../../../collections/fields/types";
-import { schemaDraftsEnabled } from "../draft-split-eligibility";
+import {
+  resetUnresolvableComponentReports,
+  schemaDraftSplit,
+  schemaDraftsEnabled,
+} from "../draft-split-eligibility";
 
 const draftsCollection = (fields: FieldConfig[]) => ({
   status: true,
   versions: { drafts: { enabled: true } },
-  localized: false,
   fields,
 });
 
@@ -90,10 +93,56 @@ describe("schemaDraftsEnabled", () => {
       schemaDraftsEnabled({
         status: true,
         versions: null,
-        localized: false,
         fields: componentFields,
       })
     ).resolves.toBe(false);
     expect(getComponentBySlugSpy).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A component slug resolves against the database, so an unresolvable one cannot
+ * be reported when the configuration is first read. It is reported on the first
+ * schema read that discovers it, and not again, so a request path does not
+ * repeat one line of configuration advice on every read.
+ */
+describe("schemaDraftSplit's unresolvable-component report", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetUnresolvableComponentReports();
+  });
+
+  it("names the entity and the component, once", async () => {
+    // No record behind the slug is what marks a component unresolved.
+    getComponentBySlugSpy.mockResolvedValue(null);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const collection = { ...draftsCollection(componentFields), slug: "posts" };
+    const first = await schemaDraftSplit(collection);
+    await schemaDraftSplit(collection);
+
+    expect(first).toEqual({
+      eligible: false,
+      reason: "unresolvable-component",
+      componentSlug: "hero",
+    });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toContain("posts");
+    expect(warn.mock.calls[0]?.[0]).toContain("hero");
+    warn.mockRestore();
+  });
+
+  it("says nothing about a collection whose components all resolve", async () => {
+    getComponentBySlugSpy.mockResolvedValue({ fields: [], localized: false });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const result = await schemaDraftSplit({
+      ...draftsCollection(componentFields),
+      slug: "posts",
+    });
+
+    expect(result.eligible).toBe(true);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
   });
 });
