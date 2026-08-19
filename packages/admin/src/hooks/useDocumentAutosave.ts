@@ -17,13 +17,15 @@
  * @module hooks/useDocumentAutosave
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect } from "react";
 import type { UseFormReturn } from "react-hook-form";
 
+import {
+  useSnapshotAutosave,
+  type AutosaveStatus,
+  DEFAULT_AUTOSAVE_DEBOUNCE_MS,
+} from "@admin/hooks/useSnapshotAutosave";
 import { versionApi, type VersionScope } from "@admin/services/versionApi";
-
-/** How long to wait after the last keystroke before recording. */
-const DEFAULT_DEBOUNCE_MS = 2000;
 
 /**
  * The document to record against, or `null` when there is not one yet.
@@ -54,7 +56,14 @@ export function autosaveScopeFor(
     : { kind: "collection", slug, entryId: documentId };
 }
 
-export type AutosaveStatus = "idle" | "saving" | "saved" | "error";
+/**
+ * Re-exported so the indicators that read it keep one import.
+ *
+ * The vocabulary belongs to the recording machinery rather than to this
+ * adapter: a second editor showing a different set of words for the same four
+ * states is the drift the split exists to prevent.
+ */
+export type { AutosaveStatus };
 
 export interface UseDocumentAutosaveOptions {
   /**
@@ -104,78 +113,41 @@ export function useDocumentAutosave({
   scope,
   form,
   locale = null,
-  debounceMs = DEFAULT_DEBOUNCE_MS,
+  debounceMs = DEFAULT_AUTOSAVE_DEBOUNCE_MS,
   enabled = true,
 }: UseDocumentAutosaveOptions): UseDocumentAutosaveResult {
-  const [status, setStatus] = useState<AutosaveStatus>("idle");
-  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
+  /*
+   * The snapshot, read at flush time rather than captured when the recording
+   * was scheduled.
+   *
+   * `getValues()` reads what the form holds right now, and deliberately not
+   * `handleSubmit`. Submitting runs validation and REFUSES on a failure, so a
+   * recovery point would exist only for work that was already valid — which is
+   * the opposite of what a recovery point is for. Half-finished input is
+   * exactly what is worth not losing.
+   */
+  const save = useCallback(async () => {
+    if (!scope) throw new Error("autosave: no scope");
+    return versionApi.saveAutosave(scope, form.getValues(), locale);
+  }, [scope, form, locale]);
 
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const inFlightRef = useRef(false);
-  // Set when an edit arrives while a recording is still in flight. The values
-  // that edit produced would otherwise be lost: the timer for them has already
-  // fired, and no further keystroke is guaranteed to arrive to schedule another.
-  const pendingRef = useRef(false);
-  const mountedRef = useRef(true);
+  /*
+   * The identity the core keys a pending recording to.
+   *
+   * Built from the scope's own fields rather than passing the object: the core
+   * compares identity for change, and an object rebuilt each render would look
+   * like a different document every time.
+   */
+  const identity = scope
+    ? `${scope.kind}:${scope.slug}:${"entryId" in scope ? scope.entryId : scope.documentId}:${locale ?? ""}`
+    : null;
 
-  // Read through refs inside the debounced callback rather than captured as
-  // dependencies. The callback is created once per subscription, and closing
-  // over these would pin the values they held when the subscription was set up.
-  const scopeRef = useRef(scope);
-  const localeRef = useRef(locale);
-  const enabledRef = useRef(enabled);
-  scopeRef.current = scope;
-  localeRef.current = locale;
-  enabledRef.current = enabled;
-
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
-
-  const flush = useCallback(async () => {
-    const target = scopeRef.current;
-    if (!target || !enabledRef.current) return;
-
-    if (inFlightRef.current) {
-      pendingRef.current = true;
-      return;
-    }
-
-    inFlightRef.current = true;
-    if (mountedRef.current) setStatus("saving");
-
-    try {
-      // `getValues()` reads what the form holds right now, and deliberately not
-      // `handleSubmit`. Submitting runs validation and REFUSES on a failure, so
-      // a recovery point would exist only for work that was already valid --
-      // which is the opposite of what a recovery point is for. Half-finished
-      // input is exactly what is worth not losing.
-      const response = await versionApi.saveAutosave(
-        target,
-        form.getValues(),
-        localeRef.current
-      );
-
-      if (mountedRef.current) {
-        setLastSavedAt(new Date(response.updatedAt));
-        setStatus("saved");
-      }
-    } catch {
-      // Swallowed deliberately, and reported through `status` rather than
-      // thrown. A recovery point nobody asked for must not surface an error
-      // over the editor or interrupt typing; the next debounce tries again.
-      if (mountedRef.current) setStatus("error");
-    } finally {
-      inFlightRef.current = false;
-      if (pendingRef.current) {
-        pendingRef.current = false;
-        void flush();
-      }
-    }
-  }, [form]);
+  const { status, lastSavedAt, schedule } = useSnapshotAutosave({
+    identity,
+    save,
+    debounceMs,
+    enabled,
+  });
 
   useEffect(() => {
     if (!enabled || !scope) return;
@@ -183,40 +155,31 @@ export function useDocumentAutosave({
     const subscription = form.subscribe({
       formState: { values: true, isDirty: true },
       callback: ({ isDirty }) => {
-        // Record only while the editor holds uncommitted changes.
-        //
-        // The discriminator is the dirty flag rather than the update's `type`.
-        // `type` carries a DOM event name and is populated only when the change
-        // came from a registered input's own handler: measured here, both
-        // `setValue` and `reset` report it as `undefined`, so keying on
-        // `"change"` would silently stop recording for every field that updates
-        // programmatically, which is most non-text controls.
-        //
-        // Dirty also answers the case that motivated the filter. Loading a
-        // document calls `reset`, which installs the loaded values as the new
-        // defaults and leaves the form clean, so the page opening records
-        // nothing. And it is the same condition the unsaved-changes guard uses,
-        // so the two cannot disagree about whether there is work at risk.
+        /*
+         * Record only while the editor holds uncommitted changes.
+         *
+         * The discriminator is the dirty flag rather than the update's `type`.
+         * `type` carries a DOM event name and is populated only when the change
+         * came from a registered input's own handler: measured here, both
+         * `setValue` and `reset` report it as `undefined`, so keying on
+         * `"change"` would silently stop recording for every field that updates
+         * programmatically, which is most non-text controls.
+         *
+         * Dirty also answers the case that motivated the filter. Loading a
+         * document calls `reset`, which installs the loaded values as the new
+         * defaults and leaves the form clean, so the page opening records
+         * nothing. And it is the same condition the unsaved-changes guard uses,
+         * so the two cannot disagree about whether there is work at risk.
+         */
         if (!isDirty) return;
-
-        if (timerRef.current) clearTimeout(timerRef.current);
-        timerRef.current = setTimeout(() => {
-          void flush();
-        }, debounceMs);
+        schedule();
       },
     });
 
-    return () => {
-      subscription();
-      if (timerRef.current) {
-        clearTimeout(timerRef.current);
-        timerRef.current = null;
-      }
-    };
+    return subscription;
     // `scope` participates through its identity fields: a different document
     // needs a different subscription, and comparing the object itself would
     // resubscribe on every render.
-  }, [form, flush, debounceMs, enabled, scope?.kind, scope?.slug, scope]);
-
+  }, [form, schedule, enabled, scope?.kind, scope?.slug, scope]);
   return { status, lastSavedAt };
 }
