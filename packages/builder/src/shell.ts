@@ -165,6 +165,28 @@ export { DropIndicator, useCanvasDrag } from "./canvas-drag";
 export { useInlineText, EDITING_ATTRIBUTE } from "./use-inline-text";
 export type { InlineTextEditing, UseInlineTextResult } from "./use-inline-text";
 export { inlineTargets, inlineTarget, inlineTextOp } from "./inline-text";
+/**
+ * The first-run checklist: what an author has not done on this page yet.
+ *
+ * Every step is DERIVED from the document rather than tracked, so it describes
+ * the page rather than a person's history with it.
+ */
+export {
+  OnboardingChecklist,
+  useBuilderChecklist,
+  CHECKLIST_STORAGE_KEY,
+} from "./onboarding-checklist";
+export type {
+  OnboardingChecklistProps,
+  UseBuilderChecklistOptions,
+  UseBuilderChecklistResult,
+} from "./onboarding-checklist";
+export {
+  builderChecklist,
+  checklistComplete,
+  checklistDoneCount,
+} from "./onboarding";
+export type { ChecklistStep } from "./onboarding";
 export type { InlineTextTarget } from "./inline-text";
 export type {
   CanvasDrag,
