@@ -37,6 +37,7 @@ jobs:
           scopes: |
             nextly
             admin
+            admin-css
             client
             ui
             adapter-postgres
@@ -56,6 +57,7 @@ jobs:
             create-nextly-app
             eslint-config
             eslint-plugin
+            module-specifiers
             prettier-config
             tsconfig
             telemetry

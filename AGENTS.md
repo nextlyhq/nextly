@@ -251,17 +251,16 @@ Before editing a package, read its README.md and check for a nested AGENTS.md.
 - Conventional Commits: commitlint (husky) checks the FORMAT; the PR-title
   check is what enforces the scope LIST below (commitlint extends
   config-conventional only, so it accepts any scope).
-  Allowed PR scopes are package-based (`nextly`, `admin`, `ui`,
+  Allowed PR scopes are package-based (`nextly`, `admin`, `admin-css`, `ui`,
   `adapter-postgres`, `adapter-mysql`, `adapter-sqlite`, `adapter-drizzle`,
   `storage-s3`, `storage-vercel-blob`, `storage-uploadthing`,
   `plugin-form-builder`, `plugin-page-builder`, `plugin-seo`, `plugin-sdk`,
   `blocks-engine`, `blocks-react`, `builder`,
-  `create-nextly-app`, `eslint-config`, `eslint-plugin`, `prettier-config`, `tsconfig`,
+  `create-nextly-app`, `eslint-config`, `eslint-plugin`, `module-specifiers`,
+  `prettier-config`, `tsconfig`,
   `telemetry`, `client`) plus `playground`, `root`, `ci`, `docs`, `deps`,
   `release`. Scope is optional; the subject must not start with an uppercase
-  letter. Subsystem names are not valid scopes. Packages currently without an
-  accepted scope (`admin-css`, `module-specifiers`) get scoped to the nearest
-  listed package until that gap is closed.
+  letter. Subsystem names are not valid scopes.
 - Errors thrown inside `packages/nextly/**` PRODUCT CODE use `NextlyError`
   (static factories: `notFound`, `forbidden`, `validation`, `conflict`,
   `duplicate`, `authRequired`, `invalidCredentials`, `rateLimited`,
