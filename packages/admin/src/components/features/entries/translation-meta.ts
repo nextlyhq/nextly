@@ -18,6 +18,14 @@
 export interface LocaleTranslationMeta {
   translated: boolean;
   status?: string;
+  /**
+   * Whether this language holds a saved change nobody has published.
+   *
+   * Separate from `status` because it answers a different question: `status`
+   * says what the language IS, this says whether something is waiting. Absent
+   * rather than false when there is nothing pending, matching the wire shape.
+   */
+  pendingChange?: boolean;
 }
 
 export interface TranslationCounts {
@@ -92,6 +100,25 @@ export function languageState(
   if (meta.status === "published") return "published";
   if (meta.status === "draft") return "draft";
   return "translated";
+}
+
+/**
+ * How a language's state reads to a person, including whether work is waiting.
+ *
+ * The pending change is appended rather than replacing the state: the language
+ * IS still published, and saying only "unpublished changes" would suggest
+ * nothing of it is live. Both facts matter and they are different facts.
+ *
+ * One function because four surfaces describe a language — the header control,
+ * this panel, its menu, and the list's dots — and a second phrasing would let
+ * two of them describe the same language differently.
+ */
+export function languageStateLabel(
+  state: LanguageState,
+  pendingChange?: boolean
+): string {
+  const base = LANGUAGE_STATE_LABEL[state];
+  return pendingChange ? `${base} · unpublished changes` : base;
 }
 
 export const LANGUAGE_STATE_LABEL: Record<LanguageState, string> = {

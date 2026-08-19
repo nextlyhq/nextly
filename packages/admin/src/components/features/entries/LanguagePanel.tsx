@@ -25,6 +25,7 @@
  */
 
 import { Button } from "@nextlyhq/ui";
+import { useState } from "react";
 
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { cn } from "@admin/lib/utils";
@@ -34,10 +35,11 @@ import { CopyFromLanguageDialog } from "./CopyFromLanguageDialog";
 import { useEntryLocale } from "./EntryLocaleContext";
 import {
   languageState,
-  LANGUAGE_STATE_LABEL,
+  languageStateLabel,
   StateDot,
   type LanguageState,
 } from "./LanguageControl";
+import { PublishAllConfirmDialog } from "./PublishAllConfirmDialog";
 import {
   translationCounts,
   type LocaleTranslationMeta,
@@ -75,6 +77,7 @@ function LanguageRow({
   rtl,
   isDefault,
   state,
+  pendingChange,
   isActive,
   canSeed,
   onSelect,
@@ -86,6 +89,8 @@ function LanguageRow({
   rtl: boolean;
   isDefault: boolean;
   state: LanguageState;
+  /** Whether this language holds a saved change nobody has published. */
+  pendingChange?: boolean;
   isActive: boolean;
   canSeed: boolean;
   onSelect?: (code: string, options?: { seedFrom?: string }) => void;
@@ -120,8 +125,20 @@ function LanguageRow({
             rtl
           </span>
         )}
-        <span className="min-w-0 truncate text-xs text-muted-foreground">
-          {LANGUAGE_STATE_LABEL[state]}
+        {/* The state is what gives way when the row runs out of room, so the
+            full phrase also rides in `title` for a sighted reader. Assistive
+            technology is unaffected either way: the truncation is CSS, and the
+            text stays whole in the accessibility tree. It is NOT repeated into
+            the Open button's name — that would bury what the button does
+            behind a state the row already states. */}
+        <span
+          className={cn(
+            "min-w-0 truncate text-xs",
+            pendingChange ? "text-foreground" : "text-muted-foreground"
+          )}
+          title={languageStateLabel(state, pendingChange)}
+        >
+          {languageStateLabel(state, pendingChange)}
         </span>
       </div>
       {isActive ? (
@@ -181,6 +198,7 @@ export function LanguagePanel({
   actionsDisabled = false,
   className,
 }: LanguagePanelProps) {
+  const [confirmPublishAll, setConfirmPublishAll] = useState(false);
   const { enabled, locales, defaultLocale } = useLocalization();
   const { collectionLocalized, isNonDefaultLocale, onEnterTranslationMode } =
     useEntryLocale();
@@ -198,6 +216,12 @@ export function LanguagePanel({
   if (!enabled || !collectionLocalized || locales.length < 2) return null;
 
   const active = activeLocale ?? defaultLocale;
+  // How many languages hold work nobody has published. Stated in the confirm
+  // below, because publishing all of them is the one action here that can put
+  // another person's held edit on the public site.
+  const pendingCount = locales.filter(
+    l => translations?.[l.code]?.pendingChange
+  ).length;
   const counts = translationCounts(
     translations,
     locales.map(l => l.code),
@@ -244,12 +268,24 @@ export function LanguagePanel({
             size="sm"
             className="h-7 px-2 text-xs"
             disabled={actionsDisabled || publish.pending}
-            onClick={publish.publishAll}
+            onClick={() => setConfirmPublishAll(true)}
           >
             {publish.pending ? "Publishing…" : "Publish all"}
           </Button>
         )}
       </div>
+
+      <PublishAllConfirmDialog
+        open={confirmPublishAll}
+        onOpenChange={setConfirmPublishAll}
+        languageCount={locales.length}
+        pendingCount={pendingCount}
+        isLoading={publish.pending}
+        onConfirm={() => {
+          publish.publishAll();
+          setConfirmPublishAll(false);
+        }}
+      />
 
       <ul aria-label="Languages in this document">
         {locales.map(locale => (
@@ -260,6 +296,7 @@ export function LanguagePanel({
             rtl={locale.rtl}
             isDefault={locale.code === defaultLocale}
             state={languageState(translations?.[locale.code])}
+            pendingChange={translations?.[locale.code]?.pendingChange}
             isActive={locale.code === active}
             canSeed={copy.available}
             {...(onSelect === undefined ? {} : { onSelect })}

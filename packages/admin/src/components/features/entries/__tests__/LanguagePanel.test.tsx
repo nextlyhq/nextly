@@ -266,4 +266,25 @@ describe("LanguagePanel", () => {
     renderPanel({ translations: TRANSLATIONS, hasStatus: true });
     expect(screen.queryByRole("button", { name: "Publish all" })).toBeNull();
   });
+
+  it("states which language holds unpublished changes, without opening it", () => {
+    // The failure this guards is invisibility: a document whose languages all
+    // read "published" while work sits unpublished inside one of them. The
+    // author must be able to see it from the list, because with several
+    // languages there is no reason to open any particular one.
+    useBranding.mockReturnValue({ locales: LOCALES });
+    renderPanel({
+      translations: {
+        en: { translated: true, status: "published" },
+        de: { translated: true, status: "published", pendingChange: true },
+      },
+    });
+
+    expect(
+      screen.getByTitle("published · unpublished changes")
+    ).toBeInTheDocument();
+    // And the language WITHOUT pending work still reads plainly — without this
+    // the assertion above would pass against a panel that marked every row.
+    expect(screen.getAllByTitle("published")).toHaveLength(1);
+  });
 });
