@@ -76,6 +76,7 @@ import {
 
 import { emptyBlockDocument } from "../fields/blocks-document";
 import { siteBreakpoints, siteSheet } from "../site-style";
+import { readSiteStyleRecord } from "../site-style-record";
 
 import { BlocksSummary } from "./BlocksSummary";
 import { DocumentStatusPill } from "./DocumentStatusPill";
@@ -387,6 +388,25 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     enabled: clientConfig?.checklist !== false,
   });
 
+  /*
+   * The site style the canvas draws with: the host's config DEFAULTS, already
+   * resolved by the plugin factory and delivered as plain data. Narrowed with
+   * the same checks the server writes by, so a malformed value degrades to
+   * the empty style (block defaults and the engine's guaranteed tokens)
+   * rather than crashing the editor.
+   *
+   * Defaults only, deliberately. The STORED tier reaches the published page
+   * through `loadSiteStyle` on the route; wiring it into the canvas needs a
+   * fetch this surface does not have yet, and belongs to the style studios.
+   * Until then the canvas previews the code-stated design — closer to the
+   * published page than the empty sheet it drew before, and honestly short of
+   * it exactly where an admin has stored an override.
+   */
+  const canvasSiteStyle = useMemo(
+    () => readSiteStyleRecord(clientConfig?.siteStyle),
+    [clientConfig]
+  );
+
   useCheckpoints({ name, control, document: editor.document });
 
   /*
@@ -513,7 +533,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
           <EditorCommandPalette editor={editor} onExit={done} />
           <Canvas
             document={editor.document}
-            siteStyles={siteSheet()}
+            siteStyles={siteSheet(canvasSiteStyle)}
             selectedId={editor.selectedId}
             selectedIds={editor.selection.ids}
             onSelect={editor.select}
@@ -537,7 +557,9 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             // field validator and the canvas cannot disagree about what this
             // site's breakpoints are — and this is now the third consumer of
             // that one answer.
-            render={{ styleContext: { breakpoints: siteBreakpoints() } }}
+            render={{
+              styleContext: { breakpoints: siteBreakpoints(canvasSiteStyle) },
+            }}
             dragHandlers={drag.handlers}
             // The pointer route into typing a block's text. Its keyboard
             // counterpart is the Enter binding above, registered in the same

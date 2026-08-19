@@ -17,6 +17,10 @@ export {
   COMPONENT_INSTANCE_TYPE,
   STYLE_STATES,
   MAX_BREAKPOINTS_PER_AXIS,
+  // Public alongside the per-axis cap: a store validating a class library on
+  // write must refuse what the compiler will not read, and a copy of this
+  // number in another package is a second statement that goes stale silently.
+  MAX_NAMED_CLASSES,
   isTokenRef,
   isBindingSource,
   isComponentInstance,

@@ -39,8 +39,10 @@
 import { createBlockResolver } from "@nextlyhq/blocks-react";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { createBlocksPage } from "@nextlyhq/blocks-react/next";
+import { loadSiteStyle } from "@nextlyhq/plugin-page-builder";
 
 import { siteReader, SITE_STYLE_CONTEXT } from "../../../lib/site-content";
+import { SITE_STYLE_DEFAULTS } from "../../../lib/site-style-defaults";
 
 /**
  * Access-enforced and per-request, which is the secure default.
@@ -80,6 +82,13 @@ const { ContentPage, generateMetadata } = createBlocksPage({
   // whenever this request arrived before the admin did.
   blocks: createBlockResolver(coreBlocks),
   styleContext: SITE_STYLE_CONTEXT,
+  // The site sheet's inputs, resolved PER REQUEST: the code-stated defaults
+  // with the stored Site Style document layered on top, so a token or class an
+  // admin saves reaches the next page view rather than the next deploy. The
+  // defaults are the same object `pageBuilder({ siteStyle })` was handed, so
+  // the canvas, the validator and this route agree by construction.
+  siteStyles: () =>
+    loadSiteStyle({ nextly: siteReader, defaults: SITE_STYLE_DEFAULTS }),
   metadata: (entry, context, derived) => ({
     title: derived.title ?? (entry.title as string | undefined),
     description: derived.description,

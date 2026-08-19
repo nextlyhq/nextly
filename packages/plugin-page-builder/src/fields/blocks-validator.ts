@@ -53,17 +53,18 @@ export interface BlocksValidationOptions {
 /**
  * Breakpoints are site-level data owned by the page-builder plugin, and the
  * engine never reads storage, so core validates against whatever set it is
- * handed. A document referencing a breakpoint id therefore warns rather than
- * errors until the plugin supplies the real set — which is the arrangement that
- * keeps the engine storage-agnostic.
+ * handed. The plugin factory passes the config-supplied set in per call; a
+ * caller with no set falls back to `siteBreakpoints()` with nothing, which is
+ * the empty set — and against an empty set the engine treats a document's
+ * breakpoint reference as a warning rather than an error, so an unwired
+ * caller stays permissive rather than wrong.
  *
- * Read from `site-style` rather than declared here, because the editor canvas
- * compiles its stylesheet against the same set. Two declarations agree while
- * both are empty and diverge the day one gains a breakpoint, leaving the canvas
- * drawing a layout this validator rejects — each side internally consistent, so
- * neither looks wrong.
+ * Fallen back to through `site-style` rather than a set declared here,
+ * because the editor canvas compiles its stylesheet against the same one
+ * answer. Two declarations agree while both are empty and diverge the day one
+ * gains a breakpoint, leaving the canvas drawing a layout this validator
+ * rejects — each side internally consistent, so neither looks wrong.
  */
-const NO_BREAKPOINTS: BreakpointSet = siteBreakpoints();
 
 /** What a field accepts when it says nothing: its own entry's page content. */
 const DEFAULT_KINDS: readonly DocumentKind[] = ["page"];
@@ -84,7 +85,8 @@ export function validateBlocksValue(
   value: unknown,
   path: string,
   label: string,
-  options: BlocksValidationOptions
+  options: BlocksValidationOptions,
+  breakpoints: BreakpointSet = siteBreakpoints()
 ): Issue[] {
   // An absent document is an empty field. Required-ness is the shared rules'
   // to enforce, exactly as for every other type.
@@ -123,7 +125,7 @@ export function validateBlocksValue(
   // document JSON rewrites is fully measured and safe to walk, one holding an
   // accessor is neither, and both are errors.
   const { issues: allDocumentIssues, survey } = validateDocument(doc, {
-    breakpoints: NO_BREAKPOINTS,
+    breakpoints,
     mode: "forgiving",
     // Where a block declares the containers it may sit inside, this is the path
     // that has to enforce it: the editor refuses such a placement while

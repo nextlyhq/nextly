@@ -19,6 +19,8 @@ import type { NextlyContentReader, NextlySingleReader } from "nextly/runtime";
 
 import nextlyConfig from "../../nextly.config";
 
+import { SITE_STYLE_DEFAULTS } from "./site-style-defaults";
+
 type NextlyInstance = Awaited<ReturnType<typeof getNextly>>;
 
 /**
@@ -79,10 +81,10 @@ export const siteReader: NextlyContentReader &
  * class that no rule ever defines, and the page would render structurally
  * correct and visually bare.
  *
- * Declared by the host because breakpoints are a site decision: the engine never
- * reads storage and ships no default set. Ids must be unique across both axes,
- * and the base breakpoint carries no `maxWidth` — it is the fallback the others
- * narrow.
+ * DERIVED from `SITE_STYLE_DEFAULTS` rather than declared beside it, because a
+ * second statement of the breakpoints is how the page sheet and the shared
+ * site sheet come to emit the same tier under different at-rules — each side
+ * internally consistent, so nothing errors.
  *
  * Left unannotated deliberately. `StyleCompileContext` is what the route helpers
  * accept, and `@nextlyhq/blocks-react` does not re-export it — naming the type
@@ -90,12 +92,5 @@ export const siteReader: NextlyContentReader &
  * to label a config object. The shape is still fully checked where it is passed.
  */
 export const SITE_STYLE_CONTEXT = {
-  breakpoints: {
-    viewport: [
-      { id: "base", label: "Base" },
-      { id: "tablet", label: "Tablet", maxWidth: 1024 },
-      { id: "mobile", label: "Mobile", maxWidth: 640 },
-    ],
-    container: [],
-  },
+  breakpoints: SITE_STYLE_DEFAULTS.breakpoints,
 };
