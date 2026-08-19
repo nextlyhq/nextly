@@ -4,9 +4,10 @@
  * The recording machinery behind autosave, with no opinion about what is being
  * recorded.
  *
- * Debounce, coalescing, the in-flight guard, the mounted guard and the status
- * an indicator reads: all of it is the same whether the thing being recorded is
- * a form's values or a block document, and none of it needs to know which.
+ * Debounce, coalescing, the in-flight guard, the mounted guard, the latch that
+ * stops asking once the server has refused, and the status an indicator reads:
+ * all of it is the same whether the thing being recorded is a form's values or
+ * a block document, and none of it needs to know which.
  * Splitting it out is what lets a second editor record recovery points without
  * a second implementation of the timing — and two implementations of a debounce
  * that must agree with a status vocabulary is exactly the pair that drifts.
@@ -35,6 +36,49 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+/**
+ * A refusal the server will give again, told apart from a failure that may not.
+ *
+ * Recording is opt-in per entity and enforced on the server, so an entity whose
+ * owner has not enabled it answers every request the same way. Asking again on
+ * the next debounce produces one rejected request every couple of seconds for
+ * as long as the editor is open, which is the shape this predicate exists to
+ * stop — and the same is true of a caller who simply may not write this
+ * document.
+ *
+ * Keyed on the status rather than on a reason string. The reason the server
+ * logs (`autosave-not-enabled`) stays in its log context and never reaches the
+ * client, and a client that pattern-matched a message would be reading prose
+ * that is free to change.
+ *
+ * The 4xx class carries the distinction that matters — a 4xx is an answer about
+ * this request, while a 5xx or a dropped connection is not an answer at all —
+ * minus the four statuses that HTTP defines as answers which can change on
+ * their own. Those are not exceptions to the rule; they are the part of the
+ * class that fails the test the rule is made of.
+ */
+const RETRYABLE_CLIENT_STATUSES = new Set([
+  /*
+   * The admin refreshes an expired access token and retries underneath this
+   * module, so a 401 usually never surfaces at all. It surfaces when the
+   * REFRESH itself fails for a non-auth reason — a 5xx, a dropped connection —
+   * and the original 401 propagates. Latching there would stop recording for
+   * the rest of a session whose credentials were never actually rejected.
+   */
+  401,
+  // A timeout, an early send and a rate limit are all "not now" rather than
+  // "no", and the next debounce is exactly the later moment they ask for.
+  408, 425, 429,
+]);
+
+function isRefusal(error: unknown): boolean {
+  const status = (error as { status?: unknown } | null)?.status;
+  if (typeof status !== "number") return false;
+  return (
+    status >= 400 && status < 500 && !RETRYABLE_CLIENT_STATUSES.has(status)
+  );
+}
+
 /** How long to wait after the last change before recording. */
 export const DEFAULT_AUTOSAVE_DEBOUNCE_MS = 2000;
 
@@ -50,6 +94,42 @@ export interface SnapshotSaveResult {
    * minutes ago" reading cannot drift with an unsynchronised browser clock.
    */
   updatedAt: string;
+}
+
+/**
+ * Whether a recording must NOT be made.
+ *
+ * One question with one implementation, asked at flush and only there. Checking
+ * any of these at scheduling time as well reads as defensive and is worse than
+ * redundant: `enabled` moves while a timer is already pending — it goes false
+ * the moment a real save starts — so the answer then is not the answer that
+ * matters, and two copies of the rule would eventually disagree about a
+ * recording one of them had already allowed.
+ */
+function recordingBlocked(state: {
+  identity: string | null;
+  enabled: boolean;
+  refused: boolean;
+}): boolean {
+  return state.identity === null || !state.enabled || state.refused;
+}
+
+/**
+ * What a failed attempt means: whether the server has settled the question, and
+ * what an indicator should show for it.
+ *
+ * A refusal shows as `idle` rather than `error`, because an entity whose owner
+ * never turned recording on has not failed at anything. An indicator stuck on
+ * "Couldn't save" would report a policy as a fault, over an editor whose work
+ * is not at risk in the way that reads.
+ */
+function outcomeOfFailure(error: unknown): {
+  refused: boolean;
+  status: AutosaveStatus;
+} {
+  return isRefusal(error)
+    ? { refused: true, status: "idle" }
+    : { refused: false, status: "error" };
 }
 
 export interface UseSnapshotAutosaveOptions {
@@ -117,6 +197,13 @@ export function useSnapshotAutosave({
    */
   const pendingRef = useRef(false);
   const mountedRef = useRef(true);
+  /*
+   * Set once the server has refused, and cleared only by a change of identity.
+   * A ref rather than state because nothing renders differently for it: the
+   * status it leaves behind is `idle`, which is what an editor with no
+   * recording available should show.
+   */
+  const refusedRef = useRef(false);
 
   /*
    * Read through refs inside the debounced callback rather than captured as
@@ -138,7 +225,14 @@ export function useSnapshotAutosave({
   }, []);
 
   const flush = useCallback(async () => {
-    if (identityRef.current === null || !enabledRef.current) return;
+    if (
+      recordingBlocked({
+        identity: identityRef.current,
+        enabled: enabledRef.current,
+        refused: refusedRef.current,
+      })
+    )
+      return;
 
     if (inFlightRef.current) {
       pendingRef.current = true;
@@ -154,13 +248,21 @@ export function useSnapshotAutosave({
         setLastSavedAt(new Date(result.updatedAt));
         setStatus("saved");
       }
-    } catch {
+    } catch (error) {
       /*
        * Swallowed deliberately, and reported through `status` rather than
        * thrown. A recovery point nobody asked for must not surface an error
-       * over the editor or interrupt typing; the next debounce tries again.
+       * over the editor or interrupt typing; the next debounce tries again —
+       * unless the server refused, and then there is nothing to try again.
+       *
+       * A refusal shows as `idle` rather than `error`, because an entity whose
+       * owner never turned recording on has not failed at anything. An
+       * indicator stuck on "Couldn't save" would report a policy as a fault,
+       * over an editor whose work is not at risk in the way that reads.
        */
-      if (mountedRef.current) setStatus("error");
+      const outcome = outcomeOfFailure(error);
+      refusedRef.current = outcome.refused;
+      if (mountedRef.current) setStatus(outcome.status);
     } finally {
       inFlightRef.current = false;
       if (pendingRef.current) {
@@ -192,6 +294,10 @@ export function useSnapshotAutosave({
   // another's key, which is the one failure this module can cause that the
   // caller cannot see.
   useEffect(() => {
+    // A refusal belongs to the document it was given for. Another document is
+    // another entity with its own setting and its own access, so the answer is
+    // asked again rather than inherited.
+    refusedRef.current = false;
     return () => {
       if (timerRef.current) {
         clearTimeout(timerRef.current);

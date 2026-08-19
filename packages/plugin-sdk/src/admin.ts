@@ -28,6 +28,27 @@ export { useDocumentIdentity, type DocumentIdentity } from "@nextlyhq/admin";
 export type { ComponentPath } from "@nextlyhq/admin";
 
 /**
+ * Record a recovery point for the surrounding document (@experimental).
+ *
+ * For a contributed field that holds its own editing state — a canvas, a
+ * diagram, an editor with its own history — whose work the form cannot see
+ * until the surface commits it. The caller passes the WHOLE document as it
+ * believes it stands (its own live value merged over the form's other values),
+ * because restoring a recovery point replaces the form's values wholesale, and
+ * calls `schedule()` when its state has changed in a way worth keeping.
+ *
+ * Whether recording is permitted at all is the entity owner's setting and is
+ * enforced on the server; a refusal is not retried, and nothing here needs to
+ * ask.
+ */
+export {
+  useDocumentCheckpoint,
+  type UseDocumentCheckpointOptions,
+  type UseDocumentCheckpointResult,
+  type AutosaveStatus,
+} from "@nextlyhq/admin";
+
+/**
  * Token-driven layout primitives (@experimental). Compose plugin admin UI from
  * these so it inherits the admin's design system with no plugin build step:
  * `Card` (+ its parts) for surfaces, `Stack`/`Grid` for layout, `Stat` for

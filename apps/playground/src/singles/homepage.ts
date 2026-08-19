@@ -15,6 +15,10 @@ import { defineSingle, text } from "nextly/config";
 export const Homepage = defineSingle({
   slug: "homepage",
   label: { singular: "Homepage" },
+  // Recovery points are opt-in per entity and the server enforces it, so
+  // without this every autosave against this single is correctly refused —
+  // which is what exercises the page builder's own recording here.
+  versions: { drafts: true },
   fields: [
     text({ name: "title" }),
     blocks({ name: "layout", label: "Layout", blocks: { allow: ["core/*"] } }),
