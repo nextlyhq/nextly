@@ -29,6 +29,28 @@ const HOOK = path.join(HERE, "..", ".husky", "pre-push");
 
 const hook = async () => readFile(HOOK, "utf-8");
 
+/**
+ * Comments are prose, and every bashism pattern below describes a shell
+ * construct, so the comments come out before any of them run.
+ *
+ * The hook is more comment than command, and the words those patterns match are
+ * ordinary English: "the source of truth" is phrasing this repository reaches
+ * for, and it contains no `source` command. A guard that fails on a sentence,
+ * under a message about dash on Ubuntu, sends the next reader hunting for a
+ * construct that was never written — and a guard that cries wolf gets deleted
+ * rather than fixed.
+ *
+ * Trailing comments come out too. Stripping can only ever remove text a pattern
+ * might have matched, so the failure direction is a missed bashism inside a
+ * comment, never a rejected correct hook.
+ */
+const shellCode = source =>
+  source
+    .split("\n")
+    .map(line => line.replace(/\s#.*$/, ""))
+    .filter(line => !/^\s*#/.test(line))
+    .join("\n");
+
 describe("the pre-push hook", () => {
   it("clears GIT_DIR", async () => {
     expect(await hook()).toMatch(/^unset .*\bGIT_DIR\b/m);
@@ -66,7 +88,7 @@ describe("portability", () => {
   });
 
   it("uses no bashisms the Ubuntu default shell would reject", async () => {
-    const source = await hook();
+    const source = shellCode(await hook());
 
     // dash is not bash: these are the constructs that silently work on a
     // developer's bash and fail on Ubuntu, where /bin/sh is dash.
