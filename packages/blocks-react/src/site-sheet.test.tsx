@@ -224,3 +224,66 @@ describe("the per-node DOM address", () => {
     expect(out).not.toContain(`${NODE_ID_ATTRIBUTE}="core/box"`);
   });
 });
+
+describe("a node's named-class references", () => {
+  const CLASSED: BlockDocument = {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [
+      {
+        id: "classed-node",
+        type: "core/box",
+        version: 1,
+        props: {},
+        classes: ["accent-id"],
+      },
+    ],
+  };
+
+  const ACCENT = {
+    id: "accent-id",
+    slug: "accent",
+    orderIndex: 0,
+    styles: { base: { base: { color: "#123123" } } },
+  };
+
+  it("resolve through the SAME class list the site sheet is compiled from", () => {
+    // The sheet writes the `.nx-c-<slug>` rule from `siteStyles.classes`; the
+    // node's stored ids resolve to names in the page compile, whose context
+    // said nothing about classes here. If the two read different lists, a
+    // stored class emits a rule no element carries — each half internally
+    // consistent — so the assertion is over both: the rule AND the name.
+    const out = renderToStaticMarkup(
+      <PageRenderer
+        document={CLASSED}
+        blocks={createBlockResolver([box])}
+        styleContext={{ breakpoints: BREAKPOINTS }}
+        siteStyles={{ breakpoints: BREAKPOINTS, classes: [ACCENT] }}
+      />
+    );
+
+    expect(out).toContain(".nx-c-accent");
+    // The name inside a class ATTRIBUTE, not merely anywhere in the markup —
+    // the sheet's own rule text also contains it.
+    expect(out).toMatch(/class="[^"]*\bnx-c-accent\b/);
+  });
+
+  it("defer to a compile context that states its OWN class list", () => {
+    // An explicit choice by the caller outranks what can be derived — the same
+    // rule the renderer applies to a context carrying its own blockBases. The
+    // context's empty list means "this site has no classes", so the node's
+    // reference resolves to nothing even though the sheet got a library.
+    const out = renderToStaticMarkup(
+      <PageRenderer
+        document={CLASSED}
+        blocks={createBlockResolver([box])}
+        styleContext={{ breakpoints: BREAKPOINTS, namedClasses: [] }}
+        siteStyles={{ breakpoints: BREAKPOINTS, classes: [ACCENT] }}
+      />
+    );
+
+    // The sheet still carries the library's rule; what the deferral changes
+    // is ATTRIBUTION, so the element must not carry the name.
+    expect(out).not.toMatch(/class="[^"]*\bnx-c-accent\b/);
+  });
+});

@@ -52,7 +52,7 @@ const TOKEN_DARK = "#8fe3c0";
 const CLASS_ID = "e2e-accent-class";
 const CLASS_SLUG = "e2e-accent";
 const CLASS_COLOR = "#0f5132";
-const CLASS_COLOR_RGB = "rgb(15, 83, 50)";
+const CLASS_COLOR_RGB = "rgb(15, 81, 50)";
 
 /** A node id, stable per fixture so a failure names the same node every run. */
 const id = (suffix: string) => `00000000-0000-4000-8000-0000000000${suffix}`;
@@ -183,11 +183,14 @@ test("a stored class is emitted as a rule and applied to a referencing node", as
   page,
   request,
 }) => {
-  // The rule text in the served sheet names the class by its CSS name...
+  // The rule text in the served sheet names the class by its CSS name. A
+  // regex rather than a substring, because the emitter scopes the selector
+  // under the page root and formats its declarations with spaces — the claim
+  // is "a rule for this class applies this colour", not a byte layout.
   const response = await request.get(`/blocks/${PAGE_SLUG}`);
   await expectOk(response, "fetching the published page");
-  expect(siteSheetOf(await response.text())).toContain(
-    `.nx-c-${CLASS_SLUG}{color:${CLASS_COLOR}`
+  expect(siteSheetOf(await response.text())).toMatch(
+    new RegExp(`\\.nx-c-${CLASS_SLUG}\\s*\\{\\s*color:\\s*${CLASS_COLOR}`)
   );
 
   // ...and the COMPUTED colour proves the browser resolved a node's class
