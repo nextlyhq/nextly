@@ -348,9 +348,21 @@ export class CollectionQueryService extends BaseService {
     const companion =
       preloaded ?? (await this.fileManager.loadCompanionSchema(collectionName));
     if (!companion) return;
+    // Which languages hold a pending change, for this whole page in one query.
+    // Read here rather than inside the join because the versions repository
+    // takes the adapter this service already has, and because a per-row lookup
+    // would turn a list render into one round trip per document.
+    const pendingChangeLocales = await new VersionsRepository(
+      this.adapter
+    ).findPendingChangeLocales(
+      "collection",
+      collectionName,
+      rows.map(r => r.id).filter((id): id is string => typeof id === "string")
+    );
     await populateTranslationStatus({
       db: this.db as never,
       companionTable: companion.table,
+      pendingChangeLocales,
       readiness: await resolveCompanionSchemaReadiness(this.adapter, companion),
       localizedFields: companion.localizedFields,
       rows,

@@ -331,6 +331,48 @@ export class VersionsRepository {
   }
 
   /**
+   * Which languages hold a pending change, for many documents at once.
+   *
+   * One query for a whole page of documents rather than one per document: the
+   * overview that consumes this is built for a list, and a per-row query there
+   * turns a page render into N round trips.
+   *
+   * Returns only the (document, locale) pairs that HAVE one, so a caller reads
+   * absence as absence rather than having to distinguish it from a document it
+   * never asked about.
+   */
+  async findPendingChangeLocales(
+    scopeKind: VersionScopeKind,
+    scopeSlug: string,
+    entryIds: string[]
+  ): Promise<Map<string, Set<string | null>>> {
+    const byEntry = new Map<string, Set<string | null>>();
+    if (entryIds.length === 0) return byEntry;
+    const rows = await this.db.select<{
+      entryId: string;
+      locale: string | null;
+    }>(TABLE, {
+      columns: ["entryId", "locale"],
+      where: {
+        and: [
+          { column: "scopeKind", op: "=", value: scopeKind },
+          { column: "scopeSlug", op: "=", value: scopeSlug },
+          { column: "entryId", op: "IN", value: entryIds },
+          { column: "isAutosave", op: "=", value: false },
+          { column: "versionNo", op: "IS NULL" },
+          { column: "status", op: "=", value: "draft" },
+        ],
+      },
+    });
+    for (const row of rows) {
+      const set = byEntry.get(row.entryId) ?? new Set<string | null>();
+      set.add(row.locale ?? null);
+      byEntry.set(row.entryId, set);
+    }
+    return byEntry;
+  }
+
+  /**
    * Every working draft this document holds, one per locale.
    *
    * For the operations that act on the whole document at once — publishing all
