@@ -61,6 +61,7 @@ import {
 import {
   useDocumentCheckpoint,
   usePluginClientConfig,
+  useEntryFieldsPanel,
   useReportUnsavedWork,
   useSuppressAdminChrome,
 } from "@nextlyhq/plugin-sdk/admin";
@@ -119,6 +120,20 @@ export interface BlocksFieldProps<
  * declared ahead of the panels.
  */
 const AVAILABLE_PANELS = ["insert", "layers"] as const;
+
+/**
+ * With an entry-fields panel to fill, `settings` joins them.
+ *
+ * Derived rather than declared twice: the shell draws a panel outside
+ * `availablePanels` as disabled and "coming soon", and warns against OPENING
+ * one nothing renders into — reserving width to display nothing reads as a
+ * broken control rather than an absent feature. So the list and the renderer
+ * move together by construction, and the rail cannot disagree with the body.
+ */
+const AVAILABLE_PANELS_WITH_SETTINGS = [
+  ...AVAILABLE_PANELS,
+  "settings",
+] as const;
 
 /** Names the registry attributes these blocks to, for diagnostics. */
 const PLUGIN_SOURCE = "@nextlyhq/plugin-page-builder";
@@ -354,6 +369,12 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   const inline = useInlineText(editor);
 
   /*
+   * The entry's other fields, or null when there is no surrounding form. Null
+   * is what withholds the panel rather than opening an empty one.
+   */
+  const renderEntryFields = useEntryFieldsPanel();
+
+  /*
    * The getting-started card, and the host's switch for it.
    *
    * `checklist === false` is the only value that turns it off: an absent
@@ -420,7 +441,11 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     <div className="fixed inset-0 z-50 bg-background">
       <BuilderShell
         onExit={done}
-        availablePanels={AVAILABLE_PANELS}
+        availablePanels={
+          renderEntryFields === null
+            ? AVAILABLE_PANELS
+            : AVAILABLE_PANELS_WITH_SETTINGS
+        }
         // Whether the page is live, which the admin's own chrome would have
         // shown had this editor not asked for it to be hidden. `undoDepth` is
         // the editor's OWN dirty signal: the form's is false for as long as the
@@ -457,6 +482,14 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             );
           }
           if (panel === "layers") return <LayersPanel editor={editor} />;
+          /*
+           * The entry's own fields — SEO, relations, whatever this collection
+           * declares — which the takeover removed from the page behind this
+           * editor. Rendered by the ADMIN's closure, not reconstructed here: how
+           * a field is drawn is the entry form's contract, and a second
+           * renderer would drift from it.
+           */
+          if (panel === "settings") return renderEntryFields?.(name) ?? null;
           return null;
         }}
       >

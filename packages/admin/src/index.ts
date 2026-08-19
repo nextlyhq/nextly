@@ -112,6 +112,14 @@ export {
   type DocumentStatus,
 } from "./components/features/entries/EntryForm/EntryFormContext";
 /**
+ * The fields an active takeover hid, for the surface that took the body over.
+ *
+ * A takeover collapses the form body to the takeover field alone, so the rest
+ * of the entry is removed from the page rather than merely covered. Whatever
+ * took the body over is the only surface left that can still show them.
+ */
+export { useEntryFieldsPanel } from "./components/features/entries/EntryForm/EntryFormContext";
+/**
  * A field telling the form it holds work the form's values do not contain.
  *
  * Exported for the plugin surface: a contributed field with its own editing
