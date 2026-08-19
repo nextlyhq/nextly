@@ -274,6 +274,9 @@ importers:
 
   e2e:
     devDependencies:
+      '@axe-core/playwright':
+        specifier: ^4.13.0
+        version: 4.13.0(playwright-core@1.61.1)
       '@nextlyhq/adapter-drizzle':
         specifier: workspace:*
         version: link:../packages/adapter-drizzle
@@ -1932,6 +1935,11 @@ packages:
   '@aws/lambda-invoke-store@0.3.0':
     resolution: {integrity: sha512-sl4Bm6yiMNYrZKkqqDFWN0UfnWhlS8ivKxrYl+6t0gCLrqr8y3B2IqZZbFRkfaVVp7C/baApyh71P+LeE1A2sQ==}
     engines: {node: '>=18.0.0'}
+
+  '@axe-core/playwright@4.13.0':
+    resolution: {integrity: sha512-6YLx+kxXu5GJceG4ozFg+33a2EMTdjYwWGloJ3sb9Kta5pp+ZNS53uxGVog5JetIY8s++P5UrtX+cri+u0VAVg==}
+    peerDependencies:
+      playwright-core: '>= 1.0.0'
 
   '@babel/code-frame@7.29.0':
     resolution: {integrity: sha512-9NhCeYjq9+3uxgdtp20LSiJXJvN0FeCtNGpJxuMFZ1Kv3cWUNb6DOhJwUvcVCzKGR66cw4njwM6hrJLqgOwbcw==}
@@ -5557,6 +5565,10 @@ packages:
 
   axe-core@4.10.3:
     resolution: {integrity: sha512-Xm7bpRXnDSX2YE2YFfBk2FnF0ep6tmG7xPh8iHee8MIcrgq762Nkce856dYtJYLkuIoYZvGfTs/PbZhideTcEg==}
+    engines: {node: '>=4'}
+
+  axe-core@4.13.0:
+    resolution: {integrity: sha512-UzGt8zg7Ny8djbYMhxl2zuEevVa7r2gJjYY5Lwr1xM7+XU2nd6CkIWFTVcCIbAP63vSz71NaVyyuSk9lHKcy0A==}
     engines: {node: '>=4'}
 
   axobject-query@4.1.0:
@@ -9207,6 +9219,11 @@ snapshots:
 
   '@aws/lambda-invoke-store@0.3.0': {}
 
+  '@axe-core/playwright@4.13.0(playwright-core@1.61.1)':
+    dependencies:
+      axe-core: 4.13.0
+      playwright-core: 1.61.1
+
   '@babel/code-frame@7.29.0':
     dependencies:
       '@babel/helper-validator-identifier': 7.28.5
@@ -12506,7 +12523,7 @@ snapshots:
       obug: 2.1.4
       std-env: 4.2.0
       tinyrainbow: 3.1.0
-      vitest: 4.1.10(@types/node@20.19.17)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(happy-dom@20.9.0)(jsdom@27.1.0)(vite@7.3.6(@types/node@20.19.17)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
+      vitest: 4.1.10(@types/node@24.10.0)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(happy-dom@20.9.0)(jsdom@27.1.0)(vite@7.3.6(@types/node@24.10.0)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.20.5)(yaml@2.8.3))
 
   '@vitest/expect@4.1.10':
     dependencies:
@@ -12576,7 +12593,7 @@ snapshots:
       sirv: 3.0.2
       tinyglobby: 0.2.15
       tinyrainbow: 3.1.0
-      vitest: 4.1.10(@types/node@20.19.17)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(happy-dom@20.9.0)(jsdom@27.1.0)(vite@7.3.6(@types/node@20.19.17)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.3))
+      vitest: 4.1.10(@types/node@24.10.0)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(happy-dom@20.9.0)(jsdom@27.1.0)(vite@7.3.6(@types/node@24.10.0)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.44.1)(tsx@4.20.5)(yaml@2.8.3))
 
   '@vitest/utils@4.1.10':
     dependencies:
@@ -12762,6 +12779,8 @@ snapshots:
   aws-ssl-profiles@1.1.2: {}
 
   axe-core@4.10.3: {}
+
+  axe-core@4.13.0: {}
 
   axobject-query@4.1.0: {}
 
