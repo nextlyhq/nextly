@@ -25,3 +25,4 @@ coverage/
 packages/create-nextly-app/templates/
 # Vitest file snapshots — byte-exact fixtures, must not be reformatted
 **/__tests__/v1-golden/__fixtures__/
+AGENTS.measured.md
