@@ -103,6 +103,60 @@ describe("useDiscardWorkingDraft", () => {
     );
   });
 
+  it("seeds only the discarded language's cache, leaving another language's alone", async () => {
+    // The response is ONE language's live document, and the detail key is a
+    // prefix of every scoped variant. Seeding it across all of them would write
+    // Spanish values into the English cache entry, which the editor then shows
+    // as English content on the next language switch.
+    const client = makeClient();
+    const enKey = entryKeys.detailScoped("posts", "e1", {
+      locale: null,
+      draft: true,
+    });
+    const esKey = entryKeys.detailScoped("posts", "e1", {
+      locale: "es",
+      draft: true,
+    });
+    client.setQueryData(enKey, {
+      id: "e1",
+      title: "English live",
+      _isWorkingDraft: true,
+    });
+    client.setQueryData(esKey, {
+      id: "e1",
+      title: "Spanish draft",
+      _isWorkingDraft: true,
+    });
+
+    discardSpy.mockResolvedValue({
+      message: "Working draft discarded.",
+      item: { id: "e1", title: "Spanish live", status: "published" },
+    });
+
+    const { result } = renderHook(
+      () =>
+        useDiscardWorkingDraft({
+          collectionSlug: "posts",
+          entryId: "e1",
+          locale: "es",
+        }),
+      { wrapper: makeWrapper(client) }
+    );
+
+    await result.current.mutateAsync();
+
+    // Spanish takes the response...
+    expect(client.getQueryData(esKey)).toMatchObject({
+      title: "Spanish live",
+      _isWorkingDraft: false,
+    });
+    // ...and English is untouched, still holding its own pending change.
+    expect(client.getQueryData(enKey)).toMatchObject({
+      title: "English live",
+      _isWorkingDraft: true,
+    });
+  });
+
   it("toasts the error and does not invalidate on failure", async () => {
     const client = makeClient();
     const invalidateSpy = vi.spyOn(client, "invalidateQueries");

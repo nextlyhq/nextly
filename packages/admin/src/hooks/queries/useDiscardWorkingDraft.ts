@@ -72,8 +72,26 @@ export function useDiscardWorkingDraft({
       // showing Changed, and a remount could briefly restore the discarded
       // values. `_isWorkingDraft` is cleared explicitly — the live item omits it,
       // so a plain spread would let the stale `true` survive.
+      // Only the variants reading the SAME language. The response is one
+      // language's live document, and the detail key is a prefix of every scoped
+      // variant, so seeding it across all of them writes this language's values
+      // into another language's cache entry — which the editor would then show
+      // on switching, as that language's content.
       queryClient.setQueriesData<Record<string, unknown>>(
-        { queryKey: entryKeys.detail(collectionSlug, entryId) },
+        {
+          queryKey: entryKeys.detail(collectionSlug, entryId),
+          predicate: query => {
+            const scope = query.queryKey[query.queryKey.length - 1];
+            // An entry cached under the bare detail key carries no read
+            // dimensions to disagree with, so it is still seeded.
+            if (typeof scope !== "object" || scope === null) return true;
+            // `detailScoped` normalises an absent locale to null, and so does
+            // this hook, so the default language compares equal on both sides.
+            return (
+              (scope as { locale?: string | null }).locale === (locale ?? null)
+            );
+          },
+        },
         old => (old ? { ...old, ...data.item, _isWorkingDraft: false } : old)
       );
 
