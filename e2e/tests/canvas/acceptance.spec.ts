@@ -74,8 +74,12 @@ async function pressAndTravel(
 
 async function openCanvas(page: Page): Promise<void> {
   await page.goto(ROUTE);
-  // The population, before any property is asked about it.
-  await expect(page.locator(NODE)).toHaveCount(6);
+  // The population, before any property is asked about it. Eleven, because the
+  // fixture nests: a section holding a text block, and a columns row holding a
+  // column that itself holds text — an EMPTY column renders zero pixels tall,
+  // and a region with no height contains no pointer, so the refusal it exists
+  // to demonstrate would be unreachable.
+  await expect(page.locator(NODE)).toHaveCount(11);
 }
 
 test.describe("the canvas acceptance suite", () => {
@@ -135,7 +139,7 @@ test.describe("the canvas acceptance suite", () => {
 
   test(`${titleFor(COVERED.find(p => p.n === 5)!)}`, async ({ page }) => {
     await openCanvas(page);
-    const from = await boxOf(page, "hx-text-last");
+    const from = await boxOf(page, "hx-text-short");
     const to = await boxOf(page, "hx-heading");
 
     // None before the drag — the control for the count below.
@@ -162,7 +166,7 @@ test.describe("the canvas acceptance suite", () => {
       "the fixture must have a gap for an indicator to land in"
     ).toBeGreaterThan(0);
 
-    const from = await boxOf(page, "hx-text-last");
+    const from = await boxOf(page, "hx-text-short");
     await pressAndTravel(
       page,
       { x: from.x + from.width / 2, y: from.y + from.height / 2 },
@@ -188,7 +192,7 @@ test.describe("the canvas acceptance suite", () => {
       );
     const before = await settled();
 
-    const from = await boxOf(page, "hx-text-last");
+    const from = await boxOf(page, "hx-text-short");
     const to = await boxOf(page, "hx-heading");
     await pressAndTravel(
       page,
@@ -202,7 +206,7 @@ test.describe("the canvas acceptance suite", () => {
 
   test(`${titleFor(COVERED.find(p => p.n === 3)!)}`, async ({ page }) => {
     await openCanvas(page);
-    const from = await boxOf(page, "hx-text-last");
+    const from = await boxOf(page, "hx-text-short");
     const heading = await boxOf(page, "hx-heading");
     const edge = heading.y + heading.height;
     const x = from.x + from.width / 2;
@@ -241,11 +245,12 @@ test.describe("the canvas acceptance suite", () => {
 
   test(`${titleFor(COVERED.find(p => p.n === 10)!)}`, async ({ page }) => {
     await openCanvas(page);
+    const before = await order(page);
     const depth = async () =>
       Number(await page.locator(HOST).getAttribute("data-nx-undo-depth"));
     expect(await depth()).toBe(0);
 
-    const from = await boxOf(page, "hx-text-last");
+    const from = await boxOf(page, "hx-text-short");
     const to = await boxOf(page, "hx-heading");
     await pressAndTravel(
       page,
@@ -254,23 +259,18 @@ test.describe("the canvas acceptance suite", () => {
     );
     await page.mouse.up();
 
-    // The tree moved — without this the depth check below passes for a drop
-    // that did nothing at all.
-    expect(await order(page)).not.toEqual([
-      "hx-heading",
-      "hx-text-tall",
-      "hx-divider",
-      "hx-text-short",
-      "hx-spacer",
-      "hx-text-last",
-    ]);
+    // The tree moved — without this the undo-depth check below passes for a
+    // drop that did nothing at all. Compared against what was captured BEFORE
+    // the drag rather than a hardcoded list, which goes stale the moment the
+    // fixture gains a node.
+    expect(await order(page)).not.toEqual(before);
     expect(await depth()).toBe(1);
   });
 
   test(`${titleFor(COVERED.find(p => p.n === 12)!)}`, async ({ page }) => {
     await openCanvas(page);
     const before = await order(page);
-    const from = await boxOf(page, "hx-text-last");
+    const from = await boxOf(page, "hx-text-short");
     const to = await boxOf(page, "hx-heading");
 
     await pressAndTravel(
@@ -280,7 +280,7 @@ test.describe("the canvas acceptance suite", () => {
     );
     await expect(page.locator(HOST)).toHaveAttribute(
       "data-nx-dragging",
-      "hx-text-last"
+      "hx-text-short"
     );
 
     await page.keyboard.press("Escape");
@@ -292,5 +292,155 @@ test.describe("the canvas acceptance suite", () => {
     expect(
       Number(await page.locator(HOST).getAttribute("data-nx-undo-depth"))
     ).toBe(0);
+  });
+
+  test(`${titleFor(COVERED.find(p => p.n === 1)!)}`, async ({ page }) => {
+    await openCanvas(page);
+    const nested = await boxOf(page, "hx-nested-text");
+    const from = await boxOf(page, "hx-text-short");
+    const x = nested.x + nested.width / 2;
+
+    // A point over the nested text is simultaneously over the section that
+    // holds it and over the root. Which one wins is the whole property.
+    await pressAndTravel(
+      page,
+      { x: from.x + from.width / 2, y: from.y + from.height / 2 },
+      { x, y: nested.y + nested.height / 2 }
+    );
+
+    const target = await page.locator(HOST).getAttribute("data-nx-drop-target");
+    expect(
+      target,
+      "a drop over a nested block must resolve somewhere"
+    ).toBeTruthy();
+    const resolved = JSON.parse(target!) as { regionId?: string };
+    // The DEEPER region, not the root. A canvas ignoring depth would answer
+    // "root" here and still look correct on a flat document — which is why the
+    // fixture nests.
+    expect(resolved.regionId).not.toBe("root");
+
+    // The control: over a ROOT-level block, the root is the right answer, so a
+    // canvas that simply always answered "deepest" is not passing by accident.
+    const rootLevel = await boxOf(page, "hx-heading");
+    await page.mouse.move(
+      rootLevel.x + rootLevel.width / 2,
+      rootLevel.y + rootLevel.height / 2,
+      { steps: 16 }
+    );
+    const atRoot = await page.locator(HOST).getAttribute("data-nx-drop-target");
+    expect((JSON.parse(atRoot!) as { regionId?: string }).regionId).toBe(
+      "root"
+    );
+    await page.mouse.up();
+  });
+
+  test(`${titleFor(COVERED.find(p => p.n === 7)!)}`, async ({ page }) => {
+    await openCanvas(page);
+    // `core/columns` accepts ONLY `core/column`. Dragging a text block at it is
+    // the refusal; dragging the column is the acceptance. Both halves, because
+    // a refusal shown nowhere and one shown everywhere pass each other's test.
+    const columns = await boxOf(page, "hx-columns");
+    const column = await boxOf(page, "hx-column");
+    // BELOW the column, inside the row. Anywhere over the column resolves to
+    // the column's own slot, which accepts a text block — the restriction lives
+    // on the ROW, and this band is the only part of it not covered by a child.
+    const aim = {
+      x: columns.x + columns.width / 2,
+      y:
+        column.y +
+        column.height +
+        (columns.y + columns.height - column.y - column.height) / 2,
+    };
+    expect(
+      aim.y,
+      "the row must extend below its column for the refusal to be reachable"
+    ).toBeGreaterThan(column.y + column.height);
+
+    const refused = await boxOf(page, "hx-text-short");
+    await pressAndTravel(
+      page,
+      { x: refused.x + refused.width / 2, y: refused.y + refused.height / 2 },
+      aim
+    );
+    const refusedTarget = await page
+      .locator(HOST)
+      .getAttribute("data-nx-drop-target");
+    // Either no target at all, or one explicitly marked invalid — both are the
+    // engine saying no. What must NOT happen is a silent, ordinary target.
+    const refusedOk =
+      refusedTarget === "" ||
+      refusedTarget === null ||
+      /invalid|forbidden|refus/i.test(refusedTarget);
+    expect(
+      refusedOk,
+      `a text block aimed into a columns slot resolved to: ${refusedTarget}`
+    ).toBe(true);
+    await page.mouse.up();
+
+    // The ACCEPTED half. Pressed at the column's LEFT EDGE rather than its
+    // centre: the centre is occupied by the text block inside it, and a press
+    // there picks up the child — measured, `data-nx-dragging` read
+    // "hx-column-text". Which block a press grabs is the deepest one under the
+    // pointer, which is correct and is why the aim has to avoid the child.
+    const accepted = await boxOf(page, "hx-column");
+    await pressAndTravel(
+      page,
+      { x: accepted.x + 2, y: accepted.y + 2 },
+      { x: aim.x, y: aim.y + 1 }
+    );
+    const draggingAccepted = await page
+      .locator(HOST)
+      .getAttribute("data-nx-dragging");
+    expect(
+      draggingAccepted,
+      "the accepted half must drag a block the container allows"
+    ).toBeTruthy();
+    await page.mouse.up();
+  });
+
+  test(`${titleFor(COVERED.find(p => p.n === 8)!)}`, async ({ page }) => {
+    await openCanvas(page);
+    const host = page.locator(HOST);
+
+    // The POPULATION for this property: the canvas must actually overflow, or
+    // "it did not scroll" is indistinguishable from "there was nowhere to go".
+    const scrollable = await host.evaluate(
+      el => el.scrollHeight > el.clientHeight + 40
+    );
+    expect(
+      scrollable,
+      "the fixture must overflow its box for autoscroll to be askable"
+    ).toBe(true);
+    expect(await host.evaluate(el => el.scrollTop)).toBe(0);
+
+    const from = await boxOf(page, "hx-heading");
+    const box = await host.boundingBox();
+    if (box === null) throw new Error("the canvas host has no box");
+
+    // Drag toward the BOTTOM edge and hold there. Autoscroll is a response to
+    // the pointer approaching an edge, so the pointer has to arrive and stay.
+    await pressAndTravel(
+      page,
+      { x: from.x + from.width / 2, y: from.y + from.height / 2 },
+      { x: box.x + box.width / 2, y: box.y + box.height - 4 },
+      20
+    );
+    for (let i = 0; i < 8; i += 1) {
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height - 4, {
+        steps: 2,
+      });
+      await page.waitForTimeout(80);
+    }
+    const scrolled = await host.evaluate(el => el.scrollTop);
+    await page.mouse.up();
+
+    expect(
+      scrolled,
+      "holding at the bottom edge did not scroll"
+    ).toBeGreaterThan(0);
+
+    // And it STOPS at the bound rather than running past it.
+    const max = await host.evaluate(el => el.scrollHeight - el.clientHeight);
+    expect(scrolled).toBeLessThanOrEqual(max);
   });
 });

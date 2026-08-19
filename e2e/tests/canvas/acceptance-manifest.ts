@@ -39,9 +39,7 @@ export const ACCEPTANCE_PROPERTIES: readonly AcceptanceProperty[] = [
     n: 1,
     property: "Pointer collision resolves by tree depth",
     greenIn: "B-6",
-    status: "deferred",
-    reason:
-      "needs a NESTED container in the fixture; the harness document is flat, so every drop resolves at one depth and a depth rule cannot be distinguished from no rule at all",
+    status: "covered",
   },
   {
     n: 2,
@@ -77,17 +75,13 @@ export const ACCEPTANCE_PROPERTIES: readonly AcceptanceProperty[] = [
     n: 7,
     property: "Explicit invalid-target state is reachable and visible",
     greenIn: "B-7",
-    status: "deferred",
-    reason:
-      "needs a block an ordinary container REFUSES; the fixture holds only core blocks every container accepts, and a refusal shown nowhere passes the same assertion as a refusal shown everywhere",
+    status: "covered",
   },
   {
     n: 8,
     property: "Autoscroll engages and stops at bounds",
     greenIn: "B-8",
-    status: "deferred",
-    reason:
-      "needs a document TALLER than the canvas viewport; the fixture is ~145px in a full-height box, so the canvas never scrolls and an autoscroll assertion would pass against an engine that has none",
+    status: "covered",
   },
   {
     n: 9,
