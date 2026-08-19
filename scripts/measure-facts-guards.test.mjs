@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 /**
- * The pr-scopes row and the carry-forward are the two measure-facts
+ * The `pr-scopes` row and the carry-forward are the two measure-facts
  * mechanisms whose failure is silent: a scopes extraction that degrades
  * records a wrong list at exit 0, and a carried heavy row that loses its
  * stamp publishes an old number as a fresh one. Both are exercised here
@@ -17,7 +17,7 @@ import { describe, expect, it } from "vitest";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-/** The pr-scopes command exactly as the generator will run it. */
+/** The `pr-scopes` command exactly as the generator will run it. */
 function scopesCmd() {
   const src = readFileSync(resolve(repoRoot, "scripts/measure-facts.mjs"), "utf8");
   const m = src.match(/id: "pr-scopes"[\s\S]*?cmd: "((?:[^"\\]|\\.)*)"/);
