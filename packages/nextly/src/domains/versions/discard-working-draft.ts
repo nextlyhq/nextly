@@ -7,6 +7,10 @@
  * is public. Durable history is never touched — this reverts unpublished edits,
  * it does not rewrite a version.
  *
+ * A localized document holds one pending change per language, so discarding is
+ * one language's concern: the request names the language it is discarding, and
+ * the other languages' pending changes are left alone.
+ *
  * Authorization is the caller's concern: the dispatcher handler establishes
  * read and update on the document before calling in here, so this module only
  * performs the removal and the re-read.
@@ -20,11 +24,18 @@ import { errorFromServiceEnvelope } from "../../errors/from-service-envelope";
 import type { UserContext } from "../singles/types";
 
 export interface DiscardWorkingDraftArgs {
-  /** Collection slug. The split is a collection feature, so there is no Single
-   *  variant: a Single has a single row, not a published/draft pair. */
+  /** Collection slug. */
   slug: string;
   entryId: string;
   user: UserContext;
+  /**
+   * Which language's pending change to discard, and which language's live
+   * values to hand back. Absent means the request named none, which for a
+   * localized document is the default language — the admin omits `?locale=`
+   * when editing it. Ignored for an unlocalized document, which has one
+   * pending change rather than one per language.
+   */
+  locale?: string | null;
   /**
    * The caller's authenticated scope, forwarded to the re-read so a scoped API
    * key is judged on its OWN read grant rather than the key owner's roles.
@@ -58,6 +69,10 @@ export async function discardWorkingDraft(
     routeAuthorized: true,
     authenticatedScope: args.authenticatedScope,
     status: "all",
+    // Read the language being discarded, so the values handed back are the ones
+    // the editor resets to. Reading another language's would reset the form to
+    // text that belongs to a language the author is not looking at.
+    ...(args.locale ? { locale: args.locale } : {}),
   });
 
   // A failed read (a concurrent delete, or an after-read hook or database error)
@@ -75,13 +90,12 @@ export async function discardWorkingDraft(
   // Now remove the sidecar through the collections handler, which deletes it
   // under the same parent-row lock a draft save takes: a save committing between
   // this request's authorization checks and the delete would otherwise have its
-  // brand-new draft removed with both requests reporting success. The split
-  // stores the working draft under the null locale key (it applies only to
-  // non-localized collections). Deleting when none exists is a no-op, not an
-  // error.
+  // brand-new draft removed with both requests reporting success. Deleting when
+  // none exists is a no-op, not an error.
   await getService("collectionsHandler").discardWorkingDraft({
     collectionName: args.slug,
     entryId: args.entryId,
+    locale: args.locale ?? null,
   });
 
   return result.data;
