@@ -330,6 +330,82 @@ for (const dialect of getConfiguredTestDialects()) {
     });
 
     /**
+     * 🔴 A Single's storage is a FAMILY of tables, and the create's ownership checks compare
+     * families — because a name those checks clear is one the orphan reset is licensed to DROP.
+     *
+     * Slug normalisation folds `-` to `_`, so `<slug>-locales` resolves to `single_<slug>_locales`:
+     * exactly the companion of the Single at `single_<slug>`. That companion is EMPTY until its
+     * owner saves localized content, so a main-name-only ownership scan would clear it as droppable
+     * wreckage — destroying another Single's translation storage, durably (the companion reconcile
+     * reads existence, and the rebuilt impostor exists) and silently (the create reports applied).
+     * Both directions are refused: a create landing on someone's companion, and a create whose own
+     * companion would land on someone's main table.
+     */
+    it("refuses a create whose table family collides with another single's", async () => {
+      current = await createTestNextly({
+        dialect,
+        localization: { locales: ["en", "es"], defaultLocale: "en" },
+      });
+      const owner = `sc_${dialect.slice(0, 2)}_fam`;
+      const companion = `single_${owner}_locales`;
+
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: owner,
+          label: "Fam",
+          localized: true,
+          fields: [{ name: "headline", type: "text", localized: true }],
+        }
+      );
+      expect(await current.adapter.tableExists(companion)).toBe(true);
+      const before = await columnsOf(current, companion);
+
+      // Lands exactly on the owner's companion table name.
+      await expect(
+        dispatchSingles(
+          "createSingle",
+          {},
+          {
+            slug: `${owner}-locales`,
+            label: "Fam Locales",
+            fields: [{ name: "body", type: "text" }],
+          }
+        )
+      ).rejects.toThrow();
+
+      // The companion is untouched — same columns, no impostor rebuild — and nothing claimed the
+      // colliding slug.
+      expect(await columnsOf(current, companion)).toEqual(before);
+      expect(await registryRow(current, `${owner}-locales`)).toBeUndefined();
+
+      // The mirror direction: the new create's OWN companion name is an existing main table.
+      const taken = `sc_${dialect.slice(0, 2)}_mir`;
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: `${taken}-locales`,
+          label: "Mir Locales",
+          fields: [{ name: "body", type: "text" }],
+        }
+      );
+      await expect(
+        dispatchSingles(
+          "createSingle",
+          {},
+          {
+            slug: taken,
+            label: "Mir",
+            fields: [{ name: "body", type: "text" }],
+          }
+        )
+      ).rejects.toThrow();
+      expect(await registryRow(current, taken)).toBeUndefined();
+    });
+
+    /**
      * A normal schema UPDATE on a Single must stay `applied`.
      *
      * 🔴 The ALTER path builds its verification shape from a normalized field list that carries a

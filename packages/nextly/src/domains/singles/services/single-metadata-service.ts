@@ -58,6 +58,7 @@ import type { Logger } from "../../../shared/types";
 import { applyMigrationStatements } from "../../schema/services/apply-migration-statements";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
 
+import { singleTableFamiliesCollide } from "./resolve-single-table-name";
 import type { SingleRegistryService } from "./single-registry-service";
 
 /**
@@ -382,8 +383,10 @@ export class SingleMetadataService {
    * orphan cannot have:
    *
    * - **Empty**, it is wreckage of an interrupted attempt. The ownership re-assertion above proved
-   *   no registered Single claims it, and a table the registry has never described is one nothing
-   *   can write rows through. It is dropped — with its locale companion and field-group data — so
+   *   no registered Single claims it as a main table OR as a `_locales` companion, and a table
+   *   outside every registered Single's family is one no Nextly path can write rows through — so
+   *   nothing can put content into it between the probe and the drop either. It is dropped — with
+   *   its own locale companion and field-group data — so
    *   the apply that follows renders every column, index and junction table from this request's
    *   fields, and `applied` describes the table that is actually there.
    * - **Holding rows**, it is somebody's data, and dropping it would destroy exactly what proves
@@ -1148,9 +1151,16 @@ export class SingleMetadataService {
   private async assertCreateStillPossible(
     input: CreateSingleInput
   ): Promise<void> {
+    // 🔴 Compared as table FAMILIES, not main names. A Single's storage occupies its main table
+    // AND the `_locales` companion beside it, and slug normalisation folds `-` to `_`, so two
+    // Singles whose main names differ can still collide on one physical table: `foo-locales`
+    // resolves to `single_foo_locales`, which is `single_foo`'s companion. That matters doubly
+    // here, because a name this scan clears is one the orphan reset below is licensed to DROP —
+    // a main-name comparison would clear another Single's empty companion for destruction.
     const owner = (await this.registry.getAllSingles()).find(
       single =>
-        single.tableName === input.tableName && single.slug !== input.slug
+        single.slug !== input.slug &&
+        singleTableFamiliesCollide(single.tableName, input.tableName)
     );
     if (owner) {
       throw NextlyError.duplicate({
