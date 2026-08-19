@@ -26,13 +26,12 @@
  *
  * @module runtime/routing/content-route
  */
-import { createRequire } from "node:module";
-
 import type { Metadata } from "next";
 
 import { getNextly } from "../../direct-api/nextly";
 import { NextlyError } from "../../errors/nextly-error";
 
+import { triggerNotFound } from "./not-found";
 import { isReservedPath } from "./reserved-paths";
 import {
   resolveContent,
@@ -309,37 +308,6 @@ export interface ContentRoute<TNode> {
  */
 export interface StaticContentRoute<TNode> extends ContentRoute<TNode> {
   generateStaticParams: () => Promise<Array<{ slug: string[] }>>;
-}
-
-// `next/navigation` is resolved lazily (opaque to bundlers), so importing this
-// module never forces `next` at load; `notFound()` throws the special error the
-// App Router catches to render the not-found page.
-let cachedNotFound: (() => never) | null | undefined;
-function loadNotFound(): () => never {
-  if (cachedNotFound === undefined) {
-    try {
-      const require = createRequire(import.meta.url);
-      const mod = require("next/navigation") as { notFound?: () => never };
-      cachedNotFound = typeof mod.notFound === "function" ? mod.notFound : null;
-    } catch {
-      cachedNotFound = null;
-    }
-  }
-  if (!cachedNotFound) {
-    // Outside a Next runtime there is no not-found boundary to trigger.
-    throw NextlyError.internal({
-      logContext: {
-        reason:
-          "createContentRoute requires next/navigation (use it inside a Next.js app)",
-      },
-    });
-  }
-  return cachedNotFound;
-}
-
-/** Trigger the App Router's not-found boundary; never returns (narrows callers). */
-function triggerNotFound(): never {
-  return loadNotFound()();
 }
 
 const MAX_STATIC_PARAMS_PER_PAGE = 500;

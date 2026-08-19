@@ -33,6 +33,15 @@ export type {
   ResolvedContext,
 } from "./content-route";
 
+export { createSingleRoute, createPublicSingleRoute } from "./single-route";
+export type {
+  SingleRoute,
+  SingleRouteConfig,
+  SingleContext,
+  SingleDocument,
+  NextlySingleReader,
+} from "./single-route";
+
 export { nextlySitemap } from "./sitemap";
 export type { NextlySitemapEntry, NextlySitemapOptions } from "./sitemap";
 

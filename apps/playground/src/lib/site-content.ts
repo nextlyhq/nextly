@@ -15,7 +15,7 @@
  * @module lib/site-content
  */
 import { getNextly } from "nextly";
-import type { NextlyContentReader } from "nextly/runtime";
+import type { NextlyContentReader, NextlySingleReader } from "nextly/runtime";
 
 import nextlyConfig from "../../nextly.config";
 
@@ -55,9 +55,15 @@ type MediaLookup = Pick<NextlyInstance["media"], "findByID">;
  * lookup, so every `core/image` storing a media id — rather than a literal
  * `src` — resolves to null and draws nothing.
  */
-export const siteReader: NextlyContentReader & { media: MediaLookup } = {
+export const siteReader: NextlyContentReader &
+  NextlySingleReader & { media: MediaLookup } = {
   find: async args => (await instance()).find(args),
   findByID: async args => (await instance()).findByID(args),
+  // A Single page reads the document itself through `findSingle` and its BLOCKS
+  // through `find`/`findByID`. One reader carrying both is what keeps a page and
+  // everything embedded in it coming from a single instance — which on a
+  // per-tenant setup is a single database.
+  findSingle: async args => (await instance()).findSingle(args),
   media: {
     findByID: async args => (await instance()).media.findByID(args),
   },
