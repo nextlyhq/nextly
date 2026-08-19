@@ -206,6 +206,7 @@ export function generateSqliteCoreTableStatements(): string[] {
       "label" TEXT,
       "locale" TEXT,
       "source_version_no" INTEGER,
+      "draft_key" TEXT,
       "created_by" TEXT,
       "created_at" INTEGER NOT NULL,
       "updated_at" INTEGER NOT NULL,
@@ -213,6 +214,12 @@ export function generateSqliteCoreTableStatements(): string[] {
     )`,
     `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_versions_seq_uidx"
       ON "nextly_versions" ("scope_kind", "scope_slug", "entry_id", "version_no")`,
+    // Its own statement, guarded with IF NOT EXISTS, so re-running this
+    // bootstrap restores the index if it is ever missing. The CREATE TABLE
+    // above cannot do the same for the column: SQLite skips that statement
+    // wholesale once the table exists.
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_versions_working_draft_uidx"
+      ON "nextly_versions" ("draft_key")`,
     `CREATE INDEX IF NOT EXISTS "nextly_versions_doc_recent_idx"
       ON "nextly_versions" ("scope_kind", "scope_slug", "entry_id", "created_at")`,
     // No REFERENCES to "email_providers": that table is not bootstrapped here,
