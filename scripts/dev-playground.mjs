@@ -10,6 +10,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { runAllChecks } from "./dev-doctor.mjs";
+import { pnpmInvocation } from "./pnpm-invocation.mjs";
 
 // Minimal .env parser. Just enough for `KEY=value` and `KEY="quoted"`
 // shapes; comments and empty lines are skipped. Stays dependency-free
@@ -79,7 +80,7 @@ async function ensureDbReachable(name, host, port, dockerArgs, waitSeconds) {
     return;
   }
   console.log(`[nextly] Starting ${name} via docker compose...`);
-  const code = await runChild("pnpm", dockerArgs, NEXTLY_ROOT);
+  const code = await runPnpm(dockerArgs, NEXTLY_ROOT);
   if (code !== 0) {
     console.error(
       `[nextly] ✗ docker:up exited ${code} while bringing up ${name}.`
@@ -184,8 +185,7 @@ async function main() {
    * cached, against a blank admin whose error names the wrong package.
    */
   console.log("[nextly] Building workspace packages (cached when current)...");
-  const buildExit = await runChild(
-    "pnpm",
+  const buildExit = await runPnpm(
     ["turbo", "build", "--filter=./packages/*"],
     NEXTLY_ROOT
   );
@@ -227,8 +227,7 @@ async function main() {
   // the steady-state cost is negligible.
   if (process.env.NEXTLY_SKIP_SEED !== "1") {
     console.log("[nextly] Auto-seeding empty playground...");
-    const seedExitCode = await runChild(
-      "pnpm",
+    const seedExitCode = await runPnpm(
       ["tsx", path.join(PLAYGROUND_DIR, "scripts/seed.ts")],
       PLAYGROUND_DIR,
       childEnv
@@ -255,24 +254,29 @@ async function main() {
 
   // Spawn `next dev` from the playground directory. Inherit stdio so
   // Next.js logs flow through unmodified.
-  child = spawn("pnpm", ["next", "dev"], {
+  const dev = pnpmInvocation(["next", "dev"]);
+  child = spawn(dev.command, dev.args, {
     cwd: PLAYGROUND_DIR,
     stdio: "inherit",
     env: childEnv,
+    shell: dev.shell,
   });
 
   child.on("exit", code => process.exit(code ?? 0));
 }
 
-// Helper: spawn a one-shot child, inherit stdio, resolve to its exit
+// Helper: run a one-shot pnpm sub-command, inherit stdio, resolve to its exit
 // code (number; never rejects on exit-non-zero so callers can decide
-// whether to bail).
-function runChild(cmd, args, cwd, env) {
+// whether to bail). Routes through pnpmInvocation so Windows gets the shell
+// it needs and the quoting that shell then requires.
+function runPnpm(args, cwd, env) {
   return new Promise(resolve => {
-    const proc = spawn(cmd, args, {
+    const { command, args: argv, shell } = pnpmInvocation(args);
+    const proc = spawn(command, argv, {
       cwd,
       stdio: "inherit",
       env: env ?? { ...process.env },
+      shell,
     });
     proc.on("exit", code => resolve(code ?? 0));
   });
