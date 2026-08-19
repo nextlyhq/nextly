@@ -20,7 +20,11 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const STABLE_ROWS = ["packages", "pr-scopes", "engines"];
 
 function section(text, id) {
-  const m = text.match(new RegExp(`## ${id}\\n[\\s\\S]*?\\n\`\`\`\\n([\\s\\S]*?)\\n\`\`\``));
+  const fence = String.fromCharCode(96, 96, 96);
+  // Comparison starts after the command line: it carries a per-run revision
+  // stamp, which legitimately differs between the committed file and a fresh
+  // regeneration on a dirty tree.
+  const m = text.match(new RegExp("## " + id + "\\n[\\s\\S]*?\\n" + fence + "\\n\\$[^\\n]*\\n([\\s\\S]*?)\\n" + fence));
   expect(m, `row ${id} not found`).toBeTruthy();
   return m[1];
 }

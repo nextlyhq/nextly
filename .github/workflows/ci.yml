@@ -145,7 +145,13 @@ jobs:
           # `.github/**` is absent on purpose: this workflow lives there.
           INERT='^(docs/|\.claude/|[^/]*\.md$|LICENSE$|\.editorconfig$|\.vscode/)'
 
-          NOT_INERT=$(printf '%s\n' "$CHANGED" | grep -vE "$INERT" || true)
+          # AGENTS.md and AGENTS.measured.md are documents, but their guard
+          # tests (scripts/agents-md-scopes-agree, scripts/measured-file-fresh)
+          # run only inside the gated ci job — so an edit to either must not
+          # skip the very job that checks it. They are re-added after the
+          # inert filter rather than encoded in it, because ERE cannot negate.
+          NOT_INERT=$({ printf '%s\n' "$CHANGED" | grep -vE "$INERT" || true
+                        printf '%s\n' "$CHANGED" | grep -xE 'AGENTS(\.measured)?\.md' || true; } | sort -u | grep . || true)
 
           {
             echo "### CI scope"

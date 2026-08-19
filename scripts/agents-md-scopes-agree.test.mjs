@@ -47,7 +47,13 @@ function documentedUnscoped() {
 
 describe("AGENTS.md scope documentation matches what is enforced", () => {
   it("documents every enforced scope and nothing else", () => {
-    expect(documentedScopes()).toEqual(enforcedScopes());
+    const enforced = enforcedScopes();
+    // Two empty lists are equal, so equality alone passes when both
+    // extractions silently read nothing; a member that can never leave the
+    // list is the control that proves the reads reached their subject.
+    expect(enforced).toContain("nextly");
+    expect(enforced.length).toBeGreaterThan(10);
+    expect(documentedScopes()).toEqual(enforced);
   });
 
   it("names exactly the packages that have no accepted scope", () => {
