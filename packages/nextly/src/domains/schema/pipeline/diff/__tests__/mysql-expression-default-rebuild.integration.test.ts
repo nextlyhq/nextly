@@ -1,6 +1,13 @@
 /**
  * A MySQL baseline must be rebuildable when a column carries an expression
- * default.
+ * default of a shape Nextly itself emits.
+ *
+ * SCOPE, because the title would otherwise read as the whole class: every
+ * default here is one an emitter in this package produces, or a bare-keyword
+ * form that must survive untouched. An expression CONTAINING a string literal
+ * is reported with its quotes backslash-escaped and is still unparseable —
+ * deliberately absent, because a passing case would not exist and a failing
+ * one would pin behaviour nobody has decided yet.
  *
  * `information_schema.COLUMN_DEFAULT` reports a function-call expression
  * default with its enclosing parentheses stripped, and MySQL refuses that same

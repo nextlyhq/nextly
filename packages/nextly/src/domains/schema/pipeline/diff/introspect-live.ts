@@ -554,7 +554,9 @@ function buildSnapshotFromPgRows(rows: PgRow[]): NextlySchemaSnapshot {
 const MYSQL_BARE_EXPRESSION_DEFAULT = /^current_timestamp(\s*\(\s*\d*\s*\))?$/i;
 
 /**
- * An expression default as it must appear in DDL.
+ * An expression default with the parentheses `information_schema` strips put
+ * back. This is ONE repair, not everything that stands between a reported
+ * expression default and applicable DDL — see the limit at the end.
  *
  * `information_schema.COLUMN_DEFAULT` reports a function-call default with its
  * enclosing parentheses STRIPPED — a column declared
@@ -572,6 +574,17 @@ const MYSQL_BARE_EXPRESSION_DEFAULT = /^current_timestamp(\s*\(\s*\d*\s*\))?$/i;
  * bare because the parenthesised form is a DIFFERENT column definition to
  * MySQL: `DEFAULT (CURRENT_TIMESTAMP)` is recorded as the ordinary expression
  * `now()`, losing the auto-initialisation the bare keyword carries.
+ *
+ * NOT repaired here: an expression that CONTAINS a string literal is reported
+ * with its quotes backslash-escaped — `DEFAULT (lower('X'))` comes back as
+ * `lower(_utf8mb4\'X\')` — and that text is rejected with or without the
+ * parentheses, so those defaults still rebuild to invalid DDL. The remedy is
+ * an unescape whose correctness depends on the server's `sql_mode`
+ * (`NO_BACKSLASH_ESCAPES` makes a backslash an ordinary character), which is a
+ * decision rather than a mechanical fix. No emitter in this package produces
+ * that shape — `quoteJsonSqlDefault` uses a hex `CONVERT` precisely to avoid
+ * guessing the mode — so it is reachable only through a column someone added
+ * to a managed table by hand.
  */
 function mysqlExpressionDefault(value: string): string {
   const trimmed = value.trim();

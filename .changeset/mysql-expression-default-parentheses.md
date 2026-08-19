@@ -33,3 +33,8 @@ requires around one, so the recorded schema described a table no MySQL server
 would create, including the one it was read from. The parentheses are now
 restored when the baseline is recorded. `CURRENT_TIMESTAMP` is left as it is,
 because on MySQL the parenthesised form means something different.
+
+This fixes the defaults Nextly itself creates. One case is still broken and is
+tracked separately: a default someone wrote by hand that contains a quoted
+piece of text, such as `DEFAULT (lower('X'))`, is reported by MySQL in a form
+that the parentheses alone do not make valid.
