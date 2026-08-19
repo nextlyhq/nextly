@@ -69,3 +69,12 @@ export {
   nextlyWebhooks,
   nextlyWebhookDeliveries,
 } from "../webhooks/mysql";
+
+// Content releases; in the bundle so freshPushSchema creates them on a fresh
+// database. Being in getCoreSchema alone only makes a table diffable — the
+// apply pushes THIS map, so one missing here is proposed on every reconcile
+// and created by none.
+export {
+  nextlyReleasesMysql as nextlyReleases,
+  nextlyReleaseMembersMysql as nextlyReleaseMembers,
+} from "../releases/mysql";

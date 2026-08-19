@@ -8,7 +8,6 @@ describe("versions types", () => {
       "draft",
       "published",
       "unpublished",
-      "scheduled",
     ]);
   });
 

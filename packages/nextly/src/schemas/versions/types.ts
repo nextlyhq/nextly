@@ -11,9 +11,14 @@
 /**
  * Lifecycle state stamped on a version row. A restore is identified by a
  * non-null `sourceVersionNo`, not a distinct status, so the active set stays
- * small; `scheduled` is reserved for the future timed-publish executor.
+ * small.
+ *
+ * Scheduling is NOT one of these. A scheduled change is a pending edit plus a
+ * release membership, and stamping the version row as well would give two
+ * places an opinion on whether something is scheduled — with nothing keeping
+ * them in step.
  */
-export type VersionStatus = "draft" | "published" | "unpublished" | "scheduled";
+export type VersionStatus = "draft" | "published" | "unpublished";
 
 /** The kind of document a version belongs to (Nextly's `{ kind, slug }` scope). */
 export type VersionScopeKind = "collection" | "single" | "page";
@@ -23,7 +28,6 @@ export const VERSION_STATUSES: readonly VersionStatus[] = [
   "draft",
   "published",
   "unpublished",
-  "scheduled",
 ];
 
 /** Runtime guard: true iff `v` is one of the active version statuses. */
@@ -58,8 +62,6 @@ export interface VersionsConfig {
     | {
         /** Coalesced autosave of the in-progress draft. Default 1000ms when on. */
         autosave?: boolean | { intervalMs?: number };
-        /** Reserve the `scheduled` status for future timed publish. */
-        schedulePublish?: boolean;
       };
   /** Durable (non-autosave) versions kept per document. `false` = unlimited. Default 50. */
   maxPerDoc?: number | false;
@@ -80,7 +82,6 @@ export interface ResolvedVersionsConfig {
       enabled: boolean;
       intervalMs: number;
     };
-    schedulePublish: boolean;
   };
   /** Durable versions retained per document; `false` = unlimited. */
   maxPerDoc: number | false;
