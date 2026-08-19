@@ -35,6 +35,20 @@ export function splitStatements(sqlStatements: string[]): string[] {
 }
 
 /**
+ * Test an error's own message AND its cause's against a set of wordings.
+ *
+ * drizzle-kit v1 wraps driver errors in a DrizzleQueryError carrying the
+ * original on `.cause`, so the dialect's actual wording is one level down and
+ * reading only the top message misses every one of them.
+ */
+function errorSays(err: unknown, patterns: RegExp[]): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  const causeMsg =
+    err instanceof Error && err.cause instanceof Error ? err.cause.message : "";
+  return [msg, causeMsg].some(m => patterns.some(p => p.test(m)));
+}
+
+/**
  * True when an error is a re-run-over-existing-schema artifact that an
  * idempotent reconcile should tolerate. The match is anchored to the
  * documented DDL wordings ONLY — "already exists" (all dialects), SQLite's
@@ -59,15 +73,36 @@ export function splitStatements(sqlStatements: string[]): string[] {
  * missing table reports — swallowing that would hide a real broken reconcile.
  */
 export function isIdempotencyError(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message : String(err);
-  const causeMsg =
-    err instanceof Error && err.cause instanceof Error ? err.cause.message : "";
-  return [msg, causeMsg].some(m =>
-    [
-      /already exists/i,
-      /duplicate column name/i,
-      /duplicate key name/i,
-      /check that column\/key exists/i,
-    ].some(p => p.test(m))
-  );
+  return errorSays(err, [
+    /already exists/i,
+    /duplicate column name/i,
+    /duplicate key name/i,
+    /check that column\/key exists/i,
+  ]);
+}
+
+/**
+ * Whether an execution error says a statement named a column the table lacks.
+ *
+ * Distinct from {@link isIdempotencyError}: that one recognises work already
+ * done, this one recognises work whose PRECONDITION has not been done yet. The
+ * only caller that may act on it is the additive-tables-only baseline, where an
+ * index over a not-yet-added column is an expected casualty of diffing from an
+ * empty snapshot, and the pass that follows creates the column and the index in
+ * order.
+ *
+ * PostgreSQL's wording is matched as `column ... does not exist` rather than a
+ * bare "does not exist", for the same reason error 1091 is matched in full
+ * above: a bare match would also catch a statement naming a genuinely missing
+ * TABLE, and treating that as tolerable would hide a broken reconcile.
+ */
+export function isMissingColumnError(err: unknown): boolean {
+  return errorSays(err, [
+    // SQLite
+    /no such column/i,
+    // MySQL (ER_KEY_COLUMN_DOES_NOT_EXIST)
+    /key column .* doesn't exist in table/i,
+    // PostgreSQL
+    /column .* does not exist/i,
+  ]);
 }
