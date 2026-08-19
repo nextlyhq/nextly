@@ -65,6 +65,19 @@ export function useBranding(): AdminBranding {
 }
 
 /**
+ * What to call this product on screen.
+ *
+ * One implementation, because the answer is one decision: a screen that spells
+ * `branding.logoText ?? "Nextly"` for itself can disagree with the component
+ * beside it. The signed-out screens had that shape — the card supplied the
+ * logo's label while the screen supplied the sentence under it, so a change to
+ * either fallback made the two contradict each other on one page.
+ */
+export function useAppName(): string {
+  return useBranding().logoText ?? "Nextly";
+}
+
+/**
  * The admin-meta request's state, for readers that draw a conclusion from
  * something being MISSING from branding.
  *

@@ -56,15 +56,13 @@ export function VerifyEmail({ searchParams }: VerifyEmailProps) {
         title="Invalid Link"
         description="This verification link is missing a token. If you need to verify your email, please check your inbox for the original verification email."
       >
-        <div className="mt-2 text-left">
-          <Link
-            href={ROUTES.LOGIN}
-            className="inline-flex items-center text-primary cursor-pointer font-medium transition-colors"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            Back to Sign In
-          </Link>
-        </div>
+        <Link
+          href={ROUTES.LOGIN}
+          className="inline-flex items-center text-primary cursor-pointer font-medium transition-colors"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Back to Sign In
+        </Link>
       </AuthStatusCard>
     );
   }
@@ -90,15 +88,13 @@ export function VerifyEmail({ searchParams }: VerifyEmailProps) {
         title="Email Verified"
         description="Your email has been verified successfully. You can now sign in to your account."
       >
-        <div className="mt-2 text-left">
-          <Link
-            href={ROUTES.LOGIN}
-            className="inline-flex items-center text-primary cursor-pointer font-medium transition-colors"
-          >
-            Go to Sign In
-            <ArrowRight className="h-4 w-4 ml-2" />
-          </Link>
-        </div>
+        <Link
+          href={ROUTES.LOGIN}
+          className="inline-flex items-center text-primary cursor-pointer font-medium transition-colors"
+        >
+          Go to Sign In
+          <ArrowRight className="h-4 w-4 ml-2" />
+        </Link>
       </AuthStatusCard>
     );
   }
@@ -111,15 +107,13 @@ export function VerifyEmail({ searchParams }: VerifyEmailProps) {
         errorMessage || "This verification link is invalid or has expired."
       }
     >
-      <div className="mt-2 text-left">
-        <Link
-          href={ROUTES.LOGIN}
-          className="inline-flex items-center text-primary cursor-pointer font-medium transition-colors"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          Back to Sign In
-        </Link>
-      </div>
+      <Link
+        href={ROUTES.LOGIN}
+        className="inline-flex items-center text-primary cursor-pointer font-medium transition-colors"
+      >
+        <ArrowLeft className="h-4 w-4" />
+        Back to Sign In
+      </Link>
     </AuthStatusCard>
   );
 }

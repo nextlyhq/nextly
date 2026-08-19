@@ -97,15 +97,13 @@ export function ResetPassword({ searchParams }: ResetPasswordProps) {
         title="Invalid Link"
         description="This password reset link is missing a token. Please request a new password reset link."
       >
-        <div className="mt-2 text-left">
-          <Link
-            href={ROUTES.FORGOT_PASSWORD}
-            className="inline-flex items-center text-primary cursor-pointer font-medium transition-colors"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            Request New Link
-          </Link>
-        </div>
+        <Link
+          href={ROUTES.FORGOT_PASSWORD}
+          className="inline-flex items-center text-primary cursor-pointer font-medium transition-colors"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Request New Link
+        </Link>
       </AuthStatusCard>
     );
   }
@@ -117,15 +115,13 @@ export function ResetPassword({ searchParams }: ResetPasswordProps) {
         title="Password Reset"
         description="Your password has been reset successfully. You can now sign in with your new password."
       >
-        <div className="mt-2 text-left">
-          <Link
-            href={ROUTES.LOGIN}
-            className="inline-flex items-center text-primary cursor-pointer font-medium transition-colors"
-          >
-            Go to Sign In
-            <ArrowRight className="h-4 w-4 ml-2" />
-          </Link>
-        </div>
+        <Link
+          href={ROUTES.LOGIN}
+          className="inline-flex items-center text-primary cursor-pointer font-medium transition-colors"
+        >
+          Go to Sign In
+          <ArrowRight className="h-4 w-4 ml-2" />
+        </Link>
       </AuthStatusCard>
     );
   }

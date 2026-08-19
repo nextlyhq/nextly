@@ -64,15 +64,13 @@ export function ForgotPassword() {
         title="Check Your Email"
         description="If an account with that email exists, we've sent a password reset link. Please check your inbox and spam folder."
       >
-        <div className="mt-2 text-left">
-          <Link
-            href={ROUTES.LOGIN}
-            className="inline-flex items-center text-primary cursor-pointer font-medium transition-colors"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            Back to Sign In
-          </Link>
-        </div>
+        <Link
+          href={ROUTES.LOGIN}
+          className="inline-flex items-center text-primary cursor-pointer font-medium transition-colors"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Back to Sign In
+        </Link>
       </AuthStatusCard>
     );
   }

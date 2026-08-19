@@ -102,15 +102,13 @@ export function AcceptInvite({ searchParams }: AcceptInviteProps) {
         title="Invalid Link"
         description="This invite link is missing its token. Ask whoever invited you to send the link again."
       >
-        <div className="mt-2 text-left">
-          <Link
-            href={ROUTES.LOGIN}
-            className="inline-flex items-center text-primary cursor-pointer font-medium transition-colors"
-          >
-            Go to Sign In
-            <ArrowRight className="h-4 w-4 ml-2" />
-          </Link>
-        </div>
+        <Link
+          href={ROUTES.LOGIN}
+          className="inline-flex items-center text-primary cursor-pointer font-medium transition-colors"
+        >
+          Go to Sign In
+          <ArrowRight className="h-4 w-4 ml-2" />
+        </Link>
       </AuthStatusCard>
     );
   }
@@ -122,15 +120,13 @@ export function AcceptInvite({ searchParams }: AcceptInviteProps) {
         title="Account Ready"
         description="Your password is set and your account is active. You can now sign in."
       >
-        <div className="mt-2 text-left">
-          <Link
-            href={ROUTES.LOGIN}
-            className="inline-flex items-center text-primary cursor-pointer font-medium transition-colors"
-          >
-            Go to Sign In
-            <ArrowRight className="h-4 w-4 ml-2" />
-          </Link>
-        </div>
+        <Link
+          href={ROUTES.LOGIN}
+          className="inline-flex items-center text-primary cursor-pointer font-medium transition-colors"
+        >
+          Go to Sign In
+          <ArrowRight className="h-4 w-4 ml-2" />
+        </Link>
       </AuthStatusCard>
     );
   }

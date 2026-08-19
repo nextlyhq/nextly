@@ -10,7 +10,7 @@ import {
 import { useEffect, useState, type ReactNode } from "react";
 
 import { ThemeAwareLogo } from "@admin/components/shared/ThemeAwareLogo";
-import { useBranding } from "@admin/context/providers/BrandingProvider";
+import { useAppName } from "@admin/context/providers/BrandingProvider";
 import { cn } from "@admin/lib/utils";
 
 export interface AuthFormCardProps {
@@ -30,17 +30,17 @@ export interface AuthFormCardProps {
  * appearing — six copies of the same `isVisible` state could only drift, and a
  * screen that forgot the effect would render at `opacity-0` forever.
  *
- * The logo reads the branding itself for the same reason: every caller passed
- * the same `branding.logoText ?? "Nextly"`, so the fallback was written six
- * times and could disagree six ways.
+ * The logo asks `useAppName` what the product is called rather than spelling
+ * the fallback here. Three of these screens interpolate the same name into
+ * their own title or description, so a fallback written in this file would sit
+ * one line above a different answer written in theirs.
  */
 export function AuthFormCard({
   title,
   description,
   children,
 }: AuthFormCardProps) {
-  const branding = useBranding();
-  const appName = branding.logoText ?? "Nextly";
+  const appName = useAppName();
   const [isVisible, setIsVisible] = useState(false);
 
   useEffect(() => {

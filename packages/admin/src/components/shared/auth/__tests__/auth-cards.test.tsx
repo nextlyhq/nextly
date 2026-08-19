@@ -11,9 +11,16 @@ import { AuthStatusCard } from "../AuthStatusCard";
  * area at all.
  */
 
-const { useBranding } = vi.hoisted(() => ({ useBranding: vi.fn() }));
+const { useBranding, useAppName } = vi.hoisted(() => ({
+  useBranding: vi.fn(),
+  useAppName: vi.fn(),
+}));
+// `useAppName` is mocked separately from `useBranding` on purpose: the card
+// ASKS for the product name rather than deriving it, and the fallback it would
+// otherwise re-derive is covered where it lives, in BrandingProvider.test.tsx.
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => useBranding(),
+  useAppName: () => useAppName(),
 }));
 
 beforeEach(() => {
@@ -25,6 +32,7 @@ beforeEach(() => {
     logoText: "Acme Docs",
     logoUrl: "https://cdn.example/logo.svg",
   });
+  useAppName.mockReturnValue("Acme Docs");
 });
 
 describe("AuthFormCard", () => {
@@ -55,7 +63,12 @@ describe("AuthFormCard", () => {
     expect(container.querySelector(".opacity-0")).toBeNull();
   });
 
-  it("labels the logo with the configured product name", () => {
+  // The card must ASK for the name rather than reading branding itself: three
+  // screens interpolate the same name into their own copy, and a second
+  // derivation here could disagree with the sentence directly beneath it.
+  it("labels the logo with the name the app is called", () => {
+    useAppName.mockReturnValue("Acme Docs");
+
     render(
       <AuthFormCard title="t" description="d">
         <span />
@@ -65,8 +78,8 @@ describe("AuthFormCard", () => {
     expect(screen.getByAltText("Acme Docs")).toBeInTheDocument();
   });
 
-  it("falls back to Nextly when branding names nothing", () => {
-    useBranding.mockReturnValue({ logoUrl: "https://cdn.example/logo.svg" });
+  it("follows that name when it changes, rather than re-deriving one", () => {
+    useAppName.mockReturnValue("Other Product");
 
     render(
       <AuthFormCard title="t" description="d">
@@ -74,7 +87,8 @@ describe("AuthFormCard", () => {
       </AuthFormCard>
     );
 
-    expect(screen.getByAltText("Nextly")).toBeInTheDocument();
+    expect(screen.getByAltText("Other Product")).toBeInTheDocument();
+    expect(screen.queryByAltText("Acme Docs")).toBeNull();
   });
 });
 
@@ -91,6 +105,27 @@ describe("AuthStatusCard", () => {
     expect(
       screen.getByRole("link", { name: "Go to Sign In" })
     ).toBeInTheDocument();
+  });
+
+  // Eight of the nine call sites used to pass this wrapper themselves. The card
+  // owns it now, so a caller passes the link and nothing around it.
+  it("puts what comes next in its own action area", () => {
+    render(
+      <AuthStatusCard title="t" description="d">
+        <a href="/login">Back to Sign In</a>
+      </AuthStatusCard>
+    );
+
+    const link = screen.getByRole("link", { name: "Back to Sign In" });
+    expect(link.parentElement).toHaveClass("mt-2", "text-left");
+  });
+
+  it("renders no action area when there is nothing to do next", () => {
+    const { container } = render(
+      <AuthStatusCard title="Invalid Link" description="No token." />
+    );
+
+    expect(container.querySelector(".mt-2")).toBeNull();
   });
 
   it("carries no logo — it is not the form card wearing a flag", () => {

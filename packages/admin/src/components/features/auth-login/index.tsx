@@ -24,7 +24,7 @@ import {
 } from "@admin/components/ui/form";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
-import { useBranding } from "@admin/context/providers/BrandingProvider";
+import { useAppName } from "@admin/context/providers/BrandingProvider";
 import { useApi } from "@admin/hooks/useApi";
 import { getCsrfToken } from "@admin/lib/api/csrf";
 import type { ActionResponse } from "@admin/lib/api/response-types";
@@ -46,8 +46,7 @@ const formSchema = z.object({
 
 export function Login() {
   const { api } = useApi();
-  const branding = useBranding();
-  const appName = branding.logoText ?? "Nextly";
+  const appName = useAppName();
 
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);

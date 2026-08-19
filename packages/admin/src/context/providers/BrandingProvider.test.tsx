@@ -23,6 +23,7 @@ vi.mock("@admin/lib/api/protectedApi", () => ({
 
 import {
   BrandingProvider,
+  useAppName,
   useBrandingStatus,
 } from "@admin/context/providers/BrandingProvider";
 
@@ -123,6 +124,54 @@ describe("useBrandingStatus", () => {
     );
 
     await waitFor(() => expect(status()).toBe("unavailable"));
+  });
+});
+
+/**
+ * The product's name is one decision, so it has one implementation. A screen
+ * that spelled `branding.logoText ?? "Nextly"` for itself could disagree with
+ * the component beside it — the signed-out card supplies the logo's label
+ * while the screen supplies the sentence under it.
+ */
+describe("useAppName", () => {
+  function NameProbe() {
+    return <span data-testid="name">{useAppName()}</span>;
+  }
+
+  function renderName(client: QueryClient) {
+    return render(
+      <QueryClientProvider client={client}>
+        <BrandingProvider>
+          <NameProbe />
+        </BrandingProvider>
+      </QueryClientProvider>
+    );
+  }
+
+  it("uses the configured name", async () => {
+    get.mockResolvedValue({ logoText: "Acme Docs" } as AdminBranding);
+    protectedGet.mockResolvedValue({ plugins: [] } as AdminBranding);
+
+    renderName(
+      new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("name").textContent).toBe("Acme Docs")
+    );
+  });
+
+  it("falls back to Nextly when branding names nothing", async () => {
+    get.mockResolvedValue({} as AdminBranding);
+    protectedGet.mockResolvedValue({ plugins: [] } as AdminBranding);
+
+    renderName(
+      new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("name").textContent).toBe("Nextly")
+    );
   });
 });
 

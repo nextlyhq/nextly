@@ -14,7 +14,12 @@ export interface AuthStatusCardProps {
   title: ReactNode;
   /** The explanation under it. */
   description: ReactNode;
-  /** Where the reader goes next — usually one link, sometimes a spinner. */
+  /**
+   * Where the reader goes next — usually one link, sometimes a spinner.
+   *
+   * Rendered in the card's own action area, so a caller passes the link itself
+   * rather than a wrapper around it.
+   */
   children?: ReactNode;
 }
 
@@ -27,6 +32,11 @@ export interface AuthStatusCardProps {
  * fade and different padding, and the two are told apart by what they are for
  * rather than by a flag — nine call sites would otherwise share a boolean whose
  * true and false branches have nothing in common.
+ *
+ * The `transition-all` is not decoration: the border and background are theme
+ * tokens, so it animates them when the theme changes. There is no `opacity-100`
+ * beside it, because nothing here ever changes opacity — unlike `AuthFormCard`,
+ * which fades in on mount and needs the pair.
  */
 export function AuthStatusCard({
   title,
@@ -35,7 +45,7 @@ export function AuthStatusCard({
 }: AuthStatusCardProps) {
   return (
     <div className="w-full max-w-[480px] mx-auto">
-      <Card className="transition-all duration-300 ease-in-out border-border-strong shadow-none p-10 opacity-100">
+      <Card className="transition-all duration-300 ease-in-out border-border-strong shadow-none p-10">
         <CardHeader className="space-y-1 p-0 mb-8" noBorder>
           <CardTitle className="text-xl font-bold tracking-tight text-foreground mb-3 text-wrap-balance">
             {title}
@@ -46,7 +56,9 @@ export function AuthStatusCard({
         </CardHeader>
 
         {children ? (
-          <CardContent className="p-0">{children}</CardContent>
+          <CardContent className="p-0">
+            <div className="mt-2 text-left">{children}</div>
+          </CardContent>
         ) : null}
       </Card>
     </div>
