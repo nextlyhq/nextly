@@ -1,5 +1,4 @@
 ---
-
 "nextly": patch
 "create-nextly-app": patch
 "@nextlyhq/admin": patch
@@ -24,6 +23,7 @@
 "@nextlyhq/tsconfig": patch
 "@nextlyhq/builder": patch
 "@nextlyhq/module-specifiers": patch
+---
 
 The editor canvas drew every block flush and unstyled while the published page drew the author's
 real spacing. An author setting a margin, a height or any other per-node style saw nothing change
