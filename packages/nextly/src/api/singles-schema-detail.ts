@@ -28,7 +28,10 @@ import {
   coerceBuilderMaxPerDoc,
   resolveBuilderVersions,
 } from "../domains/versions/builder-versions";
-import { schemaDraftsEnabled } from "../domains/versions/draft-split-eligibility";
+import {
+  draftSplitResponseFields,
+  schemaDraftSplit,
+} from "../domains/versions/draft-split-eligibility";
 import { resolveBuilderWebhooks } from "../domains/webhooks/builder-webhooks";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
@@ -106,17 +109,17 @@ export const GET = withErrorHandler(
     //
     // A resolution failure propagates rather than defaulting to false: for a
     // drafts-configured Single, false is the destructive answer.
-    const draftsEnabled = await schemaDraftsEnabled({
+    const draftSplit = await schemaDraftSplit({
       status: (single as { status?: boolean }).status,
       versions: single.versions,
-      localized: (single as { localized?: boolean }).localized,
       fields: single.fields,
+      slug: (single as { slug?: string }).slug,
     });
 
     return respondDoc({
       ...single,
       fields: enrichedFields,
-      draftsEnabled,
+      ...draftSplitResponseFields(draftSplit),
     } as unknown as typeof single);
   }
 );

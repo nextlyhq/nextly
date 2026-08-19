@@ -29,7 +29,10 @@ import {
   coerceBuilderMaxPerDoc,
   resolveBuilderVersions,
 } from "../domains/versions/builder-versions";
-import { schemaDraftsEnabled } from "../domains/versions/draft-split-eligibility";
+import {
+  draftSplitResponseFields,
+  schemaDraftSplit,
+} from "../domains/versions/draft-split-eligibility";
 import { resolveBuilderWebhooks } from "../domains/webhooks/builder-webhooks";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
@@ -132,17 +135,17 @@ export const GET = withErrorHandler(
     // of storing a working draft — so this independently exported GET fails
     // closed and is retryable, matching the dispatcher path and the fail-closed
     // resolveComponentSchemas it calls into.
-    const draftsEnabled = await schemaDraftsEnabled({
+    const draftSplit = await schemaDraftSplit({
       status: (collection as { status?: boolean }).status,
       versions: collection.versions,
-      localized: (collection as { localized?: boolean }).localized,
       fields: collection.fields,
+      slug: (collection as { slug?: string }).slug,
     });
 
     return respondDoc({
       ...(collectionWithViews as unknown as typeof collection),
       fields: enrichedFields,
-      draftsEnabled,
+      ...draftSplitResponseFields(draftSplit),
     } as unknown as typeof collection);
   }
 );

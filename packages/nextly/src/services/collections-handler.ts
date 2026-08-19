@@ -19,7 +19,10 @@ import {
   buildRetentionRunner,
   retentionPoliciesFrom,
 } from "../domains/retention/passes";
-import { schemaDraftsEnabled } from "../domains/versions/draft-split-eligibility";
+import {
+  draftSplitResponseFields,
+  schemaDraftSplit,
+} from "../domains/versions/draft-split-eligibility";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
 import type { ResolvedWebhookRetentionConfig } from "../domains/webhooks/retention-config";
 import type { RichTextOutputFormat } from "../lib/rich-text-html";
@@ -485,15 +488,16 @@ export class CollectionsHandler {
       // status-less save that stores a working draft. Failing the read keeps the
       // editor from acting on an unknown verdict; it is retryable, and mirrors
       // resolveComponentSchemas, which is fail-closed for the same reason.
-      data.draftsEnabled = await schemaDraftsEnabled({
+      const draftSplit = await schemaDraftSplit({
         status: data.status as boolean | undefined,
         versions: data.versions as
           | { drafts?: { enabled?: boolean } }
           | null
           | undefined,
-        localized: data.localized as boolean | undefined,
         fields: originalFields,
+        slug: data.slug as string | undefined,
       });
+      Object.assign(data, draftSplitResponseFields(draftSplit));
     }
 
     return result;
