@@ -150,26 +150,42 @@ describe("isTypesCompatible - symmetry", () => {
 // null for both sides of the pair and the detector falls to drop_and_add. It recreates the column
 // empty for a change the diff says is not a change.
 //
-// Asserted over the alias TARGETS rather than a hand-written list of types, so it is complete over
-// the set where the two implementations can disagree at all: a non-aliased token passes through
-// `normalizeType` unchanged and so already matches whatever the table lists. Adding an alias now
-// forces a family decision here rather than failing silently on a live database.
+// Asserted over the alias TARGETS rather than a hand-written list of types. That covers the
+// SCALAR spellings, which is where the divergence this repairs lived, and it is narrower than the
+// set of strings the detector can receive — `normalizeType` also produces array tokens (`_int4`
+// and `integer[]` both canonicalise to `int4[]`), and `Object.values(TYPE_ALIASES)` contains none
+// of them. An array column is incompatible with itself here exactly as `float8` was; no field type
+// renders one today, because `hasMany` reaches `jsonb`, so the pair is unreachable from this
+// product rather than handled.
 describe("every canonical type token PostgreSQL introspection can report has a family", () => {
-  it("leaves no canonical token without one", () => {
-    // 🔴 The population is asserted by MEMBERSHIP, not by size. The assertion below passes on an
-    // empty filter result, which a float-less token set satisfies perfectly — so a later edit to
-    // `TYPE_ALIASES` dropping the float entries would leave this green while removing the very pair
-    // it exists to watch. Naming them is what makes that edit fail here.
+  it("puts each canonical token in the family that type belongs to", () => {
+    // 🔴 The population is asserted by MEMBERSHIP, not by size. The filter below passes on an empty
+    // result, which a float-less token set satisfies perfectly — so a later edit to `TYPE_ALIASES`
+    // dropping the float entries would leave this green while removing the very pair it exists to
+    // watch. Naming them is what makes that edit fail here.
     expect(
       CANONICAL_TYPE_TOKENS,
       "the floating-point canonical tokens this check exists to cover"
     ).toEqual(expect.arrayContaining(["float8", "float4"]));
 
+    // 🔴 Null-reachability — that `typeFamilyOf` can still answer null at all — is what stops the
+    // filter below being vacuous, and it is asserted by "returns null for unknown types" above
+    // rather than here. Declared rather than left to be inferred: a neighbouring control is a real
+    // control and a fragile one, and rewriting that test silently empties this one.
     expect(
       CANONICAL_TYPE_TOKENS.filter(
         token => typeFamilyOf(token, "postgresql") === null
       ),
       "introspection reports these spellings and the rename detector does not recognise them — a rename between two columns of such a type drops the data"
     ).toEqual([]);
+
+    // Non-null is the weaker property, and for the self-pair it is enough: one spelling cannot
+    // disagree with itself about which family it is in. It says nothing about whether the table is
+    // RIGHT, and the separating property is that spellings meaning one storage type share a family.
+    // Measured: moving `float8` into `binary` leaves every assertion above green while
+    // `numeric -> float8` — a number field whose format changes from decimal to float — silently
+    // becomes drop_and_add, which is the same data loss one type along.
+    expect(typeFamilyOf("float8", "postgresql")).toBe("decimal");
+    expect(typeFamilyOf("float4", "postgresql")).toBe("decimal");
   });
 });
