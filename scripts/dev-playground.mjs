@@ -10,7 +10,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { runAllChecks } from "./dev-doctor.mjs";
-import { pnpmInvocation } from "./pnpm-invocation.mjs";
+import { pnpmInvocation, treeKillCommand } from "./pnpm-invocation.mjs";
 
 // Minimal .env parser. Just enough for `KEY=value` and `KEY="quoted"`
 // shapes; comments and empty lines are skipped. Stays dependency-free
@@ -244,10 +244,29 @@ async function main() {
   // spawn-issued and the listener-attached path doesn't bypass the
   // forwarding. The handlers null-check `child` so an early SIGINT
   // (before the spawn returns) just exits cleanly.
+  //
+  // What the handler can REACH matters as much as when it is armed. On
+  // Windows `child` is the cmd.exe that pnpmInvocation asks for, so killing
+  // the handle would stop the shell and leave `next dev` running on the
+  // port; treeKillCommand supplies the tree kill that reaches it, and
+  // returns null on POSIX, where the handle is pnpm itself and the signal
+  // is real. If the tree kill cannot run, fall back rather than hang.
   let child = null;
   const forward = sig => () => {
-    if (child) child.kill(sig);
-    else process.exit(0);
+    if (!child) {
+      process.exit(0);
+      return;
+    }
+    const treeKill = treeKillCommand(child.pid);
+    if (!treeKill) {
+      child.kill(sig);
+      return;
+    }
+    const killer = spawn(treeKill.command, treeKill.args, { stdio: "ignore" });
+    killer.on("error", () => child.kill(sig));
+    killer.on("exit", code => {
+      if (code !== 0) child.kill(sig);
+    });
   };
   process.on("SIGINT", forward("SIGINT"));
   process.on("SIGTERM", forward("SIGTERM"));

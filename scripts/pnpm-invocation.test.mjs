@@ -23,7 +23,11 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { pnpmInvocation, quoteForCmd } from "./pnpm-invocation.mjs";
+import {
+  pnpmInvocation,
+  quoteForCmd,
+  treeKillCommand,
+} from "./pnpm-invocation.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WRAPPER = path.join(HERE, "dev-playground.mjs");
@@ -107,6 +111,63 @@ describe("quoteForCmd", () => {
 
   it("doubles an embedded quote, as cmd.exe expects", () => {
     expect(quoteForCmd('a "b" c')).toBe('"a ""b"" c"');
+  });
+});
+
+describe("treeKillCommand", () => {
+  it.each(["linux", "darwin", "freebsd"])(
+    "asks for nothing on %s, where the signal already lands",
+    platform => {
+      expect(treeKillCommand(4321, platform)).toBeNull();
+    }
+  );
+
+  it("walks the tree on Windows, where the handle is only the shell", () => {
+    // /t is the whole point: without it taskkill stops cmd.exe and leaves
+    // next dev holding the port, which is the state child.kill already
+    // produces. /f because a console app under a dying shell will not
+    // acknowledge a polite close.
+    expect(treeKillCommand(4321, "win32")).toEqual({
+      command: "taskkill",
+      args: ["/pid", "4321", "/t", "/f"],
+    });
+  });
+
+  it("passes the pid as a string, which spawn arguments must be", () => {
+    const { args } = treeKillCommand(4321, "win32");
+
+    for (const arg of args) expect(typeof arg).toBe("string");
+  });
+
+  it("reads the running platform when none is given", () => {
+    const command = treeKillCommand(4321);
+
+    expect(command === null).toBe(process.platform !== "win32");
+  });
+});
+
+describe("the wrapper's shutdown path", () => {
+  it("kills the tree rather than the handle it was given", async () => {
+    // The forwarder is inside main(), which cannot be imported without
+    // booting a dev server, so the wiring is asserted at the source level —
+    // the same reason pnpmInvocation lives in its own module.
+    const source = await readFile(WRAPPER, "utf-8");
+
+    expect(source).toContain("treeKillCommand(child.pid)");
+
+    // A bare child.kill(sig) as the ONLY disposal would be the regression:
+    // it must stay reachable as the POSIX branch and the fallback, never as
+    // the unconditional path.
+    expect(source).not.toMatch(/if \(child\) child\.kill\(sig\);/);
+  });
+
+  it("still falls back when the tree kill cannot run", async () => {
+    const source = await readFile(WRAPPER, "utf-8");
+
+    // Without both handlers a missing or failing taskkill leaves the
+    // wrapper waiting on an exit that never comes.
+    expect(source).toContain('killer.on("error"');
+    expect(source).toContain('killer.on("exit"');
   });
 });
 

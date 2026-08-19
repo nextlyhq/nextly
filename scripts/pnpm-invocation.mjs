@@ -1,5 +1,10 @@
 /**
- * How to spawn pnpm, per platform.
+ * How to spawn pnpm, per platform, and how to stop what that spawn produced.
+ *
+ * Stopping belongs here because on Windows it is a consequence of the shell
+ * below, not an independent concern: the shell is what puts a process between
+ * the wrapper and its child, and a reader who changes one rule needs the
+ * other in view.
  *
  * Its own module, and deliberately free of side effects, so the dev wrapper's
  * spawn rules can be tested without importing the wrapper — which would boot a
@@ -61,4 +66,36 @@ export function pnpmInvocation(args, platform = process.platform) {
     return { command: "pnpm", args, shell: false };
   }
   return { command: "pnpm", args: args.map(quoteForCmd), shell: true };
+}
+
+/**
+ * How to stop the wrapper's long-lived child, per platform.
+ *
+ * The other side of the shell above. On Windows the handle `spawn` returns is
+ * cmd.exe, not `next dev`, and Windows has no signal delivery: `child.kill()`
+ * is a TerminateProcess against that one handle. The shell dies, `next dev`
+ * is orphaned, and the port stays held by a process no longer reachable from
+ * the wrapper.
+ *
+ * An interactive Ctrl-C hides this. The console raises CTRL_C_EVENT on the
+ * whole process group without going through the wrapper's handler at all, so
+ * the grandchild gets it either way. The case that leaks is a programmatic
+ * SIGTERM — a supervising script, an editor's task runner, a test harness —
+ * which reaches only the handle. `taskkill /t` walks the child tree, which is
+ * the only way to reach a grandchild there.
+ *
+ * POSIX needs none of it: no shell was used, so the handle IS pnpm, and the
+ * signal it is sent is a real one. Returning null rather than a POSIX command
+ * keeps that difference explicit at the call site.
+ *
+ * @param {number} pid - the spawned child's pid.
+ * @param {string} platform - a `process.platform` value.
+ * @returns {{command: string, args: string[]}|null} a tree-kill command, or
+ *   null when the platform's own signal delivery already suffices.
+ */
+export function treeKillCommand(pid, platform = process.platform) {
+  if (platform !== "win32") {
+    return null;
+  }
+  return { command: "taskkill", args: ["/pid", String(pid), "/t", "/f"] };
 }
