@@ -41,7 +41,13 @@ function documentedScopes() {
 function documentedUnscoped() {
   const doc = read("AGENTS.md");
   const sentence = doc.match(/Packages currently without an\n\s+accepted scope \(([^)]*)\)/);
-  if (!sentence) return [];
+  if (!sentence) {
+    // Absence must mean the sentence is GONE, not that it drifted past the
+    // anchor: a reworded gap claim that no longer parses would otherwise
+    // read as "no gap documented" and pass against an empty workspace list.
+    expect(doc, "AGENTS.md mentions an accepted-scope gap the anchor cannot parse").not.toMatch(/without an accepted scope/i);
+    return [];
+  }
   return (sentence[1].match(/`([^`]+)`/g) || []).map(n => n.replace(/`/g, "")).sort();
 }
 
