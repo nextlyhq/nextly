@@ -210,9 +210,12 @@ export const versionApi = {
    * names which one is being thrown away and which language's live values come
    * back. Omitting it means the request names no language, which the server
    * resolves to the default — the ordinary path when editing that language.
+   *
+   * Both scopes, sharing `basePath`. A Single's URL carries no document id: the
+   * server resolves it from the live row rather than trusting the client.
    */
   discardWorkingDraft: (
-    scope: Extract<VersionScope, { kind: "collection" }>,
+    scope: VersionScope,
     locale?: string | null
   ): Promise<DiscardWorkingDraftResponse> => {
     const search = new URLSearchParams();

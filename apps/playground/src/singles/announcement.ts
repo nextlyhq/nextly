@@ -24,6 +24,13 @@ export const Announcement = defineSingle({
   // what "publish every language" exists to move at once.
   status: true,
   localized: true,
+  // Drafts versioning, which is what turns a status-less save on a PUBLISHED
+  // language into a held pending change rather than a live write. With the
+  // lifecycle alone the split never applies, so this is the only Single that
+  // exercises the combination — status + drafts + localized — that the
+  // per-language pending-change surfaces are about. Without it the feature has
+  // no dev surface and nobody sees it work, which is how it stayed dark.
+  versions: { drafts: true },
   fields: [
     // Shared across languages — the campaign is one thing whatever it is called.
     text({ name: "campaign", label: "Campaign", localized: false }),

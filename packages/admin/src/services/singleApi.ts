@@ -228,6 +228,13 @@ export const singleApi = {
       locale?: string;
       fallbackLocale?: string;
       translationStatus?: boolean;
+      /**
+       * Opt into the working-draft overlay, so an editor sees this Single's
+       * pending change rather than the published document. Gated server-side on
+       * an update-capability probe, so passing it never widens what a
+       * read-only caller can see.
+       */
+      draft?: boolean;
     }
   ): Promise<SingleDocument> => {
     const params = new URLSearchParams();
@@ -240,6 +247,7 @@ export const singleApi = {
       params.set("fallback-locale", options.fallbackLocale);
     }
     if (options?.translationStatus) params.set("translation-status", "1");
+    if (options?.draft) params.set("draft", "1");
     // context is trusted; pass status=all so a freshly-created Single
     // (auto-created with status='draft') is reachable. Without this
     // the user sees "Failed to load Single: Not found." on the page
