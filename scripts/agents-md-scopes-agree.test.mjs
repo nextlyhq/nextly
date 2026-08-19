@@ -40,7 +40,7 @@ function documentedScopes() {
 /** The packages AGENTS.md names as having no accepted scope. */
 function documentedUnscoped() {
   const doc = read("AGENTS.md");
-  const sentence = doc.match(/Two packages currently have NO\n\s+accepted scope \(([^)]*)\)/);
+  const sentence = doc.match(/Packages currently without an\n\s+accepted scope \(([^)]*)\)/);
   expect(sentence, "unscoped-packages sentence not found in AGENTS.md — the anchor moved").toBeTruthy();
   return (sentence[1].match(/`([^`]+)`/g) || []).map(n => n.replace(/`/g, "")).sort();
 }

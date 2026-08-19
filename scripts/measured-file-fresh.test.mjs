@@ -9,11 +9,15 @@ import { describe, expect, it } from "vitest";
  * AGENTS.measured.md is generated, and a generated file with no consumer
  * silently rots: the workspace gains a package, the enforced scope list
  * moves, and the committed copy keeps describing the old repository with a
- * banner that says it can be trusted. This regenerates the cheap,
- * deterministic rows and holds the committed copy to matching them, so any
- * change to what they measure forces a regeneration in the same change.
- * Heavy rows are excluded: their values depend on build state, which a unit
- * test neither controls nor should.
+ * banner that says it can be trusted. This regenerates the three
+ * rows that are cheap AND deterministic — packages, pr-scopes, engines —
+ * and holds the committed copy to matching them, so any change to what they
+ * measure forces a regeneration in the same change. Heavy rows are excluded
+ * because their values depend on build state, which a unit test neither
+ * controls nor should; the comment-convention row is excluded because its
+ * count moves with any file added anywhere, and each row carries the
+ * revision it was read at, so an aged count is visibly old rather than
+ * silently wrong.
  */
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
