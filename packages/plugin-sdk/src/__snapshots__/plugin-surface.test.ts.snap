@@ -81,6 +81,7 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "useDocumentStatus (value)",
   "usePluginClientConfig (value)",
   "usePluginFieldTypeEntries (value)",
+  "useReportUnsavedWork (value)",
   "useSuppressAdminChrome (value)",
   "withOptionIds (value)",
 ]

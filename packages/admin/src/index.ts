@@ -101,6 +101,13 @@ export {
   hasPendingWorkingDraft,
   type DocumentStatus,
 } from "./components/features/entries/EntryForm/EntryFormContext";
+/**
+ * A field telling the form it holds work the form's values do not contain.
+ *
+ * Exported for the plugin surface: a contributed field with its own editing
+ * state is invisible to the dirty flag everything else is derived from.
+ */
+export { useReportUnsavedWork } from "./components/features/entries/EntryForm/UnsavedWorkContext";
 export {
   pillStateFromForm,
   PILL_LABEL,

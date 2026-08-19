@@ -61,6 +61,7 @@ import {
 import {
   useDocumentCheckpoint,
   usePluginClientConfig,
+  useReportUnsavedWork,
   useSuppressAdminChrome,
 } from "@nextlyhq/plugin-sdk/admin";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -366,6 +367,18 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   });
 
   useCheckpoints({ name, control, document: editor.document });
+
+  /*
+   * Tell the form this editor holds work its values do not contain, so the
+   * navigation guard warns and the save shortcut works while the canvas is
+   * open. `undoDepth` rather than comparing documents: an edit and its undo
+   * leave a document equal to the original but not identical to it, so a
+   * reference comparison would report work that was taken back.
+   *
+   * Retracted when this component unmounts, which is the same moment `done`
+   * commits the document and makes the form dirty for real.
+   */
+  useReportUnsavedWork(`blocks:${name}`, editor.undoDepth > 0);
 
   /*
    * Writing back on the way out rather than on every keystroke.
