@@ -54,6 +54,7 @@ import { mediaTables } from "./media";
 import { nextlyI18nArchiveTables } from "./nextly-i18n-archive";
 import { nextlyMetaTables } from "./nextly-meta";
 import { rbacTables } from "./rbac";
+import { releasesTables } from "./releases";
 import { schemaEventsTables } from "./schema-events";
 import { siteSettingsMysql } from "./site-settings/mysql";
 import { siteSettingsPg } from "./site-settings/postgres";
@@ -183,6 +184,13 @@ export function getCoreSchema(
     // unlike the migration ledger), so declaring it here is sufficient:
     // core-reconcile creates it on fresh and existing databases.
     ...Object.values(versionsTables(dialect)),
+    // The release tables are first-class managed system tables, declared here
+    // for the same reason `nextly_versions` is: nothing records into them
+    // before they exist, so core-reconcile creating them on fresh and existing
+    // databases is sufficient. Declaring the Drizzle tables alone would not be
+    // — a table absent from this snapshot is never created by db:sync, and the
+    // SQLite bootstrap fallback would hide that on one dialect only.
+    ...Object.values(releasesTables(dialect)),
     ...Object.values(webhookTables(dialect)),
   ];
 
@@ -278,6 +286,8 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "nextly_schema_events",
   "nextly_i18n_archive",
   "nextly_versions",
+  "nextly_releases",
+  "nextly_release_members",
   "nextly_events",
   "nextly_webhooks",
   "nextly_webhook_deliveries",
