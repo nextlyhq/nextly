@@ -209,17 +209,16 @@ function asIntrospected(declared: string, dialect: SupportedDialect): string {
  * spellings recreates the column empty, for a change the diff itself says is not a change.
  */
 const ACCEPTED: Record<string, string> = {
-  // One entry, and it is worth saying why there is not a second. The family table also splits
-  // MySQL's `boolean` from `tinyint`, which looks like the same class of bug. That spelling never
-  // reaches the detector: a column declared `boolean` is reported by MySQL as `tinyint(1)`, so a
-  // checkbox rename compares `tinyint(1)` with itself and is already compatible.
+  // Empty, and it is worth saying why rather than leaving the next reader to wonder whether the
+  // list was ever populated. It held one entry: `float8` was absent from the PostgreSQL family
+  // table, so a float column was incompatible with ITSELF and every rename of one fell to
+  // drop_and_add. Adding `float8` and `float4` to that table resolved it, and the assertion below
+  // is what forced this entry out with them.
   //
-  // 🔴 `float8` is absent from the PostgreSQL family table entirely, so it is incompatible with
-  // ITSELF: `typeFamilyOf` answers null and every pair involving it falls to drop_and_add. `real`
-  // (float4) and `numeric` are both present, which is why this went unnoticed. Consequence:
-  // renaming a float number field on PostgreSQL drops the column.
-  "postgresql:float8->float8":
-    "float8 missing from the PostgreSQL family table",
+  // The family table also splits MySQL's `boolean` from `tinyint`, which looks like the same class
+  // of bug and must not be added here. That spelling never reaches the detector: a column declared
+  // `boolean` is reported by MySQL as `tinyint(1)`, so a checkbox rename compares `tinyint(1)` with
+  // itself and is already compatible.
 };
 
 const keyFor = (dialect: string, from: string, to: string): string =>

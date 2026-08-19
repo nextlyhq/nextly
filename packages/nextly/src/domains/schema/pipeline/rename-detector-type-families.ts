@@ -48,11 +48,22 @@ const PG_FAMILIES: Record<TypeFamily, readonly string[]> = {
     "bigserial",
     "smallserial",
   ],
+  // float8 and float4 are what PG's information_schema.columns.udt_name
+  // returns for `double precision` and `real`; the SQL-standard spellings
+  // beside them only ever reach this table from the DESIRED side. Without
+  // the internal names a float column is not merely unmatched against its
+  // SQL spelling — it is incompatible with ITSELF, because both sides of the
+  // pair introspect as `float8`, typeFamilyOf answers null for each, and the
+  // rename falls to drop_and_add. `numeric` and the integer family's int2 /
+  // int4 / int8 already carry both spellings, which is why this gap was
+  // confined to floats.
   decimal: [
     "decimal",
     "numeric",
     "real",
+    "float4",
     "double precision",
+    "float8",
     "double",
     "float",
   ],
