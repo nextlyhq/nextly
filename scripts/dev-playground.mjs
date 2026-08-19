@@ -10,6 +10,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { runAllChecks } from "./dev-doctor.mjs";
+import { pnpmInvocation, treeKillCommand } from "./pnpm-invocation.mjs";
 
 // Minimal .env parser. Just enough for `KEY=value` and `KEY="quoted"`
 // shapes; comments and empty lines are skipped. Stays dependency-free
@@ -79,7 +80,7 @@ async function ensureDbReachable(name, host, port, dockerArgs, waitSeconds) {
     return;
   }
   console.log(`[nextly] Starting ${name} via docker compose...`);
-  const code = await runChild("pnpm", dockerArgs, NEXTLY_ROOT);
+  const code = await runPnpm(dockerArgs, NEXTLY_ROOT);
   if (code !== 0) {
     console.error(
       `[nextly] ✗ docker:up exited ${code} while bringing up ${name}.`
@@ -184,8 +185,7 @@ async function main() {
    * cached, against a blank admin whose error names the wrong package.
    */
   console.log("[nextly] Building workspace packages (cached when current)...");
-  const buildExit = await runChild(
-    "pnpm",
+  const buildExit = await runPnpm(
     ["turbo", "build", "--filter=./packages/*"],
     NEXTLY_ROOT
   );
@@ -227,8 +227,7 @@ async function main() {
   // the steady-state cost is negligible.
   if (process.env.NEXTLY_SKIP_SEED !== "1") {
     console.log("[nextly] Auto-seeding empty playground...");
-    const seedExitCode = await runChild(
-      "pnpm",
+    const seedExitCode = await runPnpm(
       ["tsx", path.join(PLAYGROUND_DIR, "scripts/seed.ts")],
       PLAYGROUND_DIR,
       childEnv
@@ -245,34 +244,66 @@ async function main() {
   // spawn-issued and the listener-attached path doesn't bypass the
   // forwarding. The handlers null-check `child` so an early SIGINT
   // (before the spawn returns) just exits cleanly.
+  //
+  // What the handler can REACH matters as much as when it is armed. On
+  // Windows `child` is the cmd.exe that pnpmInvocation asks for, so killing
+  // the handle would stop the shell and leave `next dev` running on the
+  // port; treeKillCommand supplies the tree kill that reaches it, and
+  // returns null on POSIX, where the handle is pnpm itself and the signal
+  // is real. If the tree kill cannot run, fall back rather than hang.
   let child = null;
   const forward = sig => () => {
-    if (child) child.kill(sig);
-    else process.exit(0);
+    if (!child) {
+      process.exit(0);
+      return;
+    }
+    const treeKill = treeKillCommand(child.pid);
+    if (!treeKill) {
+      child.kill(sig);
+      return;
+    }
+    const killer = spawn(treeKill.command, treeKill.args, { stdio: "ignore" });
+    killer.on("error", () => child.kill(sig));
+    killer.on("exit", code => {
+      if (code !== 0) child.kill(sig);
+    });
   };
   process.on("SIGINT", forward("SIGINT"));
   process.on("SIGTERM", forward("SIGTERM"));
 
   // Spawn `next dev` from the playground directory. Inherit stdio so
   // Next.js logs flow through unmodified.
-  child = spawn("pnpm", ["next", "dev"], {
+  const dev = pnpmInvocation(["next", "dev"], process.platform, childEnv);
+  child = spawn(dev.command, dev.args, {
     cwd: PLAYGROUND_DIR,
     stdio: "inherit",
     env: childEnv,
+    shell: dev.shell,
   });
 
   child.on("exit", code => process.exit(code ?? 0));
 }
 
-// Helper: spawn a one-shot child, inherit stdio, resolve to its exit
+// Helper: run a one-shot pnpm sub-command, inherit stdio, resolve to its exit
 // code (number; never rejects on exit-non-zero so callers can decide
-// whether to bail).
-function runChild(cmd, args, cwd, env) {
+// whether to bail). Routes through pnpmInvocation so Windows gets the shell
+// it needs and the quoting that shell then requires.
+function runPnpm(args, cwd, env) {
   return new Promise(resolve => {
-    const proc = spawn(cmd, args, {
+    // One env object for both, because pnpmInvocation checks the arguments
+    // against the environment cmd.exe will actually expand against, and a
+    // check run against a different one is no check.
+    const childEnv = env ?? { ...process.env };
+    const {
+      command,
+      args: argv,
+      shell,
+    } = pnpmInvocation(args, process.platform, childEnv);
+    const proc = spawn(command, argv, {
       cwd,
       stdio: "inherit",
-      env: env ?? { ...process.env },
+      env: childEnv,
+      shell,
     });
     proc.on("exit", code => resolve(code ?? 0));
   });
