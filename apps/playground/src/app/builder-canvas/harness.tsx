@@ -106,6 +106,13 @@ export function BuilderCanvasHarness() {
        */
       data-nx-dragging={drag.draggingId ?? ""}
       data-nx-drop-target={drag.target ? JSON.stringify(drag.target) : ""}
+      /*
+       * The editor's own undo depth, so "one drop is one undo entry" is asked
+       * of the OP STORE rather than inferred from the tree. A suite counting
+       * document changes instead would pass for a drop that recorded two ops
+       * whose net effect happened to look like one.
+       */
+      data-nx-undo-depth={editor.undoDepth}
     >
       <Canvas
         document={editor.document}
