@@ -2647,10 +2647,6 @@ export class CollectionQueryService extends BaseService {
       // routeAuthorized` excludes an anonymous caller passing `?status=all`.
       const draftEligible =
         (collectionForStatus as { status?: boolean }).status === true &&
-        // The working-draft split is non-localized-only (the write path stores
-        // no draft for a localized collection), so skip the lookup there rather
-        // than issue a read that can only miss.
-        (collectionForStatus as { localized?: boolean }).localized !== true &&
         // Only when drafts are still enabled. If the collection turned drafts
         // off after a working draft was written, the write path no longer
         // promotes or deletes it, so surfacing it here would shadow the live
@@ -2719,6 +2715,7 @@ export class CollectionQueryService extends BaseService {
             documentLocalized:
               (collection as { localized?: boolean }).localized === true,
             requestLocale: params.locale ?? null,
+            defaultLocale: this.localization?.defaultLocale ?? null,
           })
         );
         // Mirror the write gate's eligibility check before overlaying: a

@@ -35,6 +35,15 @@ export interface DraftHoldInput {
    * key one under the wrong slot.
    */
   requestLocale?: string | null;
+  /**
+   * The app's default locale, for a request that named none.
+   *
+   * A write that names no locale still lands somewhere — the default language —
+   * so its pending change has to key there too. Without this, a localized
+   * document edited without an explicit locale is refused a hold and its edit
+   * goes live, which is the opposite of what the caller asked for.
+   */
+  defaultLocale?: string | null;
 }
 
 export interface DraftHoldDecision {
@@ -47,6 +56,7 @@ export function resolveDraftHold(input: DraftHoldInput): DraftHoldDecision {
   const draftLocale = workingDraftLocale({
     documentLocalized: input.documentLocalized,
     requestLocale: input.requestLocale,
+    defaultLocale: input.defaultLocale,
   });
   const eligible = isDraftSplitEligible({
     collectionHasStatus: input.collectionHasStatus,

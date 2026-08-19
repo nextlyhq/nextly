@@ -1328,10 +1328,12 @@ describe("draft/published split — promote on publish (integration)", () => {
     expect(promo?.label).toBe("live");
   });
 
-  it("edits a localized collection live without a working draft", async () => {
-    // A localized document is ineligible for the split (a disqualifier known
-    // without the registry), so a status-less edit writes the live row directly
-    // and stores no working draft even when the schema references a component.
+  it("holds a localized edit that names no language, under the default", async () => {
+    // A localized document IS eligible for the split, including one whose
+    // schema references a component: a snapshot holds one locale's values and
+    // the draft is keyed by that locale. A request naming no locale is the
+    // admin's ordinary path for the default language, and its pending change
+    // keys under the default rather than being refused.
     handle = await createTestNextly({
       localization: { locales: ["en", "es"], defaultLocale: "en" },
       fieldGroups: [
@@ -1364,11 +1366,12 @@ describe("draft/published split — promote on publish (integration)", () => {
       { title: "edited" }
     );
     expect(res.success).toBe(true);
-    expect(await workingDraftCount(id)).toBe(0);
+    expect(await workingDraftCount(id)).toBe(1);
     // A localized collection keeps its text per locale, so read the live value
-    // back through getEntry rather than the main row.
+    // back through getEntry rather than the main row. The live translation is
+    // untouched: the edit is held, not published.
     const read = await entries.getEntry({ ...ctx, entryId: id, locale: "en" });
-    expect((read.data as { title?: string }).title).toBe("edited");
+    expect((read.data as { title?: string }).title).toBe("live");
   });
 
   it("keeps a live single component's other sub-fields on a first partial draft save", async () => {

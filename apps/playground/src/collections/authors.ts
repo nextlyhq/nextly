@@ -31,6 +31,11 @@ export const Authors = defineCollection({
   ],
   // Draft / Published lifecycle — the companion also gets a per-locale `_status`.
   status: true,
+  // Pending changes, per language: editing a published translation holds the
+  // edit for that language instead of publishing it. Enabled here because this
+  // is the only playground collection that is BOTH localized and lifecycled, so
+  // without it the per-language pending state has no surface to be seen on.
+  versions: { drafts: true },
   admin: {
     useAsTitle: "title",
   },

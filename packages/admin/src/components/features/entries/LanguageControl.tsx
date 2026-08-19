@@ -25,6 +25,7 @@ import { cn } from "@admin/lib/utils";
 import {
   LANGUAGE_STATE_LABEL,
   languageState,
+  languageStateLabel,
   type LanguageState,
   type LocaleTranslationMeta,
 } from "./translation-meta";
@@ -33,7 +34,7 @@ import {
 // be read off a `_translations` map. Re-exported here because this file was its
 // home while the control was its only reader, and several surfaces import it
 // from here.
-export { LANGUAGE_STATE_LABEL, languageState };
+export { LANGUAGE_STATE_LABEL, languageState, languageStateLabel };
 export type { LanguageState };
 
 /**
@@ -100,6 +101,12 @@ export function LanguageControl({
     >
       {locales.map((locale, index) => {
         const state = languageState(translations?.[locale.code]);
+        // A language holding unpublished work must not read as simply
+        // "published" here. This control is a row of compact chips with no room
+        // for a phrase, so the fact travels in the accessible name and the
+        // title, which is where this control already carries the state.
+        const pendingChange = translations?.[locale.code]?.pendingChange;
+        const stateLabel = languageStateLabel(state, pendingChange);
         const isActive = locale.code === active;
         return (
           <button
@@ -108,10 +115,10 @@ export function LanguageControl({
             onClick={() => onSelect(locale.code)}
             disabled={disabled}
             aria-pressed={isActive}
-            aria-label={`${locale.label} — ${LANGUAGE_STATE_LABEL[state]}${
+            aria-label={`${locale.label} — ${stateLabel}${
               locale.code === defaultLocale ? " (default)" : ""
             }`}
-            title={`${locale.label} — ${LANGUAGE_STATE_LABEL[state]}`}
+            title={`${locale.label} — ${stateLabel}`}
             className={cn(
               "inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",

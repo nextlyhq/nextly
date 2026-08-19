@@ -86,6 +86,21 @@ async function pendingLocales(entryId: string): Promise<string[]> {
   return rows.map(r => r.locale ?? "(none)").sort();
 }
 
+async function readDraftBody(
+  entries: CollectionEntryService,
+  id: string,
+  locale: string
+): Promise<unknown> {
+  const res = await entries.getEntry({
+    collectionName: COLLECTION,
+    entryId: id,
+    overrideAccess: true,
+    locale,
+    includeWorkingDraft: true,
+  });
+  return (res.data as { body?: unknown } | null)?.body;
+}
+
 async function readBody(
   entries: CollectionEntryService,
   id: string,
@@ -194,5 +209,52 @@ describe("pending changes per language (integration)", () => {
     expect(await readBody(entries, id, "es")).toBe("es edited");
     expect(await pendingLocales(id)).toEqual(["en"]);
     expect(await readBody(entries, id, "en")).toBe("en body");
+  });
+
+  it("holds an edit that names no language, under the default", async () => {
+    // The admin omits `?locale=` when editing the default language, so this is
+    // the ordinary path rather than an edge case. A localized document whose
+    // request names no locale still lands somewhere — the default language —
+    // and its pending change has to key there too. Treating "unnamed" as
+    // "unknown" refuses the hold and puts the edit straight on the live site,
+    // which is the opposite of what the author asked for.
+    const entries = await boot();
+    const id = await publishBoth(entries);
+
+    const res = await entries.updateEntry(
+      { collectionName: COLLECTION, entryId: id, overrideAccess: true },
+      { body: "edited with no locale named" }
+    );
+    expect(res.success).toBe(true);
+
+    expect(await pendingLocales(id)).toEqual(["en"]);
+    expect(await readBody(entries, id, "en")).toBe("en body");
+  });
+
+  it("shows the pending change to an editor, per language", async () => {
+    // Holding the edit is only half the feature. An author who saves and then
+    // sees their own words replaced by the published ones has been told the
+    // save did nothing. The draft view has to return the pending content for
+    // the language being edited — and only that language.
+    const entries = await boot();
+    const id = await publishBoth(entries);
+
+    await entries.updateEntry(
+      {
+        collectionName: COLLECTION,
+        entryId: id,
+        overrideAccess: true,
+        locale: "es",
+      },
+      { body: "es pending" }
+    );
+
+    expect(await readDraftBody(entries, id, "es")).toBe("es pending");
+    // English has nothing pending, so its draft view is the published content —
+    // without this the assertion above would pass against an overlay that
+    // returned the pending values for every language.
+    expect(await readDraftBody(entries, id, "en")).toBe("en body");
+    // And a plain read still shows the public content.
+    expect(await readBody(entries, id, "es")).toBe("es body");
   });
 });
