@@ -59,7 +59,7 @@ export { BlockBoundary, BlockList } from "./block-boundary";
 // `NODE_ID_ATTRIBUTE` is published deliberately: an editor hit-testing on the
 // attribute must not hard-code its spelling, or the renderer and the editor hold
 // two copies of one string and the editor breaks silently when it moves.
-export { NODE_ID_ATTRIBUTE } from "./block-boundary";
+export { NODE_ID_ATTRIBUTE, PROP_ATTRIBUTE } from "./block-boundary";
 export type { BlockBoundaryProps, BlockListProps } from "./block-boundary";
 
 export { BlockPlaceholder } from "./placeholder";

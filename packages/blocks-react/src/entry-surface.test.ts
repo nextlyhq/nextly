@@ -213,6 +213,7 @@ describe("the root entry", () => {
       "BlockList",
       "BlockPlaceholder",
       "NODE_ID_ATTRIBUTE",
+      "PROP_ATTRIBUTE",
       "PageRenderer",
       "createBlockResolver",
       "createStandaloneContext",

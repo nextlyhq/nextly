@@ -115,6 +115,36 @@ function isAllowedAttribute(name: string): boolean {
 /** The attribute an editor addresses a node by. Named, so one string decides it. */
 export const NODE_ID_ATTRIBUTE = "data-nx-node";
 
+/**
+ * The attribute naming which prop an element renders, for an editor.
+ *
+ * Written only when the editor asked for node addresses, so a published page
+ * carries none of it — the same condition {@link NODE_ID_ATTRIBUTE} rides on,
+ * because the two answer one question together: an editor needs to know which
+ * node it is looking at AND which of that node's values an element holds, and
+ * either alone addresses nothing.
+ */
+export const PROP_ATTRIBUTE = "data-nx-prop";
+
+/**
+ * Builds the `markProp` a block spreads onto the element carrying a value.
+ *
+ * Returns nothing at all outside an editor, and nothing for a prop the block
+ * has not declared `inline` — so the declaration and the marking have to agree
+ * before an editor sees anything, and a block that marks an element it never
+ * declared gets silence rather than an editable region nobody intended.
+ */
+function propMarker(
+  definition: { props?: Record<string, { inline?: boolean } | undefined> },
+  enabled: boolean
+): ((name: string) => Record<string, string>) | undefined {
+  if (!enabled) return undefined;
+  return (name: string): Record<string, string> => {
+    if (definition.props?.[name]?.inline !== true) return {};
+    return { [PROP_ATTRIBUTE]: name };
+  };
+}
+
 function withNodeAttributes(
   output: ReactNode,
   node: BlockNode,
@@ -529,6 +559,8 @@ export function BlockBoundary({
     declaresNothing = false;
   }
 
+  const marker = propMarker(definition, nodeAttribute === true);
+
   let output: unknown;
   try {
     output = definition.render({
@@ -536,6 +568,10 @@ export function BlockBoundary({
       node,
       className,
       ctx: context,
+      // Undefined rather than a no-op function when this is not an editor
+      // render, so `markProp?.("text")` spreads nothing and a published page
+      // is byte-identical to one rendered before this existed.
+      ...(marker === undefined ? {} : { markProp: marker }),
       // The renderer's, not the context's. A block may replace the context its
       // slot children see; it can neither drop nor forge this.
       ...(hostPolicy === undefined ? {} : { hostPolicy }),
