@@ -101,6 +101,7 @@ import {
 import { captureInTx } from "../../versions/capture-in-tx";
 import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
+import { VersionsRepository } from "../../versions/versions-repository";
 import type {
   GetSingleOptions,
   SingleDocument,
@@ -1885,9 +1886,22 @@ export class SingleQueryService extends BaseService {
       status: (singleMeta as { status?: boolean }).status === true,
     });
     if (!companion) return;
+    // Which languages hold a pending change. One document here, but the same
+    // batched lookup the collection read uses, so both overviews answer the
+    // question the same way.
+    const docId = (doc as { id?: unknown }).id;
+    const pendingChangeLocales =
+      typeof docId === "string"
+        ? await new VersionsRepository(this.adapter).findPendingChangeLocales(
+            "single",
+            slug,
+            [docId]
+          )
+        : undefined;
     await populateTranslationStatus({
       db: this.adapter.getDrizzle(),
       companionTable: companion.table,
+      pendingChangeLocales,
       localizedFields: companion.localizedFields,
       rows: [doc],
       locales: this.localization.locales.map(l => l.code),
