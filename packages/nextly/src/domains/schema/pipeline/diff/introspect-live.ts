@@ -567,13 +567,20 @@ const MYSQL_BARE_EXPRESSION_DEFAULT = /^current_timestamp(\s*\(\s*\d*\s*\))?$/i;
  * MySQL database produces a `CREATE TABLE` that cannot be applied anywhere,
  * including back to the database it came from.
  *
- * Two forms must be left exactly as reported. An expression that is not a
- * single call is reported ALREADY parenthesised as a whole (`(1 + 2)`), so
- * wrapping it again would make the recorded text differ from what the next
- * introspection reads and show as drift. And `CURRENT_TIMESTAMP` must stay
- * bare because the parenthesised form is a DIFFERENT column definition to
- * MySQL: `DEFAULT (CURRENT_TIMESTAMP)` is recorded as the ordinary expression
- * `now()`, losing the auto-initialisation the bare keyword carries.
+ * Two forms must be left exactly as reported, and for the SAME reason both
+ * times: the recorded text has to survive a round trip, or the next
+ * introspection reads something else and the diff reports drift that is not
+ * there. An expression that is not a single call is reported ALREADY
+ * parenthesised as a whole (`(1 + 2)`), so wrapping it again changes it. And
+ * `CURRENT_TIMESTAMP` does not survive being wrapped: MySQL rewrites
+ * `DEFAULT (CURRENT_TIMESTAMP)` to `DEFAULT (now())` and reports `now()` back,
+ * so a snapshot that wrapped it would differ from the table it describes on
+ * every subsequent read.
+ *
+ * The two forms remain equivalent to INSERT - both auto-initialise, and both
+ * accept `ON UPDATE CURRENT_TIMESTAMP`, measured on MySQL 8.0.46. The
+ * difference is the recorded text alone, which is what makes this a diff
+ * problem rather than a semantic one.
  *
  * NOT repaired here: an expression that CONTAINS a string literal is reported
  * with its quotes backslash-escaped — `DEFAULT (lower('X'))` comes back as
