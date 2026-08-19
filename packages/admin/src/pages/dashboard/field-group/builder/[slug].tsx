@@ -3,78 +3,52 @@
 /**
  * Field Group Builder, edit page.
  *
- * Mirrors the Collection and Single edit pages: BuilderToolbar at top,
- * BuilderFieldList in body inside DndContext, overlays mounted lazily.
- *
- * The schema-change preview and apply pipeline is wired the same way as the
- * collection builder, through SafeChangeConfirmDialog, SchemaChangeDialog and
- * RestartContext. Field groups differ in that:
- * - No HooksEditorSheet (showHooks: false in FIELD_GROUP_BUILDER_CONFIG).
+ * Draws the shared builder frame (BuilderPageLayout) and owns what a field
+ * group does differently:
  * - Uses fieldGroupApi.previewSchemaChanges / applySchemaChanges.
  * - Settings modal uses Category instead of adminGroup; no Status/Order/Plural.
+ * - A diverged or failed migration record blocks saving, so the page offers the
+ *   repair inline rather than only on the listing.
  *
  * Locked code-first field groups render in readOnly mode.
  */
 
-import { DndContext, type DragEndEvent } from "@dnd-kit/core";
-import { arrayMove } from "@dnd-kit/sortable";
 import { zodResolver } from "@hookform/resolvers/zod";
-import {
-  Alert,
-  AlertDescription,
-  AlertTitle,
-  Button,
-  Skeleton,
-} from "@nextlyhq/ui";
+import { Alert, AlertDescription, AlertTitle, Button } from "@nextlyhq/ui";
 import type React from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useState } from "react";
 import { z } from "zod";
 
 import { ReconcileFieldGroupDialog } from "@admin/components/features/field-groups/ReconcileFieldGroupDialog";
 import {
-  BuilderFieldList,
-  BuilderReadOnlyNotice,
-  BuilderSettingsModal,
-  BuilderToolbar,
-  FieldEditorSheet,
-  FieldPickerModal,
-  SafeChangeConfirmDialog,
-  SchemaChangeDialog,
+  BuilderErrorScreen,
+  BuilderLoadingScreen,
+  BuilderNotFoundScreen,
+  BuilderPageLayout,
+  BuilderSchemaChangeDialogs,
+  type ActiveOverlay,
   type BuilderSettingsValues,
 } from "@admin/components/features/schema-builder";
-import type { BuilderField } from "@admin/components/features/schema-builder/types";
 import { AlertTriangle, RefreshCw } from "@admin/components/icons";
-import { PageContainer } from "@admin/components/layout/page-container";
-import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { toast } from "@admin/components/ui";
-import { useRestart } from "@admin/context/RestartContext";
 import {
   useFieldGroup,
   useUpdateFieldGroup,
 } from "@admin/hooks/queries/useFieldGroups";
+import { useBuilderEntityState } from "@admin/hooks/useBuilderEntityState";
+import { useBuilderFieldActions } from "@admin/hooks/useBuilderFieldActions";
 import { useFieldBuilder } from "@admin/hooks/useFieldBuilder";
+import { useSchemaChangeConfirmation } from "@admin/hooks/useSchemaChangeConfirmation";
 import {
-  convertToBuilderField,
-  convertToFieldDefinition,
-  DEFAULT_SYSTEM_FIELDS,
-  findFieldById,
-  findParentContainerId,
-  reorderNestedFields,
-} from "@admin/lib/builder";
-import { countDirtyFields } from "@admin/lib/builder/dirty-tracking";
-import { nextDuplicateName } from "@admin/lib/builder/duplicate-field-name";
-import { isInsideRepeatingAncestor } from "@admin/lib/builder/is-inside-repeating-ancestor";
-import { packIntoRows, parseWidth } from "@admin/lib/builder/reflow";
+  displayLabel,
+  mirrorSchemaFile,
+  useSchemaSave,
+} from "@admin/hooks/useSchemaSave";
 import { fieldGroupToManifestEntity } from "@admin/lib/builder/to-manifest-entity-field-group";
 import { fieldGroupApi } from "@admin/services/fieldGroupApi";
-import type {
-  FieldResolution,
-  SchemaPreviewResponse,
-  SchemaRenameResolution,
-} from "@admin/services/schemaApi";
 import { schemaFileApi } from "@admin/services/schemaFileApi";
 import type { FieldDefinition } from "@admin/types/collection";
-import type { SchemaField } from "@admin/types/entities";
+import type { ApiFieldGroup } from "@admin/types/entities";
 
 import { FIELD_GROUP_BUILDER_CONFIG } from "./builder-config";
 
@@ -87,17 +61,48 @@ const componentFormSchema = z.object({
 
 type FormData = z.infer<typeof componentFormSchema>;
 
-type ActiveOverlay =
-  | { kind: "none" }
-  | { kind: "settings" }
-  // PR D: parentFieldId? scopes the picker to a group/repeater.
-  | { kind: "picker"; insertAt: number; parentFieldId?: string }
-  // Why: NEW in PR C. Sheet renders in create mode against this draft;
-  // on Apply we append, on Cancel we discard.
-  // PR D: parentFieldId? extends the overlay so the new field can be
-  // committed into a parent group/repeater's nested fields.
-  | { kind: "create"; draft: BuilderField; parentFieldId?: string }
-  | { kind: "edit"; fieldId: string };
+/** The name a field group displays under, falling back to its slug. */
+function fieldGroupName(fieldGroup: ApiFieldGroup): string {
+  return fieldGroup.label || fieldGroup.slug || "";
+}
+
+/**
+ * The settings a loaded field group opens the builder with. A field group is a
+ * reusable building block rather than a record, so it carries none of the
+ * per-record policy the other kinds do — no status, no versions, no webhooks —
+ * and offers Category in their place.
+ */
+function fieldGroupSettings(fieldGroup: ApiFieldGroup): BuilderSettingsValues {
+  const adminBlock = (fieldGroup.admin ?? {}) as Record<string, unknown>;
+  return {
+    singularName: fieldGroupName(fieldGroup),
+    slug: fieldGroup.slug,
+    description: fieldGroup.description || "",
+    icon: (adminBlock.icon as string | undefined) || "Puzzle",
+    category: (adminBlock.category as string | undefined) || "",
+    i18n: (fieldGroup as { localized?: boolean }).localized === true,
+  };
+}
+
+/**
+ * Field groups compare only the settings they actually render, rather than
+ * using the shared comparator: the values it also reads — status, versions,
+ * retention, revalidate, webhooks — have no control on this kind's modal, so
+ * they are absent on both sides and could never differ.
+ */
+function fieldGroupSettingsAreDirty(
+  original: BuilderSettingsValues | null,
+  current: BuilderSettingsValues | null
+): boolean {
+  if (!original || !current) return false;
+  return (
+    original.singularName !== current.singularName ||
+    original.description !== current.description ||
+    original.icon !== current.icon ||
+    original.category !== current.category ||
+    original.i18n !== current.i18n
+  );
+}
 
 interface FieldGroupBuilderEditPageProps {
   params?: { slug?: string };
@@ -113,69 +118,39 @@ export default function FieldGroupBuilderEditPage({
     resolver: zodResolver(componentFormSchema),
     defaultValues: { singularName: "" },
   });
+  const { handleDuplicateField, handleRowDragEnd, getValidatedFields } =
+    useBuilderFieldActions(builder);
 
-  const [settings, setSettings] = useState<BuilderSettingsValues | null>(null);
-  // i18n: pinned load-time settings snapshot so a settings-only change (e.g. toggling
-  // Internationalization) enables Save even when no field changed.
-  const [originalSettings, setOriginalSettings] =
-    useState<BuilderSettingsValues | null>(null);
   const [active, setActive] = useState<ActiveOverlay>({ kind: "none" });
-  const [isInitialized, setIsInitialized] = useState(false);
   const [reconcileOpen, setReconcileOpen] = useState(false);
-  const [originalFields, setOriginalFields] = useState<
-    readonly BuilderField[] | null
-  >(null);
 
-  // Schema change confirmation state.
-  const [previewData, setPreviewData] = useState<SchemaPreviewResponse | null>(
-    null
-  );
-  const [showSchemaDialog, setShowSchemaDialog] = useState(false);
-  const [showSafeDialog, setShowSafeDialog] = useState(false);
-  const [isApplyingSchema, setIsApplyingSchema] = useState(false);
-  const { startRestart, stopRestart } = useRestart();
+  const confirmation = useSchemaChangeConfirmation();
 
   const { mutate: updateFieldGroup, isPending: isSaving } =
     useUpdateFieldGroup();
 
-  // Initialize builder + settings from the loaded field group.
-  useEffect(() => {
-    if (!fieldGroup || isInitialized) return;
-
-    builder.form.reset({
-      singularName: fieldGroup.label || fieldGroup.slug || "",
-    });
-
-    const userSchemaFields = (fieldGroup.fields ?? []).filter(
-      (f: SchemaField) => f.name !== "title" && f.name !== "slug"
-    );
-    const builderFields = userSchemaFields.map(
-      (field: SchemaField, index: number) =>
-        convertToBuilderField(field as unknown as FieldDefinition, index)
-    );
-    const allFields = [...DEFAULT_SYSTEM_FIELDS, ...builderFields];
-    builder.setFields(allFields);
-
-    setOriginalFields(allFields.filter(f => !f.isSystem));
-
-    const adminBlock = (fieldGroup.admin ?? {}) as Record<string, unknown>;
-    const loadedSettings: BuilderSettingsValues = {
-      singularName: fieldGroup.label || fieldGroup.slug || "",
-      slug: fieldGroup.slug,
-      description: fieldGroup.description || "",
-      icon: (adminBlock.icon as string | undefined) || "Puzzle",
-      category: (adminBlock.category as string | undefined) || "",
-      // i18n: reflect the saved localization flag so the Internationalization toggle shows real
-      // state (mirrors the collection/single builder).
-      i18n: (fieldGroup as { localized?: boolean }).localized === true,
-    };
-    setSettings(loadedSettings);
-    setOriginalSettings(loadedSettings);
-
-    setIsInitialized(true);
-  }, [fieldGroup, builder, isInitialized]);
+  const {
+    settings,
+    setSettings,
+    isInitialized,
+    unsavedCount,
+    pinFields,
+    pinSettings,
+  } = useBuilderEntityState({
+    entity: fieldGroup,
+    builder,
+    toFields: loaded => (loaded.fields ?? []) as unknown as FieldDefinition[],
+    toSettings: fieldGroupSettings,
+    isDirty: fieldGroupSettingsAreDirty,
+    onLoad: loaded =>
+      builder.form.reset({ singularName: fieldGroupName(loaded) }),
+  });
 
   const isLocked = fieldGroup?.locked === true;
+  // Resolved once: the save hook refuses outright without a slug, so the
+  // fallback below is only ever satisfying the type.
+  const entitySlug = slug ?? "";
+  const localized = settings?.i18n === true;
 
   /**
    * Whether this field group's record needs repairing before it will accept a save.
@@ -188,113 +163,32 @@ export default function FieldGroupBuilderEditPage({
     fieldGroup?.migrationStatus === "diverged" ||
     fieldGroup?.migrationStatus === "failed";
 
-  const settingsDirty = useMemo(() => {
-    if (!originalSettings || !settings) return false;
-    return (
-      originalSettings.singularName !== settings.singularName ||
-      originalSettings.description !== settings.description ||
-      originalSettings.icon !== settings.icon ||
-      originalSettings.category !== settings.category ||
-      // i18n: toggling Internationalization on its own must enable Save.
-      originalSettings.i18n !== settings.i18n
-    );
-  }, [originalSettings, settings]);
-
-  const unsavedCount = useMemo(() => {
-    if (!originalFields) return settingsDirty ? 1 : 0;
-    return (
-      countDirtyFields(
-        originalFields,
-        builder.fields.filter(f => !f.isSystem)
-      ) + (settingsDirty ? 1 : 0)
-    );
-  }, [builder.fields, originalFields, settingsDirty]);
-
-  const getValidatedFields = useCallback((): FieldDefinition[] | null => {
-    const userFields = builder.fields.filter(
-      f => !f.isSystem && f.name !== "title" && f.name !== "slug"
-    );
-    const validation = builder.validateFields(userFields);
-    if (!validation.valid) {
-      toast.error(validation.errorMessage);
-      return null;
-    }
-    return userFields.map(convertToFieldDefinition);
-  }, [builder]);
-
-  const applyFieldGroupSchemaChanges = useCallback(
-    async (
-      fieldDefinitions: FieldDefinition[],
-      schemaVersion: number,
-      resolutions: Record<string, FieldResolution>,
-      renameResolutions: SchemaRenameResolution[]
-    ) => {
+  // The schema landed. Unlike the other kinds there is no separate settings
+  // write here: a field group's save always carries its fields, so the settings
+  // went with them and both baselines move together.
+  const onSchemaApplied = useCallback(
+    async (fieldDefinitions: FieldDefinition[]) => {
       if (!slug) return;
-      setIsApplyingSchema(true);
-      if (typeof window !== "undefined") window.__nextlySchemaApplying = true;
-      startRestart();
-      try {
-        const result = await fieldGroupApi.applySchemaChanges(
-          slug,
-          fieldDefinitions,
-          schemaVersion,
-          resolutions,
-          renameResolutions,
-          // i18n: carry the current toggle so a simultaneous i18n flip + field change provisions
-          // the companion in the same apply.
-          settings?.i18n === true
-        );
-        if (result.success) {
-          const componentLabel = settings?.singularName?.trim() || slug;
-          const summarySuffix =
-            result.toastSummary && result.toastSummary !== "no changes"
-              ? `. ${result.toastSummary}`
-              : "";
-          stopRestart(true, `${componentLabel} schema updated${summarySuffix}`);
-          setShowSchemaDialog(false);
-          setShowSafeDialog(false);
-          setPreviewData(null);
-          setOriginalFields(builder.fields.filter(f => !f.isSystem));
-          if (settings) setOriginalSettings(settings);
+      pinFields();
+      if (settings) pinSettings(settings);
 
-          // D-series: database mode also writes the committable ui-schema.json
-          // so the component has a migration record. Non-fatal if it fails.
-          try {
-            const entity = fieldGroupToManifestEntity({
+      await mirrorSchemaFile(
+        () =>
+          schemaFileApi.writeFieldGroup(
+            fieldGroupToManifestEntity({
               slug,
               settings: {
                 singularName: settings?.singularName,
-                // i18n: mirror the Internationalization flag into ui-schema.json.
+                // Mirror the Internationalization flag into ui-schema.json.
                 localized: settings?.i18n === true,
               },
               fields: fieldDefinitions,
-            });
-            await schemaFileApi.writeFieldGroup(entity);
-          } catch (err) {
-            const m = (err as { message?: string })?.message;
-            toast.warning(
-              `Field group applied to the database, but ui-schema.json could not be updated${m ? `: ${m}` : ""}.`
-            );
-          }
-        } else {
-          stopRestart(
-            false,
-            result.message || "Failed to apply schema changes"
-          );
-        }
-      } catch (err) {
-        const errorObj = err as { message?: string };
-        stopRestart(
-          false,
-          errorObj?.message || "An error occurred while applying changes"
-        );
-      } finally {
-        setIsApplyingSchema(false);
-        if (typeof window !== "undefined")
-          window.__nextlySchemaApplying = false;
-      }
+            })
+          ),
+        "Field group applied to the database"
+      );
     },
-    [slug, startRestart, stopRestart, settings, builder.fields]
+    [slug, settings, pinFields, pinSettings]
   );
 
   const saveSettingsOnly = useCallback(
@@ -320,9 +214,9 @@ export default function FieldGroupBuilderEditPage({
         {
           onSuccess: () => {
             toast.success("Field group updated");
-            setOriginalFields(builder.fields.filter(f => !f.isSystem));
+            pinFields();
             // Re-pin settings baseline so the Save button disables again.
-            setOriginalSettings(settings);
+            pinSettings(settings);
           },
           onError: err => {
             const errorObj = err as { message?: string };
@@ -334,214 +228,87 @@ export default function FieldGroupBuilderEditPage({
         }
       );
     },
-    [slug, settings, updateFieldGroup, builder.fields]
+    [slug, settings, updateFieldGroup, pinFields, pinSettings]
   );
 
-  const handleSave = useCallback(async () => {
-    if (!slug) {
-      toast.error("Field group slug is missing");
-      return;
-    }
-
-    const fieldDefinitions = getValidatedFields();
-    if (!fieldDefinitions) return;
-
-    try {
-      const preview = await fieldGroupApi.previewSchemaChanges(
-        slug,
-        fieldDefinitions
-      );
-
-      if (!preview.hasChanges) {
-        saveSettingsOnly(fieldDefinitions);
-        return;
-      }
-
-      if (
-        preview.classification === "safe" &&
-        !(preview.renamed && preview.renamed.length > 0)
-      ) {
-        setPreviewData(preview);
-        setShowSafeDialog(true);
-        return;
-      }
-
-      setPreviewData(preview);
-      setShowSchemaDialog(true);
-    } catch (err) {
-      const errorObj = err as { message?: string };
-      toast.error(errorObj?.message || "Failed to preview schema changes");
-    }
-  }, [slug, getValidatedFields, saveSettingsOnly]);
-
-  // Why: PR D feedback -- duplicate icon on each field card. Same shape
-  // as the collections / singles page handlers.
-  const handleDuplicateField = useCallback(
-    (fieldId: string) => {
-      // Why: PR I -- duplicate is now reachable from nested rows in the
-      // field list. Walk the tree to locate source and its parent (if
-      // any), then append the duplicate either to the parent's children
-      // or to top-level. takenNames scopes to siblings.
-      const source = findFieldById(builder.fields, fieldId);
-      if (!source) return;
-      const parent = findParentContainerId(builder.fields, fieldId);
-      const siblings = parent
-        ? (findFieldById(builder.fields, parent.containerId)?.fields ?? [])
-        : builder.fields;
-      const takenNames = siblings.map(f => f.name);
-      const duplicate: BuilderField = {
-        ...source,
-        id: `field_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
-        name: nextDuplicateName(source.name, takenNames),
-      };
-      if (parent) {
-        builder.handleNestedFieldAdd(parent.containerId, duplicate);
-      } else {
-        builder.setFields([...builder.fields, duplicate]);
-      }
-    },
-    [builder]
-  );
-
-  // Why: DnD reorder is row-level (BuilderFieldList packs fields into rows
-  // by width). We compute the OLD row layout, apply the row swap, and
-  // flatten back to a fields array for handleFieldsReorder. The legacy
-  // builder.handleDragEnd is built for the old palette+field-list model
-  // and ignores row IDs.
-  const handleRowDragEnd = useCallback(
-    (event: DragEndEvent) => {
-      const { active, over } = event;
-      if (!over || active.id === over.id) return;
-      const activeIdStr = String(active.id);
-      const overIdStr = String(over.id);
-
-      // Why: PR I -- nested fields use field ids in their per-parent
-      // SortableContext. Within-parent reorder via reorderNestedFields.
-      // Cross-parent moves intentionally a no-op (Q2).
-      if (activeIdStr.startsWith("field_") && overIdStr.startsWith("field_")) {
-        const activeParent = findParentContainerId(builder.fields, activeIdStr);
-        const overParent = findParentContainerId(builder.fields, overIdStr);
-        if (
-          activeParent &&
-          overParent &&
-          activeParent.containerId === overParent.containerId
-        ) {
-          builder.setFields(prev =>
-            reorderNestedFields(prev, activeIdStr, overIdStr)
-          );
-        }
-        return;
-      }
-
-      if (!activeIdStr.startsWith("row-") || !overIdStr.startsWith("row-")) {
-        return;
-      }
-      const userFields = builder.fields.filter(f => !f.isSystem);
-      const systemFields = builder.fields.filter(f => f.isSystem);
-      const rows = packIntoRows(
-        userFields.map(f => ({
-          id: f.id,
-          width: parseWidth(f.admin?.width),
-          _field: f,
-        }))
-      );
-      const oldIdx = Number(activeIdStr.slice("row-".length));
-      const newIdx = Number(overIdStr.slice("row-".length));
-      if (Number.isNaN(oldIdx) || Number.isNaN(newIdx)) return;
-      const reorderedRows = arrayMove(rows, oldIdx, newIdx);
-      const reorderedUserFields = reorderedRows.flatMap(row =>
-        row.map(r => (r as { _field: BuilderField })._field)
-      );
-      builder.handleFieldsReorder([...systemFields, ...reorderedUserFields]);
-    },
-    [builder]
-  );
+  const { handleSave, confirmApply } = useSchemaSave({
+    slug,
+    missingSlugMessage: "Field group slug is missing",
+    label: displayLabel(settings, entitySlug),
+    confirmation,
+    getValidatedFields,
+    // Unlike the other kinds the preview takes no i18n flag: a field group owns
+    // no rows of its own, so the toggle cannot change what it reports.
+    preview: fields => fieldGroupApi.previewSchemaChanges(entitySlug, fields),
+    apply: (fields, version, resolutions, renames) =>
+      fieldGroupApi.applySchemaChanges(
+        entitySlug,
+        fields,
+        version,
+        resolutions,
+        renames,
+        localized
+      ),
+    onNoChanges: saveSettingsOnly,
+    onApplied: onSchemaApplied,
+  });
 
   // ---------------------------- Loading / error guards ----------------------
 
   if (!slug) {
     return (
-      <div className="h-screen flex items-center justify-center bg-background">
-        <div className="text-center">
-          <h2 className="text-lg font-semibold text-foreground mb-2">
-            Field Group Not Found
-          </h2>
-          <p className="text-muted-foreground">
-            No field group slug was provided.
-          </p>
-        </div>
-      </div>
+      <BuilderNotFoundScreen
+        title="Field Group Not Found"
+        description="No field group slug was provided."
+      />
     );
   }
 
   if (isLoading || !isInitialized) {
-    return (
-      <div className="h-screen flex flex-col bg-background">
-        <div className="p-6  border-b border-border">
-          <Skeleton className="h-8 w-48 mb-2" />
-          <Skeleton className="h-4 w-64" />
-        </div>
-        <div className="flex-1 p-4">
-          <Skeleton className="h-12 w-full mb-2" />
-          <Skeleton className="h-12 w-full mb-2" />
-          <Skeleton className="h-12 w-full" />
-        </div>
-      </div>
-    );
+    return <BuilderLoadingScreen />;
   }
 
   if (error || !fieldGroup || !settings) {
-    return (
-      <div className="h-screen flex items-center justify-center bg-background">
-        <PageErrorFallback />
-      </div>
-    );
+    return <BuilderErrorScreen />;
   }
 
   // ---------------------------- Render --------------------------------------
 
-  // Why: PR I -- nested children live in parent.fields[]; the shallow
-  // .find() only sees top-level fields. findFieldById walks the tree.
-  const editingField =
-    active.kind === "edit"
-      ? (findFieldById(builder.fields, active.fieldId) ?? null)
-      : null;
-
   return (
-    <div className="flex flex-col min-h-screen bg-background">
-      <BuilderToolbar
-        config={FIELD_GROUP_BUILDER_CONFIG}
-        name={settings.singularName || slug}
-        locked={isLocked}
-        unsavedCount={unsavedCount}
-        onOpenSettings={() => setActive({ kind: "settings" })}
-        onSave={() => void handleSave()}
-      />
-      <PageContainer className="flex-1 pb-0">
-        {isLocked && (
-          <BuilderReadOnlyNotice
-            kind="field-group"
-            configPath={fieldGroup?.configPath}
-          />
-        )}
-        {/* 🔴 This page is where the refusal actually happens: a diverged field group loads and
-            edits normally, and only the SAVE is refused. An affordance living only on the list
-            would let an operator do the work, lose it to a refusal, and then navigate away to
-            find the repair. */}
-        {/* The shared Alert rather than a hand-rolled tinted box. The box drew
-            its edge with a 40%-alpha destructive border, which composites to
-            1.69:1 over this surface against the 3:1 that WCAG 1.4.11 asks of a
-            component boundary; the alert's destructive variant uses
-            full-strength scale tokens and a solid left accent instead. It also
-            supplies role="alert", which the box had no equivalent of:
-            `needsRepair` is derived from fetched data, so this refusal appears
-            AFTER the page settles and was previously announced to nobody.
+    <BuilderPageLayout
+      config={FIELD_GROUP_BUILDER_CONFIG}
+      builder={builder}
+      name={settings.singularName || slug}
+      locked={isLocked}
+      configPath={fieldGroup?.configPath}
+      unsavedCount={unsavedCount}
+      onSave={handleSave}
+      settings={settings}
+      onSettingsChange={setSettings}
+      active={active}
+      onActiveChange={setActive}
+      onDuplicateField={handleDuplicateField}
+      onRowDragEnd={handleRowDragEnd}
+      beforeFieldList={
+        /* This page is where the refusal actually happens: a diverged field group loads and
+           edits normally, and only the SAVE is refused. An affordance living only on the list
+           would let an operator do the work, lose it to a refusal, and then navigate away to
+           find the repair.
 
-            The old class is described here rather than written out. Both the
-            contrast suite and Tailwind's scanner read this file as text, so
-            quoting the utility would re-introduce it — failing the suite from a
-            comment, and emitting the class into the build. */}
-        {needsRepair && (
+           The shared Alert rather than a hand-rolled tinted box. The box drew
+           its edge with a 40%-alpha destructive border, which composites to
+           1.69:1 over this surface against the 3:1 that WCAG 1.4.11 asks of a
+           component boundary; the alert's destructive variant uses
+           full-strength scale tokens and a solid left accent instead. It also
+           supplies role="alert", which the box had no equivalent of:
+           `needsRepair` is derived from fetched data, so this refusal appears
+           AFTER the page settles and was previously announced to nobody.
+
+           The old class is described here rather than written out. Both the
+           contrast suite and Tailwind's scanner read this file as text, so
+           quoting the utility would re-introduce it — failing the suite from a
+           comment, and emitting the class into the build. */
+        needsRepair ? (
           <Alert variant="destructive" className="mb-4">
             <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
             <div className="min-w-0">
@@ -566,234 +333,23 @@ export default function FieldGroupBuilderEditPage({
               </Button>
             </div>
           </Alert>
-        )}
-        <DndContext
-          sensors={builder.sensors}
-          onDragStart={builder.handleDragStart}
-          onDragEnd={handleRowDragEnd}
-        >
-          <BuilderFieldList
-            fields={builder.fields}
-            readOnly={isLocked}
-            onAddAt={insertAt => setActive({ kind: "picker", insertAt })}
-            onEditField={fieldId => setActive({ kind: "edit", fieldId })}
-            onDeleteField={fieldId => builder.handleFieldDelete(fieldId)}
-            onDuplicateField={handleDuplicateField}
-            // Why: PR I -- nested +Add opens picker scoped to parent.
-            onAddInsideParent={parentId =>
-              setActive({
-                kind: "picker",
-                insertAt: 0,
-                parentFieldId: parentId,
-              })
-            }
-            onReorder={() => {
-              // Reorder is driven by handleRowDragEnd above.
-            }}
-          />
-        </DndContext>
-      </PageContainer>
+        ) : null
+      }
+      isSaving={isSaving || confirmation.isApplying}
+      savingLabel="Saving field group changes…"
+    >
+      <ReconcileFieldGroupDialog
+        open={reconcileOpen}
+        onOpenChange={setReconcileOpen}
+        fieldGroupSlug={slug}
+        fieldGroupLabel={settings?.singularName || slug}
+      />
 
-      {slug && (
-        <ReconcileFieldGroupDialog
-          open={reconcileOpen}
-          onOpenChange={setReconcileOpen}
-          fieldGroupSlug={slug}
-          fieldGroupLabel={settings?.singularName || slug}
-        />
-      )}
-
-      {active.kind === "settings" && (
-        <BuilderSettingsModal
-          open
-          mode="edit"
-          config={FIELD_GROUP_BUILDER_CONFIG}
-          initialValues={settings}
-          readOnly={isLocked}
-          onCancel={() => setActive({ kind: "none" })}
-          onSubmit={next => {
-            setSettings(next);
-            setActive({ kind: "none" });
-          }}
-        />
-      )}
-
-      {active.kind === "picker" && (
-        <FieldPickerModal
-          open
-          // PR D: title scopes the picker to the parent for nested adds.
-          title={
-            active.parentFieldId
-              ? // Why: PR I -- parentFieldId can point to a nested parent.
-                `Add field to ${
-                  findFieldById(builder.fields, active.parentFieldId)?.name ??
-                  "parent"
-                }`
-              : undefined
-          }
-          excludedTypes={FIELD_GROUP_BUILDER_CONFIG.picker.excludedTypes ?? []}
-          onCancel={() => setActive({ kind: "none" })}
-          // Why: PR C flow change -- pick opens sheet in create mode.
-          // PR D: thread parentFieldId through.
-          onSelect={type =>
-            setActive({
-              kind: "create",
-              parentFieldId: active.parentFieldId,
-              draft: {
-                id: `field_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
-                name: "",
-                label: "",
-                type,
-                validation: {},
-              },
-            })
-          }
-        />
-      )}
-
-      {active.kind === "create" && (
-        <FieldEditorSheet
-          open
-          mode="create"
-          field={active.draft}
-          siblingFields={
-            active.parentFieldId
-              ? // Why: PR I -- parentFieldId can be nested.
-                (findFieldById(builder.fields, active.parentFieldId)?.fields ??
-                [])
-              : builder.fields
-          }
-          readOnly={isLocked}
-          isInsideRepeatingAncestor={
-            active.parentFieldId
-              ? // Why: same logic as the other 2 builder pages. PR I:
-                // findFieldById replaces shallow .find().
-                (() => {
-                  const parent = findFieldById(
-                    builder.fields,
-                    active.parentFieldId
-                  );
-                  if (!parent) return false;
-                  const parentIsRepeating =
-                    parent.type === "repeater" ||
-                    (parent.type === "component" && parent.repeatable === true);
-                  return (
-                    parentIsRepeating ||
-                    isInsideRepeatingAncestor(parent.id, builder.fields)
-                  );
-                })()
-              : false
-          }
-          onCancel={() => setActive({ kind: "none" })}
-          onApply={next => {
-            if (active.parentFieldId) {
-              builder.handleNestedFieldAdd(active.parentFieldId, next);
-            } else {
-              builder.setFields([...builder.fields, next]);
-            }
-            setActive({ kind: "none" });
-          }}
-          onDelete={() => setActive({ kind: "none" })}
-        />
-      )}
-
-      {active.kind === "edit" && editingField && (
-        <FieldEditorSheet
-          open
-          mode="edit"
-          field={editingField}
-          siblingFields={(() => {
-            // Why: PR I -- when editing a nested field, siblings are the
-            // parent's children (minus self), not all top-level fields.
-            const parent = findParentContainerId(
-              builder.fields,
-              editingField.id
-            );
-            if (!parent) {
-              return builder.fields.filter(f => f.id !== editingField.id);
-            }
-            const container = findFieldById(builder.fields, parent.containerId);
-            return (container?.fields ?? []).filter(
-              f => f.id !== editingField.id
-            );
-          })()}
-          readOnly={isLocked}
-          isInsideRepeatingAncestor={isInsideRepeatingAncestor(
-            editingField.id,
-            builder.fields
-          )}
-          onCancel={() => setActive({ kind: "none" })}
-          onApply={next => {
-            builder.handleFieldUpdate(next);
-            setActive({ kind: "none" });
-          }}
-          onDelete={() => {
-            builder.handleFieldDelete(editingField.id);
-            setActive({ kind: "none" });
-          }}
-          // Why: PR I dropped onAddNestedField -- the +Add affordance for
-          // nested children moved into BuilderFieldList.
-        />
-      )}
-
-      {/* Safe-change confirmation (additive, no rename candidates). */}
-      {previewData &&
-        previewData.classification === "safe" &&
-        !(previewData.renamed && previewData.renamed.length > 0) && (
-          <SafeChangeConfirmDialog
-            open={showSafeDialog}
-            onOpenChange={setShowSafeDialog}
-            collectionName={slug}
-            changes={previewData.changes}
-            onConfirm={() => {
-              const fieldDefs = getValidatedFields();
-              if (fieldDefs) {
-                void applyFieldGroupSchemaChanges(
-                  fieldDefs,
-                  previewData.schemaVersion,
-                  {},
-                  []
-                );
-              }
-            }}
-            isApplying={isApplyingSchema}
-          />
-        )}
-
-      {/* Destructive / interactive / rename change dialog. */}
-      {previewData &&
-        (previewData.classification !== "safe" ||
-          (previewData.renamed && previewData.renamed.length > 0)) && (
-          <SchemaChangeDialog
-            open={showSchemaDialog}
-            onOpenChange={setShowSchemaDialog}
-            collectionName={slug}
-            hasDestructiveChanges={previewData.hasDestructiveChanges}
-            classification={previewData.classification}
-            changes={previewData.changes}
-            renamed={previewData.renamed}
-            warnings={previewData.warnings}
-            interactiveFields={previewData.interactiveFields}
-            onConfirm={(resolutions, renameResolutions) => {
-              const fieldDefs = getValidatedFields();
-              if (fieldDefs) {
-                void applyFieldGroupSchemaChanges(
-                  fieldDefs,
-                  previewData.schemaVersion,
-                  resolutions,
-                  renameResolutions
-                );
-              }
-            }}
-            isApplying={isApplyingSchema}
-          />
-        )}
-
-      {(isSaving || isApplyingSchema) && (
-        <div aria-live="polite" className="sr-only">
-          Saving field group changes…
-        </div>
-      )}
-    </div>
+      <BuilderSchemaChangeDialogs
+        confirmation={confirmation}
+        entityName={slug}
+        onConfirm={confirmApply}
+      />
+    </BuilderPageLayout>
   );
 }

@@ -11,16 +11,16 @@
 // readOnly is honored everywhere — when true, the legacy editor still
 // renders (so devs can inspect) but every onChange callback becomes a
 // no-op so values can't change.
-import {
-  RepeaterFieldEditor,
-  ComponentFieldEditor,
-  GroupFieldEditor,
-  RelationshipEditor,
-  SelectOptionsEditor,
-  UploadEditor,
-} from "@admin/components/features/schema-builder";
-
+// Each editor is imported from its own module rather than through the feature's
+// barrel: the barrel re-exports this file's own ancestors, so reaching back
+// through it makes every one of those a cycle.
+import { ComponentFieldEditor } from "../ComponentFieldEditor";
+import { GroupFieldEditor } from "../GroupFieldEditor";
+import { RelationshipEditor } from "../RelationshipEditor";
+import { RepeaterFieldEditor } from "../RepeaterFieldEditor";
+import { SelectOptionsEditor } from "../SelectOptionsEditor";
 import type { BuilderField, RelationshipFilter, SelectOption } from "../types";
+import { UploadEditor } from "../UploadEditor";
 
 type Props = {
   field: BuilderField;

@@ -1,4 +1,4 @@
-import type { BuilderField } from "@admin/components/features/schema-builder";
+import type { BuilderField } from "@admin/components/features/schema-builder/types";
 
 /**
  * Default system fields present in every collection and single.

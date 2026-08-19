@@ -28,6 +28,19 @@ export { BuilderToolbar } from "./BuilderToolbar";
 export { BuilderReadOnlyNotice } from "./BuilderReadOnlyNotice";
 export { BuilderFieldList } from "./BuilderFieldList";
 export { SchemaBuilderSlots } from "./SchemaBuilderSlots";
+
+// The builder pages themselves: the frame the three kinds share, the overlays
+// it mounts, the schema-change confirmation, and the screens shown instead of
+// the builder while the entity is missing, loading or unreachable.
+export { BuilderPageLayout } from "./BuilderPageLayout";
+export { BuilderOverlays } from "./BuilderOverlays";
+export type { ActiveOverlay } from "./BuilderOverlays";
+export { BuilderSchemaChangeDialogs } from "./BuilderSchemaChangeDialogs";
+export {
+  BuilderNotFoundScreen,
+  BuilderLoadingScreen,
+  BuilderErrorScreen,
+} from "./BuilderPageStates";
 export type {
   BuilderConfig,
   BuilderKind,

@@ -3,81 +3,59 @@
 /**
  * Collection Builder — Edit Page
  *
- * Wires the new shared schema-builder components onto the Collection edit
- * route. Replaces the legacy BuilderPageTemplate (right-sidebar with
- * Settings/Add/Edit tabs) with:
- *   BuilderToolbar at top (sticky)
- *   BuilderFieldList in body (WYSIWYG row pack)
- *   Overlays: BuilderSettingsModal / FieldPickerModal / FieldEditorSheet
- *   (only one open at a time)
+ * Loads a collection, maps it onto the shared builder state, and owns the save
+ * pipeline: preview the schema change, branch on its classification, apply, and
+ * mirror the result into the committable ui-schema.json.
  *
- * Schema-change preview + apply pipeline is preserved verbatim from the
- * legacy page — same SafeChangeConfirmDialog / SchemaChangeDialog, same
- * RestartContext integration, same toast messaging. The new BuilderToolbar
- * just calls handleSave; the rest of the flow is unchanged.
+ * Everything the three builder kinds draw identically — the toolbar, the field
+ * list and its drag context, the overlays, the schema-change confirmation —
+ * comes from BuilderPageLayout. What is here is what a collection does
+ * differently: its settings shape, its API, and its copy.
  *
  * Code-first preservation: locked collections render the page in readOnly
  * mode (formerly redirected to the listing). Devs can now visually
  * inspect the schema; every editing affordance is disabled.
  */
 
-import { DndContext, type DragEndEvent } from "@dnd-kit/core";
-import { arrayMove } from "@dnd-kit/sortable";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Skeleton } from "@nextlyhq/ui";
 import type React from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useState } from "react";
 import { z } from "zod";
 
 import {
-  BuilderFieldList,
-  BuilderReadOnlyNotice,
-  BuilderSettingsModal,
-  BuilderToolbar,
-  FieldEditorSheet,
-  FieldPickerModal,
-  SafeChangeConfirmDialog,
+  BuilderErrorScreen,
+  BuilderLoadingScreen,
+  BuilderNotFoundScreen,
+  BuilderPageLayout,
+  BuilderSchemaChangeDialogs,
   SchemaBuilderSlots,
-  SchemaChangeDialog,
+  type ActiveOverlay,
   type BuilderSettingsValues,
   type EnabledHook,
 } from "@admin/components/features/schema-builder";
-import type { BuilderField } from "@admin/components/features/schema-builder/types";
-import { PageContainer } from "@admin/components/layout/page-container";
-import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { toast } from "@admin/components/ui";
-import { useRestart } from "@admin/context/RestartContext";
 import { useCollection, useUpdateCollection } from "@admin/hooks/queries";
+import { useBuilderEntityState } from "@admin/hooks/useBuilderEntityState";
+import { useBuilderFieldActions } from "@admin/hooks/useBuilderFieldActions";
 import { useFieldBuilder } from "@admin/hooks/useFieldBuilder";
+import { useSchemaChangeConfirmation } from "@admin/hooks/useSchemaChangeConfirmation";
 import {
-  convertToFieldDefinition,
-  convertToBuilderField,
-  convertHooksToStoredFormat,
-  DEFAULT_SYSTEM_FIELDS,
-  findFieldById,
-  findParentContainerId,
-  reorderNestedFields,
-} from "@admin/lib/builder";
-import { countDirtyFields } from "@admin/lib/builder/dirty-tracking";
-import { nextDuplicateName } from "@admin/lib/builder/duplicate-field-name";
-import { isInsideRepeatingAncestor } from "@admin/lib/builder/is-inside-repeating-ancestor";
-import { packIntoRows, parseWidth } from "@admin/lib/builder/reflow";
+  displayLabel,
+  mirrorSchemaFile,
+  useSchemaSave,
+} from "@admin/hooks/useSchemaSave";
+import { convertHooksToStoredFormat } from "@admin/lib/builder";
 import { settingsAreDirty } from "@admin/lib/builder/settings-dirty";
 import { collectionEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
 import { COLLECTION_BUILDER_CONFIG } from "@admin/pages/dashboard/collections/builder/builder-config";
-import {
-  schemaApi,
-  type SchemaPreviewResponse,
-  type FieldResolution,
-  type SchemaRenameResolution,
-} from "@admin/services/schemaApi";
+import { schemaApi } from "@admin/services/schemaApi";
 import { schemaFileApi } from "@admin/services/schemaFileApi";
 // Two import statements are intentional. With isolatedModules + esbuild,
 // merging these into a single `import { type FieldDefinition,
 // getCollectionFields }` block has historically been collapsed by
 // prettier into both being type-only, which strips getCollectionFields
 // at runtime (it's a function, not a type). See main's ce29d67.
-import type { FieldDefinition } from "@admin/types/collection";
+import type { Collection, FieldDefinition } from "@admin/types/collection";
 import { getCollectionFields } from "@admin/types/collection";
 
 const collectionFormSchema = z.object({
@@ -92,27 +70,73 @@ const collectionFormSchema = z.object({
 type FormData = z.infer<typeof collectionFormSchema>;
 
 /**
- * Discriminated union for the single overlay open at a time. "none" means
- * no overlay; the other variants carry whatever per-overlay state they
- * need (the field id for the editor, the insert position for the picker).
+ * The names a collection displays under. Both fall back through `label`, which
+ * is what rows written before the labels block carry, and the singular falls
+ * back once more to the machine name so a row can never render nameless.
  */
-type ActiveOverlay =
-  | { kind: "none" }
-  | { kind: "settings" }
-  // PR D: picker carries an optional parentFieldId so the same overlay
-  // can be opened scoped to a group/repeater for nested adds.
-  | { kind: "picker"; insertAt: number; parentFieldId?: string }
-  // Why: NEW in PR C. The user has chosen a type but hasn't committed
-  // the field yet. Sheet renders in create mode against this draft; on
-  // Apply we append to builder.fields, on Cancel we discard. Avoids the
-  // legacy bug where canceling left an empty placeholder in the list.
-  // PR D: parentFieldId? extends the overlay so the new field can be
-  // committed into a parent group/repeater's nested fields.
-  | { kind: "create"; draft: BuilderField; parentFieldId?: string }
-  | { kind: "edit"; fieldId: string };
-// Why: { kind: "hooks" } variant removed in PR D -- the Hooks UI was
-// removed from the toolbar (feedback Section 2). HooksEditor component
-// stays in the codebase; backend hooks support unchanged.
+function collectionLabels(collection: Collection): {
+  singular: string;
+  plural: string;
+} {
+  return {
+    singular:
+      collection.labels?.singular || collection.label || collection.name || "",
+    plural: collection.labels?.plural || collection.label || "",
+  };
+}
+
+/**
+ * The settings a loaded collection opens the builder with.
+ *
+ * Several switches read "on unless explicitly turned off": the registry stores
+ * a resolved config, so an absent opt-out and a null config both mean the
+ * default is in force, and only an explicit `false` turns the switch off.
+ */
+function collectionSettings(
+  collection: Collection,
+  slug: string | undefined
+): BuilderSettingsValues {
+  const { singular, plural } = collectionLabels(collection);
+  return {
+    singularName: singular,
+    pluralName: plural,
+    slug: slug ?? "",
+    description: collection.description || "",
+    icon: collection.admin?.icon || "Database",
+    // The Draft/Published flag; false for collections written before the
+    // column existed. `admin.group` / `admin.order` are deliberately absent:
+    // the server still honours them from code-first config, and round-tripping
+    // them through this modal would let a settings save wipe them.
+    status: collection.status === true,
+    i18n: (collection as { localized?: boolean }).localized === true,
+    versions:
+      (collection as { versions?: { enabled?: boolean } | null }).versions
+        ?.enabled === true,
+    // Retention always carries the effective count (`false` = unlimited), so
+    // a config left at the framework default reads back as its concrete number.
+    versionsMaxPerDoc: (
+      collection as {
+        versions?: { maxPerDoc?: number | false } | null;
+      }
+    ).versions?.maxPerDoc,
+    revalidate: collection.revalidate?.disable !== true,
+    webhooks: collection.webhooks?.record !== false,
+  };
+}
+
+/**
+ * A stored hook becomes an editor row. The id is the editor's own handle for
+ * the row — the server identifies a hook by `hookId`, so this one only has to
+ * be unique within the list.
+ */
+function toEnabledHook(hook: Omit<EnabledHook, "id">): EnabledHook {
+  return {
+    id: `hook_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`,
+    hookId: hook.hookId,
+    enabled: hook.enabled,
+    config: hook.config,
+  };
+}
 
 interface CollectionBuilderEditPageProps {
   params?: { slug?: string };
@@ -128,286 +152,97 @@ export default function CollectionBuilderEditPage({
     resolver: zodResolver(collectionFormSchema),
     defaultValues: { singularName: "", pluralName: "" },
   });
+  const { handleDuplicateField, handleRowDragEnd, getValidatedFields } =
+    useBuilderFieldActions(builder);
 
-  const [settings, setSettings] = useState<BuilderSettingsValues | null>(null);
   const [hooks, setHooks] = useState<EnabledHook[]>([]);
   const [active, setActive] = useState<ActiveOverlay>({ kind: "none" });
-  const [isInitialized, setIsInitialized] = useState(false);
-
-  // Why: was a JSON string of just field IDs, which silently masked
-  // label / width / validation / options edits. Now a frozen array we
-  // diff via countDirtyFields so every meaningful edit bumps the badge.
-  const [originalFields, setOriginalFields] = useState<
-    readonly BuilderField[] | null
-  >(null);
-
-  // Pinned settings snapshot at load time — used to detect dirty
-  // settings (status flip, label / icon / group / order changes) so the
-  // Save button enables for settings-only edits, not just field edits.
-  const [originalSettings, setOriginalSettings] =
-    useState<BuilderSettingsValues | null>(null);
-
-  // Schema change confirmation state — preserved verbatim from legacy.
-  const [previewData, setPreviewData] = useState<SchemaPreviewResponse | null>(
-    null
-  );
-  const [showSchemaDialog, setShowSchemaDialog] = useState(false);
-  const [showSafeDialog, setShowSafeDialog] = useState(false);
-  const [isApplyingSchema, setIsApplyingSchema] = useState(false);
-  const { startRestart, stopRestart } = useRestart();
+  const confirmation = useSchemaChangeConfirmation();
 
   const { mutate: updateCollection, isPending: isSaving } =
     useUpdateCollection();
 
-  // Initialize builder + settings from the loaded collection.
-  useEffect(() => {
-    if (!collection || isInitialized) return;
-
-    const singular =
-      collection.labels?.singular || collection.label || collection.name || "";
-    const plural = collection.labels?.plural || collection.label || "";
-
-    builder.form.reset({
-      singularName: singular,
-      pluralName: plural,
-    });
-
-    const schemaFields = getCollectionFields(collection);
-    const userSchemaFields = schemaFields.filter(
-      (f: FieldDefinition) => f.name !== "title" && f.name !== "slug"
-    );
-    const builderFields = userSchemaFields.map(
-      (field: FieldDefinition, index: number) =>
-        convertToBuilderField(field, index)
-    );
-    const allFields = [...DEFAULT_SYSTEM_FIELDS, ...builderFields];
-    builder.setFields(allFields);
-
-    // Pin the load-time field array for dirty detection. countDirtyFields
-    // diffs the full editable shape, so every config edit bumps the badge.
-    setOriginalFields(allFields.filter(f => !f.isSystem));
-
-    const loadedSettings: BuilderSettingsValues = {
-      singularName: singular,
-      pluralName: plural,
-      slug: slug ?? "",
-      description: collection.description || "",
-      icon: collection.admin?.icon || "Database",
-      // tab. The server still supports admin.group / admin.order via
-      // code-first config; we just don't roundtrip them through the
-      // settings modal anymore.
-      // collection.status is the Draft/Published flag; default false for
-      // collections written before the column existed.
-      status: collection.status === true,
-      // i18n: reflect the saved localization flag so the Internationalization
-      // toggle shows the true state and the dirty-check is accurate.
-      i18n: (collection as { localized?: boolean }).localized === true,
-      // The registry stores the resolved config, so presence of an enabled one
-      // is what the switch reflects.
-      versions:
-        (collection as { versions?: { enabled?: boolean } | null }).versions
-          ?.enabled === true,
-      // Retention: the stored resolved config always carries the effective
-      // count (`false` = unlimited), so the select reflects the true setting. A
-      // config left at the framework default reads back as its concrete number.
-      versionsMaxPerDoc: (
-        collection as {
-          versions?: { maxPerDoc?: number | false } | null;
-        }
-      ).versions?.maxPerDoc,
-      // Cache revalidation is on unless the stored config disables it, so the
-      // switch reflects on for both null (default) and an absent-disable config.
-      revalidate: collection.revalidate?.disable !== true,
-      // Webhook recording is on unless the stored policy opts out, so the
-      // switch reflects on for both null (default) and an absent record flag.
-      webhooks: collection.webhooks?.record !== false,
-    };
-    setSettings(loadedSettings);
-    // Pin a copy as the dirty baseline so settings-only edits enable Save.
-    setOriginalSettings(loadedSettings);
-
-    if (collection.hooks && Array.isArray(collection.hooks)) {
-      const enabledHooks: EnabledHook[] = collection.hooks.map(hook => ({
-        id: `hook_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`,
-        hookId: hook.hookId,
-        enabled: hook.enabled,
-        config: hook.config,
-      }));
-      setHooks(enabledHooks);
-    }
-
-    setIsInitialized(true);
-  }, [collection, builder, isInitialized, slug]);
+  const {
+    settings,
+    setSettings,
+    isInitialized,
+    unsavedCount,
+    pinFields,
+    pinSettings,
+  } = useBuilderEntityState({
+    entity: collection,
+    builder,
+    toFields: getCollectionFields,
+    toSettings: loaded => collectionSettings(loaded, slug),
+    isDirty: settingsAreDirty,
+    onLoad: loaded => {
+      const { singular, plural } = collectionLabels(loaded);
+      builder.form.reset({ singularName: singular, pluralName: plural });
+      if (Array.isArray(loaded.hooks))
+        setHooks(loaded.hooks.map(toEnabledHook));
+    },
+  });
 
   const isLocked = collection?.locked === true;
+  // Resolved once: the save hook refuses outright without a slug, so the
+  // fallback below is only ever satisfying the type.
+  const entitySlug = slug ?? "";
+  const localized = settings?.i18n === true;
 
-  // Dirty count: number of user fields that were added, removed, or had
-  // any of their editable shape change (label / width / validation /
-  // options / defaultValue / nested fields / etc.) since load.
-  const fieldsDirtyCount = useMemo(() => {
-    if (!originalFields) return 0;
-    return countDirtyFields(
-      originalFields,
-      builder.fields.filter(f => !f.isSystem)
-    );
-  }, [builder.fields, originalFields]);
-
-  // Why: settings-only changes (status flip, label edits, group rename,
-  // icon swap, etc.) didn't bump the badge or enable Save before, because
-  // the dirty signal only counted FIELD changes. Toggling status:on in
-  // the settings dialog therefore left the Save button disabled and the
-  // change never reached the API. Track the original settings snapshot
-  // and shallow-compare on each render so the toolbar enables Save the
-  // moment any settings field diverges from load-time.
-  const settingsDirty = useMemo(
-    () => settingsAreDirty(originalSettings, settings),
-    [originalSettings, settings]
-  );
-
-  // Aggregate count drives the toolbar badge. We add a single point for
-  // settings dirtiness so the user gets a non-zero count and the Save
-  // button enables.
-  const unsavedCount = fieldsDirtyCount + (settingsDirty ? 1 : 0);
-
-  // Build validated field definitions from the builder state.
-  // Shared by the preview path and the settings-only save path.
-  const getValidatedFields = useCallback((): FieldDefinition[] | null => {
-    const systemFieldNames = ["title", "slug"];
-    const userFields = builder.fields.filter(
-      f => !f.isSystem && !systemFieldNames.includes(f.name)
-    );
-    const validation = builder.validateFields(userFields);
-    if (!validation.valid) {
-      toast.error(validation.errorMessage);
-      return null;
-    }
-    return userFields.map(convertToFieldDefinition);
-  }, [builder]);
-
-  // Apply schema changes after user confirmation. Same orchestration as
-  // legacy — kept verbatim because the toast / restart wiring is delicate.
-  const applySchemaChanges = useCallback(
-    async (
-      fieldDefinitions: FieldDefinition[],
-      schemaVersion: number,
-      resolutions: Record<string, FieldResolution>,
-      renameResolutions: SchemaRenameResolution[]
-    ) => {
+  // The schema landed. The apply carries fields only, so a save that also
+  // changed the settings would otherwise clear the dirty badge while the
+  // registry still held the old values — they are persisted here, WITHOUT
+  // `fields`, so no second migration is generated for a schema already applied.
+  const onSchemaApplied = useCallback(
+    async (fieldDefinitions: FieldDefinition[]) => {
       if (!slug) return;
+      pinFields();
+      if (!settings) return;
 
-      setIsApplyingSchema(true);
-      if (typeof window !== "undefined") window.__nextlySchemaApplying = true;
-      startRestart();
-      try {
-        const result = await schemaApi.apply(
-          slug,
-          fieldDefinitions,
-          schemaVersion,
-          resolutions,
-          renameResolutions,
-          // i18n: carry the current toggle so a simultaneous i18n flip + field change provisions
-          // the companion in the same apply.
-          settings?.i18n === true
-        );
-        if (result.success) {
-          const collectionLabel = settings?.singularName?.trim() || slug;
-          const summarySuffix =
-            result.toastSummary && result.toastSummary !== "no changes"
-              ? `. ${result.toastSummary}`
-              : "";
-          stopRestart(
-            true,
-            `${collectionLabel} schema updated${summarySuffix}`
-          );
-          setShowSchemaDialog(false);
-          setPreviewData(null);
-          // Refresh the dirty baseline so the unsaved badge clears.
-          setOriginalFields(builder.fields.filter(f => !f.isSystem));
-
-          // The schema apply carries fields only, so a save that changed the
-          // settings as well would clear the dirty badge while the registry
-          // kept the old values. Persist them here, without `fields` so no
-          // second migration is generated for a schema already applied.
-          if (settings) {
-            updateCollection(
-              {
-                collectionName: slug,
-                updates: {
-                  labels: {
-                    singular: settings.singularName,
-                    plural: settings.pluralName,
-                  },
-                  description: settings.description,
-                  icon: settings.icon,
-                  status: settings.status === true,
-                  localized: settings.i18n === true,
-                  versions: settings.versions === true,
-                  // Retention forwarded with the switch; the server resolves it.
-                  versionsMaxPerDoc: settings.versionsMaxPerDoc,
-                  // Cache revalidation: on unless explicitly turned off; the
-                  // server normalizes the boolean into the stored config.
-                  revalidate: settings.revalidate !== false,
-                  // Webhook recording: on unless explicitly turned off; the
-                  // server normalizes the boolean into the stored policy.
-                  webhooks: settings.webhooks !== false,
-                },
-              },
-              {
-                // The baseline moves only once the write lands. Clearing it
-                // first would show a clean form over a registry that still
-                // holds the old settings, with no way to retry.
-                onSuccess: () => setOriginalSettings(settings),
-                onError: err => {
-                  const m = (err as { message?: string })?.message;
-                  toast.error(
-                    `Schema applied, but the settings could not be saved${m ? `: ${m}` : ""}.`
-                  );
-                },
-              }
-            );
-          }
-
-          // D-series: database mode also writes the committable ui-schema.json
-          // so the entity has a migration record (matches code-first). A
-          // failure here must NOT undo the already-successful DB apply.
-          try {
-            if (settings) {
-              await schemaFileApi.writeCollection(
-                collectionEntityFromSettings(slug, settings, fieldDefinitions)
-              );
-            }
-          } catch (err) {
+      updateCollection(
+        {
+          collectionName: slug,
+          updates: {
+            labels: {
+              singular: settings.singularName,
+              plural: settings.pluralName,
+            },
+            description: settings.description,
+            icon: settings.icon,
+            status: settings.status === true,
+            localized: settings.i18n === true,
+            versions: settings.versions === true,
+            // Retention forwarded with the switch; the server resolves it.
+            versionsMaxPerDoc: settings.versionsMaxPerDoc,
+            // Cache revalidation and webhook recording: on unless explicitly
+            // turned off; the server normalizes each boolean into what it stores.
+            revalidate: settings.revalidate !== false,
+            webhooks: settings.webhooks !== false,
+          },
+        },
+        {
+          // The baseline moves only once the write lands. Clearing it first
+          // would show a clean form over a registry that still holds the old
+          // settings, with no way to retry.
+          onSuccess: () => pinSettings(settings),
+          onError: err => {
             const m = (err as { message?: string })?.message;
-            toast.warning(
-              `Schema applied to the database, but ui-schema.json could not be updated${m ? `: ${m}` : ""}.`
+            toast.error(
+              `Schema applied, but the settings could not be saved${m ? `: ${m}` : ""}.`
             );
-          }
-        } else {
-          stopRestart(
-            false,
-            result.message || "Failed to apply schema changes"
-          );
+          },
         }
-      } catch (err) {
-        const errorObj = err as { message?: string };
-        stopRestart(
-          false,
-          errorObj?.message || "An error occurred while applying changes"
-        );
-      } finally {
-        setIsApplyingSchema(false);
-        if (typeof window !== "undefined")
-          window.__nextlySchemaApplying = false;
-      }
+      );
+
+      await mirrorSchemaFile(
+        () =>
+          schemaFileApi.writeCollection(
+            collectionEntityFromSettings(slug, settings, fieldDefinitions)
+          ),
+        "Schema applied to the database"
+      );
     },
-    [
-      slug,
-      startRestart,
-      stopRestart,
-      settings,
-      builder.fields,
-      updateCollection,
-    ]
+    [slug, settings, updateCollection, pinFields, pinSettings]
   );
 
   // Save settings/labels/hooks (no schema changes path).
@@ -454,24 +289,18 @@ export default function CollectionBuilderEditPage({
             toast.success("Collection updated");
             // Reset the settings dirty baseline so the Save button
             // disables again immediately after a successful save.
-            setOriginalSettings(settings);
-            setOriginalFields(builder.fields.filter(f => !f.isSystem));
+            pinSettings(settings);
+            pinFields();
             // Mirror the settings change (notably Draft/Published) into the
-            // committable ui-schema.json. Best-effort: the DB write already
-            // succeeded, so a file-write failure only warns. Void IIFE keeps
-            // the mutation callback synchronous.
-            void (async () => {
-              try {
-                await schemaFileApi.writeCollection(
+            // committable ui-schema.json. Not awaited: the mutation callback
+            // stays synchronous, and the mirror is best-effort anyway.
+            void mirrorSchemaFile(
+              () =>
+                schemaFileApi.writeCollection(
                   collectionEntityFromSettings(slug, settings, fieldDefinitions)
-                );
-              } catch (err) {
-                const m = (err as { message?: string })?.message;
-                toast.warning(
-                  `Collection updated, but ui-schema.json could not be updated${m ? `: ${m}` : ""}.`
-                );
-              }
-            })();
+                ),
+              "Collection updated"
+            );
           },
           onError: err => {
             const errorObj = err as { message?: string };
@@ -483,138 +312,30 @@ export default function CollectionBuilderEditPage({
         }
       );
     },
-    [slug, settings, hooks, updateCollection, builder.fields]
+    [slug, settings, hooks, updateCollection, pinFields, pinSettings]
   );
 
-  // Top-level Save schema handler — preview first, branch on classification.
-  const handleSave = useCallback(async () => {
-    if (!slug) {
-      toast.error("Collection slug is missing");
-      return;
-    }
-
-    const fieldDefinitions = getValidatedFields();
-    if (!fieldDefinitions) return;
-
-    try {
-      // i18n: preview with the toggle the apply will use, so the resolutions
-      // collected here match the DDL that actually runs.
-      const preview = await schemaApi.preview(
-        slug,
-        fieldDefinitions,
-        settings?.i18n === true
-      );
-
-      if (!preview.hasChanges) {
-        // No schema changes — just persist labels/settings/hooks.
-        saveSettingsOnly(fieldDefinitions);
-        return;
-      }
-
-      if (
-        preview.classification === "safe" &&
-        !(preview.renamed && preview.renamed.length > 0)
-      ) {
-        setPreviewData(preview);
-        setShowSafeDialog(true);
-        return;
-      }
-
-      setPreviewData(preview);
-      setShowSchemaDialog(true);
-    } catch (err) {
-      const errorObj = err as { message?: string };
-      toast.error(errorObj?.message || "Failed to preview schema changes");
-    }
-  }, [slug, getValidatedFields, saveSettingsOnly, settings]);
-
-  // Why: DnD reorder is row-level (BuilderFieldList packs fields into rows
-  // by width). We compute the OLD row layout, apply the row swap, and
-  // Why: PR D feedback -- duplicate icon on each field card. We clone the
-  // field's full shape, mint a new id, and pick the next free numeric-
-  // suffix name. The duplicate is appended at the end of the user-fields
-  // list (insert-at-position is a follow-up).
-  const handleDuplicateField = useCallback(
-    (fieldId: string) => {
-      // Why: PR I -- duplicate is now reachable from nested rows in the
-      // field list, not only top-level. Walk the tree to locate source
-      // and its parent (if any), then append the duplicate either to
-      // the parent's children or to top-level. takenNames scopes to the
-      // sibling list so nested + top-level can share names safely.
-      const source = findFieldById(builder.fields, fieldId);
-      if (!source) return;
-      const parent = findParentContainerId(builder.fields, fieldId);
-      const siblings = parent
-        ? (findFieldById(builder.fields, parent.containerId)?.fields ?? [])
-        : builder.fields;
-      const takenNames = siblings.map(f => f.name);
-      const duplicate: BuilderField = {
-        ...source,
-        id: `field_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
-        name: nextDuplicateName(source.name, takenNames),
-      };
-      if (parent) {
-        builder.handleNestedFieldAdd(parent.containerId, duplicate);
-      } else {
-        builder.setFields([...builder.fields, duplicate]);
-      }
-    },
-    [builder]
-  );
-
-  // flatten back to a fields array for handleFieldsReorder. The legacy
-  // builder.handleDragEnd is built for the old palette+field-list model
-  // and ignores row IDs.
-  const handleRowDragEnd = useCallback(
-    (event: DragEndEvent) => {
-      const { active, over } = event;
-      if (!over || active.id === over.id) return;
-      const activeIdStr = String(active.id);
-      const overIdStr = String(over.id);
-
-      // Why: PR I -- nested fields use their own SortableContext per parent;
-      // their drag IDs are field ids (field_xxx), not row ids. When both
-      // ends are field ids in the same parent container, reorder within
-      // that container via lib/builder.reorderNestedFields. Q2: cross-
-      // parent moves are intentionally a no-op in PR I.
-      if (activeIdStr.startsWith("field_") && overIdStr.startsWith("field_")) {
-        const activeParent = findParentContainerId(builder.fields, activeIdStr);
-        const overParent = findParentContainerId(builder.fields, overIdStr);
-        if (
-          activeParent &&
-          overParent &&
-          activeParent.containerId === overParent.containerId
-        ) {
-          builder.setFields(prev =>
-            reorderNestedFields(prev, activeIdStr, overIdStr)
-          );
-        }
-        return;
-      }
-
-      if (!activeIdStr.startsWith("row-") || !overIdStr.startsWith("row-")) {
-        return;
-      }
-      const userFields = builder.fields.filter(f => !f.isSystem);
-      const systemFields = builder.fields.filter(f => f.isSystem);
-      const rows = packIntoRows(
-        userFields.map(f => ({
-          id: f.id,
-          width: parseWidth(f.admin?.width),
-          _field: f,
-        }))
-      );
-      const oldIdx = Number(activeIdStr.slice("row-".length));
-      const newIdx = Number(overIdStr.slice("row-".length));
-      if (Number.isNaN(oldIdx) || Number.isNaN(newIdx)) return;
-      const reorderedRows = arrayMove(rows, oldIdx, newIdx);
-      const reorderedUserFields = reorderedRows.flatMap(row =>
-        row.map(r => (r as { _field: BuilderField })._field)
-      );
-      builder.handleFieldsReorder([...systemFields, ...reorderedUserFields]);
-    },
-    [builder]
-  );
+  // i18n: preview and apply carry the same toggle, so the resolutions the user
+  // is asked for match the DDL that actually runs.
+  const { handleSave, confirmApply } = useSchemaSave({
+    slug,
+    missingSlugMessage: "Collection slug is missing",
+    label: displayLabel(settings, entitySlug),
+    confirmation,
+    getValidatedFields,
+    preview: fields => schemaApi.preview(entitySlug, fields, localized),
+    apply: (fields, version, resolutions, renames) =>
+      schemaApi.apply(
+        entitySlug,
+        fields,
+        version,
+        resolutions,
+        renames,
+        localized
+      ),
+    onNoChanges: saveSettingsOnly,
+    onApplied: onSchemaApplied,
+  });
 
   // ----------------------------------------------------------------
   // Loading / error guards
@@ -622,330 +343,56 @@ export default function CollectionBuilderEditPage({
 
   if (!slug) {
     return (
-      <div className="h-screen flex items-center justify-center bg-background">
-        <div className="text-center">
-          <h2 className="text-lg font-semibold text-foreground mb-2">
-            Collection Not Found
-          </h2>
-          <p className="text-muted-foreground">
-            No collection slug was provided.
-          </p>
-        </div>
-      </div>
+      <BuilderNotFoundScreen
+        title="Collection Not Found"
+        description="No collection slug was provided."
+      />
     );
   }
 
   if (isLoading || !isInitialized) {
-    return (
-      <div className="h-screen flex flex-col bg-background">
-        <div className="p-6  border-b border-border">
-          <Skeleton className="h-8 w-48 mb-2" />
-          <Skeleton className="h-4 w-64" />
-        </div>
-        <div className="flex-1 p-4">
-          <Skeleton className="h-12 w-full mb-2" />
-          <Skeleton className="h-12 w-full mb-2" />
-          <Skeleton className="h-12 w-full" />
-        </div>
-      </div>
-    );
+    return <BuilderLoadingScreen />;
   }
 
   if (error || !collection || !settings) {
-    return (
-      <div className="h-screen flex items-center justify-center bg-background">
-        <PageErrorFallback />
-      </div>
-    );
+    return <BuilderErrorScreen />;
   }
 
   // ----------------------------------------------------------------
   // Render
   // ----------------------------------------------------------------
 
-  // Why: PR I -- nested children live in parent.fields[]; the shallow
-  // .find() only sees top-level fields. findFieldById walks the tree
-  // so clicking a nested row resolves to the right field.
-  const editingField =
-    active.kind === "edit"
-      ? (findFieldById(builder.fields, active.fieldId) ?? null)
-      : null;
-
   return (
-    <div className="flex flex-col min-h-screen bg-background">
-      <BuilderToolbar
-        config={COLLECTION_BUILDER_CONFIG}
-        name={settings.singularName || slug}
-        locked={isLocked}
-        unsavedCount={unsavedCount}
-        onOpenSettings={() => setActive({ kind: "settings" })}
-        onSave={() => void handleSave()}
-      />
-      <PageContainer className="flex-1 pb-0">
-        {isLocked && (
-          <BuilderReadOnlyNotice
-            kind="collection"
-            configPath={collection?.configPath}
-          />
-        )}
+    <BuilderPageLayout
+      config={COLLECTION_BUILDER_CONFIG}
+      builder={builder}
+      name={settings.singularName || slug}
+      locked={isLocked}
+      configPath={collection?.configPath}
+      unsavedCount={unsavedCount}
+      onSave={handleSave}
+      settings={settings}
+      onSettingsChange={setSettings}
+      active={active}
+      onActiveChange={setActive}
+      onDuplicateField={handleDuplicateField}
+      onRowDragEnd={handleRowDragEnd}
+      beforeFieldList={
         <SchemaBuilderSlots
           fields={builder.fields}
           setFields={builder.setFields}
           disabled={isLocked}
           context="collection"
         />
-        <DndContext
-          sensors={builder.sensors}
-          onDragStart={builder.handleDragStart}
-          onDragEnd={handleRowDragEnd}
-        >
-          <BuilderFieldList
-            fields={builder.fields}
-            readOnly={isLocked}
-            onAddAt={insertAt => setActive({ kind: "picker", insertAt })}
-            onEditField={fieldId => setActive({ kind: "edit", fieldId })}
-            onDeleteField={fieldId => builder.handleFieldDelete(fieldId)}
-            onDuplicateField={handleDuplicateField}
-            // Why: PR I -- clicking +Add inside a parent in the field list
-            // opens FieldPickerModal scoped to that parent. Reuses the
-            // existing parent-aware picker flow (the same setActive shape
-            // the offcanvas sheet's +Add was using).
-            onAddInsideParent={parentId =>
-              setActive({
-                kind: "picker",
-                insertAt: 0,
-                parentFieldId: parentId,
-              })
-            }
-            onReorder={() => {
-              // Reorder is driven by handleRowDragEnd above. This callback
-              // exists for parents that need notification but our state
-              // lives in the useFieldBuilder hook.
-            }}
-          />
-        </DndContext>
-      </PageContainer>
-
-      {/* Settings modal — read-only for code-first collections. */}
-      {active.kind === "settings" && (
-        <BuilderSettingsModal
-          open
-          mode="edit"
-          config={COLLECTION_BUILDER_CONFIG}
-          initialValues={settings}
-          readOnly={isLocked}
-          onCancel={() => setActive({ kind: "none" })}
-          onSubmit={next => {
-            setSettings(next);
-            setActive({ kind: "none" });
-          }}
-        />
-      )}
-
-      {/* Field picker — opens off the toolbar's "+ Add field" or in-list +. */}
-      {active.kind === "picker" && (
-        <FieldPickerModal
-          open
-          // PR D: title scopes the picker to the parent when adding into
-          // a group/repeater.
-          title={
-            active.parentFieldId
-              ? // Why: PR I -- parentFieldId can point to a nested parent
-                // (repeater inside repeater). findFieldById walks the tree
-                // instead of only checking top-level.
-                `Add field to ${
-                  findFieldById(builder.fields, active.parentFieldId)?.name ??
-                  "parent"
-                }`
-              : undefined
-          }
-          excludedTypes={COLLECTION_BUILDER_CONFIG.picker.excludedTypes ?? []}
-          onCancel={() => setActive({ kind: "none" })}
-          // Why: PR C flow change. Don't append a placeholder field;
-          // build a draft and open the sheet in create mode. The field
-          // is only committed on Apply -- Cancel discards cleanly.
-          // PR D: thread parentFieldId through so the create overlay
-          // knows whether to append to top-level or nested.
-          onSelect={type =>
-            setActive({
-              kind: "create",
-              parentFieldId: active.parentFieldId,
-              draft: {
-                id: `field_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
-                name: "",
-                label: "",
-                type,
-                validation: {},
-              },
-            })
-          }
-        />
-      )}
-
-      {/* Field editor sheet -- create mode for a brand-new field that
-          hasn't been committed yet. Apply appends to builder.fields
-          (or to the parent's nested fields when parentFieldId is set). */}
-      {active.kind === "create" && (
-        <FieldEditorSheet
-          open
-          mode="create"
-          field={active.draft}
-          siblingFields={
-            active.parentFieldId
-              ? // Why: PR I -- parentFieldId can be nested; findFieldById
-                // walks the tree to locate the parent at any depth.
-                (findFieldById(builder.fields, active.parentFieldId)?.fields ??
-                [])
-              : builder.fields
-          }
-          readOnly={isLocked}
-          isInsideRepeatingAncestor={
-            active.parentFieldId
-              ? // Why: the new field will live inside parentFieldId. It
-                // counts as nested if EITHER parentFieldId itself is a
-                // repeating container OR parentFieldId already lives
-                // inside one. The helper only walks ancestors, so we
-                // OR with a direct type-check on the parent. PR I:
-                // findFieldById replaces the shallow .find() so nested
-                // parents resolve correctly.
-                (() => {
-                  const parent = findFieldById(
-                    builder.fields,
-                    active.parentFieldId
-                  );
-                  if (!parent) return false;
-                  const parentIsRepeating =
-                    parent.type === "repeater" ||
-                    (parent.type === "component" && parent.repeatable === true);
-                  return (
-                    parentIsRepeating ||
-                    isInsideRepeatingAncestor(parent.id, builder.fields)
-                  );
-                })()
-              : false
-          }
-          onCancel={() => setActive({ kind: "none" })}
-          onApply={next => {
-            if (active.parentFieldId) {
-              builder.handleNestedFieldAdd(active.parentFieldId, next);
-            } else {
-              builder.setFields([...builder.fields, next]);
-            }
-            setActive({ kind: "none" });
-          }}
-          // Why: Delete is hidden in create mode (sheet checks mode), so
-          // this handler shouldn't be reachable. Provide a no-op so the
-          // type contract is satisfied.
-          onDelete={() => setActive({ kind: "none" })}
-        />
-      )}
-
-      {/* Field editor sheet -- opens when a field card is clicked. */}
-      {active.kind === "edit" && editingField && (
-        <FieldEditorSheet
-          open
-          mode="edit"
-          field={editingField}
-          siblingFields={(() => {
-            // Why: PR I -- when editing a nested field, siblings are the
-            // parent's children (minus self), not all top-level fields.
-            // Falls back to top-level when the field has no parent.
-            const parent = findParentContainerId(
-              builder.fields,
-              editingField.id
-            );
-            if (!parent) {
-              return builder.fields.filter(f => f.id !== editingField.id);
-            }
-            const container = findFieldById(builder.fields, parent.containerId);
-            return (container?.fields ?? []).filter(
-              f => f.id !== editingField.id
-            );
-          })()}
-          readOnly={isLocked}
-          isInsideRepeatingAncestor={isInsideRepeatingAncestor(
-            editingField.id,
-            builder.fields
-          )}
-          onCancel={() => setActive({ kind: "none" })}
-          onApply={next => {
-            builder.handleFieldUpdate(next);
-            setActive({ kind: "none" });
-          }}
-          onDelete={() => {
-            builder.handleFieldDelete(editingField.id);
-            setActive({ kind: "none" });
-          }}
-          // Why: PR I dropped onAddNestedField -- the +Add affordance for
-          // nested children moved out of the offcanvas sheet and into
-          // the field list via BuilderFieldList's onAddInsideParent.
-        />
-      )}
-
-      {/* Hooks UI removed in PR D (feedback Section 2). The HooksEditor
-          component still exists in the codebase and code-first hooks in
-          nextly.config.ts continue to work; only the toolbar button +
-          sheet are gone. */}
-
-      {/* Safe-change confirmation (additive, no rename candidates). */}
-      {previewData &&
-        previewData.classification === "safe" &&
-        !(previewData.renamed && previewData.renamed.length > 0) && (
-          <SafeChangeConfirmDialog
-            open={showSafeDialog}
-            onOpenChange={setShowSafeDialog}
-            collectionName={slug}
-            changes={previewData.changes}
-            onConfirm={() => {
-              const fieldDefs = getValidatedFields();
-              if (fieldDefs) {
-                void applySchemaChanges(
-                  fieldDefs,
-                  previewData.schemaVersion,
-                  {},
-                  []
-                );
-              }
-            }}
-            isApplying={isApplyingSchema}
-          />
-        )}
-
-      {/* Destructive / interactive / rename change dialog. */}
-      {previewData &&
-        (previewData.classification !== "safe" ||
-          (previewData.renamed && previewData.renamed.length > 0)) && (
-          <SchemaChangeDialog
-            open={showSchemaDialog}
-            onOpenChange={setShowSchemaDialog}
-            collectionName={slug}
-            hasDestructiveChanges={previewData.hasDestructiveChanges}
-            classification={previewData.classification}
-            changes={previewData.changes}
-            renamed={previewData.renamed}
-            warnings={previewData.warnings}
-            interactiveFields={previewData.interactiveFields}
-            onConfirm={(resolutions, renameResolutions) => {
-              const fieldDefs = getValidatedFields();
-              if (fieldDefs) {
-                void applySchemaChanges(
-                  fieldDefs,
-                  previewData.schemaVersion,
-                  resolutions,
-                  renameResolutions
-                );
-              }
-            }}
-            isApplying={isApplyingSchema}
-          />
-        )}
-
-      {/* Cancel / back navigation surfaced via the unused isSaving state */}
-      {(isSaving || isApplyingSchema) && (
-        <div aria-live="polite" className="sr-only">
-          Saving collection changes…
-        </div>
-      )}
-    </div>
+      }
+      isSaving={isSaving || confirmation.isApplying}
+      savingLabel="Saving collection changes…"
+    >
+      <BuilderSchemaChangeDialogs
+        confirmation={confirmation}
+        entityName={slug}
+        onConfirm={confirmApply}
+      />
+    </BuilderPageLayout>
   );
 }
