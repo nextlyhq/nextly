@@ -14,6 +14,23 @@ if [ -n "$CI" ]; then
   exit 0
 fi
 
+# Git exports GIT_DIR into every hook, and in a worktree it names that
+# worktree's admin directory (<main>/.git/worktrees/<name>) rather than a
+# plain .git. Turbo shells out to git to hash inputs, inherits that pointer,
+# and never returns: `turbo run build` prints its task list and then sits
+# there, burning ~2s of CPU over 25 minutes. Pushing from the main checkout
+# is unaffected, because there GIT_DIR is an ordinary .git — which is why
+# this looked like a turbo cache problem for a long time, and is not one.
+#
+# Clearing it costs nothing anywhere else: with no GIT_DIR set, git falls
+# back to discovering the repository from the working directory, and hooks
+# already run from the top of the working tree. That resolves to the same
+# repository in a normal clone and to the correct worktree in a linked one,
+# on every platform. GIT_WORK_TREE is cleared with it because the two are
+# read as a pair; git does not currently set it for this hook, and unsetting
+# something already unset is a no-op.
+unset GIT_DIR GIT_WORK_TREE
+
 set -e
 
 # The two repo-wide lints CI gates on that `turbo lint` does not run. Both
