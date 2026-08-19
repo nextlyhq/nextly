@@ -59,7 +59,17 @@ export type DocumentKind = (typeof DOCUMENT_KINDS)[number];
 export interface DocumentSettings {
   /** Page-scoped styles with no owning node; same envelope as node styles. */
   styles?: NodeStyles;
-  /** Sanitized document-scoped custom CSS (CSS only — custom JS never exists). */
+  /**
+   * Document-scoped custom CSS, as the author wrote it.
+   *
+   * NOT sanitized, and nothing renders it. This said "sanitized" while no
+   * sanitizer existed, which is the most expensive kind of wrong comment: it
+   * reads as a guarantee to whoever adds the render call, and the render call
+   * is the change that would make it dangerous. A stylesheet needs its
+   * selectors scoped and its properties allow-listed before it reaches a page,
+   * which is a different job from the value-level checks the rich-text path
+   * performs.
+   */
   customCss?: string;
 }
 
@@ -123,7 +133,13 @@ export interface BlockNode {
   locked?: boolean;
   /** Author-facing instance label, shown in the Layers panel. */
   name?: string;
-  /** Per-node raw custom CSS (CSS only); sanitized and scoped at compile time. */
+  /**
+   * Per-node custom CSS, as the author wrote it.
+   *
+   * NOT sanitized or scoped: the style compiler never reads this key. The claim
+   * that it was compiled is the same wrong guarantee the document-level field
+   * carried, one level down.
+   */
   customCss?: string;
   /** CSS id applied to the node's root element. */
   cssId?: string;
