@@ -29,6 +29,7 @@ import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundar
 import { toast } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
+import { useSingleEditorDocument } from "@admin/hooks/queries/useSingleEditorDocument";
 import {
   useSingleSchema,
   useUpdateSingleDocument,

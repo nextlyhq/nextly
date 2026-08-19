@@ -299,6 +299,18 @@ export interface ApiSingle {
   localized?: boolean;
 
   /**
+   * Whether a status-less save on this Single is HELD as a pending change
+   * rather than written to the live document (the draft/published split).
+   *
+   * Server-DERIVED from the same predicate the write gates on, never stored:
+   * the split also depends on the fields (a reachable password field, an
+   * unresolvable component), so a flag persisted beside `status` would drift
+   * from what a save actually does. An editor told drafts are off sends an
+   * explicit published save, which overwrites the live document.
+   */
+  draftsEnabled?: boolean;
+
+  /**
    * Resolved version-history config, or null/absent when the Single is
    * unversioned. The server normalizes the Schema Builder's on/off into this
    * shape, so reads carry the object while writes send a boolean — see
