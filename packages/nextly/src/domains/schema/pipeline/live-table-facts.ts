@@ -59,9 +59,9 @@ function mysqlRows<T>(result: unknown): T[] {
 /**
  * Whether the table currently holds at least one row.
  *
- * Asked as an existence check rather than a count: the answer only ever decides whether a
- * backfill is needed, and `SELECT 1 ... LIMIT 1` costs the same on a table of ten rows and a
- * table of ten million, where `COUNT(*)` scans.
+ * Asked as an existence check rather than a count: every caller needs only the yes or no — is a
+ * backfill needed, may an unregistered table be dropped — and `SELECT 1 ... LIMIT 1` costs the
+ * same on a table of ten rows and a table of ten million, where `COUNT(*)` scans.
  */
 export async function tableHasRows(
   db: unknown,

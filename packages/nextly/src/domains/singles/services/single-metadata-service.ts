@@ -22,7 +22,9 @@
  * Two consequences follow, and both are real:
  *
  * - A crash between the DDL and the row leaves a table nothing has any record of, findable only by
- *   guessing at table names.
+ *   guessing at table names. A retry of the create reclaims that ground rather than building over
+ *   it: a table already standing at the create's table name is dropped when empty and refused when
+ *   it holds rows, never silently adopted (`resetOrphanStorage`).
  * - A DDL that FAILS still writes its row, recording `failed`. That row owns the slug, and the
  *   create path refuses a slug that is already owned, so a failed create cannot be retried through
  *   the same path until the row is removed.
@@ -337,10 +339,16 @@ export class SingleMetadataService {
     // corrected retry is a fresh create rather than a collision with its own wreckage.
     const plan = await this.planCreate(input);
 
-    // 2. APPLY. Never throws; a failure is reported as a status so the row can still record it.
+    // 2. CLEAR THE GROUND. A table already standing where this create is about to build is never
+    // adopted: empty, it is dropped so the apply renders every column from THIS request's fields;
+    // holding rows, the create is refused — and the refusal is still free, because nothing has
+    // been persisted and no statement has run.
+    await this.resetOrphanStorage(input);
+
+    // 3. APPLY. Never throws; a failure is reported as a status so the row can still record it.
     const migrationStatus = await this.applyCreateDdl(input, plan);
 
-    // 3. RECORD, with the outcome already known.
+    // 4. RECORD, with the outcome already known.
     //
     // 🔴 Deliberately last, which is where the request handler had it. Writing the intent FIRST
     // would be better — a crash between the two leaves a table nothing has any record of — but only
@@ -354,6 +362,64 @@ export class SingleMetadataService {
     });
 
     return { record, migrationStatus };
+  }
+
+  /**
+   * Leave the create's table name pointing at nothing, or refuse the create.
+   *
+   * `CREATE TABLE IF NOT EXISTS` is a no-op against a table that already exists, on every dialect,
+   * and the statement runner tolerates already-applied index statements so half-applied schema can
+   * be finished. Together those make an apply over a LEFTOVER table silent: a create interrupted
+   * between the DDL and the registry write leaves a table no row describes, and a retry with a
+   * DIFFERENT field set would adopt that table unchanged — recording `applied` and binding a
+   * runtime schema that names columns the table does not have, so every later read and write fails
+   * far from the cause. Verifying the adopted table against the requested shape is not an answer
+   * either: the DDL generator and the schema descriptor render several field kinds differently
+   * (float widths, inline unique constraints, companion-owned columns), so a comparison between
+   * them reports working tables as broken.
+   *
+   * So a standing table is never built over. Which way it goes is decided by the one thing an
+   * orphan cannot have:
+   *
+   * - **Empty**, it is wreckage of an interrupted attempt. The ownership re-assertion above proved
+   *   no registered Single claims it, and a table the registry has never described is one nothing
+   *   can write rows through. It is dropped — with its locale companion and field-group data — so
+   *   the apply that follows renders every column, index and junction table from this request's
+   *   fields, and `applied` describes the table that is actually there.
+   * - **Holding rows**, it is somebody's data, and dropping it would destroy exactly what proves
+   *   it is not wreckage. The create is refused with the table named and the way forward stated.
+   *   Raised rather than recorded: no statement has run and no row is written, so the slug stays
+   *   free and the operator can retry after dealing with the table.
+   */
+  private async resetOrphanStorage(input: CreateSingleInput): Promise<void> {
+    const adapter = this.adapter;
+    if (!adapter) return;
+    if (!(await adapter.tableExists(input.tableName))) return;
+
+    const { tableHasRows } = await import(
+      "../../schema/pipeline/live-table-facts"
+    );
+    const occupied = await tableHasRows(
+      adapter.getDrizzle(),
+      adapter.getCapabilities().dialect,
+      input.tableName
+    );
+    if (occupied) {
+      throw NextlyError.conflict({
+        reason: "state",
+        message: `Table "${input.tableName}" already exists and holds rows, but no Single describes it. Drop or rename that table, then retry the create.`,
+        logContext: {
+          reason: "single-create-table-occupied",
+          slug: input.slug,
+          tableName: input.tableName,
+        },
+      });
+    }
+
+    this.logger.info(
+      `[Singles] Dropping empty unregistered table "${input.tableName}" before creating "${input.slug}"`
+    );
+    await this.dropSingleStorage(input.slug, input.tableName, adapter);
   }
 
   /**
@@ -409,32 +475,7 @@ export class SingleMetadataService {
 
     const adapter = this.adapter;
     if (tableName && adapter) {
-      // Embedded field-group instances point back at this table by a plain string with no foreign
-      // key, so the drop below cascades nothing and would strand them. Sweep first.
-      const { teardownEntityComponentData } = await import(
-        "../../field-groups/services/teardown-entity-field-group-data"
-      );
-      await teardownEntityComponentData({ adapter, parentTable: tableName });
-
-      // Remove the companion `_locales` table and this single's archive rows before the main table.
-      // The companion holds a foreign key to `<main>.id`, so it must go first or the main drop
-      // orphans it on PostgreSQL and is rejected by the constraint on MySQL.
-      const { teardownEntityI18n } = await import(
-        "../../i18n/migration/teardown-entity-i18n"
-      );
-      await teardownEntityI18n({ adapter, slug, tableName, kind: "single" });
-
-      // PostgreSQL needs CASCADE to drop dependent objects: the companion's foreign key makes the
-      // main table a target, and a non-cascading drop raises rather than proceeding. The other two
-      // dialects reject the keyword, so it is asked for only where it means something.
-      //
-      // The adapter renders this rather than a SQL string built here, because it already owns the
-      // two things such a string has to get right on every dialect: quoting the identifier, and
-      // turning a driver failure into the normalised database error the callers above expect.
-      await adapter.dropTable(tableName, {
-        ifExists: true,
-        cascade: adapter.getCapabilities().dialect === "postgresql",
-      });
+      await this.dropSingleStorage(slug, tableName, adapter);
     }
 
     // A row a concurrent delete already took is the state this method exists to reach, so it
@@ -449,6 +490,47 @@ export class SingleMetadataService {
     } catch (error) {
       if (!NextlyError.isNotFound(error)) throw error;
     }
+  }
+
+  /**
+   * Drop everything a Single stores: its embedded field-group data, its locale companion, and the
+   * main table itself, in that order.
+   *
+   * Shared by the delete path and by the create path's orphan reset, because "remove this Single's
+   * storage" is one question and two renderings of the teardown order would drift — the order is
+   * load-bearing on two dialects (see the companion comment below).
+   */
+  private async dropSingleStorage(
+    slug: string,
+    tableName: string,
+    adapter: DrizzleAdapter
+  ): Promise<void> {
+    // Embedded field-group instances point back at this table by a plain string with no foreign
+    // key, so the drop below cascades nothing and would strand them. Sweep first.
+    const { teardownEntityComponentData } = await import(
+      "../../field-groups/services/teardown-entity-field-group-data"
+    );
+    await teardownEntityComponentData({ adapter, parentTable: tableName });
+
+    // Remove the companion `_locales` table and this single's archive rows before the main table.
+    // The companion holds a foreign key to `<main>.id`, so it must go first or the main drop
+    // orphans it on PostgreSQL and is rejected by the constraint on MySQL.
+    const { teardownEntityI18n } = await import(
+      "../../i18n/migration/teardown-entity-i18n"
+    );
+    await teardownEntityI18n({ adapter, slug, tableName, kind: "single" });
+
+    // PostgreSQL needs CASCADE to drop dependent objects: the companion's foreign key makes the
+    // main table a target, and a non-cascading drop raises rather than proceeding. The other two
+    // dialects reject the keyword, so it is asked for only where it means something.
+    //
+    // The adapter renders this rather than a SQL string built here, because it already owns the
+    // two things such a string has to get right on every dialect: quoting the identifier, and
+    // turning a driver failure into the normalised database error the callers above expect.
+    await adapter.dropTable(tableName, {
+      ifExists: true,
+      cascade: adapter.getCapabilities().dialect === "postgresql",
+    });
   }
 
   /**
