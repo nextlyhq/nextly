@@ -374,6 +374,8 @@ describe("the next entry", () => {
       "DEFAULT_MAX_QUERIES",
       "createBlocksPage",
       "createPublicBlocksPage",
+      "createPublicSinglePage",
+      "createSinglePage",
     ]);
   });
 });
