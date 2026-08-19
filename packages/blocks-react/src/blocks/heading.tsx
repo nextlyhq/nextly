@@ -39,10 +39,16 @@ export interface HeadingProps {
 export function renderHeading({
   props,
   className,
+  markProp,
 }: BlockRenderArgs<HeadingProps>): ReactElement {
   const level = oneOf(props.level, HEADING_LEVELS, "h2");
   const label = text(props.text);
   const href = url(props.href);
+
+  // The text moves between two elements, which is why the block marks it rather
+  // than an editor inferring it: linked, the words live inside the anchor;
+  // unlinked, they are the heading's own child.
+  const mark = markProp?.("text") ?? {};
 
   // The anchor goes INSIDE the heading. Wrapping the heading in a link instead
   // would put a block-level element in a phrasing context and, more usefully,
@@ -57,12 +63,13 @@ export function renderHeading({
           ...(relFor(props.target, props.rel) === undefined
             ? {}
             : { rel: relFor(props.target, props.rel) }),
+          ...mark,
         },
         label
       )
     : label;
 
-  return createElement(level, { className }, content);
+  return createElement(level, { className, ...(href ? {} : mark) }, content);
 }
 
 // Defined against the ENGINE's `defineBlock`, not the plugin SDK's: the engine
@@ -83,7 +90,7 @@ export const heading = defineBlock<HeadingProps, PageContext>({
     keywords: ["title", "headline", "h1", "h2"],
   },
   props: {
-    text: { type: "text" },
+    text: { type: "text", inline: true },
     level: { type: "select", options: [...HEADING_LEVELS] },
     href: { type: "url" },
     target: { type: "select", options: ["_self", "_blank"] },

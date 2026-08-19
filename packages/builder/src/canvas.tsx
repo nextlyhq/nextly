@@ -175,6 +175,16 @@ export interface CanvasProps {
    */
   dragHandlers?: CanvasDragHandlers;
   /**
+   * Raised when a double-click lands on the page.
+   *
+   * Separate from `onSelect` because the two gestures mean different things and
+   * one handler deciding between them by counting clicks would be a second
+   * place the distinction lives. A double-click that hits no editable value
+   * does nothing, which the handler decides — the canvas does not know what is
+   * editable.
+   */
+  onDoubleClick?: (event: React.MouseEvent<HTMLDivElement>) => void;
+  /**
    * Editor chrome drawn ABOVE the page — the drop indicator today.
    *
    * Inside the root rather than beside it, because the overlay is positioned in
@@ -202,6 +212,7 @@ export function Canvas({
   render,
   className,
   dragHandlers,
+  onDoubleClick,
   overlay,
 }: CanvasProps) {
   const root = useRef<HTMLDivElement | null>(null);
@@ -296,6 +307,12 @@ export function Canvas({
       // right up until someone writes a selector against the wrong one.
       data-nx-selected-id={selectedId ?? undefined}
       onClick={handleClick}
+      // Chrome is excluded for the same reason it is on click: a double-click
+      // on a control drawn over the page is not a double-click on the page.
+      onDoubleClick={event => {
+        if (isChrome(event.target)) return;
+        onDoubleClick?.(event);
+      }}
       // Spread rather than merged with a handler of this component's own: the
       // canvas has no pointer behaviour of its own apart from the drag, so
       // there is nothing to combine, and merging would create a second place

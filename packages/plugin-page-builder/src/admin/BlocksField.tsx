@@ -54,6 +54,7 @@ import {
   SelectionBreadcrumb,
   useCanvasDrag,
   useEditorState,
+  useInlineText,
 } from "@nextlyhq/builder/shell";
 import {
   useDocumentCheckpoint,
@@ -341,6 +342,12 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   const nesting = useMemo(registryNestingSource, []);
   const drag = useCanvasDrag({ editor, slots, nesting });
 
+  /*
+   * Typing a block's text on the canvas. The hook owns the caret; which values
+   * may be typed into is the block's own declaration, read by the builder.
+   */
+  const inline = useInlineText(editor);
+
   useCheckpoints({ name, control, document: editor.document });
 
   /*
@@ -413,7 +420,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
           It draws the live region and publishes the structural verbs to what it
           wraps, which is how the toolbar presses exactly what the keys press.
         */}
-        <BlockKeyboardActions editor={editor}>
+        <BlockKeyboardActions editor={editor} onEditText={inline.begin}>
           {/*
             Inside the verbs provider, which is what lets the palette run
             exactly what the keystrokes and the toolbar run.
@@ -432,6 +439,10 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             selectedIds={editor.selection.ids}
             onSelect={editor.select}
             dragHandlers={drag.handlers}
+            // The pointer route into typing a block's text. Its keyboard
+            // counterpart is the Enter binding above, registered in the same
+            // place so a surface cannot gain one without the other.
+            onDoubleClick={inline.onDoubleClick}
             // Both pieces of chrome go through the canvas rather than beside it,
             // because both are positioned in the canvas's own content
             // coordinates and the canvas root is what establishes them.

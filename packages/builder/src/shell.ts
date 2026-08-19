@@ -156,6 +156,16 @@ export type { EditorState, UseEditorStateArgs } from "./editor-state";
  * caller can reach them without loading React.
  */
 export { DropIndicator, useCanvasDrag } from "./canvas-drag";
+/**
+ * Typing a block's text in place on the canvas.
+ *
+ * The hook owns the caret and the handover; the rules about WHAT may be edited
+ * are `inline-text`'s, and a block declares its own through its prop schemas.
+ */
+export { useInlineText, EDITING_ATTRIBUTE } from "./use-inline-text";
+export type { InlineTextEditing, UseInlineTextResult } from "./use-inline-text";
+export { inlineTargets, inlineTarget, inlineTextOp } from "./inline-text";
+export type { InlineTextTarget } from "./inline-text";
 export type {
   CanvasDrag,
   CanvasDragHandlers,

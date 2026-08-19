@@ -200,6 +200,19 @@ export interface BlockKeyboardActionsOptions {
    * than unmounting the canvas, so the selection survives whatever is over it.
    */
   enabled?: boolean;
+  /**
+   * Begin typing the selected block's text in place, reporting whether it
+   * could be.
+   *
+   * The keyboard route to the gesture a double-click performs. A pointer-only
+   * way into editing would leave the text of every block unreachable without a
+   * mouse, which is the plainest kind of WCAG 2.1.1 failure — and it is a real
+   * one here, because the canvas is where the text is.
+   *
+   * Optional: a host that has not wired inline editing registers no binding at
+   * all, rather than one that presses and does nothing.
+   */
+  onEditText?: (nodeId: string) => boolean;
 }
 
 /** What the hook hands back: the region's text, and the verbs behind the keys. */
@@ -227,6 +240,7 @@ export interface BlockKeyboardActionsResult {
 export function useBlockKeyboardActions({
   editor,
   enabled = true,
+  onEditText,
 }: BlockKeyboardActionsOptions): BlockKeyboardActionsResult {
   // The message a live region reads out. Held as state rather than written to
   // the DOM directly so React owns the node — a region mutated behind React's
@@ -527,7 +541,39 @@ export function useBlockKeyboardActions({
     [announce, deleteSelected, duplicateSelected]
   );
 
-  useShortcuts([...bindings, ...editing], {
+  /*
+   * Enter opens the selected block's text for typing, which is the keyboard
+   * route to what a double-click does on the canvas.
+   *
+   * Registered only when a host supplied the verb: a binding that presses and
+   * does nothing is worse than no binding, because it teaches an author the key
+   * is broken rather than absent.
+   *
+   * `whenTyping: false` is what stops it firing again once the caret is in.
+   * The shortcut manager counts a `contentEditable` element as a typing target,
+   * so an author pressing Enter inside a paragraph gets a line break from the
+   * element rather than a second attempt to begin an edit that is already open.
+   */
+  const inlineEditing = React.useMemo(
+    () =>
+      onEditText === undefined
+        ? []
+        : [
+            {
+              keys: "Enter",
+              description: "Edit the selected block's text",
+              when: () => latest.current.selectedId !== null,
+              whenTyping: false,
+              run: () => {
+                const id = latest.current.selectedId;
+                if (id !== null) onEditText(id);
+              },
+            },
+          ],
+    [onEditText]
+  );
+
+  useShortcuts([...bindings, ...editing, ...inlineEditing], {
     name: "builder-block-actions",
     enabled,
   });
@@ -611,6 +657,7 @@ export function useBlockKeyboardActions({
 export function BlockKeyboardActions({
   editor,
   enabled,
+  onEditText,
   children,
 }: BlockKeyboardActionsOptions & {
   readonly children?: React.ReactNode;
@@ -618,6 +665,7 @@ export function BlockKeyboardActions({
   const { announcement, actions } = useBlockKeyboardActions({
     editor,
     enabled,
+    ...(onEditText === undefined ? {} : { onEditText }),
   });
 
   // `polite`, not `assertive`: a move is the author's own action and its result
