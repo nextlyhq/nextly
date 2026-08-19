@@ -113,6 +113,7 @@ import {
 import { resolveComponentSchemas } from "../../versions/restore-version";
 import { rehydrateSnapshotDates } from "../../versions/tag-component-types";
 import { VersionsRepository } from "../../versions/versions-repository";
+import { workingDraftLocale } from "../../versions/working-draft-locale";
 
 import type { CollectionAccessService } from "./collection-access-service";
 import type { CollectionHookService } from "./collection-hook-service";
@@ -2697,10 +2698,16 @@ export class CollectionQueryService extends BaseService {
             scopeSlug: params.collectionName,
             entryId,
           },
-          // Non-localized split: the draft is keyed under the unlocalized
-          // `locale IS NULL` slot, matching the store and promote, so it is
-          // found regardless of the request locale.
-          null
+          // The same key the store, the promote and the discard derive, from
+          // the same function: an unlocalized document under the `locale IS
+          // NULL` slot, a localized one under the language being read. A read
+          // that looked elsewhere would report no pending change and serve the
+          // published content as though the author had never saved.
+          workingDraftLocale({
+            documentLocalized:
+              (collection as { localized?: boolean }).localized === true,
+            requestLocale: params.locale ?? null,
+          })
         );
         // Mirror the write gate's eligibility check before overlaying: a
         // component that turned localized or unresolvable after this draft was
