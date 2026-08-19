@@ -1010,6 +1010,24 @@ function parseSingleVersionRoutes(
     };
   }
 
+  // `versions/working-draft` DELETE throws away this Single's pending change for
+  // one language. A named sub-resource like `autosave` above, so it cannot
+  // collide with the numeric version paths. Authorized as an update: it changes
+  // what the editor sees, not the document's history.
+  if (
+    subId === "working-draft" &&
+    additionalParams.length === 0 &&
+    httpMethod === "DELETE"
+  ) {
+    routeParams.slug = id;
+    return {
+      service: "singles",
+      operation: "update",
+      method: "discardSingleWorkingDraft",
+      routeParams,
+    };
+  }
+
   // See the collection parser: naming a version is an idempotent write on
   // history, authorized as an update.
   if (subId && additionalParams.length === 0 && httpMethod === "PATCH") {

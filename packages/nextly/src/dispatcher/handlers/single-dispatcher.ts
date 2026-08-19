@@ -112,6 +112,7 @@ import { assertSchemaVersionMatch } from "./schema-version-guard";
 import {
   assertLabelRequestValid,
   autosaveForDocument,
+  discardWorkingDraftForDocument,
   getAutosaveForDocument,
   requireSnapshotBody,
   getVersionDiffForDocument,
@@ -372,6 +373,28 @@ export const SINGLE_VERSION_METHODS: Record<
           headers: { [SKIP_TIMEZONE_FORMAT_HEADER]: "1" },
         })
       );
+    },
+  },
+  discardSingleWorkingDraft: {
+    execute: async (_svc, p) => {
+      const slug = String(p.slug ?? "");
+      // The document id comes from the live row rather than the URL, as
+      // everywhere in this handler: it is what the authorization checks are
+      // made against, and a client-supplied one would let a caller aim them at
+      // a document other than the one being written.
+      const entryId = await requireLiveSingleId(slug);
+      const item = await discardWorkingDraftForDocument({
+        scopeKind: "single",
+        slug,
+        entryId,
+        user: userFromParams(p),
+        params: p,
+        // `?locale=` names the language whose pending change is being thrown
+        // away. An empty value is the same as none: the request named no
+        // language, which a localized Single resolves to its default.
+        locale: typeof p.locale === "string" && p.locale ? p.locale : null,
+      });
+      return respondMutation("Working draft discarded.", item);
     },
   },
 };

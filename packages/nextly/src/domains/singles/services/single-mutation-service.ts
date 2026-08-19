@@ -100,6 +100,7 @@ import {
 import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
 import { VersionsRepository } from "../../versions/versions-repository";
+import { workingDraftLocale } from "../../versions/working-draft-locale";
 import { expandComponentFields } from "../../webhooks/expand-component-fields";
 import { recordMutationEvent } from "../../webhooks/record-mutation-event";
 import { isOutboxRecordingActive } from "../../webhooks/recording-activation";
@@ -246,6 +247,75 @@ export class SingleMutationService extends BaseService {
    * Auto-creates the document if it doesn't exist, then applies the
    * provided partial data.
    */
+  /**
+   * Remove a Single's pending working-draft sidecar for one language, under the
+   * same row lock a draft save takes.
+   *
+   * A status-less save to a published Single stores its edit as a working draft
+   * rather than overwriting the live row. Discarding removes that sidecar so the
+   * editor resets to what is public; the live row and the durable history are
+   * both untouched.
+   *
+   * The lock is what makes it safe to interleave with saves: a save committing
+   * between this request's authorization checks and the delete would otherwise
+   * have its brand-new draft removed with both requests reporting success. It is
+   * a no-op where row locking is unavailable (SQLite, which already serializes
+   * writers).
+   *
+   * Authorization is the caller's concern: the discard handler establishes read
+   * and update on the document first. Deleting when no working draft exists is a
+   * no-op, not an error.
+   */
+  async discardWorkingDraft(params: {
+    slug: string;
+    /**
+     * Which language's pending change to discard. A localized Single holds one
+     * per language, and removing them all would throw away work in languages the
+     * author never opened. Ignored for an unlocalized Single, which has one.
+     */
+    locale?: string | null;
+  }): Promise<void> {
+    const singleMeta = await resolveSingleForRequest(
+      this.adapter,
+      this.singleRegistryService,
+      params.slug,
+      this.logger
+    );
+    if (!singleMeta) {
+      throw NextlyError.notFound({
+        logContext: {
+          reason: "discard-working-draft-single-not-found",
+          scopeSlug: params.slug,
+        },
+      });
+    }
+
+    await this.adapter.transaction(async tx => {
+      // A Single is one row, so its identity comes from reading that row rather
+      // than from the request. No row means the document has never been written,
+      // which cannot have a pending change against it.
+      const row = await tx.selectOne<{ id?: string }>(singleMeta.tableName, {});
+      const entryId = row?.id;
+      if (entryId === undefined) return;
+
+      // Serialize with concurrent draft-save upserts, which lock this same row
+      // before writing the sidecar.
+      await tx.lockRow(singleMeta.tableName, entryId);
+      await new VersionsRepository(tx).deleteWorkingDraft(
+        {
+          scopeKind: "single",
+          scopeSlug: params.slug,
+          entryId,
+        },
+        workingDraftLocale({
+          documentLocalized: singleMeta.localized === true,
+          requestLocale: params.locale ?? null,
+          defaultLocale: this.localization?.defaultLocale ?? null,
+        })
+      );
+    });
+  }
+
   async update(
     slug: string,
     data: Record<string, unknown>,

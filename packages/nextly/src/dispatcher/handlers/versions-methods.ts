@@ -663,6 +663,7 @@ export async function discardWorkingDraftForDocument(
   );
 
   return discardWorkingDraft({
+    scopeKind: args.scopeKind,
     slug: args.slug,
     entryId: args.entryId,
     user: args.user,
