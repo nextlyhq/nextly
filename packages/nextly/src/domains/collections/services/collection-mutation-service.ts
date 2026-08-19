@@ -116,6 +116,7 @@ import {
 } from "../../i18n/runtime/companion-readiness";
 import { assembleDocument } from "../../versions/assemble-document";
 import { captureInTx } from "../../versions/capture-in-tx";
+import { resolveDraftHold } from "../../versions/draft-hold";
 import { isDraftSplitEligible } from "../../versions/draft-split-eligibility";
 import {
   buildRestorePayload,
@@ -133,6 +134,7 @@ import {
 import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
 import { VersionsRepository } from "../../versions/versions-repository";
+import { workingDraftLocale } from "../../versions/working-draft-locale";
 import { expandComponentFields } from "../../webhooks/expand-component-fields";
 import { projectFields } from "../../webhooks/project-fields";
 import {
@@ -361,6 +363,14 @@ interface WorkingDraftWriteContext {
   collection: unknown;
   collectionHasStatus: boolean;
   componentFieldData: Record<string, unknown>;
+  /**
+   * The locale this document's working draft is keyed under, from
+   * `workingDraftLocale`. `null` is the unlocalized slot, not "unknown": the
+   * store, the read overlay, the promote and the discard must all derive it the
+   * same way, because a draft written under one key and looked for under
+   * another is never found again and the edit disappears without an error.
+   */
+  draftLocale: string | null;
   fields: FieldDefinition[];
   manyToManyData: Record<string, string[]>;
   params: { collectionName: string; entryId: string; user?: UserContext };
@@ -1494,6 +1504,13 @@ export class CollectionMutationService extends BaseService {
   async discardWorkingDraft(params: {
     collectionName: string;
     entryId: string;
+    /**
+     * Which language's pending change to discard. Discarding is one language's
+     * concern: a document can hold a pending change in several at once, and
+     * removing them all would throw away work in languages the author never
+     * opened. Ignored for an unlocalized document, which has one.
+     */
+    locale?: string | null;
   }): Promise<void> {
     const collection = await this.collectionService.getCollection(
       params.collectionName
@@ -1509,7 +1526,11 @@ export class CollectionMutationService extends BaseService {
           scopeSlug: params.collectionName,
           entryId: params.entryId,
         },
-        null
+        workingDraftLocale({
+          documentLocalized:
+            (collection as { localized?: boolean }).localized === true,
+          requestLocale: params.locale ?? null,
+        })
       );
     });
   }
@@ -4440,7 +4461,17 @@ export class CollectionMutationService extends BaseService {
     namedStatus: unknown;
     /** The committed status of the row being written. */
     liveStatus: unknown;
-  }): Promise<{ hold: boolean; componentSchemas: ComponentSchemas | null }> {
+    /**
+     * The locale this write is for. Omitted by a surface that has no locale
+     * concept, which is what makes such a surface decline to hold a localized
+     * document's edit rather than key it under the wrong slot.
+     */
+    requestLocale?: string | null;
+  }): Promise<{
+    hold: boolean;
+    componentSchemas: ComponentSchemas | null;
+    draftLocale: string | null;
+  }> {
     const collectionHasStatus =
       (args.collection as { status?: boolean }).status === true;
     const versionsConfig = (args.collection as Record<string, unknown>)
@@ -4456,17 +4487,17 @@ export class CollectionMutationService extends BaseService {
       !hasPasswordField(args.fields)
         ? await resolveComponentSchemas(args.fields as unknown as FieldConfig[])
         : null;
-    const hold =
-      isDraftSplitEligible({
-        collectionHasStatus,
-        draftsVersioningEnabled: versionsConfig?.drafts?.enabled === true,
-        documentLocalized,
-        fields: args.fields as unknown as FieldConfig[],
-        componentSchemas,
-      }) &&
-      args.namedStatus === undefined &&
-      args.liveStatus === "published";
-    return { hold, componentSchemas };
+    const { hold, draftLocale } = resolveDraftHold({
+      collectionHasStatus,
+      draftsVersioningEnabled: versionsConfig?.drafts?.enabled === true,
+      documentLocalized,
+      fields: args.fields as unknown as FieldConfig[],
+      componentSchemas,
+      namedStatus: args.namedStatus,
+      liveStatus: args.liveStatus,
+      requestLocale: args.requestLocale,
+    });
+    return { hold, componentSchemas, draftLocale };
   }
 
   /**
@@ -4578,6 +4609,7 @@ export class CollectionMutationService extends BaseService {
     const {
       collection,
       collectionHasStatus,
+      draftLocale,
       fields,
       params,
       splitComponentSchemas,
@@ -4590,7 +4622,10 @@ export class CollectionMutationService extends BaseService {
       scopeSlug: params.collectionName,
       entryId: params.entryId,
     };
-    const existingDraft = await draftRepo.findWorkingDraft(draftRef, null);
+    const existingDraft = await draftRepo.findWorkingDraft(
+      draftRef,
+      draftLocale
+    );
     // The fields this save actually touched, at the assembled read
     // shape. `patchedDocument` overlaid the current patch onto the live
     // relations and REPLACED a single component whole, so a partial
@@ -4637,7 +4672,7 @@ export class CollectionMutationService extends BaseService {
       // request locale would orphan it when a later read or publish
       // arrives under a different locale in a localization-configured
       // app. The read overlay and promote use the same null key.
-      locale: null,
+      locale: draftLocale,
       snapshot: draftDocument,
       createdBy: params.user?.id ?? null,
     });
@@ -5160,6 +5195,14 @@ export class CollectionMutationService extends BaseService {
       // design and is handled separately.
       const documentLocalized =
         (collection as { localized?: boolean }).localized === true;
+      // The one key this document's working draft is stored, read, promoted and
+      // discarded under, in this method. Derived once: the store and the read
+      // disagreeing is a silent loss, because a draft written under one key is
+      // simply never found under another and no error is raised anywhere.
+      const draftLocaleKey = workingDraftLocale({
+        documentLocalized,
+        requestLocale: params.locale ?? null,
+      });
       // The component schemas reachable from this collection, resolved once off
       // the transaction (registry reads on the pooled connection, the same reason
       // as `webhookFields` below) and reused by the promote path. Skipped when a
@@ -5262,7 +5305,7 @@ export class CollectionMutationService extends BaseService {
             scopeSlug: params.collectionName,
             entryId: params.entryId,
           },
-          null
+          draftLocaleKey
         );
         if (advisoryDraft) {
           const { payload: draftInput } = buildRestorePayload(
@@ -5562,8 +5605,20 @@ export class CollectionMutationService extends BaseService {
             : (((preUpdateRow as { status?: unknown } | undefined)?.status as
                 | string
                 | undefined) ?? null);
-          storeAsWorkingDraft =
-            splitEnabled && namesNoStatus && draftLiveStatus === "published";
+          // The one hold rule, shared with the transaction and batch surfaces.
+          // Eligibility is passed in rather than recomputed: it was resolved
+          // off the transaction because it reads the component registry, and
+          // the promote path below needs it too.
+          storeAsWorkingDraft = resolveDraftHold({
+            collectionHasStatus,
+            draftsVersioningEnabled: versionsConfig?.drafts?.enabled === true,
+            documentLocalized,
+            fields: fields as unknown as FieldConfig[],
+            componentSchemas: splitComponentSchemas,
+            namedStatus: namesNoStatus ? undefined : transitionNextStatus,
+            liveStatus: draftLiveStatus,
+            requestLocale: params.locale ?? null,
+          }).hold;
 
           // TOCTOU-safe authorization: classify the transition against the
           // status just read UNDER THE ROW LOCK (`preUpdateRow` /
@@ -5656,7 +5711,7 @@ export class CollectionMutationService extends BaseService {
                 scopeSlug: params.collectionName,
                 entryId: params.entryId,
               },
-              null
+              draftLocaleKey
             );
             if (workingDraft) {
               // Promoting a working draft publishes (or unpublishes) its pending
@@ -6148,6 +6203,12 @@ export class CollectionMutationService extends BaseService {
                   collection,
                   collectionHasStatus,
                   componentFieldData,
+                  // The locale this write is for: the companion row's write
+                  // locale when the patch touched localized columns, and the
+                  // request's otherwise. Derived through the same function the
+                  // read overlay and the promote use, so all three look under
+                  // one key.
+                  draftLocale: draftLocaleKey,
                   fields,
                   manyToManyData,
                   params,
@@ -6176,7 +6237,7 @@ export class CollectionMutationService extends BaseService {
                     entryId: params.entryId,
                   },
                   // Same unlocalized key the fetch and store use.
-                  null
+                  draftLocaleKey
                 );
               }
 
@@ -6197,7 +6258,7 @@ export class CollectionMutationService extends BaseService {
                     scopeSlug: params.collectionName,
                     entryId: params.entryId,
                   },
-                  null
+                  draftLocaleKey
                 );
               }
 
@@ -6222,7 +6283,7 @@ export class CollectionMutationService extends BaseService {
                     scopeSlug: params.collectionName,
                     entryId: params.entryId,
                   },
-                  null
+                  draftLocaleKey
                 );
               }
 
@@ -8072,6 +8133,7 @@ export class CollectionMutationService extends BaseService {
       const {
         hold: txStoreAsWorkingDraft,
         componentSchemas: txSplitComponentSchemas,
+        draftLocale: txDraftLocale,
       } = await this.resolveWorkingDraftHold({
         collection,
         fields,
@@ -8180,6 +8242,7 @@ export class CollectionMutationService extends BaseService {
             // This surface writes no component subtrees of its own, so the
             // draft's components come from the live read alone.
             componentFieldData: {},
+            draftLocale: txDraftLocale,
             fields,
             manyToManyData,
             params: {
@@ -9720,6 +9783,7 @@ export class CollectionMutationService extends BaseService {
       const {
         hold: bulkStoreAsWorkingDraft,
         componentSchemas: bulkSplitComponentSchemas,
+        draftLocale: bulkDraftLocale,
       } = await this.resolveWorkingDraftHold({
         collection,
         fields,
@@ -9823,6 +9887,7 @@ export class CollectionMutationService extends BaseService {
             collectionHasStatus:
               (collection as { status?: boolean }).status === true,
             componentFieldData: {},
+            draftLocale: bulkDraftLocale,
             fields,
             manyToManyData,
             params: {
