@@ -73,6 +73,7 @@ import { emptyBlockDocument } from "../fields/blocks-document";
 import { siteSheet } from "../site-style";
 
 import { BlocksSummary } from "./BlocksSummary";
+import { DocumentStatusPill } from "./DocumentStatusPill";
 import { withValueAtPath } from "./snapshot-merge";
 
 export interface BlocksFieldProps<
@@ -391,6 +392,11 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
       <BuilderShell
         onExit={done}
         availablePanels={AVAILABLE_PANELS}
+        // Whether the page is live, which the admin's own chrome would have
+        // shown had this editor not asked for it to be hidden. `undoDepth` is
+        // the editor's OWN dirty signal: the form's is false for as long as the
+        // editor is open, because the document is committed on the way out.
+        topBar={<DocumentStatusPill isDirty={editor.undoDepth > 0} />}
         // The shell owns the region; this fills it. Rendered unconditionally
         // rather than only when something is selected, because the panel states
         // "select a block to edit it" — a region that appears and disappears

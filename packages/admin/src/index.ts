@@ -92,6 +92,21 @@ export {
   type DocumentIdentity,
 } from "./components/features/entries/EntryForm/EntryFormContext";
 /**
+ * How the surrounding document stands, for a field that covers the editor's own
+ * chrome. Separate from the identity deliberately: which document this is does
+ * not change with the language, and how it stands does.
+ */
+export {
+  useDocumentStatus,
+  hasPendingWorkingDraft,
+  type DocumentStatus,
+} from "./components/features/entries/EntryForm/EntryFormContext";
+export {
+  pillStateFromForm,
+  PILL_LABEL,
+  type PillState,
+} from "./components/features/entries/EntryForm/panels/DocumentPanel";
+/**
  * Put a contributed surface's live state somewhere a crash cannot take it.
  *
  * Exported for the plugin surface alongside the identity above: a field holding

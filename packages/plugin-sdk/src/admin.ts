@@ -28,6 +28,29 @@ export { useDocumentIdentity, type DocumentIdentity } from "@nextlyhq/admin";
 export type { ComponentPath } from "@nextlyhq/admin";
 
 /**
+ * How the surrounding document stands (@experimental).
+ *
+ * For a field that covers the editor's own chrome — the page builder takes the
+ * whole window — leaving an author no way to see whether the page is live.
+ *
+ * Separate from `useDocumentIdentity` rather than folded into it: a document's
+ * identity is the same whichever language you read it in, and its status is
+ * not. This answers for the language being edited.
+ *
+ * It reports FACTS. What to call a published document with local edits is
+ * `pillStateFromForm`'s question, because only the caller knows whether IT has
+ * unsaved work — a surface holding its own document outside the form is not
+ * described by the form's dirty flag.
+ */
+export {
+  useDocumentStatus,
+  pillStateFromForm,
+  PILL_LABEL,
+  type DocumentStatus,
+  type PillState,
+} from "@nextlyhq/admin";
+
+/**
  * Record a recovery point for the surrounding document (@experimental).
  *
  * For a contributed field that holds its own editing state — a canvas, a

@@ -63,7 +63,10 @@ import {
 } from "./entry-address";
 import { EntryFormActions } from "./EntryFormActions";
 import { EntryFormContent } from "./EntryFormContent";
-import { EntryFormContextProvider } from "./EntryFormContext";
+import {
+  EntryFormContextProvider,
+  hasPendingWorkingDraft,
+} from "./EntryFormContext";
 import { EntryFormProvider } from "./EntryFormProvider";
 import { EntryFormSidebar } from "./EntryFormSidebar";
 import { EntryFormToolbarSlots } from "./EntryFormToolbarSlots";
@@ -546,6 +549,19 @@ export function EntryForm({
         entryId={entry?.id}
         collectionSlug={collection.name}
         isCreateMode={mode === "create"}
+        // The ACTIVE language's state, matching the meta strip beside it: a
+        // field that covers the editor's chrome has to report the same thing
+        // the chrome would have. Omitted while creating, where nothing is
+        // persisted yet and a guessed "draft" would be a claim nobody made.
+        {...(mode === "create"
+          ? {}
+          : {
+              documentStatus: {
+                status:
+                  effectiveEntryStatus(entry, locale, defaultLocale) ?? "draft",
+                hasWorkingDraft: hasPendingWorkingDraft(entry),
+              },
+            })}
       >
         <EntryFormProvider
           form={form}
@@ -729,14 +745,7 @@ export function EntryForm({
                           effectiveEntryStatus(entry, locale, defaultLocale) ??
                           "draft"
                         }
-                        hasWorkingDraft={
-                          (
-                            entry as
-                              | { _isWorkingDraft?: boolean }
-                              | null
-                              | undefined
-                          )?._isWorkingDraft === true
-                        }
+                        hasWorkingDraft={hasPendingWorkingDraft(entry)}
                         isRailCollapsed={railCollapsed}
                         hasPublicAddress={hasPublicAddress}
                       />
