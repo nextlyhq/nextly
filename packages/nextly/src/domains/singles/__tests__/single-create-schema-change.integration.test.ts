@@ -34,6 +34,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { defineCollection, text } from "../../../config";
 import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
 import {
   createTestNextly,
@@ -373,7 +374,7 @@ for (const dialect of getConfiguredTestDialects()) {
             fields: [{ name: "body", type: "text" }],
           }
         )
-      ).rejects.toThrow();
+      ).rejects.toThrow(/already exists/);
 
       // The companion is untouched — same columns, no impostor rebuild — and nothing claimed the
       // colliding slug.
@@ -401,8 +402,125 @@ for (const dialect of getConfiguredTestDialects()) {
             fields: [{ name: "body", type: "text" }],
           }
         )
-      ).rejects.toThrow();
+      ).rejects.toThrow(/already exists/);
       expect(await registryRow(current, taken)).toBeUndefined();
+    });
+
+    /**
+     * 🔴 The same collision, refused by the IN-EXCLUSION guard alone.
+     *
+     * The dispatcher's preflight makes the same family comparison and throws before the service is
+     * reached, so every dispatcher-driven test above is satisfied by the outer guard whether or not
+     * the inner one works. The inner re-assertion is the one that matters most — it runs inside the
+     * schema-change exclusion, immediately before the orphan reset is licensed to DROP, and it
+     * exists precisely for registrations that land after the preflight has already passed. Driving
+     * the service directly is what makes it the only guard that can refuse.
+     */
+    it("refuses the family collision inside the exclusion, where the drop is licensed", async () => {
+      current = await createTestNextly({
+        dialect,
+        localization: { locales: ["en", "es"], defaultLocale: "en" },
+      });
+      const owner = `sc_${dialect.slice(0, 2)}_famz`;
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: owner,
+          label: "Famz",
+          localized: true,
+          fields: [{ name: "headline", type: "text", localized: true }],
+        }
+      );
+      const companion = `single_${owner}_locales`;
+      expect(await current.adapter.tableExists(companion)).toBe(true);
+
+      const metadata = current.getService("singleMetadataService");
+      await expect(
+        metadata.createSingle({
+          slug: `${owner}-locales`,
+          label: "Famz Locales",
+          tableName: companion,
+          fields: [{ name: "body", type: "text" }],
+          source: "ui",
+          locked: false,
+        })
+      ).rejects.toThrow(/already exists/);
+
+      // Refused before the reset could touch it: the companion still stands and nothing claimed
+      // the colliding slug.
+      expect(await current.adapter.tableExists(companion)).toBe(true);
+      expect(await registryRow(current, `${owner}-locales`)).toBeUndefined();
+    });
+
+    /**
+     * 🔴 An orphan's junction tables are wreckage too, and they go with it.
+     *
+     * A many-to-many relationship renders a junction table carrying a foreign key to the main
+     * table. Left standing while the main table is dropped, the outcome diverges by dialect —
+     * MySQL refuses to drop a referenced parent outright, and PostgreSQL's CASCADE strips the
+     * junction's constraint and leaves the junction itself for the re-render's
+     * `CREATE TABLE IF NOT EXISTS` to adopt silently. So the reset reads the referencing tables
+     * from the live catalog, holds each to the same emptiness bar, and drops them FIRST. Retrying
+     * without the relationship is what makes the drop observable: a junction that was merely
+     * adopted would still exist afterwards.
+     */
+    it("rebuilds an orphan together with its junction tables", async () => {
+      current = await createTestNextly({
+        dialect,
+        collections: [
+          defineCollection({
+            slug: "tags",
+            fields: [text({ name: "title" })],
+          }),
+        ],
+      });
+      const slug = `sc_${dialect.slice(0, 2)}_jn`;
+      const table = `single_${slug}`;
+      // The generator's convention: source and target table names sorted, then the field name.
+      const junction = `dc_tags_${table}_tags`;
+
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug,
+          label: "Jn",
+          fields: [
+            {
+              name: "tags",
+              type: "relationship",
+              options: { relationType: "manyToMany", target: "tags" },
+            },
+          ],
+        }
+      );
+      expect((await registryRow(current, slug))?.migrationStatus).toBe(
+        "applied"
+      );
+      expect(await current.adapter.tableExists(junction)).toBe(true);
+
+      // The interrupted state again: tables stand, the row describing them does not.
+      const registry = current.getService("singleRegistryService");
+      await registry.deleteSingle(slug, { force: true });
+
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug,
+          label: "Jn",
+          fields: [{ name: "body", type: "text" }],
+        }
+      );
+
+      expect((await registryRow(current, slug))?.migrationStatus).toBe(
+        "applied"
+      );
+      expect(await current.adapter.tableExists(table)).toBe(true);
+      // The abandoned attempt's junction went with its parent rather than surviving as an orphan
+      // of its own.
+      expect(await current.adapter.tableExists(junction)).toBe(false);
     });
 
     /**

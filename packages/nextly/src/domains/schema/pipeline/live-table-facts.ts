@@ -88,6 +88,62 @@ export async function tableHasRows(
 }
 
 /**
+ * The names of the tables that hold a foreign key REFERENCING the given table.
+ *
+ * The reverse of {@link readForeignKeyColumns}, and read from the live catalog for the same
+ * reason: which junction and companion tables point at a parent is decided by whichever path
+ * created them, not derivable from a field list — least of all for a table whose registry row is
+ * gone. A parent with referencing tables cannot simply be dropped: MySQL refuses the drop outright
+ * while the reference stands, and PostgreSQL's CASCADE silently strips the referrer's constraint
+ * instead, so the caller has to deal with the referrers first either way.
+ */
+export async function readReferencingTables(
+  db: unknown,
+  dialect: SupportedDialect,
+  tableName: string
+): Promise<string[]> {
+  const names = new Set<string>();
+
+  if (dialect === "postgresql") {
+    // Through the referenced relation, mirroring `readIndexNames`: `to_regclass` resolves the
+    // name the way the statements themselves will, across the whole search path.
+    const result = (await (db as PgMysqlExecute).execute(
+      sql`SELECT DISTINCT r.relname AS table_name
+          FROM pg_constraint c
+          JOIN pg_class r ON r.oid = c.conrelid
+          WHERE c.contype = 'f' AND c.confrelid = to_regclass(${tableName})`
+    )) as { rows: { table_name: string }[] };
+    for (const row of result.rows) names.add(row.table_name);
+    return [...names];
+  }
+
+  if (dialect === "mysql") {
+    const rows = mysqlRows<{ TABLE_NAME: string }>(
+      await (db as PgMysqlExecute).execute(
+        sql`SELECT DISTINCT TABLE_NAME
+            FROM information_schema.KEY_COLUMN_USAGE
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND REFERENCED_TABLE_NAME = ${tableName}`
+      )
+    );
+    for (const row of rows) names.add(row.TABLE_NAME);
+    return [...names];
+  }
+
+  // SQLite has no reverse foreign-key view, but `pragma_foreign_key_list` is a table-valued
+  // function, so one join over `sqlite_master` reads every table's outgoing keys and filters to
+  // those aimed at the parent.
+  const rows = (await (db as SqliteAll).all(
+    sql`SELECT DISTINCT m.name AS table_name
+        FROM sqlite_master AS m
+        JOIN pragma_foreign_key_list(m.name) AS fk
+        WHERE m.type = 'table' AND fk."table" = ${tableName}`
+  )) as { table_name: string }[];
+  for (const row of rows) names.add(row.table_name);
+  return [...names];
+}
+
+/**
  * The names of the indexes the table currently carries.
  *
  * Whether a column is indexed is not derivable from its field: an index is created by the path

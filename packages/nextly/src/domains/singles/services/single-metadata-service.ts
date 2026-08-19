@@ -386,7 +386,8 @@ export class SingleMetadataService {
    *   no registered Single claims it as a main table OR as a `_locales` companion, and a table
    *   outside every registered Single's family is one no Nextly path can write rows through — so
    *   nothing can put content into it between the probe and the drop either. It is dropped — with
-   *   its own locale companion and field-group data — so
+   *   its own locale companion, its junction tables and its field-group data, each held to the
+   *   same emptiness bar first — so
    *   the apply that follows renders every column, index and junction table from this request's
    *   fields, and `applied` describes the table that is actually there.
    * - **Holding rows**, it is somebody's data, and dropping it would destroy exactly what proves
@@ -399,29 +400,52 @@ export class SingleMetadataService {
     if (!adapter) return;
     if (!(await adapter.tableExists(input.tableName))) return;
 
-    const { tableHasRows } = await import(
+    const { readReferencingTables, tableHasRows } = await import(
       "../../schema/pipeline/live-table-facts"
     );
-    const occupied = await tableHasRows(
-      adapter.getDrizzle(),
-      adapter.getCapabilities().dialect,
-      input.tableName
-    );
-    if (occupied) {
-      throw NextlyError.conflict({
-        reason: "state",
-        message: `Table "${input.tableName}" already exists and holds rows, but no Single describes it. Drop or rename that table, then retry the create.`,
-        logContext: {
-          reason: "single-create-table-occupied",
-          slug: input.slug,
-          tableName: input.tableName,
-        },
-      });
+    const db = adapter.getDrizzle();
+    const dialect = adapter.getCapabilities().dialect;
+
+    // The wreckage is a FAMILY plus its junctions, not one table. A relationship field's junction
+    // tables carry a foreign key to the main table, so a main table cannot simply be dropped while
+    // they stand: MySQL refuses the drop outright, and PostgreSQL's CASCADE strips the junction's
+    // constraint and leaves the junction itself to be adopted by the re-render — the same silent
+    // adoption this method exists to prevent. They are read from the live catalog because the
+    // abandoned attempt's field list is gone with its registry row. The `_locales` companion also
+    // references the main table and is excluded here: `dropSingleStorage` below owns its teardown.
+    const companion = `${input.tableName}_locales`;
+    const referencing = (
+      await readReferencingTables(db, dialect, input.tableName)
+    ).filter(name => name !== companion);
+
+    // Every table about to be dropped is probed BEFORE anything is dropped, so a refusal leaves
+    // the whole group exactly as it stood.
+    for (const name of [input.tableName, ...referencing]) {
+      if (await tableHasRows(db, dialect, name)) {
+        throw NextlyError.conflict({
+          reason: "state",
+          message: `Table "${name}" already exists and holds rows, but no Single describes it. Drop or rename that table, then retry the create.`,
+          logContext: {
+            reason: "single-create-table-occupied",
+            slug: input.slug,
+            tableName: input.tableName,
+            occupiedTable: name,
+          },
+        });
+      }
     }
 
     this.logger.info(
       `[Singles] Dropping empty unregistered table "${input.tableName}" before creating "${input.slug}"`
     );
+    // Referencing tables first: they hold the foreign keys, and a parent cannot be dropped while a
+    // reference to it stands on MySQL.
+    for (const name of referencing) {
+      await adapter.dropTable(name, {
+        ifExists: true,
+        cascade: dialect === "postgresql",
+      });
+    }
     await this.dropSingleStorage(input.slug, input.tableName, adapter);
   }
 
