@@ -56,8 +56,21 @@ const AA_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
  */
 const HOST_OWNED_RULES = ["document-title"];
 
-/** The editor's own container, so the admin around it is not this suite's subject. */
-const EDITOR_ROOT = '[aria-label="Editor panels"]';
+/**
+ * The readiness anchor — NOT a scan root.
+ *
+ * `scanEditor` deliberately does not `.include()` this: the scan is whole-page,
+ * for the reason the module docblock gives. This constant only answers "has the
+ * editor finished opening", so the scan never runs against a page that has not
+ * arrived.
+ *
+ * Stated because the name invites the opposite reading, and acting on that
+ * reading would be a regression rather than a tightening: the one violation
+ * this suite has caught so far was admin chrome painted with a branded token —
+ * a real defect reachable from the builder, which a scan rooted here would not
+ * have seen.
+ */
+const EDITOR_READY_ANCHOR = '[aria-label="Editor panels"]';
 
 interface Finding {
   id: string;
@@ -99,7 +112,9 @@ async function openEditor(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Edit blocks" }).click();
   // POPULATION BEFORE VERDICT. "No violations" is satisfied perfectly by an
   // editor that never opened, so the scan must not run until it has.
-  await expect(page.locator(EDITOR_ROOT)).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(EDITOR_READY_ANCHOR)).toBeVisible({
+    timeout: 30_000,
+  });
 }
 
 test.describe("the page builder meets WCAG 2.2 AA", () => {

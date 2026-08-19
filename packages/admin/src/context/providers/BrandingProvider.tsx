@@ -113,9 +113,15 @@ function useColorInjection(colors: ResolvedBrandingColors | undefined) {
 
     if (primaryHsl) {
       rules.push(`--nx-primary: ${primaryHsl};`);
-      rules.push(
-        `--nx-primary-foreground: ${colors.primaryForeground ?? "0 0% 100%"};`
-      );
+      // Only when the API resolved one. The fallback was the bare triplet
+      // "0 0% 100%", which lands in `color: var(--nx-primary-foreground)` as an
+      // invalid value: the declaration is dropped and the text inherits the
+      // ambient foreground, which on a branded surface is the page's dark text.
+      // Emitting nothing instead leaves the theme's own token in force, which is
+      // a real colour chosen for the mode rather than one invented here.
+      if (colors.primaryForeground) {
+        rules.push(`--nx-primary-foreground: ${colors.primaryForeground};`);
+      }
       // Derived tokens that reference --nx-primary HSL triplet
       rules.push(`--nx-ring: ${primaryHsl};`);
       rules.push(`--nx-focus-ring: ${primaryHsl};`);
@@ -125,9 +131,10 @@ function useColorInjection(colors: ResolvedBrandingColors | undefined) {
 
     if (accentHsl) {
       rules.push(`--nx-accent: ${accentHsl};`);
-      rules.push(
-        `--nx-accent-foreground: ${colors.accentForeground ?? "0 0% 100%"};`
-      );
+      // Conditional for the same reason as the primary foreground above.
+      if (colors.accentForeground) {
+        rules.push(`--nx-accent-foreground: ${colors.accentForeground};`);
+      }
       rules.push(`--nx-chart-2: ${accentHsl};`);
     }
 

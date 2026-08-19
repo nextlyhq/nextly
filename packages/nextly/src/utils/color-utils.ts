@@ -1,3 +1,5 @@
+import { checkContrast } from "@nextlyhq/blocks-engine";
+
 /**
  * Color utility functions for admin branding.
  *
@@ -49,32 +51,61 @@ export function hexToCssColor(hex: string): string {
   return `hsl(${hDeg} ${sPct}% ${lPct}%)`;
 }
 
-/**
- * Determine the best foreground color (white or dark) for readable text on
- * the given background hex color, using WCAG relative luminance.
+/** Foreground candidates: the hex the ratio is measured from, and the CSS emitted.
  *
- * Returns a CSS color:
- * - "hsl(0 0% 100%)"          → white (used on dark/saturated backgrounds)
- * - "hsl(222.2 47.4% 11.2%)"  → slate-900 (used on light backgrounds)
+ * Two spellings because they answer different questions. `checkContrast` parses
+ * hex and `rgb()` and NOT `hsl()`, so the measurement takes the hex; the tokens
+ * hold complete CSS colors, so the emitted value stays the `hsl()` form the
+ * theme and the existing branding contract already use.
+ */
+const WHITE = { hex: "#ffffff", css: "hsl(0 0% 100%)" };
+/** slate-900 — the designed dark tone, softer than black and preferred when it passes. */
+const SLATE_900 = { hex: "#0f172a", css: "hsl(222.2 47.4% 11.2%)" };
+/** Pure black, the maximum-contrast dark. Only reached when the designed pair fails. */
+const BLACK = { hex: "#000000", css: "hsl(0 0% 0%)" };
+
+/**
+ * The measured ratio between a candidate and the background, or 0 when either
+ * colour cannot be read.
+ *
+ * Zero rather than a thrown error or a default verdict: an unreadable input
+ * must not be able to WIN a comparison, and every caller here validates the
+ * background with `isValidHex` first, so this is a floor rather than a path.
+ */
+function ratioAgainst(background: string, candidateHex: string): number {
+  return checkContrast(candidateHex, background)?.ratio ?? 0;
+}
+
+/** WCAG 2.2 AA for normal-size text. Buttons and labels are normal text. */
+const AA_NORMAL_TEXT = 4.5;
+
+/**
+ * The most readable foreground for text on the given background.
+ *
+ * Prefers the designed pair — white or slate-900 — and takes whichever has the
+ * higher measured contrast. When NEITHER reaches AA it escalates to the
+ * higher-contrast extreme, because if neither extreme clears the threshold then
+ * no foreground can and the brand colour itself is what cannot carry text.
+ *
+ * The escalation fires only where the designed pair would otherwise ship a
+ * failing pair, so a brand whose palette already works is unaffected. A mid-tone
+ * brand is where it matters: `#6366f1` gives white 4.47 and slate-900 4.00, both
+ * under 4.5, while black reaches 4.70.
+ *
+ * The previous implementation compared white against `1.05 / (L + 0.05)` and the
+ * dark tone against `(L + 0.05) / 0.05` — the second being the ratio against
+ * pure BLACK while the value returned was slate-900. It chose by a number the
+ * result never had, so `#6366f1` was given slate-900 believing 4.70 and shipping
+ * 4.00.
  */
 export function getForegroundForBackground(hex: string): string {
-  const clean = hex.replace("#", "");
-  const r = parseInt(clean.slice(0, 2), 16) / 255;
-  const g = parseInt(clean.slice(2, 4), 16) / 255;
-  const b = parseInt(clean.slice(4, 6), 16) / 255;
+  const white = ratioAgainst(hex, WHITE.hex);
+  const preferred =
+    white >= ratioAgainst(hex, SLATE_900.hex) ? WHITE : SLATE_900;
 
-  const toLinear = (c: number) =>
-    c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  if (ratioAgainst(hex, preferred.hex) >= AA_NORMAL_TEXT) return preferred.css;
 
-  const L = 0.2126 * toLinear(r) + 0.7152 * toLinear(g) + 0.0722 * toLinear(b);
-
-  // Compare contrast ratios against pure white (L=1) and slate-900 (L≈0.017)
-  const whiteContrast = 1.05 / (L + 0.05);
-  const darkContrast = (L + 0.05) / 0.05;
-
-  return whiteContrast >= darkContrast
-    ? "hsl(0 0% 100%)"
-    : "hsl(222.2 47.4% 11.2%)";
+  return white >= ratioAgainst(hex, BLACK.hex) ? WHITE.css : BLACK.css;
 }
 
 /**
