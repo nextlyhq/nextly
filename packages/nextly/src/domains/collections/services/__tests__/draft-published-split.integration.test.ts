@@ -1867,7 +1867,7 @@ describe("draft/published split — schema and component eligibility (integratio
     ],
   });
 
-  it("keeps a status-less edit live (no draft) when the collection embeds a localized component", async () => {
+  it("holds a status-less edit when the collection embeds a localized component", async () => {
     const entries = await bootFile(withHero(true));
     const ctx = { collectionName: COLLECTION, overrideAccess: true };
 
@@ -1875,8 +1875,10 @@ describe("draft/published split — schema and component eligibility (integratio
     const [row] = await handle!.adapter.select<LiveRow>(TABLE);
     const id = row.id;
 
-    // A localized component makes the collection ineligible for the split, so a
-    // status-less edit writes the live row directly rather than storing a draft.
+    // A localized component is representable in a draft snapshot, which holds
+    // exactly one locale's values and is keyed by that locale. What is still
+    // refused is an UNRESOLVED component, whose subtree would be dropped on
+    // promote without anyone noticing.
     const res = await entries.updateEntry(
       { ...ctx, entryId: id },
       { title: "edited" }
@@ -1884,8 +1886,8 @@ describe("draft/published split — schema and component eligibility (integratio
     expect(res.success).toBe(true);
 
     const [live] = await handle!.adapter.select<LiveRow>(TABLE);
-    expect(live.title).toBe("edited");
-    expect(await workingDraftCount(id)).toBe(0);
+    expect(live.title).toBe("live");
+    expect(await workingDraftCount(id)).toBe(1);
   });
 
   it("prunes fields the current schema no longer declares from a draft read", async () => {
@@ -2253,7 +2255,10 @@ describe("draft/published split — schema draftsEnabled flag (integration)", ()
     ).toBe(false);
   });
 
-  it("is false for a localized collection", async () => {
+  it("is true for a localized collection", async () => {
+    // The editor is told drafts are on for a translated document, because they
+    // are: a pending change is held per language, keyed by the language it
+    // belongs to.
     expect(
       await draftsEnabledFor(
         defineCollection({
@@ -2264,7 +2269,7 @@ describe("draft/published split — schema draftsEnabled flag (integration)", ()
           fields: [text({ name: "title" })],
         })
       )
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("is false for a collection with a reachable password field", async () => {

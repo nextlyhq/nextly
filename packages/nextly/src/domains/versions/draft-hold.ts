@@ -51,7 +51,6 @@ export function resolveDraftHold(input: DraftHoldInput): DraftHoldDecision {
   const eligible = isDraftSplitEligible({
     collectionHasStatus: input.collectionHasStatus,
     draftsVersioningEnabled: input.draftsVersioningEnabled,
-    documentLocalized: input.documentLocalized,
     fields: input.fields,
     componentSchemas: input.componentSchemas,
   });

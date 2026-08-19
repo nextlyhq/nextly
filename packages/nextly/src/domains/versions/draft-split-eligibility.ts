@@ -32,8 +32,6 @@ export interface DraftSplitEligibilityInput {
   collectionHasStatus: boolean;
   /** `collection.versions?.drafts?.enabled === true`. */
   draftsVersioningEnabled: boolean;
-  /** `collection.localized === true` — the split is off for localized documents. */
-  documentLocalized: boolean;
   /** The collection's top-level fields, for the reachable-password check. */
   fields: FieldConfig[];
   /**
@@ -53,11 +51,7 @@ export interface DraftSplitEligibilityInput {
 export function isDraftSplitEligible(
   input: DraftSplitEligibilityInput
 ): boolean {
-  if (
-    !input.collectionHasStatus ||
-    !input.draftsVersioningEnabled ||
-    input.documentLocalized
-  ) {
+  if (!input.collectionHasStatus || !input.draftsVersioningEnabled) {
     return false;
   }
   // A reachable password field disqualifies the whole collection: the snapshot
@@ -70,10 +64,11 @@ export function isDraftSplitEligible(
   const schemas = input.componentSchemas
     ? [...input.componentSchemas.values()]
     : [];
-  // A localized or unresolved component cannot be represented faithfully in a
-  // draft snapshot; a component holding a password is disqualified for the same
-  // reason as a top-level one.
-  if (schemas.some(schema => schema.localized || !schema.resolved)) {
+  // An unresolved component cannot be represented faithfully in a draft
+  // snapshot: its subtree would be dropped on promote, silently. A LOCALIZED
+  // component is representable, because a snapshot holds exactly one locale's
+  // values and the draft is keyed by that locale.
+  if (schemas.some(schema => !schema.resolved)) {
     return false;
   }
   if (schemas.some(schema => hasPasswordField(schema.fields))) {
@@ -107,18 +102,18 @@ export async function schemaDraftsEnabled(
 ): Promise<boolean> {
   const collectionHasStatus = collection.status === true;
   const draftsVersioningEnabled = collection.versions?.drafts?.enabled === true;
-  const documentLocalized = collection.localized === true;
+  // Resolved for a localized collection too: a localized component is
+  // representable now, but an UNRESOLVED one still is not, and skipping the
+  // registry read here would let it through unchecked.
   const componentSchemas =
     collectionHasStatus &&
     draftsVersioningEnabled &&
-    !documentLocalized &&
     !hasPasswordField(collection.fields)
       ? await resolveComponentSchemas(collection.fields)
       : null;
   return isDraftSplitEligible({
     collectionHasStatus,
     draftsVersioningEnabled,
-    documentLocalized,
     fields: collection.fields,
     componentSchemas,
   });

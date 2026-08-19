@@ -43,17 +43,14 @@ describe("resolveDraftHold", () => {
     ).toBe(false);
   });
 
-  it("derives the language key for a localized edit, and defers to eligibility", () => {
-    // The key is derived whether or not the write is held: the two are separate
-    // questions. A localized document is currently excluded from the split by
-    // `isDraftSplitEligible`, so the answer today is a key with no hold.
+  it("holds a localized edit under the language being written", () => {
     expect(
       resolveDraftHold({
         ...base(),
         documentLocalized: true,
         requestLocale: "es",
       })
-    ).toEqual({ hold: false, draftLocale: "es" });
+    ).toEqual({ hold: true, draftLocale: "es" });
   });
 
   it("refuses to hold a localized edit whose locale it cannot name", () => {

@@ -42,7 +42,6 @@ const components = (
 const base: DraftSplitEligibilityInput = {
   collectionHasStatus: true,
   draftsVersioningEnabled: true,
-  documentLocalized: false,
   fields: textFields,
   componentSchemas: new Map(),
 };
@@ -64,10 +63,13 @@ describe("isDraftSplitEligible", () => {
     ).toBe(false);
   });
 
-  it("is off for a localized document", () => {
-    expect(isDraftSplitEligible({ ...base, documentLocalized: true })).toBe(
-      false
-    );
+  it("does not ask whether the document is localized", () => {
+    // A localized document is eligible: a snapshot holds exactly one locale's
+    // values, and the draft is keyed by that locale. Which locale, and whether
+    // the writing surface can name one at all, is decided by `resolveDraftHold`
+    // — keeping the two apart is what stops an edit being held under a key
+    // nothing reads.
+    expect(isDraftSplitEligible(base)).toBe(true);
   });
 
   it("is off for a top-level (or grouped) password field", () => {
@@ -85,13 +87,16 @@ describe("isDraftSplitEligible", () => {
     ).toBe(false);
   });
 
-  it("is off for a localized component", () => {
+  it("stays eligible with a localized component", () => {
+    // Representable, for the same reason the document itself is: a snapshot
+    // holds one locale's values and the draft is keyed by that locale. An
+    // UNRESOLVED component is still refused, below.
     expect(
       isDraftSplitEligible({
         ...base,
         componentSchemas: components({ localized: true }),
       })
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("is off for an unresolved component", () => {
