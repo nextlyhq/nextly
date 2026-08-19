@@ -74,7 +74,11 @@ export function useBranding(): AdminBranding {
  * either fallback made the two contradict each other on one page.
  */
 export function useAppName(): string {
-  return useBranding().logoText ?? "Nextly";
+  // `??` alone would let a configured-but-empty `logoText` through, and an
+  // empty name is worse than a default one: the sign-in line reads "Sign in to
+  // your  account" and the card passes `alt=""`, which strips the logo's
+  // accessible name rather than just looking odd.
+  return useBranding().logoText?.trim() || "Nextly";
 }
 
 /**

@@ -134,8 +134,23 @@ describe("useBrandingStatus", () => {
  * while the screen supplies the sentence under it.
  */
 describe("useAppName", () => {
+  /**
+   * Reports the arrival of the response beside the name it produced.
+   *
+   * Waiting on the NAME alone cannot test a fallback: "Nextly" is also what
+   * renders before the request answers, so `waitFor` succeeds on the very
+   * first check and the assertion never sees the response at all. Measured —
+   * both fallback cases below passed with the guard removed until this probe
+   * made arrival observable.
+   */
   function NameProbe() {
-    return <span data-testid="name">{useAppName()}</span>;
+    const { isPending } = useBrandingStatus();
+    return (
+      <>
+        <span data-testid="name">{useAppName()}</span>
+        <span data-testid="arrived">{isPending ? "no" : "yes"}</span>
+      </>
+    );
   }
 
   function renderName(client: QueryClient) {
@@ -148,6 +163,13 @@ describe("useAppName", () => {
     );
   }
 
+  /** The response has landed, so what the name reads is about the response. */
+  async function arrived() {
+    await waitFor(() =>
+      expect(screen.getByTestId("arrived").textContent).toBe("yes")
+    );
+  }
+
   it("uses the configured name", async () => {
     get.mockResolvedValue({ logoText: "Acme Docs" } as AdminBranding);
     protectedGet.mockResolvedValue({ plugins: [] } as AdminBranding);
@@ -156,9 +178,23 @@ describe("useAppName", () => {
       new QueryClient({ defaultOptions: { queries: { retry: false } } })
     );
 
-    await waitFor(() =>
-      expect(screen.getByTestId("name").textContent).toBe("Acme Docs")
+    await arrived();
+    expect(screen.getByTestId("name").textContent).toBe("Acme Docs");
+  });
+
+  // A project that clears the field in Settings sends "", which `??` would let
+  // through — leaving the sign-in line reading "Sign in to your  account" and
+  // the logo with an empty accessible name.
+  it("treats a blank configured name as unset", async () => {
+    get.mockResolvedValue({ logoText: "   " } as AdminBranding);
+    protectedGet.mockResolvedValue({ plugins: [] } as AdminBranding);
+
+    renderName(
+      new QueryClient({ defaultOptions: { queries: { retry: false } } })
     );
+
+    await arrived();
+    expect(screen.getByTestId("name").textContent).toBe("Nextly");
   });
 
   it("falls back to Nextly when branding names nothing", async () => {
@@ -169,9 +205,8 @@ describe("useAppName", () => {
       new QueryClient({ defaultOptions: { queries: { retry: false } } })
     );
 
-    await waitFor(() =>
-      expect(screen.getByTestId("name").textContent).toBe("Nextly")
-    );
+    await arrived();
+    expect(screen.getByTestId("name").textContent).toBe("Nextly");
   });
 });
 
