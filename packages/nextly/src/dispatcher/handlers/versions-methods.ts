@@ -36,7 +36,10 @@ import {
   type VersionMetaWithAuthor,
 } from "../../domains/versions/author-hydration";
 import type { VersionDiff } from "../../domains/versions/diff";
-import { discardWorkingDraft } from "../../domains/versions/discard-working-draft";
+import {
+  discardWorkingDraft,
+  type DiscardScopeKind,
+} from "../../domains/versions/discard-working-draft";
 import { restoreVersion } from "../../domains/versions/restore-version";
 import {
   resolveComponentFieldMap,
@@ -614,7 +617,12 @@ export async function restoreVersionForDocument(
  * names the language it discards; the others are left alone.
  */
 export async function discardWorkingDraftForDocument(
-  args: Omit<VersionMethodArgs, "locale"> & {
+  args: Omit<VersionMethodArgs, "locale" | "scopeKind"> & {
+    /**
+     * Narrower than the shared `VersionMethodArgs` scope, because a discard is
+     * implemented for these two kinds only — see `DiscardScopeKind`.
+     */
+    scopeKind: DiscardScopeKind;
     params: Params;
     /**
      * Which language's pending change to discard. Absent (or null) means the

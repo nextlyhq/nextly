@@ -30,9 +30,24 @@ import { errorFromServiceEnvelope } from "../../errors/from-service-envelope";
 import type { VersionScopeKind } from "../../schemas/versions/types";
 import type { UserContext } from "../singles/types";
 
+/**
+ * The document kinds a discard is implemented for.
+ *
+ * Narrower than `VersionScopeKind`, which also admits `"page"`. The branch below
+ * routes anything that is not a Single to the collection services, so accepting
+ * the wider type would let a page request read and delete a COLLECTION's working
+ * draft whenever the slug and id happened to match. Naming the two supported
+ * kinds makes that unrepresentable, and makes a future page discard declare
+ * itself rather than inherit collection behaviour by falling through.
+ */
+export type DiscardScopeKind = Extract<
+  VersionScopeKind,
+  "collection" | "single"
+>;
+
 export interface DiscardWorkingDraftArgs {
   /** Which kind of document owns the pending change. */
-  scopeKind: VersionScopeKind;
+  scopeKind: DiscardScopeKind;
   /** Collection or Single slug. */
   slug: string;
   /**
@@ -80,11 +95,17 @@ export async function discardWorkingDraft(
   // language being discarded is named, so the values handed back are the ones the
   // editor resets to: reading another language's would reset the form to text
   // belonging to a language the author is not looking at.
+  //
+  // `overrideAccess: false` is stated rather than left off. Omitting it enforces
+  // access here too, but only because undefined is falsy — so the call site reads
+  // as though it might be trusted, and this is the document a caller receives.
+  // The live-document read gate beside this one states it for the same reason.
   const locale = args.locale ? { locale: args.locale } : {};
   const result =
     args.scopeKind === "single"
       ? await getService("singleEntryService").get(args.slug, {
           user: args.user,
+          overrideAccess: false,
           routeAuthorized: true,
           authenticatedScope: args.authenticatedScope,
           status: "all",
@@ -94,6 +115,7 @@ export async function discardWorkingDraft(
           collectionName: args.slug,
           entryId: args.entryId,
           user: args.user,
+          overrideAccess: false,
           routeAuthorized: true,
           authenticatedScope: args.authenticatedScope,
           status: "all",

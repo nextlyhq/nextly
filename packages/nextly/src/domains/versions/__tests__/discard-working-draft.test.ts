@@ -51,6 +51,9 @@ function buildEntryErrorEnvelope(error: Error) {
 const user = { id: "u1", roles: ["editor"] } as unknown as UserContext;
 
 const args = {
+  // The kind is explicit now that one function serves both: a discard for a
+  // Single reads and deletes through different services.
+  scopeKind: "collection" as const,
   slug: "posts",
   entryId: "e1",
   user,
