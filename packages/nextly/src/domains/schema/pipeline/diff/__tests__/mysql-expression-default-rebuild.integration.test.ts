@@ -61,8 +61,10 @@ const REBUILT_TABLE = "dc_expr_defaults_rebuilt";
 const JSON_OBJECT_DEFAULT = quoteJsonSqlDefault("{}", "mysql");
 
 // The emitted JSON default alongside the other expression shapes a live table
-// can carry. MySQL reports the first three with the parentheses removed and
-// the last two as written.
+// can carry. MySQL reports each one differently, which is the point: the three
+// single calls come back with their parentheses removed, `total` comes back
+// re-normalised to `(1 + 2)` from either spelling, and the two bare keywords
+// come back as written.
 const SOURCE_DDL = `CREATE TABLE ${SOURCE_TABLE} (
   id int NOT NULL PRIMARY KEY,
   payload json NOT NULL DEFAULT ${JSON_OBJECT_DEFAULT},
@@ -75,8 +77,8 @@ const SOURCE_DDL = `CREATE TABLE ${SOURCE_TABLE} (
 
 // The carve-out's reason, as a table this suite creates itself rather than as
 // a claim in a comment. Wrapping CURRENT_TIMESTAMP is accepted by MySQL and
-// behaves identically on insert — what it does NOT do is round-trip, and that
-// is the whole reason the carve-out exists.
+// behaves identically on insert — what it does is make the server record a
+// DIFFERENT default, which is the whole reason the carve-out exists.
 const WRAPPED_CT_TABLE = "dc_expr_defaults_wrapped_ct";
 
 describe.skipIf(!MYSQL_URL)("MySQL expression-default rebuild", () => {
@@ -150,11 +152,14 @@ describe.skipIf(!MYSQL_URL)("MySQL expression-default rebuild", () => {
   it("keeps CURRENT_TIMESTAMP bare, because the wrapped form does not round-trip", async () => {
     // The carve-out's reason, OBSERVED rather than asserted. Wrapping every
     // expression uniformly is not a parse failure — MySQL accepts
-    // `DEFAULT (CURRENT_TIMESTAMP)` — so nothing in the rebuild test above
-    // would have caught it. What it does is rewrite the default to `now()`,
-    // which introspection then reads back, so a snapshot that wrapped it would
-    // disagree with its own table on every subsequent read and the diff would
-    // report drift that is not there.
+    // `DEFAULT (CURRENT_TIMESTAMP)` — it REWRITES the default to `now()`,
+    // which introspection then reads back. So a snapshot that wrapped it would
+    // rebuild a table whose default reads differently from the source's.
+    //
+    // Not a diff problem: `normalizeDefault` collapses `current_timestamp` and
+    // `now()`, so the comparison would tolerate it. What breaks is the
+    // snapshot describing the database it was read from, which is why this is
+    // asserted against the server rather than through the diff.
     await pool
       .promise()
       .query(

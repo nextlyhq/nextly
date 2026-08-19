@@ -32,8 +32,9 @@ required JSON, repeater, group or chips field gets — without the parentheses i
 requires around one, so the recorded schema described a table no MySQL server
 would create, including the one it was read from. The parentheses are now
 restored when the baseline is recorded. `CURRENT_TIMESTAMP` is left as it is,
-because MySQL rewrites the parenthesised form to something it then reports back
-differently, which would show up as a schema change that never happened.
+because MySQL quietly rewrites the parenthesised form into a different default,
+so a table rebuilt from the recorded schema would not match the one it was read
+from.
 
 This fixes the defaults Nextly itself creates. One case is still broken and is
 tracked separately: a default someone wrote by hand that contains a quoted

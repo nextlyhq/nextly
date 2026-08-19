@@ -547,9 +547,17 @@ function buildSnapshotFromPgRows(rows: PgRow[]): NextlySchemaSnapshot {
  * The one expression MySQL accepts as a default without parentheses.
  *
  * `CURRENT_TIMESTAMP` is the documented exception, with or without a
- * fractional-seconds precision. The server normalizes `NOW()`, `LOCALTIME` and
- * `LOCALTIMESTAMP` to this spelling before recording it, so no synonym reaches
- * here under its own name.
+ * fractional-seconds precision.
+ *
+ * Which SPELLING arrives here depends on how the default was written, and the
+ * two cases differ. Written bare, the synonyms are recorded under this name:
+ * `DEFAULT NOW()`, `DEFAULT LOCALTIME` and `DEFAULT LOCALTIMESTAMP` are all
+ * reported as `CURRENT_TIMESTAMP`. Written as EXPRESSIONS they are not:
+ * `DEFAULT (NOW())`, `DEFAULT (LOCALTIME)` and `DEFAULT (CURRENT_TIMESTAMP)`
+ * are all reported as `now()`, which does NOT match here and is wrapped like
+ * any other expression — correctly, since that form does need the parentheses.
+ * Other date keywords behave the same way: `DEFAULT (CURRENT_DATE)` is
+ * reported as `curdate()`. Measured on MySQL 8.0.46.
  */
 const MYSQL_BARE_EXPRESSION_DEFAULT = /^current_timestamp(\s*\(\s*\d*\s*\))?$/i;
 
@@ -567,20 +575,33 @@ const MYSQL_BARE_EXPRESSION_DEFAULT = /^current_timestamp(\s*\(\s*\d*\s*\))?$/i;
  * MySQL database produces a `CREATE TABLE` that cannot be applied anywhere,
  * including back to the database it came from.
  *
- * Two forms must be left exactly as reported, and for the SAME reason both
- * times: the recorded text has to survive a round trip, or the next
- * introspection reads something else and the diff reports drift that is not
- * there. An expression that is not a single call is reported ALREADY
- * parenthesised as a whole (`(1 + 2)`), so wrapping it again changes it. And
- * `CURRENT_TIMESTAMP` does not survive being wrapped: MySQL rewrites
- * `DEFAULT (CURRENT_TIMESTAMP)` to `DEFAULT (now())` and reports `now()` back,
- * so a snapshot that wrapped it would differ from the table it describes on
- * every subsequent read.
+ * Two forms are left exactly as reported, for DIFFERENT reasons. Stating one
+ * reason for both would lend the weaker branch a justification it has not got.
  *
- * The two forms remain equivalent to INSERT - both auto-initialise, and both
- * accept `ON UPDATE CURRENT_TIMESTAMP`, measured on MySQL 8.0.46. The
- * difference is the recorded text alone, which is what makes this a diff
- * problem rather than a semantic one.
+ * `CURRENT_TIMESTAMP` is the load-bearing one. Wrapping it does not fail —
+ * MySQL accepts `DEFAULT (CURRENT_TIMESTAMP)` — it REWRITES it, recording
+ * `now()` instead. A snapshot that wrapped it would therefore rebuild a table
+ * whose default reads differently from the source's, so the round trip would
+ * not reproduce the table it came from. The integration suite creates that
+ * column and observes the rewrite rather than taking this on trust.
+ *
+ * An expression that is not a single call is reported ALREADY parenthesised as
+ * a whole (`(1 + 2)`), and that branch is NOT load-bearing in the same way:
+ * `DEFAULT ((1 + 2))` applies cleanly and MySQL reports `(1 + 2)` back from
+ * either spelling, so wrapping again would neither break the rebuild nor
+ * accumulate. It stays because the reported text is already valid DDL and
+ * rewriting it for nothing would make the recorded value differ from every
+ * baseline taken before this, for no gain.
+ *
+ * Neither case is a DIFF problem, and it is worth saying so rather than
+ * reaching for the more alarming claim: `normalizeDefault` strips wrapping
+ * parentheses and collapses `current_timestamp` into `now()`, so the
+ * comparison would tolerate all of these. What is at stake is whether the
+ * recorded schema describes the database it was read from.
+ *
+ * The two `CURRENT_TIMESTAMP` forms are also equivalent to INSERT — both
+ * auto-initialise, and both accept `ON UPDATE CURRENT_TIMESTAMP`. Measured on
+ * MySQL 8.0.46.
  *
  * NOT repaired here: an expression that CONTAINS a string literal is reported
  * with its quotes backslash-escaped — `DEFAULT (lower('X'))` comes back as
