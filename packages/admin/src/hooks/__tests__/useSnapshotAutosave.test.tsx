@@ -174,9 +174,21 @@ describe("what switches recording off", () => {
 
 describe("the identity is opaque, and it bounds a pending recording", () => {
   it("drops a pending recording when the identity changes", async () => {
-    // The one failure this module can cause that its caller cannot see: a
-    // timer scheduled for one document firing after the editor has moved to
-    // another would write the first snapshot against the second's key.
+    /*
+     * The one failure this module can cause that its caller cannot see: a
+     * timer scheduled for one document firing after the editor has moved to
+     * another would write the first snapshot against the second's key.
+     *
+     * DROPPED rather than flushed first, and the difference is reachable as
+     * soon as an identity carries a language: switch from Spanish to French
+     * mid-debounce and the two answers diverge. Flushing on the way out looks
+     * kinder — it would record the Spanish work rather than discard it — but
+     * `save` reads the snapshot AT flush time, so by then the editor is
+     * already showing French, and the "kind" version writes French content
+     * into the Spanish row. Losing an unwritten recovery point is recoverable:
+     * the document itself is untouched and the next edit schedules again.
+     * Mislabelling one is not, because nothing downstream can tell.
+     */
     const save = vi.fn(() => saved());
     const { result, rerender } = renderHook(
       ({ id }: { id: string }) =>
@@ -189,6 +201,28 @@ describe("the identity is opaque, and it bounds a pending recording", () => {
     act(() => void vi.advanceTimersByTime(DEBOUNCE * 2));
 
     expect(save).not.toHaveBeenCalled();
+  });
+
+  it("still records under the NEW identity afterwards, which is the control", async () => {
+    // Without this, the case above passes on a hook whose cleanup left it dead:
+    // "nothing was recorded" is satisfied perfectly by never recording again.
+    const save = vi.fn(() => saved());
+    const { result, rerender } = renderHook(
+      ({ id }: { id: string }) =>
+        useSnapshotAutosave({ identity: id, save, debounceMs: DEBOUNCE }),
+      { initialProps: { id: "doc-1" } }
+    );
+
+    act(() => result.current.schedule());
+    rerender({ id: "doc-2" });
+    act(() => void vi.advanceTimersByTime(DEBOUNCE * 2));
+    expect(save).not.toHaveBeenCalled();
+
+    // A fresh edit under the new identity records normally.
+    act(() => result.current.schedule());
+    act(() => void vi.advanceTimersByTime(DEBOUNCE));
+
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
   });
 
   it("accepts any string as a key without reading it", async () => {
