@@ -85,6 +85,99 @@ export function canvasHarnessDocument(): BlockDocument {
         props: { text: "Short." },
         styles: GAP,
       },
+      /*
+       * A NESTED container, so the tree has more than one depth.
+       *
+       * Collision resolving "by tree depth" cannot be distinguished from no
+       * rule at all on a flat document: every point resolves at the root, and a
+       * canvas that ignored depth entirely would pass. The section holds a text
+       * block so a pointer over that text is simultaneously over the section
+       * and over the root, which is the ambiguity the rule exists to settle.
+       */
+      {
+        id: "hx-section",
+        type: "core/section",
+        version: 1,
+        props: { as: "section", contained: true },
+        styles: GAP,
+        slots: {
+          children: [
+            {
+              id: "hx-nested-text",
+              type: "core/text",
+              version: 1,
+              props: {
+                text: "Nested inside a section, so a point here is over two containers at once.",
+              },
+            },
+          ],
+        },
+      },
+      /*
+       * A container with a RESTRICTIVE slot: `core/columns` accepts only
+       * `core/column`.
+       *
+       * An invalid-target state shown nowhere passes the same assertion as one
+       * shown everywhere, so the suite needs a container that refuses something
+       * and accepts something else. This is the only pair in the core set where
+       * the refusal is structural rather than a matter of taste.
+       */
+      {
+        id: "hx-columns",
+        type: "core/columns",
+        version: 1,
+        props: {},
+        // Taller than the column inside it, ON PURPOSE. `core/column` accepts a
+        // text block, so a pointer anywhere over the column resolves to the
+        // COLUMN's slot and never meets the restriction. The band below the
+        // column is inside `core/columns` — whose slot accepts only
+        // `core/column` — and is the only place the refusal is reachable.
+        styles: {
+          base: {
+            base: {
+              padding: { blockEnd: "120px" },
+              margin: { blockEnd: GAP_PX },
+            },
+          },
+        },
+        slots: {
+          children: [
+            {
+              id: "hx-column",
+              type: "core/column",
+              version: 1,
+              props: { as: "div" },
+              // An EMPTY column renders zero pixels tall, and a region with no
+              // height contains no pointer — measured: top 337, height 0. The
+              // refusal this container exists to demonstrate is unreachable
+              // until something gives it a box.
+              slots: {
+                children: [
+                  {
+                    id: "hx-column-text",
+                    type: "core/text",
+                    version: 1,
+                    props: { text: "Inside a column." },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      },
+      {
+        id: "hx-text-last",
+        type: "core/text",
+        version: 1,
+        props: {
+          text: "The last sibling at the root, so a drop AFTER the final child is reachable and distinguishable from a drop into nothing.",
+        },
+        styles: GAP,
+      },
+      // LAST on purpose. It is 900px tall so the canvas overflows and autoscroll
+      // is askable — placed anywhere earlier it pushes the nested containers
+      // below the fold, where a pointer cannot reach them and a drop over a
+      // nested block resolves to nothing at all.
       // No props at all by declaration: the spacer's height comes from the
       // style system (`supports.dimensions`), which is the other end of the
       // same problem as the divider — a block whose size is authored, with no
@@ -98,18 +191,12 @@ export function canvasHarnessDocument(): BlockDocument {
         // Unstyled it renders zero pixels tall and shares a `top` with the
         // block after it, which makes it unhittable and silently deletes the
         // case this fixture exists to cover.
+        // Tall enough that the document OVERFLOWS its box. Measured before:
+        // scrollHeight equalled clientHeight, so "it did not autoscroll" and
+        // "there was nowhere to scroll" were the same observation.
         styles: {
-          base: { base: { height: "48px", margin: { blockEnd: GAP_PX } } },
+          base: { base: { height: "900px", margin: { blockEnd: GAP_PX } } },
         },
-      },
-      {
-        id: "hx-text-last",
-        type: "core/text",
-        version: 1,
-        props: {
-          text: "The last sibling at the root, so a drop AFTER the final child is reachable and distinguishable from a drop into nothing.",
-        },
-        styles: GAP,
       },
     ],
   };

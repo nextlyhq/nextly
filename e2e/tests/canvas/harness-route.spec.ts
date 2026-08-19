@@ -21,13 +21,26 @@ const ROUTE = "/builder-canvas";
 const NODE = "[data-nx-node]";
 
 /** The seeded ids, in document order. */
+/**
+ * Depth-first document order, which is the order the renderer emits them in.
+ *
+ * The nested ones are not decoration: `hx-nested-text` sits inside
+ * `hx-section` so the tree has more than one depth, and `hx-column` sits inside
+ * `hx-columns`, whose slot accepts only `core/column`. Acceptance properties 1
+ * and 7 are unaskable without them.
+ */
 const SEEDED = [
   "hx-heading",
   "hx-text-tall",
   "hx-divider",
   "hx-text-short",
-  "hx-spacer",
+  "hx-section",
+  "hx-nested-text",
+  "hx-columns",
+  "hx-column",
+  "hx-column-text",
   "hx-text-last",
+  "hx-spacer",
 ];
 
 test.describe("the canvas harness route", () => {
@@ -167,7 +180,18 @@ test.describe("the canvas harness route", () => {
     // the drop indicator needs somewhere to draw, and the spacer's authored
     // height is what makes it hittable at all.
     const { gaps, spacerHeight } = await page.evaluate(() => {
-      const nodes = Array.from(document.querySelectorAll("[data-nx-node]"));
+      // ROOT siblings only. A nested node starts INSIDE its parent, so a gap
+      // computed across a parent-child pair is zero or negative and says
+      // nothing about spacing — the fixture nests deliberately, and measuring
+      // every consecutive node would fail on the tree's shape rather than on
+      // whether the author's margins rendered.
+      const nodes = Array.from(
+        document.querySelectorAll("[data-nx-node]")
+      ).filter(
+        node =>
+          node.parentElement?.closest("[data-nx-node]") === null ||
+          node.parentElement?.closest("[data-nx-node]") === undefined
+      );
       const boxes = nodes.map(node => {
         const rect = node.getBoundingClientRect();
         return {
