@@ -601,8 +601,41 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
 
-      - name: Install Chromium
+      # `--with-deps` shells out to apt on EVERY run, and apt fetches ~21MB of
+      # CJK and legacy font packages that `ubuntu-latest` does not ship. Twice on
+      # 2026-08-19 the public mirror served those at a few hundred kB/minute and
+      # the job burned its whole 20-minute budget inside this step without
+      # reaching a single test. Retries and a per-request timeout turn a slow
+      # mirror into a retried request rather than a stalled job.
+      - name: Harden apt before the Chromium dependency install
+        run: |
+          sudo tee /etc/apt/apt.conf.d/99-ci-retries >/dev/null <<'APT'
+          Acquire::Retries "5";
+          Acquire::http::Timeout "15";
+          Acquire::https::Timeout "15";
+          APT
+
+      # The cache above declared an `id` and NOTHING read it, so the browser
+      # download ran unconditionally — the comment above it says a download is
+      # most of this job's runtime, which was the intent this restores.
+      #
+      # Two branches rather than one, because a cache hit still needs the SYSTEM
+      # libraries: they live in /usr, `ubuntu-latest` is a fresh VM per job, and
+      # no browser cache carries them. Skipping them on a hit produces
+      # "Host system is missing dependencies" instead of a fast job.
+      #
+      # `timeout-minutes` on both, deliberately shorter than the job's 20: a
+      # stuck mirror should fail HERE, named and in five minutes, rather than
+      # consume the whole budget and report an ambiguous cancellation.
+      - name: Install Chromium and its system dependencies
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 5
         run: pnpm --filter @nextlyhq/e2e exec playwright install --with-deps chromium
+
+      - name: Install Chromium's system dependencies
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        timeout-minutes: 5
+        run: pnpm --filter @nextlyhq/e2e exec playwright install-deps chromium
 
       # The playground loads the admin and the plugins from their built output,
       # not their source, so a stale dist is a stale test.
