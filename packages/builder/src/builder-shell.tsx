@@ -27,6 +27,7 @@ import * as React from "react";
 import { devWarnOnce } from "./dev-warn";
 import {
   DEFAULT_PREFERENCES,
+  browserStore,
   fitsFullShell,
   LEFT_PANELS,
   MIN_CANVAS_WIDTH,
@@ -118,6 +119,15 @@ export interface BuilderShellProps {
   /** The ancestor breadcrumb, along the bottom bar. */
   breadcrumb?: React.ReactNode;
   /**
+   * A card floated over the canvas — the getting-started checklist today.
+   *
+   * Positioned by the shell rather than passed through `Canvas.overlay`,
+   * because that overlay lives in the canvas's own content coordinates and
+   * would scroll away with the page. This one belongs to the editor's chrome
+   * and stays where it is put.
+   */
+  checklist?: React.ReactNode;
+  /**
    * Leaving the editor. Explicit and LABELLED, never an unmarked X: the author
    * is one click from losing a canvas full of work, and an ambiguous glyph is
    * how that happens.
@@ -155,21 +165,7 @@ export interface BuilderShellProps {
   className?: string;
 }
 
-/** A store that forgets, for a server render or a host that supplies its own. */
-const NO_STORAGE: PreferenceStore = {
-  read: () => null,
-  write: () => undefined,
-};
-
 const STORAGE_KEY = "nextly.builder.shell";
-
-function browserStore(): PreferenceStore {
-  if (typeof window === "undefined") return NO_STORAGE;
-  return {
-    read: () => window.localStorage.getItem(STORAGE_KEY),
-    write: value => window.localStorage.setItem(STORAGE_KEY, value),
-  };
-}
 
 /**
  * Whether the shell's own CONTAINER can carry the full layout, as it changes.
@@ -649,6 +645,7 @@ function ShellRegions({
   inspector,
   topBar,
   breadcrumb,
+  checklist,
   onExit,
   preferences,
   update,
@@ -904,16 +901,26 @@ function ShellRegions({
              * cycling focuses this node, and dropping either would lose the canvas as
              * a cycle target — which reads as a focus bug rather than a markup change.
              */}
-            <section
-              ref={element => {
-                regionRefs.current.canvas = element;
-              }}
-              tabIndex={-1}
-              aria-label="Canvas"
-              className="h-full overflow-auto"
-            >
-              {children}
-            </section>
+            <div className="relative h-full">
+              <section
+                ref={element => {
+                  regionRefs.current.canvas = element;
+                }}
+                tabIndex={-1}
+                aria-label="Canvas"
+                className="h-full overflow-auto"
+              >
+                {children}
+              </section>
+              {checklist === undefined ? null : (
+                // The positioner takes no pointer events, so it cannot swallow
+                // a click aimed at the page underneath it; the card itself
+                // takes them back.
+                <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-end p-4">
+                  <div className="pointer-events-auto">{checklist}</div>
+                </div>
+              )}
+            </div>
           </ResizablePanel>
 
           <ResizableHandle withGrip />
@@ -966,7 +973,7 @@ export function BuilderShell({ store, ...props }: BuilderShellProps) {
   // swaps stores — signing into a second workspace, promoting a memory store to
   // a persisted one — went on reading and writing the store it had replaced.
   const fallbackStore = React.useRef<PreferenceStore | null>(null);
-  fallbackStore.current ??= browserStore();
+  fallbackStore.current ??= browserStore(STORAGE_KEY);
   const resolvedStore = store ?? fallbackStore.current;
   const [preferences, update, loadCount] = usePreferences(resolvedStore);
   const [measureShell, shellFits] = useFitsFullShell();

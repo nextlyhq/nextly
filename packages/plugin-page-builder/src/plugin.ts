@@ -23,6 +23,15 @@ export interface PageBuilderOptions {
   /** Disable behavior while still applying schema. Default true. */
   enabled?: boolean;
   /**
+   * Whether the editor shows its getting-started checklist. Default true.
+   *
+   * A site that teaches its authors the editor some other way turns it off
+   * here rather than asking every one of them to dismiss it. Travels to the
+   * browser through `clientConfig` for the same reason `remotePatterns` does:
+   * the canvas runs there, where a server-side option cannot reach it.
+   */
+  checklist?: boolean;
+  /**
    * Remote hosts a page may load images, video and embeds from, in the same
    * shape `next/image` uses.
    *
@@ -191,9 +200,20 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) =>
         // travels with the rest of the admin metadata. `remotePatterns` is
         // plain data and survives the trip; the serializer rejects it if a
         // future addition here does not.
-        ...(opts.remotePatterns !== undefined
+        // Sent only when the host said something. An always-present
+        // `clientConfig` would make every future reader distinguish "the host
+        // set this" from "the default is showing", which is what the absent
+        // key already says.
+        ...(opts.remotePatterns !== undefined || opts.checklist !== undefined
           ? {
-              clientConfig: { remotePatterns: opts.remotePatterns },
+              clientConfig: {
+                ...(opts.remotePatterns === undefined
+                  ? {}
+                  : { remotePatterns: opts.remotePatterns }),
+                ...(opts.checklist === undefined
+                  ? {}
+                  : { checklist: opts.checklist }),
+              },
             }
           : {}),
         menu: [

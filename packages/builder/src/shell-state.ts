@@ -179,6 +179,32 @@ export interface PreferenceStore {
   write: (value: string) => void;
 }
 
+/** A store that remembers nothing, for a server render and for a browser that refuses storage. */
+export const NO_STORAGE: PreferenceStore = {
+  read: () => null,
+  write: () => undefined,
+};
+
+/**
+ * A `localStorage`-backed store under one key.
+ *
+ * Takes the key rather than owning one, so the shell's chrome preferences and
+ * anything else the editor remembers share this port instead of each writing
+ * their own `typeof window` check and their own swallow. Outside a browser it
+ * degrades to {@link NO_STORAGE} rather than throwing, which is the whole
+ * reason the port exists.
+ *
+ * @param key - where to store the value
+ * @returns a store, or one that remembers nothing outside a browser
+ */
+export function browserStore(key: string): PreferenceStore {
+  if (typeof window === "undefined") return NO_STORAGE;
+  return {
+    read: () => window.localStorage.getItem(key),
+    write: value => window.localStorage.setItem(key, value),
+  };
+}
+
 /**
  * A stored layout, accepted only if every entry is a usable percentage.
  *

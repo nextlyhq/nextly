@@ -51,13 +51,16 @@ import {
   InsertPanel,
   InspectorPanel,
   LayersPanel,
+  OnboardingChecklist,
   SelectionBreadcrumb,
+  useBuilderChecklist,
   useCanvasDrag,
   useEditorState,
   useInlineText,
 } from "@nextlyhq/builder/shell";
 import {
   useDocumentCheckpoint,
+  usePluginClientConfig,
   useSuppressAdminChrome,
 } from "@nextlyhq/plugin-sdk/admin";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -348,6 +351,19 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    */
   const inline = useInlineText(editor);
 
+  /*
+   * The getting-started card, and the host's switch for it.
+   *
+   * `checklist === false` is the only value that turns it off: an absent
+   * config and a malformed one both leave it on, because the default is the
+   * behaviour a site that configured nothing asked for.
+   */
+  const clientConfig = usePluginClientConfig(PLUGIN_SOURCE);
+  const checklist = useBuilderChecklist({
+    document: editor.document,
+    enabled: clientConfig?.checklist !== false,
+  });
+
   useCheckpoints({ name, control, document: editor.document });
 
   /*
@@ -404,6 +420,17 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
         // slot rather than rendered beside the canvas so it cannot overlap the
         // page an author is editing.
         breadcrumb={<SelectionBreadcrumb editor={editor} />}
+        // Rendered only while it has somewhere to go: passing an element the
+        // shell would position and then hide leaves an empty positioner over
+        // the canvas.
+        checklist={
+          checklist.visible ? (
+            <OnboardingChecklist
+              steps={checklist.steps}
+              onDismiss={checklist.dismiss}
+            />
+          ) : undefined
+        }
         renderPanel={panel => {
           if (panel === "insert") {
             return (
