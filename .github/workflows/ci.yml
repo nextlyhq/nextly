@@ -510,9 +510,15 @@ jobs:
           TURBO_CACHE_DIR: .turbo
 
       # Only a job that finished its work publishes what it learned. A cancelled or
-      # failed run leaves the cache as it found it — `actions/cache` saves in a post
-      # step that runs however the job ended, and splitting restore from save is the
-      # supported way to make that conditional (`save-always` was deprecated for it).
+      # failed run leaves the cache as it found it. Splitting restore from save is the
+      # supported way to make saving conditional (`save-always` was deprecated for
+      # it).
+      #
+      # `actions/cache` does NOT save "however the job ended": at the SHA pinned
+      # here its own `action.yml` declares `post-if: "success()"`, so a failed or
+      # cancelled job saves nothing. That is not a detail — it is what makes the Playwright cache
+      # guard above safe, because an install killed by its step timeout can never
+      # persist a half-populated browser cache for later runs to skip.
       - name: Save Turbo cache
         if: success()
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -602,11 +608,21 @@ jobs:
           key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
 
       # `--with-deps` shells out to apt on EVERY run, and apt fetches ~21MB of
-      # CJK and legacy font packages that `ubuntu-latest` does not ship. Twice on
-      # 2026-08-19 the public mirror served those at a few hundred kB/minute and
-      # the job burned its whole 20-minute budget inside this step without
-      # reaching a single test. Retries and a per-request timeout turn a slow
-      # mirror into a retried request rather than a stalled job.
+      # CJK and legacy font packages that `ubuntu-latest` does not ship.
+      #
+      # These two knobs are NARROWER than they look. `Acquire::Timeout` fires on
+      # INACTIVITY and `Acquire::Retries` retries a FAILED item. In all four
+      # 2026-08-19 incidents the queue was ADVANCING — `Get:2` 16:11:37,
+      # `Get:3` 16:16:25, `Get:4` 16:26:55 — at roughly 10 kB/s, so nothing
+      # failed and nothing went quiet: apt's own 120s default `Timeout` was in
+      # force throughout and never fired.
+      #
+      # So what these buy is a bounded STALLED connection, not a bounded slow
+      # one. A throttled-but-progressing mirror is bounded only by the step
+      # timeout below. Making slow transfers abort and retry against a different
+      # mirror needs an in-step retry loop, which is deliberately not here: it
+      # would be a second mechanism added on the same day, with no measurement
+      # showing this one is insufficient.
       - name: Harden apt before the Chromium dependency install
         run: |
           sudo tee /etc/apt/apt.conf.d/99-ci-retries >/dev/null <<'APT'
@@ -616,25 +632,37 @@ jobs:
           APT
 
       # The cache above declared an `id` and NOTHING read it, so the browser
-      # download ran unconditionally — the comment above it says a download is
-      # most of this job's runtime, which was the intent this restores.
+      # download ran unconditionally.
+      #
+      # The saving is SMALL: the three browser downloads take about 9-10 seconds
+      # and restoring the 274MB cache entry costs roughly 4. What actually dominates this step is apt, at 15
+      # seconds to 3m05s, and apt runs on BOTH branches below. Anyone optimising
+      # this job further should aim there, not at the download.
       #
       # Two branches rather than one, because a cache hit still needs the SYSTEM
       # libraries: they live in /usr, `ubuntu-latest` is a fresh VM per job, and
       # no browser cache carries them. Skipping them on a hit produces
       # "Host system is missing dependencies" instead of a fast job.
       #
-      # `timeout-minutes` on both, deliberately shorter than the job's 20: a
-      # stuck mirror should fail HERE, named and in five minutes, rather than
-      # consume the whole budget and report an ambiguous cancellation.
+      # `timeout-minutes` on both, shorter than the job's 20 so a stuck mirror
+      # fails HERE and named rather than as an ambiguous cancellation of the
+      # whole job. This is the only control that bounded any of the four
+      # incidents.
+      #
+      # EIGHT, not five. A green run the same day spent 3m18s in this step
+      # (job 96155695414, 17:08:15 -> 17:11:33), and green `Browser tests` jobs
+      # ran 10.8-14.7 min against a 20-minute budget — so the job already
+      # tolerates an install of about 8.5 minutes. Five would have made a red
+      # failure of the 5-to-8.5 minute band that was passing, which is a worse
+      # trade than the ambiguity it removes.
       - name: Install Chromium and its system dependencies
         if: steps.playwright-cache.outputs.cache-hit != 'true'
-        timeout-minutes: 5
+        timeout-minutes: 8
         run: pnpm --filter @nextlyhq/e2e exec playwright install --with-deps chromium
 
       - name: Install Chromium's system dependencies
         if: steps.playwright-cache.outputs.cache-hit == 'true'
-        timeout-minutes: 5
+        timeout-minutes: 8
         run: pnpm --filter @nextlyhq/e2e exec playwright install-deps chromium
 
       # The playground loads the admin and the plugins from their built output,
@@ -656,9 +684,15 @@ jobs:
           retention-days: 7
 
       # Only a job that finished its work publishes what it learned. A cancelled or
-      # failed run leaves the cache as it found it — `actions/cache` saves in a post
-      # step that runs however the job ended, and splitting restore from save is the
-      # supported way to make that conditional (`save-always` was deprecated for it).
+      # failed run leaves the cache as it found it. Splitting restore from save is the
+      # supported way to make saving conditional (`save-always` was deprecated for
+      # it).
+      #
+      # `actions/cache` does NOT save "however the job ended": at the SHA pinned
+      # here its own `action.yml` declares `post-if: "success()"`, so a failed or
+      # cancelled job saves nothing. That is not a detail — it is what makes the Playwright cache
+      # guard above safe, because an install killed by its step timeout can never
+      # persist a half-populated browser cache for later runs to skip.
       - name: Save Turbo cache
         if: success()
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
