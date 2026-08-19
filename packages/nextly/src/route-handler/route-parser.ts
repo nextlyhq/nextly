@@ -941,6 +941,34 @@ function parseCollectionEntryVersionRoutes(
  * `/singles/{slug}/versions[/{versionNo}]` — the Single equivalent, nesting
  * under the document for the same reason.
  */
+/**
+ * Named sub-resources under a Single's `versions`, keyed by `"{name} {METHOD}"`.
+ *
+ * A table rather than a branch each: every one of these tests the same three
+ * things and returns a fixed descriptor, so a branch per entry is decision
+ * points spent restating a shape.
+ *
+ * A `Map` rather than an object literal because the key is built from a URL
+ * segment: a lookup on an object would reach inherited members, so a request for
+ * `versions/constructor` would find one.
+ *
+ * `autosave` is PUT because the row is rolling — one per document and author,
+ * rewritten in place — so repeating the request leaves one recovery point.
+ * `working-draft` is DELETE of the pending change, authorized as an update
+ * because it changes what the editor sees rather than the document's history.
+ */
+const SINGLE_VERSION_SUBRESOURCES = new Map<
+  string,
+  { operation: OperationType; method: string }
+>([
+  ["autosave PUT", { operation: "update", method: "autosaveSingle" }],
+  ["autosave GET", { operation: "single", method: "getSingleAutosave" }],
+  [
+    "working-draft DELETE",
+    { operation: "update", method: "discardSingleWorkingDraft" },
+  ],
+]);
+
 function parseSingleVersionRoutes(
   id: string | undefined,
   subresource: string | undefined,
@@ -972,42 +1000,19 @@ function parseSingleVersionRoutes(
     };
   }
 
-  // `versions/autosave` PUT records the author's rolling recovery point, the
-  // Single equivalent of the collection route above and PUT for the same reason:
-  // one row per document and author, rewritten in place, so repeating the
-  // request leaves the same single row.
-  //
-  // A Single's history nests directly under the document, so `autosave` arrives
-  // as `subId` where the collection parser sees it in `additionalParams`. It is
-  // a named sub-resource and a version number is always numeric, so the two
-  // cannot collide here either.
-  if (
-    subId === "autosave" &&
-    additionalParams.length === 0 &&
-    httpMethod === "PUT"
-  ) {
-    routeParams.slug = id;
-    return {
-      service: "singles",
-      operation: "update",
-      method: "autosaveSingle",
-      routeParams,
-    };
-  }
-
-  // The matching read, claimed here for the same reason as the collection one.
-  if (
-    subId === "autosave" &&
-    additionalParams.length === 0 &&
-    httpMethod === "GET"
-  ) {
-    routeParams.slug = id;
-    return {
-      service: "singles",
-      operation: "single",
-      method: "getSingleAutosave",
-      routeParams,
-    };
+  // The named sub-resources of a Single's history, matched from the table above
+  // rather than as one `if` each. A Single's history nests directly under the
+  // document, so these arrive as `subId` where the collection parser sees them
+  // in `additionalParams`; a version number is always numeric, so a name can
+  // never collide with one.
+  if (subId !== undefined && additionalParams.length === 0) {
+    const named = SINGLE_VERSION_SUBRESOURCES.get(
+      `${subId} ${httpMethod.toUpperCase()}`
+    );
+    if (named) {
+      routeParams.slug = id;
+      return { service: "singles", ...named, routeParams };
+    }
   }
 
   // See the collection parser: naming a version is an idempotent write on

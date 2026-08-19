@@ -206,6 +206,60 @@ describe("version routes", () => {
     expect(parsed.routeParams?.versionNo).toBeUndefined();
   });
 
+  it("parses a Single's working-draft discard as a write, with no entry id", () => {
+    const parsed = parseRestRoute(
+      ["singles", "settings", "versions", "working-draft"],
+      "DELETE"
+    );
+
+    expect(parsed).toMatchObject({
+      service: "singles",
+      // An update of the document: it changes what the editor sees, not history.
+      operation: "update",
+      method: "discardSingleWorkingDraft",
+    });
+    expect(parsed.routeParams?.slug).toBe("settings");
+    // A Single's URL names no document; the server resolves it from the live row.
+    expect(parsed.routeParams?.entryId).toBeUndefined();
+    // `working-draft` is a named sub-resource, never read as a version number.
+    expect(parsed.routeParams?.versionNo).toBeUndefined();
+  });
+
+  it("routes only DELETE on the working-draft path, and nothing deeper", () => {
+    const path = ["singles", "settings", "versions", "working-draft"];
+
+    expect(parseRestRoute(path, "DELETE").method).toBe(
+      "discardSingleWorkingDraft"
+    );
+    // Asserted per verb rather than "not the discard method": the weaker form
+    // passes when a verb falls through to some other wrong route.
+    expect(parseRestRoute(path, "PUT").method).toBeUndefined();
+    expect(parseRestRoute(path, "POST").method).toBeUndefined();
+    // GET falls through to the ordinary version read with `working-draft` in the
+    // version-NUMBER position, which is what ANY non-numeric segment does here.
+    // Recorded rather than asserted as undefined because that is the existing
+    // shape of this path: the handler coerces the segment with `Number(...)`, so
+    // the read fails to find a version rather than reaching anything else.
+    expect(parseRestRoute(path, "GET").method).toBe("getSingleVersion");
+    // PATCH on this path is a version LABEL write, which coerces the segment to
+    // a number and so rejects `working-draft` rather than treating it as one.
+    expect(parseRestRoute(path, "PATCH").method).toBe("setSingleVersionLabel");
+
+    // A deeper path is not this route's.
+    expect(parseRestRoute([...path, "extra"], "DELETE").method).toBeUndefined();
+  });
+
+  it("does not resolve an inherited object member as a named sub-resource", () => {
+    // The sub-resource lookup is keyed by a URL segment. On an object literal a
+    // key like `constructor` or `toString` resolves through the prototype, so
+    // the request would match a route that was never declared.
+    for (const forged of ["constructor", "toString", "__proto__", "valueOf"]) {
+      const path = ["singles", "settings", "versions", forged];
+      expect(parseRestRoute(path, "DELETE").method).toBeUndefined();
+      expect(parseRestRoute(path, "PUT").method).toBeUndefined();
+    }
+  });
+
   it("resolves each verb on the autosave path to its own route", () => {
     // Asserted as an exact method per verb rather than "not the write method".
     // The weaker form passes when a verb resolves to something else wrong, and

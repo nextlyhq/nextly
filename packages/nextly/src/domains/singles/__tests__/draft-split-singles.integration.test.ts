@@ -19,6 +19,7 @@ import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { discardWorkingDraftForDocument } from "../../../dispatcher/handlers/versions-methods";
 import type { SingleEntryService } from "../services/single-entry-service";
 
 let current: TestNextly | undefined;
@@ -36,6 +37,10 @@ async function bootPlain(): Promise<TestNextly> {
         slug: SLUG,
         status: true,
         versions: { drafts: true },
+        // The discard cases below drive the DISPATCHER, which authorizes read
+        // and update on the document. The service-level cases pass
+        // `overrideAccess`, so these rules do not change what they exercise.
+        access: { read: () => true, update: () => true },
         fields: [text({ name: "siteName" }), text({ name: "tagline" })],
       }),
     ],
@@ -51,6 +56,7 @@ async function bootLocalized(): Promise<TestNextly> {
         localized: true,
         status: true,
         versions: { drafts: true },
+        access: { read: () => true, update: () => true },
         fields: [text({ name: "siteName", localized: true })],
       }),
     ],
@@ -222,6 +228,117 @@ describe("pending changes for Singles (integration)", () => {
     // re-applied by a later publish.
     expect(await storedName(t, "en")).toBe("EN edited");
     expect(await storedName(t, "de")).toBe("DE edited");
+    expect(await pendingLocales(t)).toEqual([]);
+  });
+});
+
+/**
+ * Throwing a Single's pending change away.
+ *
+ * Driven through the dispatcher method rather than the service, because the
+ * gap this closes was never in the delete: a Single had no discard PATH at all,
+ * so a service-level test would pass over exactly the wiring that was missing.
+ */
+describe("discarding a Single's pending change (integration)", () => {
+  /** The live document id, which a Single's caller resolves rather than names. */
+  async function liveId(t: TestNextly): Promise<string> {
+    const res = await singlesOf(t).get(SLUG, { overrideAccess: true });
+    return (res.data as { id: string }).id;
+  }
+
+  it("removes the sidecar and returns the live row, leaving the document untouched", async () => {
+    const t = await bootPlain();
+    const singles = singlesOf(t);
+    await singles.update(
+      SLUG,
+      { siteName: "live", status: "published" },
+      { overrideAccess: true }
+    );
+    const res = await singles.update(
+      SLUG,
+      { siteName: "edited" },
+      { overrideAccess: true }
+    );
+    expect(res.success).toBe(true);
+    // The fixture must actually hold a pending change, or the assertions below
+    // are satisfied by a Single that never stored one.
+    expect(await pendingLocales(t)).toEqual(["(none)"]);
+
+    const discarded = await discardWorkingDraftForDocument({
+      scopeKind: "single",
+      slug: SLUG,
+      entryId: await liveId(t),
+      user: { id: "editor-1" },
+      params: { slug: SLUG, _authenticatedUserId: "editor-1" },
+    });
+
+    expect(await pendingLocales(t)).toEqual([]);
+    // The response is the LIVE document, not the edit just thrown away.
+    expect((discarded as { siteName?: string }).siteName).toBe("live");
+    // And the live row itself never moved.
+    expect(await storedName(t)).toBe("live");
+  });
+
+  it("discards only the language it was asked for", async () => {
+    const t = await bootLocalized();
+    const singles = singlesOf(t);
+    await singles.update(
+      SLUG,
+      { siteName: "EN live", status: "published" },
+      { locale: "en", overrideAccess: true }
+    );
+    await singles.update(
+      SLUG,
+      { siteName: "DE live", status: "published" },
+      { locale: "de", overrideAccess: true }
+    );
+    await singles.update(
+      SLUG,
+      { siteName: "EN edited" },
+      { locale: "en", overrideAccess: true }
+    );
+    await singles.update(
+      SLUG,
+      { siteName: "DE edited" },
+      { locale: "de", overrideAccess: true }
+    );
+    expect(await pendingLocales(t)).toEqual(["de", "en"]);
+
+    const discarded = await discardWorkingDraftForDocument({
+      scopeKind: "single",
+      slug: SLUG,
+      entryId: await liveId(t),
+      user: { id: "editor-1" },
+      locale: "de",
+      params: { slug: SLUG, _authenticatedUserId: "editor-1" },
+    });
+
+    // German goes; English survives, because it is work the author never opened.
+    expect(await pendingLocales(t)).toEqual(["en"]);
+    // The values handed back are GERMAN's live ones, not the default language's.
+    expect((discarded as { siteName?: string }).siteName).toBe("DE live");
+    expect(await storedName(t, "de")).toBe("DE live");
+  });
+
+  it("is a no-op that still returns the live row when nothing is pending", async () => {
+    const t = await bootPlain();
+    const singles = singlesOf(t);
+    await singles.update(
+      SLUG,
+      { siteName: "live", status: "published" },
+      { overrideAccess: true }
+    );
+    expect(await pendingLocales(t)).toEqual([]);
+
+    const discarded = await discardWorkingDraftForDocument({
+      scopeKind: "single",
+      slug: SLUG,
+      entryId: await liveId(t),
+      user: { id: "editor-1" },
+      params: { slug: SLUG, _authenticatedUserId: "editor-1" },
+    });
+
+    expect((discarded as { siteName?: string }).siteName).toBe("live");
     expect(await pendingLocales(t)).toEqual([]);
   });
 });
