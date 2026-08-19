@@ -65,6 +65,7 @@ import type { SingleEntryService } from "../../domains/singles/services/single-e
 import type { SingleMetadataService } from "../../domains/singles/services/single-metadata-service";
 import type { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
 import { resolveBuilderVersions } from "../../domains/versions/builder-versions";
+import { schemaDraftsEnabled } from "../../domains/versions/draft-split-eligibility";
 import { resolveBuilderWebhooks } from "../../domains/webhooks/builder-webhooks";
 import { NextlyError } from "../../errors";
 import { transformRichTextFields } from "../../lib/field-transform";
@@ -102,6 +103,7 @@ import {
 } from "../helpers/service-envelope";
 import {
   parseRichTextFormat,
+  isTruthyParam,
   parseStatusParam,
   requireParam,
   toNumber,
@@ -725,6 +727,10 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         locale: p.locale,
         fallbackLocale: p["fallback-locale"],
         translationStatus: p["translation-status"] === "1",
+        // `?draft=1` opts into the working-draft overlay, matching the entry
+        // read. Gated server-side on an actual update-capability probe, so a
+        // read-only caller passing it still sees the published document.
+        includeWorkingDraft: isTruthyParam(p.draft),
         status,
       });
 
@@ -893,12 +899,30 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         }
       }
 
+      // Whether a status-less save on this Single holds the edit rather than
+      // writing the live row. Derived from the SAME predicate the write gates
+      // on, which its own module requires of every call site: an editor told
+      // drafts are off sends an explicit published save, and a write that names
+      // a status is never held — so the pending-change support stays dark and
+      // the live document is overwritten. Derived from the ORIGINAL fields, not
+      // the enriched ones, because enrichment drops the markers component
+      // eligibility reads.
+      const draftsEnabled = await schemaDraftsEnabled({
+        status: (single as { status?: boolean }).status,
+        versions: single.versions,
+        localized: (single as { localized?: boolean }).localized,
+        fields: single.fields,
+      });
+
       // The schema record IS the doc here, so the admin Schema Builder
       // reads slug/fields/admin off the response body directly without
       // an envelope wrapper.
-      return respondDoc(
-        injectSingleDefaultFields(enrichedData as unknown as SingleWithFields)
-      );
+      return respondDoc({
+        ...injectSingleDefaultFields(
+          enrichedData as unknown as SingleWithFields
+        ),
+        draftsEnabled,
+      });
     },
   },
 
