@@ -87,9 +87,12 @@ export const ACCEPTANCE_PROPERTIES: readonly AcceptanceProperty[] = [
     n: 9,
     property: "Rects cached at dragstart; 60fps on a 500-block tree",
     greenIn: "B-8",
-    status: "deferred",
-    reason:
-      "needs the canvas to REPORT its geometry reads; counting getBoundingClientRect from the test would instrument the page rather than the engine, and the frame-rate half is deliberately not a merge gate — it is flaky on a shared runner and a green there proves less than a bounded read count",
+    status: "covered",
+    // The MECHANISM half only. Rect caching is observable by spying on
+    // `getBoundingClientRect` from the test, which watches the engine without
+    // altering it. The FRAME-RATE half stays out of the gate deliberately: it is
+    // flaky on a shared runner, and a green there proves less than a bounded
+    // read count does.
   },
   {
     n: 10,
@@ -103,7 +106,7 @@ export const ACCEPTANCE_PROPERTIES: readonly AcceptanceProperty[] = [
     greenIn: "B-15",
     status: "deferred",
     reason:
-      "needs the three-tier inserter mounted; the canvas harness renders no panel, so there is no panel drag to compare against and the property is vacuously true",
+      "the panel CANNOT be dragged from: insert-panel.tsx has no drag code at all and inserts by click (line 162). B-15's drag half was never built, so this is blocked on a feature rather than on scaffolding — mounting the panel would not help. See task:pb-inserter-drag",
   },
   {
     n: 12,
