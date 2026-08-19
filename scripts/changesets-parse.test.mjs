@@ -10,22 +10,20 @@ import { describe, expect, it } from "vitest";
  * once and one malformed file fails the whole run.
  *
  * The failure is remote from its cause in both directions, which is what makes
- * it worth a test rather than a convention. A changeset is added by one pull
- * request and read by `Version & Publish` on a LATER push to `main`, so the run
- * that goes red belongs to whoever merged next — and the changeset itself is
- * never executed by the pull request that introduced it. Nothing in `lint`,
- * `check-types` or any package's suite opens these files.
+ * it worth a test rather than a convention. A changeset is authored at one
+ * commit and read by `Version & Publish` on a LATER push to `main`, so the run
+ * that goes red need not be the one that introduced the file — and nothing in
+ * `lint`, `check-types` or any package's suite opens these files at all.
  *
  * 🔴 Uses the release tooling's OWN parser rather than a reader of the same
- * question. The defect this was written for is a blank line between the opening
- * `---` and the first package, which every Markdown tool and every human reader
- * accepts, and which `@changesets/parse` rejects. A hand-rolled check would
- * encode whichever spellings its author happened to think of and would answer
- * differently from the tool that actually decides.
+ * question. A blank line between the opening `---` and the first package, and a
+ * frontmatter block that never closes, are both accepted by every Markdown tool
+ * and by a human reader, and both are rejected by `@changesets/parse`. A
+ * hand-rolled reader encodes whichever spellings its author thought of and
+ * answers differently from the tool that actually decides.
  *
- * Measured: two changesets on `main` carried that blank line and
- * `Version & Publish` failed with "could not parse changeset - missing or
- * invalid frontmatter", blocking the release train for every package.
+ * Both spellings have reached `main` and stopped the release train for every
+ * package, with "could not parse changeset - missing or invalid frontmatter".
  */
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
