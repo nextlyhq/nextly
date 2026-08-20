@@ -144,7 +144,7 @@ export default function FieldGroupBuilderEditPage({
   } = useBuilderEntityState({
     entity: fieldGroup,
     builder,
-    toFields: loaded => (loaded.fields ?? []) as unknown as FieldDefinition[],
+    toFields: loaded => loaded.fields ?? [],
     toSettings: fieldGroupSettings,
     isDirty: fieldGroupSettingsAreDirty,
     onLoad: loaded =>
@@ -205,7 +205,7 @@ export default function FieldGroupBuilderEditPage({
           updates: {
             label: settings.singularName,
             description: settings.description,
-            fields: fieldDefinitions as unknown as Record<string, unknown>[],
+            fields: fieldDefinitions,
             admin: {
               category: settings.category,
               icon: settings.icon,

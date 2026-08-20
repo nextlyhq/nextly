@@ -54,7 +54,7 @@ function makeBuilder() {
     setFields: vi.fn(next => {
       current = typeof next === "function" ? next(current) : next;
     }),
-    sensors: [] as unknown as BuilderFieldsApi["sensors"],
+    sensors: [],
     handleDragStart: vi.fn(),
     handleFieldsReorder: vi.fn(),
     handleFieldDelete: vi.fn(),

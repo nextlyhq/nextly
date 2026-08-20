@@ -53,7 +53,7 @@ function makeBuilder(fields: BuilderField[] = TREE): BuilderFieldsApi {
   return {
     fields,
     setFields: vi.fn(),
-    sensors: [] as unknown as BuilderFieldsApi["sensors"],
+    sensors: [],
     handleDragStart: vi.fn(),
     handleFieldsReorder: vi.fn(),
     handleFieldDelete: vi.fn(),

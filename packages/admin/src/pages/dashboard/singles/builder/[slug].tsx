@@ -129,7 +129,7 @@ export default function SingleBuilderEditPage({
   } = useBuilderEntityState({
     entity: single,
     builder,
-    toFields: loaded => (loaded.fields ?? []) as unknown as FieldDefinition[],
+    toFields: loaded => loaded.fields ?? [],
     toSettings: singleSettings,
     isDirty: settingsAreDirty,
     onLoad: loaded => builder.form.reset({ singularName: singleName(loaded) }),
@@ -203,7 +203,7 @@ export default function SingleBuilderEditPage({
           updates: {
             label: settings.singularName,
             description: settings.description,
-            fields: fieldDefinitions as unknown as ApiSingle["fields"],
+            fields: fieldDefinitions,
             admin: {
               icon: settings.icon,
               // Advanced tab. We deliberately don't write group/order

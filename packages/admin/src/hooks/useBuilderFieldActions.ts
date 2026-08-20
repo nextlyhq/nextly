@@ -77,7 +77,7 @@ function reorderRows(
     }))
   );
   const reordered = arrayMove(rows, oldIdx, newIdx).flatMap(row =>
-    row.map(r => (r as { _field: BuilderField })._field)
+    row.map(r => r._field)
   );
   return [...systemFields, ...reordered];
 }

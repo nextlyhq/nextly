@@ -49,7 +49,7 @@ function makeBuilder(initial: BuilderField[]) {
     setFields: vi.fn(next => {
       current = typeof next === "function" ? next(current) : next;
     }),
-    sensors: [] as unknown as BuilderFieldsApi["sensors"],
+    sensors: [],
     handleDragStart: vi.fn(),
     handleFieldsReorder: vi.fn(reordered => {
       current = reordered;
@@ -67,11 +67,31 @@ function makeBuilder(initial: BuilderField[]) {
   };
 }
 
-function drag(activeId: string, overId: string): DragEndEvent {
+/**
+ * A complete drag-end event, built rather than asserted.
+ *
+ * The handler reads only `active.id` and `over?.id`, but it is typed against
+ * dnd-kit's event, so the fixture supplies the whole shape. That way a change
+ * to what a drag carries fails here, instead of a fragment continuing to
+ * describe an event the library no longer produces. `overId` is nullable
+ * because a drop outside any target is one of the cases under test.
+ */
+function drag(activeId: string, overId: string | null): DragEndEvent {
+  const rect = { width: 0, height: 0, top: 0, left: 0, right: 0, bottom: 0 };
   return {
-    active: { id: activeId },
-    over: { id: overId },
-  } as unknown as DragEndEvent;
+    activatorEvent: new Event("pointerdown"),
+    active: {
+      id: activeId,
+      data: { current: undefined },
+      rect: { current: { initial: null, translated: null } },
+    },
+    collisions: null,
+    delta: { x: 0, y: 0 },
+    over:
+      overId === null
+        ? null
+        : { id: overId, rect, disabled: false, data: { current: undefined } },
+  };
 }
 
 beforeEach(() => {
@@ -181,10 +201,7 @@ describe("handleRowDragEnd", () => {
     const { result } = renderHook(() => useBuilderFieldActions(builder.api));
 
     result.current.handleRowDragEnd(drag("row-0", "row-0"));
-    result.current.handleRowDragEnd({
-      active: { id: "row-0" },
-      over: null,
-    } as unknown as DragEndEvent);
+    result.current.handleRowDragEnd(drag("row-0", null));
 
     expect(builder.api.handleFieldsReorder).not.toHaveBeenCalled();
   });
