@@ -277,21 +277,47 @@ jobs:
           restore-keys: |
             turbo-v2-${{ runner.os }}-${{ github.job }}-
 
+      # Every verification step below carries
+      # `if: !cancelled() && steps.install.outcome == 'success'`, so ONE failing
+      # gate no longer cancels the rest of the job. The job still fails; what
+      # changes is how much it tells you.
+      #
+      # The default is to stop at the first failing step, and the cost of that
+      # is not theoretical. A grep gate two steps in went red, and the fifteen
+      # steps behind it - Script tests, Typecheck, Lint, Test, the changeset
+      # check, publint, attw - all reported `skipped`. The rollup showed one
+      # red job, which reads as one known problem, and seven pull requests were
+      # merged over it. Two of them carried defects those skipped steps existed
+      # to catch: a changeset whose frontmatter never closed (Script tests) and
+      # three type errors in a new test file (Typecheck). Neither was visible
+      # until the grep gate was repaired, days of merges later.
+      #
+      # So the ordering stays - cheap checks first is still right - but a cheap
+      # check may no longer decide whether the expensive ones are allowed to
+      # speak. `install` is the one exception, and it is identified here for
+      # that: without node_modules no step below can say anything, so its
+      # failure legitimately skips them all rather than producing fifteen
+      # identical module-resolution errors.
       - name: Install dependencies
+        id: install
         run: pnpm install --frozen-lockfile
 
       # F1 PR 5: enforce that drizzle-kit stays exact-pinned in
       # `packages/nextly/package.json` `dependencies` (no caret/tilde,
-      # not in peerDependencies). Cheap check, fails fast.
+      # not in peerDependencies). Cheap, and runs first because it is cheap -
+      # but it no longer STOPS the job, per the note above `install`.
       - name: Check drizzle-kit pin
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm check:drizzle-kit-pin
 
       # Drizzle v1 zero-legacy gate: no pre-v1 API, no removed kit symbols,
-      # no positional drizzle() constructors. Cheap check, fails fast.
+      # no positional drizzle() constructors.
       - name: Drizzle v1 legacy gate
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm check:drizzle-v1-legacy
 
       - name: Storage-spelling gate (field-group storage format)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm check:storage-format-literals
 
       # `pnpm dev` refuses to start when the concurrency limit written into the
@@ -304,6 +330,7 @@ jobs:
       # twenty long-running watchers to observe a property that is decided
       # before any of them runs.
       - name: Dev concurrency gate (persistent task count)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm check:dev-concurrency
 
       # Comments describe the code, never the process that produced it. A comment
@@ -319,6 +346,7 @@ jobs:
       # coverage, the #5782 cascade regression, RQB v2 conversions, and the
       # relations registry.
       - name: Drizzle v1 safety suites (unit)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         # Build nextly's workspace dependencies first: this step runs a raw
         # vitest BEFORE the Build step below, so any package nextly imports
         # must already have a dist or vite fails to resolve its entry and the
@@ -358,6 +386,7 @@ jobs:
       #
       # Needs no build: the suite drives ESLint over this package's own source.
       - name: Bare-Error guard controls (unit)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: |
           pnpm --filter nextly exec vitest run \
             src/errors/__tests__/bare-error-allowlist.test.ts
@@ -367,6 +396,7 @@ jobs:
       # the release-notes builder only surfaces during a real publish, after the
       # packages are already on npm. Needs no build, runs in milliseconds.
       - name: Script tests
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm test:scripts
 
       # The published packages version in lockstep, so a changeset that names
@@ -388,7 +418,7 @@ jobs:
       # changeset the branch picked up by merging `main` as one this branch
       # wrote, which is how a guard starts failing PRs over other people's files.
       - name: Changeset covers the lockstep group
-        if: github.event_name == 'pull_request'
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && github.event_name == 'pull_request' }}
         run: |
           set -euo pipefail
           # `git diff` runs on its own line so a failure — an unavailable `HEAD^1`
@@ -417,18 +447,38 @@ jobs:
 
       # Enforce the design-token theming contract in the admin + plugin packages
       # (no hsl(var(--x)) wrappers, no hardcoded colors, no stray !important).
-      # See packages/ui/docs/plugin-ui-authoring.md. Cheap check, fails fast.
+      # See packages/ui/docs/plugin-ui-authoring.md. Cheap, and no longer stops
+      # the job - see the note above `install`.
       - name: Design tokens lint
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm lint:design
 
       # Workspace manifest consistency across all 19 packages (sherif):
       # unordered keys, unsynced sibling versions, cross-package version
-      # drift, malformed manifests. All rules gate. Runs in milliseconds,
-      # fails fast.
+      # drift, malformed manifests. All rules gate. Runs in milliseconds, and
+      # no longer stops the job - see the note above `install`.
       - name: Workspace consistency
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm lint:workspace
 
+      # Identified for the same reason `install` is, and the reason is in
+      # AGENTS.md rather than here: `turbo.jsonc` gives `lint` no dependency at
+      # all and `check-types` only `^check-types`, so neither rebuilds — they
+      # read whatever `dist` survived. On an unbuilt tree `check-types` fails
+      # workspace-wide on TS2307 through the siblings' export maps and `lint`
+      # fails on `import-x/no-unresolved`, and the dangerous half is that every
+      # TYPE-AWARE lint rule then reports on types the checker cannot see: the
+      # message names YOUR EXPRESSION and reads as a correctness defect whose
+      # obvious remedy is a real regression. `publint` and `arethetypeswrong`
+      # read `dist` directly and have nothing to say without one.
+      #
+      # So a failed Build legitimately skips those FOUR, exactly as a failed
+      # install skips everything: reporting one defect four ways, all of them
+      # misleadingly, is the opposite of what this job was just changed to do.
+      # `Test` is deliberately not among them - see the note on that step.
       - name: Build
+        id: build
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm turbo build --filter='./packages/*' --filter='./apps/*'
         env:
           TURBO_CACHE_DIR: .turbo
@@ -436,11 +486,13 @@ jobs:
       # `./e2e` is named explicitly: it is a workspace member but sits under
       # neither glob, being neither something we publish nor something we run.
       - name: Lint
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.build.outcome == 'success' }}
         run: pnpm turbo lint --continue --filter='./packages/*' --filter='./apps/*' --filter='./e2e'
         env:
           TURBO_CACHE_DIR: .turbo
 
       - name: Typecheck
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.build.outcome == 'success' }}
         run: pnpm turbo check-types --continue
         env:
           TURBO_CACHE_DIR: .turbo
@@ -455,7 +507,15 @@ jobs:
       #
       # ui / storage-s3 / storage-uploadthing have no test files yet; listed so
       # they gate automatically the moment they gain one.
+      # NOT gated on Build, unlike the four steps around it: turbo.jsonc gives
+      # `test` `dependsOn: ["^build"]`, so `turbo test` rebuilds the dependency
+      # subgraph of whatever it is filtered to. A Build failure in a package
+      # none of these seventeen depends on - an app, which is a leaf - would
+      # otherwise silence all seventeen suites for no reason, and a failure in
+      # one they DO depend on is reported as an attributed `#build` failure
+      # here rather than as the type-aware noise the others would produce.
       - name: Test
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: >-
           pnpm turbo test
           --filter=@nextlyhq/blocks-engine
@@ -482,6 +542,7 @@ jobs:
       # packages (nextly + create-nextly-app + 11 @nextlyhq/*). Failures here
       # block the release pipeline.
       - name: publint
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.build.outcome == 'success' }}
         run: >-
           pnpm -r
           --filter '@nextlyhq/*'
@@ -499,6 +560,7 @@ jobs:
       #                          dynamic import())
       # All other attw rules remain active and would catch real regressions.
       - name: arethetypeswrong
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.build.outcome == 'success' }}
         run: >-
           pnpm -r
           --filter '@nextlyhq/*'
