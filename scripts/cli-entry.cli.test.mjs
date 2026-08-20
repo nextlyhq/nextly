@@ -243,11 +243,18 @@ describe.skipIf(!SYMLINKS)("a module that reaches the guard as a neighbour", () 
   // migrated scripts are run here, through the same preserved symlink.
   //
   // Each is asserted on OUTPUT rather than status. All three exit non-zero for
-  // ordinary reasons in this setup (the doctor's checks resolve against the
-  // link's directory; the gates want a PR number), and a status assertion
-  // could not tell that apart from dying at import.
+  // ordinary reasons in this setup (the doctor's checkout is unbuilt here; the
+  // gates want a PR number), and a status assertion could not tell that apart
+  // from dying at import.
+  //
+  // The marker has to be a line only a script reading the RIGHT tree can
+  // print. `[nextly]` alone would not do: the doctor prints that prefix on its
+  // failures too, so it stays green while every path resolves beside the link
+  // and the report is uniformly false. `✓ workspaceLinks` is the separating
+  // line — it needs `node_modules/@nextlyhq` to actually be found, which only
+  // happens when the root came from the real script location.
   for (const [name, script, marker] of [
-    ["the doctor", "dev-doctor.mjs", "[nextly]"],
+    ["the doctor", "dev-doctor.mjs", "✓ workspaceLinks"],
     ["the verdict gate", "ci-verdict.mjs", "usage:"],
     ["the merge gate", "verify-merge.mjs", "usage:"],
   ]) {

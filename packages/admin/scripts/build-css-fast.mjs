@@ -32,21 +32,22 @@ import { fileURLToPath, pathToFileURL } from "url";
 import postcss from "postcss";
 import tailwindcss from "@tailwindcss/postcss";
 
-// Resolved through this file's REAL path rather than as a bare relative
-// specifier, which is resolved against the URL the runtime holds for this
-// module — the SYMLINK under `--preserve-symlinks-main`. The helper would then
-// be looked for beside the link and the build would die with
-// `ERR_MODULE_NOT_FOUND` before producing any CSS.
+/**
+ * This file's directory, with symlinks resolved. ONE definition, shared by the
+ * guard import and by the CSS paths below, which have to agree about where
+ * this script lives.
+ *
+ * From `realpathSync`, because under `--preserve-symlinks-main`
+ * `import.meta.url` is the SYMLINK. Resolving only the import and leaving the
+ * paths on the preserved URL is the worse half-fix: the guard then runs the
+ * CLI block and the build reads `src/styles/globals.css` beside the link,
+ * failing with `ENOENT` for a reason that names the wrong file.
+ */
+const __dirname = path.dirname(realpathSync(fileURLToPath(import.meta.url)));
+
 const { isCliEntry } = await import(
   pathToFileURL(
-    path.join(
-      path.dirname(realpathSync(fileURLToPath(import.meta.url))),
-      "..",
-      "..",
-      "..",
-      "scripts",
-      "cli-entry.mjs"
-    )
+    path.join(__dirname, "..", "..", "..", "scripts", "cli-entry.mjs")
   ).href
 );
 
@@ -55,7 +56,6 @@ const { isCliEntry } = await import(
 // (build-css.mjs) resolves it the same way.
 import { findUnscopedRules, scopeCss } from "@nextlyhq/admin-css";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
 
 const inputFile = path.join(rootDir, "src/styles/globals.css");

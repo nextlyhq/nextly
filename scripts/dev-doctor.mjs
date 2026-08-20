@@ -9,18 +9,27 @@ import * as net from "node:net";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-// Resolved through this file's REAL path rather than as a bare
-// `./cli-entry.mjs`. A relative specifier is resolved against the URL the
-// runtime holds for this module, and under `--preserve-symlinks-main` that is
-// the SYMLINK — so the neighbour is looked for beside the link, is not there,
-// and the command dies with `ERR_MODULE_NOT_FOUND` before printing a check.
+/**
+ * This file's directory, with symlinks resolved. ONE definition, because the
+ * guard import and the diagnostic paths below must agree about where this
+ * script lives.
+ *
+ * Taken from `realpathSync` rather than from `import.meta.url` directly: under
+ * `--preserve-symlinks-main` that URL is the SYMLINK. Two different things go
+ * wrong from it, and the second is the worse one:
+ *
+ * - the guard is looked for beside the link and the command dies with
+ *   `ERR_MODULE_NOT_FOUND` before printing anything;
+ * - `nextlyRoot` lands beside the link, so every check reads the wrong tree
+ *   and a healthy checkout is reported as missing its workspace links, its
+ *   env file and its build artifacts. That one is a FALSE NEGATIVE — the
+ *   command still prints a well-formed report, so nothing about the output
+ *   says the paths were wrong.
+ */
+const HERE = path.dirname(realpathSync(fileURLToPath(import.meta.url)));
+
 const { isCliEntry } = await import(
-  pathToFileURL(
-    path.join(
-      path.dirname(realpathSync(fileURLToPath(import.meta.url))),
-      "cli-entry.mjs"
-    )
-  ).href
+  pathToFileURL(path.join(HERE, "cli-entry.mjs")).href
 );
 
 // Workspace integrity check. The two scopes get hoisted differently:
@@ -164,11 +173,9 @@ export async function runAllChecks({ nextlyRoot, envPath, port }) {
 
 // CLI entry: when invoked directly (pnpm dev:doctor), print a report.
 if (isCliEntry(import.meta.url)) {
-  // `fileURLToPath` rather than the URL's `pathname`, which keeps the leading
-  // slash a file URL puts before a Windows drive letter (`/C:/repo/scripts`)
-  // and resolves from the wrong place once joined.
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  const nextlyRoot = path.resolve(here, "..");
+  // `HERE`, so the report describes the checkout this file actually lives in
+  // rather than wherever it was invoked from.
+  const nextlyRoot = path.resolve(HERE, "..");
   const envPath = path.join(nextlyRoot, "apps", "playground", ".env");
   const port = Number(process.env.PORT) || 3000;
 
