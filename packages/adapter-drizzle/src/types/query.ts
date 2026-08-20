@@ -15,7 +15,8 @@ import type { SqlParam } from "./core";
  * - Pattern matching: LIKE, ILIKE (case-insensitive, PostgreSQL/emulated)
  * - NULL checks: IS NULL, IS NOT NULL
  * - Range: BETWEEN, NOT BETWEEN
- * - JSON/Array: CONTAINS, OVERLAPS
+ * - Substring: CONTAINS — a LITERAL match, not JSON containment; see below
+ * - Declared but NOT implemented: OVERLAPS, which throws
  *
  * This list is the source of truth and {@link WhereOperator} is derived from it,
  * rather than the two being written out separately. A guard that has to enumerate
@@ -41,8 +42,14 @@ export const WHERE_OPERATORS = [
   "IS NOT NULL",
   "BETWEEN",
   "NOT BETWEEN",
-  "CONTAINS", // JSON contains
-  "OVERLAPS", // Array overlaps
+  // Substring match on the column's TEXT, with the value taken literally. Despite the name it
+  // is not JSON containment: against a JSON column it matches the stored text, so it can hit a
+  // key name or a value in a different field. Use it as a search, not as a containment check.
+  "CONTAINS",
+  // Declared, never implemented — the builder throws `Unsupported operator: OVERLAPS`. Kept in
+  // the union because removing it would be a breaking change to a published type; the refusal
+  // is pinned by a test so implementing it has to come through here.
+  "OVERLAPS",
 ] as const;
 
 /**

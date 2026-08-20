@@ -188,11 +188,13 @@ function buildCondition(
     case "NOT BETWEEN":
       return notBetween(col, cond.value, cond.valueTo);
     case "CONTAINS":
-      // JSON contains - fall back to a substring LIKE for basic support. The value is matched
-      // LITERALLY: a `%` or `_` the caller passed is a character to find, not a wildcard, so
-      // both are escaped and the escape character is declared. Without that, `CONTAINS "a%b"`
-      // silently widens to "a, anything, b" — and through `delete`, which takes its where clause
-      // as a required argument, a widened match is a widened deletion.
+      // A substring match on the column's text, NOT JSON containment despite the operator's
+      // name — against a JSON column this matches the stored text, so it can hit a key name as
+      // readily as a value. The value is matched LITERALLY: a `%` or `_` the caller passed is a
+      // character to find, not a wildcard, so both are escaped and the escape character is
+      // declared. Without that, `CONTAINS "a%b"` silently widens to "a, anything, b" — and
+      // through `delete`, which takes its where clause as a required argument, a widened match
+      // is a widened deletion.
       return sql`${col} like ${containsPattern(String(cond.value))} escape '!'`;
     default:
       throw new Error(`Unsupported operator: ${cond.op}`);

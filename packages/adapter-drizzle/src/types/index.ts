@@ -6,7 +6,9 @@
  * feature set needed by Nextly services.
  *
  * @remarks
- * This module provides type-only exports. Import specific types as needed:
+ * Mostly types, but not only: the error guards and `WHERE_OPERATORS` are runtime
+ * values, so a consumer importing those needs a value import rather than
+ * `import type`.
  *
  * @example
  * ```typescript
@@ -16,6 +18,8 @@
  *   WhereClause,
  *   SelectOptions
  * } from '@nextly/adapter-drizzle/types';
+ *
+ * import { WHERE_OPERATORS, isDatabaseError } from '@nextly/adapter-drizzle/types';
  * ```
  *
  * @packageDocumentation
