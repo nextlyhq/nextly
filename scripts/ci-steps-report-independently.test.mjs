@@ -157,6 +157,34 @@ function stepKey(chunk, key) {
   return firstMatch(chunk, new RegExp(`^ {8}${key}: (.+)$`, "m"));
 }
 
+/** Whether a step declared at `declared` has already run by index `index`. */
+function resolvesBefore(declared, index) {
+  return declared !== undefined && declared < index;
+}
+
+/** A step's position, for a message that has to name one that has no name. */
+function label(step, index) {
+  return `${step.name || "(unnamed step)"} (#${index + 1})`;
+}
+
+/** Where an id was declared, or that it was not. */
+function where(declared) {
+  return declared === undefined ? "nowhere" : `#${declared + 1}`;
+}
+
+/**
+ * Every `steps.<id>.outcome` this condition names, sorted and de-duplicated.
+ *
+ * Sorted so the comparison is over a SET rather than over the order somebody
+ * happened to write the conjuncts in.
+ */
+function referencedOutcomeIds(condition) {
+  const ids = [...condition.matchAll(/steps\.([A-Za-z0-9_-]+)\.outcome/g)].map(
+    m => m[1]
+  );
+  return [...new Set(ids)].sort();
+}
+
 /** The first capture group, trimmed, or "" when the pattern does not match. */
 function firstMatch(text, pattern) {
   const match = pattern.exec(text);
@@ -204,35 +232,64 @@ describe("the ci job reports every gate, not only the first to fail", () => {
     ).toEqual([]);
   });
 
-  it("requires the install prerequisite on every verification step", async () => {
+  it("references EXACTLY the prerequisites each step is allowed", async () => {
     const steps = ciJobSteps(await readFile(CI_WORKFLOW, "utf-8"));
 
-    const missing = verificationSteps(steps)
-      .filter(s => !s.ifCondition.includes(INSTALL_OK))
-      .map(s => `${s.name || "(unnamed step)"}: ${s.ifCondition || "(no if:)"}`);
+    // An exact set rather than a presence check, because the two failures are
+    // opposite and both matter. A MISSING prerequisite lets a step run on a
+    // tree that cannot support it. An EXTRA one — a conjunct naming some other
+    // verification step — restores precisely the silencing this job was changed
+    // to stop: that peer failing skips this step, and the rollup goes back to
+    // one red with invisible skips beside it. The workflow itself establishes
+    // the idiom (four steps legitimately name `build`), so a chained condition
+    // is indistinguishable by eye from a blessed one.
+    const wrong = verificationSteps(steps)
+      .map(s => ({
+        step: s,
+        actual: referencedOutcomeIds(s.ifCondition),
+        expected: BUILD_DEPENDENT.has(s.name)
+          ? ["build", "install"]
+          : ["install"],
+      }))
+      .filter(r => r.actual.join() !== r.expected.join())
+      .map(
+        r =>
+          `${r.step.name || "(unnamed step)"}: references [${r.actual}], allowed [${r.expected}]`
+      );
 
     expect(
-      missing,
-      "a verification step without the install prerequisite either stops every step behind it or runs without node_modules"
-    ).toEqual([]);
-  });
-
-  it("requires the build prerequisite on the steps that read dist", async () => {
-    const steps = ciJobSteps(await readFile(CI_WORKFLOW, "utf-8"));
-
-    const missing = verificationSteps(steps)
-      .filter(s => BUILD_DEPENDENT.has(s.name))
-      .filter(s => !s.ifCondition.includes(BUILD_OK))
-      .map(s => `${s.name || "(unnamed step)"}: ${s.ifCondition || "(no if:)"}`);
-
-    expect(
-      missing,
-      "turbo gives lint no dependency and check-types only ^check-types, so on a failed Build these read a stale dist — and a type-aware lint rule then names YOUR expression rather than the missing build"
+      wrong,
+      "a verification step may name install (and build, if it reads dist without rebuilding it) and nothing else — any other outcome reference makes one gate's failure hide another's verdict"
     ).toEqual([]);
 
     // The population itself, so a rename cannot empty the check silently.
     const present = steps.map(s => s.name).filter(n => BUILD_DEPENDENT.has(n));
     expect(present.sort()).toEqual([...BUILD_DEPENDENT].sort());
+  });
+
+  it("declares install and build BEFORE the steps that reference them", async () => {
+    const steps = ciJobSteps(await readFile(CI_WORKFLOW, "utf-8"));
+
+    // The other half of "the reference must resolve". A missing id is one way
+    // `steps.<id>.outcome` evaluates to empty; referencing a step that has not
+    // RUN YET is the other, because the steps context only carries steps
+    // already executed. Both skip the step silently, and a skipped step does
+    // not fail the job — so the workflow would be GREEN with the gate never
+    // having run, which is the failure this file exists to prevent.
+    const declaredAt = new Map(
+      steps.map((s, index) => [s.id, index]).filter(([id]) => id !== "")
+    );
+
+    const tooEarly = steps.flatMap((s, index) =>
+      referencedOutcomeIds(s.ifCondition)
+        .filter(id => !resolvesBefore(declaredAt.get(id), index))
+        .map(id => `${label(s, index)} references ${id}, declared at ${where(declaredAt.get(id))}`)
+    );
+
+    expect(
+      tooEarly,
+      "a step referencing an id declared later reads empty and is skipped, and a skipped step does not fail the job"
+    ).toEqual([]);
   });
 
   it("does NOT gate Test on Build, which would silence seventeen suites", async () => {
