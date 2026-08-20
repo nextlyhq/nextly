@@ -1,5 +1,7 @@
 // Entity type definitions for the admin app
 
+import type { FieldDefinition } from "./collection";
+
 export interface Permission {
   id: string;
   name: string;
@@ -268,7 +270,7 @@ export interface ApiSingle {
   label: string;
   tableName: string;
   description?: string;
-  fields: SchemaField[];
+  fields: FieldDefinition[];
   admin?: SingleAdminOptions;
   createdBy?: string | null;
   createdAt: string;
@@ -423,7 +425,7 @@ export interface ApiFieldGroup {
   label: string;
   tableName: string;
   description?: string;
-  fields: SchemaField[];
+  fields: FieldDefinition[];
   admin?: FieldGroupAdminOptions;
   createdBy?: string | null;
   createdAt: string;

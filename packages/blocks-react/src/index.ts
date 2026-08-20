@@ -62,6 +62,14 @@ export { BlockBoundary, BlockList } from "./block-boundary";
 export { NODE_ID_ATTRIBUTE, PROP_ATTRIBUTE } from "./block-boundary";
 export type { BlockBoundaryProps, BlockListProps } from "./block-boundary";
 
+/**
+ * Draw stored rich text as React.
+ *
+ * The CMS derives HTML from the same stored shape; this draws a React tree.
+ * Both read the type and format bits from `blocks-engine`, which is the only
+ * thing they can share — this package may not import the CMS.
+ */
+export { RichText, type RichTextProps } from "./rich-text";
 export { BlockPlaceholder } from "./placeholder";
 export type { BlockPlaceholderProps, PlaceholderReason } from "./placeholder";
 

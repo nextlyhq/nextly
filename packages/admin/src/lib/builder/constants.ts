@@ -1,4 +1,4 @@
-import type { BuilderField } from "@admin/components/features/schema-builder";
+import type { BuilderField } from "@admin/components/features/schema-builder/types";
 
 /**
  * Default system fields present in every collection and single.
@@ -23,6 +23,14 @@ export const DEFAULT_SYSTEM_FIELDS: BuilderField[] = [
     validation: { required: true },
   },
 ];
+
+/**
+ * The names the system fields above occupy. Derived rather than restated so a
+ * change to that list cannot leave a loader filtering one set and a save
+ * filtering another. Narrower than RESERVED_NAMES, which also covers columns
+ * the builder never renders.
+ */
+export const SYSTEM_FIELD_NAMES = DEFAULT_SYSTEM_FIELDS.map(f => f.name);
 
 /**
  * Single source of truth for reserved field names.

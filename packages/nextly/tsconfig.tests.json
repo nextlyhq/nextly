@@ -41,7 +41,6 @@
     "src/collections/__tests__/field-defaults.integration.test.ts",
     "src/collections/fields/block-props.test.ts",
     "src/database/__tests__/integration/schema-push.integration.test.ts",
-    "src/database/__tests__/where-builder.test.ts",
     "src/direct-api/__tests__/media.test.ts",
     "src/direct-api/__tests__/users.test.ts",
     "src/dispatcher/handlers/__tests__/versions-e2e.integration.test.ts",

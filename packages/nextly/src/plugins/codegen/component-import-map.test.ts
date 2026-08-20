@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { buildPluginAdminMeta, type PluginAdminMeta } from "../admin-meta";
 import type { PluginDefinition } from "../plugin-context";
 import {
   buildComponentImportMap,
@@ -201,6 +202,300 @@ describe("block editor components", () => {
         declaringBlocks("nope" as unknown as unknown[]),
       ])
     ).toEqual([]);
+  });
+});
+
+describe("field-type and slot components", () => {
+  it("collects a field type's editor component from a plugin with no admin contributions", () => {
+    // The page builder is exactly this shape: one field type and no pages,
+    // settings or views, so before field types were collected the generated
+    // map imported nothing of it and its control could only arrive through
+    // the registry's runtime import fallback — which cannot resolve a bare
+    // package specifier in a bundled browser.
+    const p = {
+      name: "@nextlyhq/plugin-page-builder",
+      version: "1.0.0",
+      nextly: "*",
+      contributes: {
+        fieldTypes: [
+          {
+            type: "blocks",
+            storage: "json",
+            component: "@nextlyhq/plugin-page-builder/admin#BlocksField",
+          },
+        ],
+      },
+    } as unknown as PluginDefinition;
+
+    expect(collectAdminComponentPaths(p)).toEqual([
+      "@nextlyhq/plugin-page-builder/admin#BlocksField",
+    ]);
+
+    const code = buildComponentImportMap([p]);
+    expect(code).toContain(
+      'import * as _p0 from "@nextlyhq/plugin-page-builder/admin";'
+    );
+    expect(code).toContain(
+      '"@nextlyhq/plugin-page-builder/admin#BlocksField": _p0.BlocksField,'
+    );
+
+    // Field types alone are enough to need the file; returning null would
+    // leave the control unloadable by an app that registers only the plugin.
+    expect(
+      buildImportMapArtifact([p], "./src/types/nextly-types.ts")
+    ).not.toBeNull();
+  });
+
+  it("collects the header slot under both spellings, the schema-builder slot and the form toolbar slot", () => {
+    const p = plugin({
+      header: { slot: "@acme/x/admin#HeaderSlot" },
+      schemaBuilderSlot: "@acme/x/admin#SchemaSlot",
+      entryFormToolbarSlot: "@acme/x/admin#ToolbarSlot",
+    });
+
+    expect(collectAdminComponentPaths(p)).toEqual([
+      "@acme/x/admin#HeaderSlot",
+      "@acme/x/admin#SchemaSlot",
+      "@acme/x/admin#ToolbarSlot",
+    ]);
+  });
+
+  it("honors the deprecated top-level headerSlot spelling", () => {
+    // Still folded into `header.slot` by admin-meta, so the map must read it
+    // the same way rather than dropping a back-compat plugin's component.
+    const p = plugin({ headerSlot: "@acme/x/admin#LegacySlot" });
+    expect(collectAdminComponentPaths(p)).toEqual(["@acme/x/admin#LegacySlot"]);
+  });
+
+  it("keeps a disabled plugin's field-type editors but drops its slots", () => {
+    // admin-meta serializes fieldTypes regardless of enabled state — a
+    // disabled plugin keeps its collections and their fields, so their
+    // editors still mount and still need their modules imported. Behavioral
+    // UI (pages, settings, slots) is withheld for a disabled plugin.
+    const p = {
+      name: "@acme/x",
+      version: "1.0.0",
+      nextly: "*",
+      enabled: false,
+      contributes: {
+        fieldTypes: [
+          { type: "rating", storage: "json", component: "@x/admin#Rating" },
+        ],
+        admin: { schemaBuilderSlot: "@x/admin#SchemaSlot" },
+      },
+    } as unknown as PluginDefinition;
+
+    expect(collectAdminComponentPaths(p)).toEqual(["@x/admin#Rating"]);
+  });
+});
+
+/**
+ * Meta keys that carry no `ComponentPath`, whatever else they carry.
+ *
+ * Listed rather than inferred so that a key added to `PluginAdminMeta` lands
+ * in neither this set nor the readers below and is reported as
+ * `unclassified` — which is where this guard's teeth are. Someone then has
+ * to answer whether the new key names a component, instead of the map
+ * quietly not importing it.
+ */
+const KEYS_WITHOUT_COMPONENTS = new Set([
+  "name",
+  "version",
+  "description",
+  "author",
+  "homepage",
+  "repository",
+  "docsUrl",
+  "license",
+  "category",
+  "tags",
+  "enabled",
+  "dependsOn",
+  "placement",
+  "order",
+  "after",
+  "appearance",
+  "collections",
+  "singles",
+  "fieldGroups",
+  "clientConfig",
+  "routes",
+  "whenEnabled",
+  // Menu items carry a route (`to`), never a component.
+  "menu",
+]);
+
+interface ExposedPaths {
+  /** Paths the admin resolves through the registry — each needs an import. */
+  registered: string[];
+  /** Widget paths: RESERVED, so deliberately NOT imported. */
+  widgets: string[];
+  /** Emitted keys this helper classifies neither way. Must stay empty. */
+  unclassified: string[];
+}
+
+/**
+ * Every component path a serialized admin-meta entry carries, read BY KEY.
+ *
+ * Scanning the serialized JSON for `"…#…"` instead would be both too eager
+ * and too slack: `clientConfig` is arbitrary plugin data, so a branding hex
+ * like `#0ea5e9` reads as a component path, and a path naming a default
+ * export carries no `#` at all and is missed entirely. Reading the keys the
+ * serializer writes makes the set exact, and makes the widget exclusion
+ * something these tests STATE rather than something they happen not to
+ * notice.
+ *
+ * Written from the meta's shape rather than by calling the collector, so
+ * the two remain independent statements of the same set — a collector bug
+ * copied into the guard would assert nothing.
+ *
+ * Bounded by what the FIXTURE exercises: a key no fixture declares is never
+ * serialized and cannot be seen from here, so the fixtures below carry one
+ * of everything on purpose.
+ */
+function exposedComponentPaths(meta: PluginAdminMeta): ExposedPaths {
+  const registered = [
+    ...(meta.pages ?? []).map(page => page.component),
+    meta.settings?.component,
+    // Mirrored spellings, both serialized; the map must read whichever the
+    // browser is handed.
+    meta.headerSlot,
+    meta.header?.slot,
+    meta.schemaBuilderSlot,
+    meta.entryFormToolbarSlot,
+    ...(meta.fieldTypes ?? []).map(fieldType => fieldType.component),
+  ].filter((path): path is string => Boolean(path));
+
+  const readsComponents = new Set([
+    "pages",
+    "settings",
+    "headerSlot",
+    "header",
+    "schemaBuilderSlot",
+    "entryFormToolbarSlot",
+    "fieldTypes",
+  ]);
+
+  return {
+    registered,
+    widgets: (meta.widgets ?? []).map(widget => widget.component),
+    unclassified: Object.keys(meta).filter(
+      key =>
+        !readsComponents.has(key) &&
+        key !== "widgets" &&
+        !KEYS_WITHOUT_COMPONENTS.has(key)
+    ),
+  };
+}
+
+describe("parity with the admin-meta surface", () => {
+  it("collects every component path admin-meta exposes for a plugin", () => {
+    // One of every kind, so the key sweep above sees the whole surface: the
+    // widget it must NOT import, and a `clientConfig` hex that a `#` scan
+    // would have demanded an import for.
+    const p = {
+      name: "@acme/x",
+      version: "1.0.0",
+      nextly: "*",
+      contributes: {
+        fieldTypes: [
+          {
+            type: "rating",
+            storage: "json",
+            component: "@acme/x/admin#Rating",
+          },
+        ],
+        admin: {
+          menu: [{ label: "X", to: "/x" }],
+          pages: [{ path: "reports", component: "@acme/x/admin#Reports" }],
+          settings: { component: "@acme/x/admin#Settings" },
+          header: { slot: "@acme/x/admin#HeaderSlot" },
+          schemaBuilderSlot: "@acme/x/admin#SchemaSlot",
+          entryFormToolbarSlot: "@acme/x/admin#ToolbarSlot",
+          widgets: [{ id: "stats", component: "@acme/x/admin#StatsWidget" }],
+          clientConfig: { accent: "#0ea5e9" },
+        },
+      },
+    } as unknown as PluginDefinition;
+
+    const meta = buildPluginAdminMeta([p], undefined)[0];
+    const exposed = exposedComponentPaths(meta);
+
+    // The guard itself: every key the meta emits is accounted for. A new one
+    // fails here, before the assertions that depend on knowing what it is.
+    expect(exposed.unclassified).toEqual([]);
+
+    // Positive control — without it the loop below is satisfied by an empty
+    // probe.
+    expect(exposed.registered).toEqual(
+      expect.arrayContaining([
+        "@acme/x/admin#Rating",
+        "@acme/x/admin#Reports",
+        "@acme/x/admin#Settings",
+        "@acme/x/admin#HeaderSlot",
+        "@acme/x/admin#SchemaSlot",
+        "@acme/x/admin#ToolbarSlot",
+      ])
+    );
+
+    const collected = new Set([
+      ...collectAdminComponentPaths(p),
+      ...collectBlockEditorComponentPaths([p]),
+    ]);
+    for (const path of exposed.registered) {
+      expect(collected.has(path)).toBe(true);
+    }
+
+    // Widgets are RESERVED and not rendered, so the map excludes them on
+    // purpose — importing a component nothing mounts would break the
+    // generated module over a feature that does not exist yet. Asserted
+    // rather than left to a fixture that happens to declare none.
+    expect(exposed.widgets).toEqual(["@acme/x/admin#StatsWidget"]);
+    expect(collected.has("@acme/x/admin#StatsWidget")).toBe(false);
+
+    // `clientConfig` is plugin data. A colour is not a component path, and
+    // reading it as one would demand an import for a module named `#0ea5e9`.
+    expect(meta.clientConfig).toEqual({ accent: "#0ea5e9" });
+    expect(collected.has("#0ea5e9")).toBe(false);
+  });
+
+  it("covers a disabled plugin too, whose meta keeps its field types", () => {
+    // admin-meta withholds a disabled plugin's behavioral UI but still
+    // serializes its field types (retained collections keep rendering their
+    // fields), so the collector must import those editors or the fields of a
+    // disabled plugin render empty.
+    const p = {
+      name: "@acme/off",
+      version: "1.0.0",
+      nextly: "*",
+      enabled: false,
+      contributes: {
+        fieldTypes: [
+          {
+            type: "rating",
+            storage: "json",
+            component: "@acme/off/admin#Rating",
+          },
+        ],
+        admin: {
+          pages: [{ path: "reports", component: "@acme/off/admin#Reports" }],
+          schemaBuilderSlot: "@acme/off/admin#SchemaSlot",
+        },
+      },
+    } as unknown as PluginDefinition;
+
+    const meta = buildPluginAdminMeta([p], undefined)[0];
+    const exposed = exposedComponentPaths(meta);
+
+    expect(exposed.unclassified).toEqual([]);
+    // Exact, not a superset: the page and the slot are withheld for a
+    // disabled plugin, and the field type is not.
+    expect(exposed.registered).toEqual(["@acme/off/admin#Rating"]);
+
+    const collected = new Set(collectAdminComponentPaths(p));
+    for (const path of exposed.registered) {
+      expect(collected.has(path)).toBe(true);
+    }
   });
 });
 

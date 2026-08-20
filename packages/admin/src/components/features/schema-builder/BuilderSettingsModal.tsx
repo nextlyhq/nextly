@@ -184,6 +184,14 @@ export function BuilderSettingsModal({
                 kind={config.kind}
                 values={values}
                 onChange={setValues}
+                // Editable only while the entity is being created. Afterwards
+                // the slug addresses its route, its table and every record
+                // stored under it, and no save sends a changed one — every
+                // update call takes the slug from the route instead. Left
+                // editable it accepts a value that is silently dropped, and
+                // for the kinds whose dirty check compares it, enables Save
+                // and re-pins the baseline as though it had been written.
+                slugEditable={mode === "create"}
               />
             </fieldset>
           </TabsContent>
