@@ -154,13 +154,22 @@ export async function handleSetup(
 
   const strengthResult = validatePasswordStrength(password);
   if (!strengthResult.ok) {
-    return jsonResponse(400, {
-      error: {
-        code: "WEAK_PASSWORD",
-        message: "Password does not meet requirements",
-        details: strengthResult.errors,
-      },
-    });
+    // The rules a password failed are the only part of this a person can act
+    // on, so they travel on `data.errors` -- the key the canonical envelope
+    // defines and the admin reads. They used to sit under `details`, which
+    // nothing reads, so a rejected password arrived as a bare "does not meet
+    // requirements" with the reasons dropped. The mapping is the one
+    // `registerUser` already applies to this same validator output.
+    return buildAuthErrorResponse(
+      NextlyError.validation({
+        errors: strengthResult.errors.map(message => ({
+          path: "password",
+          code: "WEAK_PASSWORD",
+          message,
+        })),
+      }),
+      readOrGenerateRequestId(request)
+    );
   }
 
   // Create super admin (seeds permissions internally, hashes password internally)

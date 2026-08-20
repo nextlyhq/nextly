@@ -765,6 +765,57 @@ describe("setup handler: respondAction shape", () => {
     );
   });
 
+  // The rules a password failed are the only actionable part of the refusal.
+  // They used to travel under `details`, a key nothing reads, so the person
+  // was told their password was rejected and never by what. Asserting the
+  // canonical `data.errors` is what keeps them where a reader looks.
+  it("reports every unmet password rule on the canonical data.errors key", async () => {
+    const createSuperAdmin = vi.fn();
+    const deps = {
+      secret: SECRET,
+      isProduction: false,
+      accessTokenTTL: 900,
+      refreshTokenTTL: 604800,
+      allowedOrigins: ALLOWED_ORIGINS,
+      trustProxy: false,
+      trustedProxyIps: [],
+      getUserCount: vi.fn().mockResolvedValue(0),
+      createSuperAdmin,
+      fetchRoleIds: vi.fn(),
+      seedPermissions: vi.fn(),
+      storeRefreshToken: vi.fn(),
+      auditLog: { write: vi.fn().mockResolvedValue(undefined) },
+    };
+    const req = makeRequest("POST", {
+      email: "a@example.com",
+      password: "weak",
+      name: "A",
+    });
+    const res = await handleSetup(req, deps);
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as {
+      error: {
+        code: string;
+        data?: {
+          errors?: Array<{ path: string; code: string; message: string }>;
+        };
+      };
+    };
+    const errors = body.error.data?.errors ?? [];
+    // "weak" breaks four rules at once, so a single-reason envelope would
+    // still be hiding most of the answer.
+    expect(errors.length).toBeGreaterThan(1);
+    expect(errors.every(e => e.path === "password")).toBe(true);
+    expect(errors.every(e => e.code === "WEAK_PASSWORD")).toBe(true);
+    expect(errors.map(e => e.message)).toContain(
+      "Password must contain at least one uppercase letter"
+    );
+    // The old shape put them here, where no client would ever find them.
+    expect(body.error).not.toHaveProperty("details");
+    expect(createSuperAdmin).not.toHaveBeenCalled();
+  });
+
   // Security: an unknown user count must never be treated as 0 -- a second
   // super-admin must not be creatable on the assumption that setup is open.
   it("when getUserCount throws, returns 503 envelope and does NOT create a user", async () => {
