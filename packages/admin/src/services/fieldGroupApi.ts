@@ -38,7 +38,8 @@ export interface CreateComponentPayload {
   slug: string;
   label: string;
   description?: string;
-  fields: Record<string, unknown>[];
+  /** The field definitions to persist, in the shape the builder produces. */
+  fields: FieldDefinition[];
   admin?: {
     category?: string;
     icon?: string;

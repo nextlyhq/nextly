@@ -181,8 +181,8 @@ describe("handleRowDragEnd", () => {
     expect(builder.fields[0].fields?.map(f => f.name)).toEqual(["two", "one"]);
   });
 
-  // Q2: moving a field out of its container is deliberately not supported, so
-  // a cross-parent drag must leave the tree exactly as it was.
+  // Moving a field out of its container is deliberately not supported, so a
+  // cross-parent drag must leave the tree exactly as it was.
   it("ignores a drag between two different parents", () => {
     const builder = makeBuilder([
       field("left", { type: "repeater", fields: [field("one")] }),

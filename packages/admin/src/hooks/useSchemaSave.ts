@@ -59,6 +59,33 @@ export async function mirrorSchemaFile(
 }
 
 /**
+ * Run whatever follows a landed apply, reporting its own failure as its own.
+ *
+ * It runs after the success toast, so letting a rejection reach the apply's
+ * catch would tell the user the apply failed immediately after telling them it
+ * succeeded, and name the wrong step as the cause. The schema is already
+ * written by this point; only the follow-up can still go wrong.
+ */
+async function runPostApply(
+  /** Awaited whether or not it returns a promise, so a sync throw is caught
+   *  here rather than escaping to the apply's own handler. */
+  step: () => void | Promise<void>,
+  /** How the warning opens, e.g. "Posts". */
+  label: string
+): Promise<void> {
+  try {
+    await step();
+  } catch (err) {
+    const message = (err as { message?: string })?.message;
+    toast.warning(
+      `${label} schema updated, but a follow-up step did not complete${
+        message ? `: ${message}` : ""
+      }.`
+    );
+  }
+}
+
+/**
  * What the success toast calls the entity: its own name, or the slug when it
  * has none yet. Trimmed, because a name of spaces reads as a missing one.
  */
@@ -179,7 +206,8 @@ export function useSchemaSave({
               : "";
           stopRestart(true, `${label} schema updated${summarySuffix}`);
           confirmation.settle();
-          await onApplied(fields);
+
+          await runPostApply(() => onApplied(fields), label);
         } catch (err) {
           const message = (err as { message?: string })?.message;
           stopRestart(

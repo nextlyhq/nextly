@@ -128,11 +128,14 @@ export function BuilderPageLayout({
 
       {children}
 
-      {isSaving && (
-        <div aria-live="polite" className="sr-only">
-          {savingLabel}
-        </div>
-      )}
+      {/* Mounted whether or not a save is running, and only its text changes.
+          A live region inserted at the same moment as its message is not
+          reliably announced: several screen readers only watch regions that
+          were already present when the text appeared, so a region that arrives
+          with its own content can be skipped entirely. */}
+      <div aria-live="polite" className="sr-only">
+        {isSaving ? savingLabel : ""}
+      </div>
     </div>
   );
 }

@@ -185,6 +185,9 @@ export default function CollectionBuilderEditPage({
       if (Array.isArray(loaded.hooks))
         setHooks(loaded.hooks.map(toEnabledHook));
     },
+    // `id` rather than `slug`, which is optional on a collection; the two are
+    // equally stable and only one is guaranteed present.
+    identity: loaded => loaded.id,
   });
 
   const isLocked = collection?.locked === true;

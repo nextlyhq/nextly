@@ -133,6 +133,7 @@ export default function SingleBuilderEditPage({
     toSettings: singleSettings,
     isDirty: settingsAreDirty,
     onLoad: loaded => builder.form.reset({ singularName: singleName(loaded) }),
+    identity: loaded => loaded.slug,
   });
 
   const isLocked = single?.locked === true;

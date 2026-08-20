@@ -10,7 +10,7 @@
  * by the page, so the page no longer restates the classification the dialogs
  * already make.
  */
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { SchemaChangeConfirmation } from "@admin/components/features/schema-builder/types";
 import type { SchemaPreviewResponse } from "@admin/services/schemaApi";
@@ -56,6 +56,12 @@ export function useSchemaChangeConfirmation(): SchemaChangeConfirmation {
     setIsApplying(false);
     setApplyingFlag(false);
   }, []);
+
+  // The flag lives on `window`, so leaving it set outlives the page that set
+  // it: navigating away mid-apply would leave every later schema change in
+  // this tab looking like our own, and the announcement suppressed for good.
+  // Unmounting ends this page's apply whether or not the request settled.
+  useEffect(() => () => setApplyingFlag(false), []);
 
   return useMemo(
     () => ({

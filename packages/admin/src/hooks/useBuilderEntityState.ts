@@ -45,6 +45,16 @@ export interface UseBuilderEntityStateOptions<TEntity> {
   /** Run once when the entity lands — resetting the metadata form, and any
    *  seeding only this kind needs. */
   onLoad: (entity: TEntity) => void;
+  /**
+   * What makes this entity a different one, usually its slug.
+   *
+   * Taken from the ENTITY rather than the route: the router renders each page
+   * component without a key, so navigating from one builder to another reuses
+   * the same instance and its state. Keyed on the route, a load could also fire
+   * against whichever entity the query still held while the new slug's request
+   * was in flight, and pin baselines from the wrong record.
+   */
+  identity: (entity: TEntity) => string;
 }
 
 export interface BuilderEntityState {
@@ -70,9 +80,13 @@ export function useBuilderEntityState<TEntity>({
   toSettings,
   isDirty,
   onLoad,
+  identity,
 }: UseBuilderEntityStateOptions<TEntity>): BuilderEntityState {
   const [settings, setSettings] = useState<BuilderSettingsValues | null>(null);
-  const [isInitialized, setIsInitialized] = useState(false);
+  // Which entity was read in, rather than whether one was. A boolean cannot
+  // tell "already loaded this" from "already loaded something", and the second
+  // is what leaves a reused component showing the previous entity's fields.
+  const [loadedKey, setLoadedKey] = useState<string | null>(null);
 
   // Frozen copies of what the page loaded with. Both are arrays/objects rather
   // than hashes so every editable property takes part in the comparison — an
@@ -86,8 +100,10 @@ export function useBuilderEntityState<TEntity>({
 
   const { setFields } = builder;
 
+  const currentKey = entity ? identity(entity) : null;
+
   useEffect(() => {
-    if (!entity || isInitialized) return;
+    if (!entity || loadedKey === currentKey) return;
 
     onLoad(entity);
 
@@ -105,8 +121,13 @@ export function useBuilderEntityState<TEntity>({
     setSettings(loaded);
     setOriginalSettings(loaded);
 
-    setIsInitialized(true);
-  }, [entity, isInitialized, setFields, toFields, toSettings, onLoad]);
+    setLoadedKey(currentKey);
+  }, [entity, currentKey, loadedKey, setFields, toFields, toSettings, onLoad]);
+
+  // False while a different entity's data is still on screen, so the page
+  // holds its loading state rather than briefly drawing the previous record
+  // under the new one's name.
+  const isInitialized = currentKey !== null && loadedKey === currentKey;
 
   const unsavedCount = useMemo(() => {
     const fieldChanges = originalFields

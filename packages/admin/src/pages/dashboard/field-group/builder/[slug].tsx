@@ -149,6 +149,7 @@ export default function FieldGroupBuilderEditPage({
     isDirty: fieldGroupSettingsAreDirty,
     onLoad: loaded =>
       builder.form.reset({ singularName: fieldGroupName(loaded) }),
+    identity: loaded => loaded.slug,
   });
 
   const isLocked = fieldGroup?.locked === true;

@@ -16,7 +16,7 @@ import type { FieldDefinition } from "@admin/types/collection";
 import { useBuilderEntityState } from "../useBuilderEntityState";
 
 /** The server shape these tests load from. */
-type Entity = { name: string; fields: FieldDefinition[] };
+type Entity = { slug: string; name: string; fields: FieldDefinition[] };
 
 function definition(name: string): FieldDefinition {
   return {
@@ -87,6 +87,7 @@ function setup(entity: Entity | undefined) {
         onLoad: () => {
           loadCount += 1;
         },
+        identity: (loaded: Entity) => loaded.slug,
       }),
     { initialProps: { e: entity } }
   );
@@ -107,7 +108,11 @@ describe("useBuilderEntityState", () => {
   });
 
   it("loads the entity's settings and fields once it arrives", () => {
-    const { result } = setup({ name: "Post", fields: [definition("body")] });
+    const { result } = setup({
+      slug: "posts",
+      name: "Post",
+      fields: [definition("body")],
+    });
     expect(result.current.isInitialized).toBe(true);
     expect(result.current.settings?.singularName).toBe("Post");
     expect(loadCount).toBe(1);
@@ -117,6 +122,7 @@ describe("useBuilderEntityState", () => {
   // them for editing or send them back on save.
   it("drops the fields the server owns", () => {
     const { builder } = setup({
+      slug: "posts",
       name: "Post",
       fields: [definition("title"), definition("slug"), definition("body")],
     });
@@ -128,25 +134,62 @@ describe("useBuilderEntityState", () => {
   });
 
   it("loads only once, even as the entity object identity changes", () => {
-    const entity = { name: "Post", fields: [definition("body")] };
+    const entity = {
+      slug: "posts",
+      name: "Post",
+      fields: [definition("body")],
+    };
     const { rerender } = setup(entity);
     rerender({ e: { ...entity } });
     rerender({ e: { ...entity, name: "Renamed" } });
     expect(loadCount).toBe(1);
   });
 
+  // The router renders each page component without a key, so navigating from
+  // one builder to another reuses the instance and its state. Keyed on "has
+  // something loaded" rather than "which", the second entity never reaches the
+  // builder and the page keeps showing the first one's fields under the new
+  // one's name.
+  it("loads again when it is pointed at a different entity", () => {
+    const { result, builder, rerender } = setup({
+      slug: "posts",
+      name: "Post",
+      fields: [definition("body")],
+    });
+    expect(result.current.settings?.singularName).toBe("Post");
+
+    rerender({
+      e: { slug: "pages", name: "Page", fields: [definition("intro")] },
+    });
+
+    expect(loadCount).toBe(2);
+    expect(result.current.settings?.singularName).toBe("Page");
+    expect(builder.api.fields.map(f => f.name)).toContain("intro");
+    expect(builder.api.fields.map(f => f.name)).not.toContain("body");
+    // Baselines moved with it: the new entity is what "unchanged" now means.
+    expect(result.current.unsavedCount).toBe(0);
+  });
+
   it("reports nothing unsaved immediately after loading", () => {
-    const { result } = setup({ name: "Post", fields: [definition("body")] });
+    const { result } = setup({
+      slug: "posts",
+      name: "Post",
+      fields: [definition("body")],
+    });
     expect(result.current.unsavedCount).toBe(0);
   });
 
   // A settings-only edit has to enable Save; counting field changes alone left
   // the button disabled and the edit unreachable.
   it("counts a settings-only edit", () => {
-    const { result } = setup({ name: "Post", fields: [definition("body")] });
+    const { result } = setup({
+      slug: "posts",
+      name: "Post",
+      fields: [definition("body")],
+    });
     act(() =>
       result.current.setSettings({
-        ...settingsOf({ name: "Article", fields: [] }),
+        ...settingsOf({ slug: "posts", name: "Article", fields: [] }),
       })
     );
     expect(result.current.unsavedCount).toBe(1);
@@ -154,6 +197,7 @@ describe("useBuilderEntityState", () => {
 
   it("counts an added field", () => {
     const { result, builder, rerender } = setup({
+      slug: "posts",
       name: "Post",
       fields: [definition("body")],
     });
@@ -173,8 +217,12 @@ describe("useBuilderEntityState", () => {
   // The baseline moves when the write lands, which is what makes a change and
   // a change-back both read as clean.
   it("goes clean again once the saved settings are pinned", () => {
-    const { result } = setup({ name: "Post", fields: [definition("body")] });
-    const renamed = settingsOf({ name: "Article", fields: [] });
+    const { result } = setup({
+      slug: "posts",
+      name: "Post",
+      fields: [definition("body")],
+    });
+    const renamed = settingsOf({ slug: "posts", name: "Article", fields: [] });
     act(() => result.current.setSettings(renamed));
     expect(result.current.unsavedCount).toBe(1);
 
@@ -184,6 +232,7 @@ describe("useBuilderEntityState", () => {
 
   it("goes clean again once the saved fields are pinned", () => {
     const { result, builder, rerender } = setup({
+      slug: "posts",
       name: "Post",
       fields: [definition("body")],
     });
