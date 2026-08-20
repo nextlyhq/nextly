@@ -60,7 +60,10 @@ import { generateRuntimeSchema } from "../../domains/schema/services/runtime-sch
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
 import { reconcileSingleCompanion } from "../../domains/singles/services/reconcile-single-companion";
-import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
+import {
+  resolveSingleTableName,
+  singleTableFamiliesCollide,
+} from "../../domains/singles/services/resolve-single-table-name";
 import type { SingleEntryService } from "../../domains/singles/services/single-entry-service";
 import type { SingleMetadataService } from "../../domains/singles/services/single-metadata-service";
 import type { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
@@ -578,13 +581,14 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // and DDL so every call site writes and reads the same physical table.
       const tableName = resolveSingleTableName({ slug: b.slug });
 
-      // Refused before any DDL runs, and keyed on the TABLE NAME rather than the slug. A slug is
+      // Refused before any DDL runs, and keyed on the TABLE FAMILY rather than the slug. A slug is
       // normalised on its way to a table name, so `foo-bar` and `foo_bar` name one physical table
-      // while looking like two free slugs. The registry's own check runs after the DDL, by which
-      // point `CREATE TABLE IF NOT EXISTS` has reported success against the table that already
-      // exists and the runtime registration has rebound it to this request's fields.
-      const owner = (await svc.registry.getAllSingles()).find(
-        s => s.tableName === tableName
+      // while looking like two free slugs — and a Single's storage spans its main table AND the
+      // `_locales` companion beside it, so `foo-locales` collides with `foo` the same way. The
+      // registry's own check runs after the DDL, by which point the create has already acted
+      // against the table that exists and rebound the runtime to this request's fields.
+      const owner = (await svc.registry.getAllSingles()).find(s =>
+        singleTableFamiliesCollide(s.tableName, tableName)
       );
       if (owner) {
         throw NextlyError.duplicate({

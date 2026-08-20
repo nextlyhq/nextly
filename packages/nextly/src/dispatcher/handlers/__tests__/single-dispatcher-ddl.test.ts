@@ -50,10 +50,15 @@ function makeAdapter(dialect: "postgresql" | "mysql" | "sqlite") {
     dialect,
     getCapabilities: () => ({ dialect }),
     // Answers the way a fresh create finds the database: the main table is there once its CREATE
-    // has run, and the companion is NOT — so the companion path CREATEs it rather than altering
-    // one that does not exist. A blanket `true` here made the companion look pre-existing, which
-    // is not a state a create ever starts from.
-    tableExists: vi.fn(async (name: string) => !name.includes("_locales")),
+    // has run and not before, and the companion is NOT — so the pre-apply orphan check finds clear
+    // ground, the post-apply existence check finds the table, and the companion path CREATEs its
+    // table rather than altering one that does not exist. A blanket `true` made the main table look
+    // pre-existing before any statement ran, which is not a state a fresh create ever starts from.
+    tableExists: vi.fn(
+      async (name: string) =>
+        !name.includes("_locales") &&
+        executed.some(sql => sql.includes("CREATE TABLE") && sql.includes(name))
+    ),
     // Read by the slug guard the create runs before any DDL, to find whether another resource
     // already owns this slug. `null` is "nobody does", which is the state a successful create
     // starts from. The return type names the owner case too, so the conflict test can replace this
