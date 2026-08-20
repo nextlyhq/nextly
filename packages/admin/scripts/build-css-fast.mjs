@@ -31,6 +31,8 @@ import { fileURLToPath } from "url";
 import postcss from "postcss";
 import tailwindcss from "@tailwindcss/postcss";
 
+import { isCliEntry } from "../../../scripts/cli-entry.mjs";
+
 // Scoping lives in @nextlyhq/admin-css so this build and the plugin-facing
 // CLI share one implementation and cannot drift. The release build
 // (build-css.mjs) resolves it the same way.
@@ -67,7 +69,7 @@ export async function buildCssFast() {
 }
 
 // Direct CLI invocation: `node scripts/build-css-fast.mjs`
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isCliEntry(import.meta.url)) {
   const { ms, sizeKB, outputFile: out } = await buildCssFast();
   console.log(`[admin:css] ${sizeKB} KB in ${ms}ms → ${out}`);
 }

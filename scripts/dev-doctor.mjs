@@ -6,6 +6,9 @@
 import * as fs from "node:fs/promises";
 import * as net from "node:net";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { isCliEntry } from "./cli-entry.mjs";
 
 // Workspace integrity check. The two scopes get hoisted differently:
 //   - @nextlyhq/* — consumed by the root package.json (eslint, prettier
@@ -147,9 +150,11 @@ export async function runAllChecks({ nextlyRoot, envPath, port }) {
 }
 
 // CLI entry: when invoked directly (pnpm dev:doctor), print a report.
-const isMainModule = import.meta.url === `file://${process.argv[1]}`;
-if (isMainModule) {
-  const here = path.dirname(new URL(import.meta.url).pathname);
+if (isCliEntry(import.meta.url)) {
+  // `fileURLToPath` rather than the URL's `pathname`, which keeps the leading
+  // slash a file URL puts before a Windows drive letter (`/C:/repo/scripts`)
+  // and resolves from the wrong place once joined.
+  const here = path.dirname(fileURLToPath(import.meta.url));
   const nextlyRoot = path.resolve(here, "..");
   const envPath = path.join(nextlyRoot, "apps", "playground", ".env");
   const port = Number(process.env.PORT) || 3000;
