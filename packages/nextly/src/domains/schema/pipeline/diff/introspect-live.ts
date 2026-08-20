@@ -543,6 +543,84 @@ function buildSnapshotFromPgRows(rows: PgRow[]): NextlySchemaSnapshot {
   };
 }
 
+/**
+ * The one expression MySQL accepts as a default without parentheses.
+ *
+ * `CURRENT_TIMESTAMP` is the documented exception, with or without a
+ * fractional-seconds precision.
+ *
+ * Which SPELLING arrives here depends on how the default was written, and the
+ * two cases differ. Written bare, the synonyms are recorded under this name:
+ * `DEFAULT NOW()`, `DEFAULT LOCALTIME` and `DEFAULT LOCALTIMESTAMP` are all
+ * reported as `CURRENT_TIMESTAMP`. Written as EXPRESSIONS they are not:
+ * `DEFAULT (NOW())`, `DEFAULT (LOCALTIME)` and `DEFAULT (CURRENT_TIMESTAMP)`
+ * are all reported as `now()`, which does NOT match here and is wrapped like
+ * any other expression — correctly, since that form does need the parentheses.
+ * Other date keywords behave the same way: `DEFAULT (CURRENT_DATE)` is
+ * reported as `curdate()`. Measured on MySQL 8.0.46.
+ */
+const MYSQL_BARE_EXPRESSION_DEFAULT = /^current_timestamp(\s*\(\s*\d*\s*\))?$/i;
+
+/**
+ * An expression default with the parentheses `information_schema` strips put
+ * back. This is ONE repair, not everything that stands between a reported
+ * expression default and applicable DDL — see the limit at the end.
+ *
+ * `information_schema.COLUMN_DEFAULT` reports a function-call default with its
+ * enclosing parentheses STRIPPED — a column declared
+ * `DEFAULT (CONVERT(X'7b7d' USING utf8mb4))`, which is what a required JSON,
+ * repeater, group or chips field emits, comes back as
+ * `convert(0x7b7d using utf8mb4)` — and MySQL refuses that same text without
+ * them (`ER_PARSE_ERROR`). Recorded verbatim, a snapshot taken from a live
+ * MySQL database produces a `CREATE TABLE` that cannot be applied anywhere,
+ * including back to the database it came from.
+ *
+ * Two forms are left exactly as reported, for DIFFERENT reasons. Stating one
+ * reason for both would lend the weaker branch a justification it has not got.
+ *
+ * `CURRENT_TIMESTAMP` is the load-bearing one. Wrapping it does not fail —
+ * MySQL accepts `DEFAULT (CURRENT_TIMESTAMP)` — it REWRITES it, recording
+ * `now()` instead. A snapshot that wrapped it would therefore rebuild a table
+ * whose default reads differently from the source's, so the round trip would
+ * not reproduce the table it came from. The integration suite creates that
+ * column and observes the rewrite rather than taking this on trust.
+ *
+ * An expression that is not a single call is reported ALREADY parenthesised as
+ * a whole (`(1 + 2)`), and that branch is NOT load-bearing in the same way:
+ * `DEFAULT ((1 + 2))` applies cleanly and MySQL reports `(1 + 2)` back from
+ * either spelling, so wrapping again would neither break the rebuild nor
+ * accumulate. It stays because the reported text is already valid DDL and
+ * rewriting it for nothing would make the recorded value differ from every
+ * baseline taken before this, for no gain.
+ *
+ * Neither case is a DIFF problem, and it is worth saying so rather than
+ * reaching for the more alarming claim: `normalizeDefault` strips wrapping
+ * parentheses and collapses `current_timestamp` into `now()`, so the
+ * comparison would tolerate all of these. What is at stake is whether the
+ * recorded schema describes the database it was read from.
+ *
+ * The two `CURRENT_TIMESTAMP` forms are also equivalent to INSERT — both
+ * auto-initialise, and both accept `ON UPDATE CURRENT_TIMESTAMP`. Measured on
+ * MySQL 8.0.46.
+ *
+ * NOT repaired here: an expression that CONTAINS a string literal is reported
+ * with its quotes backslash-escaped — `DEFAULT (lower('X'))` comes back as
+ * `lower(_utf8mb4\'X\')` — and that text is rejected with or without the
+ * parentheses, so those defaults still rebuild to invalid DDL. The remedy is
+ * an unescape whose correctness depends on the server's `sql_mode`
+ * (`NO_BACKSLASH_ESCAPES` makes a backslash an ordinary character), which is a
+ * decision rather than a mechanical fix. No emitter in this package produces
+ * that shape — `quoteJsonSqlDefault` uses a hex `CONVERT` precisely to avoid
+ * guessing the mode — so it is reachable only through a column someone added
+ * to a managed table by hand.
+ */
+function mysqlExpressionDefault(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.startsWith("(")) return value;
+  if (MYSQL_BARE_EXPRESSION_DEFAULT.test(trimmed)) return value;
+  return `(${trimmed})`;
+}
+
 /** MySQL types whose default is reported as a bare number, not a literal. */
 const MYSQL_NUMERIC_TYPES = new Set([
   "tinyint",
@@ -569,16 +647,15 @@ const MYSQL_NUMERIC_TYPES = new Set([
  * snapshot could not be applied anywhere.
  *
  * `EXTRA` is what separates the two cases: an expression default (
- * `CURRENT_TIMESTAMP`, `json_array()`) carries `DEFAULT_GENERATED` and must be
- * left alone, while everything else is a literal. Numeric types need no quotes
- * either, and quoting them would turn a number into a string.
+ * `CURRENT_TIMESTAMP`, `json_array()`) carries `DEFAULT_GENERATED`, while
+ * everything else is a literal. Numeric types need no quotes either, and
+ * quoting them would turn a number into a string.
  */
 function mysqlDefaultExpression(row: MysqlRow): string | undefined {
   const value = row.COLUMN_DEFAULT;
   if (value === null || value === undefined) return undefined;
-  // An expression is already valid DDL as written.
   if ((row.EXTRA ?? "").toUpperCase().includes("DEFAULT_GENERATED")) {
-    return value;
+    return mysqlExpressionDefault(value);
   }
   if (MYSQL_NUMERIC_TYPES.has((row.DATA_TYPE ?? "").toLowerCase())) {
     return value;
