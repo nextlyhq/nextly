@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildPluginAdminMeta } from "../admin-meta";
+import { buildPluginAdminMeta, type PluginAdminMeta } from "../admin-meta";
 import type { PluginDefinition } from "../plugin-context";
 import {
   buildComponentImportMap,
@@ -289,14 +289,110 @@ describe("field-type and slot components", () => {
   });
 });
 
+/**
+ * Meta keys that carry no `ComponentPath`, whatever else they carry.
+ *
+ * Listed rather than inferred so that a key added to `PluginAdminMeta` lands
+ * in neither this set nor the readers below and is reported as
+ * `unclassified` — which is where this guard's teeth are. Someone then has
+ * to answer whether the new key names a component, instead of the map
+ * quietly not importing it.
+ */
+const KEYS_WITHOUT_COMPONENTS = new Set([
+  "name",
+  "version",
+  "description",
+  "author",
+  "homepage",
+  "repository",
+  "docsUrl",
+  "license",
+  "category",
+  "tags",
+  "enabled",
+  "dependsOn",
+  "placement",
+  "order",
+  "after",
+  "appearance",
+  "collections",
+  "singles",
+  "fieldGroups",
+  "clientConfig",
+  "routes",
+  "whenEnabled",
+  // Menu items carry a route (`to`), never a component.
+  "menu",
+]);
+
+interface ExposedPaths {
+  /** Paths the admin resolves through the registry — each needs an import. */
+  registered: string[];
+  /** Widget paths: RESERVED, so deliberately NOT imported. */
+  widgets: string[];
+  /** Emitted keys this helper classifies neither way. Must stay empty. */
+  unclassified: string[];
+}
+
+/**
+ * Every component path a serialized admin-meta entry carries, read BY KEY.
+ *
+ * Scanning the serialized JSON for `"…#…"` instead would be both too eager
+ * and too slack: `clientConfig` is arbitrary plugin data, so a branding hex
+ * like `#0ea5e9` reads as a component path, and a path naming a default
+ * export carries no `#` at all and is missed entirely. Reading the keys the
+ * serializer writes makes the set exact, and makes the widget exclusion
+ * something these tests STATE rather than something they happen not to
+ * notice.
+ *
+ * Written from the meta's shape rather than by calling the collector, so
+ * the two remain independent statements of the same set — a collector bug
+ * copied into the guard would assert nothing.
+ *
+ * Bounded by what the FIXTURE exercises: a key no fixture declares is never
+ * serialized and cannot be seen from here, so the fixtures below carry one
+ * of everything on purpose.
+ */
+function exposedComponentPaths(meta: PluginAdminMeta): ExposedPaths {
+  const registered = [
+    ...(meta.pages ?? []).map(page => page.component),
+    meta.settings?.component,
+    // Mirrored spellings, both serialized; the map must read whichever the
+    // browser is handed.
+    meta.headerSlot,
+    meta.header?.slot,
+    meta.schemaBuilderSlot,
+    meta.entryFormToolbarSlot,
+    ...(meta.fieldTypes ?? []).map(fieldType => fieldType.component),
+  ].filter((path): path is string => Boolean(path));
+
+  const readsComponents = new Set([
+    "pages",
+    "settings",
+    "headerSlot",
+    "header",
+    "schemaBuilderSlot",
+    "entryFormToolbarSlot",
+    "fieldTypes",
+  ]);
+
+  return {
+    registered,
+    widgets: (meta.widgets ?? []).map(widget => widget.component),
+    unclassified: Object.keys(meta).filter(
+      key =>
+        !readsComponents.has(key) &&
+        key !== "widgets" &&
+        !KEYS_WITHOUT_COMPONENTS.has(key)
+    ),
+  };
+}
+
 describe("parity with the admin-meta surface", () => {
-  // The admin resolves components by string through the registry, and
-  // admin-meta is the complete list of strings the browser can be handed.
-  // The import map must import a module for every one of them, or a plugin
-  // whose components the meta advertises can still render empty. This walks
-  // the SERIALIZED meta rather than a hand-written list so a new path kind
-  // added to admin-meta fails here until the collector learns it.
   it("collects every component path admin-meta exposes for a plugin", () => {
+    // One of every kind, so the key sweep above sees the whole surface: the
+    // widget it must NOT import, and a `clientConfig` hex that a `#` scan
+    // would have demanded an import for.
     const p = {
       name: "@acme/x",
       version: "1.0.0",
@@ -310,32 +406,57 @@ describe("parity with the admin-meta surface", () => {
           },
         ],
         admin: {
+          menu: [{ label: "X", to: "/x" }],
           pages: [{ path: "reports", component: "@acme/x/admin#Reports" }],
           settings: { component: "@acme/x/admin#Settings" },
           header: { slot: "@acme/x/admin#HeaderSlot" },
           schemaBuilderSlot: "@acme/x/admin#SchemaSlot",
           entryFormToolbarSlot: "@acme/x/admin#ToolbarSlot",
+          widgets: [{ id: "stats", component: "@acme/x/admin#StatsWidget" }],
+          clientConfig: { accent: "#0ea5e9" },
         },
       },
     } as unknown as PluginDefinition;
 
-    const meta = buildPluginAdminMeta([p], undefined);
-    const exposed = [
-      ...(JSON.stringify(meta).match(/"[^"]*#[^"]*"/g) ?? []),
-    ].map(s => JSON.parse(s));
+    const meta = buildPluginAdminMeta([p], undefined)[0];
+    const exposed = exposedComponentPaths(meta);
 
-    // Positive control: the walk must see the components the fixture
-    // declares, or the assertion below is satisfied by an empty probe.
-    expect(exposed).toContain("@acme/x/admin#Rating");
-    expect(exposed).toContain("@acme/x/admin#ToolbarSlot");
+    // The guard itself: every key the meta emits is accounted for. A new one
+    // fails here, before the assertions that depend on knowing what it is.
+    expect(exposed.unclassified).toEqual([]);
+
+    // Positive control — without it the loop below is satisfied by an empty
+    // probe.
+    expect(exposed.registered).toEqual(
+      expect.arrayContaining([
+        "@acme/x/admin#Rating",
+        "@acme/x/admin#Reports",
+        "@acme/x/admin#Settings",
+        "@acme/x/admin#HeaderSlot",
+        "@acme/x/admin#SchemaSlot",
+        "@acme/x/admin#ToolbarSlot",
+      ])
+    );
 
     const collected = new Set([
       ...collectAdminComponentPaths(p),
       ...collectBlockEditorComponentPaths([p]),
     ]);
-    for (const path of exposed) {
+    for (const path of exposed.registered) {
       expect(collected.has(path)).toBe(true);
     }
+
+    // Widgets are RESERVED and not rendered, so the map excludes them on
+    // purpose — importing a component nothing mounts would break the
+    // generated module over a feature that does not exist yet. Asserted
+    // rather than left to a fixture that happens to declare none.
+    expect(exposed.widgets).toEqual(["@acme/x/admin#StatsWidget"]);
+    expect(collected.has("@acme/x/admin#StatsWidget")).toBe(false);
+
+    // `clientConfig` is plugin data. A colour is not a component path, and
+    // reading it as one would demand an import for a module named `#0ea5e9`.
+    expect(meta.clientConfig).toEqual({ accent: "#0ea5e9" });
+    expect(collected.has("#0ea5e9")).toBe(false);
   });
 
   it("covers a disabled plugin too, whose meta keeps its field types", () => {
@@ -363,19 +484,16 @@ describe("parity with the admin-meta surface", () => {
       },
     } as unknown as PluginDefinition;
 
-    const meta = buildPluginAdminMeta([p], undefined);
-    const exposed = [
-      ...(JSON.stringify(meta).match(/"[^"]*#[^"]*"/g) ?? []),
-    ].map(s => JSON.parse(s));
+    const meta = buildPluginAdminMeta([p], undefined)[0];
+    const exposed = exposedComponentPaths(meta);
 
-    // Positive controls: the meta still carries the field type and withholds
-    // the page and slot — otherwise the assertions below prove nothing.
-    expect(exposed).toContain("@acme/off/admin#Rating");
-    expect(exposed).not.toContain("@acme/off/admin#Reports");
-    expect(exposed).not.toContain("@acme/off/admin#SchemaSlot");
+    expect(exposed.unclassified).toEqual([]);
+    // Exact, not a superset: the page and the slot are withheld for a
+    // disabled plugin, and the field type is not.
+    expect(exposed.registered).toEqual(["@acme/off/admin#Rating"]);
 
     const collected = new Set(collectAdminComponentPaths(p));
-    for (const path of exposed) {
+    for (const path of exposed.registered) {
       expect(collected.has(path)).toBe(true);
     }
   });

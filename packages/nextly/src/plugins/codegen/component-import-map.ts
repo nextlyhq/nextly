@@ -85,6 +85,15 @@ export function collectAdminComponentPaths(plugin: PluginDefinition): string[] {
   // its blocks control — contributes no pages, settings or views, so without
   // this the generated map imports nothing of it and the field can only
   // render through a fallback that cannot fire.
+  //
+  // Collected for a DISABLED plugin too, where the block-editor collector
+  // below drops everything once the page builder is disabled. The two rules
+  // read as opposed and are not: a retained collection still renders its
+  // fields, so their editors still mount and still need their modules, while
+  // a block editor has no registry to land in once the page builder stops
+  // booting, so importing one would pull in a bundle for a feature that
+  // cannot run. Field types follow what still RENDERS; block editors follow
+  // what still RUNS.
   const fieldTypePaths = (plugin.contributes?.fieldTypes ?? []).map(
     fieldType => fieldType.component
   );

@@ -37,7 +37,10 @@ function pluginComponentPaths(plugin: PluginMetadata): string[] {
     // resolved on the same pages the schema-builder slot is.
     plugin.entryFormToolbarSlot,
     ...(plugin.fieldTypes ?? []).map(fieldType => fieldType.component),
-  ].filter((path): path is string => path !== undefined);
+    // Falsy rather than only `undefined`, matching the codegen collector
+    // exactly: an empty component path names no module, and the two halves
+    // disagreeing about that is the drift this shared shape exists to stop.
+  ].filter((path): path is string => Boolean(path));
 }
 
 /**
