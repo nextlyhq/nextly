@@ -43,7 +43,6 @@ import {
 } from "../../../plugins/test-nextly";
 import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
 import { tableHasRows } from "../../schema/pipeline/live-table-facts";
-import type { SingleEntryService } from "../services/single-entry-service";
 let current: TestNextly | undefined;
 
 afterEach(async () => {
@@ -290,8 +289,7 @@ for (const dialect of getConfiguredTestDialects()) {
           fields: [{ name: "body", type: "text" }],
         }
       );
-      const entries =
-        current.getService<SingleEntryService>("singleEntryService");
+      const entries = current.getService("singleEntryService");
       const written = await entries.update(
         slug,
         { body: "kept" },
@@ -444,6 +442,9 @@ for (const dialect of getConfiguredTestDialects()) {
           fields: [{ name: "body", type: "text" }],
           source: "ui",
           locked: false,
+          // Required by the input type. Any value does: the create is rejected on the name
+          // collision below before the hash is ever read.
+          schemaHash: "hash-collision-probe",
         })
       ).rejects.toThrow(/already exists/);
 
